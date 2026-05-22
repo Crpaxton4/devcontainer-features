@@ -31,7 +31,6 @@ class OdooConnectionSettings:
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
         file_values = _load_file_values(config_path)
-        environment_values = _load_environment_values()
         # Prefer explicit `None` checks so callers can pass empty strings
         # deliberately (the INI loader still treats empty values as missing).
         explicit_values = {
@@ -44,8 +43,6 @@ class OdooConnectionSettings:
         for key, explicit_value in explicit_values.items():
             if explicit_value is not None:
                 values[key] = explicit_value
-            elif key in environment_values:
-                values[key] = environment_values[key]
             else:
                 values[key] = file_values.get(key)
 
