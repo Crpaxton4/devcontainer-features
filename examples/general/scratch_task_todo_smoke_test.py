@@ -23,9 +23,9 @@ from __future__ import annotations
 import argparse
 import os
 from pprint import pprint
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
-from odoo_sdk.odoo_service import OdooClient, OdooModel
+from odoo_sdk.odoo_service import OdooClient, OdooExecutor, OdooModel, OdooQuery
 
 
 TASK_FIELDS_TO_DISPLAY = [
@@ -37,6 +37,22 @@ TASK_FIELDS_TO_DISPLAY = [
     "date_deadline",
     "description",
 ]
+
+DEFAULT_TODO_NAME = "Smoke test todo created from the source checkout"
+
+
+class RedPhaseSmokeExecutor(OdooExecutor):
+    """Placeholder executor for source-checkout smoke runs.
+
+    The goal of the red phase is to expose the missing public surface before a
+    local example starts depending on live transport or credentials.
+    """
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError(
+            "This smoke test should fail on the missing recordset-first surface "
+            "before it reaches live transport execution."
+        )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -50,12 +66,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task-id",
         type=int,
-        required=True,
-        help="Existing project.task record to read before creating the todo.",
+        default=None,
+        help=(
+            "Existing project.task record to read before creating the todo. "
+            "When omitted, the script reads the first visible task so local "
+            "smoke runs do not stop at argument parsing."
+        ),
     )
     parser.add_argument(
         "--todo-name",
-        required=True,
+        default=DEFAULT_TODO_NAME,
         help="Name for the new todo record.",
     )
     parser.add_argument(
@@ -71,7 +91,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_client_from_environment() -> OdooClient:
+def build_client_from_environment() -> Tuple[OdooClient, bool]:
     connection_values = {
         "ODOO_URL": os.getenv("ODOO_URL"),
         "ODOO_DB": os.getenv("ODOO_DB"),
@@ -84,26 +104,46 @@ def build_client_from_environment() -> OdooClient:
         if not variable_value
     ]
     if missing_names:
-        raise SystemExit(
-            "Missing required environment variables: "
-            + ", ".join(missing_names)
-        )
+        return OdooClient(executor=RedPhaseSmokeExecutor()), False
 
-    return OdooClient(
-        url=connection_values["ODOO_URL"],
-        db=connection_values["ODOO_DB"],
-        username=connection_values["ODOO_USERNAME"],
-        password=connection_values["ODOO_PASSWORD"],
+    return (
+        OdooClient(
+            url=connection_values["ODOO_URL"],
+            db=connection_values["ODOO_DB"],
+            username=connection_values["ODOO_USERNAME"],
+            password=connection_values["ODOO_PASSWORD"],
+        ),
+        True,
     )
+
+
+def assert_recordset_first_surface(project_task_model: OdooModel) -> None:
+    search_result = project_task_model.search([])
+
+    # The architecture docs treat recordsets as the future identity-bearing
+    # result of search. As long as search still returns the preserved query
+    # builder, the smoke test should stop there and report that gap explicitly.
+    if isinstance(search_result, OdooQuery):
+        raise NotImplementedError(
+            "Recordset-first surface is not implemented yet: "
+            "client.env['project.task'].search(...) still returns the preserved "
+            "OdooQuery compatibility builder instead of a recordset-oriented "
+            "result."
+        )
 
 
 def read_single_task(
     project_task_model: OdooModel,
-    task_id: int,
+    task_id: Optional[int],
     *,
     include_inactive: bool,
 ) -> Dict[str, Any]:
-    task_query = project_task_model.search([("id", "=", task_id)]).limit(1)
+    if task_id is None:
+        # A smoke check is more useful when it can discover one readable task on
+        # its own instead of failing before it reaches the SDK surface.
+        task_query = project_task_model.search([]).limit(1)
+    else:
+        task_query = project_task_model.search([("id", "=", task_id)]).limit(1)
 
     # The docs make env-bound context the long-term direction, but the current
     # runnable surface still applies context on the compatibility query object.
@@ -112,6 +152,8 @@ def read_single_task(
 
     records = task_query.read(TASK_FIELDS_TO_DISPLAY)
     if not records:
+        if task_id is None:
+            raise LookupError("No readable task was found for the smoke test.")
         raise LookupError(f"No task was found for id {task_id}.")
 
     return records[0]
@@ -136,12 +178,21 @@ def create_todo_without_project(
 
 def main() -> None:
     arguments = build_argument_parser().parse_args()
-    client = build_client_from_environment()
+    client, has_live_connection = build_client_from_environment()
 
     # Starting from client.env mirrors the documented Phase A direction even
     # though the current implementation still delegates through model/query
     # compatibility objects underneath.
     project_task_model = client.env["project.task"]
+
+    assert_recordset_first_surface(project_task_model)
+
+    if not has_live_connection:
+        raise SystemExit(
+            "Provide ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD once "
+            "the recordset-first surface is ready and you want to exercise the "
+            "live read/create flow."
+        )
 
     existing_task = read_single_task(
         project_task_model,
