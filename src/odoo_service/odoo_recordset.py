@@ -48,11 +48,101 @@ class OdooRecordset:
         """Returns the ordered record ids as immutable identity state."""
         return self._ids
 
+    def _execute(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        return self._env.executor.execute(self._model_name, method, *args, **kwargs)
+
     def _context_kwargs(self) -> Dict[str, Any]:
         context = self._env.context
         if not context:
             return {}
         return {"context": context}
+
+    def _serialized_domain(self, domain: DomainInput) -> list[Any]:
+        return DomainExpression.normalize(domain).serialize()
+
+    def _search_kwargs(
+        self,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        kwargs = self._context_kwargs()
+        if limit is not None:
+            kwargs["limit"] = limit
+        if offset is not None:
+            kwargs["offset"] = offset
+        if order is not None:
+            kwargs["order"] = order
+        return kwargs
+
+    def _search_read(
+        self,
+        domain: DomainInput = None,
+        *,
+        fields: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> list[Record]:
+        serialized_domain = self._serialized_domain(domain)
+        kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
+        if fields is not None:
+            kwargs["fields"] = fields
+
+        _logger.debug(
+            "Search reading recordset model=%s domain=%s kwargs=%s",
+            self._model_name,
+            serialized_domain,
+            kwargs,
+        )
+        return self._execute("search_read", serialized_domain, **kwargs)
+
+    def _search_count(self, domain: DomainInput = None) -> int:
+        serialized_domain = self._serialized_domain(domain)
+        _logger.debug(
+            "Counting recordset model=%s domain=%s",
+            self._model_name,
+            serialized_domain,
+        )
+        return self._execute(
+            "search_count",
+            serialized_domain,
+            **self._context_kwargs(),
+        )
+
+    def _write_current(
+        self,
+        values: Dict[str, Any],
+        *,
+        allow_empty_ids: bool = False,
+        allow_empty_values: bool = False,
+    ) -> bool:
+        if not self._ids and not allow_empty_ids:
+            raise ValueError("write requires at least one id")
+        if not values and not allow_empty_values:
+            raise ValueError("write requires at least one value")
+
+        _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
+        return self._execute(
+            "write",
+            list(self._ids),
+            values,
+            **self._context_kwargs(),
+        )
+
+    def _unlink_current(self, *, allow_empty: bool = False) -> bool:
+        if not self._ids and not allow_empty:
+            raise ValueError("unlink requires at least one id")
+
+        _logger.debug(
+            "Unlinking recordset model=%s ids=%s", self._model_name, self._ids
+        )
+        return self._execute(
+            "unlink",
+            list(self._ids),
+            **self._context_kwargs(),
+        )
 
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
         """Materializes raw rows for the current ids."""
@@ -69,8 +159,7 @@ class OdooRecordset:
             self._ids,
             fields,
         )
-        return self._env.executor.execute(
-            self._model_name,
+        return self._execute(
             "read",
             list(self._ids),
             **kwargs,
@@ -78,34 +167,11 @@ class OdooRecordset:
 
     def write(self, values: Dict[str, Any]) -> bool:
         """Updates the current ids using the bound environment context."""
-        if not self._ids:
-            raise ValueError("write requires at least one id")
-        if not values:
-            raise ValueError("write requires at least one value")
-
-        _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
-        return self._env.executor.execute(
-            self._model_name,
-            "write",
-            list(self._ids),
-            values,
-            **self._context_kwargs(),
-        )
+        return self._write_current(values)
 
     def unlink(self) -> bool:
         """Deletes the current ids using the bound environment context."""
-        if not self._ids:
-            raise ValueError("unlink requires at least one id")
-
-        _logger.debug(
-            "Unlinking recordset model=%s ids=%s", self._model_name, self._ids
-        )
-        return self._env.executor.execute(
-            self._model_name,
-            "unlink",
-            list(self._ids),
-            **self._context_kwargs(),
-        )
+        return self._unlink_current()
 
     def exists(self) -> OdooRecordset:
         """Returns a new recordset for ids that still exist on the server."""
@@ -131,14 +197,8 @@ class OdooRecordset:
         order: Optional[str] = None,
     ) -> OdooRecordset:
         """Searches the bound model in the current environment."""
-        serialized_domain = DomainExpression.normalize(domain).serialize()
-        kwargs = self._context_kwargs()
-        if limit is not None:
-            kwargs["limit"] = limit
-        if offset is not None:
-            kwargs["offset"] = offset
-        if order is not None:
-            kwargs["order"] = order
+        serialized_domain = self._serialized_domain(domain)
+        kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
 
         _logger.debug(
             "Searching recordset model=%s domain=%s kwargs=%s",
@@ -146,12 +206,7 @@ class OdooRecordset:
             serialized_domain,
             kwargs,
         )
-        ids = self._env.executor.execute(
-            self._model_name,
-            "search",
-            serialized_domain,
-            **kwargs,
-        )
+        ids = self._execute("search", serialized_domain, **kwargs)
         return OdooRecordset(self._env, self._model_name, ids)
 
     def with_context(self, context: Dict[str, Any]) -> OdooRecordset:

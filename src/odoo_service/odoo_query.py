@@ -17,8 +17,7 @@ _logger = logging.getLogger(__name__)
 
 class OdooQuery:
     """
-    Fluent query builder for Odoo models.
-    Chains domain filters, limits, and offsets before executing the read.
+    Transitional fluent compatibility wrapper over env and recordset execution.
     """
 
     def __init__(
@@ -50,9 +49,7 @@ class OdooQuery:
         return query
 
     def _recordset(self) -> OdooRecordset:
-        from .odoo_recordset import OdooRecordset
-
-        return OdooRecordset(self._env, self.model_name)
+        return self._env.recordset(self.model_name)
 
     def _search_recordset(self) -> OdooRecordset:
         return self._recordset().search(
@@ -61,28 +58,6 @@ class OdooQuery:
             offset=self._offset,
             order=self._order,
         )
-
-    def _search_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {}
-        if self._limit is not None:
-            kwargs["limit"] = self._limit
-        if self._offset is not None:
-            kwargs["offset"] = self._offset
-        if self._order is not None:
-            kwargs["order"] = self._order
-        context = self._env.context
-        if context:
-            kwargs["context"] = context
-        return kwargs
-
-    def _context_kwargs(self) -> Dict[str, Any]:
-        context = self._env.context
-        if not context:
-            return {}
-        return {"context": context}
-
-    def _serialized_domain(self) -> List[Any]:
-        return self._domain.serialize()
 
     def search(self, domain: DomainInput) -> OdooQuery:
         """Sets or replaces the search domain."""
@@ -123,7 +98,7 @@ class OdooQuery:
 
     def ids(self) -> List[int]:
         """Executes `search` and returns matching record ids."""
-        serialized_domain = self._serialized_domain()
+        serialized_domain = self._domain.serialize()
         _logger.debug(
             "Executing search on model=%s domain=%s",
             self.model_name,
@@ -133,19 +108,19 @@ class OdooQuery:
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes a search_read operation to fetch record dictionaries."""
-        serialized_domain = self._serialized_domain()
+        serialized_domain = self._domain.serialize()
         _logger.debug(
             "Executing search_read on model=%s domain=%s fields=%s",
             self.model_name,
             serialized_domain,
             fields,
         )
-        kwargs = self._search_kwargs()
-        if fields is not None:
-            kwargs["fields"] = fields
-
-        return self.client.execute(
-            self.model_name, "search_read", serialized_domain, **kwargs
+        return self._recordset()._search_read(
+            self._domain,
+            fields=fields,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
         )
 
     def write(self, values: Dict[str, Any]) -> bool:
@@ -153,13 +128,10 @@ class OdooQuery:
         _logger.debug(
             "Executing query write on model=%s domain=%s", self.model_name, self._domain
         )
-        ids = list(self._search_recordset().ids)
-        return self.client.execute(
-            self.model_name,
-            "write",
-            ids,
+        return self._search_recordset()._write_current(
             values,
-            **self._context_kwargs(),
+            allow_empty_ids=True,
+            allow_empty_values=True,
         )
 
     def unlink(self) -> bool:
@@ -169,25 +141,14 @@ class OdooQuery:
             self.model_name,
             self._domain,
         )
-        ids = list(self._search_recordset().ids)
-        return self.client.execute(
-            self.model_name,
-            "unlink",
-            ids,
-            **self._context_kwargs(),
-        )
+        return self._search_recordset()._unlink_current(allow_empty=True)
 
     def count(self) -> int:
         """Executes a search_count operation."""
-        serialized_domain = self._serialized_domain()
+        serialized_domain = self._domain.serialize()
         _logger.debug(
             "Executing search_count on model=%s domain=%s",
             self.model_name,
             serialized_domain,
         )
-        return self.client.execute(
-            self.model_name,
-            "search_count",
-            serialized_domain,
-            **self._context_kwargs(),
-        )
+        return self._recordset()._search_count(self._domain)

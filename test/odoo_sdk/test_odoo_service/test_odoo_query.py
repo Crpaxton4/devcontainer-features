@@ -75,6 +75,64 @@ class TestOdooQueryWrite(unittest.TestCase):
         self.assertEqual(base._domain, DomainExpression.normalize([]))
         self.assertIsNone(base._limit)
 
+    def test_builder_methods_return_new_queries_without_mutating_source(self) -> None:
+        executor = Mock()
+
+        base = OdooQuery(executor, "res.partner", [("active", "=", True)])
+
+        with_limit = base.limit(10)
+        with_offset = base.offset(5)
+        with_order = base.order_by("name asc")
+        with_context = base.with_context({"lang": "en_US"})
+        replaced_domain = base.search([("company_id", "=", 3)])
+
+        self.assertIsNot(base, with_limit)
+        self.assertIsNot(base, with_offset)
+        self.assertIsNot(base, with_order)
+        self.assertIsNot(base, with_context)
+        self.assertIsNot(base, replaced_domain)
+
+        self.assertEqual(base._domain, DomainExpression.normalize([("active", "=", True)]))
+        self.assertIsNone(base._limit)
+        self.assertIsNone(base._offset)
+        self.assertIsNone(base._order)
+        self.assertEqual(base._env.context, {})
+
+        self.assertEqual(with_limit._limit, 10)
+        self.assertIsNone(with_limit._offset)
+        self.assertIsNone(with_limit._order)
+
+        self.assertIsNone(with_offset._limit)
+        self.assertEqual(with_offset._offset, 5)
+        self.assertIsNone(with_offset._order)
+
+        self.assertIsNone(with_order._limit)
+        self.assertIsNone(with_order._offset)
+        self.assertEqual(with_order._order, "name asc")
+
+        self.assertEqual(with_context._env.context, {"lang": "en_US"})
+        self.assertEqual(
+            replaced_domain._domain,
+            DomainExpression.normalize([("company_id", "=", 3)]),
+        )
+
+    def test_with_context_does_not_mutate_previously_created_queries(self) -> None:
+        executor = Mock()
+        executor.execute.side_effect = [[1], [2]]
+
+        base = OdooQuery(executor, "res.partner", [])
+        derived = base.with_context({"lang": "en_US"})
+
+        self.assertEqual(base.ids(), [1])
+        self.assertEqual(derived.ids(), [2])
+        self.assertEqual(
+            executor.execute.call_args_list,
+            [
+                call("res.partner", "search", []),
+                call("res.partner", "search", [], context={"lang": "en_US"}),
+            ],
+        )
+
     def test_boolean_prefix_domain_is_serialized_before_execution(self) -> None:
         executor = Mock()
         executor.execute.return_value = [7, 8]
@@ -121,6 +179,33 @@ class TestOdooQueryWrite(unittest.TestCase):
             fields=["name"],
         )
 
+    def test_read_delegates_to_recordset_search_read(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset._search_read.return_value = [{"id": 8, "name": "Acme"}]
+
+        query = (
+            OdooQuery(executor, "res.partner", [("active", "=", True)])
+            .limit(5)
+            .offset(10)
+            .order_by("name asc")
+            .with_context({"lang": "en_US"})
+        )
+        query._recordset = Mock(return_value=recordset)
+
+        result = query.read(["name"])
+
+        self.assertEqual(result, [{"id": 8, "name": "Acme"}])
+        query._recordset.assert_called_once_with()
+        recordset._search_read.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)]),
+            fields=["name"],
+            limit=5,
+            offset=10,
+            order="name asc",
+        )
+        executor.execute.assert_not_called()
+
     def test_count_executes_search_count(self) -> None:
         executor = Mock()
         executor.execute.return_value = 42
@@ -132,6 +217,23 @@ class TestOdooQueryWrite(unittest.TestCase):
         executor.execute.assert_called_once_with(
             "res.partner", "search_count", [("active", "=", True)]
         )
+
+    def test_count_delegates_to_recordset_search_count(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset._search_count.return_value = 42
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        query._recordset = Mock(return_value=recordset)
+
+        result = query.count()
+
+        self.assertEqual(result, 42)
+        query._recordset.assert_called_once_with()
+        recordset._search_count.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)])
+        )
+        executor.execute.assert_not_called()
 
     def test_ids_executes_search_with_order_and_context(self) -> None:
         executor = Mock()
@@ -221,6 +323,52 @@ class TestOdooQueryWrite(unittest.TestCase):
             ],
         )
 
+    def test_write_delegates_to_recordset_compatibility_write(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset._write_current.return_value = True
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        query._search_recordset = Mock(return_value=recordset)
+
+        result = query.write({})
+
+        self.assertTrue(result)
+        query._search_recordset.assert_called_once_with()
+        recordset._write_current.assert_called_once_with(
+            {},
+            allow_empty_ids=True,
+            allow_empty_values=True,
+        )
+        executor.execute.assert_not_called()
+
+    def test_write_keeps_empty_search_and_empty_values_compatible(self) -> None:
+        executor = Mock()
+        executor.execute.side_effect = [[], True]
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        result = query.with_context({"lang": "en_US"}).write({})
+
+        self.assertTrue(result)
+        self.assertEqual(
+            executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "search",
+                    [("active", "=", True)],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [],
+                    {},
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
     def test_unlink_passes_search_options_and_context(self) -> None:
         executor = Mock()
         executor.execute.side_effect = [[3, 4], True]
@@ -240,6 +388,42 @@ class TestOdooQueryWrite(unittest.TestCase):
                     context={"lang": "en_US"},
                 ),
                 call("res.partner", "unlink", [3, 4], context={"lang": "en_US"}),
+            ],
+        )
+
+    def test_unlink_delegates_to_recordset_compatibility_unlink(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset._unlink_current.return_value = True
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        query._search_recordset = Mock(return_value=recordset)
+
+        result = query.unlink()
+
+        self.assertTrue(result)
+        query._search_recordset.assert_called_once_with()
+        recordset._unlink_current.assert_called_once_with(allow_empty=True)
+        executor.execute.assert_not_called()
+
+    def test_unlink_keeps_empty_search_compatible(self) -> None:
+        executor = Mock()
+        executor.execute.side_effect = [[], True]
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        result = query.with_context({"lang": "en_US"}).unlink()
+
+        self.assertTrue(result)
+        self.assertEqual(
+            executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "search",
+                    [("active", "=", True)],
+                    context={"lang": "en_US"},
+                ),
+                call("res.partner", "unlink", [], context={"lang": "en_US"}),
             ],
         )
 

@@ -141,7 +141,7 @@ def _is_sequence(value: Any) -> bool:
 
 
 def _serialize_expression(node: DomainNode) -> Union[DomainCondition, list[Any]]:
-    if isinstance(node, _Condition):
+    if not isinstance(node, _Condition):
         return node.serialize()
     if len(node.operands) == 1:
         return ["!", *_serialize_tokens(node.operands[0])]
