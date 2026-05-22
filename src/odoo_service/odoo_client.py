@@ -111,11 +111,7 @@ class OdooClient(OdooExecutor):
             _logger.debug("Creating model proxy for %s", model_name)
             with self._lock:
                 if model_name not in self._models:
-                    self._models[model_name] = OdooModel(
-                        self._executor,
-                        model_name,
-                        env=self.env,
-                    )
+                    self._models[model_name] = OdooModel(self._executor, model_name)
         return self._models[model_name]
 
     def __iter__(self) -> None:

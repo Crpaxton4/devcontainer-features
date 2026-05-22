@@ -11,8 +11,8 @@ Why this file exists:
   recordset-first implementation is already finished.
 
 Local configuration can come from either shell environment variables or a
-repository-root `.env` file with `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, and
-`ODOO_PASSWORD`.
+supported INI file such as repository-root `.odoo_sdk.ini` with `url`, `db`,
+`username`, and `password` under the `[odoo]` section.
 
 Run with explicit task inputs:
 
@@ -174,7 +174,7 @@ def main() -> None:
     if not has_live_connection:
         raise SystemExit(
             "Provide ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD in the "
-            "shell environment or a repository-root .env file once the "
+            "shell environment or a supported INI file once the "
             "recordset-first surface is ready and you want to exercise the live "
             "read/create flow."
         )

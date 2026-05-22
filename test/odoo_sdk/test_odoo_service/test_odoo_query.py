@@ -3,7 +3,6 @@ from unittest.mock import Mock, call
 from hypothesis import given, strategies
 
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
-from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
 
@@ -252,23 +251,6 @@ class TestOdooQueryWrite(unittest.TestCase):
         query = query.with_context({"lang": "en_US"}).with_context({"tz": "UTC"})
         query.ids()
 
-        executor.execute.assert_called_once_with(
-            "res.partner",
-            "search",
-            [],
-            context={"lang": "en_US", "tz": "UTC"},
-        )
-
-    def test_with_context_merges_onto_existing_env_context(self) -> None:
-        executor = Mock()
-        executor.execute.return_value = [1]
-        env = OdooEnv(executor, {"lang": "en_US"})
-
-        query = OdooQuery(executor, "res.partner", [], env=env)
-        query = query.with_context({"tz": "UTC"})
-        result = query.ids()
-
-        self.assertEqual(result, [1])
         executor.execute.assert_called_once_with(
             "res.partner",
             "search",

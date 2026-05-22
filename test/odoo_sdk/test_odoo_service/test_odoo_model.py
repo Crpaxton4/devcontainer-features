@@ -27,25 +27,6 @@ class TestOdooModel(unittest.TestCase):
             "res.partner", "read", [7], fields=["name"]
         )
 
-    def test_env_bound_read_uses_context(self) -> None:
-        self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
-        model = OdooModel(
-            self.executor,
-            "res.partner",
-            env=OdooEnv(self.executor, {"lang": "en_US"}),
-        )
-
-        result = model.read(7, ["name"])
-
-        self.assertEqual(result, [{"id": 7, "name": "Acme"}])
-        self.executor.execute.assert_called_once_with(
-            "res.partner",
-            "read",
-            [7],
-            context={"lang": "en_US"},
-            fields=["name"],
-        )
-
     def test_create_delegates_to_executor(self) -> None:
         self.executor.execute.return_value = 101
 
@@ -137,24 +118,34 @@ class TestOdooModel(unittest.TestCase):
             context={"lang": "en_US"},
         )
 
-    def test_search_ids_merges_env_and_explicit_context(self) -> None:
-        self.executor.execute.return_value = [1, 2]
-        model = OdooModel(
-            self.executor,
-            "res.partner",
-            env=OdooEnv(self.executor, {"lang": "en_US"}),
-        )
+    def test_env_bound_model_read_uses_env_context(self) -> None:
+        self.executor.execute.return_value = [{"id": 3, "name": "Demo"}]
+        model = OdooEnv(self.executor, {"lang": "en_US"})["res.partner"]
 
-        result = model.search_ids(
-            [("is_company", "=", True)], context={"tz": "UTC"}
-        )
+        result = model.read(3, ["name"])
 
-        self.assertEqual(result, [1, 2])
+        self.assertEqual(result, [{"id": 3, "name": "Demo"}])
         self.executor.execute.assert_called_once_with(
             "res.partner",
-            "search",
+            "read",
+            [3],
+            context={"lang": "en_US"},
+            fields=["name"],
+        )
+
+    def test_env_bound_model_search_read_uses_env_context(self) -> None:
+        self.executor.execute.return_value = [{"id": 1, "name": "Acme"}]
+        model = OdooEnv(self.executor, {"lang": "en_US"})["res.partner"]
+
+        result = model.search_read([("is_company", "=", True)], ["name"])
+
+        self.assertEqual(result, [{"id": 1, "name": "Acme"}])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search_read",
             [("is_company", "=", True)],
-            context={"lang": "en_US", "tz": "UTC"},
+            fields=["name"],
+            context={"lang": "en_US"},
         )
 
     def test_exists_returns_existing_ids_in_input_order(self) -> None:

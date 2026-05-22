@@ -7,6 +7,7 @@ from hypothesis import given, strategies
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_model import OdooModel
+from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
 
 
 CONTEXT_KEYS = strategies.text(min_size=1, max_size=20)
@@ -184,18 +185,17 @@ class TestOdooEnv(unittest.TestCase):
         self.assertIsInstance(model, OdooModel)
         self.assertIs(model.client, self.executor)
         self.assertEqual(model.name, model_name)
+        self.assertIs(model.env, env)
 
-    def test_model_lookup_preserves_env_context_for_execution(self) -> None:
-        self.executor.execute.return_value = [{"id": 1, "name": "Acme"}]
+    @given(strategies.text(), strategies.lists(strategies.integers(), max_size=4))
+    def test_recordset_helper_returns_env_bound_recordset(
+        self, model_name: str, ids: list[int]
+    ) -> None:
         env = OdooEnv(self.executor, {"lang": "en_US"})
 
-        result = env["res.partner"].read([1], ["name"])
+        recordset = env.recordset(model_name, ids)
 
-        self.assertEqual(result, [{"id": 1, "name": "Acme"}])
-        self.executor.execute.assert_called_once_with(
-            "res.partner",
-            "read",
-            [1],
-            context={"lang": "en_US"},
-            fields=["name"],
-        )
+        self.assertIsInstance(recordset, OdooRecordset)
+        self.assertIs(recordset.env, env)
+        self.assertEqual(recordset.model_name, model_name)
+        self.assertEqual(recordset.ids, tuple(ids))

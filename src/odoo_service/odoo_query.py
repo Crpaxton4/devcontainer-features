@@ -26,20 +26,20 @@ class OdooQuery:
         client: OdooExecutor,
         model_name: str,
         domain: DomainInput = None,
-        env: OdooEnv | None = None,
+        env: Optional[OdooEnv] = None,
     ):
         self.client = client
         self.model_name = model_name
-        # Normalize domain explicitly to avoid relying on truthiness.
-        self._domain = DomainExpression.normalize(domain)
-        self._limit: Optional[int] = None
-        self._offset: Optional[int] = None
-        self._order: Optional[str] = None
         if env is None:
             from .odoo_env import OdooEnv
 
             env = OdooEnv(client)
         self._env = env
+        # Normalize domain explicitly to avoid relying on truthiness.
+        self._domain = DomainExpression.normalize(domain)
+        self._limit: Optional[int] = None
+        self._offset: Optional[int] = None
+        self._order: Optional[str] = None
 
     def _clone(self) -> OdooQuery:
         _logger.debug("Cloning query for model=%s", self.model_name)
@@ -54,6 +54,14 @@ class OdooQuery:
 
         return OdooRecordset(self._env, self.model_name)
 
+    def _search_recordset(self) -> OdooRecordset:
+        return self._recordset().search(
+            self._domain,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
+        )
+
     def _search_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
         if self._limit is not None:
@@ -62,7 +70,9 @@ class OdooQuery:
             kwargs["offset"] = self._offset
         if self._order is not None:
             kwargs["order"] = self._order
-        kwargs.update(self._context_kwargs())
+        context = self._env.context
+        if context:
+            kwargs["context"] = context
         return kwargs
 
     def _context_kwargs(self) -> Dict[str, Any]:
@@ -113,13 +123,13 @@ class OdooQuery:
 
     def ids(self) -> List[int]:
         """Executes `search` and returns matching record ids."""
-        recordset = self._recordset().search(
-            self._domain,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
+        serialized_domain = self._serialized_domain()
+        _logger.debug(
+            "Executing search on model=%s domain=%s",
+            self.model_name,
+            serialized_domain,
         )
-        return list(recordset.ids)
+        return list(self._search_recordset().ids)
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes a search_read operation to fetch record dictionaries."""
@@ -143,15 +153,13 @@ class OdooQuery:
         _logger.debug(
             "Executing query write on model=%s domain=%s", self.model_name, self._domain
         )
-        return (
-            self._recordset()
-            .search(
-                self._domain,
-                limit=self._limit,
-                offset=self._offset,
-                order=self._order,
-            )
-            .write(values)
+        ids = list(self._search_recordset().ids)
+        return self.client.execute(
+            self.model_name,
+            "write",
+            ids,
+            values,
+            **self._context_kwargs(),
         )
 
     def unlink(self) -> bool:
@@ -161,15 +169,12 @@ class OdooQuery:
             self.model_name,
             self._domain,
         )
-        return (
-            self._recordset()
-            .search(
-                self._domain,
-                limit=self._limit,
-                offset=self._offset,
-                order=self._order,
-            )
-            .unlink()
+        ids = list(self._search_recordset().ids)
+        return self.client.execute(
+            self.model_name,
+            "unlink",
+            ids,
+            **self._context_kwargs(),
         )
 
     def count(self) -> int:

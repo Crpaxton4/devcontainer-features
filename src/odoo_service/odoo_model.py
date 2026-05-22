@@ -25,7 +25,7 @@ class OdooModel:
         self,
         client: OdooExecutor,
         name: str,
-        env: OdooEnv | None = None,
+        env: Optional[OdooEnv] = None,
     ):
         self.client = client
         self.name = name
@@ -34,6 +34,20 @@ class OdooModel:
 
             env = OdooEnv(client)
         self._env = env
+
+    @property
+    def env(self) -> OdooEnv:
+        """Returns the environment bound to this model proxy."""
+        return self._env
+
+    def _context_kwargs(self) -> Dict[str, Any]:
+        context = self._env.context
+        if not context:
+            return {}
+        return {"context": context}
+
+    def _recordset(self, ids: Union[int, List[int]]) -> OdooRecordset:
+        return self._env.recordset(self.name, self._normalize_ids(ids))
 
     @staticmethod
     def _normalize_ids(ids: Union[int, List[int]]) -> List[int]:
@@ -44,17 +58,6 @@ class OdooModel:
     @staticmethod
     def _serialize_domain(domain: DomainInput) -> List[Any]:
         return DomainExpression.normalize(domain).serialize()
-
-    def _context_kwargs(self) -> Dict[str, Any]:
-        context = self._env.context
-        if not context:
-            return {}
-        return {"context": context}
-
-    def _recordset(self, ids: Union[int, List[int]]) -> OdooRecordset:
-        from .odoo_recordset import OdooRecordset
-
-        return OdooRecordset(self._env, self.name, self._normalize_ids(ids))
 
     def search(self, domain: DomainInput = None) -> OdooQuery:
         """Starts a fluent query. Returns an OdooQuery builder."""
@@ -73,7 +76,11 @@ class OdooModel:
         :return: The list of records with the requested fields.
         :rtype: List[Record]
         """
-        return self._recordset(ids).read(fields)
+        normalized_ids = self._normalize_ids(ids)
+        _logger.debug(
+            "Reading model=%s ids=%s fields=%s", self.name, normalized_ids, fields
+        )
+        return self._recordset(normalized_ids).read(fields)
 
     def browse(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
@@ -105,7 +112,11 @@ class OdooModel:
 
     def exists(self, ids: Union[int, List[int]]) -> List[int]:
         """Returns ids that still exist on the server, preserving input order."""
-        return list(self._recordset(ids).exists().ids)
+        normalized_ids = self._normalize_ids(ids)
+        if not normalized_ids:
+            return []
+
+        return list(self._recordset(normalized_ids).exists().ids)
 
     def search_read(
         self,
@@ -117,7 +128,7 @@ class OdooModel:
         order: Optional[str] = None,
     ) -> List[Record]:
         """Runs `search_read` with optional pagination and field selection."""
-        kwargs = self._context_kwargs()
+        kwargs: Dict[str, Any] = {}
         if fields is not None:
             kwargs["fields"] = fields
         if limit is not None:
@@ -126,6 +137,7 @@ class OdooModel:
             kwargs["offset"] = offset
         if order is not None:
             kwargs["order"] = order
+        kwargs.update(self._context_kwargs())
 
         search_domain = self._serialize_domain(domain)
         _logger.debug(
@@ -158,10 +170,10 @@ class OdooModel:
         limit: int = 100,
     ) -> List[List[Any]]:
         """Runs `name_search` and returns [id, display_name] rows."""
-        kwargs = self._context_kwargs()
-        kwargs.update({"operator": operator, "limit": limit})
+        kwargs: Dict[str, Any] = {"operator": operator, "limit": limit}
         if domain is not None:
             kwargs["args"] = self._serialize_domain(domain)
+        kwargs.update(self._context_kwargs())
 
         _logger.debug("Executing name_search on model=%s name=%s", self.name, name)
         return self.client.execute(self.name, "name_search", name, **kwargs)
@@ -220,14 +232,14 @@ class OdooModel:
         if not groupby:
             raise ValueError("read_group requires at least one groupby field")
 
-        kwargs = self._context_kwargs()
-        kwargs["lazy"] = lazy
+        kwargs: Dict[str, Any] = {"lazy": lazy}
         if offset is not None:
             kwargs["offset"] = offset
         if limit is not None:
             kwargs["limit"] = limit
         if orderby is not None:
             kwargs["orderby"] = orderby
+        kwargs.update(self._context_kwargs())
 
         search_domain = self._serialize_domain(domain)
         _logger.debug(
@@ -268,7 +280,14 @@ class OdooModel:
         :return: True if the update was successful, False otherwise.
         :rtype: bool
         """
-        return self._recordset(ids).write(vals)
+        normalized_ids = self._normalize_ids(ids)
+        if not normalized_ids:
+            raise ValueError("write requires at least one id")
+        if not vals:
+            raise ValueError("write requires at least one value")
+
+        _logger.debug("Writing model=%s ids=%s", self.name, normalized_ids)
+        return self._recordset(normalized_ids).write(vals)
 
     def unlink(self, ids: Union[int, List[int]]) -> bool:
         """Deletes existing records.
@@ -278,7 +297,11 @@ class OdooModel:
         :return: True if the deletion was successful, False otherwise.
         :rtype: bool
         """
-        return self._recordset(ids).unlink()
+        normalized_ids = self._normalize_ids(ids)
+        if not normalized_ids:
+            raise ValueError("unlink requires at least one id")
+        _logger.debug("Unlinking model=%s ids=%s", self.name, normalized_ids)
+        return self._recordset(normalized_ids).unlink()
 
     def fields_get(
         self, fields: Optional[List[str]] = None, attributes: Optional[List[str]] = None
@@ -292,11 +315,12 @@ class OdooModel:
         :return: The schema metadata for the model.
         :rtype: Dict[str, Any]
         """
-        kwargs = self._context_kwargs()
+        kwargs: Dict[str, Any] = {}
         if fields is not None:
             kwargs["allfields"] = fields
         if attributes is not None:
             kwargs["attributes"] = attributes
+        kwargs.update(self._context_kwargs())
         _logger.debug(
             "Fetching fields_get for model=%s fields=%s attributes=%s",
             self.name,

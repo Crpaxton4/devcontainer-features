@@ -7,6 +7,12 @@ from typing import Optional
 
 DEFAULT_CONFIG_ENV_VAR = "odoo_sdk_CONFIG"
 DEFAULT_SECTION = "odoo"
+CONNECTION_ENV_VARS = {
+    "url": "ODOO_URL",
+    "db": "ODOO_DB",
+    "username": "ODOO_USERNAME",
+    "password": "ODOO_PASSWORD",
+}
 DEFAULT_CONFIG_LOCATIONS = (
     ".odoo_sdk.ini",
     "~/.config/odoo_sdk/config.ini",
@@ -31,6 +37,7 @@ class OdooConnectionSettings:
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
         file_values = _load_file_values(config_path)
+        environment_values = _load_environment_values()
         # Prefer explicit `None` checks so callers can pass empty strings
         # deliberately (the INI loader still treats empty values as missing).
         explicit_values = {
@@ -43,6 +50,8 @@ class OdooConnectionSettings:
         for key, explicit_value in explicit_values.items():
             if explicit_value is not None:
                 values[key] = explicit_value
+            elif environment_values.get(key) is not None:
+                values[key] = environment_values[key]
             else:
                 values[key] = file_values.get(key)
 
@@ -52,8 +61,8 @@ class OdooConnectionSettings:
             missing_names = ", ".join(sorted(missing))
             raise ValueError(
                 "Missing Odoo connection settings: "
-                f"{missing_names}. Configure them in .env, the INI file, or "
-                "override them with constructor arguments."
+                f"{missing_names}. Configure them with environment variables, "
+                "the INI file, or override them with constructor arguments."
             )
 
         return cls(
@@ -81,6 +90,13 @@ def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
         "db": parser.get(DEFAULT_SECTION, "db", fallback=""),
         "username": parser.get(DEFAULT_SECTION, "username", fallback=""),
         "password": parser.get(DEFAULT_SECTION, "password", fallback=""),
+    }
+
+
+def _load_environment_values() -> dict[str, Optional[str]]:
+    return {
+        key: os.environ.get(environment_variable)
+        for key, environment_variable in CONNECTION_ENV_VARS.items()
     }
 
 

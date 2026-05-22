@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 
 from .odoo_executor import OdooExecutor
 
 if TYPE_CHECKING:
     from .odoo_model import OdooModel
+    from .odoo_recordset import OdooRecordset
 
 
 class OdooEnv:
@@ -43,3 +44,13 @@ class OdooEnv:
         from .odoo_model import OdooModel
 
         return OdooModel(self._executor, model_name, env=self)
+
+    def recordset(
+        self,
+        model_name: str,
+        ids: Union[int, Sequence[int]] = (),
+    ) -> OdooRecordset:
+        """Returns a recordset bound to this environment and model."""
+        from .odoo_recordset import OdooRecordset
+
+        return OdooRecordset(self, model_name, ids)

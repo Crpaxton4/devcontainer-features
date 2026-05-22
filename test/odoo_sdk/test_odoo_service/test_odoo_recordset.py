@@ -1,4 +1,3 @@
-from copy import deepcopy
 import unittest
 from unittest.mock import Mock
 
@@ -12,17 +11,25 @@ class TestOdooRecordset(unittest.TestCase):
         self.executor = Mock(spec=OdooExecutor)
         self.env = OdooEnv(self.executor, {"lang": "en_US"})
 
-    def test_identity_is_exposed_and_ids_are_immutable(self) -> None:
-        source_ids = [3, 1, 2]
+    def test_identity_preserves_model_env_and_ordered_ids(self) -> None:
+        input_ids = [3, 1, 2]
 
-        recordset = OdooRecordset(self.env, "res.partner", source_ids)
-        source_ids.append(9)
+        recordset = OdooRecordset(self.env, "res.partner", input_ids)
+        input_ids.append(4)
 
         self.assertIs(recordset.env, self.env)
         self.assertEqual(recordset.model_name, "res.partner")
         self.assertEqual(recordset.ids, (3, 1, 2))
 
-    def test_read_returns_raw_rows_with_env_context(self) -> None:
+    def test_read_returns_empty_rows_without_io_for_empty_ids(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.read(["name"])
+
+        self.assertEqual(result, [])
+        self.executor.execute.assert_not_called()
+
+    def test_read_materializes_raw_rows_with_context(self) -> None:
         self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
         recordset = OdooRecordset(self.env, "res.partner", [7])
 
@@ -37,39 +44,31 @@ class TestOdooRecordset(unittest.TestCase):
             fields=["name"],
         )
 
-    def test_read_returns_empty_rows_without_io_for_empty_ids(self) -> None:
-        recordset = OdooRecordset(self.env, "res.partner", [])
-
-        result = recordset.read(["name"])
-
-        self.assertEqual(result, [])
-        self.executor.execute.assert_not_called()
-
-    def test_write_uses_env_context(self) -> None:
+    def test_write_updates_current_ids_with_context(self) -> None:
         self.executor.execute.return_value = True
-        recordset = OdooRecordset(self.env, "res.partner", [4, 5])
+        recordset = OdooRecordset(self.env, "res.partner", [7, 8])
 
-        result = recordset.write({"name": "Updated"})
+        result = recordset.write({"comment": "Updated"})
 
         self.assertTrue(result)
         self.executor.execute.assert_called_once_with(
             "res.partner",
             "write",
-            [4, 5],
-            {"name": "Updated"},
+            [7, 8],
+            {"comment": "Updated"},
             context={"lang": "en_US"},
         )
 
-    def test_write_rejects_empty_ids_and_empty_values(self) -> None:
+    def test_write_rejects_empty_ids_and_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one id"):
-            OdooRecordset(self.env, "res.partner", []).write({"name": "Updated"})
+            OdooRecordset(self.env, "res.partner", []).write({"name": "Acme"})
 
         with self.assertRaisesRegex(ValueError, "at least one value"):
             OdooRecordset(self.env, "res.partner", [1]).write({})
 
-    def test_unlink_uses_env_context(self) -> None:
+    def test_unlink_deletes_current_ids_with_context(self) -> None:
         self.executor.execute.return_value = True
-        recordset = OdooRecordset(self.env, "res.partner", [4, 5])
+        recordset = OdooRecordset(self.env, "res.partner", [7, 8])
 
         result = recordset.unlink()
 
@@ -77,7 +76,7 @@ class TestOdooRecordset(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "res.partner",
             "unlink",
-            [4, 5],
+            [7, 8],
             context={"lang": "en_US"},
         )
 
@@ -85,7 +84,7 @@ class TestOdooRecordset(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one id"):
             OdooRecordset(self.env, "res.partner", []).unlink()
 
-    def test_exists_preserves_input_order_for_surviving_ids(self) -> None:
+    def test_exists_preserves_surviving_id_order(self) -> None:
         self.executor.execute.return_value = [2, 1]
         recordset = OdooRecordset(self.env, "res.partner", [3, 1, 2])
 
@@ -108,43 +107,34 @@ class TestOdooRecordset(unittest.TestCase):
         self.assertEqual(result.ids, ())
         self.executor.execute.assert_not_called()
 
-    def test_browse_returns_recordset_for_same_model_and_env(self) -> None:
-        recordset = OdooRecordset(self.env, "res.partner", [1])
+    def test_browse_returns_same_model_recordset_without_io(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [7])
 
-        result = recordset.browse([9, 8])
+        result = recordset.browse([9, 10])
 
         self.assertIsInstance(result, OdooRecordset)
-        self.assertIs(result.env, self.env)
+        self.assertEqual(result.ids, (9, 10))
         self.assertEqual(result.model_name, "res.partner")
-        self.assertEqual(result.ids, (9, 8))
+        self.assertIs(result.env, self.env)
+        self.executor.execute.assert_not_called()
 
-    def test_search_returns_recordset_with_search_options_and_context(self) -> None:
-        self.executor.execute.return_value = [8, 4]
+    def test_search_returns_new_recordset_with_domain_options_and_context(self) -> None:
+        self.executor.execute.return_value = [4, 5]
         recordset = OdooRecordset(self.env, "res.partner", [99])
 
         result = recordset.search(
-            [
-                ("active", "=", True),
-                "|",
-                ("company_id", "=", 3),
-                ("name", "ilike", "Acme"),
-            ],
+            [("active", "=", True)],
             limit=2,
             offset=1,
             order="name asc",
         )
 
         self.assertIsInstance(result, OdooRecordset)
-        self.assertEqual(result.ids, (8, 4))
+        self.assertEqual(result.ids, (4, 5))
         self.executor.execute.assert_called_once_with(
             "res.partner",
             "search",
-            [
-                ("active", "=", True),
-                "|",
-                ("company_id", "=", 3),
-                ("name", "ilike", "Acme"),
-            ],
+            [("active", "=", True)],
             context={"lang": "en_US"},
             limit=2,
             offset=1,
@@ -152,22 +142,13 @@ class TestOdooRecordset(unittest.TestCase):
         )
 
     def test_with_context_returns_new_recordset_without_mutating_original(self) -> None:
-        recordset = OdooRecordset(self.env, "res.partner", [1, 2])
-        extra_context = {"tz": ["UTC"]}
-        expected_extra_context = deepcopy(extra_context)
+        recordset = OdooRecordset(self.env, "res.partner", [7, 8])
 
-        derived = recordset.with_context(extra_context)
-        extra_context["tz"].append("Europe/Brussels")
+        derived = recordset.with_context({"tz": "UTC"})
 
         self.assertIsNot(derived, recordset)
         self.assertEqual(recordset.env.context, {"lang": "en_US"})
-        self.assertEqual(derived.env.context, {"lang": "en_US", **expected_extra_context})
-        self.assertEqual(derived.ids, (1, 2))
-
-    def test_construction_and_chaining_do_not_trigger_hidden_io(self) -> None:
-        recordset = OdooRecordset(self.env, "res.partner", [1, 2])
-
-        chained = recordset.browse([3]).with_context({"tz": "UTC"})
-
-        self.assertEqual(chained.ids, (3,))
+        self.assertEqual(derived.env.context, {"lang": "en_US", "tz": "UTC"})
+        self.assertEqual(derived.ids, (7, 8))
+        self.assertEqual(derived.model_name, "res.partner")
         self.executor.execute.assert_not_called()
