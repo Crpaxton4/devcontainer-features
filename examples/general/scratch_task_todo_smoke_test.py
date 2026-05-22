@@ -10,9 +10,12 @@ Why this file exists:
 - A smoke test should show the direction of travel without pretending that the
   recordset-first implementation is already finished.
 
-Run with connection settings in the environment and explicit task inputs:
+Local configuration can come from either shell environment variables or a
+repository-root `.env` file with `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, and
+`ODOO_PASSWORD`.
 
-    ODOO_URL=... ODOO_DB=... ODOO_USERNAME=... ODOO_PASSWORD=... \
+Run with explicit task inputs:
+
     python examples/general/scratch_task_todo_smoke_test.py \
         --task-id 123 \
         --todo-name "Call customer back"
@@ -91,30 +94,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_client_from_environment() -> Tuple[OdooClient, bool]:
-    connection_values = {
-        "ODOO_URL": os.getenv("ODOO_URL"),
-        "ODOO_DB": os.getenv("ODOO_DB"),
-        "ODOO_USERNAME": os.getenv("ODOO_USERNAME"),
-        "ODOO_PASSWORD": os.getenv("ODOO_PASSWORD"),
-    }
-    missing_names = [
-        variable_name
-        for variable_name, variable_value in connection_values.items()
-        if not variable_value
-    ]
-    if missing_names:
+def build_client_from_local_configuration() -> Tuple[OdooClient, bool]:
+    try:
+        return OdooClient(), True
+    except ValueError:
         return OdooClient(executor=RedPhaseSmokeExecutor()), False
-
-    return (
-        OdooClient(
-            url=connection_values["ODOO_URL"],
-            db=connection_values["ODOO_DB"],
-            username=connection_values["ODOO_USERNAME"],
-            password=connection_values["ODOO_PASSWORD"],
-        ),
-        True,
-    )
 
 
 def assert_recordset_first_surface(project_task_model: OdooModel) -> None:
@@ -178,7 +162,7 @@ def create_todo_without_project(
 
 def main() -> None:
     arguments = build_argument_parser().parse_args()
-    client, has_live_connection = build_client_from_environment()
+    client, has_live_connection = build_client_from_local_configuration()
 
     # Starting from client.env mirrors the documented Phase A direction even
     # though the current implementation still delegates through model/query
@@ -189,9 +173,10 @@ def main() -> None:
 
     if not has_live_connection:
         raise SystemExit(
-            "Provide ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD once "
-            "the recordset-first surface is ready and you want to exercise the "
-            "live read/create flow."
+            "Provide ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD in the "
+            "shell environment or a repository-root .env file once the "
+            "recordset-first surface is ready and you want to exercise the live "
+            "read/create flow."
         )
 
     existing_task = read_single_task(

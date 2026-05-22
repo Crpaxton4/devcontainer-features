@@ -225,6 +225,59 @@ class TestOdooConnectionSettings(unittest.TestCase):
         self.assertEqual(settings.username, "file-user")
         self.assertEqual(settings.password, "file-password")
 
+    @patch("odoo_sdk.odoo_service.odoo_config._resolve_default_dotenv_path")
+    def test_reads_connection_values_from_dotenv_when_present(
+        self, mock_resolve_default_dotenv_path: Mock
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            dotenv_path = Path(temp_dir) / ".env"
+            dotenv_path.write_text(
+                "ODOO_URL=https://from-dotenv.example.com\n"
+                "ODOO_DB=dotenv-db\n"
+                "ODOO_USERNAME=dotenv-user\n"
+                "ODOO_PASSWORD=dotenv-password\n",
+                encoding="utf-8",
+            )
+            mock_resolve_default_dotenv_path.return_value = str(dotenv_path)
+
+            with patch.dict("os.environ", {}, clear=True):
+                settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.url, "https://from-dotenv.example.com")
+        self.assertEqual(settings.db, "dotenv-db")
+        self.assertEqual(settings.username, "dotenv-user")
+        self.assertEqual(settings.password, "dotenv-password")
+
+    @patch("odoo_sdk.odoo_service.odoo_config._resolve_default_dotenv_path")
+    def test_environment_values_override_dotenv_values(
+        self, mock_resolve_default_dotenv_path: Mock
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            dotenv_path = Path(temp_dir) / ".env"
+            dotenv_path.write_text(
+                "ODOO_URL=https://from-dotenv.example.com\n"
+                "ODOO_DB=dotenv-db\n"
+                "ODOO_USERNAME=dotenv-user\n"
+                "ODOO_PASSWORD=dotenv-password\n",
+                encoding="utf-8",
+            )
+            mock_resolve_default_dotenv_path.return_value = str(dotenv_path)
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "ODOO_URL": "https://from-environment.example.com",
+                    "ODOO_PASSWORD": "environment-password",
+                },
+                clear=True,
+            ):
+                settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.url, "https://from-environment.example.com")
+        self.assertEqual(settings.db, "dotenv-db")
+        self.assertEqual(settings.username, "dotenv-user")
+        self.assertEqual(settings.password, "environment-password")
+
     @patch("odoo_sdk.odoo_service.odoo_config._resolve_relative_to_invoking_script")
     def test_relative_config_path_resolves_from_invoking_script_directory(
         self, mock_resolve_relative_to_invoking_script: Mock
