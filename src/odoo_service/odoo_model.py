@@ -59,6 +59,26 @@ class OdooModel:
     def _serialize_domain(domain: DomainInput) -> List[Any]:
         return DomainExpression.normalize(domain).serialize()
 
+    def _search_query(
+        self,
+        domain: DomainInput = None,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> OdooQuery:
+        query = self.search(domain)
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+        if order is not None:
+            query = query.order_by(order)
+        if context is not None:
+            query = query.with_context(context)
+        return query
+
     def search(self, domain: DomainInput = None) -> OdooQuery:
         """Starts a fluent query. Returns an OdooQuery builder."""
         _logger.debug("Building query for model=%s domain=%s", self.name, domain)
@@ -98,17 +118,13 @@ class OdooModel:
         context: Optional[Dict[str, Any]] = None,
     ) -> List[int]:
         """Runs `search` and returns matching record ids."""
-        query = self.search(domain)
-        if limit is not None:
-            query = query.limit(limit)
-        if offset is not None:
-            query = query.offset(offset)
-        if order is not None:
-            query = query.order_by(order)
-        if context is not None:
-            query = query.with_context(context)
-
-        return query.ids()
+        return self._search_query(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+            context=context,
+        ).ids()
 
     def exists(self, ids: Union[int, List[int]]) -> List[int]:
         """Returns ids that still exist on the server, preserving input order."""
@@ -128,38 +144,18 @@ class OdooModel:
         order: Optional[str] = None,
     ) -> List[Record]:
         """Runs `search_read` with optional pagination and field selection."""
-        kwargs: Dict[str, Any] = {}
-        if fields is not None:
-            kwargs["fields"] = fields
-        if limit is not None:
-            kwargs["limit"] = limit
-        if offset is not None:
-            kwargs["offset"] = offset
-        if order is not None:
-            kwargs["order"] = order
-        kwargs.update(self._context_kwargs())
-
-        search_domain = self._serialize_domain(domain)
-        _logger.debug(
-            "Executing search_read on model=%s domain=%s kwargs=%s",
-            self.name,
-            search_domain,
-            kwargs,
-        )
-        return self.client.execute(self.name, "search_read", search_domain, **kwargs)
+        _logger.debug("Executing search_read on model=%s", self.name)
+        return self._search_query(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        ).read(fields)
 
     def search_count(self, domain: DomainInput = None) -> int:
         """Runs `search_count` and returns the number of matched records."""
-        search_domain = self._serialize_domain(domain)
-        _logger.debug(
-            "Executing search_count on model=%s domain=%s", self.name, search_domain
-        )
-        return self.client.execute(
-            self.name,
-            "search_count",
-            search_domain,
-            **self._context_kwargs(),
-        )
+        _logger.debug("Executing search_count on model=%s", self.name)
+        return self.search(domain).count()
 
     def name_search(
         self,
