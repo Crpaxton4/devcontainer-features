@@ -3,6 +3,7 @@ import threading
 from typing import Any, Dict, Optional
 
 from .odoo_config import OdooConnectionSettings
+from .odoo_env import OdooEnv
 from .odoo_executor import OdooExecutor
 from .odoo_model import OdooModel
 from .odoo_rpc_executor import OdooRpcExecutor
@@ -77,6 +78,11 @@ class OdooClient(OdooExecutor):
         if not isinstance(self._executor, OdooRpcExecutor):
             raise AttributeError("Configured executor does not expose uid")
         return self._executor.uid
+
+    @property
+    def env(self) -> OdooEnv:
+        """Returns the root environment for env-bound Phase A behavior."""
+        return OdooEnv(self._executor)
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Base XML-RPC execution wrapper

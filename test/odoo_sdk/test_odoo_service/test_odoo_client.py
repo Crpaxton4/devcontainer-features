@@ -7,10 +7,21 @@ from hypothesis import given, strategies
 
 from odoo_sdk.odoo_service.odoo_client import OdooClient
 from odoo_sdk.odoo_service.odoo_config import OdooConnectionSettings
+from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 
 
 class TestOdooClientContract(unittest.TestCase):
+    def test_client_exposes_root_env_with_injected_executor(self) -> None:
+        executor = Mock(spec=OdooExecutor)
+        client = OdooClient(executor=executor)
+
+        env = client.env
+
+        self.assertIsInstance(env, OdooEnv)
+        self.assertIs(env.executor, executor)
+        self.assertEqual(env.context, {})
+
     @given(strategies.text(), strategies.text(), strategies.text(), strategies.text())
     def test_client_is_not_a_mapping_or_iterable(
         self, url: str, db: str, username: str, password: str
@@ -148,3 +159,4 @@ class TestOdooConnectionSettings(unittest.TestCase):
             settings = OdooConnectionSettings.from_sources(config_path="odoo.ini")
 
         self.assertEqual(settings.url, "https://from-file.example.com")
+
