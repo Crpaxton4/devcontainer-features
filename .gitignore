@@ -1,0 +1,41 @@
+
+# Ignore everything by default and explicitly whitelist known files
+/*
+/.*/
+
+# Keep the gitignore itself
+!/.gitignore
+
+# known solution directories (include their contents)
+!/.devcontainer/
+!/.devcontainer/**
+
+!/docs/
+!/docs/**
+
+!/commands/
+!/commands/**
+
+
+!/examples/
+!/examples/**
+!/src/
+!/src/**
+
+!/tests/
+!/tests/**
+
+# Whitelist project config files
+!/cosmic-ray.toml
+!/pyproject.toml
+!/uv.lock
+
+# General Development Scripts
+!/scripts
+
+!requirements.dev.txt
+!requirements.txt
+
+# Specific files to exclude
+**/__pycache__/
+*.py[cod]

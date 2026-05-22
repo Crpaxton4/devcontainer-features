@@ -1,0 +1,27 @@
+graph LR
+    subgraph A["Phase A - Current to MVP"]
+        A1["Keep OdooClient facade"]
+        A2["Introduce OdooEnv and DomainExpression"]
+        A3["Add OdooRecordset skeleton"]
+    end
+
+    subgraph B["Phase B - Growth"]
+        B1["Metadata cache"]
+        B2["Field adapters"]
+        B3["Compatibility shims for OdooQuery"]
+        B4["Local integration checks against Odoo"]
+    end
+
+    subgraph C["Phase C - Ecosystem"]
+        C1["Plugin registry"]
+        C2["Typed model adapters"]
+        C3["Tracing and retries"]
+        C4["Optional async facade"]
+    end
+
+    A3 --> B1
+    A2 --> B2
+    B2 --> C1
+    B4 --> C2
+    B1 --> C3
+    C1 --> C4

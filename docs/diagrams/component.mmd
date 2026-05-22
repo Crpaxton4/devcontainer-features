@@ -1,0 +1,31 @@
+graph TD
+    subgraph PublicAPI["Public API"]
+        Client["OdooClient facade"]
+        Env["OdooEnv"]
+        Recordset["OdooRecordset"]
+        Domain["Domain expression"]
+    end
+
+    subgraph Core["SDK core"]
+        ModelRegistry["Model registry"]
+        MetadataCache["Metadata cache"]
+        FieldAdapters["Field adapters"]
+        ErrorMapper["Error mapper"]
+        Session["OdooSession"]
+        Transport["XML-RPC transport"]
+        PluginHooks["Plugin hooks"]
+    end
+
+    Client --> Env
+    Env --> ModelRegistry
+    ModelRegistry --> Recordset
+    Recordset --> Domain
+    Recordset --> FieldAdapters
+    ModelRegistry --> MetadataCache
+    FieldAdapters --> MetadataCache
+    Env --> Session
+    Session --> Transport
+    Session --> ErrorMapper
+    PluginHooks --> FieldAdapters
+    PluginHooks --> ModelRegistry
+    Transport --> Odoo["Odoo XML-RPC"]

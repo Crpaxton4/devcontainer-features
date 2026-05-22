@@ -1,0 +1,84 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/python
+{
+	"name": "Python 3",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/python:3-3.14-bookworm",
+	"mounts": [
+		"source=${localWorkspaceFolder}/.devcontainer/vscode-config/tasks.json,target=${containerWorkspaceFolder}/.vscode/tasks.json,type=bind,consistency=cached"
+	],
+	"features": {
+		"ghcr.io/devcontainers/features/copilot-cli:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"moby": true,
+			"azureDnsAutoDetection": true,
+			"installDockerBuildx": true,
+			"version": "latest",
+			"dockerDashComposeVersion": "v2"
+		},
+		"ghcr.io/devcontainers/features/github-cli:1": {
+			"installDirectlyFromGitHubRelease": true,
+			"version": "latest"
+		},
+		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {}
+	},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "pip3 install --user -r requirements.txt",
+	// Configure tool-specific properties.
+	// "customizations": {},
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.autopep8",
+				"ms-python.black-formatter",
+				"ms-python.debugpy",
+				"ms-python.vscode-python-envs",
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"njpwerner.autodocstring",
+				"coderabbit.coderabbit-vscode",
+				"ms-python.isort"
+			],
+			"settings": {
+				"explorer.decorations.badges": true,
+				"explorer.decorations.colors": true,
+				"python.testing.cwd": "${workspaceFolder}",
+				"python.testing.unittestArgs": [
+					"-v",
+					"-s",
+					"tests",
+					"-p",
+					"test_*.py",
+					"-t",
+					"."
+				],
+				"python.testing.pytestEnabled": false,
+				"python.testing.unittestEnabled": true,
+				"testing.coverageToolbarEnabled": false,
+				"testing.gutterEnabled": true,
+				"testing.showCoverageInExplorer": true,
+				"[python]": {
+					"editor.defaultFormatter": "ms-python.black-formatter",
+					"editor.formatOnSave": true,
+					"editor.quickSuggestions": {
+						// Odoo IDE Requirement
+						"comments": "on",
+						"other": "on",
+						"strings": "on"
+					},
+					"editor.codeActionsOnSave": {
+						"source.organizeImports": "explicit"
+					}
+				},
+				"python.analysis.typeCheckingMode": "strict",
+				"python.languageServer": "Pylance"
+			}
+		}
+	}
+}
