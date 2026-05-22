@@ -65,6 +65,13 @@ Recommendation
 - Keep `OdooClient` as the main facade, but re-center the SDK on `OdooEnv`, `OdooRecordset`, and a metadata-aware model registry.
 - Retain the current thin wrappers only as transition layers, not as the final core.
 
+Phase A implementation boundary
+- Phase A preserves the current public entry points: `OdooClient`, `OdooModel`, `OdooQuery`, `OdooExecutor`, and `CommandDispatcher`.
+- Phase A introduces `OdooEnv`, `DomainExpression`, and `OdooRecordset` as the architectural center of gravity underneath those preserved surfaces.
+- During Phase A, `OdooModel` and `OdooQuery` remain compatibility layers. Their job is to delegate toward env-bound and recordset-bound behavior, not to remain the long-term core.
+- `OdooEnv` is the Phase A owner of execution context. A fuller `OdooSession` policy layer remains a later concern.
+- Export decisions for new abstractions are part of Phase A documentation alignment, not an automatic outcome of the first guardrails task.
+
 Why
 - The current architecture already has a clean transport seam.
 - The main gap is not RPC connectivity; it is the missing unit of abstraction between "model" and "row dictionary".
@@ -155,6 +162,12 @@ Target public API transformation
 | `read` returns `list[dict]` | `read` remains available, but as an extraction method on recordsets |
 | Context passed inside query kwargs | `with_context` returns a new env or recordset |
 | Relational values stay raw | Relational values become recordset proxies or typed adapters |
+
+Phase A compatibility overlay
+- The table above describes the architectural trajectory, not an immediate A0 behavior flip.
+- Throughout Phase A, the preserved public surfaces remain usable while the controlling execution path moves toward `OdooEnv`, `DomainExpression`, and `OdooRecordset`.
+- Raw `read()` extraction remains explicit during Phase A even as recordset identity becomes the new internal center.
+- `OdooQuery` remains available for fluent compatibility but should be treated as transitional rather than as the architectural center.
 
 ### System Context Diagram
 

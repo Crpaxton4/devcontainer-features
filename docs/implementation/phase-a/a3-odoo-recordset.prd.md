@@ -27,6 +27,7 @@ Introduce `OdooRecordset` as the Phase A core abstraction. A recordset will carr
 - `search(domain, limit=None, offset=None, order=None)` must return a recordset for matching ids rather than a query builder.
 - `with_context(context)` must return a new recordset bound to a derived environment rather than mutating the current recordset.
 - The design must explicitly define which Phase A operations return raw rows and which return recordsets.
+- The recordset return contract must not by itself force immediate caller-facing return changes on preserved `OdooModel` or `OdooQuery` compatibility surfaces during Phase A.
 - The implementation must define how empty-id behavior is handled for recordset operations and keep compatibility wrappers aligned with that decision.
 - Local unit tests must cover recordset creation, identity inspection, chaining behavior, `with_context`, `search`, `browse`, `exists`, and extraction behavior.
 
@@ -36,6 +37,7 @@ Introduce `OdooRecordset` as the Phase A core abstraction. A recordset will carr
 - Construction and chaining must not trigger hidden network I/O unless an operation explicitly requires execution.
 - The abstraction must remain narrow enough to avoid becoming a second query builder.
 - Context and id handling must preserve input order and avoid accidental mutation leakage.
+- Compatibility wrappers may preserve existing caller-facing return shapes during Phase A even while the recordset becomes the internal identity-bearing core.
 
 # Acceptance Criteria
 

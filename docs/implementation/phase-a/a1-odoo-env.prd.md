@@ -24,6 +24,7 @@ Introduce `OdooEnv` as the environment root for Phase A. `OdooEnv` will own exec
 - `OdooEnv` must expose a consistent model-lookup path that later Phase A tasks can use to construct model-bound behavior and recordsets.
 - `OdooClient` must expose a root environment in a way that preserves its role as the top-level facade.
 - The implementation must define how environment context is surfaced for downstream consumers without allowing accidental shared mutable state.
+- The implementation must keep `OdooEnv` as the Phase A boundary for context and environment derivation without introducing a fuller `OdooSession` abstraction in this phase.
 - Local unit tests must cover environment creation, empty-context behavior, context derivation, and defensive copying.
 
 ## Non-Functional Requirements
@@ -32,6 +33,7 @@ Introduce `OdooEnv` as the environment root for Phase A. `OdooEnv` will own exec
 - The environment abstraction must not require network I/O at construction time.
 - The environment must remain thin and must not absorb responsibilities that belong to recordsets, metadata caches, or future session policy layers.
 - The design must stay compatible with the existing synchronous executor model.
+- The design must make it clear that execution policy stays on the existing executor seam until a later phase defines a fuller session layer.
 
 # Acceptance Criteria
 

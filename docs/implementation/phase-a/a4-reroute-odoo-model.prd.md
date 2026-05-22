@@ -16,8 +16,8 @@ Re-implement the relevant `OdooModel` behavior on top of `OdooEnv`, `DomainExpre
 
 ## Functional Requirements
 
-- `OdooModel.search()` must continue to support current search call sites while routing its underlying behavior through the Phase A primitives.
-- `OdooModel.browse()` must route through recordset-backed behavior while preserving current caller expectations for returned data during the transition.
+- `OdooModel.search()` must continue to support current search call sites by returning the current fluent compatibility surface while routing its underlying behavior through the Phase A primitives.
+- `OdooModel.browse()` must route through recordset-backed behavior while preserving its current caller-facing raw-row expectations during the Phase A transition unless a later task explicitly documents a different compatibility change.
 - `OdooModel` must use the canonical domain path introduced by `DomainExpression` for search-related operations.
 - `OdooModel` must use env-bound execution rather than managing query-only context state itself.
 - The implementation must identify which existing `OdooModel` methods remain thin pass-through helpers in Phase A and must avoid moving new business logic into the model proxy.
@@ -36,7 +36,8 @@ Re-implement the relevant `OdooModel` behavior on top of `OdooEnv`, `DomainExpre
 
 - [ ] Current `OdooModel` call sites remain usable without requiring caller changes.
 - [ ] `OdooModel.search()` no longer owns independent domain or context logic outside the new Phase A primitives.
-- [ ] `OdooModel.browse()` is implemented through recordset-backed behavior but still preserves current caller-facing return expectations for the Phase A transition.
+- [ ] `OdooModel.search()` continues returning the current fluent compatibility surface during Phase A while delegating to the new primitives underneath.
+- [ ] `OdooModel.browse()` is implemented through recordset-backed behavior but still preserves current caller-facing raw-row expectations for the Phase A transition.
 - [ ] Existing helper methods on `OdooModel` continue to behave consistently after the re-route.
 - [ ] Regression tests cover preserved `OdooModel` behavior and confirm that the new primitives are the controlling execution path.
 

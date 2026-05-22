@@ -60,19 +60,24 @@ Goal
 - Define the contract for Phase A before refactoring starts.
 
 Likely touch points
-- `src/__init__.py`
-- `src/odoo_service/__init__.py`
+- `docs/implementation/phase-a/phase-a-architectural-contract.md`
+- `docs/implementation/phase-a-implementation-checklist.md`
 - `docs/odoo-sdk-architecture-plan.md`
 - `docs/odoo-sdk-design-patterns.md`
+- `src/__init__.py`
+- `src/odoo_service/__init__.py`
 
 Checklist
 - [ ] Confirm the Phase A public surfaces that must remain stable.
 - [ ] Confirm the names and ownership boundaries for `OdooEnv`, `DomainExpression`, and `OdooRecordset`.
 - [ ] Confirm that `OdooQuery` remains transitional, not the long-term core abstraction.
 - [ ] Confirm that Phase A excludes metadata caching, field adapters, and plugin work.
+- [ ] Confirm that `OdooEnv` is the Phase A context boundary and that `OdooSession` is deferred.
+- [ ] Confirm that preserved wrapper surfaces keep current caller-facing compatibility during Phase A while recordset-first behavior moves underneath them.
+- [ ] Confirm that export decisions for `OdooEnv`, `DomainExpression`, and `OdooRecordset` are deferred to A6.
 
 Done when
-- The implementation team can state exactly what is in scope and what is deferred to Phase B.
+- The implementation team can evaluate A1 through A7 against the standalone Phase A contract without reopening ownership, compatibility, or deferment decisions.
 
 ## A1 - Introduce `OdooEnv`
 

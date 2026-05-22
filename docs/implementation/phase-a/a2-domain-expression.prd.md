@@ -22,7 +22,7 @@ Introduce `DomainExpression` as the Phase A boundary for domain normalization an
 - The abstraction must support serializing normalized domains into the XML-RPC-compatible payload shape expected by the current transport layer.
 - The design must accommodate Odoo boolean prefix operators and nested domain structures without requiring Phase A to ship a full boolean algebra builder DSL.
 - `OdooModel`, `OdooQuery`, and `OdooRecordset` search-related behavior must route domain inputs through the canonical normalization and serialization path.
-- Empty-domain behavior must be defined explicitly and remain compatible with existing search behavior.
+- Empty-domain behavior must be defined explicitly and remain compatible with existing search behavior by normalizing and serializing to the current search-all payload shape.
 - Validation rules for unsupported or malformed domain shapes must be defined so failure modes are predictable.
 - Local unit tests must cover normalization and serialization of empty domains, simple list-of-tuples inputs, and at least one compound boolean-expression input.
 
@@ -38,7 +38,7 @@ Introduce `DomainExpression` as the Phase A boundary for domain normalization an
 - [ ] Existing callers can still pass the current list-of-tuples domain format to preserved public search entry points.
 - [ ] Domain inputs are normalized through a single `DomainExpression` path before XML-RPC execution.
 - [ ] A normalized domain can be serialized into the exact wire-compatible structure required by the current executor path.
-- [ ] Empty domains serialize in a defined and test-covered way.
+- [ ] Empty domains normalize and serialize in a defined, test-covered way that preserves current search-all semantics.
 - [ ] At least one test demonstrates correct handling of a compound domain that includes boolean operator structure.
 - [ ] Invalid domain shapes fail in a predictable, documented way.
 

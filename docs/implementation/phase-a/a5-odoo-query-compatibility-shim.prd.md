@@ -22,6 +22,7 @@ Keep `OdooQuery` available and behaviorally stable for existing fluent call site
 - Query execution must route domain inputs through `DomainExpression` rather than keeping separate ad hoc domain handling inside `OdooQuery`.
 - Query execution must use env- or recordset-backed behavior for terminal operations where that can be done without breaking compatibility.
 - The compatibility shim must preserve `ids`, `read`, `count`, `write`, and `unlink` semantics expected by current callers.
+- Phase A compatibility work must not repurpose `OdooQuery` terminal operations into recordset-returning behavior unless a later task explicitly documents and tests that compatibility change.
 - `with_context` must merge context predictably and must not mutate previously created query instances.
 - The implementation must avoid adding new long-term responsibilities or new DSL surface area to `OdooQuery` during Phase A.
 - Local tests must cover search execution, count, read, write, unlink, ordering, pagination, and context behavior.

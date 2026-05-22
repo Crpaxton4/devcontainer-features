@@ -20,8 +20,18 @@ Selection rules
 | Proxy | Already in use | `OdooModel` | Acts as a client-side stand-in for a remote Odoo model and forwards calls to the executor | None |
 | Builder | Already in use, lightweight | `OdooQuery` | Builds search options step by step using an immutable fluent interface | None |
 | Factory Method | Already in use, lightweight | `CommandDispatcher.register()` factories and `OdooClient.__getitem__()` model creation | Centralizes object creation for commands and model proxies without exposing construction details to consumers | None |
-| Adapter | Recommended next | Internal field and value translation layer around `fields_get` and XML-RPC payloads | Hides Odoo wire formats such as many2one tuples, x2many command data, and date strings behind existing read surfaces | Internal only |
-| Decorator | Optional next | Wrapper around `OdooExecutor` or a future session object | Adds logging, timing, retry, caching, or redaction behavior without altering the executor interface | Internal only |
+| Adapter | Deferred to Phase B | Internal field and value translation layer around `fields_get` and XML-RPC payloads | Hides Odoo wire formats such as many2one tuples, x2many command data, and date strings behind existing read surfaces after Phase A guardrails are in place | Internal only |
+| Decorator | Optional later | Wrapper around `OdooExecutor` or a future session object | Adds logging, timing, retry, caching, or redaction behavior without altering the executor interface | Internal only |
+
+## Phase A Compatibility Guidance
+
+Phase A keeps the public facade story stable while moving the implementation center of gravity.
+
+- `OdooClient` remains the facade.
+- `OdooEnv` becomes the owner of execution context.
+- `OdooRecordset` becomes the identity-bearing core.
+- `OdooModel` remains a proxy and compatibility wrapper.
+- `OdooQuery` remains an immutable builder-shaped compatibility shim, not the long-term architectural center.
 
 ## How To Use These Patterns Here
 
@@ -44,7 +54,7 @@ Design rule
 
 Design rule
 - Let `OdooClient` remain the simplified SDK entry point.
-- Do not move field translation, relation handling, or domain serialization logic into the facade.
+- Do not move field translation, relation handling, domain serialization, or context ownership logic into the facade.
 
 ### Strategy
 
@@ -58,7 +68,7 @@ Design rule
 `OdooModel` is best treated as a remote proxy, not a business-service bucket.
 
 Design rule
-- Keep model proxies responsible for delegating model operations.
+- Keep model proxies responsible for delegating model operations through the Phase A env, domain, and recordset path.
 - Avoid packing unrelated business workflows into the proxy.
 
 ### Builder
@@ -66,8 +76,9 @@ Design rule
 `OdooQuery` already behaves like an immutable builder.
 
 Design rule
-- If search configuration grows, extend `OdooQuery` rather than adding many specialized search helper methods to `OdooModel`.
+- Preserve `OdooQuery` only as a compatibility builder for existing fluent call sites.
 - Preserve cloning and immutability so chaining stays predictable.
+- Do not let `OdooQuery` continue as the long-term control path once Phase A primitives exist.
 
 ### Factory Method
 
@@ -79,7 +90,7 @@ Design rule
 
 ### Adapter
 
-This is the next pattern with the highest leverage.
+This pattern is intentionally deferred until Phase B.
 
 Good fit
 - Converting many2one tuples to richer local representations.
@@ -87,7 +98,7 @@ Good fit
 - Normalizing date and datetime field values.
 
 Design rule
-- Add adapters behind current read and metadata APIs.
+- Add adapters only after Phase A ownership boundaries are in place.
 - Do not change the high-level entry points just to introduce adapters.
 
 ### Decorator

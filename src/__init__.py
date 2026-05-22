@@ -4,6 +4,9 @@ This module makes the `src` directory act as the `odoo_sdk` package
 as configured in `pyproject.toml` (package-dir mapping).
 
 It re-exports common symbols for a flatter, convenient public API.
+Phase A guardrails intentionally preserve these exports until the
+dedicated export-alignment task decides whether new abstractions become
+supported public surfaces.
 """
 
 from . import command_registry, odoo_service, utils
