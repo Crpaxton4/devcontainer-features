@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..utils import Record
 from ..utils.types import DomainInput
 from .domain_expression import DomainExpression
 from .odoo_executor import OdooExecutor
+
+if TYPE_CHECKING:
+    from .odoo_env import OdooEnv
+    from .odoo_recordset import OdooRecordset
 
 _logger = logging.getLogger(__name__)
 
@@ -20,6 +26,7 @@ class OdooQuery:
         client: OdooExecutor,
         model_name: str,
         domain: DomainInput = None,
+        env: OdooEnv | None = None,
     ):
         self.client = client
         self.model_name = model_name
@@ -28,16 +35,24 @@ class OdooQuery:
         self._limit: Optional[int] = None
         self._offset: Optional[int] = None
         self._order: Optional[str] = None
-        self._context: Optional[Dict[str, Any]] = None
+        if env is None:
+            from .odoo_env import OdooEnv
+
+            env = OdooEnv(client)
+        self._env = env
 
     def _clone(self) -> OdooQuery:
         _logger.debug("Cloning query for model=%s", self.model_name)
-        query = OdooQuery(self.client, self.model_name, self._domain)
+        query = OdooQuery(self.client, self.model_name, self._domain, env=self._env)
         query._limit = self._limit
         query._offset = self._offset
         query._order = self._order
-        query._context = dict(self._context) if self._context is not None else None
         return query
+
+    def _recordset(self) -> OdooRecordset:
+        from .odoo_recordset import OdooRecordset
+
+        return OdooRecordset(self._env, self.model_name)
 
     def _search_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
@@ -47,14 +62,14 @@ class OdooQuery:
             kwargs["offset"] = self._offset
         if self._order is not None:
             kwargs["order"] = self._order
-        if self._context is not None:
-            kwargs["context"] = self._context
+        kwargs.update(self._context_kwargs())
         return kwargs
 
     def _context_kwargs(self) -> Dict[str, Any]:
-        if self._context is None:
+        context = self._env.context
+        if not context:
             return {}
-        return {"context": self._context}
+        return {"context": context}
 
     def _serialized_domain(self) -> List[Any]:
         return self._domain.serialize()
@@ -93,25 +108,18 @@ class OdooQuery:
         """Merges Odoo context for subsequent operations."""
         _logger.debug("Applying context to model=%s", self.model_name)
         query = self._clone()
-        merged = dict(query._context) if query._context is not None else {}
-        merged.update(context)
-        query._context = merged
+        query._env = query._env.with_context(context)
         return query
 
     def ids(self) -> List[int]:
         """Executes `search` and returns matching record ids."""
-        serialized_domain = self._serialized_domain()
-        _logger.debug(
-            "Executing search on model=%s domain=%s",
-            self.model_name,
-            serialized_domain,
+        recordset = self._recordset().search(
+            self._domain,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
         )
-        return self.client.execute(
-            self.model_name,
-            "search",
-            serialized_domain,
-            **self._search_kwargs(),
-        )
+        return list(recordset.ids)
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes a search_read operation to fetch record dictionaries."""
@@ -135,13 +143,15 @@ class OdooQuery:
         _logger.debug(
             "Executing query write on model=%s domain=%s", self.model_name, self._domain
         )
-        ids = self.ids()
-        return self.client.execute(
-            self.model_name,
-            "write",
-            ids,
-            values,
-            **self._context_kwargs(),
+        return (
+            self._recordset()
+            .search(
+                self._domain,
+                limit=self._limit,
+                offset=self._offset,
+                order=self._order,
+            )
+            .write(values)
         )
 
     def unlink(self) -> bool:
@@ -151,12 +161,15 @@ class OdooQuery:
             self.model_name,
             self._domain,
         )
-        ids = self.ids()
-        return self.client.execute(
-            self.model_name,
-            "unlink",
-            ids,
-            **self._context_kwargs(),
+        return (
+            self._recordset()
+            .search(
+                self._domain,
+                limit=self._limit,
+                offset=self._offset,
+                order=self._order,
+            )
+            .unlink()
         )
 
     def count(self) -> int:

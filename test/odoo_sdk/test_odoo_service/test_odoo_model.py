@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock
 
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
+from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_model import OdooModel
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
@@ -24,6 +25,25 @@ class TestOdooModel(unittest.TestCase):
         self.assertEqual(result, [{"id": 7, "name": "Acme"}])
         self.executor.execute.assert_called_once_with(
             "res.partner", "read", [7], fields=["name"]
+        )
+
+    def test_env_bound_read_uses_context(self) -> None:
+        self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
+        model = OdooModel(
+            self.executor,
+            "res.partner",
+            env=OdooEnv(self.executor, {"lang": "en_US"}),
+        )
+
+        result = model.read(7, ["name"])
+
+        self.assertEqual(result, [{"id": 7, "name": "Acme"}])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "read",
+            [7],
+            context={"lang": "en_US"},
+            fields=["name"],
         )
 
     def test_create_delegates_to_executor(self) -> None:
@@ -115,6 +135,26 @@ class TestOdooModel(unittest.TestCase):
             "search",
             [("is_company", "=", True)],
             context={"lang": "en_US"},
+        )
+
+    def test_search_ids_merges_env_and_explicit_context(self) -> None:
+        self.executor.execute.return_value = [1, 2]
+        model = OdooModel(
+            self.executor,
+            "res.partner",
+            env=OdooEnv(self.executor, {"lang": "en_US"}),
+        )
+
+        result = model.search_ids(
+            [("is_company", "=", True)], context={"tz": "UTC"}
+        )
+
+        self.assertEqual(result, [1, 2])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search",
+            [("is_company", "=", True)],
+            context={"lang": "en_US", "tz": "UTC"},
         )
 
     def test_exists_returns_existing_ids_in_input_order(self) -> None:

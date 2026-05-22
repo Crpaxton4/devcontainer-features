@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .odoo_executor import OdooExecutor
-from .odoo_model import OdooModel
+
+if TYPE_CHECKING:
+    from .odoo_model import OdooModel
 
 
 class OdooEnv:
@@ -36,4 +40,6 @@ class OdooEnv:
 
     def __getitem__(self, model_name: str) -> OdooModel:
         """Returns a model proxy anchored to this environment's executor."""
-        return OdooModel(self._executor, model_name)
+        from .odoo_model import OdooModel
+
+        return OdooModel(self._executor, model_name, env=self)
