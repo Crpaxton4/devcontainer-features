@@ -31,7 +31,8 @@
 !/uv.lock
 
 # General Development Scripts
-!/scripts
+!/scripts/
+!/scripts/**
 
 !requirements.dev.txt
 !requirements.txt
