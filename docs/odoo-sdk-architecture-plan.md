@@ -15,7 +15,7 @@ Existing system snapshot
 - Entry point: `OdooClient` caches model proxies and delegates execute calls.
 - Model API: `OdooModel` wraps common RPC methods and returns ids or raw dictionaries.
 - Query API: `OdooQuery` accumulates domain, pagination, order, and context, then issues `search` or `search_read`.
-- Tooling: local scripts exist for local validation, and mutation testing now defaults to fixed local HTTP Cosmic Ray workers on ports `18101`-`18104` with per-worker copies isolated under `/tmp`.
+- Tooling: local scripts exist for local validation, and mutation testing now defaults to fixed local HTTP Cosmic Ray workers on ports `18101`-`18108` with per-worker copies isolated under `/tmp`.
 - Extension sample: `CommandDispatcher` provides consumer-side command wiring but is orthogonal to ORM mirroring.
 
 Assumptions

@@ -5,7 +5,7 @@ session_name="${1:?session name is required}"
 session_file=".cosmic-ray/${session_name}.sqlite"
 worker_root=""
 worker_pids=()
-ports=(18101 18102 18103 18104)
+ports=(18101 18102 18103 18104 18105 18106 18107 18108)
 repo_root="$PWD"
 python_bin="$repo_root/.venv/bin/python"
 
