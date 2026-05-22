@@ -5,7 +5,6 @@
 
 # Keep the gitignore itself
 !/.gitignore
-!/.env.example
 
 # known solution directories (include their contents)
 !/.devcontainer/
