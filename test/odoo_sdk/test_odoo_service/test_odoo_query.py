@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, call
 from hypothesis import given, strategies
 
+from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
 
@@ -59,14 +60,49 @@ class TestOdooQueryWrite(unittest.TestCase):
         self.assertIsNot(base, query2)
         self.assertIsNot(query1, query2)
 
-        self.assertEqual(query1._domain, [("active", "=", True)])
+        self.assertEqual(
+            query1._domain,
+            DomainExpression.normalize([("active", "=", True)]),
+        )
         self.assertEqual(query1._limit, 10)
 
-        self.assertEqual(query2._domain, [("active", "=", False)])
+        self.assertEqual(
+            query2._domain,
+            DomainExpression.normalize([("active", "=", False)]),
+        )
         self.assertEqual(query2._limit, 5)
 
-        self.assertEqual(base._domain, [])
+        self.assertEqual(base._domain, DomainExpression.normalize([]))
         self.assertIsNone(base._limit)
+
+    def test_boolean_prefix_domain_is_serialized_before_execution(self) -> None:
+        executor = Mock()
+        executor.execute.return_value = [7, 8]
+
+        query = OdooQuery(
+            executor,
+            "res.partner",
+            [
+                ("active", "=", True),
+                "|",
+                ("company_id", "=", 3),
+                ("name", "ilike", "Acme"),
+            ],
+        )
+
+        result = query.ids()
+
+        self.assertEqual(result, [7, 8])
+        executor.execute.assert_called_once_with(
+            "res.partner",
+            "search",
+            [
+                ("active", "=", True),
+                "|",
+                ("company_id", "=", 3),
+                ("name", "ilike", "Acme"),
+            ],
+        )
 
     def test_read_executes_search_read_with_pagination_and_fields(self) -> None:
         executor = Mock()

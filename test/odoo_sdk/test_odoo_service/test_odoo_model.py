@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
+from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_model import OdooModel
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
@@ -13,7 +14,7 @@ class TestOdooModel(unittest.TestCase):
     def test_search_returns_query_builder(self) -> None:
         query = self.model.search([("active", "=", True)])
         self.assertIsInstance(query, OdooQuery)
-        self.assertEqual(query._domain, [("active", "=", True)])
+        self.assertEqual(query._domain, DomainExpression.normalize([("active", "=", True)]))
 
     def test_read_accepts_single_id(self) -> None:
         self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
@@ -177,6 +178,36 @@ class TestOdooModel(unittest.TestCase):
             limit=5,
         )
 
+    def test_name_search_serializes_boolean_prefix_domain(self) -> None:
+        self.executor.execute.return_value = [[1, "Acme"]]
+
+        result = self.model.name_search(
+            "ac",
+            [
+                ("active", "=", True),
+                "|",
+                ("company_id", "=", 3),
+                ("name", "ilike", "Acme"),
+            ],
+            operator="ilike",
+            limit=5,
+        )
+
+        self.assertEqual(result, [[1, "Acme"]])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "name_search",
+            "ac",
+            args=[
+                ("active", "=", True),
+                "|",
+                ("company_id", "=", 3),
+                ("name", "ilike", "Acme"),
+            ],
+            operator="ilike",
+            limit=5,
+        )
+
     def test_name_get_executes(self) -> None:
         self.executor.execute.return_value = [[7, "Acme"]]
 
@@ -233,6 +264,39 @@ class TestOdooModel(unittest.TestCase):
             offset=10,
             limit=5,
             orderby="country_id",
+        )
+
+    def test_read_group_serializes_nested_boolean_domain(self) -> None:
+        self.executor.execute.return_value = [{"country_id": (1, "Belgium")}]
+
+        result = self.model.read_group(
+            [
+                "|",
+                ("active", "=", True),
+                [
+                    "&",
+                    ("company_id", "=", 3),
+                    ("name", "ilike", "Acme"),
+                ],
+            ],
+            ["country_id"],
+            ["country_id"],
+        )
+
+        self.assertEqual(result, [{"country_id": (1, "Belgium")}])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "read_group",
+            [
+                "|",
+                ("active", "=", True),
+                "&",
+                ("company_id", "=", 3),
+                ("name", "ilike", "Acme"),
+            ],
+            ["country_id"],
+            ["country_id"],
+            lazy=True,
         )
 
     def test_read_group_validates_required_arguments(self) -> None:

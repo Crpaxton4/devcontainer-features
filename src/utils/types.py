@@ -1,5 +1,7 @@
-from collections.abc import Mapping
-from typing import Any, List, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any, TypeAlias, Union
 
-type Domain = List[Tuple[str, str, Any]]
-type Record = Mapping[str, Any]
+DomainCondition: TypeAlias = tuple[str, str, Any]
+Domain: TypeAlias = list[DomainCondition]
+DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any], None]
+Record: TypeAlias = Mapping[str, Any]

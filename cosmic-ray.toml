@@ -1,7 +1,12 @@
 [cosmic-ray]
 module-path = "src"
 timeout = 120.0
-excluded-modules = ["**/tests/**", "**/examples/**"]
+excluded-modules = [
+	"**/tests/**",
+	"**/examples/**",
+	"src/__init__.py",
+	"src/odoo_service/odoo_config.py",
+]
 test-command = 'uv run python -m unittest discover -s tests -p "test_*.py"'
 
 [cosmic-ray.distributor]

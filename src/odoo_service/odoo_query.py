@@ -1,7 +1,9 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..utils import Domain, Record
+from ..utils import Record
+from ..utils.types import DomainInput
+from .domain_expression import DomainExpression
 from .odoo_executor import OdooExecutor
 
 _logger = logging.getLogger(__name__)
@@ -17,12 +19,12 @@ class OdooQuery:
         self,
         client: OdooExecutor,
         model_name: str,
-        domain: Optional[Domain] = None,
+        domain: DomainInput = None,
     ):
         self.client = client
         self.model_name = model_name
         # Normalize domain explicitly to avoid relying on truthiness.
-        self._domain = list(domain) if domain is not None else []
+        self._domain = DomainExpression.normalize(domain)
         self._limit: Optional[int] = None
         self._offset: Optional[int] = None
         self._order: Optional[str] = None
@@ -54,13 +56,16 @@ class OdooQuery:
             return {}
         return {"context": self._context}
 
-    def search(self, domain: Domain) -> OdooQuery:
+    def _serialized_domain(self) -> List[Any]:
+        return self._domain.serialize()
+
+    def search(self, domain: DomainInput) -> OdooQuery:
         """Sets or replaces the search domain."""
         _logger.debug(
             "Updating query domain for model=%s domain=%s", self.model_name, domain
         )
         query = self._clone()
-        query._domain = list(domain)
+        query._domain = DomainExpression.normalize(domain)
         return query
 
     def limit(self, limit: int) -> OdooQuery:
@@ -95,24 +100,26 @@ class OdooQuery:
 
     def ids(self) -> List[int]:
         """Executes `search` and returns matching record ids."""
+        serialized_domain = self._serialized_domain()
         _logger.debug(
             "Executing search on model=%s domain=%s",
             self.model_name,
-            self._domain,
+            serialized_domain,
         )
         return self.client.execute(
             self.model_name,
             "search",
-            self._domain,
+            serialized_domain,
             **self._search_kwargs(),
         )
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes a search_read operation to fetch record dictionaries."""
+        serialized_domain = self._serialized_domain()
         _logger.debug(
             "Executing search_read on model=%s domain=%s fields=%s",
             self.model_name,
-            self._domain,
+            serialized_domain,
             fields,
         )
         kwargs = self._search_kwargs()
@@ -120,7 +127,7 @@ class OdooQuery:
             kwargs["fields"] = fields
 
         return self.client.execute(
-            self.model_name, "search_read", self._domain, **kwargs
+            self.model_name, "search_read", serialized_domain, **kwargs
         )
 
     def write(self, values: Dict[str, Any]) -> bool:
@@ -154,14 +161,15 @@ class OdooQuery:
 
     def count(self) -> int:
         """Executes a search_count operation."""
+        serialized_domain = self._serialized_domain()
         _logger.debug(
             "Executing search_count on model=%s domain=%s",
             self.model_name,
-            self._domain,
+            serialized_domain,
         )
         return self.client.execute(
             self.model_name,
             "search_count",
-            self._domain,
+            serialized_domain,
             **self._context_kwargs(),
         )

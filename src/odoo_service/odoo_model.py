@@ -1,7 +1,9 @@
 import logging
 from typing import Any, Dict, List, Optional, Union
 
-from ..utils import Domain, Record
+from ..utils import Record
+from ..utils.types import DomainInput
+from .domain_expression import DomainExpression
 from .odoo_executor import OdooExecutor
 from .odoo_query import OdooQuery
 
@@ -23,7 +25,11 @@ class OdooModel:
             return [ids]
         return list(ids)
 
-    def search(self, domain: Optional[Domain] = None) -> OdooQuery:
+    @staticmethod
+    def _serialize_domain(domain: DomainInput) -> List[Any]:
+        return DomainExpression.normalize(domain).serialize()
+
+    def search(self, domain: DomainInput = None) -> OdooQuery:
         """Starts a fluent query. Returns an OdooQuery builder."""
         _logger.debug("Building query for model=%s domain=%s", self.name, domain)
         return OdooQuery(self.client, self.name, domain)
@@ -57,7 +63,7 @@ class OdooModel:
 
     def search_ids(
         self,
-        domain: Optional[Domain] = None,
+        domain: DomainInput = None,
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -88,7 +94,7 @@ class OdooModel:
 
     def search_read(
         self,
-        domain: Optional[Domain] = None,
+        domain: DomainInput = None,
         fields: Optional[List[str]] = None,
         *,
         limit: Optional[int] = None,
@@ -106,7 +112,7 @@ class OdooModel:
         if order is not None:
             kwargs["order"] = order
 
-        search_domain = domain if domain is not None else []
+        search_domain = self._serialize_domain(domain)
         _logger.debug(
             "Executing search_read on model=%s domain=%s kwargs=%s",
             self.name,
@@ -115,9 +121,9 @@ class OdooModel:
         )
         return self.client.execute(self.name, "search_read", search_domain, **kwargs)
 
-    def search_count(self, domain: Optional[Domain] = None) -> int:
+    def search_count(self, domain: DomainInput = None) -> int:
         """Runs `search_count` and returns the number of matched records."""
-        search_domain = domain if domain is not None else []
+        search_domain = self._serialize_domain(domain)
         _logger.debug(
             "Executing search_count on model=%s domain=%s", self.name, search_domain
         )
@@ -126,7 +132,7 @@ class OdooModel:
     def name_search(
         self,
         name: str = "",
-        domain: Optional[Domain] = None,
+        domain: DomainInput = None,
         *,
         operator: str = "ilike",
         limit: int = 100,
@@ -134,7 +140,7 @@ class OdooModel:
         """Runs `name_search` and returns [id, display_name] rows."""
         kwargs: Dict[str, Any] = {"operator": operator, "limit": limit}
         if domain is not None:
-            kwargs["args"] = domain
+            kwargs["args"] = self._serialize_domain(domain)
 
         _logger.debug("Executing name_search on model=%s name=%s", self.name, name)
         return self.client.execute(self.name, "name_search", name, **kwargs)
@@ -162,7 +168,7 @@ class OdooModel:
 
     def read_group(
         self,
-        domain: Optional[Domain],
+        domain: DomainInput,
         fields: List[str],
         groupby: List[str],
         *,
@@ -185,7 +191,7 @@ class OdooModel:
         if orderby is not None:
             kwargs["orderby"] = orderby
 
-        search_domain = domain if domain is not None else []
+        search_domain = self._serialize_domain(domain)
         _logger.debug(
             "Executing read_group on model=%s domain=%s", self.name, search_domain
         )
