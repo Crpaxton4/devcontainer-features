@@ -6,7 +6,7 @@ Phase A Package Exports and Documentation Alignment
 
 ## Problem
 
-Phase A introduces new architectural concepts, but those concepts will be hard to use and maintain if the package exports and the written documentation do not match the implementation. The repo currently documents the architectural direction separately from the code surface, and there is no existing Phase A PRD set under `docs/implementation/phase-a/`. Without explicit export and documentation work, maintainers could accidentally ship hidden APIs, stale docs, or conflicting statements about whether `OdooQuery` remains core or only transitional.
+Phase A introduces new architectural concepts, but those concepts will be hard to use and maintain if the package exports and the written documentation do not match the implementation. The repo currently documents the architectural direction separately from the code surface, and the Phase A PRD set still needs a final export and documentation alignment pass under `docs/implementation/phase-a/`. Without explicit export and documentation work, maintainers could accidentally ship hidden APIs, stale docs, or conflicting statements about whether `OdooQuery` remains core or only transitional.
 
 ## Solution
 

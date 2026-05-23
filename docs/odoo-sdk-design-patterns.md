@@ -29,9 +29,11 @@ Phase A keeps the public facade story stable while moving the implementation cen
 
 - `OdooClient` remains the facade.
 - `OdooEnv` becomes the owner of execution context.
+- `DomainExpression` becomes the canonical domain normalization boundary.
 - `OdooRecordset` becomes the identity-bearing core.
 - `OdooModel` remains a proxy and compatibility wrapper.
 - `OdooQuery` remains an immutable builder-shaped compatibility shim, not the long-term architectural center.
+- `OdooEnv`, `DomainExpression`, and `OdooRecordset` remain internal Phase A primitives rather than supported top-level public exports.
 
 ## How To Use These Patterns Here
 
@@ -69,6 +71,7 @@ Design rule
 
 Design rule
 - Keep model proxies responsible for delegating model operations through the Phase A env, domain, and recordset path.
+- Keep `OdooModel` as a preserved public compatibility wrapper even while the internal control path moves underneath it.
 - Avoid packing unrelated business workflows into the proxy.
 
 ### Builder
@@ -78,6 +81,7 @@ Design rule
 Design rule
 - Preserve `OdooQuery` only as a compatibility builder for existing fluent call sites.
 - Preserve cloning and immutability so chaining stays predictable.
+- Route query execution through `OdooEnv`, `DomainExpression`, and `OdooRecordset` rather than letting the builder regain ownership of the core behavior.
 - Do not let `OdooQuery` continue as the long-term control path once Phase A primitives exist.
 
 ### Factory Method

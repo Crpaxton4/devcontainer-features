@@ -65,9 +65,10 @@ Each Phase A abstraction has one primary ownership boundary.
 
 ### Public Export Scope
 
-- Phase A guardrails do not widen the public package exports by themselves.
-- The export status of `OdooEnv`, `DomainExpression`, and `OdooRecordset` is decided in A6, not in A0.
-- Until A6 settles those decisions, A0 should not imply new top-level support guarantees through `__all__` changes alone.
+- Phase A does not widen the supported public package exports beyond the preserved surfaces.
+- `OdooEnv`, `DomainExpression`, and `OdooRecordset` remain internal Phase A primitives.
+- Package `__all__` declarations stay centered on `OdooClient`, `OdooModel`, `OdooQuery`, `OdooExecutor`, `OdooRpcExecutor`, `OdooConnectionSettings`, `CommandDispatcher`, and the existing utility aliases.
+- Importing the Phase A primitives from implementation modules may remain possible for local development, but that does not make them supported top-level public API during Phase A.
 
 ## Explicitly Deferred Work
 

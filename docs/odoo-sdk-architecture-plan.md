@@ -64,13 +64,14 @@ Recommendation
 - Use Option 2.
 - Keep `OdooClient` as the main facade, but re-center the SDK on `OdooEnv`, `OdooRecordset`, and a metadata-aware model registry.
 - Retain the current thin wrappers only as transition layers, not as the final core.
+- Keep `OdooEnv`, `DomainExpression`, and `OdooRecordset` internal to the supported package API during Phase A, even though they become the architectural center underneath the preserved wrappers.
 
 Phase A implementation boundary
 - Phase A preserves the current public entry points: `OdooClient`, `OdooModel`, `OdooQuery`, `OdooExecutor`, and `CommandDispatcher`.
 - Phase A introduces `OdooEnv`, `DomainExpression`, and `OdooRecordset` as the architectural center of gravity underneath those preserved surfaces.
 - During Phase A, `OdooModel` and `OdooQuery` remain compatibility layers. Their job is to delegate toward env-bound and recordset-bound behavior, not to remain the long-term core.
 - `OdooEnv` is the Phase A owner of execution context. A fuller `OdooSession` policy layer remains a later concern.
-- Export decisions for new abstractions are part of Phase A documentation alignment, not an automatic outcome of the first guardrails task.
+- At Phase A completion, `OdooEnv`, `DomainExpression`, and `OdooRecordset` remain internal implementation primitives rather than supported top-level public exports.
 
 Why
 - The current architecture already has a clean transport seam.
@@ -152,16 +153,16 @@ Root architectural findings
 - Relational fields and x2many command tuples are still raw wire values, not adapted SDK constructs.
 - The public package exposes `CommandDispatcher` even though it is orthogonal to the ORM-like core.
 
-Target public API transformation
+Public API trajectory
 
-| Current surface | Recommended target |
-|---|---|
-| `client["res.partner"]` returns `OdooModel` | `client["res.partner"]` returns an empty model recordset or model handle bound to an env |
-| `search` returns `OdooQuery` | `search` returns `OdooRecordset` |
-| `browse` returns `list[Record]` | `browse` returns `OdooRecordset` with stable identity |
-| `read` returns `list[dict]` | `read` remains available, but as an extraction method on recordsets |
-| Context passed inside query kwargs | `with_context` returns a new env or recordset |
-| Relational values stay raw | Relational values become recordset proxies or typed adapters |
+| Current surface | Phase A implemented behavior | Longer-term target |
+|---|---|---|
+| `client["res.partner"]` returns `OdooModel` | `OdooClient` still returns `OdooModel` as the supported facade path, while the model delegates through env-bound behavior internally | `client["res.partner"]` returns an empty model recordset or model handle bound to an env |
+| `search` returns `OdooQuery` | `search` still returns `OdooQuery` for compatibility, while the query delegates through `DomainExpression` and recordset-backed behavior | `search` returns `OdooRecordset` |
+| `browse` returns `list[Record]` | `browse` remains a preserved compatibility entry point, even though record identity is represented internally by `OdooRecordset` | `browse` returns `OdooRecordset` with stable identity |
+| `read` returns `list[dict]` | `read` remains the explicit raw extraction path during Phase A | `read` remains available, but as an extraction method on recordsets |
+| Context passed inside query kwargs | Context ownership moves to `OdooEnv`, while `OdooQuery` keeps compatibility forwarding for current call sites | `with_context` returns a new env or recordset |
+| Relational values stay raw | Relational values stay raw during Phase A; richer adapters are deferred | Relational values become recordset proxies or typed adapters |
 
 Phase A compatibility overlay
 - The table above describes the architectural trajectory, not an immediate A0 behavior flip.
@@ -188,11 +189,16 @@ This context is intentionally small. The SDK sits between Python consumer code a
 
 ```mermaid
 graph TD
-    subgraph PublicAPI["Public API"]
+    subgraph PublicAPI["Preserved Public API"]
         Client["OdooClient facade"]
+        Model["OdooModel compatibility proxy"]
+        Query["OdooQuery compatibility builder"]
+    end
+
+    subgraph PhaseAInternal["Phase A Internal Core"]
         Env["OdooEnv"]
         Recordset["OdooRecordset"]
-        Domain["Domain expression"]
+        Domain["DomainExpression"]
     end
 
     subgraph Core["SDK core"]
@@ -206,6 +212,10 @@ graph TD
     end
 
     Client --> Env
+    Client --> Model
+    Model --> Recordset
+    Query --> Domain
+    Query --> Recordset
     Env --> ModelRegistry
     ModelRegistry --> Recordset
     Recordset --> Domain
@@ -221,6 +231,8 @@ graph TD
 ```
 
 The major improvement is the separation of concerns:
+- The preserved public API remains centered on `OdooClient`, `OdooModel`, and `OdooQuery` during Phase A.
+- `OdooEnv`, `DomainExpression`, and `OdooRecordset` are implemented and tested in Phase A, but they remain internal to the supported package API.
 - `OdooSession` owns authentication, transport policy, and error mapping.
 - `OdooEnv` owns context and session-bound model resolution.
 - `OdooRecordset` owns ids, model identity, and fluent ORM-like behavior.

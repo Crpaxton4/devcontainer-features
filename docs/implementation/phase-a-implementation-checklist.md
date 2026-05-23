@@ -233,7 +233,7 @@ Likely touch points
 - Examples if they need clarification, but not mandatory for Phase A
 
 Checklist
-- [ ] Export new Phase A abstractions only if they are ready for public use.
+- [ ] Keep `OdooEnv`, `DomainExpression`, and `OdooRecordset` internal-only in Phase A and leave package `__all__` declarations centered on the preserved public surfaces.
 - [ ] Document how `OdooEnv`, `DomainExpression`, and `OdooRecordset` relate to `OdooClient`, `OdooModel`, and `OdooQuery`.
 - [ ] Document any Phase A compatibility promises and any deferred decisions.
 - [ ] Keep docs aligned with the local-tooling-only workflow.
