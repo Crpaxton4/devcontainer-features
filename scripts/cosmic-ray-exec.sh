@@ -6,16 +6,6 @@ session_file=".cosmic-ray/${session_name}.sqlite"
 worker_root=""
 worker_pids=()
 ports=(18101 18102 18103 18104 18105 18106 18107 18108)
-repo_root="$PWD"
-python_bin="$repo_root/.venv/bin/python"
-
-if [[ ! -x "$python_bin" ]]; then
-	echo "Expected virtualenv interpreter at $python_bin" >&2
-	exit 1
-fi
-
-export VIRTUAL_ENV="$repo_root/.venv"
-export PATH="$VIRTUAL_ENV/bin:$PATH"
 
 cleanup() {
 	local exit_code=$?
@@ -40,7 +30,7 @@ cleanup() {
 
 wait_for_port() {
 	local port="$1"
-	python3 - "$port" <<'PY'
+	python - "$port" <<'PY'
 import socket
 import sys
 import time
@@ -61,11 +51,6 @@ PY
 
 trap cleanup EXIT INT TERM
 
-if [[ ! -f "$session_file" ]]; then
-	echo "Cosmic Ray session file not found: $session_file" >&2
-	exit 1
-fi
-
 worker_root="$(bash ./scripts/cosmic-ray-worker-setup.sh "$session_name")"
 
 for index in "${!ports[@]}"; do
@@ -76,9 +61,7 @@ for index in "${!ports[@]}"; do
 
 	(
 		cd "$worker_dir"
-		export VIRTUAL_ENV="$repo_root/.venv"
-		export PATH="$VIRTUAL_ENV/bin:$PATH"
-		"$python_bin" scripts/run_cosmic_ray.py --verbosity=INFO http-worker --port "$port"
+		python scripts/run_cosmic_ray.py --verbosity=INFO http-worker --port "$port"
 	) >"$worker_log" 2>&1 &
 	worker_pids+=("$!")
 
@@ -90,5 +73,5 @@ for index in "${!ports[@]}"; do
 done
 
 echo "Cosmic Ray workers started from $worker_root"
-"$python_bin" scripts/run_cosmic_ray.py --verbosity=INFO exec cosmic-ray.toml "$session_file"
+python scripts/run_cosmic_ray.py --verbosity=INFO exec cosmic-ray.toml "$session_file"
 echo "Cosmic Ray execution completed for $session_file"

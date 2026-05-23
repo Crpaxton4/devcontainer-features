@@ -28,7 +28,7 @@ def main() -> int:
     outcomes: Counter[str] = Counter()
 
     dump = subprocess.run(
-        ["uv", "run", "cosmic-ray", "dump", str(session_file)],
+        ["cosmic-ray", "dump", str(session_file)],
         check=True,
         capture_output=True,
         text=True,

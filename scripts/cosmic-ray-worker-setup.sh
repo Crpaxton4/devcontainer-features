@@ -13,17 +13,13 @@ copy_worker() {
 
 	mkdir -p "$worker_dir"
 	rsync -a \
-		--exclude '.git/' \
-		--exclude '.venv/' \
-		--exclude '.cosmic-ray/' \
-		--exclude 'htmlcov/' \
-		--exclude 'build/' \
-		--exclude 'odoo_sdk.egg-info/' \
+		--exclude '/.*' \
+		--exclude '/build/' \
+		--exclude '/htmlcov/' \
+		--exclude '/odoo_sdk.egg-info/' \
+		--exclude '/coverage.xml' \
 		--exclude '__pycache__/' \
 		--exclude '*.py[cod]' \
-		--exclude '.hypothesis/' \
-		--exclude '.coverage' \
-		--exclude 'coverage.xml' \
 		"$repo_root/" "$worker_dir/"
 }
 
