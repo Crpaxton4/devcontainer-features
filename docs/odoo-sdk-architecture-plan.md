@@ -100,12 +100,12 @@ Layer recommendations
 |---|---|---|---|
 | Public API | Recordset-first synchronous Python facade | Query-builder-first facade | Recordsets mirror Odoo better; query builders are simpler but less expressive |
 | Transport | Wrapped `xmlrpc.client` session adapter | Custom XML-RPC over `httpx` | Stdlib is simpler; custom HTTP client gives finer timeout and telemetry control |
-| Metadata | In-memory `fields_get` cache with invalidation hooks | Optional SQLite metadata cache | Memory cache is enough early; SQLite only matters for heavy reuse or offline tooling |
+| Metadata | In-memory `fields_get` cache with explicit invalidation | Optional SQLite metadata cache | Memory cache is enough early; SQLite only matters for heavy reuse or offline tooling |
 | Context and identity | `OdooEnv` plus immutable `OdooRecordset` | Context passed ad hoc in each method | First-class env and recordset objects support `with_context` and future auth variants |
 | Value adaptation | Dynamic field adapters based on metadata | Raw dict responses everywhere | Adapters add complexity but are mandatory for ORM-like relations |
-| Extension model | Plugin hooks plus protocols | `CommandDispatcher`-only extensions | Plugin hooks scale better for model adapters and serializers |
+| Extension model | Recordset-centered semantic seams in Phase B, plugin hooks plus protocols in Phase C | `CommandDispatcher`-only extensions | Deferring plugin seams until Phase C keeps Phase B focused on shared semantic boundaries |
 | Build and test | Keep `unittest`, Hypothesis, coverage, and local scripts such as `uv` tasks and Cosmic Ray helpers | Mock-only tests | Local integration checks against a live Odoo instance still catch version drift without introducing CI yet |
-| Observability | Structured logging plus optional OpenTelemetry hooks | Logging only | Logging is enough now; hooks keep future instrumentation cheap |
+| Observability | Structured logging now, optional OpenTelemetry hooks in Phase C | Logging only | Logging is enough now; later hooks keep future instrumentation cheap without widening Phase B |
 
 Recommended package layout evolution
 
@@ -129,6 +129,8 @@ src/
     legacy_query.py
     legacy_model.py
 ```
+
+Phase B is primarily concerned with the shared semantic boundaries under `core/`, `orm/`, and `compatibility/`. A `plugins/` package remains a Phase C concern rather than a Phase B deliverable.
 
 ## System Architecture
 > All Mermaid diagrams with detailed explanations.
@@ -201,13 +203,17 @@ graph TD
         Domain["DomainExpression"]
     end
 
-    subgraph Core["SDK core"]
+    subgraph Core["Shared Semantic Core"]
         ModelRegistry["Model registry"]
         MetadataCache["Metadata cache"]
         FieldAdapters["Field adapters"]
+        X2Many["x2many helpers"]
         ErrorMapper["Error mapper"]
         Session["OdooSession"]
         Transport["XML-RPC transport"]
+    end
+
+    subgraph PhaseCExtensibility["Phase C Extensibility"]
         PluginHooks["Plugin hooks"]
     end
 
@@ -220,23 +226,25 @@ graph TD
     ModelRegistry --> Recordset
     Recordset --> Domain
     Recordset --> FieldAdapters
+    Recordset --> X2Many
     ModelRegistry --> MetadataCache
     FieldAdapters --> MetadataCache
     Env --> Session
     Session --> Transport
     Session --> ErrorMapper
-    PluginHooks --> FieldAdapters
-    PluginHooks --> ModelRegistry
+    PluginHooks -.-> FieldAdapters
+    PluginHooks -.-> ModelRegistry
     Transport --> Odoo["Odoo XML-RPC"]
 ```
 
 The major improvement is the separation of concerns:
 - The preserved public API remains centered on `OdooClient`, `OdooModel`, and `OdooQuery` during Phase A.
 - `OdooEnv`, `DomainExpression`, and `OdooRecordset` are implemented and tested in Phase A, but they remain internal to the supported package API.
-- `OdooSession` owns authentication, transport policy, and error mapping.
+- A shared execution boundary, potentially realized as `OdooSession`, owns authentication, transport policy, and mapped-error behavior in the longer-term architecture.
 - `OdooEnv` owns context and session-bound model resolution.
 - `OdooRecordset` owns ids, model identity, and fluent ORM-like behavior.
-- `MetadataCache` and `FieldAdapters` translate the wire protocol into higher-level semantics.
+- `MetadataCache`, `FieldAdapters`, and x2many helpers are the Phase B semantic additions routed through the shared core.
+- Plugin hooks remain a Phase C extensibility seam rather than a Phase B deliverable.
 
 ### Data Flow Diagram
 
@@ -297,9 +305,9 @@ graph LR
 
     subgraph B["Phase B - Growth"]
         B1["Metadata cache"]
-        B2["Field adapters"]
-        B3["Compatibility shims for OdooQuery"]
-        B4["Local integration checks against Odoo"]
+        B2["Field adaptation"]
+        B3["x2many helpers"]
+        B4["Mapped errors + local validation"]
     end
 
     subgraph C["Phase C - Ecosystem"]
@@ -310,10 +318,13 @@ graph LR
     end
 
     A3 --> B1
-    A2 --> B2
-    B2 --> C1
+    A3 --> B2
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
+    B4 --> C1
     B4 --> C2
-    B1 --> C3
+    B4 --> C3
     C1 --> C4
 ```
 
@@ -555,7 +566,7 @@ Data handling
 
 - [ADR-001 - Adopt a recordset-first public API](./architecture/ADR-001-recordset-first-public-api.md)
 - [ADR-002 - Introduce a session and transport policy boundary](./architecture/ADR-002-session-and-transport-boundary.md)
-- [ADR-003 - Add metadata caching and plugin-based field adaptation](./architecture/ADR-003-metadata-cache-and-plugin-adapters.md)
+- [ADR-003 - Add metadata caching and internal field adaptation](./architecture/ADR-003-metadata-cache-and-plugin-adapters.md)
 
 ## Next Steps
 > Prioritized action items for the implementation team.

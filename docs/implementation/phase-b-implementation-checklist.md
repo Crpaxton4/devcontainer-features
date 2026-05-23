@@ -60,19 +60,23 @@ Goal
 - Define the exact Phase B contract before implementation expands the data model and error model.
 
 Likely touch points
+- `docs/implementation/phase-b/phase-b-semantic-growth-contract.md`
+- `docs/implementation/phase-b-implementation-checklist.md`
+- `docs/implementation/phase-a/phase-a-architectural-contract.md`
 - `docs/odoo-sdk-architecture-plan.md`
 - `docs/odoo-sdk-design-patterns.md`
-- `docs/implementation/phase-a-implementation-checklist.md`
-- New Phase B modules and tests
+- `docs/architecture/ADR-003-metadata-cache-and-plugin-adapters.md`
 
 Checklist
-- [ ] Confirm Phase A prerequisites that must exist before Phase B starts.
-- [ ] Confirm the exact Phase B field categories in scope: many2one, one2many, many2many, date, datetime, and binary normalization.
-- [ ] Confirm that Phase B introduces internal adapters and caches, not a new public architecture direction.
-- [ ] Confirm that plugin work, typed adapters, and telemetry expansion remain deferred to Phase C.
+- [ ] Confirm the preserved public surfaces and the Phase A baseline that remain in force throughout Phase B.
+- [ ] Confirm the exact Phase B field categories in scope: many2one, one2many, many2many, date, datetime, and binary.
+- [ ] Confirm that metadata caching, field adaptation, x2many helpers, and mapped errors are internal semantic growth work rather than a new public architecture direction.
+- [ ] Confirm that raw extraction remains explicit and that richer semantics must document coexistence rather than silently replacing preserved raw paths.
+- [ ] Confirm that compatibility layers delegate to the same Phase B internals used by recordset-first flows.
+- [ ] Confirm that plugin work, typed adapters, async work, telemetry expansion, CI, publishing, and release automation remain deferred.
 
 Done when
-- The implementation team can describe the exact Phase B behavior additions and what still remains intentionally deferred.
+- The implementation team can evaluate B1 through B7 against the standalone Phase B contract without reopening recordset-first direction, compatibility routing, or deferment decisions.
 
 ## B1 - Introduce Metadata Cache
 

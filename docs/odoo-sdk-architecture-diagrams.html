@@ -99,39 +99,53 @@ graph LR
     <h2>Component Diagram</h2>
     <div class="mermaid">
 graph TD
-    subgraph PublicAPI["Public API"]
+    subgraph PublicAPI["Preserved Public API"]
         Client["OdooClient facade"]
-        Env["OdooEnv"]
-        Recordset["OdooRecordset"]
-        Domain["Domain expression"]
+      Model["OdooModel compatibility proxy"]
+      Query["OdooQuery compatibility builder"]
     end
 
-    subgraph Core["SDK core"]
+    subgraph PhaseAInternal["Phase A Internal Core"]
+      Env["OdooEnv"]
+      Recordset["OdooRecordset"]
+      Domain["DomainExpression"]
+    end
+
+    subgraph Core["Shared Semantic Core"]
         ModelRegistry["Model registry"]
         MetadataCache["Metadata cache"]
         FieldAdapters["Field adapters"]
+      X2Many["x2many helpers"]
         ErrorMapper["Error mapper"]
         Session["OdooSession"]
         Transport["XML-RPC transport"]
+    end
+
+    subgraph PhaseCExtensibility["Phase C Extensibility"]
         PluginHooks["Plugin hooks"]
     end
 
     Client --> Env
+    Client --> Model
+    Model --> Recordset
+    Query --> Domain
+    Query --> Recordset
     Env --> ModelRegistry
     ModelRegistry --> Recordset
     Recordset --> Domain
     Recordset --> FieldAdapters
+    Recordset --> X2Many
     ModelRegistry --> MetadataCache
     FieldAdapters --> MetadataCache
     Env --> Session
     Session --> Transport
     Session --> ErrorMapper
-    PluginHooks --> FieldAdapters
-    PluginHooks --> ModelRegistry
+    PluginHooks -.-> FieldAdapters
+    PluginHooks -.-> ModelRegistry
     Transport --> Odoo["Odoo XML-RPC"]
     </div>
     <div class="description">
-      <p>The recommended architecture adds an environment, recordset abstraction, metadata cache, and plugin hooks while preserving a simple top-level client facade.</p>
+      <p>The recommended architecture adds an environment, recordset abstraction, metadata cache, field adaptation, and x2many boundaries while preserving a simple top-level client facade. Plugin hooks remain a Phase C seam.</p>
     </div>
   </section>
 
@@ -198,9 +212,9 @@ graph LR
 
     subgraph B["Phase B - Growth"]
         B1["Metadata cache"]
-        B2["Field adapters"]
-        B3["Compatibility shims for OdooQuery"]
-      B4["Local integration checks against Odoo"]
+        B2["Field adaptation"]
+        B3["x2many helpers"]
+        B4["Mapped errors + local validation"]
     end
 
     subgraph C["Phase C - Ecosystem"]
@@ -211,10 +225,13 @@ graph LR
     end
 
     A3 --> B1
-    A2 --> B2
-    B2 --> C1
+    A3 --> B2
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
+    B4 --> C1
     B4 --> C2
-    B1 --> C3
+    B4 --> C3
     C1 --> C4
     </div>
     <div class="description">

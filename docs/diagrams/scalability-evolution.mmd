@@ -7,9 +7,9 @@ graph LR
 
     subgraph B["Phase B - Growth"]
         B1["Metadata cache"]
-        B2["Field adapters"]
-        B3["Compatibility shims for OdooQuery"]
-        B4["Local integration checks against Odoo"]
+        B2["Field adaptation"]
+        B3["x2many helpers"]
+        B4["Mapped errors + local validation"]
     end
 
     subgraph C["Phase C - Ecosystem"]
@@ -20,8 +20,11 @@ graph LR
     end
 
     A3 --> B1
-    A2 --> B2
-    B2 --> C1
+    A3 --> B2
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
+    B4 --> C1
     B4 --> C2
-    B1 --> C3
+    B4 --> C3
     C1 --> C4
