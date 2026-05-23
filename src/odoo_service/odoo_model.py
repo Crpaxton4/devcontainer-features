@@ -32,7 +32,8 @@ class OdooModel:
         if env is None:
             from .odoo_env import OdooEnv
 
-            env = OdooEnv(client)
+            resolved_env = getattr(client, "env", None)
+            env = resolved_env if isinstance(resolved_env, OdooEnv) else OdooEnv(client)
         self._env = env
 
     @property
@@ -311,16 +312,14 @@ class OdooModel:
         :return: The schema metadata for the model.
         :rtype: Dict[str, Any]
         """
-        kwargs: Dict[str, Any] = {}
-        if fields is not None:
-            kwargs["allfields"] = fields
-        if attributes is not None:
-            kwargs["attributes"] = attributes
-        kwargs.update(self._context_kwargs())
         _logger.debug(
             "Fetching fields_get for model=%s fields=%s attributes=%s",
             self.name,
             fields,
             attributes,
         )
-        return self.client.execute(self.name, "fields_get", **kwargs)
+        return self._env.get_field_metadata(
+            self.name,
+            fields,
+            attributes,
+        )

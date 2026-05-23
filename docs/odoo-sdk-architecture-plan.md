@@ -381,7 +381,9 @@ Implementation checklist
 - [Phase B Implementation Checklist](./implementation/phase-b-implementation-checklist.md)
 
 Scope
-- Add `fields_get` caching keyed by model and attribute set.
+- Add `fields_get` caching keyed by model, requested field set,
+  requested attribute set, and request context when that context changes the
+  raw metadata payload.
 - Add field adapters for many2one, one2many, many2many, date, datetime, and binary normalization.
 - Add x2many command helpers mirroring Odoo's command tuple protocol.
 - Add local integration checks against at least one live Odoo instance.

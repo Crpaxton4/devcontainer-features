@@ -63,6 +63,7 @@ class OdooClient(OdooExecutor):
                 settings.username,
                 settings.password,
             )
+        self._env = OdooEnv(self._executor)
         self._models: Dict[str, OdooModel] = {}
         self._lock = threading.Lock()
 
@@ -82,7 +83,7 @@ class OdooClient(OdooExecutor):
     @property
     def env(self) -> OdooEnv:
         """Returns the root environment for env-bound Phase A behavior."""
-        return OdooEnv(self._executor)
+        return self._env
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Base XML-RPC execution wrapper
@@ -111,7 +112,11 @@ class OdooClient(OdooExecutor):
             _logger.debug("Creating model proxy for %s", model_name)
             with self._lock:
                 if model_name not in self._models:
-                    self._models[model_name] = OdooModel(self._executor, model_name)
+                    self._models[model_name] = OdooModel(
+                        self._executor,
+                        model_name,
+                        env=self._env,
+                    )
         return self._models[model_name]
 
     def __iter__(self) -> None:

@@ -32,7 +32,8 @@ class OdooQuery:
         if env is None:
             from .odoo_env import OdooEnv
 
-            env = OdooEnv(client)
+            resolved_env = getattr(client, "env", None)
+            env = resolved_env if isinstance(resolved_env, OdooEnv) else OdooEnv(client)
         self._env = env
         # Normalize domain explicitly to avoid relying on truthiness.
         self._domain = DomainExpression.normalize(domain)

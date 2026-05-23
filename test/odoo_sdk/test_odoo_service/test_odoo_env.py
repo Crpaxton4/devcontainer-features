@@ -174,6 +174,103 @@ class TestOdooEnv(unittest.TestCase):
 
         self.assertEqual(derived_env.context, expected_context)
 
+    def test_with_context_preserves_shared_metadata_cache_reference(self) -> None:
+        env = OdooEnv(self.executor, {"lang": "en_US"})
+
+        derived_env = env.with_context({"tz": "UTC"})
+
+        self.assertIs(derived_env.metadata_cache, env.metadata_cache)
+
+    def test_get_field_metadata_reuses_cache_for_equivalent_derived_envs(self) -> None:
+        self.executor.execute.return_value = {"name": {"type": "char"}}
+        env = OdooEnv(self.executor, {"lang": "en_US"})
+
+        first = env.get_field_metadata("res.partner", ["name"], ["type"])
+        second = env.with_context({}).get_field_metadata(
+            "res.partner",
+            ["name"],
+            ["type"],
+        )
+
+        self.assertEqual(first, second)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "fields_get",
+            allfields=["name"],
+            attributes=["type"],
+            context={"lang": "en_US"},
+        )
+
+    def test_get_field_metadata_isolated_by_context(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"string": "Name"}},
+            {"name": {"string": "Nom"}},
+        ]
+        env = OdooEnv(self.executor, {"lang": "en_US"})
+
+        english = env.get_field_metadata("res.partner", ["name"], ["string"])
+        french = env.with_context({"lang": "fr_FR"}).get_field_metadata(
+            "res.partner",
+            ["name"],
+            ["string"],
+        )
+
+        self.assertEqual(english, {"name": {"string": "Name"}})
+        self.assertEqual(french, {"name": {"string": "Nom"}})
+        self.assertEqual(self.executor.execute.call_count, 2)
+
+    def test_clear_metadata_cache_removes_cached_entries(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"type": "char"}},
+            {"name": {"type": "char", "string": "Name"}},
+        ]
+        env = OdooEnv(self.executor)
+
+        env.get_field_metadata("res.partner", ["name"], ["type"])
+        env.clear_metadata_cache("res.partner")
+        result = env.get_field_metadata("res.partner", ["name"], ["type"])
+
+        self.assertEqual(result, {"name": {"type": "char", "string": "Name"}})
+        self.assertEqual(self.executor.execute.call_count, 2)
+
+    def test_get_field_metadata_refresh_bypasses_cached_entry(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"type": "char"}},
+            {"name": {"type": "char", "string": "Name"}},
+        ]
+        env = OdooEnv(self.executor)
+
+        cached = env.get_field_metadata("res.partner", ["name"], ["type"])
+        refreshed = env.get_field_metadata(
+            "res.partner",
+            ["name"],
+            ["type"],
+            refresh=True,
+        )
+
+        self.assertEqual(cached, {"name": {"type": "char"}})
+        self.assertEqual(refreshed, {"name": {"type": "char", "string": "Name"}})
+        self.assertEqual(self.executor.execute.call_count, 2)
+
+    def test_clear_metadata_cache_without_model_name_removes_all_entries(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"type": "char"}},
+            {"login": {"type": "char"}},
+            {"name": {"type": "char", "string": "Name"}},
+            {"login": {"type": "char", "string": "Login"}},
+        ]
+        env = OdooEnv(self.executor)
+
+        env.get_field_metadata("res.partner", ["name"], ["type"])
+        env.get_field_metadata("res.users", ["login"], ["type"])
+        env.clear_metadata_cache()
+        partner = env.get_field_metadata("res.partner", ["name"], ["type"])
+        user = env.get_field_metadata("res.users", ["login"], ["type"])
+
+        self.assertEqual(partner, {"name": {"type": "char", "string": "Name"}})
+        self.assertEqual(user, {"login": {"type": "char", "string": "Login"}})
+        self.assertEqual(self.executor.execute.call_count, 4)
+
     @given(strategies.text())
     def test_model_lookup_returns_model_bound_to_same_executor(
         self, model_name: str

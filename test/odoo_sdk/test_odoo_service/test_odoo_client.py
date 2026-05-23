@@ -9,6 +9,8 @@ from odoo_sdk.odoo_service.odoo_client import OdooClient
 from odoo_sdk.odoo_service.odoo_config import OdooConnectionSettings
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
+from odoo_sdk.odoo_service.odoo_model import OdooModel
+from odoo_sdk.odoo_service.odoo_query import OdooQuery
 from odoo_sdk.odoo_service.odoo_rpc_executor import OdooRpcExecutor
 
 
@@ -28,8 +30,50 @@ class TestOdooClientContract(unittest.TestCase):
         self.assertIs(env.executor, executor)
         self.assertEqual(env.context, {})
         self.assertIsNot(first_env, env)
+        self.assertIs(client.env, env)
         self.assertEqual(model.name, model_name)
         self.assertIs(model.client, executor)
+
+    def test_client_and_env_models_share_cached_metadata(self) -> None:
+        executor = Mock(spec=OdooExecutor)
+        executor.execute.return_value = {"name": {"type": "char"}}
+        client = OdooClient(executor=executor)
+
+        first = client["res.partner"].fields_get(["name"], ["type"])
+        second = client.env["res.partner"].fields_get(["name"], ["type"])
+
+        self.assertEqual(first, second)
+        executor.execute.assert_called_once_with(
+            "res.partner",
+            "fields_get",
+            allfields=["name"],
+            attributes=["type"],
+        )
+
+    def test_direct_model_construction_reuses_client_root_env_cache(self) -> None:
+        executor = Mock(spec=OdooExecutor)
+        executor.execute.return_value = {"name": {"type": "char"}}
+        client = OdooClient(executor=executor)
+        model = OdooModel(client, "res.partner")
+
+        first = client["res.partner"].fields_get(["name"], ["type"])
+        second = model.fields_get(["name"], ["type"])
+
+        self.assertEqual(first, second)
+        executor.execute.assert_called_once_with(
+            "res.partner",
+            "fields_get",
+            allfields=["name"],
+            attributes=["type"],
+        )
+
+    def test_direct_query_construction_reuses_client_root_env(self) -> None:
+        executor = Mock(spec=OdooExecutor)
+        client = OdooClient(executor=executor)
+
+        query = OdooQuery(client, "res.partner")
+
+        self.assertIs(query._env, client.env)
 
     @given(strategies.text(), strategies.text(), strategies.text(), strategies.text())
     def test_client_is_not_a_mapping_or_iterable(

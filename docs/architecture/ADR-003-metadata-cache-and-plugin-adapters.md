@@ -14,7 +14,9 @@ Date: 2026-05-21
 
 ## Decision
 
-- Add an in-memory metadata cache keyed by model and requested attributes.
+- Add an in-memory metadata cache keyed by model, requested field set,
+  requested attribute set, and the runtime context that materially affects
+  `fields_get` payloads.
 - Build shared internal field and value adaptation boundaries on top of cached metadata.
 - Keep raw extraction behavior explicit while documenting where adapted behavior coexists with it.
 - Defer plugin hooks or protocols for model-specific adapters and serializers to Phase C.

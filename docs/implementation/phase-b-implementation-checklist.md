@@ -94,7 +94,9 @@ Likely touch points
 
 Checklist
 - [ ] Define cache ownership and lifecycle: recordset, environment, session, or dedicated metadata service.
-- [ ] Define cache key strategy for model name and requested attribute combinations.
+- [ ] Define cache key strategy for model name, requested field set,
+  requested attribute set, and any runtime-scoped context that changes raw
+  `fields_get` payloads.
 - [ ] Define miss behavior and fallback behavior when metadata retrieval fails.
 - [ ] Define whether cache invalidation is manual, per-process, or intentionally deferred for Phase B.
 - [ ] Add local tests for cache hits, misses, and repeated metadata access.

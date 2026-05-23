@@ -76,6 +76,18 @@ class TestOdooModel(unittest.TestCase):
             "res.partner", "fields_get", allfields=["name"], attributes=["type"]
         )
 
+    def test_fields_get_reuses_cached_metadata(self) -> None:
+        self.executor.execute.return_value = {"name": {"type": "char"}}
+
+        first = self.model.fields_get(["name"], ["type"])
+        second = self.model.fields_get(["name"], ["type"])
+
+        self.assertEqual(first, second)
+        self.assertIsNot(first, second)
+        self.executor.execute.assert_called_once_with(
+            "res.partner", "fields_get", allfields=["name"], attributes=["type"]
+        )
+
     def test_browse_reads_ids(self) -> None:
         self.executor.execute.return_value = [{"id": 3, "name": "Demo"}]
 
