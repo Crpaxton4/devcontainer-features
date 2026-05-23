@@ -1,6 +1,8 @@
 import unittest
+from datetime import date, datetime, timezone
 from unittest.mock import Mock
 
+from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
@@ -10,6 +12,11 @@ class TestOdooRecordset(unittest.TestCase):
     def setUp(self) -> None:
         self.executor = Mock(spec=OdooExecutor)
         self.env = OdooEnv(self.executor, {"lang": "en_US"})
+
+    def test_single_integer_id_is_normalized_to_singleton_tuple(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", 7)
+
+        self.assertEqual(recordset.ids, (7,))
 
     def test_identity_preserves_model_env_and_ordered_ids(self) -> None:
         input_ids = [3, 1, 2]
@@ -42,6 +49,168 @@ class TestOdooRecordset(unittest.TestCase):
             [7],
             context={"lang": "en_US"},
             fields=["name"],
+        )
+
+    def test_read_adapted_materializes_relation_date_and_binary_values(self) -> None:
+        self.executor.execute.side_effect = [
+            [
+                {
+                    "id": 7,
+                    "parent_id": [3, "Parent"],
+                    "category_id": [9, 5],
+                    "birthday": "2026-05-23",
+                    "write_date": "2026-05-23 10:15:00",
+                    "image_128": "aGVsbG8=",
+                }
+            ],
+            {
+                "parent_id": {"type": "many2one", "relation": "res.partner"},
+                "category_id": {
+                    "type": "many2many",
+                    "relation": "res.partner.category",
+                },
+                "birthday": {"type": "date"},
+                "write_date": {"type": "datetime"},
+                "image_128": {"type": "binary"},
+            },
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.read_adapted(
+            ["parent_id", "category_id", "birthday", "write_date", "image_128"]
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": 7,
+                    "parent_id": RelationValue("res.partner", 3, "Parent"),
+                    "category_id": RelationCollection(
+                        "res.partner.category", (9, 5)
+                    ),
+                    "birthday": date(2026, 5, 23),
+                    "write_date": datetime(
+                        2026, 5, 23, 10, 15, 0, tzinfo=timezone.utc
+                    ),
+                    "image_128": b"hello",
+                }
+            ],
+        )
+        self.assertEqual(self.executor.execute.call_count, 2)
+        self.assertEqual(
+            self.executor.execute.call_args_list[1].kwargs,
+            {
+                "allfields": [
+                    "parent_id",
+                    "category_id",
+                    "birthday",
+                    "write_date",
+                    "image_128",
+                ],
+                "attributes": ["type", "relation"],
+                "context": {"lang": "en_US"},
+            },
+        )
+
+    def test_read_adapted_reuses_cached_metadata_on_subsequent_reads(self) -> None:
+        self.executor.execute.side_effect = [
+            [{"id": 7, "parent_id": [3, "Parent"]}],
+            {"parent_id": {"type": "many2one", "relation": "res.partner"}},
+            [{"id": 7, "parent_id": [4, "Updated"]}],
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        first = recordset.read_adapted(["parent_id"])
+        second = recordset.read_adapted(["parent_id"])
+
+        self.assertEqual(
+            first,
+            [{"id": 7, "parent_id": RelationValue("res.partner", 3, "Parent")}],
+        )
+        self.assertEqual(
+            second,
+            [{"id": 7, "parent_id": RelationValue("res.partner", 4, "Updated")}],
+        )
+        self.assertEqual(self.executor.execute.call_count, 3)
+
+    def test_read_adapted_with_only_id_field_skips_metadata_lookup(self) -> None:
+        self.executor.execute.return_value = [{"id": 7}]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.read_adapted(["id"])
+
+        self.assertEqual(result, [{"id": 7}])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "read",
+            [7],
+            context={"lang": "en_US"},
+            fields=["id"],
+        )
+
+    def test_read_adapted_without_requested_fields_uses_returned_record_keys(self) -> None:
+        self.executor.execute.side_effect = [
+            [{"id": 7, "parent_id": [3, "Parent"], "birthday": "2026-05-23"}],
+            {
+                "parent_id": {"type": "many2one", "relation": "res.partner"},
+                "birthday": {"type": "date"},
+            },
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.read_adapted()
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": 7,
+                    "parent_id": RelationValue("res.partner", 3, "Parent"),
+                    "birthday": date(2026, 5, 23),
+                }
+            ],
+        )
+        self.assertEqual(
+            self.executor.execute.call_args_list[1],
+            unittest.mock.call(
+                "res.partner",
+                "fields_get",
+                allfields=["parent_id", "birthday"],
+                attributes=["type", "relation"],
+                context={"lang": "en_US"},
+            ),
+        )
+
+    def test_search_read_adapted_shares_recordset_adaptation_path(self) -> None:
+        self.executor.execute.side_effect = [
+            [{"id": 7, "parent_id": [3, "Parent"]}],
+            {"parent_id": {"type": "many2one", "relation": "res.partner"}},
+        ]
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_read_adapted(
+            [("active", "=", True)],
+            fields=["parent_id"],
+            limit=1,
+            order="name asc",
+        )
+
+        self.assertEqual(
+            result,
+            [{"id": 7, "parent_id": RelationValue("res.partner", 3, "Parent")}],
+        )
+        self.assertEqual(
+            self.executor.execute.call_args_list[0],
+            unittest.mock.call(
+                "res.partner",
+                "search_read",
+                [("active", "=", True)],
+                context={"lang": "en_US"},
+                limit=1,
+                order="name asc",
+                fields=["parent_id"],
+            ),
         )
 
     def test_write_updates_current_ids_with_context(self) -> None:

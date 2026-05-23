@@ -64,6 +64,7 @@ These additions are internal semantic growth work. They do not define a new publ
 ### Raw And Adapted Paths
 
 - Phase A preserved raw transport behavior and raw `read()` extraction behavior, and Phase B must keep those paths explicit.
+- The implemented Phase B read-side contract keeps `read()` and `search_read()` raw, while routing richer semantics through explicit adapted entry points such as `read_adapted()` and `search_read_adapted()`.
 - Any richer semantic behavior introduced in Phase B must document how it coexists with raw extraction rather than silently replacing it.
 - Adapted behavior must be routed through one shared internal path for the in-scope field categories.
 
@@ -82,7 +83,7 @@ These additions are internal semantic growth work. They do not define a new publ
 ### Public Export Scope
 
 - Phase B does not widen the supported top-level public exports beyond the preserved surfaces.
-- Metadata caches, adapters, x2many helpers, and error-mapping support may exist as internal modules without becoming new supported top-level entry points in this phase.
+- Metadata caches, adapters, adapted relation value objects, x2many helpers, and error-mapping support may exist as internal modules without becoming new supported top-level entry points in this phase.
 
 ## Explicitly Deferred Work
 

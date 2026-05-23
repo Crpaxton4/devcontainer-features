@@ -103,11 +103,30 @@ class OdooModel:
         )
         return self._recordset(normalized_ids).read(fields)
 
+    def read_adapted(
+        self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
+    ) -> List[Record]:
+        """Reads specific records by ID with Phase B field adaptation applied."""
+        normalized_ids = self._normalize_ids(ids)
+        _logger.debug(
+            "Reading adapted model=%s ids=%s fields=%s",
+            self.name,
+            normalized_ids,
+            fields,
+        )
+        return self._recordset(normalized_ids).read_adapted(fields)
+
     def browse(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
         """Convenience alias for read() to mirror ORM-style call sites."""
         return self._recordset(ids).read(fields)
+
+    def browse_adapted(
+        self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
+    ) -> List[Record]:
+        """Convenience alias for adapted reads to mirror ORM-style call sites."""
+        return self._recordset(ids).read_adapted(fields)
 
     def search_ids(
         self,
@@ -152,6 +171,24 @@ class OdooModel:
             offset=offset,
             order=order,
         ).read(fields)
+
+    def search_read_adapted(
+        self,
+        domain: DomainInput = None,
+        fields: Optional[List[str]] = None,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> List[Record]:
+        """Runs `search_read` with Phase B field adaptation applied."""
+        _logger.debug("Executing adapted search_read on model=%s", self.name)
+        return self._search_query(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        ).read_adapted(fields)
 
     def search_count(self, domain: DomainInput = None) -> int:
         """Runs `search_count` and returns the number of matched records."""

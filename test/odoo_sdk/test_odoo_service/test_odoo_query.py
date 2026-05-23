@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, call
 from hypothesis import given, strategies
 
+from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
@@ -200,6 +201,38 @@ class TestOdooQueryWrite(unittest.TestCase):
         recordset._search_read.assert_called_once_with(
             DomainExpression.normalize([("active", "=", True)]),
             fields=["name"],
+            limit=5,
+            offset=10,
+            order="name asc",
+        )
+        executor.execute.assert_not_called()
+
+    def test_read_adapted_delegates_to_recordset_search_read_adapted(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset.search_read_adapted.return_value = [
+            {"id": 8, "parent_id": RelationValue("res.partner", 7, "Parent")}
+        ]
+
+        query = (
+            OdooQuery(executor, "res.partner", [("active", "=", True)])
+            .limit(5)
+            .offset(10)
+            .order_by("name asc")
+            .with_context({"lang": "en_US"})
+        )
+        query._recordset = Mock(return_value=recordset)
+
+        result = query.read_adapted(["parent_id"])
+
+        self.assertEqual(
+            result,
+            [{"id": 8, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
+        query._recordset.assert_called_once_with()
+        recordset.search_read_adapted.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)]),
+            fields=["parent_id"],
             limit=5,
             offset=10,
             order="name asc",

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
+from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_model import OdooModel
@@ -36,6 +37,23 @@ class TestOdooModel(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "res.partner", "create", {"name": "New"}
         )
+
+    def test_read_adapted_delegates_to_recordset_read_adapted(self) -> None:
+        recordset = Mock()
+        recordset.read_adapted.return_value = [
+            {"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}
+        ]
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.read_adapted(3, ["parent_id"])
+
+        self.assertEqual(
+            result,
+            [{"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
+        self.model._recordset.assert_called_once_with([3])
+        recordset.read_adapted.assert_called_once_with(["parent_id"])
+        self.executor.execute.assert_not_called()
 
     def test_write_normalizes_single_id(self) -> None:
         self.executor.execute.return_value = True
@@ -108,6 +126,23 @@ class TestOdooModel(unittest.TestCase):
         self.assertEqual(result, [{"id": 3, "name": "Demo"}])
         self.model._recordset.assert_called_once_with(3)
         recordset.read.assert_called_once_with(["name"])
+        self.executor.execute.assert_not_called()
+
+    def test_browse_adapted_delegates_to_recordset_read_adapted(self) -> None:
+        recordset = Mock()
+        recordset.read_adapted.return_value = [
+            {"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}
+        ]
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.browse_adapted(3, ["parent_id"])
+
+        self.assertEqual(
+            result,
+            [{"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
+        self.model._recordset.assert_called_once_with(3)
+        recordset.read_adapted.assert_called_once_with(["parent_id"])
         self.executor.execute.assert_not_called()
 
     def test_search_ids_supports_pagination(self) -> None:
@@ -267,6 +302,35 @@ class TestOdooModel(unittest.TestCase):
         query.offset.assert_called_once_with(0)
         query.order_by.assert_called_once_with("name")
         query.read.assert_called_once_with(["name"])
+        self.executor.execute.assert_not_called()
+
+    def test_search_read_adapted_delegates_to_query_read_adapted(self) -> None:
+        query = Mock(spec=OdooQuery)
+        query.limit.return_value = query
+        query.offset.return_value = query
+        query.order_by.return_value = query
+        query.read_adapted.return_value = [
+            {"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}
+        ]
+        self.model.search = Mock(return_value=query)
+
+        result = self.model.search_read_adapted(
+            [("is_company", "=", True)],
+            ["parent_id"],
+            limit=1,
+            offset=0,
+            order="name",
+        )
+
+        self.assertEqual(
+            result,
+            [{"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
+        self.model.search.assert_called_once_with([("is_company", "=", True)])
+        query.limit.assert_called_once_with(1)
+        query.offset.assert_called_once_with(0)
+        query.order_by.assert_called_once_with("name")
+        query.read_adapted.assert_called_once_with(["parent_id"])
         self.executor.execute.assert_not_called()
 
     def test_search_count_executes(self) -> None:

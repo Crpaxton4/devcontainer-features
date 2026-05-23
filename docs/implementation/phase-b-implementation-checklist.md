@@ -118,6 +118,8 @@ Why this exists
 
 Likely touch points
 - New field or value adapter modules under the chosen package location.
+- `src/odoo_service/field_adapters.py`
+- `src/odoo_service/field_values.py`
 - Metadata cache module
 - Phase A recordset implementation
 - `src/odoo_service/odoo_model.py`
@@ -128,7 +130,7 @@ Checklist
 - [ ] Define the adaptation rules for one2many and many2many read-side values.
 - [ ] Define normalization rules for date and datetime fields.
 - [ ] Define normalization rules for binary fields for Phase B.
-- [ ] Define where adaptation is triggered: recordset read path, model read path, or a shared response adapter layer.
+- [ ] Define where adaptation is triggered: recordset-owned materialization via `read_adapted()` and `search_read_adapted()`, with thin compatibility delegates layered above it.
 - [ ] Ensure adaptation can be applied without breaking callers that still rely on compatibility surfaces.
 - [ ] Add local tests for each supported Phase B field category.
 
@@ -209,7 +211,7 @@ Likely touch points
 - New cache, adapter, command-helper, and error modules
 
 Checklist
-- [ ] Decide which read and write paths become recordset-centered in Phase B.
+- [ ] Decide which read and write paths become recordset-centered in Phase B. Raw `read()` and `search_read()` stay explicit extraction paths; adapted semantics flow through `read_adapted()` and `search_read_adapted()`.
 - [ ] Ensure `OdooModel` compatibility helpers use the same Phase B internals as recordsets.
 - [ ] Ensure `OdooQuery` compatibility behavior still works without becoming the owner of adaptation or cache semantics.
 - [ ] Remove or avoid duplicate metadata or adaptation code paths.

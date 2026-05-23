@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 from ..utils import Record
 from ..utils.types import DomainInput
 from .domain_expression import DomainExpression
+from .field_adapters import adapt_record_values
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
@@ -85,18 +86,117 @@ class OdooRecordset:
         offset: Optional[int] = None,
         order: Optional[str] = None,
     ) -> list[Record]:
-        serialized_domain = self._serialized_domain(domain)
-        kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
-        if fields is not None:
-            kwargs["fields"] = fields
-
-        _logger.debug(
-            "Search reading recordset model=%s domain=%s kwargs=%s",
-            self._model_name,
-            serialized_domain,
-            kwargs,
+        return self._materialize_records(
+            domain=domain,
+            fields=fields,
+            limit=limit,
+            offset=offset,
+            order=order,
         )
-        return self._execute("search_read", serialized_domain, **kwargs)
+
+    def _materialize_records(
+        self,
+        *,
+        ids: Optional[Sequence[int]] = None,
+        domain: DomainInput = None,
+        fields: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+        adapt: bool = False,
+    ) -> list[Record]:
+        if ids is not None:
+            if not ids:
+                return []
+
+            kwargs = self._context_kwargs()
+            if fields is not None:
+                kwargs["fields"] = fields
+
+            _logger.debug(
+                "Reading recordset model=%s ids=%s fields=%s adapt=%s",
+                self._model_name,
+                ids,
+                fields,
+                adapt,
+            )
+            records = self._execute("read", list(ids), **kwargs)
+        else:
+            serialized_domain = self._serialized_domain(domain)
+            kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
+            if fields is not None:
+                kwargs["fields"] = fields
+
+            _logger.debug(
+                "Search reading recordset model=%s domain=%s kwargs=%s adapt=%s",
+                self._model_name,
+                serialized_domain,
+                kwargs,
+                adapt,
+            )
+            records = self._execute("search_read", serialized_domain, **kwargs)
+
+        if not adapt or not records:
+            return records
+
+        return self._adapt_records(records, fields)
+
+    def _adapt_records(
+        self,
+        records: list[Record],
+        fields: Optional[list[str]] = None,
+    ) -> list[Record]:
+        metadata_fields = self._metadata_fields(records, fields)
+        if not metadata_fields:
+            return [dict(record) for record in records]
+
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            metadata_fields,
+            ["type", "relation"],
+        )
+        return [adapt_record_values(record, metadata) for record in records]
+
+    @staticmethod
+    def _metadata_fields(
+        records: Sequence[Record],
+        fields: Optional[Sequence[str]],
+    ) -> list[str]:
+        if fields is not None:
+            return [
+                field_name
+                for field_name in dict.fromkeys(fields)
+                if field_name != "id"
+            ]
+
+        names: list[str] = []
+        for record in records:
+            names.extend(record.keys())
+
+        return [
+            field_name
+            for field_name in dict.fromkeys(names)
+            if field_name != "id"
+        ]
+
+    def search_read_adapted(
+        self,
+        domain: DomainInput = None,
+        *,
+        fields: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> list[Record]:
+        """Materializes adapted rows for a search_read operation."""
+        return self._materialize_records(
+            domain=domain,
+            fields=fields,
+            limit=limit,
+            offset=offset,
+            order=order,
+            adapt=True,
+        )
 
     def _search_count(self, domain: DomainInput = None) -> int:
         serialized_domain = self._serialized_domain(domain)
@@ -146,23 +246,17 @@ class OdooRecordset:
 
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
         """Materializes raw rows for the current ids."""
-        if not self._ids:
-            return []
-
-        kwargs = self._context_kwargs()
-        if fields is not None:
-            kwargs["fields"] = fields
-
-        _logger.debug(
-            "Reading recordset model=%s ids=%s fields=%s",
-            self._model_name,
-            self._ids,
-            fields,
+        return self._materialize_records(
+            ids=self._ids,
+            fields=fields,
         )
-        return self._execute(
-            "read",
-            list(self._ids),
-            **kwargs,
+
+    def read_adapted(self, fields: Optional[list[str]] = None) -> list[Record]:
+        """Materializes adapted rows for the current ids."""
+        return self._materialize_records(
+            ids=self._ids,
+            fields=fields,
+            adapt=True,
         )
 
     def write(self, values: Dict[str, Any]) -> bool:

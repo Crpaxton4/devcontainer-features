@@ -124,6 +124,23 @@ class OdooQuery:
             order=self._order,
         )
 
+    def read_adapted(self, fields: Optional[List[str]] = None) -> List[Record]:
+        """Executes search_read with Phase B field adaptation applied."""
+        serialized_domain = self._domain.serialize()
+        _logger.debug(
+            "Executing adapted search_read on model=%s domain=%s fields=%s",
+            self.model_name,
+            serialized_domain,
+            fields,
+        )
+        return self._recordset().search_read_adapted(
+            self._domain,
+            fields=fields,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
+        )
+
     def write(self, values: Dict[str, Any]) -> bool:
         """Searches for matching records and updates them."""
         _logger.debug(
