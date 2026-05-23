@@ -1,11 +1,12 @@
 import unittest
 from datetime import date, datetime, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
+from odoo_sdk.odoo_service.x2many_commands import X2ManyCommand
 
 
 class TestOdooRecordset(unittest.TestCase):
@@ -225,6 +226,111 @@ class TestOdooRecordset(unittest.TestCase):
             "write",
             [7, 8],
             {"comment": "Updated"},
+            context={"lang": "en_US"},
+        )
+
+    def test_write_serializes_x2many_helpers_with_shared_ordering(self) -> None:
+        self.executor.execute.side_effect = [
+            {"tag_ids": {"type": "many2many"}},
+            True,
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7, 8])
+
+        result = recordset.write(
+            {
+                "tag_ids": [
+                    X2ManyCommand.link(3),
+                    (4, 5),
+                ]
+            }
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["tag_ids"],
+                    attributes=["type"],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [7, 8],
+                    {"tag_ids": [(4, 3, 0), (4, 5, 0)]},
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
+    def test_write_serializes_single_x2many_helper_and_preserves_scalars(self) -> None:
+        self.executor.execute.side_effect = [
+            {"tag_ids": {"type": "many2many"}},
+            True,
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.write(
+            {
+                "name": "Updated",
+                "tag_ids": X2ManyCommand.set([5, 3]),
+            }
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["tag_ids"],
+                    attributes=["type"],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [7],
+                    {
+                        "name": "Updated",
+                        "tag_ids": [(6, 0, [5, 3])],
+                    },
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
+    def test_write_rejects_invalid_x2many_raw_tuple_before_write(self) -> None:
+        self.executor.execute.return_value = {"tag_ids": {"type": "many2many"}}
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        with self.assertRaisesRegex(ValueError, "positive integer id"):
+            recordset.write({"tag_ids": [(4, 0)]})
+
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "fields_get",
+            allfields=["tag_ids"],
+            attributes=["type"],
+            context={"lang": "en_US"},
+        )
+
+    def test_write_rejects_x2many_helper_on_scalar_field(self) -> None:
+        self.executor.execute.return_value = {"name": {"type": "char"}}
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        with self.assertRaisesRegex(ValueError, "one2many or many2many"):
+            recordset.write({"name": X2ManyCommand.link(3)})
+
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "fields_get",
+            allfields=["name"],
+            attributes=["type"],
             context={"lang": "en_US"},
         )
 

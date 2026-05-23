@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, call
 from hypothesis import given, strategies
 
+from odoo_sdk.odoo_service import X2ManyCommand
 from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
@@ -351,6 +352,46 @@ class TestOdooQueryWrite(unittest.TestCase):
                     "write",
                     [3, 4],
                     {"comment": "Updated"},
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
+    def test_write_serializes_x2many_helpers_through_recordset_path(self) -> None:
+        executor = Mock()
+        executor.execute.side_effect = [
+            [3, 4],
+            {"tag_ids": {"type": "many2many"}},
+            True,
+        ]
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+        result = query.with_context({"lang": "en_US"}).write(
+            {"tag_ids": [X2ManyCommand.link(9), (5,)]}
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "search",
+                    [("active", "=", True)],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["tag_ids"],
+                    attributes=["type"],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [3, 4],
+                    {"tag_ids": [(4, 9, 0), (5, 0, 0)]},
                     context={"lang": "en_US"},
                 ),
             ],

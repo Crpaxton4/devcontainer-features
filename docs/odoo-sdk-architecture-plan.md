@@ -152,7 +152,7 @@ Root architectural findings
 - Domain is typed as a list of triples only, which cannot represent Odoo's boolean prefix operators or more complex domain expressions.
 - Context exists in `OdooQuery`, but not as a first-class environment abstraction.
 - Field metadata can be retrieved, but there is no registry or cache to use it systematically.
-- Relational fields and x2many command tuples are still raw wire values, not adapted SDK constructs.
+- Raw `read()` extraction remains explicit, while Phase B routes x2many writes through `X2ManyCommand` helpers and a shared recordset-owned serializer instead of leaving relation updates as ad hoc wire tuples.
 - The public package exposes `CommandDispatcher` even though it is orthogonal to the ORM-like core.
 
 Public API trajectory
@@ -385,12 +385,13 @@ Scope
   requested attribute set, and request context when that context changes the
   raw metadata payload.
 - Add field adapters for many2one, one2many, many2many, date, datetime, and binary normalization.
-- Add x2many command helpers mirroring Odoo's command tuple protocol.
+- Add x2many command helpers mirroring Odoo's command tuple protocol and normalize them through the shared recordset write path.
 - Add local integration checks against at least one live Odoo instance.
 - Add explicit error classes for auth, access, validation, missing records, and transport faults.
 
 What changes from Phase A
 - The SDK starts interpreting Odoo semantics instead of just transporting payloads.
+- Write-side x2many operations gain SDK helper objects that normalize to canonical Odoo command tuples before XML-RPC execution.
 - Local validation becomes more RPC-aware and less dependent on mocks alone.
 
 Why it is needed
@@ -402,7 +403,7 @@ Cost implications
 
 Migration path
 - Start with read-only adapters and metadata cache.
-- Add write-side x2many helpers next.
+- Route write-side x2many helpers through recordset-first internals while preserving raw tuple compatibility for existing callers.
 - Introduce error mapping without changing the transport wire protocol.
 
 ### Phase C - Scale

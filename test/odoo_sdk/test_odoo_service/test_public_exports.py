@@ -46,8 +46,10 @@ class TestPhaseAPublicExports(unittest.TestCase):
                 "OdooModel",
                 "OdooQuery",
                 "OdooRpcExecutor",
+                "X2ManyCommand",
             },
         )
+        self.assertTrue(hasattr(service_package, "X2ManyCommand"))
         self.assertFalse(hasattr(service_package, "OdooEnv"))
         self.assertFalse(hasattr(service_package, "DomainExpression"))
         self.assertFalse(hasattr(service_package, "OdooRecordset"))

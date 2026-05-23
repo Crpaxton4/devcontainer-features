@@ -152,14 +152,16 @@ Why this exists
 Likely touch points
 - New helper module for x2many commands
 - Recordset write path
+- `src/odoo_service/__init__.py`
 - `src/odoo_service/odoo_model.py`
+- `src/odoo_service/odoo_query.py`
 - Local tests for write serialization
 
 Checklist
-- [ ] Define the minimum helper API needed for common x2many operations in Phase B.
-- [ ] Define serialization from helper objects to Odoo command tuple payloads.
-- [ ] Define whether raw tuple input remains accepted for compatibility and how both paths coexist.
-- [ ] Add local tests for command helper serialization and write-path usage.
+- [x] Define the minimum helper API needed for common x2many operations in Phase B.
+- [x] Define serialization from helper objects to Odoo command tuple payloads.
+- [x] Define whether raw tuple input remains accepted for compatibility and how both paths coexist.
+- [x] Add local tests for command helper serialization and write-path usage.
 
 Done when
 - Consumers have an SDK-supported way to express x2many write commands without constructing raw tuples manually.

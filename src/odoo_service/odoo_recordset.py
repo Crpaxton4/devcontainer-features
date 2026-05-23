@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence as SequenceABC
 from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 
 from ..utils import Record
 from ..utils.types import DomainInput
 from .domain_expression import DomainExpression
 from .field_adapters import adapt_record_values
+from .x2many_commands import X2ManyCommand, normalize_x2many_commands
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
@@ -60,6 +62,41 @@ class OdooRecordset:
 
     def _serialized_domain(self, domain: DomainInput) -> list[Any]:
         return DomainExpression.normalize(domain).serialize()
+
+    def _normalize_write_values(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(values)
+        fields_to_check = [
+            field_name
+            for field_name, value in normalized.items()
+            if _needs_write_field_metadata(value)
+        ]
+        if not fields_to_check:
+            return normalized
+
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            fields=fields_to_check,
+            attributes=["type"],
+        )
+        for field_name in fields_to_check:
+            field_metadata = metadata.get(field_name)
+            if field_metadata is None:
+                if _contains_x2many_helpers(normalized[field_name]):
+                    raise ValueError(
+                        f"Field {field_name!r} must be one2many or many2many to use x2many helpers"
+                    )
+                continue
+            field_type = field_metadata.get("type")
+            if field_type in {"one2many", "many2many"}:
+                normalized[field_name] = normalize_x2many_commands(
+                    normalized[field_name]
+                )
+                continue
+            if _contains_x2many_helpers(normalized[field_name]):
+                raise ValueError(
+                    f"Field {field_name!r} must be one2many or many2many to use x2many helpers"
+                )
+        return normalized
 
     def _search_kwargs(
         self,
@@ -223,11 +260,13 @@ class OdooRecordset:
         if not values and not allow_empty_values:
             raise ValueError("write requires at least one value")
 
+        normalized_values = self._normalize_write_values(values) if values else dict(values)
+
         _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
         return self._execute(
             "write",
             list(self._ids),
-            values,
+            normalized_values,
             **self._context_kwargs(),
         )
 
@@ -310,3 +349,20 @@ class OdooRecordset:
             self._model_name,
             self._ids,
         )
+
+
+def _needs_write_field_metadata(value: Any) -> bool:
+    if isinstance(value, X2ManyCommand):
+        return True
+    return isinstance(value, SequenceABC) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    )
+
+
+def _contains_x2many_helpers(value: Any) -> bool:
+    if isinstance(value, X2ManyCommand):
+        return True
+    return isinstance(value, SequenceABC) and any(
+        isinstance(item, X2ManyCommand) for item in value
+    )

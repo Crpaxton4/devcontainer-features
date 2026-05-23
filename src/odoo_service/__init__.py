@@ -12,6 +12,7 @@ from .odoo_executor import OdooExecutor
 from .odoo_model import OdooModel
 from .odoo_query import OdooQuery
 from .odoo_rpc_executor import OdooRpcExecutor
+from .x2many_commands import X2ManyCommand
 
 # Phase A internal primitives are deliberately not re-exported here.
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "OdooModel",
     "OdooQuery",
     "OdooRpcExecutor",
+    "X2ManyCommand",
 ]

@@ -1,6 +1,7 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
+from odoo_sdk.odoo_service import X2ManyCommand
 from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
@@ -63,6 +64,33 @@ class TestOdooModel(unittest.TestCase):
         self.assertTrue(result)
         self.executor.execute.assert_called_once_with(
             "res.partner", "write", [9], {"name": "Updated"}
+        )
+
+    def test_write_serializes_x2many_helpers_via_recordset(self) -> None:
+        self.executor.execute.side_effect = [
+            {"tag_ids": {"type": "many2many"}},
+            True,
+        ]
+
+        result = self.model.write(9, {"tag_ids": X2ManyCommand.link(4)})
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["tag_ids"],
+                    attributes=["type"],
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [9],
+                    {"tag_ids": [(4, 4, 0)]},
+                ),
+            ],
         )
 
     def test_write_rejects_empty_inputs(self) -> None:

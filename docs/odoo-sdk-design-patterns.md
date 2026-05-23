@@ -20,7 +20,7 @@ Selection rules
 | Proxy | Already in use | `OdooModel` | Acts as a client-side stand-in for a remote Odoo model and forwards calls to the executor | None |
 | Builder | Already in use, lightweight | `OdooQuery` | Builds search options step by step using an immutable fluent interface | None |
 | Factory Method | Already in use, lightweight | `CommandDispatcher.register()` factories and `OdooClient.__getitem__()` model creation | Centralizes object creation for commands and model proxies without exposing construction details to consumers | None |
-| Adapter | Deferred to Phase B | Internal field and value translation layer around `fields_get` and XML-RPC payloads | Hides Odoo wire formats such as many2one tuples, x2many command data, and date strings behind existing read surfaces after Phase A guardrails are in place | Internal only |
+| Adapter | Now in use internally | Internal field and value translation layer around `fields_get`, read-side adaptation, and x2many write serialization | Hides Odoo wire formats such as many2one tuples, x2many command tuples, and date strings behind explicit semantic boundaries without widening the top-level API | Internal only |
 | Decorator | Optional later | Wrapper around `OdooExecutor` or a future session object | Adds logging, timing, retry, caching, or redaction behavior without altering the executor interface | Internal only |
 
 ## Phase A Compatibility Guidance
@@ -94,16 +94,16 @@ Design rule
 
 ### Adapter
 
-This pattern is intentionally deferred until Phase B.
+This pattern is now used internally in Phase B.
 
 Good fit
 - Converting many2one tuples to richer local representations.
-- Translating x2many command structures.
+- Translating `X2ManyCommand` helper values and compatible raw tuples into canonical Odoo x2many command tuples.
 - Normalizing date and datetime field values.
 
 Design rule
-- Add adapters only after Phase A ownership boundaries are in place.
-- Do not change the high-level entry points just to introduce adapters.
+- Keep read-side adaptation and write-side x2many serialization behind shared metadata-driven boundaries owned by recordsets and envs.
+- Keep the helper API small and explicit; do not change the high-level entry points just to introduce adapters.
 
 ### Decorator
 

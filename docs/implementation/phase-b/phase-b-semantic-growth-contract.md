@@ -59,6 +59,12 @@ Phase B is limited to the following behavior additions:
 - Explicit SDK error taxonomy and mapped failure behavior.
 - A local live-Odoo validation path for the new semantics.
 
+The implemented x2many helper boundary is intentionally small:
+
+- `X2ManyCommand` supports `create`, `update`, `delete`, `unlink`, `link`, `clear`, and `set` operations.
+- The shared x2many boundary accepts a single helper object, a single raw tuple, or an ordered mixed list of both for `one2many` and `many2many` fields.
+- Helper and raw tuple inputs are canonicalized to standard Odoo command tuples before XML-RPC execution.
+
 These additions are internal semantic growth work. They do not define a new public architecture direction.
 
 ### Raw And Adapted Paths
@@ -67,6 +73,8 @@ These additions are internal semantic growth work. They do not define a new publ
 - The implemented Phase B read-side contract keeps `read()` and `search_read()` raw, while routing richer semantics through explicit adapted entry points such as `read_adapted()` and `search_read_adapted()`.
 - Any richer semantic behavior introduced in Phase B must document how it coexists with raw extraction rather than silently replacing it.
 - Adapted behavior must be routed through one shared internal path for the in-scope field categories.
+- Ordinary scalar values remain valid in the same write payload as x2many helper values; only metadata-confirmed `one2many` and `many2many` fields are normalized through the shared x2many boundary.
+- x2many command normalization must preserve caller ordering for mixed helper and raw tuple command lists.
 
 ### Compatibility Routing
 
@@ -84,6 +92,7 @@ These additions are internal semantic growth work. They do not define a new publ
 
 - Phase B does not widen the supported top-level public exports beyond the preserved surfaces.
 - Metadata caches, adapters, adapted relation value objects, x2many helpers, and error-mapping support may exist as internal modules without becoming new supported top-level entry points in this phase.
+- x2many helpers may be re-exported from `odoo_sdk.odoo_service`, but Phase B still does not widen the package-root `odoo_sdk` export surface.
 
 ## Explicitly Deferred Work
 
