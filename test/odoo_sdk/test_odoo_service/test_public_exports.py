@@ -34,6 +34,18 @@ class TestPhaseAPublicExports(unittest.TestCase):
         self.assertFalse(hasattr(package, "DomainExpression"))
         self.assertFalse(hasattr(package, "OdooRecordset"))
 
+    def test_top_level_all_excludes_phase_b_error_taxonomy(self) -> None:
+        package = importlib.import_module("src")
+
+        self.assertNotIn("OdooError", package.__all__)
+        self.assertNotIn("OdooAuthenticationError", package.__all__)
+        self.assertNotIn("OdooAccessError", package.__all__)
+        self.assertNotIn("OdooValidationError", package.__all__)
+        self.assertNotIn("OdooMissingRecordError", package.__all__)
+        self.assertNotIn("OdooTransportError", package.__all__)
+        self.assertNotIn("OdooServerError", package.__all__)
+        self.assertFalse(hasattr(package, "OdooError"))
+
     def test_service_all_excludes_phase_a_internal_primitives(self) -> None:
         service_package = importlib.import_module("odoo_sdk.odoo_service")
 
@@ -42,6 +54,13 @@ class TestPhaseAPublicExports(unittest.TestCase):
             {
                 "OdooClient",
                 "OdooConnectionSettings",
+                "OdooError",
+                "OdooAuthenticationError",
+                "OdooAccessError",
+                "OdooValidationError",
+                "OdooMissingRecordError",
+                "OdooTransportError",
+                "OdooServerError",
                 "OdooExecutor",
                 "OdooModel",
                 "OdooQuery",

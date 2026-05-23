@@ -64,6 +64,8 @@ Design rule
 
 Design rule
 - New transport behavior should be introduced by another executor-compatible implementation or wrapper, not by branching inside `OdooModel` or `OdooQuery`.
+- Keep mapped error classification at the executor boundary so compatibility wrappers and recordsets propagate the same `OdooError` subclasses without local translation.
+- Re-export the Phase B error taxonomy from `odoo_sdk.odoo_service` only; do not widen the package-root `odoo_sdk` surface just to expose error types.
 
 ### Proxy
 

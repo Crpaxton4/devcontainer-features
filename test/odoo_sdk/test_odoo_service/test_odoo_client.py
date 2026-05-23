@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 from hypothesis import given, strategies
 
+from odoo_sdk.odoo_service import OdooServerError
 from odoo_sdk.odoo_service.odoo_client import OdooClient
 from odoo_sdk.odoo_service.odoo_config import OdooConnectionSettings
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
@@ -119,6 +120,22 @@ class TestOdooClientContract(unittest.TestCase):
         executor.execute.assert_called_once_with(
             "res.partner", "search", [("id", "=", 1)], limit=1
         )
+
+    def test_client_execute_propagates_sdk_error_without_wrapping(self) -> None:
+        executor = Mock(spec=OdooExecutor)
+        error = OdooServerError(
+            "Odoo server error (res.partner.search)",
+            operation="res.partner.search",
+            model="res.partner",
+            method="search",
+        )
+        executor.execute.side_effect = error
+        client = OdooClient(executor=executor)
+
+        with self.assertRaises(OdooServerError) as caught:
+            client.execute("res.partner", "search", [])
+
+        self.assertIs(caught.exception, error)
 
     @given(strategies.text())
     def test_client_reuses_cached_model_proxy(self, model_name: str) -> None:

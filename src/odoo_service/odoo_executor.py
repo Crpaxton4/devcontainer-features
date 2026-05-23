@@ -11,7 +11,8 @@ class OdooExecutor(ABC):
     Provide a concrete `execute` method that raises `NotImplementedError` so
     subclasses explicitly implement behavior. This avoids relying solely on
     the `@abstractmethod` decorator which can be removed by mutation operators
-    and lead to misleading test results.
+    and lead to misleading test results. Concrete implementations should raise
+    `OdooError` subclasses for mapped Odoo-facing failures.
     """
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:

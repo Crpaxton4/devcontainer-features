@@ -2,6 +2,7 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import Mock, call
 
+from odoo_sdk.odoo_service import OdooMissingRecordError
 from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
@@ -51,6 +52,21 @@ class TestOdooRecordset(unittest.TestCase):
             context={"lang": "en_US"},
             fields=["name"],
         )
+
+    def test_read_propagates_sdk_error_without_wrapping(self) -> None:
+        error = OdooMissingRecordError(
+            "Odoo record was not found (res.partner.read)",
+            operation="res.partner.read",
+            model="res.partner",
+            method="read",
+        )
+        self.executor.execute.side_effect = error
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        with self.assertRaises(OdooMissingRecordError) as caught:
+            recordset.read(["name"])
+
+        self.assertIs(caught.exception, error)
 
     def test_read_adapted_materializes_relation_date_and_binary_values(self) -> None:
         self.executor.execute.side_effect = [

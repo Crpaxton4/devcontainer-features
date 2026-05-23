@@ -86,12 +86,16 @@ These additions are internal semantic growth work. They do not define a new publ
 
 - Phase B must provide one explicit mapped-error taxonomy.
 - Mapped error behavior must be observed consistently from recordset flows and compatibility flows.
+- The Phase B taxonomy is exposed from `odoo_sdk.odoo_service` as `OdooError`, `OdooAuthenticationError`, `OdooAccessError`, `OdooValidationError`, `OdooMissingRecordError`, `OdooTransportError`, and `OdooServerError`.
+- Broad callers should catch `OdooError` when they need one handler for mapped SDK failures instead of relying on generic `RuntimeError`.
+- Fault and transport classification stay owned by the executor boundary so `OdooModel`, `OdooQuery`, and recordsets propagate the same mapped exceptions without local remapping.
 - Phase B does not require a broader transport redesign or a full session-policy implementation to satisfy this boundary.
 
 ### Public Export Scope
 
 - Phase B does not widen the supported top-level public exports beyond the preserved surfaces.
 - Metadata caches, adapters, adapted relation value objects, x2many helpers, and error-mapping support may exist as internal modules without becoming new supported top-level entry points in this phase.
+- The new error taxonomy is re-exported from `odoo_sdk.odoo_service`, but it is not added to the package-root `odoo_sdk` exports during Phase B.
 - x2many helpers may be re-exported from `odoo_sdk.odoo_service`, but Phase B still does not widen the package-root `odoo_sdk` export surface.
 
 ## Explicitly Deferred Work

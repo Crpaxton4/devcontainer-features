@@ -9,6 +9,15 @@ from `__all__` until a later phase widens the supported API.
 from .odoo_client import OdooClient
 from .odoo_config import OdooConnectionSettings
 from .odoo_executor import OdooExecutor
+from .errors import (
+    OdooAccessError,
+    OdooAuthenticationError,
+    OdooError,
+    OdooMissingRecordError,
+    OdooServerError,
+    OdooTransportError,
+    OdooValidationError,
+)
 from .odoo_model import OdooModel
 from .odoo_query import OdooQuery
 from .odoo_rpc_executor import OdooRpcExecutor
@@ -18,6 +27,13 @@ from .x2many_commands import X2ManyCommand
 __all__ = [
     "OdooClient",
     "OdooConnectionSettings",
+    "OdooError",
+    "OdooAuthenticationError",
+    "OdooAccessError",
+    "OdooValidationError",
+    "OdooMissingRecordError",
+    "OdooTransportError",
+    "OdooServerError",
     "OdooExecutor",
     "OdooModel",
     "OdooQuery",

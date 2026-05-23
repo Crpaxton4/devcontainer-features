@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, call
 
-from odoo_sdk.odoo_service import X2ManyCommand
+from odoo_sdk.odoo_service import OdooAccessError, X2ManyCommand
 from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
@@ -28,6 +28,20 @@ class TestOdooModel(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "res.partner", "read", [7], fields=["name"]
         )
+
+    def test_read_propagates_sdk_error_without_wrapping(self) -> None:
+        error = OdooAccessError(
+            "Odoo access denied (res.partner.read)",
+            operation="res.partner.read",
+            model="res.partner",
+            method="read",
+        )
+        self.executor.execute.side_effect = error
+
+        with self.assertRaises(OdooAccessError) as caught:
+            self.model.read(7, ["name"])
+
+        self.assertIs(caught.exception, error)
 
     def test_create_delegates_to_executor(self) -> None:
         self.executor.execute.return_value = 101

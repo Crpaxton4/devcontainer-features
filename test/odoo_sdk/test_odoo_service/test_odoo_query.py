@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock, call
 from hypothesis import given, strategies
 
-from odoo_sdk.odoo_service import X2ManyCommand
+from odoo_sdk.odoo_service import OdooValidationError, X2ManyCommand
 from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
@@ -49,6 +49,23 @@ class TestOdooQueryWrite(unittest.TestCase):
                 call(model_name, "unlink", [1, 2, 3]),
             ],
         )
+
+    def test_ids_propagates_sdk_error_without_wrapping(self) -> None:
+        executor = Mock()
+        error = OdooValidationError(
+            "Odoo validation failed (res.partner.search)",
+            operation="res.partner.search",
+            model="res.partner",
+            method="search",
+        )
+        executor.execute.side_effect = error
+
+        query = OdooQuery(executor, "res.partner", [("active", "=", True)])
+
+        with self.assertRaises(OdooValidationError) as caught:
+            query.ids()
+
+        self.assertIs(caught.exception, error)
 
     def test_chained_queries_are_independent_instances(self) -> None:
         executor = Mock()

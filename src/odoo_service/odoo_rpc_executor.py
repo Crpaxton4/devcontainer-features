@@ -3,6 +3,13 @@ import threading
 import xmlrpc.client
 from typing import Any, Optional
 
+from ._error_mapping import (
+    map_authentication_failure,
+    map_authentication_fault,
+    map_fault,
+    map_transport_error,
+)
+from .errors import OdooError
 from .odoo_executor import OdooExecutor
 
 _logger = logging.getLogger(__name__)
@@ -39,29 +46,37 @@ class OdooRpcExecutor(OdooExecutor):
                         auth_result = self._common.authenticate(
                             self.db, self.username, self.password, {}
                         )
+                    except xmlrpc.client.Fault as exc:
+                        raise map_authentication_fault(exc) from exc
                     except Exception as exc:
-                        raise ConnectionError(
-                            f"Failed to connect to Odoo: {exc}"
+                        raise map_transport_error(
+                            exc,
+                            operation="authenticate",
                         ) from exc
 
                     # Odoo returns `False` for invalid credentials.
                     if auth_result is False or auth_result is None:
-                        raise PermissionError(
-                            f"Odoo auth failed for user: {self.username}"
+                        raise map_authentication_failure(
+                            detail="Odoo returned a falsey authentication response"
                         )
 
                     try:
                         authenticated_uid = int(auth_result)  # type: ignore[arg-type]
                     except (TypeError, ValueError) as exc:
-                        raise ConnectionError(
-                            f"Unexpected auth response from Odoo: {auth_result!r}"
+                        raise map_transport_error(
+                            exc,
+                            operation="authenticate",
+                            detail=f"Unexpected auth response from Odoo: {auth_result!r}",
                         ) from exc
 
                     self._uid = authenticated_uid
                     self._authenticated = True
 
         if self._uid is None:
-            raise ConnectionError("Authentication succeeded without a user id")
+            raise map_transport_error(
+                RuntimeError("Authentication succeeded without a user id"),
+                operation="authenticate",
+            )
         return self._uid
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
@@ -71,11 +86,9 @@ class OdooRpcExecutor(OdooExecutor):
             return self._object.execute_kw(
                 self.db, self.uid, self.password, model, method, list(args), kwargs
             )
-        except (ConnectionError, PermissionError):
+        except OdooError:
             raise
-        except xmlrpc.client.Fault as e:
-            raise RuntimeError(
-                f"Odoo Server Error ({model}.{method}): {e.faultString}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(f"XML-RPC Error ({model}.{method}): {str(e)}") from e
+        except xmlrpc.client.Fault as exc:
+            raise map_fault(exc, model=model, method=method) from exc
+        except Exception as exc:
+            raise map_transport_error(exc, model=model, method=method) from exc
