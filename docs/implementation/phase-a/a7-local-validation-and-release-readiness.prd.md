@@ -10,7 +10,7 @@ Phase A is architectural work, which makes it easy to declare success based on c
 
 ## Solution
 
-Define a repeatable local validation path for Phase A and require tests that cover both the new abstractions and the preserved public entry points. The validation path should rely only on repository-local tooling and should document the commands that prepare the environment and run the Phase A test suite. This gives maintainers a clear, local-only definition of done for the phase.
+Define a repeatable local validation path for Phase A and require tests that cover both the new abstractions and the preserved public entry points. The validation path should rely only on repository-local tooling and should document the commands that prepare the environment, run the Phase A unit-test and coverage baseline, and execute the Phase A mutation gate. This gives maintainers a clear, local-only definition of done for the phase.
 
 # Requirements
 
@@ -21,8 +21,9 @@ Define a repeatable local validation path for Phase A and require tests that cov
 - The implementation must document the exact local command path required to validate Phase A from the repository root.
 - The documented local setup path must include environment preparation for a clean local run.
 - The documented local execution path must include the unit-test and coverage command used as the Phase A validation baseline.
+- The documented local execution path must include the repository mutation-testing commands and the minimum required kill rate for Phase A completion.
 - The validation guidance must explicitly state that CI is not required for Phase A completion.
-- The documentation must identify any optional local checks, such as mutation testing helpers, as optional unless they are promoted into a required exit criterion.
+- Mutation testing is a required Phase A exit criterion and must continue to use the existing repository-local helpers.
 - The documentation must confirm that Phase A docs reflect the implemented behavior at the time the validation path is declared complete.
 
 ## Non-Functional Requirements
@@ -30,15 +31,18 @@ Define a repeatable local validation path for Phase A and require tests that cov
 - The validation path must be runnable entirely with local tooling already present in the repository workflow.
 - The documented commands must be deterministic and simple enough for a maintainer to rerun during review.
 - Test coverage must continue to satisfy the repository's configured coverage threshold.
+- Mutation kill rate must remain at or above the repository-approved 90% threshold.
 - Validation must focus on Phase A behavior and must not depend on future live-Odoo integration work planned for later phases.
 
 # Acceptance Criteria
 
 - [ ] Unit tests exist for the new Phase A abstractions and compatibility tests exist for preserved entry points.
 - [ ] The local setup command is documented as `uv venv --allow-existing .venv && uv sync` or an equivalent repository-approved command.
-- [ ] The local validation command is documented as `uv run coverage run -m unittest -v && uv run coverage html` or an equivalent repository-approved command.
+- [ ] The local validation command is documented as `uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html` or an equivalent repository-approved command.
+- [ ] The local mutation workflow is documented with `./scripts/cosmic-ray-init.sh <session>`, `./scripts/cosmic-ray-baseline.sh <session>`, `./scripts/cosmic-ray-exec.sh <session>`, and `./scripts/cosmic-ray-report.sh <session>` or equivalent repository-approved commands.
 - [ ] The documented Phase A validation path does not require CI or hosted infrastructure.
 - [ ] Coverage remains at or above the repository's configured threshold after Phase A changes.
+- [ ] Mutation kill rate remains at or above 90% after Phase A changes.
 - [ ] The documentation used for validation matches the implemented Phase A behavior.
 
 # Out of Scope
@@ -46,4 +50,4 @@ Define a repeatable local validation path for Phase A and require tests that cov
 - Adding CI pipelines or remote test automation.
 - Requiring live Odoo integration testing as a Phase A exit gate.
 - Changing the repository's packaging or publishing workflow.
-- Making mutation testing a mandatory Phase A completion criterion.
+- Replacing the existing repository-local mutation tooling with a different workflow.

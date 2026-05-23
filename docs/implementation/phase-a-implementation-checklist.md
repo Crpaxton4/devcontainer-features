@@ -257,12 +257,16 @@ Likely touch points
 Checklist
 - [ ] Add or update unit tests for all new Phase A abstractions.
 - [ ] Add or update compatibility tests for preserved surfaces.
-- [ ] Define the local command path used to validate Phase A.
-- [ ] Confirm that local validation does not require CI.
+- [ ] Document the repository-root setup command: `uv venv --allow-existing .venv && uv sync`.
+- [ ] Document the repository baseline validation command: `uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html`.
+- [ ] Document the required mutation workflow: `./scripts/cosmic-ray-init.sh <session>`, `./scripts/cosmic-ray-baseline.sh <session>`, `./scripts/cosmic-ray-exec.sh <session>`, and `./scripts/cosmic-ray-report.sh <session>`.
+- [ ] Require the repository coverage gate to remain at or above 90%.
+- [ ] Require the Cosmic Ray kill rate to remain at or above 90%.
+- [ ] Confirm that local validation does not require CI or hosted infrastructure.
 - [ ] Confirm that docs reflect what was actually implemented.
 
 Done when
-- A maintainer can validate Phase A end to end using only local tooling and the documented workflow.
+- A maintainer can validate Phase A end to end using only local tooling and the documented workflow, with all unit tests passing, coverage at or above 90%, and mutation kill rate at or above 90%.
 
 ## Exit Criteria
 
@@ -273,4 +277,5 @@ Done when
 - [ ] `OdooModel.search()` and `browse()` route through the new abstractions.
 - [ ] `OdooQuery` still works as a compatibility shim.
 - [ ] Local tests cover both the new architecture and the preserved public surfaces.
+- [ ] The documented setup, coverage, and mutation commands match the commands maintainers actually run from the repository root.
 - [ ] Phase A docs are sufficient to draft separate PRDs later without revisiting the architecture baseline.

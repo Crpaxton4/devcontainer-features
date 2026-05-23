@@ -20,7 +20,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "uv run coverage run -m unittest -v && uv run coverage html"
+        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
