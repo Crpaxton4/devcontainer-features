@@ -114,7 +114,25 @@ class OdooRecordset:
             kwargs["order"] = order
         return kwargs
 
-    def _search_read(
+    def search_ids(
+        self,
+        domain: DomainInput = None,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> list[int]:
+        """Returns matching ids for a search operation."""
+        return list(
+            self.search(
+                domain,
+                limit=limit,
+                offset=offset,
+                order=order,
+            ).ids
+        )
+
+    def search_read(
         self,
         domain: DomainInput = None,
         *,
@@ -123,6 +141,7 @@ class OdooRecordset:
         offset: Optional[int] = None,
         order: Optional[str] = None,
     ) -> list[Record]:
+        """Materializes raw rows for a search_read operation."""
         return self._materialize_records(
             domain=domain,
             fields=fields,
@@ -235,7 +254,8 @@ class OdooRecordset:
             adapt=True,
         )
 
-    def _search_count(self, domain: DomainInput = None) -> int:
+    def search_count(self, domain: DomainInput = None) -> int:
+        """Returns the number of rows matching the provided domain."""
         serialized_domain = self._serialized_domain(domain)
         _logger.debug(
             "Counting recordset model=%s domain=%s",
@@ -247,6 +267,46 @@ class OdooRecordset:
             serialized_domain,
             **self._context_kwargs(),
         )
+
+    def search_write(
+        self,
+        domain: DomainInput,
+        values: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+        allow_empty_ids: bool = False,
+        allow_empty_values: bool = False,
+    ) -> bool:
+        """Searches and updates matching ids using recordset-owned write semantics."""
+        return self.search(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )._write_current(
+            values,
+            allow_empty_ids=allow_empty_ids,
+            allow_empty_values=allow_empty_values,
+        )
+
+    def search_unlink(
+        self,
+        domain: DomainInput,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+        allow_empty: bool = False,
+    ) -> bool:
+        """Searches and deletes matching ids using recordset-owned unlink semantics."""
+        return self.search(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )._unlink_current(allow_empty=allow_empty)
 
     def _write_current(
         self,
@@ -284,14 +344,14 @@ class OdooRecordset:
         )
 
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
-        """Materializes raw rows for the current ids."""
+        """Materializes raw Phase A rows for the current ids."""
         return self._materialize_records(
             ids=self._ids,
             fields=fields,
         )
 
     def read_adapted(self, fields: Optional[list[str]] = None) -> list[Record]:
-        """Materializes adapted rows for the current ids."""
+        """Materializes Phase B adapted rows for the current ids."""
         return self._materialize_records(
             ids=self._ids,
             fields=fields,

@@ -230,6 +230,123 @@ class TestOdooRecordset(unittest.TestCase):
             ),
         )
 
+    def test_search_read_materializes_raw_rows_with_context(self) -> None:
+        self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_read(
+            [("active", "=", True)],
+            fields=["name"],
+            limit=1,
+            order="name asc",
+        )
+
+        self.assertEqual(result, [{"id": 7, "name": "Acme"}])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search_read",
+            [("active", "=", True)],
+            context={"lang": "en_US"},
+            limit=1,
+            order="name asc",
+            fields=["name"],
+        )
+
+    def test_search_ids_returns_list_from_search_recordset(self) -> None:
+        self.executor.execute.return_value = [7, 8]
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_ids(
+            [("active", "=", True)],
+            limit=2,
+            offset=1,
+            order="name asc",
+        )
+
+        self.assertEqual(result, [7, 8])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search",
+            [("active", "=", True)],
+            context={"lang": "en_US"},
+            limit=2,
+            offset=1,
+            order="name asc",
+        )
+
+    def test_search_count_executes_with_context(self) -> None:
+        self.executor.execute.return_value = 9
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_count([("active", "=", True)])
+
+        self.assertEqual(result, 9)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search_count",
+            [("active", "=", True)],
+            context={"lang": "en_US"},
+        )
+
+    def test_search_write_preserves_query_compatibility_flags(self) -> None:
+        self.executor.execute.side_effect = [[], True]
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_write(
+            [("active", "=", True)],
+            {},
+            allow_empty_ids=True,
+            allow_empty_values=True,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "search",
+                    [("active", "=", True)],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [],
+                    {},
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
+    def test_search_unlink_preserves_query_compatibility_flags(self) -> None:
+        self.executor.execute.side_effect = [[], True]
+        recordset = OdooRecordset(self.env, "res.partner")
+
+        result = recordset.search_unlink(
+            [("active", "=", True)],
+            allow_empty=True,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "search",
+                    [("active", "=", True)],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "unlink",
+                    [],
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
     def test_write_updates_current_ids_with_context(self) -> None:
         self.executor.execute.return_value = True
         recordset = OdooRecordset(self.env, "res.partner", [7, 8])

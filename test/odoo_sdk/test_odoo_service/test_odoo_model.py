@@ -43,6 +43,19 @@ class TestOdooModel(unittest.TestCase):
 
         self.assertIs(caught.exception, error)
 
+    def test_read_delegates_to_recordset_read(self) -> None:
+        recordset = Mock()
+        recordset.ids = (3,)
+        recordset.read.return_value = [{"id": 3, "name": "Demo"}]
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.read(3, ["name"])
+
+        self.assertEqual(result, [{"id": 3, "name": "Demo"}])
+        self.model._recordset.assert_called_once_with(3)
+        recordset.read.assert_called_once_with(["name"])
+        self.executor.execute.assert_not_called()
+
     def test_create_delegates_to_executor(self) -> None:
         self.executor.execute.return_value = 101
 
@@ -55,6 +68,7 @@ class TestOdooModel(unittest.TestCase):
 
     def test_read_adapted_delegates_to_recordset_read_adapted(self) -> None:
         recordset = Mock()
+        recordset.ids = (3,)
         recordset.read_adapted.return_value = [
             {"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}
         ]
@@ -66,7 +80,7 @@ class TestOdooModel(unittest.TestCase):
             result,
             [{"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}],
         )
-        self.model._recordset.assert_called_once_with([3])
+        self.model._recordset.assert_called_once_with(3)
         recordset.read_adapted.assert_called_once_with(["parent_id"])
         self.executor.execute.assert_not_called()
 
@@ -79,6 +93,19 @@ class TestOdooModel(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "res.partner", "write", [9], {"name": "Updated"}
         )
+
+    def test_write_delegates_to_recordset_write(self) -> None:
+        recordset = Mock()
+        recordset.ids = (9,)
+        recordset.write.return_value = True
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.write(9, {"name": "Updated"})
+
+        self.assertTrue(result)
+        self.model._recordset.assert_called_once_with(9)
+        recordset.write.assert_called_once_with({"name": "Updated"})
+        self.executor.execute.assert_not_called()
 
     def test_write_serializes_x2many_helpers_via_recordset(self) -> None:
         self.executor.execute.side_effect = [
@@ -121,6 +148,19 @@ class TestOdooModel(unittest.TestCase):
 
         self.assertTrue(result)
         self.executor.execute.assert_called_once_with("res.partner", "unlink", [10])
+
+    def test_unlink_delegates_to_recordset_unlink(self) -> None:
+        recordset = Mock()
+        recordset.ids = (10,)
+        recordset.unlink.return_value = True
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.unlink(10)
+
+        self.assertTrue(result)
+        self.model._recordset.assert_called_once_with(10)
+        recordset.unlink.assert_called_once_with()
+        self.executor.execute.assert_not_called()
 
     def test_unlink_rejects_empty_ids(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one id"):
@@ -374,6 +414,22 @@ class TestOdooModel(unittest.TestCase):
         query.order_by.assert_called_once_with("name")
         query.read_adapted.assert_called_once_with(["parent_id"])
         self.executor.execute.assert_not_called()
+
+    def test_search_read_raw_and_adapted_behaviors_remain_explicit(self) -> None:
+        self.executor.execute.side_effect = [
+            [{"id": 1, "parent_id": [7, "Parent"]}],
+            [{"id": 1, "parent_id": [7, "Parent"]}],
+            {"parent_id": {"type": "many2one", "relation": "res.partner"}},
+        ]
+
+        raw = self.model.search_read([("id", "=", 1)], ["parent_id"])
+        adapted = self.model.search_read_adapted([("id", "=", 1)], ["parent_id"])
+
+        self.assertEqual(raw, [{"id": 1, "parent_id": [7, "Parent"]}])
+        self.assertEqual(
+            adapted,
+            [{"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
 
     def test_search_count_executes(self) -> None:
         self.executor.execute.return_value = 19

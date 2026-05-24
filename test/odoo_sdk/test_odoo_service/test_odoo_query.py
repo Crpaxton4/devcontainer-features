@@ -201,7 +201,7 @@ class TestOdooQueryWrite(unittest.TestCase):
     def test_read_delegates_to_recordset_search_read(self) -> None:
         executor = Mock()
         recordset = Mock()
-        recordset._search_read.return_value = [{"id": 8, "name": "Acme"}]
+        recordset.search_read.return_value = [{"id": 8, "name": "Acme"}]
 
         query = (
             OdooQuery(executor, "res.partner", [("active", "=", True)])
@@ -216,7 +216,7 @@ class TestOdooQueryWrite(unittest.TestCase):
 
         self.assertEqual(result, [{"id": 8, "name": "Acme"}])
         query._recordset.assert_called_once_with()
-        recordset._search_read.assert_called_once_with(
+        recordset.search_read.assert_called_once_with(
             DomainExpression.normalize([("active", "=", True)]),
             fields=["name"],
             limit=5,
@@ -257,6 +257,25 @@ class TestOdooQueryWrite(unittest.TestCase):
         )
         executor.execute.assert_not_called()
 
+    def test_read_raw_and_adapted_behaviors_remain_explicit(self) -> None:
+        executor = Mock()
+        executor.execute.side_effect = [
+            [{"id": 1, "parent_id": [7, "Parent"]}],
+            [{"id": 1, "parent_id": [7, "Parent"]}],
+            {"parent_id": {"type": "many2one", "relation": "res.partner"}},
+        ]
+
+        query = OdooQuery(executor, "res.partner", [("id", "=", 1)])
+
+        raw = query.read(["parent_id"])
+        adapted = query.read_adapted(["parent_id"])
+
+        self.assertEqual(raw, [{"id": 1, "parent_id": [7, "Parent"]}])
+        self.assertEqual(
+            adapted,
+            [{"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}],
+        )
+
     def test_count_executes_search_count(self) -> None:
         executor = Mock()
         executor.execute.return_value = 42
@@ -272,7 +291,7 @@ class TestOdooQueryWrite(unittest.TestCase):
     def test_count_delegates_to_recordset_search_count(self) -> None:
         executor = Mock()
         recordset = Mock()
-        recordset._search_count.return_value = 42
+        recordset.search_count.return_value = 42
 
         query = OdooQuery(executor, "res.partner", [("active", "=", True)])
         query._recordset = Mock(return_value=recordset)
@@ -281,8 +300,33 @@ class TestOdooQueryWrite(unittest.TestCase):
 
         self.assertEqual(result, 42)
         query._recordset.assert_called_once_with()
-        recordset._search_count.assert_called_once_with(
+        recordset.search_count.assert_called_once_with(
             DomainExpression.normalize([("active", "=", True)])
+        )
+        executor.execute.assert_not_called()
+
+    def test_ids_delegates_to_recordset_search_ids(self) -> None:
+        executor = Mock()
+        recordset = Mock()
+        recordset.search_ids.return_value = [7, 8]
+
+        query = (
+            OdooQuery(executor, "res.partner", [("active", "=", True)])
+            .limit(5)
+            .offset(1)
+            .order_by("name asc")
+        )
+        query._recordset = Mock(return_value=recordset)
+
+        result = query.ids()
+
+        self.assertEqual(result, [7, 8])
+        query._recordset.assert_called_once_with()
+        recordset.search_ids.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)]),
+            limit=5,
+            offset=1,
+            order="name asc",
         )
         executor.execute.assert_not_called()
 
@@ -417,17 +461,21 @@ class TestOdooQueryWrite(unittest.TestCase):
     def test_write_delegates_to_recordset_compatibility_write(self) -> None:
         executor = Mock()
         recordset = Mock()
-        recordset._write_current.return_value = True
+        recordset.search_write.return_value = True
 
         query = OdooQuery(executor, "res.partner", [("active", "=", True)])
-        query._search_recordset = Mock(return_value=recordset)
+        query._recordset = Mock(return_value=recordset)
 
         result = query.write({})
 
         self.assertTrue(result)
-        query._search_recordset.assert_called_once_with()
-        recordset._write_current.assert_called_once_with(
+        query._recordset.assert_called_once_with()
+        recordset.search_write.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)]),
             {},
+            limit=None,
+            offset=None,
+            order=None,
             allow_empty_ids=True,
             allow_empty_values=True,
         )
@@ -485,16 +533,22 @@ class TestOdooQueryWrite(unittest.TestCase):
     def test_unlink_delegates_to_recordset_compatibility_unlink(self) -> None:
         executor = Mock()
         recordset = Mock()
-        recordset._unlink_current.return_value = True
+        recordset.search_unlink.return_value = True
 
         query = OdooQuery(executor, "res.partner", [("active", "=", True)])
-        query._search_recordset = Mock(return_value=recordset)
+        query._recordset = Mock(return_value=recordset)
 
         result = query.unlink()
 
         self.assertTrue(result)
-        query._search_recordset.assert_called_once_with()
-        recordset._unlink_current.assert_called_once_with(allow_empty=True)
+        query._recordset.assert_called_once_with()
+        recordset.search_unlink.assert_called_once_with(
+            DomainExpression.normalize([("active", "=", True)]),
+            limit=None,
+            offset=None,
+            order=None,
+            allow_empty=True,
+        )
         executor.execute.assert_not_called()
 
     def test_unlink_keeps_empty_search_compatible(self) -> None:

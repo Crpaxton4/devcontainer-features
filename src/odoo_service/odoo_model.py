@@ -48,13 +48,7 @@ class OdooModel:
         return {"context": context}
 
     def _recordset(self, ids: Union[int, List[int]]) -> OdooRecordset:
-        return self._env.recordset(self.name, self._normalize_ids(ids))
-
-    @staticmethod
-    def _normalize_ids(ids: Union[int, List[int]]) -> List[int]:
-        if isinstance(ids, int):
-            return [ids]
-        return list(ids)
+        return self._env.recordset(self.name, ids)
 
     @staticmethod
     def _serialize_domain(domain: DomainInput) -> List[Any]:
@@ -97,35 +91,35 @@ class OdooModel:
         :return: The list of records with the requested fields.
         :rtype: List[Record]
         """
-        normalized_ids = self._normalize_ids(ids)
+        recordset = self._recordset(ids)
         _logger.debug(
-            "Reading model=%s ids=%s fields=%s", self.name, normalized_ids, fields
+            "Reading model=%s ids=%s fields=%s", self.name, recordset.ids, fields
         )
-        return self._recordset(normalized_ids).read(fields)
+        return recordset.read(fields)
 
     def read_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
         """Reads specific records by ID with Phase B field adaptation applied."""
-        normalized_ids = self._normalize_ids(ids)
+        recordset = self._recordset(ids)
         _logger.debug(
             "Reading adapted model=%s ids=%s fields=%s",
             self.name,
-            normalized_ids,
+            recordset.ids,
             fields,
         )
-        return self._recordset(normalized_ids).read_adapted(fields)
+        return recordset.read_adapted(fields)
 
     def browse(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
-        """Convenience alias for read() to mirror ORM-style call sites."""
+        """Convenience alias for raw Phase A reads to mirror ORM-style call sites."""
         return self._recordset(ids).read(fields)
 
     def browse_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
-        """Convenience alias for adapted reads to mirror ORM-style call sites."""
+        """Convenience alias for Phase B adapted reads to mirror ORM-style call sites."""
         return self._recordset(ids).read_adapted(fields)
 
     def search_ids(
@@ -148,11 +142,11 @@ class OdooModel:
 
     def exists(self, ids: Union[int, List[int]]) -> List[int]:
         """Returns ids that still exist on the server, preserving input order."""
-        normalized_ids = self._normalize_ids(ids)
-        if not normalized_ids:
+        recordset = self._recordset(ids)
+        if not recordset.ids:
             return []
 
-        return list(self._recordset(normalized_ids).exists().ids)
+        return list(recordset.exists().ids)
 
     def search_read(
         self,
@@ -163,7 +157,7 @@ class OdooModel:
         offset: Optional[int] = None,
         order: Optional[str] = None,
     ) -> List[Record]:
-        """Runs `search_read` with optional pagination and field selection."""
+        """Runs raw Phase A `search_read` with optional pagination and field selection."""
         _logger.debug("Executing search_read on model=%s", self.name)
         return self._search_query(
             domain,
@@ -181,7 +175,7 @@ class OdooModel:
         offset: Optional[int] = None,
         order: Optional[str] = None,
     ) -> List[Record]:
-        """Runs `search_read` with Phase B field adaptation applied."""
+        """Runs Phase B `search_read` with field adaptation applied."""
         _logger.debug("Executing adapted search_read on model=%s", self.name)
         return self._search_query(
             domain,
@@ -214,7 +208,7 @@ class OdooModel:
 
     def name_get(self, ids: Union[int, List[int]]) -> List[List[Any]]:
         """Runs `name_get` for the provided ids."""
-        normalized_ids = self._normalize_ids(ids)
+        normalized_ids = list(self._recordset(ids).ids)
         if not normalized_ids:
             raise ValueError("name_get requires at least one id")
         _logger.debug(
@@ -314,14 +308,14 @@ class OdooModel:
         :return: True if the update was successful, False otherwise.
         :rtype: bool
         """
-        normalized_ids = self._normalize_ids(ids)
-        if not normalized_ids:
+        recordset = self._recordset(ids)
+        if not recordset.ids:
             raise ValueError("write requires at least one id")
         if not vals:
             raise ValueError("write requires at least one value")
 
-        _logger.debug("Writing model=%s ids=%s", self.name, normalized_ids)
-        return self._recordset(normalized_ids).write(vals)
+        _logger.debug("Writing model=%s ids=%s", self.name, recordset.ids)
+        return recordset.write(vals)
 
     def unlink(self, ids: Union[int, List[int]]) -> bool:
         """Deletes existing records.
@@ -331,11 +325,11 @@ class OdooModel:
         :return: True if the deletion was successful, False otherwise.
         :rtype: bool
         """
-        normalized_ids = self._normalize_ids(ids)
-        if not normalized_ids:
+        recordset = self._recordset(ids)
+        if not recordset.ids:
             raise ValueError("unlink requires at least one id")
-        _logger.debug("Unlinking model=%s ids=%s", self.name, normalized_ids)
-        return self._recordset(normalized_ids).unlink()
+        _logger.debug("Unlinking model=%s ids=%s", self.name, recordset.ids)
+        return recordset.unlink()
 
     def fields_get(
         self, fields: Optional[List[str]] = None, attributes: Optional[List[str]] = None

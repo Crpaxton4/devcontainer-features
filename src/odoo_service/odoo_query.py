@@ -52,14 +52,6 @@ class OdooQuery:
     def _recordset(self) -> OdooRecordset:
         return self._env.recordset(self.model_name)
 
-    def _search_recordset(self) -> OdooRecordset:
-        return self._recordset().search(
-            self._domain,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
-
     def search(self, domain: DomainInput) -> OdooQuery:
         """Sets or replaces the search domain."""
         _logger.debug(
@@ -105,10 +97,15 @@ class OdooQuery:
             self.model_name,
             serialized_domain,
         )
-        return list(self._search_recordset().ids)
+        return self._recordset().search_ids(
+            self._domain,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
+        )
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
-        """Executes a search_read operation to fetch record dictionaries."""
+        """Executes raw Phase A search_read semantics for the current query."""
         serialized_domain = self._domain.serialize()
         _logger.debug(
             "Executing search_read on model=%s domain=%s fields=%s",
@@ -116,7 +113,7 @@ class OdooQuery:
             serialized_domain,
             fields,
         )
-        return self._recordset()._search_read(
+        return self._recordset().search_read(
             self._domain,
             fields=fields,
             limit=self._limit,
@@ -125,7 +122,7 @@ class OdooQuery:
         )
 
     def read_adapted(self, fields: Optional[List[str]] = None) -> List[Record]:
-        """Executes search_read with Phase B field adaptation applied."""
+        """Executes Phase B search_read semantics with field adaptation applied."""
         serialized_domain = self._domain.serialize()
         _logger.debug(
             "Executing adapted search_read on model=%s domain=%s fields=%s",
@@ -146,8 +143,12 @@ class OdooQuery:
         _logger.debug(
             "Executing query write on model=%s domain=%s", self.model_name, self._domain
         )
-        return self._search_recordset()._write_current(
+        return self._recordset().search_write(
+            self._domain,
             values,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
             allow_empty_ids=True,
             allow_empty_values=True,
         )
@@ -159,7 +160,13 @@ class OdooQuery:
             self.model_name,
             self._domain,
         )
-        return self._search_recordset()._unlink_current(allow_empty=True)
+        return self._recordset().search_unlink(
+            self._domain,
+            limit=self._limit,
+            offset=self._offset,
+            order=self._order,
+            allow_empty=True,
+        )
 
     def count(self) -> int:
         """Executes a search_count operation."""
@@ -169,4 +176,4 @@ class OdooQuery:
             self.model_name,
             serialized_domain,
         )
-        return self._recordset()._search_count(self._domain)
+        return self._recordset().search_count(self._domain)
