@@ -76,8 +76,6 @@ class OdooClient(OdooExecutor):
         :return: The user ID.
         :rtype: int
         """
-        if not isinstance(self._executor, OdooRpcExecutor):
-            raise AttributeError("Configured executor does not expose uid")
         return self._executor.uid
 
     @property
