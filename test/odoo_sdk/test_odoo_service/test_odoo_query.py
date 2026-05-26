@@ -458,7 +458,7 @@ class TestOdooQueryWrite(unittest.TestCase):
             ],
         )
 
-    def test_write_delegates_to_recordset_compatibility_write(self) -> None:
+    def test_write_delegates_to_recordset_search_write(self) -> None:
         executor = Mock()
         recordset = Mock()
         recordset.search_write.return_value = True
@@ -476,8 +476,6 @@ class TestOdooQueryWrite(unittest.TestCase):
             limit=None,
             offset=None,
             order=None,
-            allow_empty_ids=True,
-            allow_empty_values=True,
         )
         executor.execute.assert_not_called()
 
@@ -530,7 +528,7 @@ class TestOdooQueryWrite(unittest.TestCase):
             ],
         )
 
-    def test_unlink_delegates_to_recordset_compatibility_unlink(self) -> None:
+    def test_unlink_delegates_to_recordset_search_unlink(self) -> None:
         executor = Mock()
         recordset = Mock()
         recordset.search_unlink.return_value = True
@@ -547,7 +545,6 @@ class TestOdooQueryWrite(unittest.TestCase):
             limit=None,
             offset=None,
             order=None,
-            allow_empty=True,
         )
         executor.execute.assert_not_called()
 

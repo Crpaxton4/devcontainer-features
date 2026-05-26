@@ -1,10 +1,18 @@
 import unittest
 from unittest.mock import Mock
 
-from odoo_sdk.odoo_service.metadata_cache import MetadataCache
+from odoo_sdk.odoo_service.metadata_cache import MetadataCache, MetadataRequestKey
 
 
 class TestMetadataCache(unittest.TestCase):
+    def test_request_key_normalizes_context_sorting_by_key_name(self) -> None:
+        key = MetadataRequestKey.from_request(
+            "res.partner",
+            context={"b": 0, "a": 1},
+        )
+
+        self.assertEqual(key.context, (("a", 1), ("b", 0)))
+
     def test_reuses_equivalent_requests_with_mixed_ordering(self) -> None:
         cache = MetadataCache()
         loader = Mock(return_value={"name": {"type": "char"}})

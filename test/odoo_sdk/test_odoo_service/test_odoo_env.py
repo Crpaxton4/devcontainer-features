@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 from hypothesis import given, strategies
 
+import odoo_sdk.odoo_service.odoo_env as odoo_env_module
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_model import OdooModel
@@ -63,6 +64,10 @@ class TestOdooEnv(unittest.TestCase):
         env = OdooEnv(self.executor)
 
         self.assertEqual(env.context, {})
+
+    def test_type_checking_symbols_are_not_runtime_imported(self) -> None:
+        self.assertFalse(hasattr(odoo_env_module, "OdooModel"))
+        self.assertFalse(hasattr(odoo_env_module, "OdooRecordset"))
 
     @given(MUTABLE_CONTEXTS)
     def test_constructor_defensively_copies_input_context(

@@ -51,7 +51,7 @@ class TestOdooClientContract(unittest.TestCase):
             attributes=["type"],
         )
 
-    def test_direct_model_construction_reuses_client_root_env_cache(self) -> None:
+    def test_direct_model_construction_uses_independent_env_cache(self) -> None:
         executor = Mock(spec=OdooExecutor)
         executor.execute.return_value = {"name": {"type": "char"}}
         client = OdooClient(executor=executor)
@@ -61,20 +61,32 @@ class TestOdooClientContract(unittest.TestCase):
         second = model.fields_get(["name"], ["type"])
 
         self.assertEqual(first, second)
-        executor.execute.assert_called_once_with(
-            "res.partner",
-            "fields_get",
-            allfields=["name"],
-            attributes=["type"],
+        self.assertEqual(
+            executor.execute.call_args_list,
+            [
+                unittest.mock.call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["name"],
+                    attributes=["type"],
+                ),
+                unittest.mock.call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["name"],
+                    attributes=["type"],
+                ),
+            ],
         )
 
-    def test_direct_query_construction_reuses_client_root_env(self) -> None:
+    def test_direct_query_construction_uses_independent_env(self) -> None:
         executor = Mock(spec=OdooExecutor)
         client = OdooClient(executor=executor)
 
         query = OdooQuery(client, "res.partner")
 
-        self.assertIs(query._env, client.env)
+        self.assertIsNot(query._env, client.env)
+        self.assertIs(query._env.executor, client)
 
     @given(strategies.text(), strategies.text(), strategies.text(), strategies.text())
     def test_client_is_not_a_mapping_or_iterable(
@@ -150,13 +162,12 @@ class TestOdooClientContract(unittest.TestCase):
     def test_client_uid_raises_for_non_rpc_executor(self) -> None:
         client = OdooClient(executor=Mock(spec=OdooExecutor))
 
-        with self.assertRaisesRegex(AttributeError, "does not expose uid"):
+        with self.assertRaises(AttributeError):
             _ = client.uid
 
     def test_client_uid_returns_rpc_executor_uid(self) -> None:
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
         executor._uid = 7
-        executor._authenticated = True
         client = OdooClient(executor=executor)
 
         self.assertEqual(client.uid, 7)

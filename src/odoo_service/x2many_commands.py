@@ -195,13 +195,20 @@ def _normalize_raw_relation_id_command(command: tuple[Any, ...]) -> X2ManyTupleC
 
 
 def _normalize_raw_clear_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
-    if len(command) not in {1, 2, 3}:
-        raise ValueError("x2many clear tuples must contain between 1 and 3 items")
-    if len(command) >= 2 and not _is_placeholder(command[1]):
-        raise ValueError("x2many clear tuples require 0 as the second item")
-    if len(command) == 3 and not _is_placeholder(command[2]):
-        raise ValueError("x2many clear tuples require 0 as the third item")
-    return X2ManyCommand.clear().serialize()
+    command_length = len(command)
+    if command_length == 1:
+        return X2ManyCommand.clear().serialize()
+    if command_length == 2:
+        if not _is_placeholder(command[1]):
+            raise ValueError("x2many clear tuples require 0 as the second item")
+        return X2ManyCommand.clear().serialize()
+    if command_length == 3:
+        if not _is_placeholder(command[1]):
+            raise ValueError("x2many clear tuples require 0 as the second item")
+        if not _is_placeholder(command[2]):
+            raise ValueError("x2many clear tuples require 0 as the third item")
+        return X2ManyCommand.clear().serialize()
+    raise ValueError("x2many clear tuples must contain between 1 and 3 items")
 
 
 def _normalize_raw_set_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:

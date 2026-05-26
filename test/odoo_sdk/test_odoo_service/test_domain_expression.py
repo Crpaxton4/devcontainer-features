@@ -6,6 +6,7 @@ from odoo_sdk.odoo_service.domain_expression import (
     DomainExpression,
     _BooleanExpression,
     _Condition,
+    _normalize_domain_nodes,
 )
 
 
@@ -89,6 +90,28 @@ class TestDomainExpression(unittest.TestCase):
             ],
         )
 
+    def test_not_operator_parses_correctly_after_leading_condition(self) -> None:
+        domain = [
+            ("id", "=", 1),
+            "!",
+            ("active", "=", True),
+        ]
+
+        expression = DomainExpression.normalize(domain)
+
+        self.assertEqual(expression.serialize(), domain)
+
+    def test_normalize_domain_nodes_requires_keyword_only_allow_empty(self) -> None:
+        with self.assertRaises(TypeError):
+            _normalize_domain_nodes([("id", "=", 1)], True)
+
+    def test_large_domain_round_trips_without_loop_termination_errors(self) -> None:
+        domain = [(f"field_{index}", "=", index) for index in range(300)]
+
+        expression = DomainExpression.normalize(domain)
+
+        self.assertEqual(expression.serialize(), domain)
+
     def test_mutating_input_after_normalization_does_not_leak(self) -> None:
         values = [1, 2]
         expression = DomainExpression.normalize([("id", "in", values)])
@@ -138,6 +161,17 @@ class TestDomainExpression(unittest.TestCase):
     def test_boolean_expression_rejects_short_binary_arity(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least two operands"):
             _BooleanExpression("&", (_Condition("active", "=", True),))
+
+    def test_boolean_expression_dataclass_uses_slots(self) -> None:
+        expression = _BooleanExpression(
+            "&",
+            (
+                _Condition("active", "=", True),
+                _Condition("company_id", "=", 3),
+            ),
+        )
+
+        self.assertFalse(hasattr(expression, "__dict__"))
 
     @given(
         strategies.text().filter(lambda text: text not in {"&", "|", "!"}),

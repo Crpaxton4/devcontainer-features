@@ -29,10 +29,11 @@
     },
     {
       "label": "odoo_sdk: Cosmic Ray init session",
-      "type": "process",
-      "command": "./scripts/cosmic-ray-init.sh",
+      "type": "shell",
+      "command": "bash",
       "args": [
-        "${input:sessionName}"
+        "-lc",
+        "uv run ./scripts/cosmic-ray-init.sh \"session\""
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -48,10 +49,11 @@
     },
     {
       "label": "odoo_sdk: Cosmic Ray baseline",
-      "type": "process",
-      "command": "./scripts/cosmic-ray-baseline.sh",
+      "type": "shell",
+      "command": "bash",
       "args": [
-        "${input:sessionName}"
+        "-lc",
+        "uv run ./scripts/cosmic-ray-baseline.sh \"session\""
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -67,10 +69,11 @@
     },
     {
       "label": "odoo_sdk: Cosmic Ray exec session",
-      "type": "process",
-      "command": "./scripts/cosmic-ray-exec.sh",
+      "type": "shell",
+      "command": "bash",
       "args": [
-        "${input:sessionName}"
+        "-lc",
+        "uv run ./scripts/cosmic-ray-exec.sh \"session\""
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -86,10 +89,11 @@
     },
     {
       "label": "odoo_sdk: Cosmic Ray report",
-      "type": "process",
-      "command": "./scripts/cosmic-ray-report.sh",
+      "type": "shell",
+      "command": "bash",
       "args": [
-        "${input:sessionName}"
+        "-lc",
+        "uv run ./scripts/cosmic-ray-report.sh \"session\""
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -120,14 +124,6 @@
         "group": "mutation-test"
       },
       "problemMatcher": []
-    }
-  ],
-  "inputs": [
-    {
-      "id": "sessionName",
-      "description": "Enter session name:",
-      "default": "session",
-      "type": "promptString"
     }
   ]
 }

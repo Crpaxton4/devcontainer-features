@@ -28,12 +28,12 @@ class _BooleanExpression:
     def __post_init__(self) -> None:
         if self.operator not in _BOOLEAN_OPERATORS:
             raise ValueError(f"Unsupported boolean operator: {self.operator!r}")
-        if self.operator == "!" and len(self.operands) != 1:
-            raise ValueError("Boolean operator '!' requires exactly one operand")
         if self.operator in {"&", "|"} and len(self.operands) < 2:
             raise ValueError(
                 f"Boolean operator {self.operator!r} requires at least two operands"
             )
+        if self.operator not in {"&", "|"} and len(self.operands) != 1:
+            raise ValueError("Boolean operator '!' requires exactly one operand")
 
 
 DomainNode: TypeAlias = Union[_Condition, _BooleanExpression]
@@ -115,9 +115,9 @@ def _normalize_item(item: Any) -> DomainNode:
         raise ValueError(f"Unsupported domain item: {item!r}")
 
     nodes = _normalize_domain_nodes(item, allow_empty=False)
-    if len(nodes) == 1:
-        return nodes[0]
-    return _BooleanExpression("&", nodes)
+    if len(nodes) > 1:
+        return _BooleanExpression("&", nodes)
+    return nodes[0]
 
 
 def _build_condition(condition: Sequence[Any]) -> _Condition:

@@ -12,9 +12,11 @@ dependencies = []
 [dependency-groups]
 dev = [
     "black>=24.10.0",
+    "complexipy>=5.5.0",
     "cosmic-ray>=8.4.6",
     "coverage[toml]>=7.6.0",
     "hypothesis>=6.0.0",
+    "odoo-sdk",
 ]
 
 [tool.setuptools]
@@ -51,3 +53,11 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+[tool.uv.workspace]
+members = [
+    ".",
+]
+
+[tool.uv.sources]
+odoo-sdk = { workspace = true }

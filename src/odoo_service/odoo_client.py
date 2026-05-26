@@ -69,13 +69,7 @@ class OdooClient(OdooExecutor):
 
     @property
     def uid(self) -> int:
-        """Lazily authenticates and returns the user ID.
-
-        :raises OdooTransportError: If there is a problem connecting to the Odoo server.
-        :raises OdooAuthenticationError: If authentication fails for the user.
-        :return: The user ID.
-        :rtype: int
-        """
+        """Lazily authenticates and returns the user ID."""
         return self._executor.uid
 
     @property
@@ -90,8 +84,6 @@ class OdooClient(OdooExecutor):
         :type model: str
         :param method: The name of the method to call on the Odoo model.
         :type method: str
-        :raises OdooError: For mapped Odoo-facing failures. Catch this base type
-            when broad handling is desired.
         :return: The result of the Odoo method call.
         :rtype: Any
         """

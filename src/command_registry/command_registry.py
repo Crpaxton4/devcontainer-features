@@ -5,7 +5,7 @@ from ..odoo_service import OdooClient
 
 class CommandDispatcher:
     """
-    Command Rigistry that registerd commands holds the shared resources that are injected into the command handlers.
+    Command registry that stores handlers and injects shared resources.
     """
 
     def __init__(self, client: OdooClient):
@@ -37,7 +37,5 @@ class CommandDispatcher:
 
         Raises `KeyError` if the command is not registered.
         """
-        command_factory = self._commands.get(command_name)
-        if not command_factory:
-            raise KeyError(command_name)
+        command_factory = self._commands[command_name]
         return command_factory(self._client)

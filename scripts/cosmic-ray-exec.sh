@@ -5,10 +5,14 @@ session_name="${1:?session name is required}"
 session_file=".cosmic-ray/${session_name}.sqlite"
 worker_root=""
 worker_pids=()
+cleanup_done=0
 ports=(18101 18102 18103 18104 18105 18106 18107 18108)
 
 cleanup() {
-	local exit_code=$?
+	if [[ "$cleanup_done" -eq 1 ]]; then
+		return
+	fi
+	cleanup_done=1
 
 	trap - EXIT INT TERM
 
@@ -24,6 +28,14 @@ cleanup() {
 	if [[ -n "$worker_root" && -d "$worker_root" ]]; then
 		rm -rf "$worker_root"
 	fi
+
+	return
+}
+
+on_signal() {
+	local signal_name="$1"
+	echo "Received $signal_name, shutting down Cosmic Ray workers" >&2
+	exit 130
 
 	exit "$exit_code"
 }
@@ -49,7 +61,9 @@ sys.exit(1)
 PY
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 worker_root="$(bash ./scripts/cosmic-ray-worker-setup.sh "$session_name")"
 

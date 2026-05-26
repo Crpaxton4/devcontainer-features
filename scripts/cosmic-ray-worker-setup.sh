@@ -21,6 +21,10 @@ copy_worker() {
 		--exclude '__pycache__/' \
 		--exclude '*.py[cod]' \
 		"$repo_root/" "$worker_dir/"
+
+	# Ensure imports inside worker processes resolve to the copied mutable
+	# source tree rather than the root editable install.
+	ln -sfn src "$worker_dir/odoo_sdk"
 }
 
 copy_worker "01"

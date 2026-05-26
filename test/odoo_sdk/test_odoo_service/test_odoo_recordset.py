@@ -288,15 +288,13 @@ class TestOdooRecordset(unittest.TestCase):
             context={"lang": "en_US"},
         )
 
-    def test_search_write_preserves_query_compatibility_flags(self) -> None:
+    def test_search_write_delegates_to_search_then_write(self) -> None:
         self.executor.execute.side_effect = [[], True]
         recordset = OdooRecordset(self.env, "res.partner")
 
         result = recordset.search_write(
             [("active", "=", True)],
             {},
-            allow_empty_ids=True,
-            allow_empty_values=True,
         )
 
         self.assertTrue(result)
@@ -319,13 +317,12 @@ class TestOdooRecordset(unittest.TestCase):
             ],
         )
 
-    def test_search_unlink_preserves_query_compatibility_flags(self) -> None:
+    def test_search_unlink_delegates_to_search_then_unlink(self) -> None:
         self.executor.execute.side_effect = [[], True]
         recordset = OdooRecordset(self.env, "res.partner")
 
         result = recordset.search_unlink(
             [("active", "=", True)],
-            allow_empty=True,
         )
 
         self.assertTrue(result)
@@ -452,27 +449,63 @@ class TestOdooRecordset(unittest.TestCase):
             context={"lang": "en_US"},
         )
 
-    def test_write_rejects_x2many_helper_on_scalar_field(self) -> None:
-        self.executor.execute.return_value = {"name": {"type": "char"}}
+    def test_write_passes_x2many_helper_on_scalar_field_to_executor(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"type": "char"}},
+            True,
+        ]
         recordset = OdooRecordset(self.env, "res.partner", [7])
 
-        with self.assertRaisesRegex(ValueError, "one2many or many2many"):
-            recordset.write({"name": X2ManyCommand.link(3)})
+        result = recordset.write({"name": X2ManyCommand.link(3)})
 
+        self.assertTrue(result)
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["name"],
+                    attributes=["type"],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "write",
+                    [7],
+                    {"name": X2ManyCommand.link(3)},
+                    context={"lang": "en_US"},
+                ),
+            ],
+        )
+
+    def test_write_passes_empty_ids_to_executor(self) -> None:
+        self.executor.execute.return_value = True
+
+        result = OdooRecordset(self.env, "res.partner", []).write({"name": "Acme"})
+
+        self.assertTrue(result)
         self.executor.execute.assert_called_once_with(
             "res.partner",
-            "fields_get",
-            allfields=["name"],
-            attributes=["type"],
+            "write",
+            [],
+            {"name": "Acme"},
             context={"lang": "en_US"},
         )
 
-    def test_write_rejects_empty_ids_and_values(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one id"):
-            OdooRecordset(self.env, "res.partner", []).write({"name": "Acme"})
+    def test_write_passes_empty_values_to_executor(self) -> None:
+        self.executor.execute.return_value = True
 
-        with self.assertRaisesRegex(ValueError, "at least one value"):
-            OdooRecordset(self.env, "res.partner", [1]).write({})
+        result = OdooRecordset(self.env, "res.partner", [1]).write({})
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "write",
+            [1],
+            {},
+            context={"lang": "en_US"},
+        )
 
     def test_unlink_deletes_current_ids_with_context(self) -> None:
         self.executor.execute.return_value = True
@@ -488,9 +521,18 @@ class TestOdooRecordset(unittest.TestCase):
             context={"lang": "en_US"},
         )
 
-    def test_unlink_rejects_empty_ids(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one id"):
-            OdooRecordset(self.env, "res.partner", []).unlink()
+    def test_unlink_passes_empty_ids_to_executor(self) -> None:
+        self.executor.execute.return_value = True
+
+        result = OdooRecordset(self.env, "res.partner", []).unlink()
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "unlink",
+            [],
+            context={"lang": "en_US"},
+        )
 
     def test_exists_preserves_surviving_id_order(self) -> None:
         self.executor.execute.return_value = [2, 1]

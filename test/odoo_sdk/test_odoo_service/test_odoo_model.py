@@ -134,12 +134,18 @@ class TestOdooModel(unittest.TestCase):
             ],
         )
 
-    def test_write_rejects_empty_inputs(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one id"):
-            self.model.write([], {"name": "Updated"})
+    def test_write_passes_empty_ids_and_values_to_executor(self) -> None:
+        self.executor.execute.return_value = True
 
-        with self.assertRaisesRegex(ValueError, "at least one value"):
-            self.model.write([1], {})
+        result = self.model.write([], {})
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "write",
+            [],
+            {},
+        )
 
     def test_unlink_normalizes_single_id(self) -> None:
         self.executor.execute.return_value = True
@@ -162,9 +168,17 @@ class TestOdooModel(unittest.TestCase):
         recordset.unlink.assert_called_once_with()
         self.executor.execute.assert_not_called()
 
-    def test_unlink_rejects_empty_ids(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one id"):
-            self.model.unlink([])
+    def test_unlink_passes_empty_ids_to_executor(self) -> None:
+        self.executor.execute.return_value = True
+
+        result = self.model.unlink([])
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "unlink",
+            [],
+        )
 
     def test_fields_get_uses_keywords(self) -> None:
         self.executor.execute.return_value = {"name": {"type": "char"}}
@@ -508,9 +522,17 @@ class TestOdooModel(unittest.TestCase):
         self.assertEqual(result, [[7, "Acme"]])
         self.executor.execute.assert_called_once_with("res.partner", "name_get", [7])
 
-    def test_name_get_rejects_empty_ids(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one id"):
-            self.model.name_get([])
+    def test_name_get_passes_empty_ids_to_executor(self) -> None:
+        self.executor.execute.return_value = []
+
+        result = self.model.name_get([])
+
+        self.assertEqual(result, [])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "name_get",
+            [],
+        )
 
     def test_default_get_executes(self) -> None:
         self.executor.execute.return_value = {"active": True}
@@ -591,9 +613,17 @@ class TestOdooModel(unittest.TestCase):
             lazy=True,
         )
 
-    def test_read_group_validates_required_arguments(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one field"):
-            self.model.read_group([], [], ["country_id"])
+    def test_read_group_passes_empty_fields_and_groupby_to_executor(self) -> None:
+        self.executor.execute.return_value = []
 
-        with self.assertRaisesRegex(ValueError, "at least one groupby"):
-            self.model.read_group([], ["country_id"], [])
+        result = self.model.read_group([], [], [])
+
+        self.assertEqual(result, [])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "read_group",
+            [],
+            [],
+            [],
+            lazy=True,
+        )
