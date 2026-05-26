@@ -10,7 +10,7 @@ Phase B introduces metadata-aware behavior and richer semantic translation, whic
 
 ## Solution
 
-Add a local-only live-Odoo validation path that exercises the key Phase B semantics against a configured Odoo instance and can be run from the repository root. The checks must cover metadata retrieval, at least one adapted relation field, at least one normalized date or datetime field, x2many serialization, and mapped failure behavior where practical. The workflow must remain optional for unconfigured environments, but deterministic and documented for maintainers who do have local or shared development Odoo access. The default `project.task` smoke path assumes the standard model shape, especially `date_deadline` as a native `date` field, and should fail during metadata preflight before mutations when a target database has drifted or been customized beyond that contract.
+Add a local-only live-Odoo validation path that exercises the key Phase B semantics against a configured Odoo instance and can be run from the repository root. The checks must cover metadata retrieval, at least one adapted relation field, at least one normalized date or datetime field, x2many serialization, and mapped failure behavior where practical. The workflow must remain optional for unconfigured environments, but deterministic and documented for maintainers who do have local or shared development Odoo access. The default `project.task` smoke path should use live `fields_get` metadata to decide whether `date_deadline` round-trips as a Python `date` or `datetime`, so the validation follows the connected instance instead of assuming a fixed schema in advance.
 
 # Requirements
 
@@ -34,7 +34,7 @@ Add a local-only live-Odoo validation path that exercises the key Phase B semant
 - The checks must be narrow enough to run during maintainer validation without becoming a full end-to-end test platform.
 - The workflow must minimize environment-specific assumptions and document any required model or fixture expectations clearly.
 - The design must preserve ordinary unit-test determinism by keeping live checks separate or explicitly skippable when no live environment is configured.
-- The default `project.task` smoke path must surface unsupported schema drift explicitly before it reaches create or write operations.
+- The default `project.task` smoke path must remain metadata-driven and avoid hard-coded assumptions about whether `date_deadline` is a `date` or `datetime` field on a given instance.
 
 # Acceptance Criteria
 

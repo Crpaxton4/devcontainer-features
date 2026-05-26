@@ -4,14 +4,12 @@ This script is intentionally separate from `tests/` so automated validation stay
 purely local and deterministic. It exercises the Phase B metadata, adapted-read,
 x2many write, and error-mapping paths against a real Odoo instance.
 
-It assumes the standard `project.task` schema, including `date_deadline` as a
-native `date` field. Databases that customize that field shape should fail
-during metadata preflight before any create or write operations are attempted.
+The flow is metadata-driven. It reads the live `project.task` field metadata and
+uses the reported field types to decide how to round-trip adapted temporal
+values instead of assuming a fixed schema ahead of time.
 
 Safety constraints:
 - Requires `--allow-live-production` before any RPC calls are made.
-- Fails during metadata preflight unless `project.task.date_deadline` is a native
-    `date` field in the target database.
 - Creates exactly one new `project.task` ToDo per run with `project_id=False`.
 - Uses only create, read, and update operations.
 - Does not use tags, delete, unlink, or x2many delete/unlink commands.
@@ -25,7 +23,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from pprint import pprint
 from typing import Any
@@ -78,8 +76,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run a manual live-Odoo smoke test for the Phase B metadata, "
-            "adaptation, x2many, and error-mapping paths against a compatible "
-            "database whose project.task.date_deadline remains a native date field."
+            "adaptation, x2many, and error-mapping paths against a live Odoo "
+            "instance using whatever temporal field metadata it reports."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -88,7 +86,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Required acknowledgement before the script talks to the configured "
-            "Odoo instance and performs metadata preflight."
+            "Odoo instance and performs metadata-driven checks."
         ),
     )
     parser.add_argument(
@@ -158,40 +156,56 @@ def require_field_metadata(
     metadata_by_field: dict[str, dict[str, Any]],
     field_name: str,
     *,
-    expected_type: str,
+    expected_types: tuple[str, ...],
     expected_relation: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     observed_metadata = metadata_by_field.get(field_name)
     require(
         isinstance(observed_metadata, dict),
         f"fields_get() did not return metadata for {field_name!r}.",
     )
 
-    if observed_metadata.get("type") != expected_type:
-        expectation = f"type {expected_type!r}"
-        if field_name == "date_deadline" and expected_type == "date":
-            expectation = "a native 'date' field"
-
+    observed_type = observed_metadata.get("type")
+    if observed_type not in expected_types:
+        expectation = ", ".join(repr(item) for item in expected_types)
         raise AssertionError(
-            "Unsupported live project.task schema for this manual Phase B smoke "
-            f"test: {field_name} metadata was {observed_metadata!r}, expected "
-            f"{expectation}. Run this script against a compatible sandbox or "
-            "development database whose project.task schema matches the standard "
-            "Phase B assumptions."
+            f"Unexpected metadata for {field_name}: {observed_metadata!r}. "
+            f"Expected type to be one of {expectation}."
         )
 
-    if expected_relation is not None and observed_metadata.get("relation") != expected_relation:
+    if (
+        expected_relation is not None
+        and observed_metadata.get("relation") != expected_relation
+    ):
         raise AssertionError(
-            "Unsupported live project.task schema for this manual Phase B smoke "
-            f"test: {field_name} metadata was {observed_metadata!r}, expected "
-            f"relation {expected_relation!r}. Run this script against a compatible "
-            "sandbox or development database whose project.task schema matches the "
-            "standard Phase B assumptions."
+            f"Unexpected metadata for {field_name}: {observed_metadata!r}. "
+            f"Expected relation {expected_relation!r}."
         )
+
+    return observed_metadata
+
+
+def build_deadline_roundtrip(deadline_metadata: dict[str, Any]) -> tuple[str, date | datetime]:
+    deadline_type = deadline_metadata.get("type")
+
+    if deadline_type == "date":
+        target_deadline = date.today() + timedelta(days=7)
+        return target_deadline.isoformat(), target_deadline
+
+    require(
+        deadline_type == "datetime",
+        f"date_deadline should be a date or datetime field, got {deadline_metadata!r}.",
+    )
+    target_deadline = datetime.combine(
+        date.today() + timedelta(days=7),
+        time(hour=12, minute=0),
+        tzinfo=timezone.utc,
+    )
+    return target_deadline.strftime("%Y-%m-%d %H:%M:%S"), target_deadline
 
 
 def verify_metadata(client: OdooClient) -> dict[str, dict[str, Any]]:
-    print_section("metadata preflight")
+    print_section("metadata retrieval")
     client.env.clear_metadata_cache("project.task")
     refreshed_metadata = client.env.get_field_metadata(
         "project.task",
@@ -212,41 +226,40 @@ def verify_metadata(client: OdooClient) -> dict[str, dict[str, Any]]:
     require_field_metadata(
         refreshed_metadata,
         "project_id",
-        expected_type="many2one",
+        expected_types=("many2one",),
     )
     require_field_metadata(
         refreshed_metadata,
         "create_uid",
-        expected_type="many2one",
+        expected_types=("many2one",),
         expected_relation="res.users",
     )
     require_field_metadata(
         refreshed_metadata,
         "user_ids",
-        expected_type="many2many",
+        expected_types=("many2many",),
         expected_relation="res.users",
     )
-    require_field_metadata(
+    deadline_metadata = require_field_metadata(
         refreshed_metadata,
         "date_deadline",
-        expected_type="date",
+        expected_types=("date", "datetime"),
     )
     require_field_metadata(
         refreshed_metadata,
         "write_date",
-        expected_type="datetime",
+        expected_types=("datetime",),
     )
 
     print_pass(
         "Fetched project.task metadata through the Phase B metadata path and "
-        "confirmed the expected standard schema before any write operations."
+        f"detected date_deadline as {deadline_metadata['type']!r}."
     )
     return refreshed_metadata
 
 
-def create_todo(project_task_model: Any, todo_name_prefix: str) -> tuple[int, date]:
+def create_todo(project_task_model: Any, todo_name_prefix: str) -> int:
     print_section("todo creation")
-    target_deadline = date.today() + timedelta(days=7)
     todo_name = build_todo_name(todo_name_prefix)
     todo_id = project_task_model.create(
         {
@@ -263,17 +276,20 @@ def create_todo(project_task_model: Any, todo_name_prefix: str) -> tuple[int, da
     print(f"Created project.task ToDo id: {todo_id}")
     print(f"Created project.task ToDo name: {todo_name}")
     print_pass("Created one fresh project.task ToDo with project_id=False.")
-    return todo_id, target_deadline
+    return todo_id
 
 
 def update_todo(
-    project_task_model: Any, todo_id: int, uid: int, target_deadline: date
+    project_task_model: Any,
+    todo_id: int,
+    uid: int,
+    deadline_write_value: str,
 ) -> None:
     print_section("todo update")
     write_result = project_task_model.write(
         todo_id,
         {
-            "date_deadline": target_deadline.isoformat(),
+            "date_deadline": deadline_write_value,
             "description": (
                 f"{DEFAULT_TODO_DESCRIPTION} Assigned to the current user and updated "
                 "by the manual Phase B smoke test."
@@ -291,7 +307,11 @@ def update_todo(
 
 
 def verify_adapted_read(
-    project_task_model: Any, todo_id: int, uid: int, target_deadline: date
+    project_task_model: Any,
+    todo_id: int,
+    uid: int,
+    deadline_metadata: dict[str, Any],
+    expected_deadline: date | datetime,
 ) -> dict[str, Any]:
     print_section("adapted read")
     records = project_task_model.read_adapted(todo_id, ADAPTED_READ_FIELDS)
@@ -327,12 +347,23 @@ def verify_adapted_read(
     require(
         uid in user_ids.ids, "user_ids should include the current authenticated user."
     )
+    deadline_type = deadline_metadata["type"]
+    if deadline_type == "date":
+        require(
+            isinstance(deadline_value, date) and not isinstance(deadline_value, datetime),
+            "date_deadline should adapt to datetime.date when metadata reports a date field.",
+        )
+    else:
+        require(
+            isinstance(deadline_value, datetime),
+            "date_deadline should adapt to datetime.datetime when metadata reports a datetime field.",
+        )
+        require(
+            deadline_value.tzinfo == timezone.utc,
+            "date_deadline datetime values should normalize to UTC.",
+        )
     require(
-        isinstance(deadline_value, date) and not isinstance(deadline_value, datetime),
-        "date_deadline should adapt to datetime.date.",
-    )
-    require(
-        deadline_value == target_deadline,
+        deadline_value == expected_deadline,
         "date_deadline did not round-trip through Phase B adaptation.",
     )
     require(
@@ -345,7 +376,7 @@ def verify_adapted_read(
 
     pprint(record)
     print_pass(
-        "Validated adapted relation, date, and datetime fields from the live record."
+        "Validated adapted relation and temporal fields from the live record."
     )
     return record
 
@@ -391,12 +422,19 @@ def run_smoke(arguments: argparse.Namespace) -> int:
     print_pass(f"Authenticated successfully as Odoo uid {uid}.")
 
     project_task_model = client.env["project.task"]
-    verify_metadata(client)
-    todo_id, target_deadline = create_todo(
-        project_task_model, arguments.todo_name_prefix
+    metadata = verify_metadata(client)
+    deadline_write_value, expected_deadline = build_deadline_roundtrip(
+        metadata["date_deadline"]
     )
-    update_todo(project_task_model, todo_id, uid, target_deadline)
-    verify_adapted_read(project_task_model, todo_id, uid, target_deadline)
+    todo_id = create_todo(project_task_model, arguments.todo_name_prefix)
+    update_todo(project_task_model, todo_id, uid, deadline_write_value)
+    verify_adapted_read(
+        project_task_model,
+        todo_id,
+        uid,
+        metadata["date_deadline"],
+        expected_deadline,
+    )
 
     if arguments.skip_auth_check:
         print_section("mapped auth error")
