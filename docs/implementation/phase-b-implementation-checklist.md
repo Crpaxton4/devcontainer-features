@@ -235,8 +235,7 @@ Why this exists
 - Mock-only validation is not enough once metadata-driven adaptation and x2many command semantics are introduced.
 
 Likely touch points
-- `tests/` or local validation scripts
-- Existing local tooling under `scripts/`
+- Manual smoke examples under `examples/`
 - Example flows that already access live Odoo
 - Docs under `docs/`
 
@@ -245,6 +244,10 @@ Checklist
 - [ ] Cover metadata retrieval, at least one adapted relation field, at least one normalized date or datetime field, x2many serialization, and mapped error behavior where practical.
 - [ ] Document the local setup assumptions for running the checks.
 - [ ] Keep the validation path local-only and scriptable.
+
+Current manual command path
+- `python examples/live_phase_b_smoke_test.py --allow-live-production`
+- Keep the live check in `examples/`; `tests/` remains reserved for automated validation.
 
 Done when
 - A maintainer can run a local live-Odoo validation path that exercises the key new semantics in Phase B.
@@ -272,6 +275,7 @@ Checklist
 - [ ] Keep the pattern guidance aligned with actual implementation choices.
 - [ ] Document the local validation path used for Phase B.
 - [ ] Confirm docs still reflect the local-tooling-only workflow.
+- [ ] Keep the manual live validation path documented as an example script rather than automated test or task wiring.
 
 Done when
 - The code, docs, and validation workflow all describe the same Phase B behavior.
