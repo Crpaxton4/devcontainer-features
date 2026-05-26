@@ -243,10 +243,12 @@ Checklist
 - [ ] Define the minimum live-Odoo scenarios needed to validate Phase B.
 - [ ] Cover metadata retrieval, at least one adapted relation field, at least one normalized date or datetime field, x2many serialization, and mapped error behavior where practical.
 - [ ] Document the local setup assumptions for running the checks.
+- [ ] Document the default `project.task` schema assumptions for the manual smoke path and fail before mutations when the live database drifts from that shape.
 - [ ] Keep the validation path local-only and scriptable.
 
 Current manual command path
 - `python examples/live_phase_b_smoke_test.py --allow-live-production`
+- Run the default smoke example only against a compatible sandbox or development database whose `project.task.date_deadline` remains a native `date` field; unsupported schemas should stop in metadata preflight before any create or write occurs.
 - Keep the live check in `examples/`; `tests/` remains reserved for automated validation.
 
 Done when

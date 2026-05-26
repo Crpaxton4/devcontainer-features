@@ -4,8 +4,14 @@ This script is intentionally separate from `tests/` so automated validation stay
 purely local and deterministic. It exercises the Phase B metadata, adapted-read,
 x2many write, and error-mapping paths against a real Odoo instance.
 
+It assumes the standard `project.task` schema, including `date_deadline` as a
+native `date` field. Databases that customize that field shape should fail
+during metadata preflight before any create or write operations are attempted.
+
 Safety constraints:
 - Requires `--allow-live-production` before any RPC calls are made.
+- Fails during metadata preflight unless `project.task.date_deadline` is a native
+    `date` field in the target database.
 - Creates exactly one new `project.task` ToDo per run with `project_id=False`.
 - Uses only create, read, and update operations.
 - Does not use tags, delete, unlink, or x2many delete/unlink commands.
@@ -72,14 +78,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run a manual live-Odoo smoke test for the Phase B metadata, "
-            "adaptation, x2many, and error-mapping paths."
+            "adaptation, x2many, and error-mapping paths against a compatible "
+            "database whose project.task.date_deadline remains a native date field."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--allow-live-production",
         action="store_true",
-        help="Required acknowledgement before the script talks to the configured Odoo instance.",
+        help=(
+            "Required acknowledgement before the script talks to the configured "
+            "Odoo instance and performs metadata preflight."
+        ),
     )
     parser.add_argument(
         "--config-path",
@@ -144,8 +154,44 @@ def build_todo_name(prefix: str) -> str:
     return f"{prefix} {datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid4().hex[:8]}"
 
 
+def require_field_metadata(
+    metadata_by_field: dict[str, dict[str, Any]],
+    field_name: str,
+    *,
+    expected_type: str,
+    expected_relation: str | None = None,
+) -> None:
+    observed_metadata = metadata_by_field.get(field_name)
+    require(
+        isinstance(observed_metadata, dict),
+        f"fields_get() did not return metadata for {field_name!r}.",
+    )
+
+    if observed_metadata.get("type") != expected_type:
+        expectation = f"type {expected_type!r}"
+        if field_name == "date_deadline" and expected_type == "date":
+            expectation = "a native 'date' field"
+
+        raise AssertionError(
+            "Unsupported live project.task schema for this manual Phase B smoke "
+            f"test: {field_name} metadata was {observed_metadata!r}, expected "
+            f"{expectation}. Run this script against a compatible sandbox or "
+            "development database whose project.task schema matches the standard "
+            "Phase B assumptions."
+        )
+
+    if expected_relation is not None and observed_metadata.get("relation") != expected_relation:
+        raise AssertionError(
+            "Unsupported live project.task schema for this manual Phase B smoke "
+            f"test: {field_name} metadata was {observed_metadata!r}, expected "
+            f"relation {expected_relation!r}. Run this script against a compatible "
+            "sandbox or development database whose project.task schema matches the "
+            "standard Phase B assumptions."
+        )
+
+
 def verify_metadata(client: OdooClient) -> dict[str, dict[str, Any]]:
-    print_section("metadata retrieval")
+    print_section("metadata preflight")
     client.env.clear_metadata_cache("project.task")
     refreshed_metadata = client.env.get_field_metadata(
         "project.task",
@@ -159,38 +205,42 @@ def verify_metadata(client: OdooClient) -> dict[str, dict[str, Any]]:
         attributes=["type", "relation"],
     )
 
+    print("Observed project.task metadata:")
+    pprint(refreshed_metadata)
+
     require(refreshed_metadata == cached_metadata, "Repeated metadata reads diverged.")
-    require(
-        refreshed_metadata["project_id"]["type"] == "many2one",
-        "project_id should be many2one metadata.",
+    require_field_metadata(
+        refreshed_metadata,
+        "project_id",
+        expected_type="many2one",
     )
-    require(
-        refreshed_metadata["create_uid"]["type"] == "many2one",
-        "create_uid should be many2one metadata.",
+    require_field_metadata(
+        refreshed_metadata,
+        "create_uid",
+        expected_type="many2one",
+        expected_relation="res.users",
     )
-    require(
-        refreshed_metadata["create_uid"]["relation"] == "res.users",
-        "create_uid should relate to res.users.",
+    require_field_metadata(
+        refreshed_metadata,
+        "user_ids",
+        expected_type="many2many",
+        expected_relation="res.users",
     )
-    require(
-        refreshed_metadata["user_ids"]["type"] == "many2many",
-        "user_ids should be many2many metadata.",
+    require_field_metadata(
+        refreshed_metadata,
+        "date_deadline",
+        expected_type="date",
     )
-    require(
-        refreshed_metadata["user_ids"]["relation"] == "res.users",
-        "user_ids should relate to res.users.",
-    )
-    require(
-        refreshed_metadata["date_deadline"]["type"] == "date",
-        "date_deadline should be date metadata.",
-    )
-    require(
-        refreshed_metadata["write_date"]["type"] == "datetime",
-        "write_date should be datetime metadata.",
+    require_field_metadata(
+        refreshed_metadata,
+        "write_date",
+        expected_type="datetime",
     )
 
-    pprint(refreshed_metadata)
-    print_pass("Fetched project.task metadata through the Phase B metadata path.")
+    print_pass(
+        "Fetched project.task metadata through the Phase B metadata path and "
+        "confirmed the expected standard schema before any write operations."
+    )
     return refreshed_metadata
 
 
