@@ -32,8 +32,7 @@ class OdooModel:
         if env is None:
             from .odoo_env import OdooEnv
 
-            resolved_env = getattr(client, "env", None)
-            env = resolved_env if isinstance(resolved_env, OdooEnv) else OdooEnv(client)
+            env = OdooEnv(client)
         self._env = env
 
     @property
@@ -209,8 +208,6 @@ class OdooModel:
     def name_get(self, ids: Union[int, List[int]]) -> List[List[Any]]:
         """Runs `name_get` for the provided ids."""
         normalized_ids = list(self._recordset(ids).ids)
-        if not normalized_ids:
-            raise ValueError("name_get requires at least one id")
         _logger.debug(
             "Executing name_get on model=%s ids=%s", self.name, normalized_ids
         )
@@ -255,11 +252,6 @@ class OdooModel:
         lazy: bool = True,
     ) -> List[Dict[str, Any]]:
         """Runs `read_group` for grouped aggregate queries."""
-        if not fields:
-            raise ValueError("read_group requires at least one field")
-        if not groupby:
-            raise ValueError("read_group requires at least one groupby field")
-
         kwargs: Dict[str, Any] = {"lazy": lazy}
         if offset is not None:
             kwargs["offset"] = offset
@@ -309,11 +301,6 @@ class OdooModel:
         :rtype: bool
         """
         recordset = self._recordset(ids)
-        if not recordset.ids:
-            raise ValueError("write requires at least one id")
-        if not vals:
-            raise ValueError("write requires at least one value")
-
         _logger.debug("Writing model=%s ids=%s", self.name, recordset.ids)
         return recordset.write(vals)
 
@@ -326,8 +313,6 @@ class OdooModel:
         :rtype: bool
         """
         recordset = self._recordset(ids)
-        if not recordset.ids:
-            raise ValueError("unlink requires at least one id")
         _logger.debug("Unlinking model=%s ids=%s", self.name, recordset.ids)
         return recordset.unlink()
 

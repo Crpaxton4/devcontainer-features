@@ -12,10 +12,7 @@ primitives and are intentionally excluded from `__all__`.
 
 from . import command_registry, odoo_service, utils
 
-try:
-    from importlib.metadata import version, PackageNotFoundError
-except ImportError:
-    from importlib_metadata import version, PackageNotFoundError  # type: ignore
+from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("odoo_sdk")

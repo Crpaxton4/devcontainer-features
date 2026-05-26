@@ -276,8 +276,6 @@ class OdooRecordset:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order: Optional[str] = None,
-        allow_empty_ids: bool = False,
-        allow_empty_values: bool = False,
     ) -> bool:
         """Searches and updates matching ids using recordset-owned write semantics."""
         return self.search(
@@ -285,11 +283,7 @@ class OdooRecordset:
             limit=limit,
             offset=offset,
             order=order,
-        )._write_current(
-            values,
-            allow_empty_ids=allow_empty_ids,
-            allow_empty_values=allow_empty_values,
-        )
+        )._write_current(values)
 
     def search_unlink(
         self,
@@ -298,7 +292,6 @@ class OdooRecordset:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order: Optional[str] = None,
-        allow_empty: bool = False,
     ) -> bool:
         """Searches and deletes matching ids using recordset-owned unlink semantics."""
         return self.search(
@@ -306,21 +299,13 @@ class OdooRecordset:
             limit=limit,
             offset=offset,
             order=order,
-        )._unlink_current(allow_empty=allow_empty)
+        )._unlink_current()
 
     def _write_current(
         self,
         values: Dict[str, Any],
-        *,
-        allow_empty_ids: bool = False,
-        allow_empty_values: bool = False,
     ) -> bool:
-        if not self._ids and not allow_empty_ids:
-            raise ValueError("write requires at least one id")
-        if not values and not allow_empty_values:
-            raise ValueError("write requires at least one value")
-
-        normalized_values = self._normalize_write_values(values) if values else dict(values)
+        normalized_values = self._normalize_write_values(values)
 
         _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
         return self._execute(
@@ -330,10 +315,7 @@ class OdooRecordset:
             **self._context_kwargs(),
         )
 
-    def _unlink_current(self, *, allow_empty: bool = False) -> bool:
-        if not self._ids and not allow_empty:
-            raise ValueError("unlink requires at least one id")
-
+    def _unlink_current(self) -> bool:
         _logger.debug(
             "Unlinking recordset model=%s ids=%s", self._model_name, self._ids
         )

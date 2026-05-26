@@ -32,8 +32,7 @@ class OdooQuery:
         if env is None:
             from .odoo_env import OdooEnv
 
-            resolved_env = getattr(client, "env", None)
-            env = resolved_env if isinstance(resolved_env, OdooEnv) else OdooEnv(client)
+            env = OdooEnv(client)
         self._env = env
         # Normalize domain explicitly to avoid relying on truthiness.
         self._domain = DomainExpression.normalize(domain)
@@ -149,8 +148,6 @@ class OdooQuery:
             limit=self._limit,
             offset=self._offset,
             order=self._order,
-            allow_empty_ids=True,
-            allow_empty_values=True,
         )
 
     def unlink(self) -> bool:
@@ -165,7 +162,6 @@ class OdooQuery:
             limit=self._limit,
             offset=self._offset,
             order=self._order,
-            allow_empty=True,
         )
 
     def count(self) -> int:
