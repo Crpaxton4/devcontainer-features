@@ -51,6 +51,18 @@ class OdooRecordset:
         """Returns the ordered record ids as immutable identity state."""
         return self._ids
 
+    def _derive(
+        self,
+        ids: Union[int, Sequence[int]] = (),
+        *,
+        env: OdooEnv | None = None,
+    ) -> OdooRecordset:
+        return OdooRecordset(
+            self._env if env is None else env,
+            self._model_name,
+            ids,
+        )
+
     def _execute(self, method: str, *args: Any, **kwargs: Any) -> Any:
         return self._env.executor.execute(self._model_name, method, *args, **kwargs)
 
@@ -104,6 +116,34 @@ class OdooRecordset:
         if order is not None:
             kwargs["order"] = order
         return kwargs
+
+    def _search_current(
+        self,
+        domain: DomainInput,
+        method_name: str,
+        *args: Any,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> Any:
+        method = getattr(
+            self.search(
+                domain,
+                limit=limit,
+                offset=offset,
+                order=order,
+            ),
+            method_name,
+        )
+        return method(*args)
+
+    def _execute_current(self, method: str, *args: Any) -> Any:
+        return self._execute(
+            method,
+            list(self._ids),
+            *args,
+            **self._context_kwargs(),
+        )
 
     def search_ids(
         self,
@@ -269,12 +309,14 @@ class OdooRecordset:
         order: Optional[str] = None,
     ) -> bool:
         """Searches and updates matching ids using recordset-owned write semantics."""
-        return self.search(
+        return self._search_current(
             domain,
+            "_write_current",
+            values,
             limit=limit,
             offset=offset,
             order=order,
-        )._write_current(values)
+        )
 
     def search_unlink(
         self,
@@ -285,12 +327,13 @@ class OdooRecordset:
         order: Optional[str] = None,
     ) -> bool:
         """Searches and deletes matching ids using recordset-owned unlink semantics."""
-        return self.search(
+        return self._search_current(
             domain,
+            "_unlink_current",
             limit=limit,
             offset=offset,
             order=order,
-        )._unlink_current()
+        )
 
     def _write_current(
         self,
@@ -299,22 +342,13 @@ class OdooRecordset:
         normalized_values = self._normalize_write_values(values)
 
         _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
-        return self._execute(
-            "write",
-            list(self._ids),
-            normalized_values,
-            **self._context_kwargs(),
-        )
+        return self._execute_current("write", normalized_values)
 
     def _unlink_current(self) -> bool:
         _logger.debug(
             "Unlinking recordset model=%s ids=%s", self._model_name, self._ids
         )
-        return self._execute(
-            "unlink",
-            list(self._ids),
-            **self._context_kwargs(),
-        )
+        return self._execute_current("unlink")
 
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
         """Materializes raw Phase A rows for the current ids."""
@@ -342,17 +376,17 @@ class OdooRecordset:
     def exists(self) -> OdooRecordset:
         """Returns a new recordset for ids that still exist on the server."""
         if not self._ids:
-            return OdooRecordset(self._env, self._model_name, ())
+            return self._derive()
 
         existing_ids = set(
             self.search([("id", "in", list(self._ids))]).ids
         )
         surviving_ids = [record_id for record_id in self._ids if record_id in existing_ids]
-        return OdooRecordset(self._env, self._model_name, surviving_ids)
+        return self._derive(surviving_ids)
 
     def browse(self, ids: Union[int, Sequence[int]]) -> OdooRecordset:
         """Returns a same-model recordset for the provided ids without I/O."""
-        return OdooRecordset(self._env, self._model_name, ids)
+        return self._derive(ids)
 
     def search(
         self,
@@ -373,15 +407,11 @@ class OdooRecordset:
             kwargs,
         )
         ids = self._execute("search", serialized_domain, **kwargs)
-        return OdooRecordset(self._env, self._model_name, ids)
+        return self._derive(ids)
 
     def with_context(self, context: Dict[str, Any]) -> OdooRecordset:
         """Returns a new recordset bound to a derived environment."""
-        return OdooRecordset(
-            self._env.with_context(context),
-            self._model_name,
-            self._ids,
-        )
+        return self._derive(self._ids, env=self._env.with_context(context))
 
 
 def _needs_write_field_metadata(value: Any) -> bool:

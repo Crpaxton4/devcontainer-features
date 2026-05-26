@@ -46,8 +46,56 @@ class OdooModel:
             return {}
         return {"context": context}
 
+    def _execute(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        return self.client.execute(self.name, method, *args, **kwargs)
+
+    def _execute_with_context(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        call_kwargs = dict(kwargs)
+        call_kwargs.update(self._context_kwargs())
+        return self._execute(method, *args, **call_kwargs)
+
     def _recordset(self, ids: Union[int, List[int]]) -> OdooRecordset:
         return self._env.recordset(self.name, ids)
+
+    def _read_from_recordset(
+        self,
+        ids: Union[int, List[int]],
+        fields: Optional[List[str]],
+        *,
+        adapted: bool = False,
+    ) -> List[Record]:
+        recordset = self._recordset(ids)
+        reader_name = "read_adapted" if adapted else "read"
+        mode = " adapted" if adapted else ""
+        _logger.debug(
+            "Reading%s model=%s ids=%s fields=%s",
+            mode,
+            self.name,
+            recordset.ids,
+            fields,
+        )
+        return getattr(recordset, reader_name)(fields)
+
+    def _read_from_query(
+        self,
+        domain: DomainInput,
+        fields: Optional[List[str]],
+        *,
+        adapted: bool = False,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> List[Record]:
+        reader_name = "read_adapted" if adapted else "read"
+        mode = "adapted " if adapted else ""
+        _logger.debug("Executing %ssearch_read on model=%s", mode, self.name)
+        query = self._search_query(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
+        return getattr(query, reader_name)(fields)
 
     @staticmethod
     def _serialize_domain(domain: DomainInput) -> List[Any]:
@@ -90,36 +138,25 @@ class OdooModel:
         :return: The list of records with the requested fields.
         :rtype: List[Record]
         """
-        recordset = self._recordset(ids)
-        _logger.debug(
-            "Reading model=%s ids=%s fields=%s", self.name, recordset.ids, fields
-        )
-        return recordset.read(fields)
+        return self._read_from_recordset(ids, fields)
 
     def read_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
         """Reads specific records by ID with Phase B field adaptation applied."""
-        recordset = self._recordset(ids)
-        _logger.debug(
-            "Reading adapted model=%s ids=%s fields=%s",
-            self.name,
-            recordset.ids,
-            fields,
-        )
-        return recordset.read_adapted(fields)
+        return self._read_from_recordset(ids, fields, adapted=True)
 
     def browse(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
         """Convenience alias for raw Phase A reads to mirror ORM-style call sites."""
-        return self._recordset(ids).read(fields)
+        return self._read_from_recordset(ids, fields)
 
     def browse_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
     ) -> List[Record]:
         """Convenience alias for Phase B adapted reads to mirror ORM-style call sites."""
-        return self._recordset(ids).read_adapted(fields)
+        return self._read_from_recordset(ids, fields, adapted=True)
 
     def search_ids(
         self,
@@ -157,13 +194,13 @@ class OdooModel:
         order: Optional[str] = None,
     ) -> List[Record]:
         """Runs raw Phase A `search_read` with optional pagination and field selection."""
-        _logger.debug("Executing search_read on model=%s", self.name)
-        return self._search_query(
+        return self._read_from_query(
             domain,
+            fields,
             limit=limit,
             offset=offset,
             order=order,
-        ).read(fields)
+        )
 
     def search_read_adapted(
         self,
@@ -175,13 +212,14 @@ class OdooModel:
         order: Optional[str] = None,
     ) -> List[Record]:
         """Runs Phase B `search_read` with field adaptation applied."""
-        _logger.debug("Executing adapted search_read on model=%s", self.name)
-        return self._search_query(
+        return self._read_from_query(
             domain,
+            fields,
+            adapted=True,
             limit=limit,
             offset=offset,
             order=order,
-        ).read_adapted(fields)
+        )
 
     def search_count(self, domain: DomainInput = None) -> int:
         """Runs `search_count` and returns the number of matched records."""
@@ -203,7 +241,7 @@ class OdooModel:
         kwargs.update(self._context_kwargs())
 
         _logger.debug("Executing name_search on model=%s name=%s", self.name, name)
-        return self.client.execute(self.name, "name_search", name, **kwargs)
+        return self._execute("name_search", name, **kwargs)
 
     def name_get(self, ids: Union[int, List[int]]) -> List[List[Any]]:
         """Runs `name_get` for the provided ids."""
@@ -211,34 +249,18 @@ class OdooModel:
         _logger.debug(
             "Executing name_get on model=%s ids=%s", self.name, normalized_ids
         )
-        return self.client.execute(
-            self.name,
-            "name_get",
-            normalized_ids,
-            **self._context_kwargs(),
-        )
+        return self._execute_with_context("name_get", normalized_ids)
 
     def default_get(self, fields: List[str]) -> Dict[str, Any]:
         """Runs `default_get` and returns default values for the requested fields."""
         _logger.debug("Executing default_get on model=%s fields=%s", self.name, fields)
-        return self.client.execute(
-            self.name,
-            "default_get",
-            fields,
-            **self._context_kwargs(),
-        )
+        return self._execute_with_context("default_get", fields)
 
     def copy(self, record_id: int, default: Optional[Record] = None) -> int:
         """Runs `copy` and returns the newly created record id."""
         values = dict(default) if default is not None else {}
         _logger.debug("Executing copy on model=%s id=%s", self.name, record_id)
-        return self.client.execute(
-            self.name,
-            "copy",
-            record_id,
-            values,
-            **self._context_kwargs(),
-        )
+        return self._execute_with_context("copy", record_id, values)
 
     def read_group(
         self,
@@ -283,12 +305,7 @@ class OdooModel:
         :rtype: int
         """
         _logger.debug("Creating record in model=%s", self.name)
-        return self.client.execute(
-            self.name,
-            "create",
-            vals,
-            **self._context_kwargs(),
-        )
+        return self._execute_with_context("create", vals)
 
     def write(self, ids: Union[int, List[int]], vals: Dict[str, Any]) -> bool:
         """Updates existing records.

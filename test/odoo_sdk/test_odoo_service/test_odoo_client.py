@@ -370,4 +370,3 @@ class TestOdooConnectionSettings(unittest.TestCase):
             settings = OdooConnectionSettings.from_sources(config_path="odoo.ini")
 
         self.assertEqual(settings.url, "https://from-file.example.com")
-

@@ -51,6 +51,17 @@ class OdooQuery:
     def _recordset(self) -> OdooRecordset:
         return self._env.recordset(self.model_name)
 
+    def _search_options(self) -> Dict[str, Any]:
+        return {
+            "limit": self._limit,
+            "offset": self._offset,
+            "order": self._order,
+        }
+
+    def _search_recordset(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        method = getattr(self._recordset(), method_name)
+        return method(self._domain, *args, **self._search_options(), **kwargs)
+
     def search(self, domain: DomainInput) -> OdooQuery:
         """Sets or replaces the search domain."""
         _logger.debug(
@@ -96,12 +107,7 @@ class OdooQuery:
             self.model_name,
             serialized_domain,
         )
-        return self._recordset().search_ids(
-            self._domain,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
+        return self._search_recordset("search_ids")
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes raw Phase A search_read semantics for the current query."""
@@ -112,13 +118,7 @@ class OdooQuery:
             serialized_domain,
             fields,
         )
-        return self._recordset().search_read(
-            self._domain,
-            fields=fields,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
+        return self._search_recordset("search_read", fields=fields)
 
     def read_adapted(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Executes Phase B search_read semantics with field adaptation applied."""
@@ -129,26 +129,14 @@ class OdooQuery:
             serialized_domain,
             fields,
         )
-        return self._recordset().search_read_adapted(
-            self._domain,
-            fields=fields,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
+        return self._search_recordset("search_read_adapted", fields=fields)
 
     def write(self, values: Dict[str, Any]) -> bool:
         """Searches for matching records and updates them."""
         _logger.debug(
             "Executing query write on model=%s domain=%s", self.model_name, self._domain
         )
-        return self._recordset().search_write(
-            self._domain,
-            values,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
+        return self._search_recordset("search_write", values)
 
     def unlink(self) -> bool:
         """Searches for matching records and deletes them."""
@@ -157,12 +145,7 @@ class OdooQuery:
             self.model_name,
             self._domain,
         )
-        return self._recordset().search_unlink(
-            self._domain,
-            limit=self._limit,
-            offset=self._offset,
-            order=self._order,
-        )
+        return self._search_recordset("search_unlink")
 
     def count(self) -> int:
         """Executes a search_count operation."""
