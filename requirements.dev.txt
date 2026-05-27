@@ -3,3 +3,4 @@
 cosmic-ray
 hypothesis
 complexipy
+pygount

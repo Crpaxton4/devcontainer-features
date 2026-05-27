@@ -172,6 +172,15 @@ wheels = [
 ]
 
 [[package]]
+name = "chardet"
+version = "5.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/0d/f7b6ab21ec75897ed80c17d79b15951a719226b9fababf1e40ea74d69079/chardet-5.2.0.tar.gz", hash = "sha256:1b3b6ff479a8c414bc3fa2c0852995695c4a026dcd6d0633b2dd092ca39c1cf7", size = 2069618, upload-time = "2023-08-01T19:23:02.662Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/6f/f5fbc992a329ee4e0f288c1fe0e2ad9485ed064cac731ed2fe47dcc38cbf/chardet-5.2.0-py3-none-any.whl", hash = "sha256:e1cf59446890a00105fe7b7912492ea04b6e6f06d4b742b2c788469e34c82970", size = 199385, upload-time = "2023-08-01T19:23:00.661Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -675,6 +684,7 @@ dev = [
     { name = "coverage" },
     { name = "hypothesis" },
     { name = "odoo-sdk" },
+    { name = "pygount" },
 ]
 
 [package.metadata]
@@ -687,6 +697,7 @@ dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.6.0" },
     { name = "hypothesis", specifier = ">=6.0.0" },
     { name = "odoo-sdk", editable = "." },
+    { name = "pygount", specifier = ">=3.2.0" },
 ]
 
 [[package]]
@@ -826,6 +837,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
+]
+
+[[package]]
+name = "pygount"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chardet" },
+    { name = "gitpython" },
+    { name = "pygments" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/5c/27b0bd8678ef5d7af67d925bbe22fb8f7e484151d284c52f0712c32a7ec1/pygount-3.2.0.tar.gz", hash = "sha256:27b03a6c6d791c4920003eec361a3c38ccd815637c51f5536efb9e47db1d452a", size = 983240, upload-time = "2026-04-08T12:42:21.075Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/56/6b92a522a91140977941ee212421760b4c6f84897fb2a3cc63cc934c7a23/pygount-3.2.0-py3-none-any.whl", hash = "sha256:c037bf293d92ccc3ed5728329fe330f992901d933a7d278cb997bbbbeb0cf965", size = 30973, upload-time = "2026-04-08T12:42:22.533Z" },
 ]
 
 [[package]]
