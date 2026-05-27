@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from ..utils import Record
-from ..utils.types import DomainInput
-from .domain_expression import DomainExpression
+from .domain_expression import DomainExpression, DomainInput
 from .odoo_executor import OdooExecutor
+from .odoo_recordset import Record
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv

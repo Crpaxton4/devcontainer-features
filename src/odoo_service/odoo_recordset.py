@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Sequence as SequenceABC
-from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
+from collections.abc import Mapping, Sequence as SequenceABC
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, TypeAlias, Union
 
-from ..utils import Record
-from ..utils.types import DomainInput
-from .domain_expression import DomainExpression
+from .domain_expression import DomainExpression, DomainInput
 from .field_adapters import adapt_record_values
 from .x2many_commands import X2ManyCommand, normalize_x2many_commands
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
+
+
+Record: TypeAlias = Mapping[str, Any]
 
 
 class OdooRecordset:

@@ -9,7 +9,6 @@ class TestPhaseAPublicExports(unittest.TestCase):
         expected_exports = {
             "command_registry",
             "odoo_service",
-            "utils",
             "OdooClient",
             "OdooConnectionSettings",
             "OdooExecutor",

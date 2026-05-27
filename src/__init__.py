@@ -10,7 +10,7 @@ and the preserved compatibility wrappers. `OdooEnv`,
 primitives and are intentionally excluded from `__all__`.
 """
 
-from . import command_registry, odoo_service, utils
+from . import command_registry, odoo_service
 
 from importlib.metadata import PackageNotFoundError, version
 
@@ -27,14 +27,14 @@ from .odoo_service import (
     OdooQuery,
     OdooRpcExecutor,
 )
+from .odoo_service.domain_expression import Domain
+from .odoo_service.odoo_recordset import Record
 from .command_registry import CommandDispatcher
-from .utils import Domain, Record
 
 # Phase A keeps OdooEnv, DomainExpression, and OdooRecordset internal-only.
 __all__ = [
     "command_registry",
     "odoo_service",
-    "utils",
     "OdooClient",
     "OdooConnectionSettings",
     "OdooExecutor",

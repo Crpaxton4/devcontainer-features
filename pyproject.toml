@@ -25,7 +25,6 @@ packages = [
     "odoo_sdk",
     "odoo_sdk.command_registry",
     "odoo_sdk.odoo_service",
-    "odoo_sdk.utils",
 ]
 
 [tool.setuptools.package-data]
@@ -35,7 +34,6 @@ packages = [
 "odoo_sdk" = "src"
 "odoo_sdk.command_registry" = "src/command_registry"
 "odoo_sdk.odoo_service" = "src/odoo_service"
-"odoo_sdk.utils" = "src/utils"
 
 [tool.black]
 target-version = ["py312"]

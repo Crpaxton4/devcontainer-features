@@ -5,7 +5,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias, Union
 
-from ..utils.types import DomainCondition, DomainInput
+DomainCondition: TypeAlias = tuple[str, str, Any]
+Domain: TypeAlias = list[DomainCondition]
+DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any], None]
 
 _BOOLEAN_OPERATORS: Final[set[str]] = {"&", "|", "!"}
 
