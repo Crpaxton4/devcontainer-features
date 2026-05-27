@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from ..utils import Record
@@ -12,8 +11,6 @@ from .odoo_query import OdooQuery
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
     from .odoo_recordset import OdooRecordset
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooModel:
@@ -135,95 +132,6 @@ class OdooModel:
         """
         return self._env.recordset(self.name, ids)
 
-    def _read_from_recordset(
-        self,
-        ids: Union[int, List[int]],
-        fields: Optional[List[str]],
-        *,
-        adapted: bool = False,
-    ) -> List[Record]:
-        """Read specific ids through the recordset-owned read path.
-
-        This helper is necessary because both raw and adapted reads should reuse the
-        same recordset implementation instead of duplicating branching logic here.
-
-        :param ids: Record id or ids to read.
-        :type ids: Union[int, List[int]]
-        :param fields: Optional field names to request, defaults to None.
-        :type fields: Optional[List[str]]
-        :param adapted: When True, use the adapted read path, defaults to False.
-        :type adapted: bool
-        :return: Requested records in raw or adapted form.
-        :rtype: List[Record]
-        """
-        recordset = self._recordset(ids)
-        reader_name = "read_adapted" if adapted else "read"
-        mode = " adapted" if adapted else ""
-        _logger.debug(
-            "Reading%s model=%s ids=%s fields=%s",
-            mode,
-            self.name,
-            recordset.ids,
-            fields,
-        )
-        return getattr(recordset, reader_name)(fields)
-
-    def _read_from_query(
-        self,
-        domain: DomainInput,
-        fields: Optional[List[str]],
-        *,
-        adapted: bool = False,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Record]:
-        """Run search-derived reads through the query compatibility layer.
-
-        This helper is necessary because model-level `search_read` variants still
-        expose the historical query-style surface even though terminal behavior is
-        delegated into `OdooQuery` and then recordsets.
-
-        :param domain: Domain used to select records.
-        :type domain: DomainInput
-        :param fields: Optional field names to request, defaults to None.
-        :type fields: Optional[List[str]]
-        :param adapted: When True, use the adapted read path, defaults to False.
-        :type adapted: bool
-        :param limit: Maximum number of records to read, defaults to None.
-        :type limit: Optional[int]
-        :param offset: Number of matched rows to skip, defaults to None.
-        :type offset: Optional[int]
-        :param order: Odoo order expression, defaults to None.
-        :type order: Optional[str]
-        :return: Requested records in raw or adapted form.
-        :rtype: List[Record]
-        """
-        reader_name = "read_adapted" if adapted else "read"
-        mode = "adapted " if adapted else ""
-        _logger.debug("Executing %ssearch_read on model=%s", mode, self.name)
-        query = self._search_query(
-            domain,
-            limit=limit,
-            offset=offset,
-            order=order,
-        )
-        return getattr(query, reader_name)(fields)
-
-    @staticmethod
-    def _serialize_domain(domain: DomainInput) -> List[Any]:
-        """Serialize a domain input into Odoo RPC token form.
-
-        This helper is necessary for the few compatibility methods that still invoke
-        model RPCs directly instead of delegating the whole operation to a recordset.
-
-        :param domain: Domain input to normalize and serialize.
-        :type domain: DomainInput
-        :return: Serialized domain tokens.
-        :rtype: List[Any]
-        """
-        return DomainExpression.normalize(domain).serialize()
-
     def _search_query(
         self,
         domain: DomainInput = None,
@@ -279,7 +187,6 @@ class OdooModel:
         :return: Fluent query compatibility object.
         :rtype: OdooQuery
         """
-        _logger.debug("Building query for model=%s domain=%s", self.name, domain)
         return OdooQuery(self.client, self.name, domain, env=self._env)
 
     def read(
@@ -297,7 +204,8 @@ class OdooModel:
         :return: Raw record mappings for the requested ids.
         :rtype: List[Record]
         """
-        return self._read_from_recordset(ids, fields)
+        recordset = self._recordset(ids)
+        return recordset.read(fields)
 
     def read_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
@@ -314,7 +222,8 @@ class OdooModel:
         :return: Adapted record mappings for the requested ids.
         :rtype: List[Record]
         """
-        return self._read_from_recordset(ids, fields, adapted=True)
+        recordset = self._recordset(ids)
+        return recordset.read_adapted(fields)
 
     def browse(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
@@ -335,7 +244,7 @@ class OdooModel:
         :return: Raw record mappings for the requested ids.
         :rtype: List[Record]
         """
-        return self._read_from_recordset(ids, fields)
+        return self.read(ids, fields)
 
     def browse_adapted(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
@@ -356,7 +265,7 @@ class OdooModel:
         :return: Adapted record mappings for the requested ids.
         :rtype: List[Record]
         """
-        return self._read_from_recordset(ids, fields, adapted=True)
+        return self.read_adapted(ids, fields)
 
     def search_ids(
         self,
@@ -437,13 +346,12 @@ class OdooModel:
         :return: Raw record mappings.
         :rtype: List[Record]
         """
-        return self._read_from_query(
+        return self._search_query(
             domain,
-            fields,
             limit=limit,
             offset=offset,
             order=order,
-        )
+        ).read(fields)
 
     def search_read_adapted(
         self,
@@ -472,14 +380,12 @@ class OdooModel:
         :return: Adapted record mappings.
         :rtype: List[Record]
         """
-        return self._read_from_query(
+        return self._search_query(
             domain,
-            fields,
-            adapted=True,
             limit=limit,
             offset=offset,
             order=order,
-        )
+        ).read_adapted(fields)
 
     def search_count(self, domain: DomainInput = None) -> int:
         """Return the number of records matching a domain.
@@ -492,7 +398,6 @@ class OdooModel:
         :return: Number of matched records.
         :rtype: int
         """
-        _logger.debug("Executing search_count on model=%s", self.name)
         return self.search(domain).count()
 
     def name_search(
@@ -522,10 +427,8 @@ class OdooModel:
         """
         kwargs: Dict[str, Any] = {"operator": operator, "limit": limit}
         if domain is not None:
-            kwargs["args"] = self._serialize_domain(domain)
+            kwargs["args"] = DomainExpression.normalize(domain).serialize()
         kwargs.update(self._context_kwargs())
-
-        _logger.debug("Executing name_search on model=%s name=%s", self.name, name)
         return self._execute("name_search", name, **kwargs)
 
     def name_get(self, ids: Union[int, List[int]]) -> List[List[Any]]:
@@ -540,9 +443,6 @@ class OdooModel:
         :rtype: List[List[Any]]
         """
         normalized_ids = list(self._recordset(ids).ids)
-        _logger.debug(
-            "Executing name_get on model=%s ids=%s", self.name, normalized_ids
-        )
         return self._execute_with_context("name_get", normalized_ids)
 
     def default_get(self, fields: List[str]) -> Dict[str, Any]:
@@ -556,7 +456,6 @@ class OdooModel:
         :return: Mapping of field names to default values.
         :rtype: Dict[str, Any]
         """
-        _logger.debug("Executing default_get on model=%s fields=%s", self.name, fields)
         return self._execute_with_context("default_get", fields)
 
     def copy(self, record_id: int, default: Optional[Record] = None) -> int:
@@ -573,7 +472,6 @@ class OdooModel:
         :rtype: int
         """
         values = dict(default) if default is not None else {}
-        _logger.debug("Executing copy on model=%s id=%s", self.name, record_id)
         return self._execute_with_context("copy", record_id, values)
 
     def read_group(
@@ -619,10 +517,7 @@ class OdooModel:
             kwargs["orderby"] = orderby
         kwargs.update(self._context_kwargs())
 
-        search_domain = self._serialize_domain(domain)
-        _logger.debug(
-            "Executing read_group on model=%s domain=%s", self.name, search_domain
-        )
+        search_domain = DomainExpression.normalize(domain).serialize()
         return self.client.execute(
             self.name,
             "read_group",
@@ -643,7 +538,6 @@ class OdooModel:
         :return: Identifier of the newly created record.
         :rtype: int
         """
-        _logger.debug("Creating record in model=%s", self.name)
         return self._execute_with_context("create", vals)
 
     def write(self, ids: Union[int, List[int]], vals: Dict[str, Any]) -> bool:
@@ -661,7 +555,6 @@ class OdooModel:
         :rtype: bool
         """
         recordset = self._recordset(ids)
-        _logger.debug("Writing model=%s ids=%s", self.name, recordset.ids)
         return recordset.write(vals)
 
     def unlink(self, ids: Union[int, List[int]]) -> bool:
@@ -676,7 +569,6 @@ class OdooModel:
         :rtype: bool
         """
         recordset = self._recordset(ids)
-        _logger.debug("Unlinking model=%s ids=%s", self.name, recordset.ids)
         return recordset.unlink()
 
     def fields_get(
@@ -696,12 +588,6 @@ class OdooModel:
         :return: Field metadata keyed by field name.
         :rtype: Dict[str, Any]
         """
-        _logger.debug(
-            "Fetching fields_get for model=%s fields=%s attributes=%s",
-            self.name,
-            fields,
-            attributes,
-        )
         return self._env.get_field_metadata(
             self.name,
             fields,

@@ -1,8 +1,5 @@
-import logging
 from abc import ABC
 from typing import Any
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooExecutor(ABC):

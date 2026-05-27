@@ -1,4 +1,3 @@
-import logging
 import threading
 from typing import Any, Dict, Optional
 
@@ -7,8 +6,6 @@ from .odoo_env import OdooEnv
 from .odoo_executor import OdooExecutor
 from .odoo_model import OdooModel
 from .odoo_rpc_executor import OdooRpcExecutor
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooClient(OdooExecutor):
@@ -73,7 +70,6 @@ class OdooClient(OdooExecutor):
         # a real `OdooRpcExecutor`.
         if executor is not None:
             self._executor = executor
-            _logger.info("Initializing OdooClient with injected executor")
         else:
             settings = OdooConnectionSettings.from_sources(
                 url=url,
@@ -82,7 +78,6 @@ class OdooClient(OdooExecutor):
                 password=password,
                 config_path=config_path,
             )
-            _logger.info("Initializing OdooClient for db=%s", settings.db)
             self._executor = OdooRpcExecutor(
                 settings.url,
                 settings.db,
@@ -137,7 +132,6 @@ class OdooClient(OdooExecutor):
         :return: Result returned by the executor.
         :rtype: Any
         """
-        _logger.debug("Delegating execute for %s.%s", model, method)
         return self._executor.execute(model, method, *args, **kwargs)
 
     def __getitem__(self, model_name: str) -> OdooModel:
@@ -153,7 +147,6 @@ class OdooClient(OdooExecutor):
         :rtype: OdooModel
         """
         if model_name not in self._models:
-            _logger.debug("Creating model proxy for %s", model_name)
             with self._lock:
                 if model_name not in self._models:
                     self._models[model_name] = OdooModel(

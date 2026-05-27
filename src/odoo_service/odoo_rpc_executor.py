@@ -1,10 +1,7 @@
-import logging
 import threading
 import xmlrpc.client
 from typing import Any
 from .odoo_executor import OdooExecutor
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooRpcExecutor(OdooExecutor):
@@ -41,7 +38,6 @@ class OdooRpcExecutor(OdooExecutor):
         :return: None.
         :rtype: None
         """
-        _logger.info("Creating OdooRpcExecutor for db=%s", db)
         self.url = url.rstrip("/")
         self.db = db
         self.username = username
@@ -67,7 +63,6 @@ class OdooRpcExecutor(OdooExecutor):
         if self._uid is None:
             with self._lock:
                 if self._uid is None:
-                    _logger.info("Authenticating against Odoo for db=%s", self.db)
                     self._uid = self._common.authenticate(
                         self.db,
                         self.username,
@@ -93,7 +88,6 @@ class OdooRpcExecutor(OdooExecutor):
         :return: Result returned by the XML-RPC endpoint.
         :rtype: Any
         """
-        _logger.debug("Executing XML-RPC call %s.%s", model, method)
         return self._object.execute_kw(
             self.db,
             self.uid,

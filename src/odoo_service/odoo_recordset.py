@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence as SequenceABC
 from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 
@@ -12,9 +11,6 @@ from .x2many_commands import X2ManyCommand, normalize_x2many_commands
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
-
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooRecordset:
@@ -165,19 +161,6 @@ class OdooRecordset:
             return {}
         return {"context": context}
 
-    def _serialized_domain(self, domain: DomainInput) -> list[Any]:
-        """Serialize domain input into Odoo RPC token form.
-
-        This helper is necessary because search-derived recordset operations all share
-        the same domain normalization and serialization boundary.
-
-        :param domain: Domain input to normalize and serialize.
-        :type domain: DomainInput
-        :return: Serialized domain tokens.
-        :rtype: list[Any]
-        """
-        return DomainExpression.normalize(domain).serialize()
-
     def _normalize_write_values(self, values: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize write values that require metadata-aware adaptation.
 
@@ -244,66 +227,6 @@ class OdooRecordset:
         if order is not None:
             kwargs["order"] = order
         return kwargs
-
-    def _search_current(
-        self,
-        domain: DomainInput,
-        method_name: str,
-        *args: Any,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> Any:
-        """Search first, then invoke a terminal method on the matched recordset.
-
-        This helper is necessary because search-based write and unlink flows share the
-        same pattern of resolving ids first and then reusing current-recordset methods.
-
-        :param domain: Domain used to select records.
-        :type domain: DomainInput
-        :param method_name: Name of the current-recordset method to invoke.
-        :type method_name: str
-        :param args: Positional arguments forwarded to the terminal method.
-        :type args: Any
-        :param limit: Maximum number of records to match, defaults to None.
-        :type limit: Optional[int]
-        :param offset: Number of matched rows to skip, defaults to None.
-        :type offset: Optional[int]
-        :param order: Odoo order expression, defaults to None.
-        :type order: Optional[str]
-        :return: Result of the terminal recordset method.
-        :rtype: Any
-        """
-        method = getattr(
-            self.search(
-                domain,
-                limit=limit,
-                offset=offset,
-                order=order,
-            ),
-            method_name,
-        )
-        return method(*args)
-
-    def _execute_current(self, method: str, *args: Any) -> Any:
-        """Execute one method against the current record ids.
-
-        This helper is necessary because recordset methods like `write` and `unlink`
-        all share the same RPC pattern of sending the current ids plus context.
-
-        :param method: Name of the Odoo method to invoke.
-        :type method: str
-        :param args: Positional arguments forwarded after the current ids.
-        :type args: Any
-        :return: Result returned by Odoo.
-        :rtype: Any
-        """
-        return self._execute(
-            method,
-            list(self._ids),
-            *args,
-            **self._context_kwargs(),
-        )
 
     def search_ids(
         self,
@@ -413,28 +336,12 @@ class OdooRecordset:
             kwargs = self._context_kwargs()
             if fields is not None:
                 kwargs["fields"] = fields
-
-            _logger.debug(
-                "Reading recordset model=%s ids=%s fields=%s adapt=%s",
-                self._model_name,
-                ids,
-                fields,
-                adapt,
-            )
             records = self._execute("read", list(ids), **kwargs)
         else:
-            serialized_domain = self._serialized_domain(domain)
+            serialized_domain = DomainExpression.normalize(domain).serialize()
             kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
             if fields is not None:
                 kwargs["fields"] = fields
-
-            _logger.debug(
-                "Search reading recordset model=%s domain=%s kwargs=%s adapt=%s",
-                self._model_name,
-                serialized_domain,
-                kwargs,
-                adapt,
-            )
             records = self._execute("search_read", serialized_domain, **kwargs)
 
         if not adapt or not records:
@@ -551,12 +458,7 @@ class OdooRecordset:
         :return: Number of matched records.
         :rtype: int
         """
-        serialized_domain = self._serialized_domain(domain)
-        _logger.debug(
-            "Counting recordset model=%s domain=%s",
-            self._model_name,
-            serialized_domain,
-        )
+        serialized_domain = DomainExpression.normalize(domain).serialize()
         return self._execute(
             "search_count",
             serialized_domain,
@@ -590,14 +492,12 @@ class OdooRecordset:
         :return: True when Odoo reports a successful update.
         :rtype: bool
         """
-        return self._search_current(
+        return self.search(
             domain,
-            "_write_current",
-            values,
             limit=limit,
             offset=offset,
             order=order,
-        )
+        ).write(values)
 
     def search_unlink(
         self,
@@ -623,46 +523,12 @@ class OdooRecordset:
         :return: True when Odoo reports a successful delete.
         :rtype: bool
         """
-        return self._search_current(
+        return self.search(
             domain,
-            "_unlink_current",
             limit=limit,
             offset=offset,
             order=order,
-        )
-
-    def _write_current(
-        self,
-        values: Dict[str, Any],
-    ) -> bool:
-        """Write values to the current ids after metadata-aware normalization.
-
-        This helper is necessary because the current recordset owns the final write
-        semantics, including x2many command normalization and context propagation.
-
-        :param values: Field values to write.
-        :type values: Dict[str, Any]
-        :return: True when Odoo reports a successful update.
-        :rtype: bool
-        """
-        normalized_values = self._normalize_write_values(values)
-
-        _logger.debug("Writing recordset model=%s ids=%s", self._model_name, self._ids)
-        return self._execute_current("write", normalized_values)
-
-    def _unlink_current(self) -> bool:
-        """Delete the current record ids using the bound environment context.
-
-        This helper is necessary because both direct and search-derived unlink flows
-        converge on the same current-recordset delete path.
-
-        :return: True when Odoo reports a successful delete.
-        :rtype: bool
-        """
-        _logger.debug(
-            "Unlinking recordset model=%s ids=%s", self._model_name, self._ids
-        )
-        return self._execute_current("unlink")
+        ).unlink()
 
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
         """Read the current ids using raw Phase A semantics.
@@ -708,7 +574,13 @@ class OdooRecordset:
         :return: True when Odoo reports a successful update.
         :rtype: bool
         """
-        return self._write_current(values)
+        normalized_values = self._normalize_write_values(values)
+        return self._execute(
+            "write",
+            list(self._ids),
+            normalized_values,
+            **self._context_kwargs(),
+        )
 
     def unlink(self) -> bool:
         """Delete the current ids.
@@ -719,7 +591,11 @@ class OdooRecordset:
         :return: True when Odoo reports a successful delete.
         :rtype: bool
         """
-        return self._unlink_current()
+        return self._execute(
+            "unlink",
+            list(self._ids),
+            **self._context_kwargs(),
+        )
 
     def exists(self) -> OdooRecordset:
         """Return a new recordset containing only ids that still exist.
@@ -776,15 +652,8 @@ class OdooRecordset:
         :return: Recordset containing the matching ids.
         :rtype: OdooRecordset
         """
-        serialized_domain = self._serialized_domain(domain)
+        serialized_domain = DomainExpression.normalize(domain).serialize()
         kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
-
-        _logger.debug(
-            "Searching recordset model=%s domain=%s kwargs=%s",
-            self._model_name,
-            serialized_domain,
-            kwargs,
-        )
         ids = self._execute("search", serialized_domain, **kwargs)
         return self._derive(ids)
 

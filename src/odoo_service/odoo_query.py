@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..utils import Record
@@ -11,8 +10,6 @@ from .odoo_executor import OdooExecutor
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
     from .odoo_recordset import OdooRecordset
-
-_logger = logging.getLogger(__name__)
 
 
 class OdooQuery:
@@ -88,7 +85,6 @@ class OdooQuery:
         :return: A new query instance carrying the same search configuration.
         :rtype: OdooQuery
         """
-        _logger.debug("Cloning query for model=%s", self.model_name)
         query = OdooQuery(self.client, self.model_name, self._domain, env=self._env)
         query._limit = self._limit
         query._offset = self._offset
@@ -122,25 +118,6 @@ class OdooQuery:
             "order": self._order,
         }
 
-    def _search_recordset(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        """Invoke a terminal recordset method using the current query state.
-
-        This indirection is necessary to prevent `OdooQuery` from re-implementing
-        Phase A and Phase B semantics locally; instead it forwards the normalized
-        domain plus stored options into one recordset-controlled path.
-
-        :param method_name: Name of the recordset method to invoke.
-        :type method_name: str
-        :param args: Positional arguments forwarded to the recordset method.
-        :type args: Any
-        :param kwargs: Keyword arguments forwarded to the recordset method.
-        :type kwargs: Any
-        :return: The delegated recordset result.
-        :rtype: Any
-        """
-        method = getattr(self._recordset(), method_name)
-        return method(self._domain, *args, **self._search_options(), **kwargs)
-
     def search(self, domain: DomainInput) -> OdooQuery:
         """Return a new query with a replaced normalized search domain.
 
@@ -152,9 +129,6 @@ class OdooQuery:
         :return: A cloned query carrying the new domain.
         :rtype: OdooQuery
         """
-        _logger.debug(
-            "Updating query domain for model=%s domain=%s", self.model_name, domain
-        )
         query = self._clone()
         query._domain = DomainExpression.normalize(domain)
         return query
@@ -170,7 +144,6 @@ class OdooQuery:
         :return: A cloned query carrying the requested limit.
         :rtype: OdooQuery
         """
-        _logger.debug("Applying limit=%s to model=%s", limit, self.model_name)
         query = self._clone()
         query._limit = limit
         return query
@@ -186,7 +159,6 @@ class OdooQuery:
         :return: A cloned query carrying the requested offset.
         :rtype: OdooQuery
         """
-        _logger.debug("Applying offset=%s to model=%s", offset, self.model_name)
         query = self._clone()
         query._offset = offset
         return query
@@ -202,7 +174,6 @@ class OdooQuery:
         :return: A cloned query carrying the requested order clause.
         :rtype: OdooQuery
         """
-        _logger.debug("Applying order=%s to model=%s", order, self.model_name)
         query = self._clone()
         query._order = order
         return query
@@ -219,7 +190,6 @@ class OdooQuery:
         :return: A cloned query bound to a derived environment.
         :rtype: OdooQuery
         """
-        _logger.debug("Applying context to model=%s", self.model_name)
         query = self._clone()
         query._env = query._env.with_context(context)
         return query
@@ -234,13 +204,7 @@ class OdooQuery:
         :return: Matching record identifiers in server order.
         :rtype: List[int]
         """
-        serialized_domain = self._domain.serialize()
-        _logger.debug(
-            "Executing search on model=%s domain=%s",
-            self.model_name,
-            serialized_domain,
-        )
-        return self._search_recordset("search_ids")
+        return self._recordset().search_ids(self._domain, **self._search_options())
 
     def read(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Execute raw `search_read` semantics for the current query state.
@@ -254,14 +218,11 @@ class OdooQuery:
         :return: Raw Odoo row dictionaries.
         :rtype: List[Record]
         """
-        serialized_domain = self._domain.serialize()
-        _logger.debug(
-            "Executing search_read on model=%s domain=%s fields=%s",
-            self.model_name,
-            serialized_domain,
-            fields,
+        return self._recordset().search_read(
+            self._domain,
+            fields=fields,
+            **self._search_options(),
         )
-        return self._search_recordset("search_read", fields=fields)
 
     def read_adapted(self, fields: Optional[List[str]] = None) -> List[Record]:
         """Execute adapted `search_read` semantics for the current query state.
@@ -274,14 +235,11 @@ class OdooQuery:
         :return: Adapted record dictionaries produced by the shared field layer.
         :rtype: List[Record]
         """
-        serialized_domain = self._domain.serialize()
-        _logger.debug(
-            "Executing adapted search_read on model=%s domain=%s fields=%s",
-            self.model_name,
-            serialized_domain,
-            fields,
+        return self._recordset().search_read_adapted(
+            self._domain,
+            fields=fields,
+            **self._search_options(),
         )
-        return self._search_recordset("search_read_adapted", fields=fields)
 
     def write(self, values: Dict[str, Any]) -> bool:
         """Search for matching records and update them.
@@ -295,10 +253,11 @@ class OdooQuery:
         :return: ``True`` when Odoo reports a successful update.
         :rtype: bool
         """
-        _logger.debug(
-            "Executing query write on model=%s domain=%s", self.model_name, self._domain
+        return self._recordset().search_write(
+            self._domain,
+            values,
+            **self._search_options(),
         )
-        return self._search_recordset("search_write", values)
 
     def unlink(self) -> bool:
         """Search for matching records and delete them.
@@ -310,12 +269,10 @@ class OdooQuery:
         :return: ``True`` when Odoo reports a successful delete.
         :rtype: bool
         """
-        _logger.debug(
-            "Executing query unlink on model=%s domain=%s",
-            self.model_name,
+        return self._recordset().search_unlink(
             self._domain,
+            **self._search_options(),
         )
-        return self._search_recordset("search_unlink")
 
     def count(self) -> int:
         """Execute `search_count` for the current query state.
@@ -327,10 +284,4 @@ class OdooQuery:
         :return: Number of records matching the current query state.
         :rtype: int
         """
-        serialized_domain = self._domain.serialize()
-        _logger.debug(
-            "Executing search_count on model=%s domain=%s",
-            self.model_name,
-            serialized_domain,
-        )
         return self._recordset().search_count(self._domain)
