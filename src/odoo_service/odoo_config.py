@@ -21,6 +21,22 @@ DEFAULT_CONFIG_LOCATIONS = (
 
 @dataclass(frozen=True)
 class OdooConnectionSettings:
+    """Hold resolved connection settings for constructing the default client.
+
+    This value object is necessary because the client can source configuration from
+    explicit arguments, environment variables, and INI files, but the executor only
+    needs one validated set of concrete connection strings.
+
+    :param url: Base URL of the Odoo server.
+    :type url: str
+    :param db: Database name to authenticate against.
+    :type db: str
+    :param username: Username used for authentication.
+    :type username: str
+    :param password: Password or API key used for authentication.
+    :type password: str
+    """
+
     url: str
     db: str
     username: str
@@ -36,6 +52,25 @@ class OdooConnectionSettings:
         password: Optional[str] = None,
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
+        """Resolve connection settings from explicit, environment, and file sources.
+
+        This factory is necessary because the client supports multiple configuration
+        channels and must apply one predictable precedence order before validation.
+
+        :param url: Explicit URL override, defaults to None.
+        :type url: Optional[str]
+        :param db: Explicit database override, defaults to None.
+        :type db: Optional[str]
+        :param username: Explicit username override, defaults to None.
+        :type username: Optional[str]
+        :param password: Explicit password override, defaults to None.
+        :type password: Optional[str]
+        :param config_path: Optional INI file path override, defaults to None.
+        :type config_path: Optional[str]
+        :raises ValueError: Raised when any required setting remains unresolved.
+        :return: Fully resolved connection settings.
+        :rtype: OdooConnectionSettings
+        """
         file_values = _load_file_values(config_path)
         environment_values = _load_environment_values()
         # Prefer explicit `None` checks so callers can pass empty strings
@@ -74,6 +109,17 @@ class OdooConnectionSettings:
 
 
 def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
+    """Load connection settings from the selected INI file, if one exists.
+
+    This helper is necessary so file-based configuration stays isolated from source
+    precedence logic and can return an empty mapping when no valid file applies.
+
+    :param config_path: Explicit or environment-provided config path, defaults to
+        None.
+    :type config_path: Optional[str]
+    :return: Connection values loaded from the INI file.
+    :rtype: dict[str, str]
+    """
     parser = configparser.ConfigParser()
     selected_path = _resolve_config_path(
         config_path or os.environ.get(DEFAULT_CONFIG_ENV_VAR)
@@ -94,6 +140,14 @@ def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
 
 
 def _load_environment_values() -> dict[str, Optional[str]]:
+    """Load connection settings from the configured environment variables.
+
+    This helper is necessary because environment values participate in the supported
+    configuration precedence order for client construction.
+
+    :return: Environment-derived connection values keyed by setting name.
+    :rtype: dict[str, Optional[str]]
+    """
     return {
         key: os.environ.get(environment_variable)
         for key, environment_variable in CONNECTION_ENV_VARS.items()
@@ -101,6 +155,17 @@ def _load_environment_values() -> dict[str, Optional[str]]:
 
 
 def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
+    """Resolve the effective INI file path from explicit and default locations.
+
+    This helper is necessary because callers may provide relative paths, absolute
+    paths, or rely on default search locations, and only existing files should be
+    returned to the loader.
+
+    :param config_path: Explicit config path to resolve, defaults to None.
+    :type config_path: Optional[str]
+    :return: Absolute path to an existing config file, or None when none applies.
+    :rtype: Optional[str]
+    """
     if config_path:
         expanded_path = Path(config_path).expanduser()
         if expanded_path.is_absolute():
@@ -120,6 +185,17 @@ def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
 
 
 def _resolve_relative_to_invoking_script(config_path: Path) -> Optional[str]:
+    """Resolve a relative config path against the invoking script directory.
+
+    This helper is necessary because consumers often run scripts from different
+    working directories, but still expect a relative config path beside the script to
+    resolve predictably.
+
+    :param config_path: Relative path provided by the caller.
+    :type config_path: Path
+    :return: Absolute path to an existing script-relative config file, or None.
+    :rtype: Optional[str]
+    """
     main_module = sys.modules.get("__main__")
     main_file = getattr(main_module, "__file__", None)
     if not main_file:

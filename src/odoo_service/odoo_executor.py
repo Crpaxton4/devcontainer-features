@@ -6,18 +6,31 @@ _logger = logging.getLogger(__name__)
 
 
 class OdooExecutor(ABC):
-    """Executor interface shared by model and query objects.
+    """Define the minimal execution contract shared by SDK facade objects.
 
-    Provide a concrete `execute` method that raises `NotImplementedError` so
-    subclasses explicitly implement behavior. This avoids relying solely on
-    the `@abstractmethod` decorator which can be removed by mutation operators
-    and lead to misleading test results.
+    The executor interface is necessary because models, queries, clients, and test
+    doubles all need one stable way to issue Odoo operations without depending on a
+    specific transport implementation.
     """
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Execute a method on an Odoo model. Subclasses must override.
+        """Execute one method on an Odoo model.
 
-        Raises `NotImplementedError` when not implemented by the concrete
-        executor.
+        The base implementation exists to make the abstract contract explicit even
+        under mutation testing. Concrete executors must override it with real
+        transport behavior.
+
+        :param model: Name of the Odoo model to call.
+        :type model: str
+        :param method: Name of the method to execute.
+        :type method: str
+        :param args: Positional arguments to pass to Odoo.
+        :type args: Any
+        :param kwargs: Keyword arguments to pass to Odoo.
+        :type kwargs: Any
+        :raises NotImplementedError: Raised when a subclass does not provide a
+            concrete implementation.
+        :return: The executor-specific result.
+        :rtype: Any
         """
         raise NotImplementedError("Subclasses must implement `execute`")

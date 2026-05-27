@@ -12,7 +12,22 @@ if TYPE_CHECKING:
 
 
 class OdooEnv:
-    """Thin environment root for executor access, metadata, and context state."""
+    """Own shared executor, context, and metadata state for one Odoo runtime boundary.
+
+    The environment is the internal root of the recordset-first architecture. It is
+    necessary because context propagation, metadata caching, and model binding must
+    live in one reusable object instead of being recomputed separately by model,
+    query, and recordset compatibility layers.
+
+    :param executor: Executor used to issue Odoo calls for this environment.
+    :type executor: OdooExecutor
+    :param context: Initial Odoo context values to copy into the environment,
+        defaults to None.
+    :type context: Optional[Dict[str, Any]]
+    :param metadata_cache: Existing metadata cache to share with derived
+        environments, defaults to None.
+    :type metadata_cache: Optional[MetadataCache]
+    """
 
     def __init__(
         self,
@@ -20,6 +35,23 @@ class OdooEnv:
         context: Optional[Dict[str, Any]] = None,
         metadata_cache: Optional[MetadataCache] = None,
     ):
+        """Initialize an environment with executor, context, and cache ownership.
+
+        This constructor is necessary because all recordset and compatibility flows
+        need one place to anchor execution policy, cached metadata, and immutable-ish
+        context derivation.
+
+        :param executor: Executor used to issue Odoo calls for this environment.
+        :type executor: OdooExecutor
+        :param context: Initial Odoo context values to copy into the environment,
+            defaults to None.
+        :type context: Optional[Dict[str, Any]]
+        :param metadata_cache: Existing metadata cache to share with derived
+            environments, defaults to None.
+        :type metadata_cache: Optional[MetadataCache]
+        :return: None.
+        :rtype: None
+        """
         self._executor = executor
         self._context: Dict[str, Any] = (
             deepcopy(context) if context is not None else {}
@@ -28,21 +60,53 @@ class OdooEnv:
 
     @property
     def executor(self) -> OdooExecutor:
-        """Returns the executor that backs this environment."""
+        """Expose the executor bound to this environment.
+
+        This property is necessary because recordsets and model proxies delegate
+        actual transport work through the environment rather than storing their own
+        independent executor state.
+
+        :return: Executor that backs this environment.
+        :rtype: OdooExecutor
+        """
         return self._executor
 
     @property
     def context(self) -> Dict[str, Any]:
-        """Returns a defensive copy of the current Odoo context."""
+        """Return a defensive copy of the current Odoo context.
+
+        Returning a copy is necessary so callers can inspect context safely without
+        mutating the environment's shared runtime state.
+
+        :return: Copied Odoo context mapping.
+        :rtype: Dict[str, Any]
+        """
         return deepcopy(self._context)
 
     @property
     def metadata_cache(self) -> MetadataCache:
-        """Returns the shared metadata cache for this runtime boundary."""
+        """Expose the shared metadata cache for this runtime boundary.
+
+        This property is necessary so advanced internal flows can coordinate cache
+        reuse and invalidation without bypassing the environment abstraction.
+
+        :return: Metadata cache shared by related environments.
+        :rtype: MetadataCache
+        """
         return self._metadata_cache
 
     def with_context(self, context: Dict[str, Any]) -> "OdooEnv":
-        """Returns a derived environment with merged context values."""
+        """Create a derived environment with merged context values.
+
+        This method is necessary because Odoo context is request-scoped, but callers
+        need to fork that state without mutating the root environment shared by other
+        model, query, or recordset objects.
+
+        :param context: Additional context keys to merge into the current state.
+        :type context: Dict[str, Any]
+        :return: A new environment sharing the same executor and metadata cache.
+        :rtype: OdooEnv
+        """
         merged = deepcopy(self._context)
         merged.update(deepcopy(context))
         return OdooEnv(
@@ -52,7 +116,17 @@ class OdooEnv:
         )
 
     def clear_metadata_cache(self, model_name: Optional[str] = None) -> None:
-        """Clears cached metadata for the current runtime boundary."""
+        """Clear cached metadata for this runtime boundary.
+
+        This method is necessary when callers know `fields_get` results may have
+        changed and must invalidate cached metadata either globally or for one model.
+
+        :param model_name: Model whose cached metadata should be removed, or None to
+            clear all cached metadata, defaults to None.
+        :type model_name: Optional[str]
+        :return: None.
+        :rtype: None
+        """
         self._metadata_cache.clear(model_name=model_name)
 
     def get_field_metadata(
@@ -63,7 +137,25 @@ class OdooEnv:
         *,
         refresh: bool = False,
     ) -> Dict[str, Any]:
-        """Fetches and caches raw fields_get metadata for a model."""
+        """Fetch and cache raw `fields_get` metadata for one model.
+
+        This method is necessary because metadata-driven behaviors such as field
+        adaptation and x2many normalization require a single shared loading and cache
+        boundary instead of ad hoc `fields_get` calls scattered across the codebase.
+
+        :param model_name: Name of the Odoo model whose metadata is requested.
+        :type model_name: str
+        :param fields: Optional subset of field names to request, defaults to None.
+        :type fields: Optional[Sequence[str]]
+        :param attributes: Optional subset of metadata attributes to request,
+            defaults to None.
+        :type attributes: Optional[Sequence[str]]
+        :param refresh: When True, bypass the cached entry and load fresh metadata,
+            defaults to False.
+        :type refresh: bool
+        :return: Raw metadata keyed by field name.
+        :rtype: Dict[str, Any]
+        """
         context = self.context
         kwargs: Dict[str, Any] = {}
         if fields is not None:
@@ -83,7 +175,16 @@ class OdooEnv:
         )
 
     def __getitem__(self, model_name: str) -> OdooModel:
-        """Returns a model proxy anchored to this environment's executor."""
+        """Return a model proxy anchored to this environment.
+
+        This convenience is necessary so env-first internal flows can resolve model
+        proxies without routing back through the public client facade.
+
+        :param model_name: Name of the Odoo model to bind.
+        :type model_name: str
+        :return: Model proxy bound to this environment.
+        :rtype: OdooModel
+        """
         from .odoo_model import OdooModel
 
         return OdooModel(self._executor, model_name, env=self)
@@ -93,7 +194,20 @@ class OdooEnv:
         model_name: str,
         ids: Union[int, Sequence[int]] = (),
     ) -> OdooRecordset:
-        """Returns a recordset bound to this environment and model."""
+        """Return a recordset bound to this environment and model.
+
+        This factory is necessary because recordsets are the architectural center of
+        the SDK, and callers need one canonical way to bind ids, model identity, and
+        shared environment state together.
+
+        :param model_name: Name of the Odoo model the recordset targets.
+        :type model_name: str
+        :param ids: Record identifier or ordered identifiers to bind, defaults to an
+            empty recordset.
+        :type ids: Union[int, Sequence[int]]
+        :return: Recordset bound to the requested model and ids.
+        :rtype: OdooRecordset
+        """
         from .odoo_recordset import OdooRecordset
 
         return OdooRecordset(self, model_name, ids)
