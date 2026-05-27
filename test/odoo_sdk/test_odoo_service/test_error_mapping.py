@@ -7,13 +7,12 @@ from odoo_sdk.odoo_service import (
     OdooTransportError,
     OdooValidationError,
 )
-from odoo_sdk.odoo_service._error_mapping import (
+from odoo_sdk.odoo_service.errors import (
     map_authentication_failure,
     map_authentication_fault,
     map_fault,
     map_transport_error,
 )
-
 
 class TestErrorMapping(unittest.TestCase):
     def test_map_authentication_failure_sets_auth_operation(self) -> None:
