@@ -4,6 +4,9 @@
 
 Implement the minimum scale-phase changes needed to make the SDK intentionally extensible and operationally robust by adding plugin hooks, optional typed adapters for stable internal models, execution policy hooks for tracing and retry behavior, and a documented boundary for any future async facade.
 
+Baseline contract
+- [Phase C Extensibility Contract](./phase-c/phase-c-extensibility-contract.md)
+
 ## PRD-Ready Context
 
 ### Problem statement
@@ -12,6 +15,8 @@ Phase B makes the SDK semantically useful, but Phase B still assumes one dominan
 
 ### Desired outcome
 
+- A written Phase C extensibility contract defines what later Phase C work may
+  add without reopening the recordset-first architecture.
 - Consumers and maintainers have a narrow, documented plugin surface for model-specific behavior.
 - Stable internal model families can opt into typed adapters without turning the whole SDK into a code-generated system.
 - Execution policies such as tracing, retry, timeout control, and richer telemetry have a clear hook boundary.
@@ -60,19 +65,22 @@ Goal
 - Define the exact Phase C contract before extensibility and operational hooks expand the surface area.
 
 Likely touch points
+- `docs/implementation/phase-c/phase-c-extensibility-contract.md`
 - `docs/odoo-sdk-architecture-plan.md`
 - `docs/odoo-sdk-design-patterns.md`
-- `docs/implementation/phase-b-implementation-checklist.md`
-- New Phase C modules and tests
+- `docs/implementation/phase-a/phase-a-architectural-contract.md`
+- `docs/implementation/phase-b/phase-b-semantic-growth-contract.md`
+
 
 Checklist
+- [ ] Create and adopt a dedicated Phase C extensibility contract as the review baseline for C1-C7.
 - [ ] Confirm the exact Phase C scope: plugin hooks, optional typed adapters, execution policy hooks, and async boundary evaluation.
-- [ ] Confirm the Phase B prerequisites that must exist before Phase C starts.
+- [ ] Confirm the Phase A and Phase B prerequisites that must exist before Phase C starts: recordset-first internals, centralized domain handling, metadata caching, field adaptation seams, and explicit error-mapping boundaries.
 - [ ] Confirm that the synchronous public facade remains the default path.
 - [ ] Confirm which concerns remain out of scope even in Phase C.
 
 Done when
-- The implementation team can state precisely what Phase C adds and what is still intentionally deferred.
+- The implementation team can evaluate every later Phase C task against one explicit contract document without reopening the core architecture direction.
 
 ## C1 - Define Plugin Contracts and Extension Boundaries
 

@@ -103,34 +103,37 @@ Layer recommendations
 | Metadata | In-memory `fields_get` cache with explicit invalidation | Optional SQLite metadata cache | Memory cache is enough early; SQLite only matters for heavy reuse or offline tooling |
 | Context and identity | `OdooEnv` plus immutable `OdooRecordset` | Context passed ad hoc in each method | First-class env and recordset objects support `with_context` and future auth variants |
 | Value adaptation | Dynamic field adapters based on metadata | Raw dict responses everywhere | Adapters add complexity but are mandatory for ORM-like relations |
-| Extension model | Recordset-centered semantic seams in Phase B, plugin hooks plus protocols in Phase C | `CommandDispatcher`-only extensions | Deferring plugin seams until Phase C keeps Phase B focused on shared semantic boundaries |
+| Extension model | Recordset-centered semantic seams in Phase B, then narrow plugin contracts plus centralized plugin-aware wiring in Phase C | `CommandDispatcher`-only extensions | Deferring plugin seams until Phase C keeps Phase B focused on shared semantic boundaries while keeping Phase C additive to the recordset-first core |
 | Build and test | Keep `unittest`, Hypothesis, coverage, and local scripts such as `uv` tasks and Cosmic Ray helpers | Mock-only tests | Local integration checks against a live Odoo instance still catch version drift without introducing CI yet |
-| Observability | Structured logging now, optional OpenTelemetry hooks in Phase C | Logging only | Logging is enough now; later hooks keep future instrumentation cheap without widening Phase B |
+| Observability | Structured logging now, local execution-policy hooks in Phase C, hosted observability deferred | Logging only | Logging is enough now; later hooks keep future instrumentation cheap without widening Phase B or requiring hosted services |
 
 Recommended package layout evolution
 
 ```text
 src/
-  core/
-    errors.py
-    session.py
-    transport.py
-  orm/
-    context.py
-    domain.py
-    model_registry.py
-    recordset.py
-    fields.py
-    commands.py
-  plugins/
-    hooks.py
-    protocols.py
-  compatibility/
-    legacy_query.py
-    legacy_model.py
+    command_registry/
+        command_registry.py
+    odoo_service/
+        errors.py
+        odoo_client.py
+        odoo_env.py
+        odoo_executor.py
+        odoo_rpc_executor.py
+        domain_expression.py
+        odoo_recordset.py
+        field_adapters.py
+        metadata_cache.py
+        x2many_commands.py
+        plugins/
+            contracts.py
+            registry.py
+        adapters/
+            registry.py
+            stable_models.py
+        execution_policy.py
 ```
 
-Phase B is primarily concerned with the shared semantic boundaries under `core/`, `orm/`, and `compatibility/`. A `plugins/` package remains a Phase C concern rather than a Phase B deliverable.
+Phase B is primarily concerned with the shared semantic boundaries already living under `odoo_sdk.odoo_service`. Phase C should extend that existing package with narrow internal plugin, adapter, and policy modules rather than forcing a package rename or a second public architecture.
 
 ## System Architecture
 > All Mermaid diagrams with detailed explanations.
@@ -408,18 +411,33 @@ Migration path
 
 ### Phase C - Scale
 
+Implementation baseline
+- [Phase C Extensibility Contract](./implementation/phase-c/phase-c-extensibility-contract.md)
+
 Implementation checklist
 - [Phase C Implementation Checklist](./implementation/phase-c-implementation-checklist.md)
 
 Scope
-- Add plugin hooks for model-specific behavior and consumer extensions.
-- Add optional typed adapters for stable internal models.
-- Add tracing hooks, retry policy, timeout configuration, and richer telemetry.
-- Evaluate a separate async facade rather than mutating the sync API in place.
+- Add narrow plugin contracts and centralized plugin-aware wiring for model-specific behavior and targeted extensions.
+- Add optional typed adapters for selected stable internal models without replacing the default dynamic path.
+- Add tracing, retry, timeout, and local telemetry through a session or executor-adjacent execution-policy boundary.
+- Evaluate a separate async facade and record an explicit outcome rather than mutating the sync API in place.
+
+Deferred in Phase C
+- No forced async migration or mixed sync/async facade.
+- No broad code generation across the Odoo model surface.
+- No hosted observability rollout or remote plugin infrastructure.
+- No CI, package publishing, or release automation work.
+- No redesign of the recordset-first core.
+
+Guardrails
+- Keep the synchronous facade as the default supported execution path throughout Phase C.
+- Preserve `OdooClient`, `OdooEnv`, `DomainExpression`, `OdooRecordset`, `OdooModel`, `OdooQuery`, `OdooExecutor`, and `CommandDispatcher` as usable public surfaces.
+- Keep validation local-only and defer hosted observability, CI exit gates, packaging automation, and release automation.
 
 What changes from Phase B
-- Extensibility becomes intentional rather than incidental.
-- Operational concerns become first-class.
+- Extensibility becomes intentional through contract-guarded seams rather than incidental internal override points.
+- Operational concerns become first-class through one defined policy boundary.
 
 Why it is needed
 - Once multiple consumers depend on the SDK, stability, observability, and targeted extension points matter more than raw feature count.

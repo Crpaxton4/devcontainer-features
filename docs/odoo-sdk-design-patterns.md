@@ -7,7 +7,9 @@ This guide applies only patterns that fit the current SDK shape and do not requi
 Selection rules
 - Prefer patterns that already match the current code.
 - Prefer internal patterns over public API expansion.
+- Prefer narrow typed extension seams over open-ended interception points.
 - Reject patterns that add framework-like machinery without a concrete pressure point.
+- Prefer additive, local-testable seams over framework-style extension systems.
 - Keep the architecture local-tooling friendly and easy to test.
 
 ## Patterns That Apply Directly
@@ -20,20 +22,21 @@ Selection rules
 | Proxy | Already in use | `OdooModel` | Acts as a client-side stand-in for a remote Odoo model and forwards calls to the executor | None |
 | Builder | Already in use, lightweight | `OdooQuery` | Builds search options step by step using an immutable fluent interface | None |
 | Factory Method | Already in use, lightweight | `CommandDispatcher.register()` factories and `OdooClient.__getitem__()` model creation | Centralizes object creation for commands and model proxies without exposing construction details to consumers | None |
-| Adapter | Now in use internally | Internal field and value translation layer around `fields_get`, read-side adaptation, and x2many write serialization | Hides Odoo wire formats such as many2one tuples, x2many command tuples, and date strings behind explicit semantic boundaries without widening the top-level API | Internal only |
-| Decorator | Optional later | Wrapper around `OdooExecutor` or a future session object | Adds logging, timing, retry, caching, or redaction behavior without altering the executor interface | Internal only |
+| Registry | Phase C addition | Narrow plugin and typed-adapter registration | Keeps extension discovery explicit, inspectable, and resettable for local tests without creating framework-style auto-discovery | Internal only |
+| Adapter | Now in use internally, expands selectively in Phase C | Internal field and value translation layer around `fields_get`, read-side adaptation, x2many write serialization, and optional typed adapters for selected stable models | Hides Odoo wire formats and enables selective typed ergonomics without widening the top-level API or replacing the dynamic model | Internal only |
+| Decorator | Approved Phase C boundary | Wrapper around `OdooExecutor` or a future session or policy boundary | Adds tracing, timing, retry, timeout, telemetry, or redaction behavior without altering the executor interface | Internal only |
 
-## Phase A Compatibility Guidance
+## Current Compatibility Guidance
 
-Phase A keeps the public facade story stable while moving the implementation center of gravity.
+The public facade story stays stable while the implementation center of gravity remains recordset-first.
 
 - `OdooClient` remains the facade.
-- `OdooEnv` becomes the owner of execution context.
-- `DomainExpression` becomes the canonical domain normalization boundary.
-- `OdooRecordset` becomes the identity-bearing core.
+- `OdooEnv` remains the owner of execution context.
+- `DomainExpression` remains the canonical domain normalization boundary.
+- `OdooRecordset` remains the identity-bearing core.
 - `OdooModel` remains a proxy and compatibility wrapper.
 - `OdooQuery` remains an immutable builder-shaped compatibility shim, not the long-term architectural center.
-- `OdooEnv`, `DomainExpression`, and `OdooRecordset` remain internal Phase A primitives rather than supported top-level public exports.
+- `OdooEnv`, `DomainExpression`, and `OdooRecordset` are public exports in the recordset-first API.
 
 ## How To Use These Patterns Here
 
@@ -94,6 +97,19 @@ Design rule
 - Continue constructing command instances through registered factories.
 - Continue constructing model proxies in one place rather than scattering proxy creation across consumers.
 
+### Registry
+
+Phase C registries should stay narrow and explicit.
+
+Good fit
+- Plugin contract registration for documented hook categories.
+- Typed-adapter selection for a small, documented stable model set.
+
+Design rule
+- Keep registration explicit, local-runtime friendly, and inspectable in tests.
+- Use one registry path shared by recordset-first and compatibility surfaces.
+- Do not turn registries into automatic third-party discovery or a general plugin framework.
+
 ### Adapter
 
 This pattern is now used internally in Phase B.
@@ -106,6 +122,7 @@ Good fit
 Design rule
 - Keep read-side adaptation and write-side x2many serialization behind shared metadata-driven boundaries owned by recordsets and envs.
 - Keep the helper API small and explicit; do not change the high-level entry points just to introduce adapters.
+- Keep Phase C typed adapters opt-in and selective; when no typed adapter applies, the default dynamic behavior remains the supported path.
 
 ### Decorator
 
@@ -119,6 +136,17 @@ Good fit
 Design rule
 - Wrap executors or sessions when a concern appears in more than one place.
 - Do not push logging or retry branches down into every model or query method.
+- Keep Phase C execution policy hooks for tracing, retry, timeout, and local telemetry on an executor or session-adjacent boundary rather than in `OdooClient`, `OdooModel`, or `OdooQuery`.
+- Keep the synchronous facade as the default supported path; any async facade remains a later separate decision.
+
+### Narrow Plugin Contracts
+
+Phase C plugin work should use narrow, typed extension seams rather than an open event bus.
+
+Design rule
+- Allow plugins only at existing model-specific adaptation, selection, or serialization seams.
+- Disallow transport replacement, arbitrary `OdooEnv` mutation, domain serialization ownership, and recordset identity takeover.
+- Fail fast when a plugin does not satisfy the documented contract instead of silently ignoring incompatible behavior.
 
 ## Patterns To Avoid For Now
 
@@ -126,7 +154,7 @@ Design rule
 |---|---|
 | Abstract Factory | One executor family and one main facade do not justify a larger product-family abstraction yet |
 | Mediator | `CommandDispatcher` is a simple registry, not a coordination hub with competing peers |
-| Observer | The SDK has no event model that needs subscriptions |
+| Observer | The SDK still does not need a general event model; Phase C should use narrow plugin contracts rather than broad subscriptions |
 | Singleton | Conflicts with explicit dependency injection and makes testing harder |
 | Visitor | There is no stable object graph or AST worth visiting yet |
 | Composite | A future domain object may use it, but introducing it now would force a larger public domain redesign |
@@ -148,4 +176,5 @@ Design rule
 3. Keep `OdooQuery` immutable and builder-like instead of multiplying model helper methods.
 4. Add adapters before adding more convenience methods for raw XML-RPC payload shapes.
 5. Add decorators only for concerns that clearly repeat, such as logging, retry, or profiling.
-6. Prefer constructor injection and registered factories over global state.
+6. Use registries only when they keep one canonical plugin or adapter path and can be reset cleanly in tests.
+7. Prefer constructor injection and registered factories over global state.
