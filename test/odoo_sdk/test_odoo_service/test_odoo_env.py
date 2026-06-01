@@ -277,16 +277,16 @@ class TestOdooEnv(unittest.TestCase):
         self.assertEqual(self.executor.execute.call_count, 4)
 
     @given(strategies.text())
-    def test_model_lookup_returns_model_bound_to_same_executor(
+    def test_model_lookup_returns_model_bound_recordset(
         self, model_name: str
     ) -> None:
         env = OdooEnv(self.executor, {"lang": "en_US"})
 
         model = env[model_name]
 
-        self.assertIsInstance(model, OdooModel)
-        self.assertIs(model.client, self.executor)
-        self.assertEqual(model.name, model_name)
+        self.assertIsInstance(model, OdooRecordset)
+        self.assertEqual(model.model_name, model_name)
+        self.assertEqual(model.ids, ())
         self.assertIs(model.env, env)
 
     @given(strategies.text(), strategies.lists(strategies.integers(), max_size=4))

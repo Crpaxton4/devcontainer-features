@@ -30,6 +30,129 @@ class TestOdooRecordset(unittest.TestCase):
         self.assertEqual(recordset.model_name, "res.partner")
         self.assertEqual(recordset.ids, (3, 1, 2))
 
+    def test_len_and_bool_follow_bound_identity(self) -> None:
+        empty = OdooRecordset(self.env, "res.partner", [])
+        populated = OdooRecordset(self.env, "res.partner", [3, 1, 2])
+
+        self.assertEqual(len(empty), 0)
+        self.assertFalse(empty)
+        self.assertEqual(len(populated), 3)
+        self.assertTrue(populated)
+
+    def test_ensure_one_returns_same_singleton_recordset(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.ensure_one()
+
+        self.assertIs(result, recordset)
+
+    def test_ensure_one_raises_on_empty_or_multi_recordsets(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected singleton"):
+            OdooRecordset(self.env, "res.partner", []).ensure_one()
+
+        with self.assertRaisesRegex(ValueError, "Expected singleton"):
+            OdooRecordset(self.env, "res.partner", [7, 8]).ensure_one()
+
+    def test_id_returns_singleton_identifier(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        self.assertEqual(recordset.id, 7)
+
+    def test_id_raises_when_recordset_is_not_singleton(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected singleton"):
+            _ = OdooRecordset(self.env, "res.partner", [7, 8]).id
+
+    def test_iteration_yields_singleton_recordsets_in_order(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [3, 1, 2])
+
+        result = list(recordset)
+
+        self.assertEqual([item.ids for item in result], [(3,), (1,), (2,)])
+        self.assertTrue(all(isinstance(item, OdooRecordset) for item in result))
+        self.assertTrue(all(item.env is self.env for item in result))
+        self.assertTrue(all(item.model_name == "res.partner" for item in result))
+
+    def test_integer_index_returns_singleton_recordset(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [3, 1, 2])
+
+        result = recordset[1]
+
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (1,))
+        self.assertIs(result.env, self.env)
+
+    def test_slice_returns_same_model_recordset_subset(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [3, 1, 2, 9])
+
+        result = recordset[1:3]
+
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (1, 2))
+        self.assertIs(result.env, self.env)
+        self.assertEqual(result.model_name, "res.partner")
+
+    def test_integer_index_raises_index_error_when_out_of_range(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        with self.assertRaises(IndexError):
+            _ = recordset[0]
+
+    def test_scalar_field_access_requires_singleton(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected singleton"):
+            _ = OdooRecordset(self.env, "res.partner", [7, 8]).name
+
+    def test_scalar_field_access_prefetches_across_iteration_and_caches(self) -> None:
+        self.executor.execute.side_effect = [
+            {"name": {"type": "char"}},
+            [{"id": 7, "name": "Acme"}, {"id": 8, "name": "Beta"}],
+        ]
+        first, second = list(OdooRecordset(self.env, "res.partner", [7, 8]))
+
+        self.assertEqual(first.name, "Acme")
+        self.assertEqual(second.name, "Beta")
+        self.assertEqual(
+            self.executor.execute.call_args_list,
+            [
+                call(
+                    "res.partner",
+                    "fields_get",
+                    allfields=["name"],
+                    attributes=["type", "relation"],
+                    context={"lang": "en_US"},
+                ),
+                call(
+                    "res.partner",
+                    "read",
+                    [7, 8],
+                    context={"lang": "en_US"},
+                    fields=["name"],
+                ),
+            ],
+        )
+
+    def test_many2one_field_access_returns_related_recordset(self) -> None:
+        self.executor.execute.side_effect = [
+            {"parent_id": {"type": "many2one", "relation": "res.partner"}},
+            [{"id": 7, "parent_id": [3, "Parent"]}],
+            {"name": {"type": "char"}},
+            [{"id": 3, "name": "Parent"}],
+        ]
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        parent = recordset.parent_id
+
+        self.assertIsInstance(parent, OdooRecordset)
+        self.assertEqual(parent.model_name, "res.partner")
+        self.assertEqual(parent.ids, (3,))
+        self.assertEqual(parent.name, "Parent")
+
+    def test_unknown_attribute_raises_attribute_error(self) -> None:
+        self.executor.execute.return_value = {}
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        with self.assertRaises(AttributeError):
+            _ = recordset.not_a_real_field
+
     def test_read_returns_empty_rows_without_io_for_empty_ids(self) -> None:
         recordset = OdooRecordset(self.env, "res.partner", [])
 

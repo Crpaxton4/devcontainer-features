@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence as SequenceABC
-from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, TypeAlias, Union
+from typing import Any, Dict, Iterator, Optional, Sequence, TYPE_CHECKING, TypeAlias, Union
 
 from .domain_expression import DomainExpression, DomainInput
-from .field_adapters import adapt_record_values
+from .field_adapters import adapt_field_value, adapt_record_values
+from .field_values import RelationCollection, RelationValue
 from .x2many_commands import X2ManyCommand, normalize_x2many_commands
 
 if TYPE_CHECKING:
@@ -35,6 +36,8 @@ class OdooRecordset:
         env: OdooEnv,
         model_name: str,
         ids: Union[int, Sequence[int]] = (),
+        *,
+        prefetch_ids: Union[int, Sequence[int], None] = None,
     ):
         """Initialize a recordset with environment, model, and identity state.
 
@@ -54,6 +57,9 @@ class OdooRecordset:
         self._env = env
         self._model_name = model_name
         self._ids = self._normalize_ids(ids)
+        self._prefetch_ids = self._normalize_ids(
+            self._ids if prefetch_ids is None else prefetch_ids
+        )
 
     @staticmethod
     def _normalize_ids(ids: Union[int, Sequence[int]]) -> tuple[int, ...]:
@@ -107,11 +113,38 @@ class OdooRecordset:
         """
         return self._ids
 
+    @property
+    def id(self) -> int:
+        """Return the singleton identifier carried by this recordset.
+
+        This property is necessary because Odoo-style recordsets expose `id` only for
+        singleton recordsets and treat it as an error on empty or multi-record sets.
+
+        :return: The singleton record id.
+        :rtype: int
+        """
+        return self.ensure_one()._ids[0]
+
+    def ensure_one(self) -> OdooRecordset:
+        """Assert that the recordset is a singleton and return it.
+
+        This method is necessary because many Odoo-style record operations are only
+        valid on one-record recordsets and should fail loudly otherwise.
+
+        :return: The current recordset when it contains exactly one id.
+        :rtype: OdooRecordset
+        :raises ValueError: When the recordset is empty or contains multiple ids.
+        """
+        if len(self._ids) != 1:
+            raise ValueError(f"Expected singleton: {self}")
+        return self
+
     def _derive(
         self,
         ids: Union[int, Sequence[int]] = (),
         *,
         env: OdooEnv | None = None,
+        prefetch_ids: Union[int, Sequence[int], None] = None,
     ) -> OdooRecordset:
         """Create a same-model recordset with optionally new ids or environment.
 
@@ -129,7 +162,171 @@ class OdooRecordset:
             self._env if env is None else env,
             self._model_name,
             ids,
+            prefetch_ids=self._prefetch_ids if prefetch_ids is None else prefetch_ids,
         )
+
+    def __bool__(self) -> bool:
+        """Return whether the recordset contains at least one bound id.
+
+        :return: True when the recordset is non-empty.
+        :rtype: bool
+        """
+        return bool(self._ids)
+
+    def __len__(self) -> int:
+        """Return the number of bound ids in this recordset.
+
+        :return: Count of bound record ids.
+        :rtype: int
+        """
+        return len(self._ids)
+
+    def __iter__(self) -> Iterator[OdooRecordset]:
+        """Iterate over this recordset as singleton recordsets in order.
+
+        :return: Iterator of one-record recordsets.
+        :rtype: Iterator[OdooRecordset]
+        """
+        for record_id in self._ids:
+            yield self._derive((record_id,))
+
+    def __getitem__(self, key: int | slice) -> OdooRecordset:
+        """Return a singleton recordset or sliced subset by positional lookup.
+
+        :param key: Integer index or slice over the bound ids.
+        :type key: int | slice
+        :return: Singleton recordset for integer indexing or subset recordset for a slice.
+        :rtype: OdooRecordset
+        :raises IndexError: Propagated when the integer index is out of range.
+        """
+        if isinstance(key, slice):
+            return self._derive(self._ids[key])
+        return self._derive((self._ids[key],))
+
+    def __getattr__(self, name: str) -> Any:
+        """Resolve singleton field access using metadata and cached values.
+
+        :param name: Field name to resolve lazily.
+        :type name: str
+        :return: Adapted field value or related recordset.
+        :rtype: Any
+        :raises AttributeError: When the name does not describe a model field.
+        """
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            fields=[name],
+            attributes=["type", "relation"],
+        )
+        field_metadata = metadata.get(name)
+        if field_metadata is None:
+            raise AttributeError(
+                f"{type(self).__name__!s} object has no attribute {name!r}"
+            )
+
+        self.ensure_one()
+        return self._get_field_value(name, field_metadata)
+
+    def __repr__(self) -> str:
+        """Return a compact debug representation of the recordset.
+
+        :return: Debug representation containing model name and ids.
+        :rtype: str
+        """
+        return f"{self._model_name}{self._ids!r}"
+
+    def _get_field_value(
+        self,
+        field_name: str,
+        field_metadata: Dict[str, Any],
+    ) -> Any:
+        """Return one lazily loaded field value for the singleton recordset.
+
+        :param field_name: Field name to resolve.
+        :type field_name: str
+        :param field_metadata: Metadata describing the field.
+        :type field_metadata: Dict[str, Any]
+        :return: Adapted field value.
+        :rtype: Any
+        """
+        record_id = self.id
+        found, value = self._env.get_cached_field_value(
+            self._model_name,
+            record_id,
+            field_name,
+        )
+        if found:
+            return value
+
+        ids_to_fetch = self._env.get_missing_field_ids(
+            self._model_name,
+            self._prefetch_ids,
+            field_name,
+        )
+        if ids_to_fetch:
+            rows = self._materialize_records(ids=ids_to_fetch, fields=[field_name])
+            for row in rows:
+                if "id" not in row:
+                    continue
+                adapted_value = self._adapt_field_access_value(
+                    row.get(field_name),
+                    field_metadata,
+                )
+                self._env.cache_record_field_values(
+                    self._model_name,
+                    row["id"],
+                    {field_name: adapted_value},
+                )
+
+        found, value = self._env.get_cached_field_value(
+            self._model_name,
+            record_id,
+            field_name,
+        )
+        if found:
+            return value
+        raise AttributeError(
+            f"{type(self).__name__!s} object has no attribute {field_name!r}"
+        )
+
+    def _adapt_field_access_value(
+        self,
+        value: Any,
+        field_metadata: Dict[str, Any],
+    ) -> Any:
+        """Adapt one field value for singleton dot-access semantics.
+
+        :param value: Raw field value returned by Odoo.
+        :type value: Any
+        :param field_metadata: Metadata describing the field.
+        :type field_metadata: Dict[str, Any]
+        :return: Dot-access value semantics for the field.
+        :rtype: Any
+        """
+        field_type = field_metadata.get("type")
+        relation_model = field_metadata.get("relation")
+
+        if field_type == "many2one" and relation_model:
+            relation = adapt_field_value(value, field_metadata)
+            if relation is None:
+                return self._env.recordset(relation_model)
+            if isinstance(relation, RelationValue):
+                related = self._env.recordset(relation.model_name, relation.id)
+                if relation.label is not None:
+                    self._env.cache_record_field_values(
+                        relation.model_name,
+                        relation.id,
+                        {"display_name": relation.label},
+                    )
+                return related
+            return value
+
+        if field_type in {"one2many", "many2many"} and relation_model:
+            relation = adapt_field_value(value, field_metadata)
+            if isinstance(relation, RelationCollection):
+                return self._env.recordset(relation.model_name, relation.ids)
+            return self._env.recordset(relation_model)
+
+        return adapt_field_value(value, field_metadata)
 
     def _execute(self, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one method on the bound model through the environment executor.
@@ -466,6 +663,52 @@ class OdooRecordset:
             **self._context_kwargs(),
         )
 
+    def create(self, values: Dict[str, Any]) -> int:
+        """Create one record on the bound model.
+
+        This method is necessary because model-bound recordsets are now the primary
+        public entry path and therefore must expose model-level create behavior.
+
+        :param values: Field values for the new record.
+        :type values: Dict[str, Any]
+        :return: Identifier of the created record.
+        :rtype: int
+        """
+        normalized_values = self._normalize_write_values(values)
+        return self._execute(
+            "create",
+            normalized_values,
+            **self._context_kwargs(),
+        )
+
+    def fields_get(
+        self,
+        allfields: Optional[list[str]] = None,
+        attributes: Optional[list[str]] = None,
+        *,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        """Return cached model metadata for the bound model.
+
+        This method is necessary because model-bound recordsets replace model proxies
+        as the main public entry point and must still expose field metadata lookup.
+
+        :param allfields: Optional subset of field names to request.
+        :type allfields: Optional[list[str]]
+        :param attributes: Optional subset of metadata attributes to request.
+        :type attributes: Optional[list[str]]
+        :param refresh: When True, bypass the metadata cache.
+        :type refresh: bool
+        :return: Raw metadata keyed by field name.
+        :rtype: Dict[str, Any]
+        """
+        return self._env.get_field_metadata(
+            self._model_name,
+            fields=allfields,
+            attributes=attributes,
+            refresh=refresh,
+        )
+
     def search_write(
         self,
         domain: DomainInput,
@@ -627,7 +870,7 @@ class OdooRecordset:
         :return: Derived recordset bound to the provided ids.
         :rtype: OdooRecordset
         """
-        return self._derive(ids)
+        return self._derive(ids, prefetch_ids=ids)
 
     def search(
         self,
@@ -656,7 +899,7 @@ class OdooRecordset:
         serialized_domain = DomainExpression.normalize(domain).serialize()
         kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
         ids = self._execute("search", serialized_domain, **kwargs)
-        return self._derive(ids)
+        return self._derive(ids, prefetch_ids=ids)
 
     def with_context(self, context: Dict[str, Any]) -> OdooRecordset:
         """Return a new recordset bound to a derived environment context.

@@ -12,6 +12,7 @@ from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_model import OdooModel
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
+from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
 from odoo_sdk.odoo_service.odoo_rpc_executor import OdooRpcExecutor
 
 
@@ -32,10 +33,12 @@ class TestOdooClientContract(unittest.TestCase):
         self.assertEqual(env.context, {})
         self.assertIsNot(first_env, env)
         self.assertIs(client.env, env)
-        self.assertEqual(model.name, model_name)
-        self.assertIs(model.client, executor)
+        self.assertIsInstance(model, OdooRecordset)
+        self.assertEqual(model.model_name, model_name)
+        self.assertEqual(model.ids, ())
+        self.assertIs(model.env, env)
 
-    def test_client_and_env_models_share_cached_metadata(self) -> None:
+    def test_client_and_env_recordsets_share_cached_metadata(self) -> None:
         executor = Mock(spec=OdooExecutor)
         executor.execute.return_value = {"name": {"type": "char"}}
         client = OdooClient(executor=executor)
@@ -114,7 +117,7 @@ class TestOdooClientContract(unittest.TestCase):
             executor=executor,
         )
 
-        result = client[model_name].read([1], ["name"])
+        result = client[model_name].browse([1]).read(["name"])
 
         self.assertEqual(result, [{"id": 1, "name": "Test"}])
         executor.execute.assert_called_once_with(
@@ -150,7 +153,7 @@ class TestOdooClientContract(unittest.TestCase):
         self.assertIs(caught.exception, error)
 
     @given(strategies.text())
-    def test_client_reuses_cached_model_proxy(self, model_name: str) -> None:
+    def test_client_reuses_cached_model_bound_recordset(self, model_name: str) -> None:
         executor = Mock(spec=OdooExecutor)
         client = OdooClient(executor=executor)
 
@@ -158,6 +161,7 @@ class TestOdooClientContract(unittest.TestCase):
         second_model = client[model_name]
 
         self.assertIs(first_model, second_model)
+        self.assertIsInstance(first_model, OdooRecordset)
 
     def test_client_uid_raises_for_non_rpc_executor(self) -> None:
         client = OdooClient(executor=Mock(spec=OdooExecutor))

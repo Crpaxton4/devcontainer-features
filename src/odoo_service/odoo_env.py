@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from copy import deepcopy
 from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 
@@ -7,7 +8,6 @@ from .metadata_cache import MetadataCache
 from .odoo_executor import OdooExecutor
 
 if TYPE_CHECKING:
-    from .odoo_model import OdooModel
     from .odoo_recordset import OdooRecordset
 
 
@@ -57,6 +57,8 @@ class OdooEnv:
             deepcopy(context) if context is not None else {}
         )
         self._metadata_cache = metadata_cache if metadata_cache is not None else MetadataCache()
+        self._record_value_cache: dict[tuple[str, int], dict[str, Any]] = {}
+        self._record_value_lock = threading.Lock()
 
     @property
     def executor(self) -> OdooExecutor:
@@ -129,6 +131,78 @@ class OdooEnv:
         """
         self._metadata_cache.clear(model_name=model_name)
 
+    def get_missing_field_ids(
+        self,
+        model_name: str,
+        record_ids: Sequence[int],
+        field_name: str,
+    ) -> list[int]:
+        """Return ids that do not yet have a cached value for one field.
+
+        :param model_name: Model whose cached values are being queried.
+        :type model_name: str
+        :param record_ids: Candidate record ids to inspect.
+        :type record_ids: Sequence[int]
+        :param field_name: Field whose cached presence should be checked.
+        :type field_name: str
+        :return: Ordered ids missing the requested field value in cache.
+        :rtype: list[int]
+        """
+        with self._record_value_lock:
+            return [
+                record_id
+                for record_id in record_ids
+                if field_name
+                not in self._record_value_cache.get((model_name, record_id), {})
+            ]
+
+    def get_cached_field_value(
+        self,
+        model_name: str,
+        record_id: int,
+        field_name: str,
+    ) -> tuple[bool, Any]:
+        """Return one cached field value when present.
+
+        :param model_name: Model whose cached values are being queried.
+        :type model_name: str
+        :param record_id: Record id whose cached field value is requested.
+        :type record_id: int
+        :param field_name: Field name to retrieve from cache.
+        :type field_name: str
+        :return: Tuple of cache-hit flag and cached value.
+        :rtype: tuple[bool, Any]
+        """
+        with self._record_value_lock:
+            values = self._record_value_cache.get((model_name, record_id), {})
+            if field_name not in values:
+                return False, None
+            return True, values[field_name]
+
+    def cache_record_field_values(
+        self,
+        model_name: str,
+        record_id: int,
+        values: Dict[str, Any],
+    ) -> None:
+        """Store cached field values for one record.
+
+        :param model_name: Model whose cached values are being updated.
+        :type model_name: str
+        :param record_id: Record id whose values are being updated.
+        :type record_id: int
+        :param values: Field values to cache for the record.
+        :type values: Dict[str, Any]
+        :return: None.
+        :rtype: None
+        """
+        if not values:
+            return
+
+        with self._record_value_lock:
+            cached = self._record_value_cache.setdefault((model_name, record_id), {})
+            cached.update(values)
+
     def get_field_metadata(
         self,
         model_name: str,
@@ -174,20 +248,18 @@ class OdooEnv:
             loader=lambda: self._executor.execute(model_name, "fields_get", **kwargs),
         )
 
-    def __getitem__(self, model_name: str) -> OdooModel:
-        """Return a model proxy anchored to this environment.
+    def __getitem__(self, model_name: str) -> OdooRecordset:
+        """Return an empty model-bound recordset anchored to this environment.
 
-        This convenience is necessary so env-first internal flows can resolve model
-        proxies without routing back through the public client facade.
+        This convenience is necessary because env-first flows and public callers both
+        use Odoo-style `env["model"]` lookup to start from a model-bound recordset.
 
         :param model_name: Name of the Odoo model to bind.
         :type model_name: str
-        :return: Model proxy bound to this environment.
-        :rtype: OdooModel
+        :return: Empty recordset bound to this environment and model.
+        :rtype: OdooRecordset
         """
-        from .odoo_model import OdooModel
-
-        return OdooModel(self._executor, model_name, env=self)
+        return self.recordset(model_name)
 
     def recordset(
         self,

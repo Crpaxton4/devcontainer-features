@@ -303,7 +303,7 @@ class TestOdooModel(unittest.TestCase):
         self.executor.execute.return_value = [{"id": 3, "name": "Demo"}]
         model = OdooEnv(self.executor, {"lang": "en_US"})["res.partner"]
 
-        result = model.read(3, ["name"])
+        result = model.browse(3).read(["name"])
 
         self.assertEqual(result, [{"id": 3, "name": "Demo"}])
         self.executor.execute.assert_called_once_with(
@@ -318,7 +318,7 @@ class TestOdooModel(unittest.TestCase):
         self.executor.execute.return_value = [{"id": 1, "name": "Acme"}]
         model = OdooEnv(self.executor, {"lang": "en_US"})["res.partner"]
 
-        result = model.search_read([("is_company", "=", True)], ["name"])
+        result = model.search_read([("is_company", "=", True)], fields=["name"])
 
         self.assertEqual(result, [{"id": 1, "name": "Acme"}])
         self.executor.execute.assert_called_once_with(

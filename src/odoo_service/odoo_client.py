@@ -1,11 +1,13 @@
 import threading
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .odoo_config import OdooConnectionSettings
 from .odoo_env import OdooEnv
 from .odoo_executor import OdooExecutor
-from .odoo_model import OdooModel
 from .odoo_rpc_executor import OdooRpcExecutor
+
+if TYPE_CHECKING:
+    from .odoo_recordset import OdooRecordset
 
 
 class OdooClient(OdooExecutor):
@@ -85,7 +87,7 @@ class OdooClient(OdooExecutor):
                 settings.password,
             )
         self._env = OdooEnv(self._executor)
-        self._models: Dict[str, OdooModel] = {}
+        self._model_recordsets: Dict[str, OdooRecordset] = {}
         self._lock = threading.Lock()
 
     @property
@@ -134,27 +136,25 @@ class OdooClient(OdooExecutor):
         """
         return self._executor.execute(model, method, *args, **kwargs)
 
-    def __getitem__(self, model_name: str) -> OdooModel:
-        """Return a cached model proxy for one Odoo model name.
+    def __getitem__(self, model_name: str) -> OdooRecordset:
+        """Return a cached model-bound recordset for one Odoo model name.
 
-        This lookup is necessary because the facade acts like a model registry for
-        consumers, and reusing model proxies keeps shared environment state stable
-        across repeated accesses.
+        This lookup is necessary because the client acts like Odoo's env-bound model
+        registry, and the supported high-level contract now starts from empty
+        model-bound recordsets rather than model proxy wrappers.
 
         :param model_name: Name of the Odoo model to access.
         :type model_name: str
-        :return: Cached or newly created model proxy.
-        :rtype: OdooModel
+        :return: Cached or newly created empty recordset bound to the model.
+        :rtype: OdooRecordset
         """
-        if model_name not in self._models:
+        if model_name not in self._model_recordsets:
             with self._lock:
-                if model_name not in self._models:
-                    self._models[model_name] = OdooModel(
-                        self._executor,
-                        model_name,
-                        env=self._env,
+                if model_name not in self._model_recordsets:
+                    self._model_recordsets[model_name] = self._env.recordset(
+                        model_name
                     )
-        return self._models[model_name]
+        return self._model_recordsets[model_name]
 
     def __iter__(self) -> None:
         """Reject iteration over the client facade.

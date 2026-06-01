@@ -1,14 +1,15 @@
 """Public Odoo service exports.
 
-Phase A preserves the current service exports as the supported public
-surface. `OdooEnv`, `DomainExpression`, and `OdooRecordset` are part of
-the internal Phase A architecture, but they remain intentionally absent
-from `__all__` until a later phase widens the supported API.
+The supported high-level API is now recordset-first. `OdooEnv`,
+`DomainExpression`, and `OdooRecordset` are public exports alongside the
+legacy compatibility wrappers that remain available during migration.
 """
 
 from .odoo_client import OdooClient
 from .odoo_config import OdooConnectionSettings
+from .domain_expression import DomainExpression
 from .odoo_executor import OdooExecutor
+from .odoo_env import OdooEnv
 from .errors import (
     OdooAccessError,
     OdooAuthenticationError,
@@ -20,10 +21,10 @@ from .errors import (
 )
 from .odoo_model import OdooModel
 from .odoo_query import OdooQuery
+from .odoo_recordset import OdooRecordset
 from .odoo_rpc_executor import OdooRpcExecutor
 from .x2many_commands import X2ManyCommand
 
-# Phase A internal primitives are deliberately not re-exported here.
 __all__ = [
     "OdooClient",
     "OdooConnectionSettings",
@@ -34,9 +35,12 @@ __all__ = [
     "OdooMissingRecordError",
     "OdooTransportError",
     "OdooServerError",
+    "OdooEnv",
     "OdooExecutor",
     "OdooModel",
     "OdooQuery",
+    "OdooRecordset",
     "OdooRpcExecutor",
+    "DomainExpression",
     "X2ManyCommand",
 ]
