@@ -22,8 +22,7 @@ class GetTasksCommand:
 
         return (
             self.client["project.task"]
-            .search(task_domain)
-            .limit(limit)
+            .search(task_domain, limit=limit)
             .read(fields_to_fetch)
         )
 

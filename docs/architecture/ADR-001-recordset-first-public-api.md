@@ -1,13 +1,13 @@
 # ADR-001 - Adopt a Recordset-First Public API
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-05-21
 
 ## Context
 
 - The project goal is to mirror Odoo ORM semantics over the external XML-RPC API.
-- The current public surface is centered on `OdooClient`, `OdooModel`, and `OdooQuery`.
+- The supported public surface is now centered on `OdooClient`, `OdooEnv`, `DomainExpression`, and `OdooRecordset`, while `OdooModel` and `OdooQuery` remain compatibility layers.
 - The current abstractions return ids and raw row dictionaries, but not a stable object that carries model identity, record ids, and execution context.
 - Odoo itself centers the ORM around recordsets, not around standalone query builders.
 
@@ -17,6 +17,15 @@ Date: 2026-05-21
 - Keep `OdooClient` as the main entry point and facade.
 - Keep `OdooModel` and `OdooQuery` as compatibility layers during migration.
 - Route future ORM-like features, including `with_context`, relation traversal, field adapters, and x2many helpers, through recordsets rather than model helper methods.
+
+## Implementation Status
+
+- `OdooEnv`, `DomainExpression`, and `OdooRecordset` are now public exports.
+- `OdooClient["model"]` and `OdooEnv["model"]` now return empty model-bound `OdooRecordset` instances.
+- `OdooRecordset.search(...)` and `OdooModel.search(...)` now return `OdooRecordset` directly.
+- `browse(...)` now binds ids to `OdooRecordset` identity rather than returning row payloads.
+- Explicit `read()` and `read_adapted()` remain available as low-level extraction helpers.
+- `OdooModel` and `OdooQuery` remain available only as compatibility-oriented surfaces over the recordset-owned core.
 
 ## Consequences
 

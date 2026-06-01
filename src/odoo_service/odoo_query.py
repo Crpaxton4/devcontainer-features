@@ -21,9 +21,9 @@ class OdooQuery:
     controlling implementation path.
 
     .. note::
-       This class is a transitional compatibility surface. Evaluate it for
-       deprecation once a public recordset-first query API replaces the fluent
-       builder contract.
+         This class is a legacy compatibility surface. Normal lookup and search flows
+         now return `OdooRecordset` directly, so `OdooQuery` should only be used by
+         callers that intentionally preserve older builder-style chaining.
 
     :param client: Executor used to perform Odoo model operations.
     :type client: OdooExecutor

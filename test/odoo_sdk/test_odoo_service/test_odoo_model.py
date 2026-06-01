@@ -3,10 +3,9 @@ from unittest.mock import Mock, call
 
 from odoo_sdk.odoo_service import OdooAccessError, X2ManyCommand
 from odoo_sdk.odoo_service.field_values import RelationValue
-from odoo_sdk.odoo_service.domain_expression import DomainExpression
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_model import OdooModel
-from odoo_sdk.odoo_service.odoo_query import OdooQuery
+from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
 
 
 class TestOdooModel(unittest.TestCase):
@@ -14,10 +13,40 @@ class TestOdooModel(unittest.TestCase):
         self.executor = Mock()
         self.model = OdooModel(self.executor, "res.partner")
 
-    def test_search_returns_query_builder(self) -> None:
-        query = self.model.search([("active", "=", True)])
-        self.assertIsInstance(query, OdooQuery)
-        self.assertEqual(query._domain, DomainExpression.normalize([("active", "=", True)]))
+    def test_search_returns_recordset(self) -> None:
+        self.executor.execute.return_value = [1, 2]
+
+        result = self.model.search([("active", "=", True)])
+
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (1, 2))
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search",
+            [("active", "=", True)],
+        )
+
+    def test_search_supports_native_odoo_kwargs(self) -> None:
+        self.executor.execute.return_value = [1, 2]
+
+        result = self.model.search(
+            [("active", "=", True)],
+            limit=2,
+            offset=5,
+            order="name asc",
+            context={"lang": "fr_FR"},
+        )
+
+        self.assertEqual(result.ids, (1, 2))
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "search",
+            [("active", "=", True)],
+            limit=2,
+            offset=5,
+            order="name asc",
+            context={"lang": "fr_FR"},
+        )
 
     def test_read_accepts_single_id(self) -> None:
         self.executor.execute.return_value = [{"id": 7, "name": "Acme"}]
@@ -202,43 +231,32 @@ class TestOdooModel(unittest.TestCase):
             "res.partner", "fields_get", allfields=["name"], attributes=["type"]
         )
 
-    def test_browse_reads_ids(self) -> None:
-        self.executor.execute.return_value = [{"id": 3, "name": "Demo"}]
+    def test_browse_returns_recordset_without_io(self) -> None:
+        result = self.model.browse(3)
 
-        result = self.model.browse(3, ["name"])
-
-        self.assertEqual(result, [{"id": 3, "name": "Demo"}])
-        self.executor.execute.assert_called_once_with(
-            "res.partner", "read", [3], fields=["name"]
-        )
-
-    def test_browse_delegates_to_recordset_read(self) -> None:
-        recordset = Mock()
-        recordset.read.return_value = [{"id": 3, "name": "Demo"}]
-        self.model._recordset = Mock(return_value=recordset)
-
-        result = self.model.browse(3, ["name"])
-
-        self.assertEqual(result, [{"id": 3, "name": "Demo"}])
-        self.model._recordset.assert_called_once_with(3)
-        recordset.read.assert_called_once_with(["name"])
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (3,))
         self.executor.execute.assert_not_called()
 
-    def test_browse_adapted_delegates_to_recordset_read_adapted(self) -> None:
+    def test_browse_delegates_to_recordset_binding(self) -> None:
         recordset = Mock()
-        recordset.read_adapted.return_value = [
-            {"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}
-        ]
+        recordset.ids = (3,)
         self.model._recordset = Mock(return_value=recordset)
 
-        result = self.model.browse_adapted(3, ["parent_id"])
+        result = self.model.browse(3)
 
-        self.assertEqual(
-            result,
-            [{"id": 3, "parent_id": RelationValue("res.partner", 7, "Parent")}],
-        )
+        self.assertIs(result, recordset)
         self.model._recordset.assert_called_once_with(3)
-        recordset.read_adapted.assert_called_once_with(["parent_id"])
+        self.executor.execute.assert_not_called()
+
+    def test_browse_adapted_is_compatibility_alias_for_browse(self) -> None:
+        recordset = Mock(spec=OdooRecordset)
+        self.model._recordset = Mock(return_value=recordset)
+
+        result = self.model.browse_adapted(3)
+
+        self.assertIs(result, recordset)
+        self.model._recordset.assert_called_once_with(3)
         self.executor.execute.assert_not_called()
 
     def test_search_ids_supports_pagination(self) -> None:
@@ -273,14 +291,10 @@ class TestOdooModel(unittest.TestCase):
             context={"lang": "en_US"},
         )
 
-    def test_search_ids_delegates_to_query_builder(self) -> None:
-        query = Mock(spec=OdooQuery)
-        query.limit.return_value = query
-        query.offset.return_value = query
-        query.order_by.return_value = query
-        query.with_context.return_value = query
-        query.ids.return_value = [1, 2]
-        self.model.search = Mock(return_value=query)
+    def test_search_ids_delegates_to_recordset_search(self) -> None:
+        recordset = Mock(spec=OdooRecordset)
+        recordset.ids = (1, 2)
+        self.model._search_recordset = Mock(return_value=recordset)
 
         result = self.model.search_ids(
             [("is_company", "=", True)],
@@ -291,12 +305,13 @@ class TestOdooModel(unittest.TestCase):
         )
 
         self.assertEqual(result, [1, 2])
-        self.model.search.assert_called_once_with([("is_company", "=", True)])
-        query.limit.assert_called_once_with(2)
-        query.offset.assert_called_once_with(5)
-        query.order_by.assert_called_once_with("name")
-        query.with_context.assert_called_once_with({"lang": "en_US"})
-        query.ids.assert_called_once_with()
+        self.model._search_recordset.assert_called_once_with(
+            [("is_company", "=", True)],
+            limit=2,
+            offset=5,
+            order="name",
+            context={"lang": "en_US"},
+        )
         self.executor.execute.assert_not_called()
 
     def test_env_bound_model_read_uses_env_context(self) -> None:
@@ -376,13 +391,10 @@ class TestOdooModel(unittest.TestCase):
             offset=0,
         )
 
-    def test_search_read_delegates_to_query_read(self) -> None:
-        query = Mock(spec=OdooQuery)
-        query.limit.return_value = query
-        query.offset.return_value = query
-        query.order_by.return_value = query
-        query.read.return_value = [{"id": 1, "name": "Acme"}]
-        self.model.search = Mock(return_value=query)
+    def test_search_read_delegates_to_recordset_search_read(self) -> None:
+        recordset = Mock(spec=OdooRecordset)
+        recordset.search_read.return_value = [{"id": 1, "name": "Acme"}]
+        self.model._env.recordset = Mock(return_value=recordset)
 
         result = self.model.search_read(
             [("is_company", "=", True)],
@@ -393,22 +405,22 @@ class TestOdooModel(unittest.TestCase):
         )
 
         self.assertEqual(result, [{"id": 1, "name": "Acme"}])
-        self.model.search.assert_called_once_with([("is_company", "=", True)])
-        query.limit.assert_called_once_with(1)
-        query.offset.assert_called_once_with(0)
-        query.order_by.assert_called_once_with("name")
-        query.read.assert_called_once_with(["name"])
+        self.model._env.recordset.assert_called_once_with("res.partner")
+        recordset.search_read.assert_called_once_with(
+            [("is_company", "=", True)],
+            fields=["name"],
+            limit=1,
+            offset=0,
+            order="name",
+        )
         self.executor.execute.assert_not_called()
 
-    def test_search_read_adapted_delegates_to_query_read_adapted(self) -> None:
-        query = Mock(spec=OdooQuery)
-        query.limit.return_value = query
-        query.offset.return_value = query
-        query.order_by.return_value = query
-        query.read_adapted.return_value = [
+    def test_search_read_adapted_delegates_to_recordset_search_read_adapted(self) -> None:
+        recordset = Mock(spec=OdooRecordset)
+        recordset.search_read_adapted.return_value = [
             {"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}
         ]
-        self.model.search = Mock(return_value=query)
+        self.model._env.recordset = Mock(return_value=recordset)
 
         result = self.model.search_read_adapted(
             [("is_company", "=", True)],
@@ -422,11 +434,14 @@ class TestOdooModel(unittest.TestCase):
             result,
             [{"id": 1, "parent_id": RelationValue("res.partner", 7, "Parent")}],
         )
-        self.model.search.assert_called_once_with([("is_company", "=", True)])
-        query.limit.assert_called_once_with(1)
-        query.offset.assert_called_once_with(0)
-        query.order_by.assert_called_once_with("name")
-        query.read_adapted.assert_called_once_with(["parent_id"])
+        self.model._env.recordset.assert_called_once_with("res.partner")
+        recordset.search_read_adapted.assert_called_once_with(
+            [("is_company", "=", True)],
+            fields=["parent_id"],
+            limit=1,
+            offset=0,
+            order="name",
+        )
         self.executor.execute.assert_not_called()
 
     def test_search_read_raw_and_adapted_behaviors_remain_explicit(self) -> None:
@@ -455,16 +470,16 @@ class TestOdooModel(unittest.TestCase):
             "res.partner", "search_count", [("is_company", "=", True)]
         )
 
-    def test_search_count_delegates_to_query_count(self) -> None:
-        query = Mock(spec=OdooQuery)
-        query.count.return_value = 19
-        self.model.search = Mock(return_value=query)
+    def test_search_count_delegates_to_recordset_search_count(self) -> None:
+        recordset = Mock(spec=OdooRecordset)
+        recordset.search_count.return_value = 19
+        self.model._env.recordset = Mock(return_value=recordset)
 
         result = self.model.search_count([("is_company", "=", True)])
 
         self.assertEqual(result, 19)
-        self.model.search.assert_called_once_with([("is_company", "=", True)])
-        query.count.assert_called_once_with()
+        self.model._env.recordset.assert_called_once_with("res.partner")
+        recordset.search_count.assert_called_once_with([("is_company", "=", True)])
         self.executor.execute.assert_not_called()
 
     def test_name_search_executes(self) -> None:

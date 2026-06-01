@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .domain_expression import DomainExpression, DomainInput
 from .odoo_executor import OdooExecutor
-from .odoo_query import OdooQuery
 from .odoo_recordset import Record
 
 if TYPE_CHECKING:
@@ -13,11 +12,11 @@ if TYPE_CHECKING:
 
 
 class OdooModel:
-    """Preserve the public model-proxy surface over recordset-first internals.
+    """Legacy model-style adapter over the recordset-first core.
 
-    This compatibility proxy is necessary because current consumers resolve models by
-    name from `OdooClient`, while the architectural center of gravity has shifted to
-    environments and recordsets underneath that public facade.
+    This compatibility adapter remains available for callers that still construct or
+    import `OdooModel` directly, but the primary public entry path is now model-bound
+    `OdooRecordset` lookup from `OdooClient` or `OdooEnv`.
 
     :param client: Executor used to issue model method calls.
     :type client: OdooExecutor
@@ -131,7 +130,7 @@ class OdooModel:
         """
         return self._env.recordset(self.name, ids)
 
-    def _search_query(
+    def _search_recordset(
         self,
         domain: DomainInput = None,
         *,
@@ -139,15 +138,16 @@ class OdooModel:
         offset: Optional[int] = None,
         order: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
-    ) -> OdooQuery:
-        """Build an `OdooQuery` with the requested search options applied.
+    ) -> OdooRecordset:
+        """Search through the recordset-first core for compatibility callers.
 
-        This helper is necessary because several compatibility methods share the same
-        fluent query setup before they invoke a terminal query operation.
+        This helper is necessary because legacy model-style methods still need to
+        expose model-level search operations while delegating directly to the shared
+        recordset path instead of rebuilding fluent query-builder behavior.
 
         :param domain: Domain used to select records, defaults to None.
         :type domain: DomainInput
-        :param limit: Maximum number of records to match, defaults to None.
+        :param limit: Maximum number of matched rows to return, defaults to None.
         :type limit: Optional[int]
         :param offset: Number of matched rows to skip, defaults to None.
         :type offset: Optional[int]
@@ -155,38 +155,58 @@ class OdooModel:
         :type order: Optional[str]
         :param context: Additional Odoo context to merge, defaults to None.
         :type context: Optional[Dict[str, Any]]
-        :return: Configured query compatibility object.
-        :rtype: OdooQuery
+        :return: Matching recordset produced by the recordset-first core.
+        :rtype: OdooRecordset
         """
-        query = self.search(domain)
-        if limit is not None:
-            query = query.limit(limit)
-        if offset is not None:
-            query = query.offset(offset)
-        if order is not None:
-            query = query.order_by(order)
-        if context is not None:
-            query = query.with_context(context)
-        return query
+        env = self._env.with_context(context) if context is not None else self._env
+        return env.recordset(self.name).search(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
 
-    def search(self, domain: DomainInput = None) -> OdooQuery:
-        """Start a fluent compatibility query for this model.
+    def search(
+        self,
+        domain: DomainInput = None,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> OdooRecordset:
+        """Search the model and return a recordset.
 
-        This method is necessary because the public API still exposes query-builder
-        semantics even though query execution has moved underneath to recordset-owned
-        behavior.
+        This method is necessary because legacy `OdooModel` callers still need model-
+        level search operations, but normal wrapper use should now align with native
+        Odoo semantics and return `OdooRecordset` directly rather than an
+        `OdooQuery` builder.
 
         .. note::
-           This method returns the transitional `OdooQuery` compatibility wrapper.
-           Evaluate that fluent surface for deprecation once public recordset-first
-           querying becomes the supported default.
+           Direct `OdooQuery` construction remains available only as a legacy
+           compatibility surface. `OdooModel.search()` is no longer the path that
+           exposes query-builder-first behavior.
 
-        :param domain: Initial domain to normalize for the query, defaults to None.
+        :param domain: Domain used to select records, defaults to None.
         :type domain: DomainInput
-        :return: Fluent query compatibility object.
-        :rtype: OdooQuery
+        :param limit: Maximum number of matched rows to return, defaults to None.
+        :type limit: Optional[int]
+        :param offset: Number of matched rows to skip, defaults to None.
+        :type offset: Optional[int]
+        :param order: Odoo order expression, defaults to None.
+        :type order: Optional[str]
+        :param context: Additional Odoo context to merge, defaults to None.
+        :type context: Optional[Dict[str, Any]]
+        :return: Matching recordset.
+        :rtype: OdooRecordset
         """
-        return OdooQuery(self.client, self.name, domain, env=self._env)
+        return self._search_recordset(
+            domain,
+            limit=limit,
+            offset=offset,
+            order=order,
+            context=context,
+        )
 
     def read(
         self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
@@ -224,47 +244,41 @@ class OdooModel:
         recordset = self._recordset(ids)
         return recordset.read_adapted(fields)
 
-    def browse(
-        self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
-    ) -> List[Record]:
-        """Alias raw reads under an ORM-style compatibility name.
+    def browse(self, ids: Union[int, List[int]]) -> OdooRecordset:
+        """Bind ids to a same-model recordset without triggering I/O.
 
-        This method is necessary only to preserve existing call sites that used a
-        browse-style entry point before recordsets became the architectural center.
+        This method is necessary because browse-like compatibility should now align
+        with native Odoo semantics and return a recordset rather than row payloads.
 
         .. note::
-           This method is a compatibility alias over `read`. Evaluate it for
-           deprecation once a true public recordset-returning browse surface exists.
+           Use `recordset.read()` or singleton field access for extraction after
+           browsing. Returning rows directly here is no longer the preferred or
+           documented behavior.
 
-        :param ids: Record id or ids to read.
+        :param ids: Record id or ids to bind.
         :type ids: Union[int, List[int]]
-        :param fields: Optional field names to request, defaults to None.
-        :type fields: Optional[List[str]]
-        :return: Raw record mappings for the requested ids.
-        :rtype: List[Record]
+        :return: Recordset bound to the requested ids.
+        :rtype: OdooRecordset
         """
-        return self.read(ids, fields)
+        return self._recordset(ids)
 
-    def browse_adapted(
-        self, ids: Union[int, List[int]], fields: Optional[List[str]] = None
-    ) -> List[Record]:
-        """Alias adapted reads under an ORM-style compatibility name.
+    def browse_adapted(self, ids: Union[int, List[int]]) -> OdooRecordset:
+        """Preserve the old adapted-browse name as a recordset alias.
 
-        This method is necessary only to preserve browse-shaped call sites while the
-        public API still returns row dictionaries instead of recordsets.
+        This method is necessary only to preserve old call sites that referenced the
+        adapted browse name. Field adaptation now happens through recordset access and
+        extraction methods, not through a distinct browse result type.
 
         .. note::
-           This method is a compatibility alias over `read_adapted`. Evaluate it for
-           deprecation once a true public recordset-returning browse surface exists.
+           This remains a compatibility alias over `browse()` and should not be used
+           to imply a separate preferred API.
 
-        :param ids: Record id or ids to read.
+        :param ids: Record id or ids to bind.
         :type ids: Union[int, List[int]]
-        :param fields: Optional field names to request, defaults to None.
-        :type fields: Optional[List[str]]
-        :return: Adapted record mappings for the requested ids.
-        :rtype: List[Record]
+        :return: Recordset bound to the requested ids.
+        :rtype: OdooRecordset
         """
-        return self.read_adapted(ids, fields)
+        return self.browse(ids)
 
     def search_ids(
         self,
@@ -293,13 +307,15 @@ class OdooModel:
         :return: Matching record ids.
         :rtype: List[int]
         """
-        return self._search_query(
-            domain,
-            limit=limit,
-            offset=offset,
-            order=order,
-            context=context,
-        ).ids()
+        return list(
+            self._search_recordset(
+                domain,
+                limit=limit,
+                offset=offset,
+                order=order,
+                context=context,
+            ).ids
+        )
 
     def exists(self, ids: Union[int, List[int]]) -> List[int]:
         """Return the subset of ids that still exist on the server.
@@ -326,11 +342,13 @@ class OdooModel:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> List[Record]:
         """Run raw `search_read` with optional pagination and field selection.
 
-        This method is necessary because Phase A preserves explicit raw extraction for
-        search-derived reads while reusing the newer query and recordset internals.
+        This method is necessary because explicit row extraction remains available for
+        compatibility callers, but it should delegate directly to the recordset-owned
+        `search_read` helper instead of rebuilding a query-builder-shaped flow.
 
         :param domain: Domain used to select records, defaults to None.
         :type domain: DomainInput
@@ -342,15 +360,19 @@ class OdooModel:
         :type offset: Optional[int]
         :param order: Odoo order expression, defaults to None.
         :type order: Optional[str]
+        :param context: Additional Odoo context to merge, defaults to None.
+        :type context: Optional[Dict[str, Any]]
         :return: Raw record mappings.
         :rtype: List[Record]
         """
-        return self._search_query(
+        env = self._env.with_context(context) if context is not None else self._env
+        return env.recordset(self.name).search_read(
             domain,
+            fields=fields,
             limit=limit,
             offset=offset,
             order=order,
-        ).read(fields)
+        )
 
     def search_read_adapted(
         self,
@@ -360,11 +382,12 @@ class OdooModel:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> List[Record]:
         """Run adapted `search_read` with optional pagination and field selection.
 
-        This method is necessary because compatibility callers need richer relation and
-        temporal semantics without losing the existing `OdooModel` entry point.
+        This method is necessary because compatibility callers may still want adapted
+        row payloads while the primary search contract is recordset-first.
 
         :param domain: Domain used to select records, defaults to None.
         :type domain: DomainInput
@@ -376,15 +399,19 @@ class OdooModel:
         :type offset: Optional[int]
         :param order: Odoo order expression, defaults to None.
         :type order: Optional[str]
+        :param context: Additional Odoo context to merge, defaults to None.
+        :type context: Optional[Dict[str, Any]]
         :return: Adapted record mappings.
         :rtype: List[Record]
         """
-        return self._search_query(
+        env = self._env.with_context(context) if context is not None else self._env
+        return env.recordset(self.name).search_read_adapted(
             domain,
+            fields=fields,
             limit=limit,
             offset=offset,
             order=order,
-        ).read_adapted(fields)
+        )
 
     def search_count(self, domain: DomainInput = None) -> int:
         """Return the number of records matching a domain.
@@ -397,7 +424,7 @@ class OdooModel:
         :return: Number of matched records.
         :rtype: int
         """
-        return self.search(domain).count()
+        return self._env.recordset(self.name).search_count(domain)
 
     def name_search(
         self,

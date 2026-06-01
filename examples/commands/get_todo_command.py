@@ -17,8 +17,7 @@ class GetTodoCommand:
         ]
         records = (
             self.client["project.task"]
-            .search([("id", "=", task_id)])
-            .limit(1)
+            .search([("id", "=", task_id)], limit=1)
             .read(fields_to_fetch)
         )
         return records[0] if records else None

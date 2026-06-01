@@ -17,6 +17,10 @@ Safety constraints:
 Run from the repository root:
 
     python examples/live_phase_b_smoke_test.py --allow-live-production
+
+The primary SDK entry path demonstrated here is model-bound recordset lookup via
+`client["project.task"]`, followed by explicit `browse(...)`, `write(...)`, and
+`read_adapted(...)` operations where raw or adapted extraction is still desired.
 """
 
 from __future__ import annotations
@@ -64,6 +68,7 @@ from odoo_sdk.odoo_service import (  # noqa: E402
     OdooAuthenticationError,
     OdooClient,
     OdooConnectionSettings,
+    OdooRecordset,
     X2ManyCommand,
 )
 from odoo_sdk.odoo_service.field_values import (
@@ -258,7 +263,7 @@ def verify_metadata(client: OdooClient) -> dict[str, dict[str, Any]]:
     return refreshed_metadata
 
 
-def create_todo(project_task_model: Any, todo_name_prefix: str) -> int:
+def create_todo(project_task_model: OdooRecordset, todo_name_prefix: str) -> int:
     print_section("todo creation")
     todo_name = build_todo_name(todo_name_prefix)
     todo_id = project_task_model.create(
@@ -280,14 +285,13 @@ def create_todo(project_task_model: Any, todo_name_prefix: str) -> int:
 
 
 def update_todo(
-    project_task_model: Any,
+    project_task_model: OdooRecordset,
     todo_id: int,
     uid: int,
     deadline_write_value: str,
 ) -> None:
     print_section("todo update")
-    write_result = project_task_model.write(
-        todo_id,
+    write_result = project_task_model.browse(todo_id).write(
         {
             "date_deadline": deadline_write_value,
             "description": (
@@ -307,14 +311,16 @@ def update_todo(
 
 
 def verify_adapted_read(
-    project_task_model: Any,
+    project_task_model: OdooRecordset,
     todo_id: int,
     uid: int,
     deadline_metadata: dict[str, Any],
     expected_deadline: date | datetime,
 ) -> dict[str, Any]:
     print_section("adapted read")
-    records = project_task_model.read_adapted(todo_id, ADAPTED_READ_FIELDS)
+    todo_record = project_task_model.browse(todo_id)
+    require(todo_record.id == todo_id, "browse() should preserve singleton identity.")
+    records = todo_record.read_adapted(ADAPTED_READ_FIELDS)
     require(
         len(records) == 1,
         "read_adapted() should return exactly one record for the created ToDo.",
@@ -421,7 +427,15 @@ def run_smoke(arguments: argparse.Namespace) -> int:
     uid = client.uid
     print_pass(f"Authenticated successfully as Odoo uid {uid}.")
 
-    project_task_model = client.env["project.task"]
+    project_task_model = client["project.task"]
+    require(
+        isinstance(project_task_model, OdooRecordset),
+        "client['project.task'] should return a model-bound OdooRecordset.",
+    )
+    require(
+        project_task_model.ids == (),
+        "client['project.task'] should start as an empty model-bound recordset.",
+    )
     metadata = verify_metadata(client)
     deadline_write_value, expected_deadline = build_deadline_roundtrip(
         metadata["date_deadline"]

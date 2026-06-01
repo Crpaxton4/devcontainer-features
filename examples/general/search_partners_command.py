@@ -20,6 +20,7 @@ class SearchPartnersCommand:
         # Business logic: We always want to fetch country and email data for partners
         fields_to_fetch = ["name", "email", "is_company", "country_id", "phone"]
 
-        return (
-            self.client["res.partner"].search(domain).limit(limit).read(fields_to_fetch)
-        )
+        return self.client["res.partner"].search(
+            domain,
+            limit=limit,
+        ).read(fields_to_fetch)
