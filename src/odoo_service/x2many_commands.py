@@ -476,19 +476,13 @@ def _normalize_raw_clear_command(command: tuple[Any, ...]) -> X2ManyTupleCommand
     :rtype: X2ManyTupleCommand
     """
     command_length = len(command)
-    if command_length == 1:
-        return X2ManyCommand.clear().serialize()
-    if command_length == 2:
-        if not _is_placeholder(command[1]):
-            raise ValueError("x2many clear tuples require 0 as the second item")
-        return X2ManyCommand.clear().serialize()
-    if command_length == 3:
-        if not _is_placeholder(command[1]):
-            raise ValueError("x2many clear tuples require 0 as the second item")
-        if not _is_placeholder(command[2]):
-            raise ValueError("x2many clear tuples require 0 as the third item")
-        return X2ManyCommand.clear().serialize()
-    raise ValueError("x2many clear tuples must contain between 1 and 3 items")
+    if command_length > 3:
+        raise ValueError("x2many clear tuples must contain between 1 and 3 items")
+    if command_length > 1 and not _is_placeholder(command[1]):
+        raise ValueError("x2many clear tuples require 0 as the second item")
+    if command_length > 2 and not _is_placeholder(command[2]):
+        raise ValueError("x2many clear tuples require 0 as the third item")
+    return X2ManyCommand.clear().serialize()
 
 
 def _normalize_raw_set_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
@@ -617,9 +611,11 @@ def _is_placeholder(value: Any) -> bool:
     :return: True when the value is an accepted placeholder token.
     :rtype: bool
     """
-    if value is None or value is False:
+    if value is None:
         return True
-    return isinstance(value, int) and not isinstance(value, bool) and value == 0
+    if isinstance(value, bool):
+        return not value
+    return isinstance(value, int) and not value
 
 
 def _is_sequence(value: Any) -> bool:

@@ -4,10 +4,26 @@ from dataclasses import FrozenInstanceError
 from hypothesis import given, strategies
 
 from odoo_sdk.odoo_service import X2ManyCommand
-from odoo_sdk.odoo_service.x2many_commands import normalize_x2many_commands
+from odoo_sdk.odoo_service.x2many_commands import (
+    _is_placeholder,
+    _normalize_id_payload,
+    _normalize_mapping_payload,
+    _validate_record_id,
+    normalize_x2many_commands,
+)
 
 
 class TestX2ManyCommands(unittest.TestCase):
+    def test_internal_helpers_require_keyword_only_operation(self) -> None:
+        with self.assertRaises(TypeError):
+            _normalize_mapping_payload({"name": "Acme"}, "create")
+
+        with self.assertRaises(TypeError):
+            _normalize_id_payload([1, 2], "set")
+
+        with self.assertRaises(TypeError):
+            _validate_record_id(7, "link")
+
     def test_helper_is_frozen_and_slotted(self) -> None:
         command = X2ManyCommand.link(7)
 
@@ -162,6 +178,30 @@ class TestX2ManyCommands(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "positive integer id"):
             X2ManyCommand.set([1, -1])
+
+    def test_placeholder_helper_accepts_only_none_false_or_zero(self) -> None:
+        class FalseLike:
+            def __eq__(self, other: object) -> bool:
+                return other is False
+
+            def __le__(self, other: object) -> bool:
+                return other is False
+
+        self.assertTrue(_is_placeholder(None))
+        self.assertTrue(_is_placeholder(False))
+        self.assertTrue(_is_placeholder(0))
+
+        self.assertFalse(_is_placeholder(True))
+        self.assertFalse(_is_placeholder(-1))
+        self.assertFalse(_is_placeholder(1))
+        self.assertFalse(_is_placeholder(FalseLike()))
+
+    def test_clear_tuples_reject_negative_placeholder_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "second item"):
+            normalize_x2many_commands((5, -1))
+
+        with self.assertRaisesRegex(ValueError, "third item"):
+            normalize_x2many_commands((5, 0, -1))
 
     def test_rejects_malformed_raw_update_tuple(self) -> None:
         with self.assertRaisesRegex(ValueError, "exactly 3 items"):

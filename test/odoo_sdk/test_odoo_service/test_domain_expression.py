@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import FrozenInstanceError
 
 from hypothesis import given, strategies
 
@@ -7,15 +8,31 @@ from odoo_sdk.odoo_service.domain_expression import (
     _BooleanExpression,
     _Condition,
     _normalize_domain_nodes,
+    _parse_expression,
+    _serialize_boolean,
 )
 
 
 class TestDomainExpression(unittest.TestCase):
+    def test_condition_dataclass_uses_slots_and_is_frozen(self) -> None:
+        condition = _Condition("active", "=", True)
+
+        self.assertFalse(hasattr(condition, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            condition.field = "id"  # type: ignore[misc]
+
     def test_normalize_none_serializes_to_empty_domain(self) -> None:
         expression = DomainExpression.normalize(None)
 
         self.assertTrue(expression.is_empty())
         self.assertEqual(expression.serialize(), [])
+
+    def test_domain_expression_dataclass_uses_slots_and_is_frozen(self) -> None:
+        expression = DomainExpression.normalize([("active", "=", True)])
+
+        self.assertFalse(hasattr(expression, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            expression._nodes = ()  # type: ignore[misc]
 
     def test_normalize_existing_expression_returns_same_instance(self) -> None:
         expression = DomainExpression.normalize([("active", "=", True)])
@@ -158,6 +175,16 @@ class TestDomainExpression(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one operand"):
             _BooleanExpression("!", ())
 
+    def test_boolean_expression_rejects_not_with_multiple_operands(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one operand"):
+            _BooleanExpression(
+                "!",
+                (
+                    _Condition("active", "=", True),
+                    _Condition("company_id", "=", 3),
+                ),
+            )
+
     def test_boolean_expression_rejects_short_binary_arity(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least two operands"):
             _BooleanExpression("&", (_Condition("active", "=", True),))
@@ -172,6 +199,33 @@ class TestDomainExpression(unittest.TestCase):
         )
 
         self.assertFalse(hasattr(expression, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            expression.operator = "|"  # type: ignore[misc]
+
+    def test_parse_expression_rejects_index_beyond_end(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ended before all operands"):
+            _parse_expression([], 1)
+
+    def test_parse_expression_rejects_index_at_end_for_large_runtime_integer(self) -> None:
+        items = [(f"field_{index}", "=", index) for index in range(300)]
+        index = int("300")
+
+        with self.assertRaisesRegex(ValueError, "ended before all operands"):
+            _parse_expression(items, index)
+
+    def test_dynamic_not_token_is_parsed_by_value_not_identity(self) -> None:
+        class DynamicBang(str):
+            pass
+
+        expression = DomainExpression.normalize(
+            [DynamicBang("!"), ("active", "=", True)]
+        )
+
+        self.assertEqual(expression.serialize(), ["!", ("active", "=", True)])
+
+    def test_serialize_boolean_rejects_single_operand_binary_operator(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least two operands"):
+            _serialize_boolean("&", (_Condition("active", "=", True),))
 
     @given(
         strategies.text().filter(lambda text: text not in {"&", "|", "!"}),

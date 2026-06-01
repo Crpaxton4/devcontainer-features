@@ -204,13 +204,13 @@ def _parse_expression(items: list[Any], index: int) -> tuple[DomainNode, int]:
     if isinstance(item, str):
         if item not in _BOOLEAN_OPERATORS:
             raise ValueError(f"Unsupported domain token: {item!r}")
-        if item == "!":
-            operand, next_index = _parse_expression(items, index + 1)
-            return _BooleanExpression("!", (operand,)), next_index
+        if item in {"&", "|"}:
+            left, next_index = _parse_expression(items, index + 1)
+            right, next_index = _parse_expression(items, next_index)
+            return _BooleanExpression(item, (left, right)), next_index
 
-        left, next_index = _parse_expression(items, index + 1)
-        right, next_index = _parse_expression(items, next_index)
-        return _BooleanExpression(item, (left, right)), next_index
+        operand, next_index = _parse_expression(items, index + 1)
+        return _BooleanExpression("!", (operand,)), next_index
 
     return _normalize_item(item), index + 1
 
@@ -233,9 +233,9 @@ def _normalize_item(item: Any) -> DomainNode:
         raise ValueError(f"Unsupported domain item: {item!r}")
 
     nodes = _normalize_domain_nodes(item, allow_empty=False)
-    if len(nodes) > 1:
-        return _BooleanExpression("&", nodes)
-    return nodes[0]
+    if len(nodes) == 1:
+        return nodes[0]
+    return _BooleanExpression("&", nodes)
 
 
 def _build_condition(condition: Sequence[Any]) -> _Condition:
@@ -302,7 +302,7 @@ def _serialize_expression(node: DomainNode) -> Union[DomainCondition, list[Any]]
     """
     if isinstance(node, _Condition):
         return node.serialize()
-    if len(node.operands) == 1:
+    if node.operator == "!":
         return ["!", *_serialize_tokens(node.operands[0])]
     return _serialize_boolean(node.operator, node.operands)
 
@@ -320,16 +320,21 @@ def _serialize_boolean(operator: str, operands: tuple[DomainNode, ...]) -> list[
     :return: Prefix-ordered domain tokens.
     :rtype: list[Any]
     """
-    if len(operands) == 2:
+    operand_count = len(operands)
+    if operand_count < 2:
+        raise ValueError(f"Boolean operator {operator!r} requires at least two operands")
+    if operand_count > 2:
         return [
             operator,
-            *_serialize_tokens(operands[0]),
-            *_serialize_tokens(operands[1]),
+            *_serialize_tokens(_BooleanExpression(operator, operands[:-1])),
+            *_serialize_tokens(operands[-1]),
         ]
+
+    left, right = operands
     return [
         operator,
-        *_serialize_tokens(_BooleanExpression(operator, operands[:-1])),
-        *_serialize_tokens(operands[-1]),
+        *_serialize_tokens(left),
+        *_serialize_tokens(right),
     ]
 
 
