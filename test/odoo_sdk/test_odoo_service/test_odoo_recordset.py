@@ -7,8 +7,7 @@ from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
-from odoo_sdk.odoo_service.x2many_commands import X2ManyCommand
-
+from odoo_sdk.odoo_service.x2many_commands import Command
 
 class TestOdooRecordset(unittest.TestCase):
     def setUp(self) -> None:
@@ -492,7 +491,7 @@ class TestOdooRecordset(unittest.TestCase):
         result = recordset.write(
             {
                 "tag_ids": [
-                    X2ManyCommand.link(3),
+                    Command.link(3),
                     (4, 5),
                 ]
             }
@@ -529,7 +528,7 @@ class TestOdooRecordset(unittest.TestCase):
         result = recordset.write(
             {
                 "name": "Updated",
-                "tag_ids": X2ManyCommand.set([5, 3]),
+                "tag_ids": Command.set([5, 3]),
             }
         )
 
@@ -579,7 +578,7 @@ class TestOdooRecordset(unittest.TestCase):
         ]
         recordset = OdooRecordset(self.env, "res.partner", [7])
 
-        result = recordset.write({"name": X2ManyCommand.link(3)})
+        result = recordset.write({"name": Command.link(3)})
 
         self.assertTrue(result)
         self.assertEqual(
@@ -596,7 +595,7 @@ class TestOdooRecordset(unittest.TestCase):
                     "res.partner",
                     "write",
                     [7],
-                    {"name": X2ManyCommand.link(3)},
+                    {"name": Command.link(3)},
                     context={"lang": "en_US"},
                 ),
             ],

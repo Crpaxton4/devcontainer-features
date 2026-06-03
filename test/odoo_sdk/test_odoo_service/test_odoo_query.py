@@ -1,10 +1,11 @@
 import unittest
 from unittest.mock import Mock, call
+
 from hypothesis import given, strategies
 
-from odoo_sdk.odoo_service import OdooValidationError, X2ManyCommand
-from odoo_sdk.odoo_service.field_values import RelationValue
+from odoo_sdk.odoo_service import Command, OdooValidationError
 from odoo_sdk.odoo_service.domain_expression import DomainExpression
+from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.odoo_query import OdooQuery
 
 
@@ -428,7 +429,7 @@ class TestOdooQueryWrite(unittest.TestCase):
 
         query = OdooQuery(executor, "res.partner", [("active", "=", True)])
         result = query.with_context({"lang": "en_US"}).write(
-            {"tag_ids": [X2ManyCommand.link(9), (5,)]}
+            {"tag_ids": [Command.link(9), (5,)]}
         )
 
         self.assertTrue(result)

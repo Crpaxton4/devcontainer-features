@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, call
 
-from odoo_sdk.odoo_service import OdooAccessError, X2ManyCommand
+from odoo_sdk.odoo_service import Command, OdooAccessError
 from odoo_sdk.odoo_service.field_values import RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_model import OdooModel
@@ -142,7 +142,7 @@ class TestOdooModel(unittest.TestCase):
             True,
         ]
 
-        result = self.model.write(9, {"tag_ids": X2ManyCommand.link(4)})
+        result = self.model.write(9, {"tag_ids": Command.link(4)})
 
         self.assertTrue(result)
         self.assertEqual(

@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 
 from hypothesis import given, strategies
 
-from odoo_sdk.odoo_service import X2ManyCommand
+from odoo_sdk.odoo_service import Command
 from odoo_sdk.odoo_service.x2many_commands import (
     _is_placeholder,
     _normalize_id_payload,
@@ -11,7 +11,6 @@ from odoo_sdk.odoo_service.x2many_commands import (
     _validate_record_id,
     normalize_x2many_commands,
 )
-
 
 class TestX2ManyCommands(unittest.TestCase):
     def test_internal_helpers_require_keyword_only_operation(self) -> None:
@@ -25,7 +24,7 @@ class TestX2ManyCommands(unittest.TestCase):
             _validate_record_id(7, "link")
 
     def test_helper_is_frozen_and_slotted(self) -> None:
-        command = X2ManyCommand.link(7)
+        command = Command.link(7)
 
         with self.assertRaises(FrozenInstanceError):
             command.record_id = 9
@@ -34,7 +33,7 @@ class TestX2ManyCommands(unittest.TestCase):
 
     def test_create_helper_deep_copies_mutable_payload(self) -> None:
         values = {"name": ["Acme"]}
-        command = X2ManyCommand.create(values)
+        command = Command.create(values)
 
         values["name"].append("Mutated")
         payload = command.serialize()
@@ -44,38 +43,38 @@ class TestX2ManyCommands(unittest.TestCase):
         self.assertEqual(command.record_id, 0)
 
     def test_manual_create_command_resets_record_id(self) -> None:
-        command = X2ManyCommand(0, record_id=99, payload={"name": "Acme"})
+        command = Command(0, record_id=99, payload={"name": "Acme"})
 
         self.assertEqual(command.record_id, 0)
         self.assertEqual(command.serialize(), (0, 0, {"name": "Acme"}))
 
     def test_update_helper_serializes_to_canonical_tuple(self) -> None:
-        command = X2ManyCommand.update(7, {"name": "Updated"})
+        command = Command.update(7, {"name": "Updated"})
 
         self.assertEqual(command.serialize(), (1, 7, {"name": "Updated"}))
 
     def test_delete_helper_serializes_to_canonical_tuple(self) -> None:
-        command = X2ManyCommand.delete(7)
+        command = Command.delete(7)
 
         self.assertEqual(command.serialize(), (2, 7, 0))
 
     def test_unlink_helper_serializes_to_canonical_tuple(self) -> None:
-        command = X2ManyCommand.unlink(7)
+        command = Command.unlink(7)
 
         self.assertEqual(command.serialize(), (3, 7, 0))
 
     def test_link_helper_serializes_to_canonical_tuple(self) -> None:
-        command = X2ManyCommand.link(7)
+        command = Command.link(7)
 
         self.assertEqual(command.serialize(), (4, 7, 0))
 
     def test_clear_helper_serializes_to_canonical_tuple(self) -> None:
-        command = X2ManyCommand.clear()
+        command = Command.clear()
 
         self.assertEqual(command.serialize(), (5, 0, 0))
 
     def test_manual_clear_command_resets_record_id_and_payload(self) -> None:
-        command = X2ManyCommand(5, record_id=9, payload=1)
+        command = Command(5, record_id=9, payload=1)
 
         self.assertEqual(command.record_id, 0)
         self.assertEqual(command.payload, 0)
@@ -83,20 +82,20 @@ class TestX2ManyCommands(unittest.TestCase):
 
     @given(strategies.lists(strategies.integers(min_value=1, max_value=999), max_size=5))
     def test_set_helper_preserves_id_order(self, ids: list[int]) -> None:
-        command = X2ManyCommand.set(ids)
+        command = Command.set(ids)
 
         self.assertEqual(command.serialize(), (6, 0, ids))
         self.assertEqual(command.record_id, 0)
 
     def test_manual_set_command_resets_record_id(self) -> None:
-        command = X2ManyCommand(6, record_id=8, payload=[3, 1])
+        command = Command(6, record_id=8, payload=[3, 1])
 
         self.assertEqual(command.record_id, 0)
         self.assertEqual(command.payload, (3, 1))
         self.assertEqual(command.serialize(), (6, 0, [3, 1]))
 
     def test_normalize_single_helper_returns_one_command_list(self) -> None:
-        result = normalize_x2many_commands(X2ManyCommand.link(4))
+        result = normalize_x2many_commands(Command.link(4))
 
         self.assertEqual(result, [(4, 4, 0)])
 
@@ -128,9 +127,9 @@ class TestX2ManyCommands(unittest.TestCase):
     def test_normalize_mixed_helper_and_raw_commands(self) -> None:
         result = normalize_x2many_commands(
             [
-                X2ManyCommand.clear(),
+                Command.clear(),
                 (4, 7),
-                X2ManyCommand.set([3, 1]),
+                Command.set([3, 1]),
             ]
         )
 
@@ -149,35 +148,35 @@ class TestX2ManyCommands(unittest.TestCase):
 
     def test_rejects_non_mapping_create_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "mapping payload"):
-            X2ManyCommand.create([("name", "Acme")])
+            Command.create([("name", "Acme")])
 
     def test_rejects_non_positive_record_ids(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive integer id"):
-            X2ManyCommand.link(0)
+            Command.link(0)
 
         with self.assertRaisesRegex(ValueError, "positive integer id"):
-            X2ManyCommand.unlink(-1)
+            Command.unlink(-1)
 
         with self.assertRaisesRegex(ValueError, "positive integer id"):
-            X2ManyCommand.delete(True)
+            Command.delete(True)
 
     def test_rejects_non_iterable_set_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "iterable of ids"):
-            X2ManyCommand.set(7)
+            Command.set(7)
 
     def test_rejects_string_and_mapping_set_payloads(self) -> None:
         with self.assertRaisesRegex(ValueError, "iterable of ids"):
-            X2ManyCommand.set("7")
+            Command.set("7")
 
         with self.assertRaisesRegex(ValueError, "iterable of ids"):
-            X2ManyCommand.set({"id": 7})
+            Command.set({"id": 7})
 
     def test_rejects_invalid_set_item_ids(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive integer id"):
-            X2ManyCommand.set([1, 0])
+            Command.set([1, 0])
 
         with self.assertRaisesRegex(ValueError, "positive integer id"):
-            X2ManyCommand.set([1, -1])
+            Command.set([1, -1])
 
     def test_placeholder_helper_accepts_only_none_false_or_zero(self) -> None:
         class FalseLike:
