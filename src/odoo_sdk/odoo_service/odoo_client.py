@@ -101,7 +101,7 @@ class OdooClient(OdooExecutor):
         :return: Authenticated Odoo user identifier.
         :rtype: int
         """
-        return self._executor.uid
+        return int(self._executor.uid)
 
     @property
     def env(self) -> OdooEnv:
@@ -115,6 +115,19 @@ class OdooClient(OdooExecutor):
         :rtype: OdooEnv
         """
         return self._env
+
+    @property
+    def authenticated(self) -> bool:
+        """Indicate whether the client has successfully authenticated.
+
+        This property is necessary because some consumers need a simple boolean check
+        for authentication status without directly accessing the uid or handling
+        exceptions from failed authentication attempts.
+
+        :return: True if authenticated successfully, False otherwise.
+        :rtype: bool
+        """
+        return bool(self._executor.uid)
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate one model method call to the underlying executor.
