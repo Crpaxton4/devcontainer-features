@@ -9,15 +9,16 @@ The supported public surface is recordset-first, with `OdooEnv`,
 compatibility wrappers.
 """
 
-from . import command_registry, odoo_service
-
 from importlib.metadata import PackageNotFoundError, version
+
+from . import command_registry, odoo_service
 
 try:
     __version__ = version("odoo_sdk")
 except PackageNotFoundError:
     __version__ = "0.0.0"
 
+from .command_registry import CommandDispatcher
 from .odoo_service import (
     OdooClient,
     OdooConnectionSettings,
@@ -30,7 +31,6 @@ from .odoo_service import (
 )
 from .odoo_service.domain_expression import Domain, DomainExpression
 from .odoo_service.odoo_recordset import Record
-from .command_registry import CommandDispatcher
 
 __all__ = [
     "command_registry",
