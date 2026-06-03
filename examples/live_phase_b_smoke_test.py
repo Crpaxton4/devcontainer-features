@@ -26,12 +26,20 @@ The primary SDK entry path demonstrated here is model-bound recordset lookup via
 from __future__ import annotations
 
 import argparse
-import sys
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from pprint import pprint
 from typing import Any
 from uuid import uuid4
+
+from odoo_sdk.odoo_service import (
+    OdooAuthenticationError,
+    OdooClient,
+    OdooConnectionSettings,
+    OdooRecordset,
+    X2ManyCommand,
+)
+from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = REPOSITORY_ROOT / ".odoo_sdk.ini"
@@ -59,29 +67,11 @@ ADAPTED_READ_FIELDS = [
 ]
 
 
-if str(REPOSITORY_ROOT) not in sys.path:
-    # Support direct execution from a source checkout before installation.
-    sys.path.insert(0, str(REPOSITORY_ROOT))
-
-
-from odoo_sdk.odoo_service import (  # noqa: E402
-    OdooAuthenticationError,
-    OdooClient,
-    OdooConnectionSettings,
-    OdooRecordset,
-    X2ManyCommand,
-)
-from odoo_sdk.odoo_service.field_values import (
-    RelationCollection,
-    RelationValue,
-)  # noqa: E402
-
-
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run a manual live-Odoo smoke test for the Phase B metadata, "
-            "adaptation, x2many, and error-mapping paths against a live Odoo "
+            "adaptation, x2many, and esrror-mapping paths against a live Odoo "
             "instance using whatever temporal field metadata it reports."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

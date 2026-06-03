@@ -31,16 +31,16 @@ packages = [
 "*" = ["py.typed"]
 
 [tool.setuptools.package-dir]
-"odoo_sdk" = "src"
-"odoo_sdk.command_registry" = "src/command_registry"
-"odoo_sdk.odoo_service" = "src/odoo_service"
+"odoo_sdk" = "src/odoo_sdk"
+"odoo_sdk.command_registry" = "src/odoo_sdk/command_registry"
+"odoo_sdk.odoo_service" = "src/odoo_sdk/odoo_service"
 
 [tool.black]
 target-version = ["py312"]
 
 [tool.coverage.run]
 branch = true
-source = ["src"]
+source = ["src/odoo_sdk"]
 omit = ["*/tests/*", "*/examples/*"]
 
 [tool.coverage.report]

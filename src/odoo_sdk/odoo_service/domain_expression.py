@@ -13,7 +13,7 @@ _BOOLEAN_OPERATORS: Final[set[str]] = {"&", "|", "!"}
 
 
 @dataclass(frozen=True, slots=True)
-class _Condition:
+class Condition:
     """Represent one normalized leaf condition in an Odoo domain tree.
 
     This internal node is necessary because the serializer needs a stable typed shape
@@ -45,7 +45,7 @@ class _Condition:
 
 
 @dataclass(frozen=True, slots=True)
-class _BooleanExpression:
+class BooleanExpression:
     """Represent one normalized boolean operator in a domain expression tree.
 
     This internal node is necessary because Odoo's prefix boolean operators have
@@ -54,11 +54,11 @@ class _BooleanExpression:
     :param operator: Boolean operator token such as ``&``, ``|``, or ``!``.
     :type operator: str
     :param operands: Operand nodes controlled by the operator.
-    :type operands: tuple[Union[_Condition, _BooleanExpression], ...]
+    :type operands: tuple[Union[Condition, BooleanExpression], ...]
     """
 
     operator: str
-    operands: tuple[Union[_Condition, "_BooleanExpression"], ...]
+    operands: tuple[Union[Condition, "BooleanExpression"], ...]
 
     def __post_init__(self) -> None:
         """Validate operator support and operand arity after construction.
@@ -81,7 +81,7 @@ class _BooleanExpression:
             raise ValueError("Boolean operator '!' requires exactly one operand")
 
 
-DomainNode: TypeAlias = Union[_Condition, _BooleanExpression]
+DomainNode: TypeAlias = Union[Condition, BooleanExpression]
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,10 +207,10 @@ def _parse_expression(items: list[Any], index: int) -> tuple[DomainNode, int]:
         if item in {"&", "|"}:
             left, next_index = _parse_expression(items, index + 1)
             right, next_index = _parse_expression(items, next_index)
-            return _BooleanExpression(item, (left, right)), next_index
+            return BooleanExpression(item, (left, right)), next_index
 
         operand, next_index = _parse_expression(items, index + 1)
-        return _BooleanExpression("!", (operand,)), next_index
+        return BooleanExpression("!", (operand,)), next_index
 
     return _normalize_item(item), index + 1
 
@@ -235,10 +235,10 @@ def _normalize_item(item: Any) -> DomainNode:
     nodes = _normalize_domain_nodes(item, allow_empty=False)
     if len(nodes) == 1:
         return nodes[0]
-    return _BooleanExpression("&", nodes)
+    return BooleanExpression("&", nodes)
 
 
-def _build_condition(condition: Sequence[Any]) -> _Condition:
+def _build_condition(condition: Sequence[Any]) -> Condition:
     """Create a normalized condition node from a raw condition triple.
 
     This helper is necessary so normalization can deep-copy mutable operand values and
@@ -250,7 +250,7 @@ def _build_condition(condition: Sequence[Any]) -> _Condition:
     :rtype: _Condition
     """
     field, operator, value = condition
-    return _Condition(field, operator, deepcopy(value))
+    return Condition(field, operator, deepcopy(value))
 
 
 def _is_condition(value: Any) -> bool:
@@ -300,7 +300,7 @@ def _serialize_expression(node: DomainNode) -> Union[DomainCondition, list[Any]]
     :return: Serialized condition tuple or boolean token list.
     :rtype: Union[DomainCondition, list[Any]]
     """
-    if isinstance(node, _Condition):
+    if isinstance(node, Condition):
         return node.serialize()
     if node.operator == "!":
         return ["!", *_serialize_tokens(node.operands[0])]
@@ -326,7 +326,7 @@ def _serialize_boolean(operator: str, operands: tuple[DomainNode, ...]) -> list[
     if operand_count > 2:
         return [
             operator,
-            *_serialize_tokens(_BooleanExpression(operator, operands[:-1])),
+            *_serialize_tokens(BooleanExpression(operator, operands[:-1])),
             *_serialize_tokens(operands[-1]),
         ]
 
