@@ -5,11 +5,7 @@ The supported high-level API is now recordset-first. `OdooEnv`,
 legacy compatibility wrappers that remain available during migration.
 """
 
-from .odoo_client import OdooClient
-from .odoo_config import OdooConnectionSettings
 from .domain_expression import DomainExpression
-from .odoo_executor import OdooExecutor
-from .odoo_env import OdooEnv
 from .errors import (
     OdooAccessError,
     OdooAuthenticationError,
@@ -19,11 +15,15 @@ from .errors import (
     OdooTransportError,
     OdooValidationError,
 )
+from .odoo_client import OdooClient
+from .odoo_config import OdooConnectionSettings
+from .odoo_env import OdooEnv
+from .odoo_executor import OdooExecutor
 from .odoo_model import OdooModel
 from .odoo_query import OdooQuery
 from .odoo_recordset import OdooRecordset
 from .odoo_rpc_executor import OdooRpcExecutor
-from .x2many_commands import X2ManyCommand
+from .x2many_commands import Command
 
 __all__ = [
     "OdooClient",
@@ -42,5 +42,5 @@ __all__ = [
     "OdooRecordset",
     "OdooRpcExecutor",
     "DomainExpression",
-    "X2ManyCommand",
+    "Command",
 ]
