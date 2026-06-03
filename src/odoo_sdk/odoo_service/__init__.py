@@ -23,7 +23,7 @@ from .odoo_model import OdooModel
 from .odoo_query import OdooQuery
 from .odoo_recordset import OdooRecordset
 from .odoo_rpc_executor import OdooRpcExecutor
-from .x2many_commands import Command
+from .relational_command import Command
 
 __all__ = [
     "OdooClient",

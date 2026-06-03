@@ -7,7 +7,7 @@ from odoo_sdk.odoo_service.field_values import RelationCollection, RelationValue
 from odoo_sdk.odoo_service.odoo_env import OdooEnv
 from odoo_sdk.odoo_service.odoo_executor import OdooExecutor
 from odoo_sdk.odoo_service.odoo_recordset import OdooRecordset
-from odoo_sdk.odoo_service.x2many_commands import Command
+from odoo_sdk.odoo_service.relational_command import Command
 
 class TestOdooRecordset(unittest.TestCase):
     def setUp(self) -> None:

@@ -16,7 +16,7 @@ from typing import (
 from .domain_expression import DomainExpression, DomainInput
 from .field_adapters import adapt_field_value, adapt_record_values
 from .field_values import RelationCollection, RelationValue
-from .x2many_commands import Command, normalize_x2many_commands
+from .relational_command import Command, normalize_x2many_commands
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv

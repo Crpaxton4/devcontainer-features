@@ -16,7 +16,6 @@ dev = [
     "cosmic-ray>=8.4.6",
     "coverage[toml]>=7.6.0",
     "hypothesis>=6.0.0",
-    "odoo-sdk",
     "pygount>=3.2.0",
 ]
 
@@ -56,8 +55,7 @@ exclude_lines = [
 [tool.uv.workspace]
 members = [
     ".",
-    ".",
 ]
 
 [tool.uv.sources]
-odoo-sdk = { workspace = true }
+odoo_sdk = { workspace = true }

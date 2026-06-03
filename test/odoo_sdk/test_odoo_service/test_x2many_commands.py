@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 from hypothesis import given, strategies
 
 from odoo_sdk.odoo_service import Command
-from odoo_sdk.odoo_service.x2many_commands import (
+from odoo_sdk.odoo_service.relational_command import (
     _is_placeholder,
     _normalize_id_payload,
     _normalize_mapping_payload,
