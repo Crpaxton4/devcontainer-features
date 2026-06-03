@@ -1,12 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence as SequenceABC
-from typing import Any, Dict, Iterator, Optional, Sequence, TYPE_CHECKING, TypeAlias, Union
+from collections.abc import Mapping
+from collections.abc import Sequence as SequenceABC
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterator,
+    Optional,
+    Sequence,
+    TypeAlias,
+    Union,
+)
 
 from .domain_expression import DomainExpression, DomainInput
 from .field_adapters import adapt_field_value, adapt_record_values
 from .field_values import RelationCollection, RelationValue
-from .x2many_commands import X2ManyCommand, normalize_x2many_commands
+from .x2many_commands import Command, normalize_x2many_commands
 
 if TYPE_CHECKING:
     from .odoo_env import OdooEnv
@@ -926,7 +936,7 @@ def _needs_write_field_metadata(value: Any) -> bool:
     :return: True when metadata lookup may be required to normalize the value.
     :rtype: bool
     """
-    if isinstance(value, X2ManyCommand):
+    if isinstance(value, Command):
         return True
     return isinstance(value, SequenceABC) and not isinstance(
         value,
