@@ -1,6 +1,7 @@
 import threading
 import xmlrpc.client
 from typing import Any
+
 from .odoo_executor import OdooExecutor
 
 
@@ -46,7 +47,7 @@ class OdooRpcExecutor(OdooExecutor):
         self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
         self._object = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
 
-        self._uid: Any = None
+        self._uid = None
         self._lock = threading.Lock()
 
     @property
@@ -57,9 +58,10 @@ class OdooRpcExecutor(OdooExecutor):
         before they actually issue a request, and repeated calls should not repeat
         the login handshake.
 
-        :return: Authenticated Odoo user identifier.
+        :return: Authenticated Odoo user id. 0 if authentication fails.
         :rtype: int
         """
+
         if self._uid is None:
             with self._lock:
                 if self._uid is None:
@@ -69,7 +71,7 @@ class OdooRpcExecutor(OdooExecutor):
                         self.password,
                         {},
                     )
-        return self._uid
+        return int(self._uid)
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over Odoo's `execute_kw` XML-RPC API.
