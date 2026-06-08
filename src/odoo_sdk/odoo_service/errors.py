@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+
 class OdooError(RuntimeError):
     """Represent a classified failure that occurred while talking to Odoo.
 

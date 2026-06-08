@@ -30,6 +30,10 @@ def adapt_field_value(
         return value
 
     field_type = field_metadata.get("type")
+
+    if field_type is None:
+        return value
+
     adapter = _ADAPTERS.get(field_type)
     if adapter is None:
         return value
@@ -80,10 +84,11 @@ def _adapt_many2one(value: Any, field_metadata: Mapping[str, Any]) -> Any:
         return value
 
     relation_model = field_metadata.get("relation")
+
     if not relation_model:
         return value
 
-    if value in (None, False, "", [], (), {}):
+    if not value:
         return None
 
     if isinstance(value, int) and not isinstance(value, bool):
@@ -91,9 +96,6 @@ def _adapt_many2one(value: Any, field_metadata: Mapping[str, Any]) -> Any:
 
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return value
-
-    if not value:
-        return None
 
     record_id = value[0]
     if not isinstance(record_id, int) or isinstance(record_id, bool):

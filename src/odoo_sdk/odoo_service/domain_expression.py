@@ -7,7 +7,7 @@ from typing import Any, Final, TypeAlias, Union
 
 DomainCondition: TypeAlias = tuple[str, str, Any]
 Domain: TypeAlias = list[DomainCondition]
-DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any], None]
+DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any]]
 
 _BOOLEAN_OPERATORS: Final[set[str]] = {"&", "|", "!"}
 
@@ -99,7 +99,7 @@ class DomainExpression:
     _nodes: tuple[DomainNode, ...] = ()
 
     @classmethod
-    def normalize(cls, domain: DomainInput = None) -> DomainExpression:
+    def normalize(cls, domain: DomainInput) -> DomainExpression:
         """Normalize supported domain input into a canonical expression object.
 
         This factory is necessary because callers may already hold a normalized
@@ -113,8 +113,6 @@ class DomainExpression:
         """
         if isinstance(domain, cls):
             return domain
-        if domain is None:
-            return cls()
         return cls(_normalize_domain_nodes(domain, allow_empty=True))
 
     def serialize(self) -> list[Any]:

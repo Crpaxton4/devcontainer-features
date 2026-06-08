@@ -683,7 +683,6 @@ dev = [
     { name = "cosmic-ray" },
     { name = "coverage" },
     { name = "hypothesis" },
-    { name = "odoo-sdk" },
     { name = "pygount" },
 ]
 
@@ -696,7 +695,6 @@ dev = [
     { name = "cosmic-ray", specifier = ">=8.4.6" },
     { name = "coverage", extras = ["toml"], specifier = ">=7.6.0" },
     { name = "hypothesis", specifier = ">=6.0.0" },
-    { name = "odoo-sdk", editable = "." },
     { name = "pygount", specifier = ">=3.2.0" },
 ]
 
