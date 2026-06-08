@@ -28,100 +28,21 @@
       "problemMatcher": []
     },
     {
-      "label": "odoo_sdk: Cosmic Ray init session",
-      "type": "shell",
-      "command": "bash",
-      "args": [
-        "-lc",
-        "uv run ./scripts/cosmic-ray-init.sh \"session\""
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "hide": false,
-      "presentation": {
-        "focus": false,
-        "showReuseMessage": false,
-        "panel": "shared",
-        "group": "mutation-test"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "odoo_sdk: Cosmic Ray baseline",
-      "type": "shell",
-      "command": "bash",
-      "args": [
-        "-lc",
-        "uv run ./scripts/cosmic-ray-baseline.sh \"session\""
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "hide": false,
-      "presentation": {
-        "focus": false,
-        "showReuseMessage": false,
-        "panel": "shared",
-        "group": "mutation-test"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "odoo_sdk: Cosmic Ray exec session",
-      "type": "shell",
-      "command": "bash",
-      "args": [
-        "-lc",
-        "uv run ./scripts/cosmic-ray-exec.sh \"session\""
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "hide": false,
-      "presentation": {
-        "focus": false,
-        "showReuseMessage": false,
-        "panel": "shared",
-        "group": "mutation-test"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "odoo_sdk: Cosmic Ray report",
-      "type": "shell",
-      "command": "bash",
-      "args": [
-        "-lc",
-        "uv run ./scripts/cosmic-ray-report.sh \"session\""
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "hide": false,
-      "presentation": {
-        "focus": false,
-        "showReuseMessage": false,
-        "panel": "shared",
-        "group": "mutation-test"
-      },
-      "problemMatcher": []
-    },
-    {
       "label": "Mutation Test",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "odoo_sdk: Cosmic Ray init session",
-        "odoo_sdk: Cosmic Ray baseline",
-        "odoo_sdk: Cosmic Ray exec session",
-        "odoo_sdk: Cosmic Ray report"
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "uv run ./scripts/mutation-test.sh"
       ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "presentation": {
         "focus": true,
         "reveal": "always",
         "panel": "dedicated",
-        "showReuseMessage": false,
-        "group": "mutation-test"
+        "showReuseMessage": false
       },
       "problemMatcher": []
     }
