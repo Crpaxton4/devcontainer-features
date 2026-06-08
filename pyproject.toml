@@ -65,12 +65,26 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 
+[tool.coverage.html]
+directory = "reports/coverage/html"
+
+[tool.coverage.json]
+output = "reports/coverage/coverage.json"
+pretty_print = true
+
 [tool.radon]
 exclude = "tests/*,examples/*"
 cc_min = "A"
 show_complexity = true
 average = true
 show_mi = true
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15
+exclude = ["tests", "examples", "build", "htmlcov"]
+output-format = ["json"]
+output = "reports/complexipy/"
 
 [tool.uv.workspace]
 members = [

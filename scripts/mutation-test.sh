@@ -169,4 +169,24 @@ awk -v killed="$killed" -v completed="$completed" -v min_rate="$min_kill_rate" '
 	}
 }'
 
+# ── JSON Export ───────────────────────────────────────────────────────────────
+echo "Exporting JSON report..."
+mkdir -p reports/mutation
+cosmic-ray dump "$session_file" \
+	| jq -sn '
+		[
+			inputs | select(length > 0) | {
+				job_id: .[0],
+				module: .[1].module_path,
+				operator: .[1].operator_name,
+				occurrence: .[1].occurrence,
+				start_pos: .[1].start_pos,
+				end_pos: .[1].end_pos,
+				worker_outcome: (.[2].worker_outcome // null),
+				test_outcome: (.[2].test_outcome // null)
+			}
+		]
+	' > reports/mutation/mutation.json
+echo "JSON report written to reports/mutation/mutation.json"
+
 echo "Report generated at $report_file"

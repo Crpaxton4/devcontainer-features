@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# static-analysis.sh — Run all Radon static analysis metrics against src/odoo_sdk
-# Produces JSON reports in reports/radon/ and streams results to terminal.
+# static-analysis.sh — Run all static analysis metrics against src/odoo_sdk
+# Produces JSON reports in reports/radon/ and reports/complexipy/ and streams results to terminal.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC="$REPO_ROOT/src/odoo_sdk"
 REPORTS_DIR="$REPO_ROOT/reports/radon"
+COMPLEXIPY_DIR="$REPO_ROOT/reports/complexipy"
 
 cd "$REPO_ROOT"
 
 mkdir -p "$REPORTS_DIR"
+mkdir -p "$COMPLEXIPY_DIR"
 
 # ── Cyclomatic Complexity ────────────────────────────────────────────────────
 echo ""
@@ -40,8 +42,17 @@ echo "  Halstead Metrics (hal)"
 echo "════════════════════════════════════════════════════════"
 radon hal "$SRC" --json | tee "$REPORTS_DIR/hal.json"
 
+# ── Cognitive Complexity (complexipy) ────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════"
-echo "  Reports written to: $REPORTS_DIR"
+echo "  Cognitive Complexity (complexipy)"
+echo "════════════════════════════════════════════════════════"
+complexipy src --output-format json --output "$COMPLEXIPY_DIR/" --sort desc
+echo "  Report written to: $COMPLEXIPY_DIR/complexipy-results.json"
+
+echo ""
+echo "════════════════════════════════════════════════════════"
+echo "  Radon reports written to:      $REPORTS_DIR"
+echo "  Complexipy report written to:  $COMPLEXIPY_DIR"
 echo "════════════════════════════════════════════════════════"
 echo ""

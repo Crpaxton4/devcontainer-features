@@ -20,7 +20,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html"
+        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html && uv run coverage json"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -47,7 +47,7 @@
       "problemMatcher": []
     },
     {
-      "label": "odoo_sdk: Static Analysis (Radon)",
+      "label": "odoo_sdk: Static Analysis",
       "type": "shell",
       "command": "bash",
       "args": [
