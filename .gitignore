@@ -34,6 +34,10 @@
 !/scripts/
 !/scripts/**
 
+# VS Code workspace settings
+!/.vscode/
+!/.vscode/**
+
 !requirements.dev.txt
 !requirements.txt
 

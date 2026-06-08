@@ -17,6 +17,7 @@ dev = [
     "coverage[toml]>=7.6.0",
     "hypothesis>=6.0.0",
     "pygount>=3.2.0",
+    "radon>=6.0.1",
 ]
 
 [tool.setuptools]
@@ -63,6 +64,13 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+[tool.radon]
+exclude = "tests/*,examples/*"
+cc_min = "A"
+show_complexity = true
+average = true
+show_mi = true
 
 [tool.uv.workspace]
 members = [
