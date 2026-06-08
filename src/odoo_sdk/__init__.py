@@ -11,30 +11,26 @@ compatibility wrappers.
 
 from importlib.metadata import PackageNotFoundError, version
 
-from . import command_registry, odoo_service
+from . import command_registry
 
 try:
     __version__ = version("odoo_sdk")
 except PackageNotFoundError:
     __version__ = "0.0.0"
 
+from .client import OdooClient
+from .config import OdooConnectionSettings
+from .env import OdooEnv
+from .fields.commands import Command
+from .query.domain import Domain, DomainExpression
+from .records import OdooModel, OdooRecordset
+from .records.recordset import Record
+from .transport import OdooExecutor, OdooRpcExecutor
 from .command_registry import CommandDispatcher
-from .odoo_service import (
-    OdooClient,
-    OdooConnectionSettings,
-    OdooEnv,
-    OdooExecutor,
-    OdooModel,
-    OdooQuery,
-    OdooRecordset,
-    OdooRpcExecutor,
-)
-from .odoo_service.domain_expression import Domain, DomainExpression
-from .odoo_service.odoo_recordset import Record
+from .query import OdooQuery
 
 __all__ = [
     "command_registry",
-    "odoo_service",
     "OdooClient",
     "OdooConnectionSettings",
     "OdooEnv",

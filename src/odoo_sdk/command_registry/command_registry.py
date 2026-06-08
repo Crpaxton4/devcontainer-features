@@ -1,6 +1,6 @@
 from typing import Any, Dict, Callable
 
-from ..odoo_service import OdooClient
+from odoo_sdk.client.client import OdooClient
 
 
 class CommandDispatcher:

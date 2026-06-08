@@ -23,7 +23,13 @@ dev = [
 packages = [
     "odoo_sdk",
     "odoo_sdk.command_registry",
-    "odoo_sdk.odoo_service",
+    "odoo_sdk.client",
+    "odoo_sdk.transport",
+    "odoo_sdk.config",
+    "odoo_sdk.env",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
 ]
 
 [tool.setuptools.package-data]
@@ -32,7 +38,13 @@ packages = [
 [tool.setuptools.package-dir]
 "odoo_sdk" = "src/odoo_sdk"
 "odoo_sdk.command_registry" = "src/odoo_sdk/command_registry"
-"odoo_sdk.odoo_service" = "src/odoo_sdk/odoo_service"
+"odoo_sdk.client" = "src/odoo_sdk/client"
+"odoo_sdk.transport" = "src/odoo_sdk/transport"
+"odoo_sdk.config" = "src/odoo_sdk/config"
+"odoo_sdk.env" = "src/odoo_sdk/env"
+"odoo_sdk.records" = "src/odoo_sdk/records"
+"odoo_sdk.query" = "src/odoo_sdk/query"
+"odoo_sdk.fields" = "src/odoo_sdk/fields"
 
 [tool.black]
 target-version = ["py312"]
