@@ -81,14 +81,16 @@ class OdooConnectionSettings:
             "username": username,
             "password": password,
         }
-        values: dict[str, Optional[str]] = {}
-        for key, explicit_value in explicit_values.items():
-            if explicit_value is not None:
-                values[key] = explicit_value
-            elif environment_values.get(key) is not None:
-                values[key] = environment_values[key]
-            else:
-                values[key] = file_values.get(key)
+        values: dict[str, Optional[str]] = {
+            key: (
+                explicit_value
+                if explicit_value is not None
+                else environment_values[key]
+                if environment_values.get(key) is not None
+                else file_values.get(key)
+            )
+            for key, explicit_value in explicit_values.items()
+        }
 
         # Treat both `None` and empty string as missing configuration values.
         missing = [key for key, value in values.items() if value in (None, "")]
@@ -171,17 +173,19 @@ def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
         if expanded_path.is_absolute():
             return str(expanded_path) if expanded_path.is_file() else None
 
-        caller_relative_path = _resolve_relative_to_invoking_script(expanded_path)
-        if caller_relative_path is not None:
-            return caller_relative_path
+        return (
+            _resolve_relative_to_invoking_script(expanded_path)
+            or (str(expanded_path.resolve()) if expanded_path.is_file() else None)
+        )
 
-        return str(expanded_path.resolve()) if expanded_path.is_file() else None
-
-    for candidate in DEFAULT_CONFIG_LOCATIONS:
-        expanded_candidate = Path(candidate).expanduser()
-        if expanded_candidate.is_file():
-            return str(expanded_candidate)
-    return None
+    return next(
+        (
+            str(e)
+            for c in DEFAULT_CONFIG_LOCATIONS
+            if (e := Path(c).expanduser()).is_file()
+        ),
+        None,
+    )
 
 
 def _resolve_relative_to_invoking_script(config_path: Path) -> Optional[str]:

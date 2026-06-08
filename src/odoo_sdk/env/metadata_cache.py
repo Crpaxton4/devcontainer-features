@@ -22,8 +22,10 @@ def _freeze_context_value(value: Any) -> Any:
     """
     if isinstance(value, dict):
         return tuple(
-            (str(key), _freeze_context_value(item))
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            sorted(
+                (str(key), _freeze_context_value(item))
+                for key, item in value.items()
+            )
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_context_value(item) for item in value)
@@ -68,8 +70,10 @@ def _normalize_context(
     if not context:
         return None
     return tuple(
-        (str(key), _freeze_context_value(value))
-        for key, value in sorted(context.items(), key=lambda pair: str(pair[0]))
+        sorted(
+            (str(key), _freeze_context_value(value))
+            for key, value in context.items()
+        )
     )
 
 
@@ -222,8 +226,6 @@ class MetadataCache:
                 self._entries.clear()
                 return
 
-            keys_to_remove = [
-                key for key in self._entries if key.model_name == model_name
-            ]
-            for key in keys_to_remove:
-                del self._entries[key]
+            self._entries = {
+                k: v for k, v in self._entries.items() if k.model_name != model_name
+            }
