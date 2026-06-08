@@ -2,7 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import date, datetime, timezone
 
-from odoo_sdk.fields.adapters import adapt_field_value, adapt_record_values
+from odoo_sdk.fields.values import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 
 

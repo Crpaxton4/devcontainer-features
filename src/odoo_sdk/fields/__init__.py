@@ -1,6 +1,10 @@
-from .adapters import adapt_field_value, adapt_record_values
 from .commands import Command, normalize_x2many_commands
-from .values import RelationCollection, RelationValue
+from .values import (
+    RelationCollection,
+    RelationValue,
+    adapt_field_value,
+    adapt_record_values,
+)
 
 __all__ = [
     "RelationValue",

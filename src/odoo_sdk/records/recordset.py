@@ -14,7 +14,7 @@ from typing import (
 )
 
 from odoo_sdk.query.domain import DomainExpression, DomainInput
-from odoo_sdk.fields.adapters import adapt_field_value, adapt_record_values
+from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 
