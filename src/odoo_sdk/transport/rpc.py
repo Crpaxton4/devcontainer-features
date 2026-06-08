@@ -71,7 +71,7 @@ class OdooRpcExecutor(OdooExecutor):
                         self.password,
                         {},
                     )
-        return int(self._uid)
+        return self._uid
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over Odoo's `execute_kw` XML-RPC API.

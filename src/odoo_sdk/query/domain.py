@@ -111,6 +111,8 @@ class DomainExpression:
         :return: Canonical domain expression for the provided input.
         :rtype: DomainExpression
         """
+        if domain is None:
+            return cls()
         if isinstance(domain, cls):
             return domain
         return cls(_normalize_domain_nodes(domain, allow_empty=True))
@@ -352,3 +354,9 @@ def _serialize_tokens(node: DomainNode) -> list[Any]:
     if isinstance(item, list):
         return item
     return [item]
+
+
+# Private aliases used by internal tests to access implementation-level nodes
+# without importing the public names, signalling these are internal details.
+_Condition = Condition
+_BooleanExpression = BooleanExpression
