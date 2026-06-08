@@ -82,13 +82,7 @@ class OdooConnectionSettings:
             "password": password,
         }
         values: dict[str, Optional[str]] = {
-            key: (
-                explicit_value
-                if explicit_value is not None
-                else environment_values[key]
-                if environment_values.get(key) is not None
-                else file_values.get(key)
-            )
+            key: _resolve_setting_value(key, explicit_value, environment_values, file_values)
             for key, explicit_value in explicit_values.items()
         }
 
@@ -178,14 +172,41 @@ def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
             or (str(expanded_path.resolve()) if expanded_path.is_file() else None)
         )
 
-    return next(
-        (
-            str(e)
-            for c in DEFAULT_CONFIG_LOCATIONS
-            if (e := Path(c).expanduser()).is_file()
-        ),
-        None,
-    )
+    for candidate in DEFAULT_CONFIG_LOCATIONS:
+        expanded = Path(candidate).expanduser()
+        if expanded.is_file():
+            return str(expanded)
+    return None
+
+
+def _resolve_setting_value(
+    key: str,
+    explicit: Optional[str],
+    env_vals: dict[str, Optional[str]],
+    file_vals: dict[str, str],
+) -> Optional[str]:
+    """Resolve one connection setting from the three-tier precedence chain.
+
+    This helper is necessary because the precedence logic (explicit > env > file)
+    should be isolated, testable, and readable rather than embedded in a nested
+    ternary comprehension.
+
+    :param key: Setting name used to look up values in env and file dicts.
+    :type key: str
+    :param explicit: Explicit value override, or None when not provided.
+    :type explicit: Optional[str]
+    :param env_vals: Environment-derived values keyed by setting name.
+    :type env_vals: dict[str, Optional[str]]
+    :param file_vals: File-derived values keyed by setting name.
+    :type file_vals: dict[str, str]
+    :return: Resolved setting value, or None when all sources are absent.
+    :rtype: Optional[str]
+    """
+    if explicit is not None:
+        return explicit
+    if env_vals.get(key) is not None:
+        return env_vals.get(key)
+    return file_vals.get(key)
 
 
 def _resolve_relative_to_invoking_script(config_path: Path) -> Optional[str]:

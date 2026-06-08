@@ -667,7 +667,7 @@ class TestOdooRecordset(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "res.partner",
             "search",
-            [("id", "in", [3, 1, 2])],
+            [("id", "in", (3, 1, 2))],
             context={"lang": "en_US"},
         )
 

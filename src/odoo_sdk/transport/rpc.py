@@ -42,7 +42,7 @@ class OdooRpcExecutor(OdooExecutor):
         self.url = url.rstrip("/")
         self.db = db
         self.username = username
-        self.password = password
+        self._password = password
 
         self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
         self._object = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
@@ -68,7 +68,7 @@ class OdooRpcExecutor(OdooExecutor):
                     self._uid = self._common.authenticate(
                         self.db,
                         self.username,
-                        self.password,
+                        self._password,
                         {},
                     )
         return self._uid
@@ -93,7 +93,7 @@ class OdooRpcExecutor(OdooExecutor):
         return self._object.execute_kw(
             self.db,
             self.uid,
-            self.password,
+            self._password,
             model,
             method,
             list(args),

@@ -109,8 +109,7 @@ class OdooEnv:
         :return: A new environment sharing the same executor and metadata cache.
         :rtype: OdooEnv
         """
-        merged = deepcopy(self._context)
-        merged.update(deepcopy(context))
+        merged = deepcopy({**self._context, **context})
         return OdooEnv(
             self._executor,
             merged,
@@ -231,14 +230,7 @@ class OdooEnv:
         :rtype: Dict[str, Any]
         """
         context = self.context
-        kwargs: Dict[str, Any] = {}
-        if fields is not None:
-            kwargs["allfields"] = list(fields)
-        if attributes is not None:
-            kwargs["attributes"] = list(attributes)
-        if context:
-            kwargs["context"] = context
-
+        kwargs = self._build_fields_get_kwargs(fields, attributes, context)
         return self._metadata_cache.get_or_load(
             model_name,
             fields=fields,
@@ -247,6 +239,36 @@ class OdooEnv:
             refresh=refresh,
             loader=lambda: self._executor.execute(model_name, "fields_get", **kwargs),
         )
+
+    def _build_fields_get_kwargs(
+        self,
+        fields: Optional[Sequence[str]],
+        attributes: Optional[Sequence[str]],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the ``fields_get`` keyword arguments from optional parameters.
+
+        This helper is necessary because ``get_field_metadata`` should read as a
+        single-purpose orchestrator rather than embedding conditional kwargs assembly
+        inline.
+
+        :param fields: Optional subset of field names to request.
+        :type fields: Optional[Sequence[str]]
+        :param attributes: Optional subset of metadata attributes to request.
+        :type attributes: Optional[Sequence[str]]
+        :param context: Current Odoo context to include when non-empty.
+        :type context: Dict[str, Any]
+        :return: Keyword arguments for the ``fields_get`` executor call.
+        :rtype: Dict[str, Any]
+        """
+        kwargs: Dict[str, Any] = {}
+        if fields is not None:
+            kwargs["allfields"] = list(fields)
+        if attributes is not None:
+            kwargs["attributes"] = list(attributes)
+        if context:
+            kwargs["context"] = context
+        return kwargs
 
     def __getitem__(self, model_name: str) -> OdooRecordset:
         """Return an empty model-bound recordset anchored to this environment.

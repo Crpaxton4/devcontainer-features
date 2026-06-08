@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+from odoo_sdk._utils import _is_null_wire_value
+
 @dataclass(frozen=True)
 class RelationValue:
     """Represent one adapted many2one relation returned by the SDK.
@@ -196,14 +198,14 @@ def _adapt_many2one(value: Any, field_metadata: Mapping[str, Any]) -> Any:
     if not value:
         return None
 
-    if isinstance(value, int) and not isinstance(value, bool):
+    if _is_valid_relation_id(value):
         return RelationValue(model_name=relation_model, id=value)
 
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return value
 
     record_id = value[0]
-    if not isinstance(record_id, int) or isinstance(record_id, bool):
+    if not _is_valid_relation_id(record_id):
         return value
 
     label: str | None = None
@@ -267,7 +269,7 @@ def _adapt_date(value: Any, _field_metadata: Mapping[str, Any]) -> Any:
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
 
-    if value in (None, False, ""):
+    if _is_null_wire_value(value):
         return None
 
     if not isinstance(value, str):
@@ -299,7 +301,7 @@ def _adapt_datetime(value: Any, _field_metadata: Mapping[str, Any]) -> Any:
     if isinstance(value, datetime):
         return _normalize_utc(value)
 
-    if value in (None, False, ""):
+    if _is_null_wire_value(value):
         return None
 
     if not isinstance(value, str):
@@ -363,6 +365,20 @@ def _normalize_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _is_valid_relation_id(value: Any) -> bool:
+    """Return whether a value is a valid Odoo relation record id.
+
+    This predicate is necessary because ``bool`` is a subclass of ``int`` in Python,
+    and Odoo wire values may include ``False`` which must not be treated as id ``0``.
+
+    :param value: Candidate id value to inspect.
+    :type value: Any
+    :return: True when the value is a positive-compatible integer that is not a bool.
+    :rtype: bool
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 # Dispatch table mapping Odoo field type strings to their adapter functions.

@@ -5,6 +5,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias
 
+from odoo_sdk._utils import _is_sequence
+
 CREATE: Final[int] = 0
 UPDATE: Final[int] = 1
 DELETE: Final[int] = 2
@@ -191,10 +193,9 @@ def normalize_x2many_commands(value: Any) -> list[X2ManyTupleCommand]:
         return [_normalize_raw_command(value)]
 
     if _is_sequence(value):
-        commands = list(value)
-        if not commands:
+        if not value:
             raise ValueError("x2many command sequences cannot be empty")
-        return [_normalize_single_command(item) for item in commands]
+        return [_normalize_single_command(item) for item in value]
 
     raise ValueError(
         "x2many field values must be a helper, raw tuple, or sequence of commands"
@@ -616,22 +617,6 @@ def _is_placeholder(value: Any) -> bool:
     if isinstance(value, bool):
         return not value
     return isinstance(value, int) and not value
-
-
-def _is_sequence(value: Any) -> bool:
-    """Return whether a value is a non-string sequence.
-
-    This predicate is necessary because command normalization accepts list-like input
-    but must reject strings and bytes as accidental iterables.
-
-    :param value: Candidate value to inspect.
-    :type value: Any
-    :return: True when the value is a supported sequence.
-    :rtype: bool
-    """
-    if isinstance(value, (str, bytes, bytearray)):
-        return False
-    return isinstance(value, Sequence)
 
 
 _COMMAND_STATE_NORMALIZERS: Final[dict[int, Any]] = {

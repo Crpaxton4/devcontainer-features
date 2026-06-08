@@ -5,6 +5,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias, Union
 
+from odoo_sdk._utils import _is_sequence
+
 DomainCondition: TypeAlias = tuple[str, str, Any]
 Domain: TypeAlias = list[DomainCondition]
 DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any]]
@@ -205,14 +207,45 @@ def _parse_expression(items: list[Any], index: int) -> tuple[DomainNode, int]:
         if item not in _BOOLEAN_OPERATORS:
             raise ValueError(f"Unsupported domain token: {item!r}")
         if item in {"&", "|"}:
-            left, next_index = _parse_expression(items, index + 1)
-            right, next_index = _parse_expression(items, next_index)
-            return BooleanExpression(item, (left, right)), next_index
-
-        operand, next_index = _parse_expression(items, index + 1)
-        return BooleanExpression("!", (operand,)), next_index
+            return _parse_binary_expression(item, items, index)
+        return _parse_unary_expression(items, index)
 
     return _normalize_item(item), index + 1
+
+
+def _parse_binary_expression(
+    operator: str, items: list[Any], index: int
+) -> tuple[DomainNode, int]:
+    """Parse a binary boolean expression (``&`` or ``|``) from a token sequence.
+
+    :param operator: The binary operator token (``&`` or ``|``).
+    :type operator: str
+    :param items: Flat list of domain tokens.
+    :type items: list[Any]
+    :param index: Index of the operator token.
+    :type index: int
+    :return: Binary expression node and the next unread token index.
+    :rtype: tuple[DomainNode, int]
+    """
+    left, next_index = _parse_expression(items, index + 1)
+    right, next_index = _parse_expression(items, next_index)
+    return BooleanExpression(operator, (left, right)), next_index
+
+
+def _parse_unary_expression(
+    items: list[Any], index: int
+) -> tuple[DomainNode, int]:
+    """Parse a unary boolean expression (``!``) from a token sequence.
+
+    :param items: Flat list of domain tokens.
+    :type items: list[Any]
+    :param index: Index of the ``!`` operator token.
+    :type index: int
+    :return: Negation expression node and the next unread token index.
+    :rtype: tuple[DomainNode, int]
+    """
+    operand, next_index = _parse_expression(items, index + 1)
+    return BooleanExpression("!", (operand,)), next_index
 
 
 def _normalize_item(item: Any) -> DomainNode:
@@ -273,20 +306,6 @@ def _is_condition(value: Any) -> bool:
         and isinstance(operator, str)
     )
 
-
-def _is_sequence(value: Any) -> bool:
-    """Return whether a value is a non-string sequence.
-
-    This helper is necessary because domain parsing accepts list-like containers but
-    must reject strings and bytes, which are sequences in Python but not domain
-    structures here.
-
-    :param value: Candidate value to inspect.
-    :type value: Any
-    :return: True when the value is a supported sequence type.
-    :rtype: bool
-    """
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
 
 def _serialize_expression(node: DomainNode) -> Union[DomainCondition, list[Any]]:

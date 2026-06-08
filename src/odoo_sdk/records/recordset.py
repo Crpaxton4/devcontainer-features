@@ -17,6 +17,7 @@ from odoo_sdk.query.domain import DomainExpression, DomainInput
 from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
+from odoo_sdk._utils import _dedup_field_names
 
 if TYPE_CHECKING:
     from odoo_sdk.env.env import OdooEnv
@@ -273,19 +274,7 @@ class OdooRecordset:
             field_name,
         )
         if ids_to_fetch:
-            rows = self._materialize_records(ids=ids_to_fetch, fields=[field_name])
-            for row in rows:
-                if "id" not in row:
-                    continue
-                adapted_value = self._adapt_field_access_value(
-                    row.get(field_name),
-                    field_metadata,
-                )
-                self._env.cache_record_field_values(
-                    self._model_name,
-                    row["id"],
-                    {field_name: adapted_value},
-                )
+            self._populate_field_cache(field_name, field_metadata, ids_to_fetch)
 
         found, value = self._env.get_cached_field_value(
             self._model_name,
@@ -297,6 +286,40 @@ class OdooRecordset:
         raise AttributeError(
             f"{type(self).__name__!s} object has no attribute {field_name!r}"
         )
+
+    def _populate_field_cache(
+        self,
+        field_name: str,
+        field_metadata: Dict[str, Any],
+        ids_to_fetch: list[int],
+    ) -> None:
+        """Fetch field values from Odoo and store them in the environment cache.
+
+        This helper is necessary because the lazy-load path in ``_get_field_value``
+        should be a single named step rather than an inline side-effect block.
+
+        :param field_name: Field name to load.
+        :type field_name: str
+        :param field_metadata: Metadata describing the field for adaptation.
+        :type field_metadata: Dict[str, Any]
+        :param ids_to_fetch: Record ids that are missing the cached value.
+        :type ids_to_fetch: list[int]
+        :return: None.
+        :rtype: None
+        """
+        rows = self._materialize_records(ids=ids_to_fetch, fields=[field_name])
+        for row in rows:
+            if "id" not in row:
+                continue
+            adapted_value = self._adapt_field_access_value(
+                row.get(field_name),
+                field_metadata,
+            )
+            self._env.cache_record_field_values(
+                self._model_name,
+                row["id"],
+                {field_name: adapted_value},
+            )
 
     def _adapt_field_access_value(
         self,
@@ -518,7 +541,7 @@ class OdooRecordset:
         """Materialize records by direct ids or by a search-derived read.
 
         This helper is necessary because raw and adapted reads share the same decision
-        tree for direct `read` versus `search_read` execution.
+        tree for direct ``read`` versus ``search_read`` execution.
 
         :param ids: Explicit record ids to read, defaults to None.
         :type ids: Optional[Sequence[int]]
@@ -540,22 +563,73 @@ class OdooRecordset:
         if ids is not None:
             if not ids:
                 return []
-
-            kwargs = self._context_kwargs()
-            if fields is not None:
-                kwargs["fields"] = fields
-            records = self._execute("read", list(ids), **kwargs)
+            records = self._read_by_ids(ids, fields)
         else:
-            serialized_domain = DomainExpression.normalize(domain).serialize()
-            kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
-            if fields is not None:
-                kwargs["fields"] = fields
-            records = self._execute("search_read", serialized_domain, **kwargs)
+            records = self._search_read_core(
+                domain, fields, limit=limit, offset=offset, order=order
+            )
 
         if not adapt or not records:
             return records
 
         return self._adapt_records(records, fields)
+
+    def _read_by_ids(
+        self,
+        ids: Sequence[int],
+        fields: Optional[list[str]] = None,
+    ) -> list[Record]:
+        """Execute a ``read`` call for the given ids.
+
+        This helper is necessary because ``_materialize_records`` should delegate
+        each execution branch to a focused method rather than building kwargs inline
+        in two places.
+
+        :param ids: Record ids to read.
+        :type ids: Sequence[int]
+        :param fields: Optional field names to request, defaults to None.
+        :type fields: Optional[list[str]]
+        :return: Raw record mappings.
+        :rtype: list[Record]
+        """
+        kwargs = self._context_kwargs()
+        if fields is not None:
+            kwargs["fields"] = fields
+        return self._execute("read", list(ids), **kwargs)
+
+    def _search_read_core(
+        self,
+        domain: DomainInput = None,
+        fields: Optional[list[str]] = None,
+        *,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> list[Record]:
+        """Execute a ``search_read`` call for the given domain.
+
+        This helper is necessary because ``_materialize_records`` should delegate
+        each execution branch to a focused method rather than building kwargs inline
+        in two places.
+
+        :param domain: Domain used to select records, defaults to None.
+        :type domain: DomainInput
+        :param fields: Optional field names to request, defaults to None.
+        :type fields: Optional[list[str]]
+        :param limit: Maximum number of rows to return, defaults to None.
+        :type limit: Optional[int]
+        :param offset: Number of matched rows to skip, defaults to None.
+        :type offset: Optional[int]
+        :param order: Odoo order expression, defaults to None.
+        :type order: Optional[str]
+        :return: Raw record mappings.
+        :rtype: list[Record]
+        """
+        serialized_domain = DomainExpression.normalize(domain).serialize()
+        kwargs = self._search_kwargs(limit=limit, offset=offset, order=order)
+        if fields is not None:
+            kwargs["fields"] = fields
+        return self._execute("search_read", serialized_domain, **kwargs)
 
     def _adapt_records(
         self,
@@ -593,7 +667,7 @@ class OdooRecordset:
         """Determine which field names require metadata lookup for adaptation.
 
         This helper is necessary because the adapter layer should fetch only the field
-        metadata it actually needs and should ignore the synthetic `id` field.
+        metadata it actually needs and should ignore the synthetic ``id`` field.
 
         :param records: Materialized records whose keys may require metadata.
         :type records: Sequence[Record]
@@ -603,21 +677,12 @@ class OdooRecordset:
         :rtype: list[str]
         """
         if fields is not None:
-            return [
-                field_name
-                for field_name in dict.fromkeys(fields)
-                if field_name != "id"
-            ]
+            return _dedup_field_names(fields)
 
         names: list[str] = []
         for record in records:
             names.extend(record.keys())
-
-        return [
-            field_name
-            for field_name in dict.fromkeys(names)
-            if field_name != "id"
-        ]
+        return _dedup_field_names(names)
 
     def search_read_adapted(
         self,
@@ -864,7 +929,7 @@ class OdooRecordset:
             return self._derive()
 
         existing_ids = set(
-            self.search([("id", "in", list(self._ids))]).ids
+            self.search([("id", "in", self._ids)]).ids
         )
         surviving_ids = [record_id for record_id in self._ids if record_id in existing_ids]
         return self._derive(surviving_ids)
