@@ -10,8 +10,6 @@ from odoo_sdk.client.client import OdooClient
 from odoo_sdk.config.settings import OdooConnectionSettings
 from odoo_sdk.env.env import OdooEnv
 from odoo_sdk.transport.executor import OdooExecutor
-from odoo_sdk.records.model import OdooModel
-from odoo_sdk.query.builder import OdooQuery
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.rpc import OdooRpcExecutor
 
@@ -53,43 +51,6 @@ class TestOdooClientContract(unittest.TestCase):
             allfields=["name"],
             attributes=["type"],
         )
-
-    def test_direct_model_construction_uses_independent_env_cache(self) -> None:
-        executor = Mock(spec=OdooExecutor)
-        executor.execute.return_value = {"name": {"type": "char"}}
-        client = OdooClient(executor=executor)
-        model = OdooModel(client, "res.partner")
-
-        first = client["res.partner"].fields_get(["name"], ["type"])
-        second = model.fields_get(["name"], ["type"])
-
-        self.assertEqual(first, second)
-        self.assertEqual(
-            executor.execute.call_args_list,
-            [
-                unittest.mock.call(
-                    "res.partner",
-                    "fields_get",
-                    allfields=["name"],
-                    attributes=["type"],
-                ),
-                unittest.mock.call(
-                    "res.partner",
-                    "fields_get",
-                    allfields=["name"],
-                    attributes=["type"],
-                ),
-            ],
-        )
-
-    def test_direct_query_construction_uses_independent_env(self) -> None:
-        executor = Mock(spec=OdooExecutor)
-        client = OdooClient(executor=executor)
-
-        query = OdooQuery(client, "res.partner")
-
-        self.assertIsNot(query._env, client.env)
-        self.assertIs(query._env.executor, client)
 
     @given(strategies.text(), strategies.text(), strategies.text(), strategies.text())
     def test_client_is_not_a_mapping_or_iterable(

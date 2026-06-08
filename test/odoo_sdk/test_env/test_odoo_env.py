@@ -7,7 +7,6 @@ from hypothesis import given, strategies
 import odoo_sdk.env.env as odoo_env_module
 from odoo_sdk.env.env import OdooEnv
 from odoo_sdk.transport.executor import OdooExecutor
-from odoo_sdk.records.model import OdooModel
 from odoo_sdk.records.recordset import OdooRecordset
 
 
@@ -66,7 +65,6 @@ class TestOdooEnv(unittest.TestCase):
         self.assertEqual(env.context, {})
 
     def test_type_checking_symbols_are_not_runtime_imported(self) -> None:
-        self.assertFalse(hasattr(odoo_env_module, "OdooModel"))
         self.assertFalse(hasattr(odoo_env_module, "OdooRecordset"))
 
     @given(MUTABLE_CONTEXTS)

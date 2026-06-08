@@ -23,11 +23,10 @@ from .config import OdooConnectionSettings
 from .env import OdooEnv
 from .fields.commands import Command
 from .query.domain import Domain, DomainExpression
-from .records import OdooModel, OdooRecordset
+from .records import OdooRecordset
 from .records.recordset import Record
 from .transport import OdooExecutor, OdooRpcExecutor
 from .command_registry import CommandDispatcher
-from .query import OdooQuery
 
 __all__ = [
     "command_registry",
@@ -35,8 +34,6 @@ __all__ = [
     "OdooConnectionSettings",
     "OdooEnv",
     "OdooExecutor",
-    "OdooModel",
-    "OdooQuery",
     "OdooRecordset",
     "OdooRpcExecutor",
     "CommandDispatcher",

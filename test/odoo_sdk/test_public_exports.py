@@ -12,8 +12,6 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
             "OdooConnectionSettings",
             "OdooEnv",
             "OdooExecutor",
-            "OdooModel",
-            "OdooQuery",
             "OdooRecordset",
             "OdooRpcExecutor",
             "CommandDispatcher",

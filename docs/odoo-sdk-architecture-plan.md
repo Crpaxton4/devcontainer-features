@@ -201,11 +201,6 @@ graph TD
         Domain["DomainExpression"]
     end
 
-    subgraph Compatibility["Legacy Compatibility"]
-        Model["OdooModel compatibility adapter"]
-        Query["OdooQuery legacy builder shim"]
-    end
-
     subgraph Core["Shared Semantic Core"]
         ModelRegistry["Model registry"]
         MetadataCache["Metadata cache"]
@@ -222,9 +217,6 @@ graph TD
 
     Client --> Env
     Client --> Recordset
-    Model --> Recordset
-    Query --> Domain
-    Query --> Recordset
     Env --> ModelRegistry
     ModelRegistry --> Recordset
     Recordset --> Domain
@@ -242,7 +234,6 @@ graph TD
 
 The major improvement is the separation of concerns:
 - The current public API is recordset-first: `OdooClient`, `OdooEnv`, `DomainExpression`, and `OdooRecordset` are all supported exports.
-- `OdooModel` and `OdooQuery` remain only as compatibility-oriented surfaces over that public core.
 - A shared execution boundary, potentially realized as `OdooSession`, owns authentication, transport policy, and mapped-error behavior in the longer-term architecture.
 - `OdooEnv` owns context and session-bound model resolution.
 - `OdooRecordset` owns ids, model identity, and fluent ORM-like behavior.

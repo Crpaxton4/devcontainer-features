@@ -101,8 +101,6 @@ graph LR
 graph TD
     subgraph PublicAPI["Preserved Public API"]
         Client["OdooClient facade"]
-      Model["OdooModel compatibility proxy"]
-      Query["OdooQuery compatibility builder"]
     end
 
     subgraph PhaseAInternal["Phase A Internal Core"]
@@ -126,8 +124,7 @@ graph TD
     end
 
     Client --> Env
-    Client --> Model
-    Model --> Recordset
+    ModelRegistry --> Recordset
     Query --> Domain
     Query --> Recordset
     Env --> ModelRegistry
