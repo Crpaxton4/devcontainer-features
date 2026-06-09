@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias, Union
@@ -175,6 +175,96 @@ class DomainExpression:
         if not self._nodes:
             return True
         return all(_evaluate_node(record_values, node) for node in self._nodes)
+
+    @classmethod
+    def AND(cls, iterable: Iterable[Any]) -> DomainExpression:
+        """Combine an iterable of domains with logical AND.
+
+        :param iterable: Iterable of ``DomainExpression`` instances or raw domain lists.
+        :type iterable: Iterable[Any]
+        :return: Combined domain expression.
+        :rtype: DomainExpression
+        """
+        items = [cls.normalize(x) for x in iterable]
+        if len(items) == 0:
+            return cls.TRUE
+        if len(items) == 1:
+            return items[0]
+        nodes = [n for item in items if (n := _to_domain_node(item)) is not None]
+        if not nodes:
+            return cls.TRUE
+        if len(nodes) == 1:
+            return cls((nodes[0],))
+        return cls((BooleanExpression("&", tuple(nodes)),))
+
+    @classmethod
+    def OR(cls, iterable: Iterable[Any]) -> DomainExpression:
+        """Combine an iterable of domains with logical OR.
+
+        :param iterable: Iterable of ``DomainExpression`` instances or raw domain lists.
+        :type iterable: Iterable[Any]
+        :return: Combined domain expression.
+        :rtype: DomainExpression
+        """
+        items = [cls.normalize(x) for x in iterable]
+        if len(items) == 0:
+            return cls.FALSE
+        if len(items) == 1:
+            return items[0]
+        if any(item.is_empty() for item in items):
+            return cls.TRUE
+        nodes = tuple(_to_domain_node(item) for item in items)
+        return cls((BooleanExpression("|", nodes),))  # type: ignore[arg-type]
+
+    def __invert__(self) -> DomainExpression:
+        """Return the logical negation of this domain.
+
+        :return: New domain expression with a ``!`` node wrapping this expression.
+        :rtype: DomainExpression
+        """
+        if self.is_empty():
+            return type(self).FALSE
+        node = _to_domain_node(self)
+        assert node is not None
+        return type(self)((BooleanExpression("!", (node,)),))
+
+    def __and__(self, other: Any) -> DomainExpression:
+        """Return the logical AND of this domain and another.
+
+        :param other: Another ``DomainExpression`` or raw domain list.
+        :type other: Any
+        :return: Combined domain expression.
+        :rtype: DomainExpression
+        """
+        return type(self).AND([self, type(self).normalize(other)])
+
+    def __or__(self, other: Any) -> DomainExpression:
+        """Return the logical OR of this domain and another.
+
+        :param other: Another ``DomainExpression`` or raw domain list.
+        :type other: Any
+        :return: Combined domain expression.
+        :rtype: DomainExpression
+        """
+        return type(self).OR([self, type(self).normalize(other)])
+
+
+def _to_domain_node(expr: DomainExpression) -> DomainNode | None:
+    """Reduce a DomainExpression to a single DomainNode for use in boolean trees.
+
+    This helper is necessary because composition methods need to embed multi-node
+    expressions as a single operand inside a parent BooleanExpression.
+
+    :param expr: Domain expression to reduce.
+    :type expr: DomainExpression
+    :return: None for empty (TRUE) expressions; single node or implicit AND wrapper.
+    :rtype: DomainNode | None
+    """
+    if not expr._nodes:
+        return None
+    if len(expr._nodes) == 1:
+        return expr._nodes[0]
+    return BooleanExpression("&", expr._nodes)
 
 
 def _normalize_domain_nodes(
@@ -603,6 +693,10 @@ def _collect_domain_fields(nodes: tuple[DomainNode, ...]) -> set[str]:
             result |= _collect_domain_fields(node.operands)
     return result
 
+
+# Class-level constants for domain composition.
+DomainExpression.TRUE = DomainExpression()
+DomainExpression.FALSE = DomainExpression((Condition("id", "=", False),))
 
 # Private aliases used by internal tests to access implementation-level nodes
 # without importing the public names, signalling these are internal details.
