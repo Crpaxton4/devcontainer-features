@@ -834,3 +834,188 @@ class TestOdooRecordset(unittest.TestCase):
 
         _call_kwargs = self.executor.execute.call_args.kwargs
         self.assertNotIn("offset", _call_kwargs)
+
+    # -- name_create -----------------------------------------------------------
+
+    def test_name_create_returns_singleton_recordset(self) -> None:
+        self.executor.execute.return_value = [42, "Test Name"]
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.name_create("Test Name")
+
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (42,))
+        self.assertEqual(result.model_name, "res.partner")
+
+    def test_name_create_forwards_context(self) -> None:
+        self.executor.execute.return_value = [7, "Foo"]
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        recordset.name_create("Foo")
+
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "name_create",
+            "Foo",
+            context={"lang": "en_US"},
+        )
+
+    # -- name_search -----------------------------------------------------------
+
+    def test_name_search_returns_list_of_id_name_pairs(self) -> None:
+        self.executor.execute.return_value = [[1, "Foo"], [2, "Bar"]]
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.name_search("foo")
+
+        self.assertEqual(result, [[1, "Foo"], [2, "Bar"]])
+
+    def test_name_search_forwards_domain_operator_limit_and_context(self) -> None:
+        self.executor.execute.return_value = []
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        recordset.name_search("test", domain=[("active", "=", True)], operator="=", limit=5)
+
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "name_search",
+            "test",
+            [("active", "=", True)],
+            "=",
+            5,
+            context={"lang": "en_US"},
+        )
+
+    def test_name_search_empty_result_returns_empty_list(self) -> None:
+        self.executor.execute.return_value = []
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.name_search("no_match")
+
+        self.assertEqual(result, [])
+
+    def test_name_search_none_domain_passes_empty_list_to_server(self) -> None:
+        self.executor.execute.return_value = []
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        recordset.name_search("x", domain=None)
+
+        _call_args = self.executor.execute.call_args.args
+        self.assertEqual(_call_args[3], [])
+
+    # -- default_get -----------------------------------------------------------
+
+    def test_default_get_returns_dict_from_server(self) -> None:
+        self.executor.execute.return_value = {"name": "Default"}
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.default_get(["name", "active"])
+
+        self.assertEqual(result, {"name": "Default"})
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "default_get",
+            ["name", "active"],
+            context={"lang": "en_US"},
+        )
+
+    def test_default_get_empty_dict_when_server_has_no_defaults(self) -> None:
+        self.executor.execute.return_value = {}
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.default_get(["name"])
+
+        self.assertEqual(result, {})
+
+    # -- copy ------------------------------------------------------------------
+
+    def test_copy_returns_new_singleton_recordset(self) -> None:
+        self.executor.execute.return_value = 99
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        result = recordset.copy()
+
+        self.assertIsInstance(result, OdooRecordset)
+        self.assertEqual(result.ids, (99,))
+        self.assertNotEqual(result.ids, recordset.ids)
+
+    def test_copy_forwards_default_dict_and_context(self) -> None:
+        self.executor.execute.return_value = 100
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        recordset.copy(default={"name": "Copy"})
+
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "copy",
+            7,
+            {"name": "Copy"},
+            context={"lang": "en_US"},
+        )
+
+    def test_copy_none_default_sends_empty_dict_to_server(self) -> None:
+        self.executor.execute.return_value = 101
+        recordset = OdooRecordset(self.env, "res.partner", [7])
+
+        recordset.copy(default=None)
+
+        _call_args = self.executor.execute.call_args.args
+        self.assertEqual(_call_args[3], {})
+
+    def test_copy_raises_value_error_on_multi_record_recordset(self) -> None:
+        recordset = OdooRecordset(self.env, "res.partner", [1, 2])
+
+        with self.assertRaises(ValueError):
+            recordset.copy()
+
+    # -- get_metadata ----------------------------------------------------------
+
+    def test_get_metadata_returns_list_of_audit_dicts(self) -> None:
+        meta = [
+            {
+                "id": 1,
+                "create_uid": [3, "Admin"],
+                "create_date": "2024-01-01 00:00:00",
+                "write_uid": [3, "Admin"],
+                "write_date": "2024-06-01 00:00:00",
+                "xmlid": False,
+                "xmlids": [],
+                "noupdate": False,
+            },
+            {
+                "id": 2,
+                "create_uid": [3, "Admin"],
+                "create_date": "2024-01-02 00:00:00",
+                "write_uid": [3, "Admin"],
+                "write_date": "2024-06-02 00:00:00",
+                "xmlid": False,
+                "xmlids": [],
+                "noupdate": False,
+            },
+        ]
+        self.executor.execute.return_value = meta
+        recordset = OdooRecordset(self.env, "res.partner", [1, 2])
+
+        result = recordset.get_metadata()
+
+        self.assertEqual(result, meta)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "get_metadata",
+            [1, 2],
+            context={"lang": "en_US"},
+        )
+
+    def test_get_metadata_empty_recordset_passes_empty_list_to_server(self) -> None:
+        self.executor.execute.return_value = []
+        recordset = OdooRecordset(self.env, "res.partner", [])
+
+        result = recordset.get_metadata()
+
+        self.assertEqual(result, [])
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "get_metadata",
+            [],
+            context={"lang": "en_US"},
+        )

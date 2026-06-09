@@ -916,6 +916,111 @@ class OdooRecordset:
             **self._context_kwargs(),
         )
 
+    def name_create(self, name: str) -> OdooRecordset:
+        """Create a new record from a display name and return it as a singleton recordset.
+
+        This method is necessary because ``name_create`` is a standard Odoo shortcut
+        that creates a record using only its ``name`` field and must return an
+        ``OdooRecordset`` rather than a raw id.
+
+        :param name: Display name for the new record.
+        :type name: str
+        :return: Singleton recordset for the newly created record.
+        :rtype: OdooRecordset
+        """
+        result = self._execute("name_create", name, **self._context_kwargs())
+        return self._derive(result[0])
+
+    def name_search(
+        self,
+        name: str = "",
+        domain: DomainInput = None,
+        operator: str = "ilike",
+        limit: int = 100,
+    ) -> list[tuple[int, str]]:
+        """Search records by display name and return (id, display_name) pairs.
+
+        This method is necessary because ``name_search`` is the standard Odoo lookup
+        for picking-widget style queries and must be reachable through the recordset API
+        so context is forwarded automatically.
+
+        :param name: Display name fragment to match, defaults to ``''``.
+        :type name: str
+        :param domain: Additional domain to narrow results, defaults to None.
+        :type domain: DomainInput
+        :param operator: Comparison operator applied to the name, defaults to
+            ``'ilike'``.
+        :type operator: str
+        :param limit: Maximum number of pairs to return, defaults to 100.
+        :type limit: int
+        :return: List of ``(id, display_name)`` pairs.
+        :rtype: list[tuple[int, str]]
+        """
+        serialized_domain = DomainExpression.normalize(domain).serialize()
+        return self._execute(
+            "name_search",
+            name,
+            serialized_domain,
+            operator,
+            limit,
+            **self._context_kwargs(),
+        )
+
+    def default_get(self, fields: list[str]) -> dict:
+        """Return server-side default values for the requested fields.
+
+        This method is necessary because ``default_get`` is the authoritative source
+        for server-configured defaults and must honour the current environment context
+        when computing them.
+
+        :param fields: Field names for which defaults should be fetched.
+        :type fields: list[str]
+        :return: Dict of default values keyed by field name; only fields for which the
+            server has a default are included.
+        :rtype: dict
+        """
+        return self._execute("default_get", fields, **self._context_kwargs())
+
+    def copy(self, default: dict | None = None) -> OdooRecordset:
+        """Duplicate the singleton record and return the copy as a new recordset.
+
+        This method is necessary because ``copy`` is only meaningful for a single
+        record and must return an ``OdooRecordset`` so the caller stays within the
+        recordset-first API.
+
+        :param default: Field values to override on the copy, defaults to None.
+        :type default: dict | None
+        :return: Singleton recordset for the duplicated record.
+        :rtype: OdooRecordset
+        :raises ValueError: When the recordset contains more than one record.
+        """
+        self.ensure_one()
+        result = self._execute(
+            "copy",
+            self._ids[0],
+            default or {},
+            **self._context_kwargs(),
+        )
+        return self._derive(result)
+
+    def get_metadata(self) -> list[dict]:
+        """Return audit metadata for all records in the recordset.
+
+        This method is necessary because ``get_metadata`` is the standard Odoo RPC
+        call for retrieving audit fields and must be accessible through the recordset
+        API so context is forwarded automatically.
+
+        :return: List of dicts with keys ``id``, ``create_uid``, ``create_date``,
+            ``write_uid``, ``write_date``, ``xmlid``, ``xmlids``, ``noupdate``; one
+            dict per record in the recordset.
+        :rtype: list[dict]
+        """
+        return self._execute(
+            "get_metadata",
+            list(self._ids),
+            **self._context_kwargs(),
+        )
+
     def exists(self) -> OdooRecordset:
         """Return a new recordset containing only ids that still exist.
 
