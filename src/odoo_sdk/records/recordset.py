@@ -245,6 +245,139 @@ class OdooRecordset:
         """
         return f"{self._model_name}{self._ids!r}"
 
+    # ------------------------------------------------------------------
+    # Set algebra operators
+    # ------------------------------------------------------------------
+
+    def _check_same_model(self, other: OdooRecordset) -> None:
+        """Raise ValueError when *other* belongs to a different model.
+
+        :param other: The other operand to validate.
+        :type other: OdooRecordset
+        :raises ValueError: When model names differ.
+        """
+        if self._model_name != other._model_name:
+            raise ValueError(
+                f"Set operations require the same model: "
+                f"{self._model_name!r} != {other._model_name!r}"
+            )
+
+    def __or__(self, other: OdooRecordset) -> OdooRecordset:
+        """Return the union of two same-model recordsets.
+
+        Preserves the order of *self*, then appends any ids from *other* not
+        already present.  Deduplicates by id.
+
+        :param other: Recordset to merge into this one.
+        :type other: OdooRecordset
+        :return: New recordset containing all ids from both operands.
+        :rtype: OdooRecordset
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        seen = set(self._ids)
+        extra = tuple(i for i in other._ids if i not in seen)
+        return self._derive(self._ids + extra)
+
+    def __and__(self, other: OdooRecordset) -> OdooRecordset:
+        """Return the intersection of two same-model recordsets.
+
+        Preserves the order of *self*; only ids present in *other* are kept.
+
+        :param other: Recordset to intersect with.
+        :type other: OdooRecordset
+        :return: New recordset with ids common to both operands.
+        :rtype: OdooRecordset
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        other_set = set(other._ids)
+        return self._derive(tuple(i for i in self._ids if i in other_set))
+
+    def __sub__(self, other: OdooRecordset) -> OdooRecordset:
+        """Return the difference of two same-model recordsets.
+
+        Preserves the order of *self*; ids present in *other* are removed.
+
+        :param other: Recordset whose ids will be excluded.
+        :type other: OdooRecordset
+        :return: New recordset with ids in *self* that are absent from *other*.
+        :rtype: OdooRecordset
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        other_set = set(other._ids)
+        return self._derive(tuple(i for i in self._ids if i not in other_set))
+
+    def __contains__(self, record: object) -> bool:
+        """Test whether *record* (a singleton recordset) is present in this recordset.
+
+        :param record: A singleton ``OdooRecordset`` to look up.
+        :type record: object
+        :return: ``True`` when the record's id is present.
+        :rtype: bool
+        :raises TypeError: When *record* is not an ``OdooRecordset``.
+        :raises ValueError: When *record* is not a singleton or models differ.
+        """
+        if not isinstance(record, OdooRecordset):
+            raise TypeError(
+                f"'in' requires an OdooRecordset singleton, got {type(record).__name__!r}"
+            )
+        if len(record._ids) != 1:
+            raise ValueError(
+                f"'in' requires a singleton recordset, got {len(record._ids)} records"
+            )
+        self._check_same_model(record)
+        return record._ids[0] in set(self._ids)
+
+    def __le__(self, other: OdooRecordset) -> bool:
+        """Return ``True`` if every id in *self* is present in *other* (subset test).
+
+        :param other: The potential superset.
+        :type other: OdooRecordset
+        :return: ``True`` when *self* is a subset of *other*.
+        :rtype: bool
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        return set(self._ids) <= set(other._ids)
+
+    def __lt__(self, other: OdooRecordset) -> bool:
+        """Return ``True`` if *self* is a strict subset of *other*.
+
+        :param other: The potential strict superset.
+        :type other: OdooRecordset
+        :return: ``True`` when *self* is a proper subset of *other*.
+        :rtype: bool
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        return set(self._ids) < set(other._ids)
+
+    def __ge__(self, other: OdooRecordset) -> bool:
+        """Return ``True`` if every id in *other* is present in *self* (superset test).
+
+        :param other: The potential subset.
+        :type other: OdooRecordset
+        :return: ``True`` when *self* is a superset of *other*.
+        :rtype: bool
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        return set(self._ids) >= set(other._ids)
+
+    def __gt__(self, other: OdooRecordset) -> bool:
+        """Return ``True`` if *self* is a strict superset of *other*.
+
+        :param other: The potential strict subset.
+        :type other: OdooRecordset
+        :return: ``True`` when *self* is a proper superset of *other*.
+        :rtype: bool
+        :raises ValueError: When operands are from different models.
+        """
+        self._check_same_model(other)
+        return set(self._ids) > set(other._ids)
+
     def _get_field_value(
         self,
         field_name: str,

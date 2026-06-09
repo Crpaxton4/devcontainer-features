@@ -1024,3 +1024,174 @@ class TestOdooRecordset(unittest.TestCase):
             [],
             context={"lang": "en_US"},
         )
+
+
+class TestOdooRecordsetSetOperations(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor = Mock(spec=OdooExecutor)
+        self.env = OdooEnv(self.executor, {"lang": "en_US"})
+
+    def _rs(self, ids, model="res.partner"):
+        return OdooRecordset(self.env, model, ids)
+
+    # ------------------------------------------------------------------
+    # Union
+    # ------------------------------------------------------------------
+
+    def test_union_basic(self) -> None:
+        result = self._rs([1, 2]) | self._rs([2, 3])
+        self.assertEqual(result.ids, (1, 2, 3))
+
+    def test_union_preserves_left_order_then_new_from_right(self) -> None:
+        result = self._rs([3, 1]) | self._rs([2, 1, 4])
+        self.assertEqual(result.ids, (3, 1, 2, 4))
+
+    def test_union_both_empty(self) -> None:
+        result = self._rs([]) | self._rs([])
+        self.assertEqual(result.ids, ())
+
+    def test_union_left_empty(self) -> None:
+        result = self._rs([]) | self._rs([1, 2])
+        self.assertEqual(result.ids, (1, 2))
+
+    def test_union_right_empty(self) -> None:
+        result = self._rs([1, 2]) | self._rs([])
+        self.assertEqual(result.ids, (1, 2))
+
+    def test_union_cross_model_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self._rs([1], "res.partner") | self._rs([1], "res.users")
+
+    def test_union_result_bound_to_left_env(self) -> None:
+        result = self._rs([1, 2]) | self._rs([3])
+        self.assertIs(result.env, self.env)
+        self.assertEqual(result.model_name, "res.partner")
+
+    # ------------------------------------------------------------------
+    # Intersection
+    # ------------------------------------------------------------------
+
+    def test_intersection_basic(self) -> None:
+        result = self._rs([1, 2, 3]) & self._rs([2, 3, 4])
+        self.assertEqual(result.ids, (2, 3))
+
+    def test_intersection_preserves_left_order(self) -> None:
+        result = self._rs([3, 2, 1]) & self._rs([1, 2])
+        self.assertEqual(result.ids, (3, 2, 1) if False else (2, 1))
+        # left order: 3 not in {1,2}, 2 in, 1 in  →  (2, 1)
+        self.assertEqual(result.ids, (2, 1))
+
+    def test_intersection_empty_result(self) -> None:
+        result = self._rs([1, 2]) & self._rs([3, 4])
+        self.assertEqual(result.ids, ())
+
+    def test_intersection_both_empty(self) -> None:
+        result = self._rs([]) & self._rs([])
+        self.assertEqual(result.ids, ())
+
+    def test_intersection_cross_model_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self._rs([1], "res.partner") & self._rs([1], "res.users")
+
+    # ------------------------------------------------------------------
+    # Difference
+    # ------------------------------------------------------------------
+
+    def test_difference_basic(self) -> None:
+        result = self._rs([1, 2, 3]) - self._rs([2])
+        self.assertEqual(result.ids, (1, 3))
+
+    def test_difference_removes_all_right_ids(self) -> None:
+        result = self._rs([1, 2, 3]) - self._rs([1, 2, 3])
+        self.assertEqual(result.ids, ())
+
+    def test_difference_right_empty(self) -> None:
+        result = self._rs([1, 2]) - self._rs([])
+        self.assertEqual(result.ids, (1, 2))
+
+    def test_difference_both_empty(self) -> None:
+        result = self._rs([]) - self._rs([])
+        self.assertEqual(result.ids, ())
+
+    def test_difference_cross_model_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self._rs([1], "res.partner") - self._rs([1], "res.users")
+
+    # ------------------------------------------------------------------
+    # Membership
+    # ------------------------------------------------------------------
+
+    def test_contains_true(self) -> None:
+        rs = self._rs([1, 2, 3])
+        self.assertIn(self._rs([2]), rs)
+
+    def test_contains_false(self) -> None:
+        rs = self._rs([1, 2, 3])
+        self.assertNotIn(self._rs([99]), rs)
+
+    def test_not_in(self) -> None:
+        rs = self._rs([1, 2])
+        self.assertNotIn(self._rs([5]), rs)
+
+    def test_contains_non_singleton_raises(self) -> None:
+        rs = self._rs([1, 2, 3])
+        with self.assertRaises(ValueError):
+            _ = self._rs([1, 2]) in rs
+
+    def test_contains_non_recordset_raises(self) -> None:
+        rs = self._rs([1, 2, 3])
+        with self.assertRaises(TypeError):
+            _ = 1 in rs  # type: ignore[operator]
+
+    def test_contains_cross_model_raises(self) -> None:
+        rs = self._rs([1, 2], "res.partner")
+        with self.assertRaises(ValueError):
+            _ = self._rs([1], "res.users") in rs
+
+    # ------------------------------------------------------------------
+    # Subset / superset
+    # ------------------------------------------------------------------
+
+    def test_subset_true(self) -> None:
+        self.assertTrue(self._rs([1, 2]) <= self._rs([1, 2, 3]))
+
+    def test_subset_equal_sets(self) -> None:
+        self.assertTrue(self._rs([1, 2]) <= self._rs([1, 2]))
+
+    def test_subset_false(self) -> None:
+        self.assertFalse(self._rs([1, 4]) <= self._rs([1, 2, 3]))
+
+    def test_strict_subset_true(self) -> None:
+        self.assertTrue(self._rs([1, 2]) < self._rs([1, 2, 3]))
+
+    def test_strict_subset_equal_sets_is_false(self) -> None:
+        self.assertFalse(self._rs([1, 2]) < self._rs([1, 2]))
+
+    def test_strict_subset_false(self) -> None:
+        self.assertFalse(self._rs([1, 4]) < self._rs([1, 2, 3]))
+
+    def test_superset_true(self) -> None:
+        self.assertTrue(self._rs([1, 2, 3]) >= self._rs([1, 2]))
+
+    def test_superset_equal_sets(self) -> None:
+        self.assertTrue(self._rs([1, 2]) >= self._rs([1, 2]))
+
+    def test_superset_false(self) -> None:
+        self.assertFalse(self._rs([1, 2]) >= self._rs([1, 2, 3]))
+
+    def test_strict_superset_true(self) -> None:
+        self.assertTrue(self._rs([1, 2, 3]) > self._rs([1, 2]))
+
+    def test_strict_superset_equal_sets_is_false(self) -> None:
+        self.assertFalse(self._rs([1, 2]) > self._rs([1, 2]))
+
+    def test_strict_superset_false(self) -> None:
+        self.assertFalse(self._rs([1, 2]) > self._rs([1, 2, 3]))
+
+    def test_subset_cross_model_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = self._rs([1], "res.partner") <= self._rs([1], "res.users")
+
+    def test_superset_cross_model_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = self._rs([1, 2], "res.partner") >= self._rs([1], "res.users")
