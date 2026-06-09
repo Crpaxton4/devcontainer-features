@@ -1195,3 +1195,131 @@ class TestOdooRecordsetSetOperations(unittest.TestCase):
     def test_superset_cross_model_raises(self) -> None:
         with self.assertRaises(ValueError):
             _ = self._rs([1, 2], "res.partner") >= self._rs([1], "res.users")
+
+
+class TestOdooRecordsetWithUser(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor = Mock(spec=OdooExecutor)
+        self.env = OdooEnv(self.executor, {"lang": "en_US"})
+
+    def test_with_user_returns_new_recordset(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        derived = rs.with_user(99)
+        self.assertIsNot(derived, rs)
+
+    def test_with_user_derived_recordset_same_model_and_ids(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7, 8])
+        derived = rs.with_user(99)
+        self.assertEqual(derived.model_name, "res.partner")
+        self.assertEqual(derived.ids, (7, 8))
+
+    def test_with_user_original_recordset_env_unchanged(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        rs.with_user(99)
+        self.assertIs(rs.env, self.env)
+
+    def test_with_user_derived_recordset_has_different_env(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        derived = rs.with_user(99)
+        self.assertIsNot(derived.env, self.env)
+
+    def test_with_user_execute_uses_override_uid(self) -> None:
+        self.executor.execute_as.return_value = True
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        derived = rs.with_user(99)
+
+        derived.write({"name": "Alice"})
+
+        self.executor.execute_as.assert_called_once_with(
+            99, "res.partner", "write", [7], {"name": "Alice"}, context={"lang": "en_US"}
+        )
+
+
+class TestOdooRecordsetWithCompany(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor = Mock(spec=OdooExecutor)
+        self.env = OdooEnv(self.executor, {"lang": "en_US"})
+
+    def test_with_company_returns_new_recordset(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        derived = rs.with_company(3)
+        self.assertIsNot(derived, rs)
+
+    def test_with_company_derived_recordset_has_allowed_company_ids(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        derived = rs.with_company(3)
+        self.assertEqual(derived.env.context["allowed_company_ids"], [3])
+
+    def test_with_company_original_env_context_unchanged(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        rs.with_company(3)
+        self.assertNotIn("allowed_company_ids", self.env.context)
+
+    def test_with_company_derived_recordset_same_model_and_ids(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7, 8])
+        derived = rs.with_company(3)
+        self.assertEqual(derived.model_name, "res.partner")
+        self.assertEqual(derived.ids, (7, 8))
+
+
+class TestOdooRecordsetArchive(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor = Mock(spec=OdooExecutor)
+        self.env = OdooEnv(self.executor, {"lang": "en_US"})
+
+    def test_action_archive_writes_active_false(self) -> None:
+        self.executor.execute.return_value = True
+        rs = OdooRecordset(self.env, "res.partner", [7, 8])
+
+        result = rs.action_archive()
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "write",
+            [7, 8],
+            {"active": False},
+            context={"lang": "en_US"},
+        )
+
+    def test_action_unarchive_writes_active_true(self) -> None:
+        self.executor.execute.return_value = True
+        rs = OdooRecordset(self.env, "res.partner", [7, 8])
+
+        result = rs.action_unarchive()
+
+        self.assertTrue(result)
+        self.executor.execute.assert_called_once_with(
+            "res.partner",
+            "write",
+            [7, 8],
+            {"active": True},
+            context={"lang": "en_US"},
+        )
+
+    def test_action_archive_returns_false_when_write_fails(self) -> None:
+        self.executor.execute.return_value = False
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        self.assertFalse(rs.action_archive())
+
+    def test_action_unarchive_returns_false_when_write_fails(self) -> None:
+        self.executor.execute.return_value = False
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        self.assertFalse(rs.action_unarchive())
+
+
+class TestOdooRecordsetSudo(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor = Mock(spec=OdooExecutor)
+        self.env = OdooEnv(self.executor)
+
+    def test_sudo_raises_not_implemented_error(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        with self.assertRaises(NotImplementedError):
+            rs.sudo()
+
+    def test_sudo_error_message_references_with_user(self) -> None:
+        rs = OdooRecordset(self.env, "res.partner", [7])
+        with self.assertRaises(NotImplementedError) as ctx:
+            rs.sudo()
+        self.assertIn("with_user", str(ctx.exception))

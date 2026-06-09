@@ -99,3 +99,32 @@ class OdooRpcExecutor(OdooExecutor):
             list(args),
             kwargs,
         )
+
+    def execute_as(self, uid: int, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute one model method using an explicit user id.
+
+        This method is necessary so derived environments can override the authenticated
+        uid on a per-call basis without mutating this executor's own credentials.
+
+        :param uid: User id to use for this call instead of the authenticated uid.
+        :type uid: int
+        :param model: Name of the Odoo model to call.
+        :type model: str
+        :param method: Name of the Odoo method to invoke.
+        :type method: str
+        :param args: Positional arguments forwarded to `execute_kw`.
+        :type args: Any
+        :param kwargs: Keyword arguments forwarded to `execute_kw`.
+        :type kwargs: Any
+        :return: Result returned by the XML-RPC endpoint.
+        :rtype: Any
+        """
+        return self._object.execute_kw(
+            self.db,
+            uid,
+            self._password,
+            model,
+            method,
+            list(args),
+            kwargs,
+        )

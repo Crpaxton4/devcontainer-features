@@ -1427,6 +1427,70 @@ class OdooRecordset:
         """
         return self._derive(self._ids, env=self._env.with_context(context))
 
+    def with_user(self, uid: int) -> OdooRecordset:
+        """Return a new recordset bound to an environment that calls as a different user.
+
+        This method is necessary for user-switch workflows that need to perform
+        operations on the same records as a specific uid.
+
+        :param uid: User id to use for calls on the returned recordset.
+        :type uid: int
+        :return: Derived recordset bound to a uid-overriding environment.
+        :rtype: OdooRecordset
+        """
+        return self._derive(self._ids, env=self._env.with_user(uid))
+
+    def with_company(self, company_id: int) -> OdooRecordset:
+        """Return a new recordset bound to an environment restricted to one company.
+
+        This method is necessary for multi-company workflows that need to switch
+        ``allowed_company_ids`` in context without mutating the current recordset.
+
+        :param company_id: Id of the company to set as the active company.
+        :type company_id: int
+        :return: Derived recordset bound to an environment with
+            ``allowed_company_ids`` set to ``[company_id]``.
+        :rtype: OdooRecordset
+        """
+        return self._derive(self._ids, env=self._env.with_company(company_id))
+
+    def action_archive(self) -> bool:
+        """Set ``active=False`` on all records in this recordset.
+
+        This method is necessary for archive workflows that need to deactivate records
+        without manually constructing the write payload.
+
+        :return: ``True`` when the write succeeds.
+        :rtype: bool
+        """
+        return self.write({"active": False})
+
+    def action_unarchive(self) -> bool:
+        """Set ``active=True`` on all records in this recordset.
+
+        This method is necessary for unarchive workflows that need to reactivate
+        records without manually constructing the write payload.
+
+        :return: ``True`` when the write succeeds.
+        :rtype: bool
+        """
+        return self.write({"active": True})
+
+    def sudo(self) -> OdooRecordset:
+        """Not implemented — raises ``NotImplementedError`` unconditionally.
+
+        ``sudo()`` is excluded because Odoo's external XML-RPC API enforces
+        permissions for the authenticated user and provides no server-side
+        mechanism to escalate privileges from the outside. Use ``with_user``
+        with an appropriate uid instead.
+
+        :raises NotImplementedError: Always raised with an explanatory message.
+        """
+        raise NotImplementedError(
+            "sudo() is not supported by the Odoo external XML-RPC API. "
+            "Use with_user(uid) to switch to a specific user instead."
+        )
+
     # ------------------------------------------------------------------
     # In-memory functional operations
     # ------------------------------------------------------------------
