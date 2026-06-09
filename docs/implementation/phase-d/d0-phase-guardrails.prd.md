@@ -30,11 +30,11 @@ Define and adopt the Phase D ORM completeness contract before any D1–D7 implem
 
 # Acceptance Criteria
 
-- [ ] `docs/implementation/phase-d/phase-d-orm-completeness-contract.md` exists and is reviewed.
-- [ ] `sudo()` exclusion is documented with rationale.
-- [ ] All preserved public surfaces are listed with their Phase D status.
-- [ ] Deferred work is listed explicitly.
-- [ ] D1–D7 PRD authors confirm the contract is sufficient to evaluate their tasks.
+- [x] `docs/implementation/phase-d/phase-d-orm-completeness-contract.md` exists and is reviewed.
+- [x] `sudo()` exclusion is documented with rationale.
+- [x] All preserved public surfaces are listed with their Phase D status.
+- [x] Deferred work is listed explicitly.
+- [x] D1–D7 PRD authors confirm the contract is sufficient to evaluate their tasks.
 
 # Out of Scope
 
