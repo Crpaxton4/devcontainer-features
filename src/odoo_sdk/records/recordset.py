@@ -1052,32 +1052,127 @@ class OdooRecordset:
             return []
 
         all_specs = list(groupby) + list(aggregates)
-        recordset_specs = {spec for spec in aggregates if spec.endswith(":recordset")}
+        recordset_specs = self._find_recordset_specs(aggregates)
 
         if not recordset_specs:
-            return [tuple(row[spec] for spec in all_specs) for row in rows]
+            return self._build_simple_group_tuples(rows, all_specs)
 
-        recordset_field_names = [spec.split(":")[0] for spec in recordset_specs]
-        metadata = self._env.get_field_metadata(
+        metadata = self._fetch_recordset_metadata(recordset_specs)
+        return [
+            self._build_group_tuple(row, all_specs, recordset_specs, metadata)
+            for row in rows
+        ]
+
+    @staticmethod
+    def _find_recordset_specs(aggregates: Sequence[str]) -> set[str]:
+        """Return the subset of aggregate specifiers that end in ``:recordset``.
+
+        This helper is necessary because isolating the detection step keeps
+        ``_convert_read_group_rows`` below the A-grade cyclomatic complexity threshold.
+
+        :param aggregates: Aggregate specifier strings to inspect.
+        :type aggregates: Sequence[str]
+        :return: Specifiers that require ``OdooRecordset`` wrapping.
+        :rtype: set[str]
+        """
+        return {spec for spec in aggregates if spec.endswith(":recordset")}
+
+    def _build_simple_group_tuples(
+        self,
+        rows: list[Any],
+        all_specs: list[str],
+    ) -> list[tuple]:
+        """Build tuples from rows that contain no recordset aggregates.
+
+        This helper is necessary because extracting the simple path from
+        ``_convert_read_group_rows`` keeps each branch as a flat, analysable unit.
+
+        :param rows: Raw row dicts returned by the server.
+        :type rows: list[Any]
+        :param all_specs: Ordered groupby and aggregate specifiers.
+        :type all_specs: list[str]
+        :return: Ordered tuples of group keys and aggregate values.
+        :rtype: list[tuple]
+        """
+        return [tuple(row[spec] for spec in all_specs) for row in rows]
+
+    def _fetch_recordset_metadata(
+        self,
+        recordset_specs: set[str],
+    ) -> Dict[str, Any]:
+        """Fetch field relation metadata for recordset aggregate specs.
+
+        This helper is necessary because ``_convert_read_group_rows`` should delegate
+        the metadata lookup to a single-purpose step rather than inlining it.
+
+        :param recordset_specs: Aggregate specifier strings ending in ``:recordset``.
+        :type recordset_specs: set[str]
+        :return: Field metadata keyed by field name.
+        :rtype: Dict[str, Any]
+        """
+        field_names = [spec.split(":")[0] for spec in recordset_specs]
+        return self._env.get_field_metadata(
             self._model_name,
-            fields=recordset_field_names,
+            fields=field_names,
             attributes=["relation"],
         )
 
-        result = []
-        for row in rows:
-            values = []
-            for spec in all_specs:
-                value = row[spec]
-                if spec in recordset_specs:
-                    field_name = spec.split(":")[0]
-                    relation_model = (metadata.get(field_name) or {}).get(
-                        "relation", self._model_name
-                    )
-                    value = OdooRecordset(self._env, relation_model, value or [])
-                values.append(value)
-            result.append(tuple(values))
-        return result
+    def _build_group_tuple(
+        self,
+        row: Any,
+        all_specs: list[str],
+        recordset_specs: set[str],
+        metadata: Dict[str, Any],
+    ) -> tuple:
+        """Build one result tuple from a raw ``_read_group`` row.
+
+        This helper is necessary because ``_convert_read_group_rows`` should express
+        the per-row transformation as a named step rather than an inline nested loop.
+
+        :param row: Raw row dict from the server.
+        :type row: Any
+        :param all_specs: Ordered groupby and aggregate specifiers.
+        :type all_specs: list[str]
+        :param recordset_specs: Specifiers that should produce ``OdooRecordset`` values.
+        :type recordset_specs: set[str]
+        :param metadata: Field relation metadata for recordset conversion.
+        :type metadata: Dict[str, Any]
+        :return: One result tuple matching the specifier order.
+        :rtype: tuple
+        """
+        return tuple(
+            self._resolve_recordset_value(spec, row[spec], metadata)
+            if spec in recordset_specs
+            else row[spec]
+            for spec in all_specs
+        )
+
+    def _resolve_recordset_value(
+        self,
+        spec: str,
+        value: Any,
+        metadata: Dict[str, Any],
+    ) -> OdooRecordset:
+        """Wrap a raw list of ids for one recordset aggregate into an ``OdooRecordset``.
+
+        This helper is necessary because the relation model resolution and recordset
+        construction for a single ``:recordset`` aggregate value is a distinct concern
+        from iterating over the group row.
+
+        :param spec: Aggregate specifier ending in ``:recordset``.
+        :type spec: str
+        :param value: Raw ids returned by the server, or ``None``.
+        :type value: Any
+        :param metadata: Field relation metadata keyed by field name.
+        :type metadata: Dict[str, Any]
+        :return: ``OdooRecordset`` bound to the related model and returned ids.
+        :rtype: OdooRecordset
+        """
+        field_name = spec.split(":")[0]
+        relation_model = (metadata.get(field_name) or {}).get(
+            "relation", self._model_name
+        )
+        return OdooRecordset(self._env, relation_model, value or [])
 
     def with_context(self, context: Dict[str, Any]) -> OdooRecordset:
         """Return a new recordset bound to a derived environment context.
