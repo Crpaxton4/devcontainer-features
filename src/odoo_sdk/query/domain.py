@@ -453,6 +453,75 @@ def _sql_like_to_regex(pattern: str, *, case_sensitive: bool) -> re.Pattern[str]
     return re.compile("".join(parts), flags)
 
 
+def _match_equality(cmp: Any, domain_value: Any, *, negate: bool) -> bool:
+    """Evaluate an ``=`` or ``!=`` condition against a normalized field value.
+
+    :param cmp: Normalized comparison value (from ``_extract_comparison_value``).
+    :type cmp: Any
+    :param domain_value: Operand from the domain condition.
+    :type domain_value: Any
+    :param negate: When True, evaluate ``!=``; otherwise evaluate ``=``.
+    :type negate: bool
+    :return: True when the condition is satisfied.
+    :rtype: bool
+    """
+    if domain_value is False or domain_value is None:
+        result = not cmp
+    else:
+        result = cmp == domain_value
+    return (not result) if negate else result
+
+
+def _match_membership(cmp: Any, domain_value: Any, *, negate: bool) -> bool:
+    """Evaluate an ``in`` or ``not in`` condition against a normalized field value.
+
+    :param cmp: Normalized comparison value.
+    :type cmp: Any
+    :param domain_value: Collection operand from the domain condition.
+    :type domain_value: Any
+    :param negate: When True, evaluate ``not in``; otherwise evaluate ``in``.
+    :type negate: bool
+    :return: True when the condition is satisfied.
+    :rtype: bool
+    """
+    if isinstance(cmp, tuple):
+        result = any(v in domain_value for v in cmp)
+        return (not result) if negate else result
+    return (cmp not in domain_value) if negate else (cmp in domain_value)
+
+
+def _match_like_pattern(
+    cmp: Any, domain_value: Any, *, case_sensitive: bool, negate: bool
+) -> bool:
+    """Evaluate a LIKE/ILIKE condition against a normalized field value.
+
+    :param cmp: Normalized field value (expected to be a string).
+    :type cmp: Any
+    :param domain_value: SQL LIKE pattern from the domain condition.
+    :type domain_value: Any
+    :param case_sensitive: When True, use case-sensitive matching.
+    :type case_sensitive: bool
+    :param negate: When True, negate the match result (NOT LIKE / NOT ILIKE).
+    :type negate: bool
+    :return: True when the condition is satisfied.
+    :rtype: bool
+    """
+    if not isinstance(cmp, str) or not isinstance(domain_value, str):
+        return negate
+    matched = bool(
+        _sql_like_to_regex(domain_value, case_sensitive=case_sensitive).fullmatch(cmp)
+    )
+    return (not matched) if negate else matched
+
+
+_COMPARISON_OP_DISPATCH: dict[str, Any] = {
+    "<": lambda a, b: a < b,
+    ">": lambda a, b: a > b,
+    "<=": lambda a, b: a <= b,
+    ">=": lambda a, b: a >= b,
+}
+
+
 def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool:
     """Evaluate one domain condition operator against an adapted field value.
 
@@ -471,45 +540,23 @@ def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool
     cmp = _extract_comparison_value(field_value)
 
     if operator == "=":
-        if domain_value is False or domain_value is None:
-            return not cmp
-        return cmp == domain_value
+        return _match_equality(cmp, domain_value, negate=False)
     if operator == "!=":
-        if domain_value is False or domain_value is None:
-            return bool(cmp)
-        return cmp != domain_value
-    if operator == "<":
-        return cmp < domain_value  # type: ignore[operator]
-    if operator == ">":
-        return cmp > domain_value  # type: ignore[operator]
-    if operator == "<=":
-        return cmp <= domain_value  # type: ignore[operator]
-    if operator == ">=":
-        return cmp >= domain_value  # type: ignore[operator]
+        return _match_equality(cmp, domain_value, negate=True)
+    if operator in _COMPARISON_OP_DISPATCH:
+        return _COMPARISON_OP_DISPATCH[operator](cmp, domain_value)
     if operator == "in":
-        if isinstance(cmp, tuple):
-            return any(v in domain_value for v in cmp)
-        return cmp in domain_value
+        return _match_membership(cmp, domain_value, negate=False)
     if operator == "not in":
-        if isinstance(cmp, tuple):
-            return all(v not in domain_value for v in cmp)
-        return cmp not in domain_value
+        return _match_membership(cmp, domain_value, negate=True)
     if operator in ("like", "=like"):
-        if not isinstance(cmp, str) or not isinstance(domain_value, str):
-            return False
-        return bool(_sql_like_to_regex(domain_value, case_sensitive=True).fullmatch(cmp))
+        return _match_like_pattern(cmp, domain_value, case_sensitive=True, negate=False)
     if operator in ("ilike", "=ilike"):
-        if not isinstance(cmp, str) or not isinstance(domain_value, str):
-            return False
-        return bool(_sql_like_to_regex(domain_value, case_sensitive=False).fullmatch(cmp))
+        return _match_like_pattern(cmp, domain_value, case_sensitive=False, negate=False)
     if operator == "not like":
-        if not isinstance(cmp, str) or not isinstance(domain_value, str):
-            return True
-        return not bool(_sql_like_to_regex(domain_value, case_sensitive=True).fullmatch(cmp))
+        return _match_like_pattern(cmp, domain_value, case_sensitive=True, negate=True)
     if operator == "not ilike":
-        if not isinstance(cmp, str) or not isinstance(domain_value, str):
-            return True
-        return not bool(_sql_like_to_regex(domain_value, case_sensitive=False).fullmatch(cmp))
+        return _match_like_pattern(cmp, domain_value, case_sensitive=False, negate=True)
     if operator in ("child_of", "parent_of"):
         raise NotImplementedError(
             f"Operator {operator!r} requires server-side hierarchy information "

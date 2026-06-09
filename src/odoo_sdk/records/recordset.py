@@ -1373,20 +1373,7 @@ class OdooRecordset:
 
         if isinstance(func, str):
             parts = func.split(".")
-            matching_ids: list[int] = []
-            for record in self:
-                val: Any = record
-                for part in parts:
-                    if isinstance(val, OdooRecordset) and not val:
-                        val = None
-                        break
-                    try:
-                        val = getattr(val, part)
-                    except (AttributeError, ValueError):
-                        val = None
-                        break
-                if val:
-                    matching_ids.append(record.id)
+            matching_ids = [r.id for r in self if _eval_dotted_path(r, parts)]
             return self._derive(matching_ids, prefetch_ids=self._prefetch_ids)
 
         if callable(func):
@@ -1504,38 +1491,45 @@ class OdooRecordset:
         field_type = field_meta.get("type")
         is_relational = field_type in {"many2one", "one2many", "many2many"}
         relation_model = field_meta.get("relation") or self._model_name
-
         values = [getattr(r, field_name) for r in self]
 
         if remaining:
-            if not is_relational:
-                raise ValueError(
-                    f"Cannot traverse dotted path: field {field_name!r} is"
-                    f" not a relational field"
-                )
-            seen: set[int] = set()
-            deduped: list[int] = []
-            for v in values:
-                if isinstance(v, OdooRecordset):
-                    for rid in v.ids:
-                        if rid not in seen:
-                            seen.add(rid)
-                            deduped.append(rid)
-            merged = OdooRecordset(self._env, relation_model, deduped)
-            return merged._mapped_path(remaining)
+            return self._mapped_path_hop(values, relation_model, remaining, field_name)
+        return _mapped_path_terminal(self._env, relation_model, is_relational, values)
 
-        if is_relational:
-            seen_ids: set[int] = set()
-            deduped_ids: list[int] = []
-            for v in values:
-                if isinstance(v, OdooRecordset):
-                    for rid in v.ids:
-                        if rid not in seen_ids:
-                            seen_ids.add(rid)
-                            deduped_ids.append(rid)
-            return OdooRecordset(self._env, relation_model, deduped_ids)
+    def _mapped_path_hop(
+        self,
+        values: list[Any],
+        relation_model: str,
+        remaining: list[str],
+        field_name: str,
+    ) -> list[Any] | OdooRecordset:
+        """Continue a dotted-path traversal through a relational hop.
 
-        return values
+        This helper is necessary so ``_mapped_path`` can recurse into the next
+        path segment without duplicating the id-dedup and merge logic.
+
+        :param values: Field values returned for the current segment.
+        :type values: list[Any]
+        :param relation_model: Model name of the relation to merge into.
+        :type relation_model: str
+        :param remaining: Remaining path segments after the current hop.
+        :type remaining: list[str]
+        :param field_name: Current field name, used in the error message.
+        :type field_name: str
+        :raises ValueError: When the current field is not relational.
+        :return: Terminal list or ``OdooRecordset``.
+        :rtype: list[Any] | OdooRecordset
+        """
+        if not any(isinstance(v, OdooRecordset) for v in values):
+            raise ValueError(
+                f"Cannot traverse dotted path: field {field_name!r} is"
+                f" not a relational field"
+            )
+        merged = OdooRecordset(
+            self._env, relation_model, _dedup_relation_ids(values)
+        )
+        return merged._mapped_path(remaining)
 
     def sorted(
         self,
@@ -1668,6 +1662,81 @@ def _needs_write_field_metadata(value: Any) -> bool:
         value,
         (str, bytes, bytearray),
     )
+
+
+def _eval_dotted_path(record: OdooRecordset, parts: list[str]) -> Any:
+    """Traverse a dotted field path on a singleton recordset and return the terminal value.
+
+    Returns ``None`` when any intermediate value is an empty recordset or when
+    attribute access fails.
+
+    :param record: Singleton recordset to traverse from.
+    :type record: OdooRecordset
+    :param parts: Field path segments to follow in order.
+    :type parts: list[str]
+    :return: Terminal field value, or ``None`` if traversal cannot continue.
+    :rtype: Any
+    """
+    val: Any = record
+    for part in parts:
+        if isinstance(val, OdooRecordset) and not val:
+            return None
+        try:
+            val = getattr(val, part)
+        except (AttributeError, ValueError):
+            return None
+    return val
+
+
+def _dedup_relation_ids(values: list[Any]) -> list[int]:
+    """Return a deduplicated ordered list of ids from a collection of recordset values.
+
+    This helper is necessary so both ``_mapped_path`` and ``_mapped_path_hop``
+    share one canonical way to merge relational field values into a flat id list.
+
+    :param values: List of adapted field values, expected to be ``OdooRecordset``
+        instances for relational fields.
+    :type values: list[Any]
+    :return: Deduplicated record ids in encounter order.
+    :rtype: list[int]
+    """
+    seen: set[int] = set()
+    result: list[int] = []
+    for v in values:
+        if isinstance(v, OdooRecordset):
+            for rid in v.ids:
+                if rid not in seen:
+                    seen.add(rid)
+                    result.append(rid)
+    return result
+
+
+def _mapped_path_terminal(
+    env: Any,
+    relation_model: str,
+    is_relational: bool,
+    values: list[Any],
+) -> list[Any] | OdooRecordset:
+    """Return the terminal result for a completed dotted-path traversal.
+
+    This helper is necessary so ``_mapped_path`` can separate terminal-result
+    logic from the traversal loop without duplicating the id-dedup code.
+
+    :param env: Environment bound to the originating recordset.
+    :type env: OdooEnv
+    :param relation_model: Related model name to use for recordset construction.
+    :type relation_model: str
+    :param is_relational: True when the terminal field is many2one/x2many.
+    :type is_relational: bool
+    :param values: Collected field values for all records.
+    :type values: list[Any]
+    :return: Deduplicated ``OdooRecordset`` for relational terminals; plain list
+        otherwise.
+    :rtype: list[Any] | OdooRecordset
+    """
+    if is_relational:
+        return OdooRecordset(env, relation_model, _dedup_relation_ids(values))
+    return values
 
 
 # ---------------------------------------------------------------------------
