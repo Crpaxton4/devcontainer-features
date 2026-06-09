@@ -724,3 +724,113 @@ class TestOdooRecordset(unittest.TestCase):
         self.assertEqual(derived.ids, (7, 8))
         self.assertEqual(derived.model_name, "res.partner")
         self.executor.execute.assert_not_called()
+
+    def test_read_group_groupby_only_returns_one_tuple_per_group(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = [
+            {"stage_id": 1},
+            {"stage_id": 2},
+        ]
+
+        result = recordset._read_group(groupby=("stage_id",))
+
+        self.assertEqual(result, [(1,), (2,)])
+        self.executor.execute.assert_called_once_with(
+            "sale.order",
+            "_read_group",
+            [],
+            context={"lang": "en_US"},
+            groupby=["stage_id"],
+            aggregates=[],
+        )
+
+    def test_read_group_aggregate_only_returns_aggregate_values(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = [{"amount_total:sum": 500.0}]
+
+        result = recordset._read_group(aggregates=("amount_total:sum",))
+
+        self.assertEqual(result, [(500.0,)])
+
+    def test_read_group_groupby_and_aggregates_returns_combined_tuples(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = [
+            {"stage_id": 1, "amount_total:sum": 300.0},
+            {"stage_id": 2, "amount_total:sum": 700.0},
+        ]
+
+        result = recordset._read_group(
+            groupby=("stage_id",), aggregates=("amount_total:sum",)
+        )
+
+        self.assertEqual(result, [(1, 300.0), (2, 700.0)])
+
+    def test_read_group_having_is_forwarded_as_kwarg(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = [{"amount_total:sum": 900.0}]
+
+        recordset._read_group(
+            aggregates=("amount_total:sum",),
+            having=[("amount_total:sum", ">=", 100)],
+        )
+
+        _call_kwargs = self.executor.execute.call_args.kwargs
+        self.assertIn("having", _call_kwargs)
+        self.assertEqual(_call_kwargs["having"], [("amount_total:sum", ">=", 100)])
+
+    def test_read_group_none_domain_passes_empty_list_to_server(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = []
+
+        recordset._read_group(domain=None, groupby=("stage_id",))
+
+        _call_args = self.executor.execute.call_args.args
+        self.assertEqual(_call_args[2], [])
+
+    def test_read_group_returns_empty_list_when_server_returns_no_rows(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = []
+
+        result = recordset._read_group(
+            domain=[("active", "=", True)], groupby=("stage_id",)
+        )
+
+        self.assertEqual(result, [])
+
+    def test_read_group_recordset_aggregate_converts_ids_to_odoo_recordset(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.side_effect = [
+            [{"stage_id": 1, "partner_id:recordset": [7, 8]}],
+            {"partner_id": {"type": "many2one", "relation": "res.partner"}},
+        ]
+
+        result = recordset._read_group(
+            groupby=("stage_id",), aggregates=("partner_id:recordset",)
+        )
+
+        self.assertEqual(len(result), 1)
+        group_key, partner_rs = result[0]
+        self.assertEqual(group_key, 1)
+        self.assertIsInstance(partner_rs, OdooRecordset)
+        self.assertEqual(partner_rs.model_name, "res.partner")
+        self.assertEqual(partner_rs.ids, (7, 8))
+
+    def test_read_group_offset_and_limit_forwarded_when_provided(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = [{"stage_id": 3}]
+
+        recordset._read_group(groupby=("stage_id",), offset=5, limit=10, order="stage_id asc")
+
+        _call_kwargs = self.executor.execute.call_args.kwargs
+        self.assertEqual(_call_kwargs["offset"], 5)
+        self.assertEqual(_call_kwargs["limit"], 10)
+        self.assertEqual(_call_kwargs["order"], "stage_id asc")
+
+    def test_read_group_zero_offset_not_forwarded(self) -> None:
+        recordset = OdooRecordset(self.env, "sale.order", [])
+        self.executor.execute.return_value = []
+
+        recordset._read_group(groupby=("stage_id",), offset=0)
+
+        _call_kwargs = self.executor.execute.call_args.kwargs
+        self.assertNotIn("offset", _call_kwargs)

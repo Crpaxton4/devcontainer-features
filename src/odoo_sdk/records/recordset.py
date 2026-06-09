@@ -976,6 +976,109 @@ class OdooRecordset:
         ids = self._execute("search", serialized_domain, **kwargs)
         return self._derive(ids, prefetch_ids=ids)
 
+    def _read_group(
+        self,
+        domain: DomainInput = None,
+        groupby: Sequence[str] = (),
+        aggregates: Sequence[str] = (),
+        having: DomainInput = None,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> list[tuple]:
+        """Run server-side aggregation using Odoo's ``_read_group`` method.
+
+        This method is necessary because server-side grouping and aggregation are
+        impractical to reproduce client-side, especially when access rules filter
+        the underlying records.
+
+        :param domain: Domain used to filter records before grouping, defaults to None.
+        :type domain: DomainInput
+        :param groupby: Sequence of field names or ``'field:granularity'`` strings,
+            defaults to an empty sequence.
+        :type groupby: Sequence[str]
+        :param aggregates: Sequence of ``'field:agg'`` aggregate specifier strings,
+            defaults to an empty sequence.
+        :type aggregates: Sequence[str]
+        :param having: Domain applied to aggregate results to filter groups,
+            defaults to None.
+        :type having: DomainInput
+        :param offset: Number of result groups to skip, defaults to 0.
+        :type offset: int
+        :param limit: Maximum number of result groups to return, defaults to None.
+        :type limit: Optional[int]
+        :param order: Odoo order expression for result groups, defaults to None.
+        :type order: Optional[str]
+        :return: List of tuples matching the Odoo ``_read_group`` response shape.
+        :rtype: list[tuple]
+        """
+        serialized_domain = DomainExpression.normalize(domain).serialize()
+        kwargs: Dict[str, Any] = self._context_kwargs()
+        kwargs["groupby"] = list(groupby)
+        kwargs["aggregates"] = list(aggregates)
+        serialized_having = DomainExpression.normalize(having).serialize()
+        if serialized_having:
+            kwargs["having"] = serialized_having
+        if offset:
+            kwargs["offset"] = offset
+        if limit is not None:
+            kwargs["limit"] = limit
+        if order is not None:
+            kwargs["order"] = order
+        rows = self._execute("_read_group", serialized_domain, **kwargs)
+        return self._convert_read_group_rows(rows, groupby, aggregates)
+
+    def _convert_read_group_rows(
+        self,
+        rows: list[Any],
+        groupby: Sequence[str],
+        aggregates: Sequence[str],
+    ) -> list[tuple]:
+        """Convert raw ``_read_group`` row dicts to a list of tuples.
+
+        This helper is necessary because the public ``_read_group`` method should
+        separate RPC dispatch from response shaping and recordset reconstruction.
+
+        :param rows: Raw row dicts returned by the server.
+        :type rows: list[Any]
+        :param groupby: Groupby specifier strings used in the request.
+        :type groupby: Sequence[str]
+        :param aggregates: Aggregate specifier strings used in the request.
+        :type aggregates: Sequence[str]
+        :return: Ordered tuples of group keys and aggregate values.
+        :rtype: list[tuple]
+        """
+        if not rows:
+            return []
+
+        all_specs = list(groupby) + list(aggregates)
+        recordset_specs = {spec for spec in aggregates if spec.endswith(":recordset")}
+
+        if not recordset_specs:
+            return [tuple(row[spec] for spec in all_specs) for row in rows]
+
+        recordset_field_names = [spec.split(":")[0] for spec in recordset_specs]
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            fields=recordset_field_names,
+            attributes=["relation"],
+        )
+
+        result = []
+        for row in rows:
+            values = []
+            for spec in all_specs:
+                value = row[spec]
+                if spec in recordset_specs:
+                    field_name = spec.split(":")[0]
+                    relation_model = (metadata.get(field_name) or {}).get(
+                        "relation", self._model_name
+                    )
+                    value = OdooRecordset(self._env, relation_model, value or [])
+                values.append(value)
+            result.append(tuple(values))
+        return result
+
     def with_context(self, context: Dict[str, Any]) -> OdooRecordset:
         """Return a new recordset bound to a derived environment context.
 
