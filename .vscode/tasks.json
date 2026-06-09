@@ -20,7 +20,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html && uv run coverage json"
+        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -34,25 +34,6 @@
       "args": [
         "-lc",
         "uv run ./scripts/mutation-test.sh"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "focus": true,
-        "reveal": "always",
-        "panel": "dedicated",
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "odoo_sdk: Static Analysis",
-      "type": "shell",
-      "command": "bash",
-      "args": [
-        "-lc",
-        "uv run bash scripts/static-analysis.sh"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
