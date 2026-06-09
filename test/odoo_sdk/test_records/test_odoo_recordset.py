@@ -9,6 +9,7 @@ from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.fields.commands import Command
 
+
 class TestOdooRecordset(unittest.TestCase):
     def setUp(self) -> None:
         self.executor = Mock(spec=OdooExecutor)
@@ -225,13 +226,9 @@ class TestOdooRecordset(unittest.TestCase):
                 {
                     "id": 7,
                     "parent_id": RelationValue("res.partner", 3, "Parent"),
-                    "category_id": RelationCollection(
-                        "res.partner.category", (9, 5)
-                    ),
+                    "category_id": RelationCollection("res.partner.category", (9, 5)),
                     "birthday": date(2026, 5, 23),
-                    "write_date": datetime(
-                        2026, 5, 23, 10, 15, 0, tzinfo=timezone.utc
-                    ),
+                    "write_date": datetime(2026, 5, 23, 10, 15, 0, tzinfo=timezone.utc),
                     "image_128": b"hello",
                 }
             ],
@@ -288,7 +285,9 @@ class TestOdooRecordset(unittest.TestCase):
             fields=["id"],
         )
 
-    def test_read_adapted_without_requested_fields_uses_returned_record_keys(self) -> None:
+    def test_read_adapted_without_requested_fields_uses_returned_record_keys(
+        self,
+    ) -> None:
         self.executor.execute.side_effect = [
             [{"id": 7, "parent_id": [3, "Parent"], "birthday": "2026-05-23"}],
             {
@@ -797,7 +796,9 @@ class TestOdooRecordset(unittest.TestCase):
 
         self.assertEqual(result, [])
 
-    def test_read_group_recordset_aggregate_converts_ids_to_odoo_recordset(self) -> None:
+    def test_read_group_recordset_aggregate_converts_ids_to_odoo_recordset(
+        self,
+    ) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
         self.executor.execute.side_effect = [
             [{"stage_id": 1, "partner_id:recordset": [7, 8]}],
@@ -819,7 +820,9 @@ class TestOdooRecordset(unittest.TestCase):
         recordset = OdooRecordset(self.env, "sale.order", [])
         self.executor.execute.return_value = [{"stage_id": 3}]
 
-        recordset._read_group(groupby=("stage_id",), offset=5, limit=10, order="stage_id asc")
+        recordset._read_group(
+            groupby=("stage_id",), offset=5, limit=10, order="stage_id asc"
+        )
 
         _call_kwargs = self.executor.execute.call_args.kwargs
         self.assertEqual(_call_kwargs["offset"], 5)
@@ -874,7 +877,9 @@ class TestOdooRecordset(unittest.TestCase):
         self.executor.execute.return_value = []
         recordset = OdooRecordset(self.env, "res.partner", [])
 
-        recordset.name_search("test", domain=[("active", "=", True)], operator="=", limit=5)
+        recordset.name_search(
+            "test", domain=[("active", "=", True)], operator="=", limit=5
+        )
 
         self.executor.execute.assert_called_once_with(
             "res.partner",

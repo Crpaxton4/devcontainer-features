@@ -1033,10 +1033,10 @@ class OdooRecordset:
         if not self._ids:
             return self._derive()
 
-        existing_ids = set(
-            self.search([("id", "in", self._ids)]).ids
-        )
-        surviving_ids = [record_id for record_id in self._ids if record_id in existing_ids]
+        existing_ids = set(self.search([("id", "in", self._ids)]).ids)
+        surviving_ids = [
+            record_id for record_id in self._ids if record_id in existing_ids
+        ]
         return self._derive(surviving_ids)
 
     def browse(self, ids: Union[int, Sequence[int]]) -> OdooRecordset:
@@ -1246,9 +1246,11 @@ class OdooRecordset:
         :rtype: tuple
         """
         return tuple(
-            self._resolve_recordset_value(spec, row[spec], metadata)
-            if spec in recordset_specs
-            else row[spec]
+            (
+                self._resolve_recordset_value(spec, row[spec], metadata)
+                if spec in recordset_specs
+                else row[spec]
+            )
             for spec in all_specs
         )
 
