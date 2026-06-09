@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -147,6 +148,33 @@ class DomainExpression:
         :rtype: bool
         """
         return not self._nodes
+
+    def field_names(self) -> set[str]:
+        """Return every field name referenced by conditions in this expression.
+
+        This method is necessary because in-memory evaluation needs to pre-fetch all
+        referenced fields before iterating records.
+
+        :return: Set of field name strings found in the expression tree.
+        :rtype: set[str]
+        """
+        return _collect_domain_fields(self._nodes)
+
+    def matches(self, record_values: dict[str, Any]) -> bool:
+        """Evaluate the domain against an in-memory record value mapping.
+
+        An empty domain matches every record.  Values in ``record_values`` may be
+        adapted Python types (e.g. ``datetime.date``) or duck-typed relational objects
+        that expose an ``ids`` attribute (e.g. ``OdooRecordset``).
+
+        :param record_values: Adapted field values keyed by field name.
+        :type record_values: dict[str, Any]
+        :return: True when every domain node is satisfied by the provided values.
+        :rtype: bool
+        """
+        if not self._nodes:
+            return True
+        return all(_evaluate_node(record_values, node) for node in self._nodes)
 
 
 def _normalize_domain_nodes(
@@ -373,6 +401,160 @@ def _serialize_tokens(node: DomainNode) -> list[Any]:
     if isinstance(item, list):
         return item
     return [item]
+
+
+# ---------------------------------------------------------------------------
+# In-memory domain evaluation helpers
+# ---------------------------------------------------------------------------
+
+def _extract_comparison_value(value: Any) -> Any:
+    """Normalize an adapted field value to a primitive suitable for comparison.
+
+    Duck-types relational objects that expose an ``ids`` attribute (e.g.
+    ``OdooRecordset``) to avoid importing that class here.
+
+    :param value: Adapted field value to normalize.
+    :type value: Any
+    :return: Comparable primitive (int, tuple, False, or the value unchanged).
+    :rtype: Any
+    """
+    if hasattr(value, "ids"):
+        ids = tuple(value.ids)
+        if not ids:
+            return False
+        if len(ids) == 1:
+            return ids[0]
+        return ids
+    return value
+
+
+def _sql_like_to_regex(pattern: str, *, case_sensitive: bool) -> re.Pattern[str]:
+    """Convert an SQL LIKE pattern to a compiled regular expression.
+
+    ``%`` matches any sequence of characters; ``_`` matches any single character;
+    all other regex metacharacters are escaped.
+
+    :param pattern: SQL LIKE pattern to convert.
+    :type pattern: str
+    :param case_sensitive: When False, compile with ``re.IGNORECASE``.
+    :type case_sensitive: bool
+    :return: Compiled regular expression equivalent to the LIKE pattern.
+    :rtype: re.Pattern[str]
+    """
+    parts: list[str] = []
+    for char in pattern:
+        if char == "%":
+            parts.append(".*")
+        elif char == "_":
+            parts.append(".")
+        else:
+            parts.append(re.escape(char))
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return re.compile("".join(parts), flags)
+
+
+def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool:
+    """Evaluate one domain condition operator against an adapted field value.
+
+    :param field_value: Adapted value from the record field cache.
+    :type field_value: Any
+    :param operator: Odoo domain operator string.
+    :type operator: str
+    :param domain_value: Operand value from the domain condition.
+    :type domain_value: Any
+    :raises NotImplementedError: For ``child_of`` and ``parent_of`` which require
+        server-side hierarchy information.
+    :raises ValueError: For unrecognised operators.
+    :return: True when the condition is satisfied.
+    :rtype: bool
+    """
+    cmp = _extract_comparison_value(field_value)
+
+    if operator == "=":
+        if domain_value is False or domain_value is None:
+            return not cmp
+        return cmp == domain_value
+    if operator == "!=":
+        if domain_value is False or domain_value is None:
+            return bool(cmp)
+        return cmp != domain_value
+    if operator == "<":
+        return cmp < domain_value  # type: ignore[operator]
+    if operator == ">":
+        return cmp > domain_value  # type: ignore[operator]
+    if operator == "<=":
+        return cmp <= domain_value  # type: ignore[operator]
+    if operator == ">=":
+        return cmp >= domain_value  # type: ignore[operator]
+    if operator == "in":
+        if isinstance(cmp, tuple):
+            return any(v in domain_value for v in cmp)
+        return cmp in domain_value
+    if operator == "not in":
+        if isinstance(cmp, tuple):
+            return all(v not in domain_value for v in cmp)
+        return cmp not in domain_value
+    if operator in ("like", "=like"):
+        if not isinstance(cmp, str) or not isinstance(domain_value, str):
+            return False
+        return bool(_sql_like_to_regex(domain_value, case_sensitive=True).fullmatch(cmp))
+    if operator in ("ilike", "=ilike"):
+        if not isinstance(cmp, str) or not isinstance(domain_value, str):
+            return False
+        return bool(_sql_like_to_regex(domain_value, case_sensitive=False).fullmatch(cmp))
+    if operator == "not like":
+        if not isinstance(cmp, str) or not isinstance(domain_value, str):
+            return True
+        return not bool(_sql_like_to_regex(domain_value, case_sensitive=True).fullmatch(cmp))
+    if operator == "not ilike":
+        if not isinstance(cmp, str) or not isinstance(domain_value, str):
+            return True
+        return not bool(_sql_like_to_regex(domain_value, case_sensitive=False).fullmatch(cmp))
+    if operator in ("child_of", "parent_of"):
+        raise NotImplementedError(
+            f"Operator {operator!r} requires server-side hierarchy information "
+            "and is not supported in filtered_domain."
+        )
+    raise ValueError(f"Unsupported domain operator for in-memory evaluation: {operator!r}")
+
+
+def _evaluate_node(record_values: dict[str, Any], node: DomainNode) -> bool:
+    """Recursively evaluate a normalized domain node against record field values.
+
+    :param record_values: Adapted field values keyed by field name.
+    :type record_values: dict[str, Any]
+    :param node: Normalized domain node (condition or boolean expression).
+    :type node: DomainNode
+    :return: True when the node is satisfied.
+    :rtype: bool
+    """
+    if isinstance(node, Condition):
+        field_value = record_values.get(node.field)
+        return _match_condition(field_value, node.operator, node.value)
+    # BooleanExpression
+    if node.operator == "!":
+        return not _evaluate_node(record_values, node.operands[0])
+    if node.operator == "&":
+        return all(_evaluate_node(record_values, op) for op in node.operands)
+    # "|"
+    return any(_evaluate_node(record_values, op) for op in node.operands)
+
+
+def _collect_domain_fields(nodes: tuple[DomainNode, ...]) -> set[str]:
+    """Collect every field name referenced in a domain node tree.
+
+    :param nodes: Tuple of normalized domain nodes to inspect.
+    :type nodes: tuple[DomainNode, ...]
+    :return: Set of unique field names found in all leaf conditions.
+    :rtype: set[str]
+    """
+    result: set[str] = set()
+    for node in nodes:
+        if isinstance(node, Condition):
+            result.add(node.field)
+        else:  # BooleanExpression
+            result |= _collect_domain_fields(node.operands)
+    return result
 
 
 # Private aliases used by internal tests to access implementation-level nodes

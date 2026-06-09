@@ -1294,6 +1294,362 @@ class OdooRecordset:
         """
         return self._derive(self._ids, env=self._env.with_context(context))
 
+    # ------------------------------------------------------------------
+    # In-memory functional operations
+    # ------------------------------------------------------------------
+
+    def _ensure_fields_cached(self, field_names: list[str]) -> None:
+        """Fetch and cache all given fields for every id in this recordset.
+
+        This helper is necessary so functional operations can batch-prime the field
+        cache before iterating, avoiding per-record round-trips.
+
+        :param field_names: Field names to ensure are present in the cache.
+        :type field_names: list[str]
+        :raises AttributeError: When a field name is not a known model field.
+        :return: None.
+        :rtype: None
+        """
+        if not self._ids or not field_names:
+            return
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            fields=field_names,
+            attributes=["type", "relation"],
+        )
+        for field_name in field_names:
+            if metadata.get(field_name) is None:
+                raise AttributeError(
+                    f"{type(self).__name__!s} object has no attribute {field_name!r}"
+                )
+        ids_to_fetch: set[int] = set()
+        for field_name in field_names:
+            missing = self._env.get_missing_field_ids(
+                self._model_name, list(self._ids), field_name
+            )
+            ids_to_fetch.update(missing)
+        if not ids_to_fetch:
+            return
+        rows = self._materialize_records(ids=list(ids_to_fetch), fields=field_names)
+        for row in rows:
+            if "id" not in row:
+                continue
+            record_id = row["id"]
+            for field_name in field_names:
+                if field_name not in row:
+                    continue
+                field_meta = metadata.get(field_name, {})
+                adapted = self._adapt_field_access_value(row[field_name], field_meta)
+                self._env.cache_record_field_values(
+                    self._model_name, record_id, {field_name: adapted}
+                )
+
+    def filtered(
+        self,
+        func: Any,
+    ) -> OdooRecordset:
+        """Return a new recordset containing only records that satisfy ``func``.
+
+        ``func`` may be:
+
+        * A callable predicate — keep records where ``func(record)`` is truthy.
+        * A dotted field-path string (e.g. ``'partner_id.is_company'``) — keep
+          records where the terminal path value is truthy.
+        * A domain list or ``DomainExpression`` — delegate to
+          :meth:`filtered_domain`.
+
+        :param func: Predicate, dotted field path, domain list, or
+            ``DomainExpression``.
+        :type func: Any
+        :return: Filtered recordset sharing the original prefetch set.
+        :rtype: OdooRecordset
+        :raises TypeError: When ``func`` is not a supported type.
+        """
+        if not self._ids:
+            return self._derive(())
+
+        if isinstance(func, (list, DomainExpression)):
+            return self.filtered_domain(func)
+
+        if isinstance(func, str):
+            parts = func.split(".")
+            matching_ids: list[int] = []
+            for record in self:
+                val: Any = record
+                for part in parts:
+                    if isinstance(val, OdooRecordset) and not val:
+                        val = None
+                        break
+                    try:
+                        val = getattr(val, part)
+                    except (AttributeError, ValueError):
+                        val = None
+                        break
+                if val:
+                    matching_ids.append(record.id)
+            return self._derive(matching_ids, prefetch_ids=self._prefetch_ids)
+
+        if callable(func):
+            matching_ids = [r.id for r in self if func(r)]
+            return self._derive(matching_ids, prefetch_ids=self._prefetch_ids)
+
+        raise TypeError(
+            f"filtered() argument must be a callable, field path string, domain list,"
+            f" or DomainExpression; got {type(func)!r}"
+        )
+
+    def filtered_domain(
+        self,
+        domain: Any,
+    ) -> OdooRecordset:
+        """Return a new recordset containing only records that match ``domain``.
+
+        Evaluates the domain in-memory against cached field values; no additional
+        server call is issued beyond the initial field fetch.
+
+        :param domain: Domain list or ``DomainExpression`` to evaluate.
+        :type domain: Any
+        :return: Filtered recordset sharing the original prefetch set.
+        :rtype: OdooRecordset
+        :raises AttributeError: When a domain field is not a known model field.
+        :raises NotImplementedError: When the domain uses ``child_of`` or
+            ``parent_of``.
+        """
+        expr = DomainExpression.normalize(domain)
+        if expr.is_empty():
+            return self._derive(self._ids, prefetch_ids=self._prefetch_ids)
+
+        field_names = list(expr.field_names())
+        self._ensure_fields_cached(field_names)
+
+        matching_ids: list[int] = []
+        for record_id in self._ids:
+            record_values: Dict[str, Any] = {}
+            for field_name in field_names:
+                found, value = self._env.get_cached_field_value(
+                    self._model_name, record_id, field_name
+                )
+                if found:
+                    record_values[field_name] = value
+            if expr.matches(record_values):
+                matching_ids.append(record_id)
+
+        return self._derive(matching_ids, prefetch_ids=self._prefetch_ids)
+
+    def mapped(
+        self,
+        func: Any,
+    ) -> list[Any] | OdooRecordset:
+        """Apply ``func`` to every record and return the collected results.
+
+        ``func`` may be:
+
+        * A callable — returns ``[func(record) for record in self]``.
+        * A dotted field-path string (e.g. ``'partner_id.is_company'``) — for
+          scalar terminal fields returns a list of values; for relational terminal
+          fields returns a deduplicated ``OdooRecordset`` of the related model.
+          Intermediate Many2one hops are followed automatically; x2many
+          intermediate fields fan out across all related ids.
+
+        :param func: Callable or dotted field path string.
+        :type func: Any
+        :return: List of values for scalar/callable results; ``OdooRecordset`` for
+            relational terminal fields.
+        :rtype: list[Any] | OdooRecordset
+        :raises TypeError: When ``func`` is not callable and not a string.
+        """
+        if callable(func):
+            return [func(r) for r in self]
+
+        if not isinstance(func, str):
+            raise TypeError(
+                f"mapped() argument must be a callable or field path string;"
+                f" got {type(func)!r}"
+            )
+
+        parts = func.split(".")
+        return self._mapped_path(parts)
+
+    def _mapped_path(self, parts: list[str]) -> list[Any] | OdooRecordset:
+        """Traverse a field path list and collect terminal values.
+
+        This helper is necessary so ``mapped`` can recurse cleanly through
+        relational hops without duplicating traversal logic.
+
+        :param parts: Remaining path segments to traverse.
+        :type parts: list[str]
+        :return: List for scalar terminals; ``OdooRecordset`` for relational
+            terminals.
+        :rtype: list[Any] | OdooRecordset
+        """
+        if not parts:
+            return list(self)
+
+        if not self._ids:
+            return []
+
+        field_name = parts[0]
+        remaining = parts[1:]
+
+        metadata = self._env.get_field_metadata(
+            self._model_name,
+            fields=[field_name],
+            attributes=["type", "relation"],
+        )
+        field_meta = metadata.get(field_name)
+        if field_meta is None:
+            raise AttributeError(
+                f"{type(self).__name__!s} object has no attribute {field_name!r}"
+            )
+        field_type = field_meta.get("type")
+        is_relational = field_type in {"many2one", "one2many", "many2many"}
+        relation_model = field_meta.get("relation") or self._model_name
+
+        values = [getattr(r, field_name) for r in self]
+
+        if remaining:
+            if not is_relational:
+                raise ValueError(
+                    f"Cannot traverse dotted path: field {field_name!r} is"
+                    f" not a relational field"
+                )
+            seen: set[int] = set()
+            deduped: list[int] = []
+            for v in values:
+                if isinstance(v, OdooRecordset):
+                    for rid in v.ids:
+                        if rid not in seen:
+                            seen.add(rid)
+                            deduped.append(rid)
+            merged = OdooRecordset(self._env, relation_model, deduped)
+            return merged._mapped_path(remaining)
+
+        if is_relational:
+            seen_ids: set[int] = set()
+            deduped_ids: list[int] = []
+            for v in values:
+                if isinstance(v, OdooRecordset):
+                    for rid in v.ids:
+                        if rid not in seen_ids:
+                            seen_ids.add(rid)
+                            deduped_ids.append(rid)
+            return OdooRecordset(self._env, relation_model, deduped_ids)
+
+        return values
+
+    def sorted(
+        self,
+        key: Any = None,
+        reverse: bool = False,
+    ) -> OdooRecordset:
+        """Return a new recordset with records in a defined order.
+
+        ``key`` may be:
+
+        * A callable — records are sorted by ``key(record)``.
+        * A comma-separated field spec string, e.g.
+          ``'name DESC, amount_total ASC NULLS LAST'``.  Each spec supports an
+          optional ``ASC`` / ``DESC`` qualifier and an optional
+          ``NULLS FIRST`` / ``NULLS LAST`` qualifier.
+        * ``None`` — records are sorted by id ascending (model default order is
+          not available via XML-RPC and id order is used as a deterministic
+          fallback; this is documented as a known limitation).
+
+        :param key: Sort key: callable, field spec string, or ``None``.
+        :type key: Any
+        :param reverse: When True, reverse the final sort order.
+        :type reverse: bool
+        :return: Sorted recordset sharing the original prefetch set.
+        :rtype: OdooRecordset
+        """
+        if not self._ids:
+            return self._derive(())
+
+        if key is None:
+            sorted_ids = sorted(self._ids, reverse=reverse)
+            return self._derive(sorted_ids, prefetch_ids=self._prefetch_ids)
+
+        if callable(key):
+            pairs = [(key(r), r.id) for r in self]
+            pairs.sort(key=lambda x: x[0], reverse=reverse)
+            sorted_ids = [p[1] for p in pairs]
+            return self._derive(sorted_ids, prefetch_ids=self._prefetch_ids)
+
+        if isinstance(key, str):
+            specs = _parse_sort_specs(key)
+            field_names = [spec[0] for spec in specs]
+            self._ensure_fields_cached(field_names)
+
+            record_ids = list(self._ids)
+            for field_spec_name, direction, nulls_first in reversed(specs):
+                spec_reverse = direction == "DESC"
+                effective_nulls_first = nulls_first if not spec_reverse else not nulls_first
+
+                def make_key(
+                    rid: int,
+                    fn: str = field_spec_name,
+                    nf: bool = effective_nulls_first,
+                ) -> _SortKey:
+                    found, v = self._env.get_cached_field_value(
+                        self._model_name, rid, fn
+                    )
+                    from odoo_sdk.query.domain import _extract_comparison_value
+                    extracted = _extract_comparison_value(v if found else None)
+                    return _SortKey(extracted, nulls_first=nf)
+
+                record_ids = sorted(record_ids, key=make_key, reverse=spec_reverse)
+
+            if reverse:
+                record_ids = list(reversed(record_ids))
+            return self._derive(record_ids, prefetch_ids=self._prefetch_ids)
+
+        raise TypeError(
+            f"sorted() key must be a callable, field spec string, or None;"
+            f" got {type(key)!r}"
+        )
+
+    def grouped(
+        self,
+        key: Any,
+    ) -> dict[Any, OdooRecordset]:
+        """Group records by a key and return a mapping of key to recordset.
+
+        ``key`` may be:
+
+        * A callable — groups by ``key(record)``.
+        * A field name string — groups by the field value of each record.
+
+        Returned ``OdooRecordset`` values all share the same prefetch set as the
+        source recordset.
+
+        :param key: Grouping callable or field name string.
+        :type key: Any
+        :return: Ordered dict mapping each distinct key value to a recordset.
+        :rtype: dict[Any, OdooRecordset]
+        :raises TypeError: When ``key`` is not callable and not a string.
+        """
+        if not isinstance(key, str) and not callable(key):
+            raise TypeError(
+                f"grouped() key must be a callable or field name string;"
+                f" got {type(key)!r}"
+            )
+
+        groups: dict[Any, list[int]] = {}
+        for record in self:
+            if callable(key):
+                k = key(record)
+            else:
+                k = getattr(record, key)
+            k = _to_grouping_key(k)
+            if k not in groups:
+                groups[k] = []
+            groups[k].append(record.id)
+
+        return {
+            k: self._derive(ids, prefetch_ids=self._prefetch_ids)
+            for k, ids in groups.items()
+        }
+
 
 def _needs_write_field_metadata(value: Any) -> bool:
     """Return whether a write value requires field metadata inspection.
@@ -1312,3 +1668,123 @@ def _needs_write_field_metadata(value: Any) -> bool:
         value,
         (str, bytes, bytearray),
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for sorted() and grouped()
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_SORT_SPEC_RE = _re.compile(
+    r"(\w+)(?:\s+(ASC|DESC))?(?:\s+NULLS\s+(FIRST|LAST))?",
+    _re.IGNORECASE,
+)
+
+
+def _parse_sort_specs(key: str) -> list[tuple[str, str, bool]]:
+    """Parse a comma-separated sort spec string into field/direction/nulls triples.
+
+    Each comma-separated segment may be ``field``, ``field ASC``, ``field DESC``,
+    ``field ASC NULLS FIRST``, or ``field DESC NULLS LAST`` (case-insensitive).
+
+    :param key: Sort spec string.
+    :type key: str
+    :raises ValueError: When a segment does not match the expected pattern.
+    :return: List of ``(field_name, direction, nulls_first)`` triples.
+    :rtype: list[tuple[str, str, bool]]
+    """
+    results: list[tuple[str, str, bool]] = []
+    for segment in key.split(","):
+        segment = segment.strip()
+        m = _SORT_SPEC_RE.fullmatch(segment)
+        if m is None:
+            raise ValueError(f"Invalid sort spec segment: {segment!r}")
+        field_name = m.group(1)
+        direction = (m.group(2) or "ASC").upper()
+        nulls_str = (m.group(3) or "LAST").upper()
+        results.append((field_name, direction, nulls_str == "FIRST"))
+    return results
+
+
+class _SortKey:
+    """Comparable sort key that handles ``None`` / ``False`` with configurable placement.
+
+    This class is necessary because Python's ``sorted()`` cannot natively place
+    ``None`` values first or last depending on a per-column directive; a custom
+    comparison object provides the required flexibility without relying on
+    sentinel numeric infinities that would break string comparisons.
+
+    :param value: Field value to compare, or ``None`` / ``False`` for null records.
+    :type value: Any
+    :param nulls_first: When True, null values sort before non-null values.
+    :type nulls_first: bool
+    """
+
+    __slots__ = ("is_null", "value", "nulls_first")
+
+    def __init__(self, value: Any, *, nulls_first: bool) -> None:
+        self.is_null: bool = value is None or value is False
+        self.value = value
+        self.nulls_first = nulls_first
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, _SortKey):
+            return NotImplemented
+        if self.is_null and other.is_null:
+            return False
+        if self.is_null:
+            return self.nulls_first
+        if other.is_null:
+            return not self.nulls_first
+        return self.value < other.value  # type: ignore[operator]
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, _SortKey):
+            return NotImplemented
+        return other.__lt__(self)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _SortKey):
+            return NotImplemented
+        if self.is_null and other.is_null:
+            return True
+        if self.is_null != other.is_null:
+            return False
+        return self.value == other.value  # type: ignore[operator]
+
+    def __le__(self, other: object) -> bool:
+        eq = self.__eq__(other)
+        if eq is NotImplemented:
+            return NotImplemented
+        lt = self.__lt__(other)
+        if lt is NotImplemented:
+            return NotImplemented
+        return lt or eq
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, _SortKey):
+            return NotImplemented
+        return other.__le__(self)  # type: ignore[return-value]
+
+
+def _to_grouping_key(value: Any) -> Any:
+    """Convert an adapted field value to a hashable grouping key.
+
+    Relational field values that are duck-typed as recordsets (expose ``ids``)
+    are converted to their id integer (for singleton many2one), a tuple of ids
+    (for x2many), or ``False`` for empty recordsets.
+
+    :param value: Adapted field value.
+    :type value: Any
+    :return: Hashable grouping key.
+    :rtype: Any
+    """
+    if hasattr(value, "ids"):
+        ids = tuple(value.ids)
+        if not ids:
+            return False
+        if len(ids) == 1:
+            return ids[0]
+        return ids
+    return value
