@@ -8,10 +8,12 @@ from .errors import (
     OdooValidationError,
 )
 from .executor import OdooExecutor
+from .json2 import OdooJson2Executor
 from .rpc import OdooRpcExecutor
 
 __all__ = [
     "OdooExecutor",
+    "OdooJson2Executor",
     "OdooRpcExecutor",
     "OdooError",
     "OdooAuthenticationError",

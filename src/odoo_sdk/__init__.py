@@ -25,7 +25,7 @@ from .fields.commands import Command
 from .query.domain import Domain, DomainExpression
 from .records import OdooRecordset
 from .records.recordset import Record
-from .transport import OdooExecutor, OdooRpcExecutor
+from .transport import OdooExecutor, OdooJson2Executor, OdooRpcExecutor
 from .command_registry import CommandDispatcher
 
 __all__ = [
