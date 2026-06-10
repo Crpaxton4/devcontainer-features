@@ -1224,22 +1224,33 @@ class OdooRecordset:
         limit: Optional[int] = None,
         order: Optional[str] = None,
     ) -> list[tuple]:
-        """Run server-side aggregation using Odoo's ``_read_group`` method.
+        """Run server-side aggregation using Odoo's public ``read_group`` XML-RPC method.
 
         This method is necessary because server-side grouping and aggregation are
         impractical to reproduce client-side, especially when access rules filter
         the underlying records.
+
+        The implementation calls the public ``read_group`` XML-RPC method (not the
+        internal ``_read_group`` ORM method, which is not accessible over XML-RPC).
+        Response dicts from ``read_group`` use base field names as keys (e.g.
+        ``amount_total`` for an ``amount_total:sum`` aggregate), so the response is
+        mapped back to the specifier-ordered tuple shape before returning.
+
+        ``__count`` is a special aggregate that ``read_group`` always includes in
+        its response dict; it does not need to be passed to the server as a field.
 
         :param domain: Domain used to filter records before grouping, defaults to None.
         :type domain: DomainInput
         :param groupby: Sequence of field names or ``'field:granularity'`` strings,
             defaults to an empty sequence.
         :type groupby: Sequence[str]
-        :param aggregates: Sequence of ``'field:agg'`` aggregate specifier strings,
-            defaults to an empty sequence.
+        :param aggregates: Sequence of ``'field:agg'`` aggregate specifier strings.
+            ``'__count'`` is accepted and extracts the per-group record count from
+            the server response without being forwarded as a field to the server.
+            Defaults to an empty sequence.
         :type aggregates: Sequence[str]
-        :param having: Domain applied to aggregate results to filter groups,
-            defaults to None.
+        :param having: Not supported over XML-RPC. A non-empty value raises
+            ``NotImplementedError``.
         :type having: DomainInput
         :param offset: Number of result groups to skip, defaults to 0.
         :type offset: int
@@ -1249,21 +1260,33 @@ class OdooRecordset:
         :type order: Optional[str]
         :return: List of tuples matching the Odoo ``_read_group`` response shape.
         :rtype: list[tuple]
+        :raises NotImplementedError: When a non-empty ``having`` domain is provided.
         """
         serialized_domain = DomainExpression.normalize(domain).serialize()
-        kwargs: Dict[str, Any] = self._context_kwargs()
-        kwargs["groupby"] = list(groupby)
-        kwargs["aggregates"] = list(aggregates)
         serialized_having = DomainExpression.normalize(having).serialize()
         if serialized_having:
-            kwargs["having"] = serialized_having
+            raise NotImplementedError(
+                "_read_group 'having' is not supported by the Odoo XML-RPC "
+                "'read_group' method. Filter results client-side after retrieval, "
+                "or express the filter as part of the 'domain' parameter instead."
+            )
+        kwargs: Dict[str, Any] = self._context_kwargs()
+        kwargs["lazy"] = False
         if offset:
             kwargs["offset"] = offset
         if limit is not None:
             kwargs["limit"] = limit
         if order is not None:
-            kwargs["order"] = order
-        rows = self._execute("_read_group", serialized_domain, **kwargs)
+            kwargs["orderby"] = order
+        # __count is always present in read_group responses; omit from server fields.
+        server_aggregates = [f for f in aggregates if f != "__count"]
+        rows = self._execute(
+            "read_group",
+            serialized_domain,
+            list(server_aggregates),
+            list(groupby),
+            **kwargs,
+        )
         return self._convert_read_group_rows(rows, groupby, aggregates)
 
     def _convert_read_group_rows(
@@ -1332,7 +1355,7 @@ class OdooRecordset:
         :return: Ordered tuples of group keys and aggregate values.
         :rtype: list[tuple]
         """
-        return [tuple(row[spec] for spec in all_specs) for row in rows]
+        return [tuple(row[spec.split(":")[0]] for spec in all_specs) for row in rows]
 
     def _fetch_recordset_metadata(
         self,
@@ -1380,9 +1403,9 @@ class OdooRecordset:
         """
         return tuple(
             (
-                self._resolve_recordset_value(spec, row[spec], metadata)
+                self._resolve_recordset_value(spec, row[spec.split(":")[0]], metadata)
                 if spec in recordset_specs
-                else row[spec]
+                else row[spec.split(":")[0]]
             )
             for spec in all_specs
         )

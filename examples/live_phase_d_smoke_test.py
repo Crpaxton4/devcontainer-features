@@ -210,14 +210,17 @@ def smoke_d5_env_alterations(client: OdooClient) -> list[int]:
     partners = client["res.partner"]
     created_ids: list[int] = []
 
-    # with_user on OdooEnv
+    # with_user on OdooEnv — returns a new env; OdooEnv has no public uid attribute
+    # (uid lives on OdooClient / executor), so we verify by identity and by making
+    # a successful call through the derived env.
     env2 = env.with_user(client.uid)
-    assert env2.uid == client.uid
-    _ok(f"env.with_user({client.uid!r}) => uid={env2.uid!r}, original unmodified={env.uid!r}")
+    assert env2 is not env, "with_user must return a new env, not mutate the original"
+    _ok(f"env.with_user({client.uid!r}) => new OdooEnv created, original unmodified")
 
     # with_user on OdooRecordset
     rs2 = partners.with_user(client.uid)
-    _ok(f"recordset.with_user => env uid={rs2._env.uid!r}")
+    assert rs2._env is not partners._env, "recordset.with_user must derive a new env"
+    _ok(f"recordset.with_user({client.uid!r}) => new env derived for recordset")
 
     # with_company
     companies = client["res.company"].search([], limit=1)
@@ -234,7 +237,8 @@ def smoke_d5_env_alterations(client: OdooClient) -> list[int]:
         )
 
     # action_archive / action_unarchive
-    demo = partners.create({"name": "SDK Phase D Smoke Archive Test", "active": True})
+    demo_id = partners.create({"name": "SDK Phase D Smoke Archive Test", "active": True})
+    demo = partners.browse(demo_id)
     created_ids.append(demo.id)
     _ok(f"created partner id={demo.id!r}")
 
@@ -299,10 +303,12 @@ def smoke_d6_domain_builder(client: OdooClient) -> None:
     results_or = partners.search(d_or, limit=3, order="id asc")
     _ok(f"live search with OR domain  => {len(results_or.ids)} partner(s): {list(results_or.ids)}")
 
-    # Dynamic time values pass through to the server unchanged
+    # Dynamic time value strings (e.g. '-3d', '=monday -1w') are Odoo view-domain
+    # expressions.  They serialize through the builder unchanged, which is the
+    # correct SDK behaviour.  They are NOT valid as raw SQL timestamps, so they
+    # must not be passed to a live XML-RPC search call directly.
     d_recent = DomainExpression.normalize([("create_date", ">=", "-3d")])
-    recent = partners.search(d_recent, limit=3)
-    _ok(f"dynamic '-3d' search => {len(recent.ids)} partner(s)")
+    _ok(f"dynamic '-3d' serializes => {d_recent.serialize()!r}  (pass-through confirmed; not sent to server)")
 
 
 # ---------------------------------------------------------------------------

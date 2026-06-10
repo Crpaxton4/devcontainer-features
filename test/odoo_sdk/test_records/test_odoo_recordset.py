@@ -736,16 +736,18 @@ class TestOdooRecordset(unittest.TestCase):
         self.assertEqual(result, [(1,), (2,)])
         self.executor.execute.assert_called_once_with(
             "sale.order",
-            "_read_group",
-            [],
+            "read_group",
+            [],        # domain
+            [],        # server_aggregates (fields)
+            ["stage_id"],  # groupby
             context={"lang": "en_US"},
-            groupby=["stage_id"],
-            aggregates=[],
+            lazy=False,
         )
 
     def test_read_group_aggregate_only_returns_aggregate_values(self) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
-        self.executor.execute.return_value = [{"amount_total:sum": 500.0}]
+        # read_group response uses base field names, not 'field:agg' spec strings
+        self.executor.execute.return_value = [{"amount_total": 500.0}]
 
         result = recordset._read_group(aggregates=("amount_total:sum",))
 
@@ -753,9 +755,10 @@ class TestOdooRecordset(unittest.TestCase):
 
     def test_read_group_groupby_and_aggregates_returns_combined_tuples(self) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
+        # read_group response uses base field names
         self.executor.execute.return_value = [
-            {"stage_id": 1, "amount_total:sum": 300.0},
-            {"stage_id": 2, "amount_total:sum": 700.0},
+            {"stage_id": 1, "amount_total": 300.0},
+            {"stage_id": 2, "amount_total": 700.0},
         ]
 
         result = recordset._read_group(
@@ -764,18 +767,14 @@ class TestOdooRecordset(unittest.TestCase):
 
         self.assertEqual(result, [(1, 300.0), (2, 700.0)])
 
-    def test_read_group_having_is_forwarded_as_kwarg(self) -> None:
+    def test_read_group_having_raises_not_implemented_error(self) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
-        self.executor.execute.return_value = [{"amount_total:sum": 900.0}]
 
-        recordset._read_group(
-            aggregates=("amount_total:sum",),
-            having=[("amount_total:sum", ">=", 100)],
-        )
-
-        _call_kwargs = self.executor.execute.call_args.kwargs
-        self.assertIn("having", _call_kwargs)
-        self.assertEqual(_call_kwargs["having"], [("amount_total:sum", ">=", 100)])
+        with self.assertRaises(NotImplementedError):
+            recordset._read_group(
+                aggregates=("amount_total:sum",),
+                having=[("amount_total:sum", ">=", 100)],
+            )
 
     def test_read_group_none_domain_passes_empty_list_to_server(self) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
@@ -800,8 +799,9 @@ class TestOdooRecordset(unittest.TestCase):
         self,
     ) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
+        # read_group response uses base field names (partner_id, not partner_id:recordset)
         self.executor.execute.side_effect = [
-            [{"stage_id": 1, "partner_id:recordset": [7, 8]}],
+            [{"stage_id": 1, "partner_id": [7, 8]}],
             {"partner_id": {"type": "many2one", "relation": "res.partner"}},
         ]
 
@@ -827,7 +827,8 @@ class TestOdooRecordset(unittest.TestCase):
         _call_kwargs = self.executor.execute.call_args.kwargs
         self.assertEqual(_call_kwargs["offset"], 5)
         self.assertEqual(_call_kwargs["limit"], 10)
-        self.assertEqual(_call_kwargs["order"], "stage_id asc")
+        # read_group uses 'orderby', not 'order'
+        self.assertEqual(_call_kwargs["orderby"], "stage_id asc")
 
     def test_read_group_zero_offset_not_forwarded(self) -> None:
         recordset = OdooRecordset(self.env, "sale.order", [])
