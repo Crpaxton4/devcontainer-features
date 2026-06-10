@@ -10,7 +10,7 @@ Its job is to add the Odoo JSON-2 API (`/json/2`) as an opt-in transport while k
 
 | Surface | Phase E status | Guardrail |
 |---|---|---|
-| `OdooClient` | Preserved and extended | Gains `from_xml_rpc`, `from_json2`, `server_version`, `generate_api_key`, `revoke_api_key` |
+| `OdooClient` | Preserved and extended | Gains `from_xml_rpc`, `from_json2`, `server_version`, `server_version_string`, `generate_api_key`, `revoke_api_key` |
 | `OdooExecutor` | Preserved | Interface is unchanged; `OdooJson2Executor` implements it |
 | `OdooRpcExecutor` | Preserved | Remains the default; behavior is unchanged |
 | `OdooConnectionSettings` | Preserved and extended | Gains `transport` and `api_key` fields |
@@ -55,6 +55,20 @@ JSON-2 error responses carry both an HTTP status code and a JSON body with a Pyt
 ### Synchronous Only
 
 All JSON-2 HTTP calls are synchronous. No background threads, connection pools, or async variants are introduced.
+
+## Decision Gates
+
+The table below maps each resolved decision to the Phase E PRD(s) that depend on it. PRD authors can use this to confirm the contract is sufficient before starting implementation.
+
+| Decision | Gates |
+|---|---|
+| stdlib Only (`urllib`) | E1, E5 |
+| XML-RPC Remains the Default | E3 |
+| `OdooExecutor` Interface Is Unchanged | E1, E3, E6 |
+| Named Arguments Only | E1 |
+| Error Mapping Priority (JSON `name` first, HTTP status fallback) | E1, E2 |
+| API Key Management Is JSON-2 Only | E3, E4 |
+| Synchronous Only | E1, E5 |
 
 ## Explicitly Deferred Work
 
