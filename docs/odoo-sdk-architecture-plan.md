@@ -441,6 +441,57 @@ Migration path
 - Keep plugin APIs additive.
 - Keep async separate from the sync surface to avoid semantic drift.
 
+### Phase D — ORM Completeness
+
+Implementation contract
+- [Phase D ORM Completeness Contract](./implementation/phase-d/phase-d-orm-completeness-contract.md)
+
+Implementation checklist
+- [Phase D Implementation Checklist](./implementation/phase-d-implementation-checklist.md)
+
+Scope
+- Add `_read_group` to `OdooRecordset` for server-side aggregation and groupby with granularity strings and aggregate specifiers.
+- Add model utility methods `name_create`, `name_search`, `default_get`, `copy`, and `get_metadata` to `OdooRecordset`.
+- Add in-memory recordset functional operations: `filtered`, `mapped`, `sorted`, `grouped`, and `filtered_domain`.
+- Add recordset set-algebra operators: `|` (union), `&` (intersection), `-` (difference), `in`/`not in` (membership), and `<=`/`<`/`>=`/`>` (subset/superset comparisons).
+- Add environment alteration methods `with_user` and `with_company` on both `OdooEnv` and `OdooRecordset`; add `action_archive` and `action_unarchive` helpers.
+- Add domain builder ergonomics to `DomainExpression`: `AND`, `OR`, `TRUE`, `FALSE` class-level helpers; `~` (invert), `&`, and `|` operators; pass-through support for dynamic time value strings.
+- Document explicitly that `sudo()` is not supported over the external XML-RPC API.
+
+Deferred in Phase D
+- No new transport layer.
+- No runtime model reflection or schema discovery.
+- No Pydantic validation.
+- No async facade.
+- No CI or release automation.
+- No `sudo()` support.
+
+Guardrails
+- All Phase A, B, and C public surfaces remain usable.
+- All operations are synchronous.
+- No new external dependencies.
+
+Achievements
+- A developer can write external Odoo integrations using the same method names and semantics as Odoo ORM code.
+- Server-side aggregation is available via `_read_group` without manually constructing `execute_kw` calls.
+- In-memory record processing matches idiomatic Odoo ORM style through `filtered`, `mapped`, `sorted`, `grouped`, and `filtered_domain`.
+- Recordset set operations enable combining and comparing result sets without converting to id lists.
+- Context alterations work as derived env/recordset creation without mutating existing state.
+- Complex domain composition is ergonomic through `DomainExpression.AND([d1, d2])` / `~d1` style matching Odoo ORM documentation.
+
+What changes from Phase C
+- `OdooRecordset` gains the remaining idiomatic ORM methods needed for day-to-day Odoo integrations.
+- `DomainExpression` gains class-level composition helpers and boolean operators.
+- `OdooEnv` gains `with_user` and `with_company` alteration methods.
+- All Phase D methods are unit-tested and demonstrated in `examples/`.
+
+Cost implications
+- Additive to Phase A–C; no architectural changes.
+- Runtime cost unchanged; all new operations remain synchronous.
+
+Migration path
+- Fully additive. No existing public surfaces change.
+
 ## Existing System Review
 > Audit findings, bottlenecks, modernization backlog.
 

@@ -69,12 +69,12 @@ Likely touch points
 - `docs/implementation/phase-c/phase-c-extensibility-contract.md`
 
 Checklist
-- [ ] Create and adopt a dedicated Phase D ORM completeness contract as the review baseline for D1–D7.
-- [ ] Confirm the exact Phase D scope: ORM methods, recordset functional ops, set ops, env alterations, domain ergonomics.
-- [ ] Confirm that `sudo()` is explicitly out of scope and document why (no-op over external API).
-- [ ] Confirm Phase A, B, and C prerequisites: recordset-first internals, metadata caching, field adaptation, error mapping, and plugin hooks must exist.
-- [ ] Confirm that all Phase D behavior is synchronous.
-- [ ] Confirm that no new external dependencies are introduced.
+- [x] Create and adopt a dedicated Phase D ORM completeness contract as the review baseline for D1–D7.
+- [x] Confirm the exact Phase D scope: ORM methods, recordset functional ops, set ops, env alterations, domain ergonomics.
+- [x] Confirm that `sudo()` is explicitly out of scope and document why (no-op over external API).
+- [x] Confirm Phase A, B, and C prerequisites: recordset-first internals, metadata caching, field adaptation, error mapping, and plugin hooks must exist.
+- [x] Confirm that all Phase D behavior is synchronous.
+- [x] Confirm that no new external dependencies are introduced.
 
 Done when
 - The implementation team can evaluate D1 through D7 against the standalone Phase D contract without reopening architecture, transport, or reflection decisions.
@@ -94,13 +94,13 @@ Likely touch points
 - `examples/`
 
 Checklist
-- [ ] Implement `_read_group(domain, groupby, aggregates, having, offset, limit, order)` on `OdooRecordset`.
-- [ ] Map the Odoo `_read_group` granularity strings (`day`, `week`, `month`, `quarter`, `year`) through cleanly.
-- [ ] Support aggregate specifier strings (`field:sum`, `field:count`, `field:avg`, `field:min`, `field:max`, `field:count_distinct`).
-- [ ] Return a list of tuples matching the Odoo `_read_group` response shape.
-- [ ] Add unit tests for groupby-only, aggregate-only, and combined groupby+aggregate cases.
-- [ ] Add unit tests for `having` filtering.
-- [ ] Add an example demonstrating aggregate reporting in `examples/`.
+- [x] Implement `_read_group(domain, groupby, aggregates, having, offset, limit, order)` on `OdooRecordset`.
+- [x] Map the Odoo `_read_group` granularity strings (`day`, `week`, `month`, `quarter`, `year`) through cleanly.
+- [x] Support aggregate specifier strings (`field:sum`, `field:count`, `field:avg`, `field:min`, `field:max`, `field:count_distinct`).
+- [x] Return a list of tuples matching the Odoo `_read_group` response shape.
+- [x] Add unit tests for groupby-only, aggregate-only, and combined groupby+aggregate cases.
+- [x] Add unit tests for `having` filtering.
+- [x] Add an example demonstrating aggregate reporting in `examples/`.
 
 Done when
 - A developer can perform server-side aggregation using the same interface as Odoo's `_read_group` without manually constructing `execute_kw` calls.
@@ -123,14 +123,14 @@ Likely touch points
 - Tests in `tests/test_records/`
 
 Checklist
-- [ ] Implement `name_create(name)` — create a record by display name, return a singleton recordset.
-- [ ] Implement `name_search(name, domain, operator, limit)` — return `[(id, display_name)]` list.
-- [ ] Implement `default_get(fields)` — return dict of server-side default values for given field names.
-- [ ] Implement `copy(default=None)` — duplicate the singleton record, return new singleton recordset.
-- [ ] Implement `get_metadata()` — return list of audit dicts (`id`, `create_uid`, `create_date`, `write_uid`, `write_date`, `xmlid`, `noupdate`).
-- [ ] Ensure `name_create` and `copy` return `OdooRecordset` instances, not raw ids.
-- [ ] Add unit tests for each method.
-- [ ] Document `default_get` behavior: returns only fields explicitly requested.
+- [x] Implement `name_create(name)` — create a record by display name, return a singleton recordset.
+- [x] Implement `name_search(name, domain, operator, limit)` — return `[(id, display_name)]` list.
+- [x] Implement `default_get(fields)` — return dict of server-side default values for given field names.
+- [x] Implement `copy(default=None)` — duplicate the singleton record, return new singleton recordset.
+- [x] Implement `get_metadata()` — return list of audit dicts (`id`, `create_uid`, `create_date`, `write_uid`, `write_date`, `xmlid`, `noupdate`).
+- [x] Ensure `name_create` and `copy` return `OdooRecordset` instances, not raw ids.
+- [x] Add unit tests for each method.
+- [x] Document `default_get` behavior: returns only fields explicitly requested.
 
 Done when
 - All five utility methods are available on `OdooRecordset` with the same signatures as the Odoo ORM.
@@ -153,14 +153,14 @@ Likely touch points
 - Tests in `tests/test_records/`
 
 Checklist
-- [ ] Implement `filtered(func)` — accepts a callable, dotted field path string, or `DomainExpression`; returns a new `OdooRecordset`.
-- [ ] Implement `mapped(func)` — accepts a callable or dotted field path; returns a list for scalar fields or a new `OdooRecordset` for relational fields.
-- [ ] Implement `sorted(key=None, reverse=False)` — accepts a callable, comma-separated field spec string, or `None` for default order; returns a new `OdooRecordset`.
-- [ ] Implement `grouped(key)` — accepts a field name or callable; returns a `dict` mapping key values to `OdooRecordset` instances.
-- [ ] Implement `filtered_domain(domain)` — accepts a domain list or `DomainExpression`; evaluates against already-fetched field values; returns a new `OdooRecordset`.
-- [ ] Ensure all operations preserve the env binding on returned recordsets.
-- [ ] Add unit tests for each operation, including empty-recordset edge cases.
-- [ ] Add tests for dotted-path traversal in `mapped` and `filtered`.
+- [x] Implement `filtered(func)` — accepts a callable, dotted field path string, or `DomainExpression`; returns a new `OdooRecordset`.
+- [x] Implement `mapped(func)` — accepts a callable or dotted field path; returns a list for scalar fields or a new `OdooRecordset` for relational fields.
+- [x] Implement `sorted(key=None, reverse=False)` — accepts a callable, comma-separated field spec string, or `None` for default order; returns a new `OdooRecordset`.
+- [x] Implement `grouped(key)` — accepts a field name or callable; returns a `dict` mapping key values to `OdooRecordset` instances.
+- [x] Implement `filtered_domain(domain)` — accepts a domain list or `DomainExpression`; evaluates against already-fetched field values; returns a new `OdooRecordset`.
+- [x] Ensure all operations preserve the env binding on returned recordsets.
+- [x] Add unit tests for each operation, including empty-recordset edge cases.
+- [x] Add tests for dotted-path traversal in `mapped` and `filtered`.
 
 Done when
 - All five functional operations are available and compose correctly with other recordset operations.
@@ -182,14 +182,14 @@ Likely touch points
 - Tests in `tests/test_records/`
 
 Checklist
-- [ ] Implement `|` (union) — returns a new recordset with all ids from both operands, preserving order, deduplicating.
-- [ ] Implement `&` (intersection) — returns a new recordset with ids present in both operands.
-- [ ] Implement `-` (difference) — returns a new recordset with ids in the left operand that are absent from the right.
-- [ ] Implement `in` / `not in` — membership test for a singleton recordset in a larger recordset.
-- [ ] Implement `<=` / `<` — subset and strict subset tests.
-- [ ] Implement `>=` / `>` — superset and strict superset tests.
-- [ ] Raise a clear error when set operations are attempted between recordsets of different models.
-- [ ] Add unit tests for each operator, including empty operands and same-model/different-model combinations.
+- [x] Implement `|` (union) — returns a new recordset with all ids from both operands, preserving order, deduplicating.
+- [x] Implement `&` (intersection) — returns a new recordset with ids present in both operands.
+- [x] Implement `-` (difference) — returns a new recordset with ids in the left operand that are absent from the right.
+- [x] Implement `in` / `not in` — membership test for a singleton recordset in a larger recordset.
+- [x] Implement `<=` / `<` — subset and strict subset tests.
+- [x] Implement `>=` / `>` — superset and strict superset tests.
+- [x] Raise a clear error when set operations are attempted between recordsets of different models.
+- [x] Add unit tests for each operator, including empty operands and same-model/different-model combinations.
 
 Done when
 - All set operations behave consistently with Odoo ORM recordset set semantics.
@@ -212,14 +212,14 @@ Likely touch points
 - Tests in `tests/test_env/` and `tests/test_records/`
 
 Checklist
-- [ ] Implement `with_user(uid)` on `OdooEnv` and `OdooRecordset` — derives a new env/recordset where subsequent `execute_kw` calls use the given uid.
-- [ ] Implement `with_company(company_id)` on `OdooEnv` and `OdooRecordset` — derives a new env/recordset with `allowed_company_ids` set to `[company_id]` in context.
-- [ ] Document explicitly that `sudo()` is NOT implemented — it has no reliable semantic over the external API.
-- [ ] Implement `action_archive()` on `OdooRecordset` — sets `active=False` on all records in the set.
-- [ ] Implement `action_unarchive()` on `OdooRecordset` — sets `active=True` on all records in the set.
-- [ ] Implement `active_test` context key handling — when `active_test=False` is in context, pass it through to search calls so archived records are included.
-- [ ] Add unit tests for `with_user`, `with_company`, `action_archive`, and `action_unarchive`.
-- [ ] Add a test asserting that `with_user` derivation leaves the original env unchanged.
+- [x] Implement `with_user(uid)` on `OdooEnv` and `OdooRecordset` — derives a new env/recordset where subsequent `execute_kw` calls use the given uid.
+- [x] Implement `with_company(company_id)` on `OdooEnv` and `OdooRecordset` — derives a new env/recordset with `allowed_company_ids` set to `[company_id]` in context.
+- [x] Document explicitly that `sudo()` is NOT implemented — it has no reliable semantic over the external API.
+- [x] Implement `action_archive()` on `OdooRecordset` — sets `active=False` on all records in the set.
+- [x] Implement `action_unarchive()` on `OdooRecordset` — sets `active=True` on all records in the set.
+- [x] Implement `active_test` context key handling — when `active_test=False` is in context, pass it through to search calls so archived records are included.
+- [x] Add unit tests for `with_user`, `with_company`, `action_archive`, and `action_unarchive`.
+- [x] Add a test asserting that `with_user` derivation leaves the original env unchanged.
 
 Done when
 - Context alterations work as derived env/recordset creation without mutating existing state.
@@ -241,14 +241,14 @@ Likely touch points
 - Tests in `tests/test_query/`
 
 Checklist
-- [ ] Add `DomainExpression.AND(iterable)` class method — combines an iterable of domains with `&` operators.
-- [ ] Add `DomainExpression.OR(iterable)` class method — combines an iterable of domains with `|` operators.
-- [ ] Add `DomainExpression.TRUE` and `DomainExpression.FALSE` class-level constants.
-- [ ] Implement `__invert__` (`~`) operator on `DomainExpression` — wraps the domain in a `!` negation node.
-- [ ] Implement `__and__` (`&`) and `__or__` (`|`) operators on `DomainExpression` for pairwise composition.
-- [ ] Add support for dynamic time value strings in condition values (`'now'`, `'-3d'`, `'=monday -1w'`, etc.) — pass through to the server unchanged, document the format.
-- [ ] Add unit tests for each composition method, including empty input and single-element input.
-- [ ] Add unit tests for `~`, `&`, and `|` operators with nested domains.
+- [x] Add `DomainExpression.AND(iterable)` class method — combines an iterable of domains with `&` operators.
+- [x] Add `DomainExpression.OR(iterable)` class method — combines an iterable of domains with `|` operators.
+- [x] Add `DomainExpression.TRUE` and `DomainExpression.FALSE` class-level constants.
+- [x] Implement `__invert__` (`~`) operator on `DomainExpression` — wraps the domain in a `!` negation node.
+- [x] Implement `__and__` (`&`) and `__or__` (`|`) operators on `DomainExpression` for pairwise composition.
+- [x] Add support for dynamic time value strings in condition values (`'now'`, `'-3d'`, `'=monday -1w'`, etc.) — pass through to the server unchanged, document the format.
+- [x] Add unit tests for each composition method, including empty input and single-element input.
+- [x] Add unit tests for `~`, `&`, and `|` operators with nested domains.
 
 Done when
 - Domain composition is ergonomic and matches the `Domain.AND([d1, d2])` / `~d1` style described in the Odoo ORM documentation.
@@ -272,12 +272,12 @@ Likely touch points
 - Local integration check scripts
 
 Checklist
-- [ ] Add or update `examples/` scripts demonstrating each D1–D6 capability against a live Odoo instance.
-- [ ] Update `docs/odoo-sdk-architecture-plan.md` with Phase D boundary and achievement summary.
-- [ ] Update public `__init__.py` exports for any new Phase D public symbols.
-- [ ] Run full test suite and confirm no Phase A–C regressions.
-- [ ] Run live integration smoke tests in `examples/` against at least one Odoo instance.
-- [ ] Mark all Phase D checklist items done.
+- [x] Add or update `examples/` scripts demonstrating each D1–D6 capability against a live Odoo instance.
+- [x] Update `docs/odoo-sdk-architecture-plan.md` with Phase D boundary and achievement summary.
+- [x] Update public `__init__.py` exports for any new Phase D public symbols.
+- [x] Run full test suite and confirm no Phase A–C regressions.
+- [x] Run live integration smoke tests in `examples/` against at least one Odoo instance.
+- [x] Mark all Phase D checklist items done.
 
 Done when
 - Phase D changes are validated locally with both unit tests and live integration checks, and the documentation reflects the new SDK capabilities.
