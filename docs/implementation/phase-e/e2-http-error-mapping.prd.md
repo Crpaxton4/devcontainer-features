@@ -16,7 +16,7 @@ Extend the existing error mapping logic in `errors.py` to handle JSON-2 error bo
 
 ## Functional Requirements
 
-- Parse the JSON error body to extract `name`, `message`, `arguments`, and `debug` fields.
+- Parse the JSON error body to extract `name`, `message`, and `debug` fields.
 - Map `name` values to SDK errors:
   - `odoo.exceptions.AccessDenied` or HTTP 401 → `OdooAuthenticationError`
   - `odoo.exceptions.AccessError` or HTTP 403 → `OdooAccessError`
