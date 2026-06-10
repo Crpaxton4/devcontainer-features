@@ -94,27 +94,8 @@ class OdooConnectionSettings:
             for key, explicit_value in explicit_values.items()
         }
 
-        resolved_transport: Literal["xmlrpc", "json2"] = (
-            "json2" if values.get("transport") == "json2" else "xmlrpc"
-        )
-
-        # Validate required fields based on transport type.
-        if resolved_transport == "json2":
-            missing = [key for key in ("url", "db", "api_key") if not values.get(key)]
-        else:
-            # Treat both `None` and empty string as missing configuration values.
-            missing = [
-                key for key in ("url", "db", "username", "password")
-                if values.get(key) in (None, "")
-            ]
-
-        if missing:
-            missing_names = ", ".join(sorted(missing))
-            raise ValueError(
-                "Missing Odoo connection settings: "
-                f"{missing_names}. Configure them with environment variables, "
-                "the INI file, or override them with constructor arguments."
-            )
+        resolved_transport = _resolve_transport(values)
+        _validate_required_settings(values, resolved_transport)
 
         return cls(
             url=str(values["url"]),
@@ -123,6 +104,51 @@ class OdooConnectionSettings:
             password=values.get("password") or None,
             transport=resolved_transport,
             api_key=values.get("api_key") or None,
+        )
+
+
+def _resolve_transport(values: dict[str, Optional[str]]) -> Literal["xmlrpc", "json2"]:
+    """Return the effective transport type from resolved values.
+
+    This helper is necessary so transport resolution is isolated from from_sources
+    and keeps its cyclomatic complexity within acceptable bounds.
+
+    :param values: Resolved setting values keyed by setting name.
+    :type values: dict[str, Optional[str]]
+    :return: Effective transport type.
+    :rtype: Literal["xmlrpc", "json2"]
+    """
+    return "json2" if values.get("transport") == "json2" else "xmlrpc"
+
+
+def _validate_required_settings(
+    values: dict[str, Optional[str]],
+    transport: Literal["xmlrpc", "json2"],
+) -> None:
+    """Raise ValueError when required settings are absent for the given transport.
+
+    This helper is necessary so transport-aware validation is isolated from
+    from_sources and keeps its cyclomatic complexity within acceptable bounds.
+
+    :param values: Resolved setting values keyed by setting name.
+    :type values: dict[str, Optional[str]]
+    :param transport: Effective transport type.
+    :type transport: Literal["xmlrpc", "json2"]
+    :raises ValueError: When required keys are missing.
+    """
+    if transport == "json2":
+        required = ("url", "db", "api_key")
+        missing = [key for key in required if not values.get(key)]
+    else:
+        required = ("url", "db", "username", "password")
+        missing = [key for key in required if values.get(key) in (None, "")]
+
+    if missing:
+        missing_names = ", ".join(sorted(missing))
+        raise ValueError(
+            "Missing Odoo connection settings: "
+            f"{missing_names}. Configure them with environment variables, "
+            "the INI file, or override them with constructor arguments."
         )
 
 
