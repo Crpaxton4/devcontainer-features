@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from odoo_sdk.config.settings import OdooConnectionSettings
 from odoo_sdk.env.env import OdooEnv
 from odoo_sdk.transport.executor import OdooExecutor
+from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
 
 if TYPE_CHECKING:
@@ -80,15 +81,58 @@ class OdooClient(OdooExecutor):
                 password=password,
                 config_path=config_path,
             )
-            self._executor = OdooRpcExecutor(
-                settings.url,
-                settings.db,
-                settings.username,
-                settings.password,
-            )
+            if settings.transport == "json2":
+                self._executor = OdooJson2Executor(
+                    settings.url,
+                    settings.db,
+                    settings.api_key,  # type: ignore[arg-type]
+                )
+            else:
+                self._executor = OdooRpcExecutor(
+                    settings.url,
+                    settings.db,
+                    settings.username,  # type: ignore[arg-type]
+                    settings.password,  # type: ignore[arg-type]
+                )
         self._env = OdooEnv(self._executor)
         self._model_recordsets: Dict[str, OdooRecordset] = {}
         self._lock = threading.Lock()
+
+    @classmethod
+    def from_xml_rpc(
+        cls,
+        url: str,
+        db: str,
+        username: str,
+        password: str,
+    ) -> "OdooClient":
+        """Create a client backed by an XML-RPC executor.
+
+        :param url: Base URL of the Odoo server.
+        :param db: Database name to authenticate against.
+        :param username: Username used for authentication.
+        :param password: Password used for authentication.
+        :return: OdooClient backed by OdooRpcExecutor.
+        :rtype: OdooClient
+        """
+        return cls(executor=OdooRpcExecutor(url, db, username, password))
+
+    @classmethod
+    def from_json2(
+        cls,
+        url: str,
+        db: str,
+        api_key: str,
+    ) -> "OdooClient":
+        """Create a client backed by a JSON-2 executor.
+
+        :param url: Base URL of the Odoo server.
+        :param db: Database name to authenticate against.
+        :param api_key: Bearer API key used for authentication.
+        :return: OdooClient backed by OdooJson2Executor.
+        :rtype: OdooClient
+        """
+        return cls(executor=OdooJson2Executor(url, db, api_key))
 
     @property
     def uid(self) -> int:

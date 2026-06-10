@@ -1,9 +1,9 @@
 import configparser
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 DEFAULT_CONFIG_ENV_VAR = "odoo_sdk_CONFIG"
 DEFAULT_SECTION = "odoo"
@@ -12,6 +12,8 @@ CONNECTION_ENV_VARS = {
     "db": "ODOO_DB",
     "username": "ODOO_USERNAME",
     "password": "ODOO_PASSWORD",
+    "api_key": "ODOO_API_KEY",
+    "transport": "ODOO_TRANSPORT",
 }
 DEFAULT_CONFIG_LOCATIONS = (
     ".odoo_sdk.ini",
@@ -39,8 +41,10 @@ class OdooConnectionSettings:
 
     url: str
     db: str
-    username: str
-    password: str
+    username: Optional[str] = None
+    password: Optional[str] = None
+    transport: Literal["xmlrpc", "json2"] = "xmlrpc"
+    api_key: Optional[str] = field(default=None, repr=False)
 
     @classmethod
     def from_sources(
@@ -50,6 +54,8 @@ class OdooConnectionSettings:
         db: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        api_key: Optional[str] = None,
+        transport: Optional[str] = None,
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
         """Resolve connection settings from explicit, environment, and file sources.
@@ -80,14 +86,28 @@ class OdooConnectionSettings:
             "db": db,
             "username": username,
             "password": password,
+            "api_key": api_key,
+            "transport": transport,
         }
         values: dict[str, Optional[str]] = {
             key: _resolve_setting_value(key, explicit_value, environment_values, file_values)
             for key, explicit_value in explicit_values.items()
         }
 
-        # Treat both `None` and empty string as missing configuration values.
-        missing = [key for key, value in values.items() if value in (None, "")]
+        resolved_transport: Literal["xmlrpc", "json2"] = (
+            "json2" if values.get("transport") == "json2" else "xmlrpc"
+        )
+
+        # Validate required fields based on transport type.
+        if resolved_transport == "json2":
+            missing = [key for key in ("url", "db", "api_key") if not values.get(key)]
+        else:
+            # Treat both `None` and empty string as missing configuration values.
+            missing = [
+                key for key in ("url", "db", "username", "password")
+                if values.get(key) in (None, "")
+            ]
+
         if missing:
             missing_names = ", ".join(sorted(missing))
             raise ValueError(
@@ -99,8 +119,10 @@ class OdooConnectionSettings:
         return cls(
             url=str(values["url"]),
             db=str(values["db"]),
-            username=str(values["username"]),
-            password=str(values["password"]),
+            username=values.get("username") or None,
+            password=values.get("password") or None,
+            transport=resolved_transport,
+            api_key=values.get("api_key") or None,
         )
 
 
@@ -132,6 +154,8 @@ def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
         "db": parser.get(DEFAULT_SECTION, "db", fallback=""),
         "username": parser.get(DEFAULT_SECTION, "username", fallback=""),
         "password": parser.get(DEFAULT_SECTION, "password", fallback=""),
+        "api_key": parser.get(DEFAULT_SECTION, "api_key", fallback=""),
+        "transport": parser.get(DEFAULT_SECTION, "transport", fallback=""),
     }
 
 

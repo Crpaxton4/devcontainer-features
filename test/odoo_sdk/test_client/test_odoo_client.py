@@ -11,6 +11,7 @@ from odoo_sdk.config.settings import OdooConnectionSettings
 from odoo_sdk.env.env import OdooEnv
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.records.recordset import OdooRecordset
+from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
 
 
@@ -335,3 +336,142 @@ class TestOdooConnectionSettings(unittest.TestCase):
             settings = OdooConnectionSettings.from_sources(config_path="odoo.ini")
 
         self.assertEqual(settings.url, "https://from-file.example.com")
+
+    def test_api_key_resolved_from_environment_variable(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODOO_URL": "https://example.com",
+                "ODOO_DB": "mydb",
+                "ODOO_API_KEY": "secret-key",
+                "ODOO_TRANSPORT": "json2",
+            },
+            clear=True,
+        ):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.api_key, "secret-key")
+
+    def test_transport_resolved_from_environment_variable(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODOO_URL": "https://example.com",
+                "ODOO_DB": "mydb",
+                "ODOO_API_KEY": "secret-key",
+                "ODOO_TRANSPORT": "json2",
+            },
+            clear=True,
+        ):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.transport, "json2")
+
+    def test_api_key_absent_from_repr(self) -> None:
+        settings = OdooConnectionSettings(
+            url="https://example.com",
+            db="mydb",
+            api_key="super-secret",
+        )
+
+        self.assertNotIn("super-secret", repr(settings))
+
+    def test_ini_file_api_key_and_transport_parsed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "odoo.ini"
+            config_path.write_text(
+                "[odoo]\n"
+                "url=https://from-file.example.com\n"
+                "db=file-db\n"
+                "transport=json2\n"
+                "api_key=ini-api-key\n",
+                encoding="utf-8",
+            )
+
+            settings = OdooConnectionSettings.from_sources(config_path=str(config_path))
+
+        self.assertEqual(settings.transport, "json2")
+        self.assertEqual(settings.api_key, "ini-api-key")
+
+    def test_json2_transport_raises_without_api_key(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODOO_URL": "https://example.com",
+                "ODOO_DB": "mydb",
+                "ODOO_TRANSPORT": "json2",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+                OdooConnectionSettings.from_sources()
+
+    def test_xmlrpc_transport_raises_without_username_password(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODOO_URL": "https://example.com",
+                "ODOO_DB": "mydb",
+            },
+            clear=True,
+        ):
+            with patch(
+                "odoo_sdk.config.settings._resolve_config_path",
+                return_value=None,
+            ):
+                with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+                    OdooConnectionSettings.from_sources()
+
+
+class TestOdooClientFactoryMethods(unittest.TestCase):
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_from_xml_rpc_returns_odoo_client(self, mock_rpc: Mock) -> None:
+        mock_executor = Mock(spec=OdooExecutor)
+        mock_rpc.return_value = mock_executor
+
+        client = OdooClient.from_xml_rpc(
+            "https://example.com", "mydb", "admin", "pass"
+        )
+
+        self.assertIsInstance(client, OdooClient)
+        mock_rpc.assert_called_once_with(
+            "https://example.com", "mydb", "admin", "pass"
+        )
+        self.assertIs(client._executor, mock_executor)
+
+    @patch("odoo_sdk.client.client.OdooJson2Executor")
+    def test_from_json2_returns_odoo_client(self, mock_json2: Mock) -> None:
+        mock_executor = Mock(spec=OdooExecutor)
+        mock_json2.return_value = mock_executor
+
+        client = OdooClient.from_json2("https://example.com", "mydb", "api-key")
+
+        self.assertIsInstance(client, OdooClient)
+        mock_json2.assert_called_once_with("https://example.com", "mydb", "api-key")
+        self.assertIs(client._executor, mock_executor)
+
+    @patch("odoo_sdk.client.client.OdooJson2Executor")
+    @patch("odoo_sdk.client.client.OdooConnectionSettings.from_sources")
+    def test_client_init_uses_json2_executor_when_transport_is_json2(
+        self,
+        mock_from_sources: Mock,
+        mock_json2: Mock,
+    ) -> None:
+        settings = OdooConnectionSettings(
+            url="https://example.com",
+            db="mydb",
+            transport="json2",
+            api_key="my-api-key",
+        )
+        built_executor = Mock(spec=OdooExecutor)
+        mock_from_sources.return_value = settings
+        mock_json2.return_value = built_executor
+
+        client = OdooClient(url="https://example.com", db="mydb")
+
+        self.assertIs(client._executor, built_executor)
+        mock_json2.assert_called_once_with(
+            settings.url,
+            settings.db,
+            settings.api_key,
+        )
