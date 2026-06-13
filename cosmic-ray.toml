@@ -3,9 +3,7 @@ module-path = "src"
 timeout = 120.0
 excluded-modules = [
 	"**/tests/**",
-	"**/examples/**",
-	"src/__init__.py",
-	"src/odoo_sdk/config/settings.py",
+	"**/examples/**", 
 ]
 test-command = 'python -m unittest discover -s tests -p "test_*.py"'
 
