@@ -25,7 +25,7 @@ The primary SDK entry path demonstrated here is model-bound recordset lookup via
 
 from datetime import date, datetime, timedelta, timezone
 
-from odoo_sdk.odoo_service import Command, OdooClient
+from odoo_sdk import Command, OdooClient
 
 DEADLINE = date.today() + timedelta(days=7)
 

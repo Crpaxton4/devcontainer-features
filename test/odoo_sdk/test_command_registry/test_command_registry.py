@@ -1,7 +1,6 @@
 import unittest
 
-from odoo_sdk.command_registry.command_registry import CommandDispatcher
-
+from odoo_sdk.commands.command_registry import CommandDispatcher
 
 class DummyCommandOk:
     def __init__(self, client):

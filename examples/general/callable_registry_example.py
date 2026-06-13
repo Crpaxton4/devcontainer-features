@@ -8,8 +8,7 @@ Run as a script for a minimal demo; it intentionally uses a small fake client
 so the example is self-contained and has no external dependencies.
 """
 
-from odoo_sdk import CommandDispatcher
-
+from odoo_sdk.commands import Command, Registry
 
 class FakeClient:
     """A minimal fake client for demonstration purposes.
@@ -68,23 +67,23 @@ def main() -> None:
     # dispatcher = CommandDispatcher(client)
 
     client = FakeClient(uid=42)
-    dispatcher = CommandDispatcher(client)
+    registry = Registry(client)
 
     # You may register a class directly (classes are callables that return
     # an instance when called with `client`). The dispatcher will call the
     # registered factory with the shared `client` when executing.
-    dispatcher.register("get_uid", GetUidCommand)
-    dispatcher.register("create_task", CreateTaskCommand)
+    registry.register("get_uid", GetUidCommand)
+    registry.register("create_task", CreateTaskCommand)
 
     # Or register a factory function that returns a callable
-    dispatcher.register("echo", make_echo_command)
+    registry.register("echo", make_echo_command)
 
-    print("get_uid ->", dispatcher["get_uid"]())
+    print("get_uid ->", registry["get_uid"]())
     print(
         "create_task ->",
-        dispatcher["create_task"]("My task", 7, "a demo task"),
+        registry["create_task"]("My task", 7, "a demo task"),
     )
-    print("echo ->", dispatcher["echo"]("hello"))
+    print("echo ->", registry["echo"]("hello"))
 
 
 if __name__ == "__main__":

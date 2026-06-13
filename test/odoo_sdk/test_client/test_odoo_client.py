@@ -3,14 +3,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
+
 from hypothesis import given, strategies
 
-from odoo_sdk.transport.errors import OdooServerError
 from odoo_sdk.client.client import OdooClient
 from odoo_sdk.config.settings import OdooConnectionSettings
 from odoo_sdk.env.env import OdooEnv
-from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.records.recordset import OdooRecordset
+from odoo_sdk.transport.errors import OdooServerError
+from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
 

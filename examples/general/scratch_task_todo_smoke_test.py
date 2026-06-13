@@ -24,12 +24,10 @@ Run with explicit task inputs:
 from __future__ import annotations
 
 import argparse
-import os
 from pprint import pprint
 from typing import Any, Dict, Optional, Tuple
 
-from odoo_sdk.odoo_service import OdooClient, OdooExecutor, OdooRecordset
-
+from odoo_sdk import OdooClient, OdooExecutor, OdooRecordset
 
 TASK_FIELDS_TO_DISPLAY = [
     "id",
