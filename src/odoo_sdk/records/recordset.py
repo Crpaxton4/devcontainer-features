@@ -5,7 +5,7 @@ from collections.abc import Sequence as SequenceABC
 from typing import Any, Dict, Iterator, Optional, Sequence, TypeAlias, Union
 
 from odoo_sdk._utils import _dedup_field_names
-from odoo_sdk.env.env import OdooEnv
+from odoo_sdk.env import OdooEnv
 from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 from odoo_sdk.fields.values import RelationCollection, RelationValue

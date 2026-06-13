@@ -8,6 +8,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from odoo_sdk._utils import _is_null_wire_value
 
+
 @dataclass(frozen=True)
 class RelationValue:
     """Represent one adapted many2one relation returned by the SDK.

@@ -56,7 +56,9 @@ class TestDomainExpressionAND(unittest.TestCase):
         self.assertIn(("state", "=", "open"), serialized)
 
     def test_and_accepts_raw_list_operand(self) -> None:
-        result = DomainExpression.AND([[("active", "=", True)], [("company_id", "=", 1)]])
+        result = DomainExpression.AND(
+            [[("active", "=", True)], [("company_id", "=", 1)]]
+        )
         self.assertEqual(
             result.serialize(),
             ["&", ("active", "=", True), ("company_id", "=", 1)],
@@ -106,7 +108,9 @@ class TestDomainExpressionOR(unittest.TestCase):
         self.assertIn(("state", "=", "open"), serialized)
 
     def test_or_accepts_raw_list_operand(self) -> None:
-        result = DomainExpression.OR([[("active", "=", True)], [("company_id", "=", 1)]])
+        result = DomainExpression.OR(
+            [[("active", "=", True)], [("company_id", "=", 1)]]
+        )
         self.assertEqual(
             result.serialize(),
             ["|", ("active", "=", True), ("company_id", "=", 1)],

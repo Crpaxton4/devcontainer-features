@@ -90,7 +90,9 @@ class OdooConnectionSettings:
             "transport": transport,
         }
         values: dict[str, Optional[str]] = {
-            key: _resolve_setting_value(key, explicit_value, environment_values, file_values)
+            key: _resolve_setting_value(
+                key, explicit_value, environment_values, file_values
+            )
             for key, explicit_value in explicit_values.items()
         }
 
@@ -217,9 +219,8 @@ def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
         if expanded_path.is_absolute():
             return str(expanded_path) if expanded_path.is_file() else None
 
-        return (
-            _resolve_relative_to_invoking_script(expanded_path)
-            or (str(expanded_path.resolve()) if expanded_path.is_file() else None)
+        return _resolve_relative_to_invoking_script(expanded_path) or (
+            str(expanded_path.resolve()) if expanded_path.is_file() else None
         )
 
     for candidate in DEFAULT_CONFIG_LOCATIONS:

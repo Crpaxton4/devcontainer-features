@@ -44,7 +44,9 @@ def demo_builder() -> None:
 
     # AND with empty iterable → TRUE
     d_and_empty = DomainExpression.AND([])
-    print(f"AND([]) => {d_and_empty.serialize()!r}  (is_empty={d_and_empty.is_empty()!r})")
+    print(
+        f"AND([]) => {d_and_empty.serialize()!r}  (is_empty={d_and_empty.is_empty()!r})"
+    )
 
     # ------------------------------------------------------------------ D6-3
     # DomainExpression.OR — combine an iterable with logical OR
@@ -99,14 +101,20 @@ def demo_live(client: OdooClient) -> None:
     d_combined = d_company & d_active
 
     results = partners.search(d_combined, limit=5, order="id asc")
-    print(f"\nLive search with AND domain: found {len(results.ids)} partner(s): {list(results.ids)}")
+    print(
+        f"\nLive search with AND domain: found {len(results.ids)} partner(s): {list(results.ids)}"
+    )
 
-    d_or = DomainExpression.OR([
-        DomainExpression.normalize([("is_company", "=", True)]),
-        DomainExpression.normalize([("customer_rank", ">", 0)]),
-    ])
+    d_or = DomainExpression.OR(
+        [
+            DomainExpression.normalize([("is_company", "=", True)]),
+            DomainExpression.normalize([("customer_rank", ">", 0)]),
+        ]
+    )
     results_or = partners.search(d_or, limit=5, order="id asc")
-    print(f"Live search with OR domain : found {len(results_or.ids)} partner(s): {list(results_or.ids)}")
+    print(
+        f"Live search with OR domain : found {len(results_or.ids)} partner(s): {list(results_or.ids)}"
+    )
 
 
 def main() -> None:

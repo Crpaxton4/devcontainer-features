@@ -50,7 +50,7 @@ packages = [
 "odoo_sdk.fields" = "src/odoo_sdk/fields"
 
 [tool.black]
-target-version = ["py312"]
+target-version = ["py313"]
 
 [tool.coverage.run]
 branch = true

@@ -505,9 +505,7 @@ def _normalize_raw_set_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     return Command.set(command[2]).serialize()
 
 
-def _normalize_mapping_payload(
-    payload: Any, *, operation: str
-) -> dict[str, Any]:
+def _normalize_mapping_payload(payload: Any, *, operation: str) -> dict[str, Any]:
     """Validate and copy a mapping payload for create or update commands.
 
     This helper is necessary because Odoo create and update tuple commands require a

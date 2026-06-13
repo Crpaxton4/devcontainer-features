@@ -299,7 +299,10 @@ class TestMapped(unittest.TestCase):
             # metadata for partner_id on sale.order
             {"partner_id": {"type": "many2one", "relation": "res.partner"}},
             # read sale.order fields
-            [{"id": 7, "partner_id": [3, "Acme"]}, {"id": 8, "partner_id": [5, "Beta"]}],
+            [
+                {"id": 7, "partner_id": [3, "Acme"]},
+                {"id": 8, "partner_id": [5, "Beta"]},
+            ],
             # metadata for name on res.partner
             {"name": {"type": "char"}},
             # read partner names

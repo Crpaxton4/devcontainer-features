@@ -23,16 +23,13 @@ def _freeze_context_value(value: Any) -> Any:
     if isinstance(value, dict):
         return tuple(
             sorted(
-                (str(key), _freeze_context_value(item))
-                for key, item in value.items()
+                (str(key), _freeze_context_value(item)) for key, item in value.items()
             )
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_context_value(item) for item in value)
     if isinstance(value, set):
-        return tuple(
-            sorted((_freeze_context_value(item) for item in value), key=repr)
-        )
+        return tuple(sorted((_freeze_context_value(item) for item in value), key=repr))
     return value
 
 
@@ -71,8 +68,7 @@ def _normalize_context(
         return None
     return tuple(
         sorted(
-            (str(key), _freeze_context_value(value))
-            for key, value in context.items()
+            (str(key), _freeze_context_value(value)) for key, value in context.items()
         )
     )
 

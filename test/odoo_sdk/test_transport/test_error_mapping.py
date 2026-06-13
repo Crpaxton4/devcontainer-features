@@ -12,7 +12,6 @@ from odoo_sdk.transport.errors import (
     OdooValidationError,
 )
 
-
 _FAULT_MARKERS: tuple[tuple[Type[OdooError], tuple[str, ...]], ...] = (
     (
         OdooMissingRecordError,
@@ -104,7 +103,9 @@ def _classify_fault(fault_string: str) -> Type[OdooError]:
     return OdooServerError
 
 
-def map_authentication_failure(*, detail: Optional[str] = None) -> OdooAuthenticationError:
+def map_authentication_failure(
+    *, detail: Optional[str] = None
+) -> OdooAuthenticationError:
     return OdooAuthenticationError(
         _message_for_error(OdooAuthenticationError, operation_name="authenticate"),
         operation="authenticate",

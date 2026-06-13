@@ -350,9 +350,7 @@ def _parse_binary_expression(
     return BooleanExpression(operator, (left, right)), next_index
 
 
-def _parse_unary_expression(
-    items: list[Any], index: int
-) -> tuple[DomainNode, int]:
+def _parse_unary_expression(items: list[Any], index: int) -> tuple[DomainNode, int]:
     """Parse a unary boolean expression (``!``) from a token sequence.
 
     :param items: Flat list of domain tokens.
@@ -425,7 +423,6 @@ def _is_condition(value: Any) -> bool:
     )
 
 
-
 def _serialize_expression(node: DomainNode) -> Union[DomainCondition, list[Any]]:
     """Serialize one normalized node into Odoo domain tokens.
 
@@ -459,7 +456,9 @@ def _serialize_boolean(operator: str, operands: tuple[DomainNode, ...]) -> list[
     """
     operand_count = len(operands)
     if operand_count < 2:
-        raise ValueError(f"Boolean operator {operator!r} requires at least two operands")
+        raise ValueError(
+            f"Boolean operator {operator!r} requires at least two operands"
+        )
     if operand_count > 2:
         return [
             operator,
@@ -496,6 +495,7 @@ def _serialize_tokens(node: DomainNode) -> list[Any]:
 # ---------------------------------------------------------------------------
 # In-memory domain evaluation helpers
 # ---------------------------------------------------------------------------
+
 
 def _extract_comparison_value(value: Any) -> Any:
     """Normalize an adapted field value to a primitive suitable for comparison.
@@ -642,7 +642,9 @@ def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool
     if operator in ("like", "=like"):
         return _match_like_pattern(cmp, domain_value, case_sensitive=True, negate=False)
     if operator in ("ilike", "=ilike"):
-        return _match_like_pattern(cmp, domain_value, case_sensitive=False, negate=False)
+        return _match_like_pattern(
+            cmp, domain_value, case_sensitive=False, negate=False
+        )
     if operator == "not like":
         return _match_like_pattern(cmp, domain_value, case_sensitive=True, negate=True)
     if operator == "not ilike":
@@ -652,7 +654,9 @@ def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool
             f"Operator {operator!r} requires server-side hierarchy information "
             "and is not supported in filtered_domain."
         )
-    raise ValueError(f"Unsupported domain operator for in-memory evaluation: {operator!r}")
+    raise ValueError(
+        f"Unsupported domain operator for in-memory evaluation: {operator!r}"
+    )
 
 
 def _evaluate_node(record_values: dict[str, Any], node: DomainNode) -> bool:

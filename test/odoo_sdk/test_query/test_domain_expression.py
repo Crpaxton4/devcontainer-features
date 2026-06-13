@@ -150,9 +150,7 @@ class TestDomainExpression(unittest.TestCase):
             DomainExpression.normalize(["^", ("active", "=", True), ("id", "=", 7)])
 
     def test_rejects_non_sequence_domain_input(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "condition or sequence of tokens"
-        ):
+        with self.assertRaisesRegex(ValueError, "condition or sequence of tokens"):
             DomainExpression.normalize(7)
 
     def test_rejects_missing_boolean_operand(self) -> None:
@@ -165,7 +163,7 @@ class TestDomainExpression(unittest.TestCase):
 
     def test_rejects_empty_nested_group(self) -> None:
         with self.assertRaisesRegex(ValueError, "Nested domain groups cannot be empty"):
-            DomainExpression.normalize([[ ]])
+            DomainExpression.normalize([[]])
 
     def test_boolean_expression_rejects_invalid_operator(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported boolean operator"):
@@ -206,7 +204,9 @@ class TestDomainExpression(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ended before all operands"):
             _parse_expression([], 1)
 
-    def test_parse_expression_rejects_index_at_end_for_large_runtime_integer(self) -> None:
+    def test_parse_expression_rejects_index_at_end_for_large_runtime_integer(
+        self,
+    ) -> None:
         items = [(f"field_{index}", "=", index) for index in range(300)]
         index = int("300")
 

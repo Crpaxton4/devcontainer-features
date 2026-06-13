@@ -420,7 +420,9 @@ class TestOdooConnectionSettings(unittest.TestCase):
                 "odoo_sdk.config.settings._resolve_config_path",
                 return_value=None,
             ):
-                with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+                with self.assertRaisesRegex(
+                    ValueError, "Missing Odoo connection settings"
+                ):
                     OdooConnectionSettings.from_sources()
 
 
@@ -430,14 +432,10 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
         mock_executor = Mock(spec=OdooExecutor)
         mock_rpc.return_value = mock_executor
 
-        client = OdooClient.from_xml_rpc(
-            "https://example.com", "mydb", "admin", "pass"
-        )
+        client = OdooClient.from_xml_rpc("https://example.com", "mydb", "admin", "pass")
 
         self.assertIsInstance(client, OdooClient)
-        mock_rpc.assert_called_once_with(
-            "https://example.com", "mydb", "admin", "pass"
-        )
+        mock_rpc.assert_called_once_with("https://example.com", "mydb", "admin", "pass")
         self.assertIs(client._executor, mock_executor)
 
     @patch("odoo_sdk.client.client.OdooJson2Executor")

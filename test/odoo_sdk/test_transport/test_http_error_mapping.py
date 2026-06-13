@@ -20,23 +20,31 @@ class TestMapHttpError(unittest.TestCase):
     # --- name-field-driven mapping ---
 
     def test_access_denied_name_raises_authentication_error(self) -> None:
-        body = self._json_body(name="odoo.exceptions.AccessDenied", message="bad credentials")
+        body = self._json_body(
+            name="odoo.exceptions.AccessDenied", message="bad credentials"
+        )
         exc = map_http_error(200, body, model="res.users", method="login")
         self.assertIsInstance(exc, OdooAuthenticationError)
         self.assertEqual(str(exc), "bad credentials")
 
     def test_access_error_name_raises_access_error(self) -> None:
-        body = self._json_body(name="odoo.exceptions.AccessError", message="access denied")
+        body = self._json_body(
+            name="odoo.exceptions.AccessError", message="access denied"
+        )
         exc = map_http_error(200, body)
         self.assertIsInstance(exc, OdooAccessError)
 
     def test_missing_error_name_raises_missing_record_error(self) -> None:
-        body = self._json_body(name="odoo.exceptions.MissingError", message="record gone")
+        body = self._json_body(
+            name="odoo.exceptions.MissingError", message="record gone"
+        )
         exc = map_http_error(200, body)
         self.assertIsInstance(exc, OdooMissingRecordError)
 
     def test_validation_error_name_raises_validation_error(self) -> None:
-        body = self._json_body(name="odoo.exceptions.ValidationError", message="invalid value")
+        body = self._json_body(
+            name="odoo.exceptions.ValidationError", message="invalid value"
+        )
         exc = map_http_error(200, body)
         self.assertIsInstance(exc, OdooValidationError)
 
@@ -118,6 +126,8 @@ class TestMapHttpError(unittest.TestCase):
         self.assertEqual(exc.detail, "traceback here")
 
     def test_message_preserved_in_exception(self) -> None:
-        body = self._json_body(name="odoo.exceptions.AccessError", message="You are not allowed")
+        body = self._json_body(
+            name="odoo.exceptions.AccessError", message="You are not allowed"
+        )
         exc = map_http_error(403, body)
         self.assertEqual(str(exc), "You are not allowed")

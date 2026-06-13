@@ -10,6 +10,7 @@ so the example is self-contained and has no external dependencies.
 
 from odoo_sdk.commands import Command, Registry
 
+
 class FakeClient:
     """A minimal fake client for demonstration purposes.
 

@@ -12,6 +12,7 @@ from odoo_sdk.fields.commands import (
     normalize_x2many_commands,
 )
 
+
 class TestX2ManyCommands(unittest.TestCase):
     def test_internal_helpers_require_keyword_only_operation(self) -> None:
         with self.assertRaises(TypeError):
@@ -80,7 +81,9 @@ class TestX2ManyCommands(unittest.TestCase):
         self.assertEqual(command.payload, 0)
         self.assertEqual(command.serialize(), (5, 0, 0))
 
-    @given(strategies.lists(strategies.integers(min_value=1, max_value=999), max_size=5))
+    @given(
+        strategies.lists(strategies.integers(min_value=1, max_value=999), max_size=5)
+    )
     def test_set_helper_preserves_id_order(self, ids: list[int]) -> None:
         command = Command.set(ids)
 
@@ -109,7 +112,9 @@ class TestX2ManyCommands(unittest.TestCase):
 
         self.assertEqual(result, [(1, 7, {"name": "Updated"})])
 
-    def test_normalize_raw_relation_commands_accept_short_and_canonical_forms(self) -> None:
+    def test_normalize_raw_relation_commands_accept_short_and_canonical_forms(
+        self,
+    ) -> None:
         self.assertEqual(normalize_x2many_commands((2, 9)), [(2, 9, 0)])
         self.assertEqual(normalize_x2many_commands((3, 8, 0)), [(3, 8, 0)])
         self.assertEqual(normalize_x2many_commands((4, 7, False)), [(4, 7, 0)])

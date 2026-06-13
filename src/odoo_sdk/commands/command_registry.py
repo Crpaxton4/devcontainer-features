@@ -4,6 +4,7 @@ from odoo_sdk.client.client import OdooClient
 
 from .command import Command
 
+
 class Registry:
     """Register command factories that share one `OdooClient` dependency.
 

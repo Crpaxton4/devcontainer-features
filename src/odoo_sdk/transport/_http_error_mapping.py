@@ -66,7 +66,9 @@ def map_http_error(
         )
 
     name: str = data.get("name", "")
-    message: str = data.get("message", "") or data.get("error", "") or f"HTTP {status_code}"
+    message: str = (
+        data.get("message", "") or data.get("error", "") or f"HTTP {status_code}"
+    )
     debug: str = data.get("debug", "") or ""
 
     error_class = _NAME_MAP.get(name) or _STATUS_MAP.get(status_code) or OdooServerError

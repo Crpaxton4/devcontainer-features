@@ -57,9 +57,7 @@ def run(client: OdooClient) -> None:
     # sorted with a callable key
     # ------------------------------------------------------------------ D3-6
     sorted_by_name = sample.sorted(key=lambda r: (r.name or ""))
-    print(
-        f"sorted(name) first 5 ids: {list(sorted_by_name.ids[:5])}"
-    )
+    print(f"sorted(name) first 5 ids: {list(sorted_by_name.ids[:5])}")
 
     # ------------------------------------------------------------------ D3-7
     # sorted with a field spec string

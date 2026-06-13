@@ -68,6 +68,7 @@ def _cc_rank(score: int) -> str:
 
 # ── Section builders ──────────────────────────────────────────────────────────
 
+
 def section_coverage(lines: list[str]) -> None:
     data = load_json(REPORTS / "coverage" / "coverage.json")
     lines.append("## 🧪 Coverage\n")
@@ -83,11 +84,13 @@ def section_coverage(lines: list[str]) -> None:
     total_branches = totals.get("num_branches", 0)
     branch_pct = (covered_branches / total_branches * 100) if total_branches else 0.0
 
-    lines.append(f"| Metric | Value |\n|---|---|\n"
-                 f"| **Overall** | {badge(pct, COVERAGE_WARN, COVERAGE_FAIL)} |\n"
-                 f"| Statements | {stmts - miss} / {stmts} |\n"
-                 f"| Missing | {miss} |\n"
-                 f"| Branches | {covered_branches} / {total_branches} ({branch_pct:.1f}%) |\n")
+    lines.append(
+        f"| Metric | Value |\n|---|---|\n"
+        f"| **Overall** | {badge(pct, COVERAGE_WARN, COVERAGE_FAIL)} |\n"
+        f"| Statements | {stmts - miss} / {stmts} |\n"
+        f"| Missing | {miss} |\n"
+        f"| Branches | {covered_branches} / {total_branches} ({branch_pct:.1f}%) |\n"
+    )
     lines.append("")
 
     files = data.get("files", {})
@@ -99,15 +102,21 @@ def section_coverage(lines: list[str]) -> None:
         for path_str, fdata in files.items():
             s = fdata.get("summary", {})
             f_pct = s.get("percent_covered", 0.0)
-            icon = "✅" if f_pct >= COVERAGE_WARN else ("⚠️" if f_pct >= COVERAGE_FAIL else "❌")
-            rows.append((
-                f_pct,
-                short_path(path_str),
-                s.get("num_statements", 0),
-                s.get("missing_lines", 0),
-                f"{s.get('covered_branches', 0)}/{s.get('num_branches', 0)}",
-                f"{icon} {f_pct:.1f}%",
-            ))
+            icon = (
+                "✅"
+                if f_pct >= COVERAGE_WARN
+                else ("⚠️" if f_pct >= COVERAGE_FAIL else "❌")
+            )
+            rows.append(
+                (
+                    f_pct,
+                    short_path(path_str),
+                    s.get("num_statements", 0),
+                    s.get("missing_lines", 0),
+                    f"{s.get('covered_branches', 0)}/{s.get('num_branches', 0)}",
+                    f"{icon} {f_pct:.1f}%",
+                )
+            )
         rows.sort(key=lambda r: r[0])
         for row in rows:
             lines.append(f"| `{row[1]}` | {row[2]} | {row[3]} | {row[4]} | {row[5]} |")
@@ -118,7 +127,9 @@ def section_mutation(lines: list[str]) -> None:
     data = load_json(REPORTS / "mutation" / "mutation.json")
     lines.append("## 🧬 Mutation Testing\n")
     if data is None:
-        lines.append("> _No mutation.json found — run `uv run ./scripts/mutation-test.sh`_\n")
+        lines.append(
+            "> _No mutation.json found — run `uv run ./scripts/mutation-test.sh`_\n"
+        )
         return
 
     if not isinstance(data, list):
@@ -133,12 +144,14 @@ def section_mutation(lines: list[str]) -> None:
 
     kill_rate = len(killed) / len(completed) * 100 if completed else 0.0
 
-    lines.append(f"| Metric | Value |\n|---|---|\n"
-                 f"| **Kill Rate** | {badge(kill_rate, KILL_RATE_WARN, KILL_RATE_FAIL)} |\n"
-                 f"| Total Mutants | {total} |\n"
-                 f"| Killed | {len(killed)} |\n"
-                 f"| Survived | {len(survived)} |\n"
-                 f"| Pending | {pending} |\n")
+    lines.append(
+        f"| Metric | Value |\n|---|---|\n"
+        f"| **Kill Rate** | {badge(kill_rate, KILL_RATE_WARN, KILL_RATE_FAIL)} |\n"
+        f"| Total Mutants | {total} |\n"
+        f"| Killed | {len(killed)} |\n"
+        f"| Survived | {len(survived)} |\n"
+        f"| Pending | {pending} |\n"
+    )
     lines.append("")
 
     if survived:
@@ -162,7 +175,9 @@ def section_cyclomatic(lines: list[str]) -> None:
     data = load_json(REPORTS / "radon" / "cc.json")
     lines.append("## 🔁 Cyclomatic Complexity\n")
     if data is None:
-        lines.append("> _No cc.json found — run `uv run bash scripts/static-analysis.sh`_\n")
+        lines.append(
+            "> _No cc.json found — run `uv run bash scripts/static-analysis.sh`_\n"
+        )
         return
 
     # Flatten all blocks across all files
@@ -172,14 +187,16 @@ def section_cyclomatic(lines: list[str]) -> None:
         for block in blocks:
             rank = block.get("rank", _cc_rank(block.get("complexity", 0)))
             rank_counts[rank] = rank_counts.get(rank, 0) + 1
-            all_blocks.append({
-                "file": short_path(file_path),
-                "name": block.get("name", "?"),
-                "type": block.get("type", "?"),
-                "complexity": block.get("complexity", 0),
-                "rank": rank,
-                "lineno": block.get("lineno", 0),
-            })
+            all_blocks.append(
+                {
+                    "file": short_path(file_path),
+                    "name": block.get("name", "?"),
+                    "type": block.get("type", "?"),
+                    "complexity": block.get("complexity", 0),
+                    "rank": rank,
+                    "lineno": block.get("lineno", 0),
+                }
+            )
 
     lines.append("### Rank Distribution\n")
     lines.append("| Rank | Score Range | Label | Count |")
@@ -216,7 +233,9 @@ def section_maintainability(lines: list[str]) -> None:
     data = load_json(REPORTS / "radon" / "mi.json")
     lines.append("## 🛠 Maintainability Index\n")
     if data is None:
-        lines.append("> _No mi.json found — run `uv run bash scripts/static-analysis.sh`_\n")
+        lines.append(
+            "> _No mi.json found — run `uv run bash scripts/static-analysis.sh`_\n"
+        )
         return
 
     lines.append("_Scale: A (100–20) = high · B (19–10) = medium · C (9–0) = low_\n")
@@ -238,7 +257,9 @@ def section_raw(lines: list[str]) -> None:
     data = load_json(REPORTS / "radon" / "raw.json")
     lines.append("## 📐 Raw Metrics\n")
     if data is None:
-        lines.append("> _No raw.json found — run `uv run bash scripts/static-analysis.sh`_\n")
+        lines.append(
+            "> _No raw.json found — run `uv run bash scripts/static-analysis.sh`_\n"
+        )
         return
 
     # Aggregate totals
@@ -276,7 +297,9 @@ def section_halstead(lines: list[str]) -> None:
     data = load_json(REPORTS / "radon" / "hal.json")
     lines.append("## 🔬 Halstead Metrics\n")
     if data is None:
-        lines.append("> _No hal.json found — run `uv run bash scripts/static-analysis.sh`_\n")
+        lines.append(
+            "> _No hal.json found — run `uv run bash scripts/static-analysis.sh`_\n"
+        )
         return
 
     rows = []
@@ -285,22 +308,26 @@ def section_halstead(lines: list[str]) -> None:
         m = metrics.get("total", metrics) if isinstance(metrics, dict) else {}
         if not m or "volume" not in m:
             continue
-        rows.append((
-            short_path(file_path),
-            round(m.get("volume", 0), 1),
-            round(m.get("effort", 0), 1),
-            round(m.get("bugs", 0), 3),
-            round(m.get("time", 0), 1),
-            m.get("vocabulary", 0),
-            m.get("length", 0),
-        ))
+        rows.append(
+            (
+                short_path(file_path),
+                round(m.get("volume", 0), 1),
+                round(m.get("effort", 0), 1),
+                round(m.get("bugs", 0), 3),
+                round(m.get("time", 0), 1),
+                m.get("vocabulary", 0),
+                m.get("length", 0),
+            )
+        )
 
     if not rows:
         lines.append("> _No Halstead data available_\n")
         return
 
     rows.sort(key=lambda r: r[1], reverse=True)
-    lines.append("_Volume = program size · Effort = mental effort · Bugs = estimated defects_\n")
+    lines.append(
+        "_Volume = program size · Effort = mental effort · Bugs = estimated defects_\n"
+    )
     lines.append("| File | Volume | Effort | Bugs | Time (s) | Vocab | Length |")
     lines.append("|---|--:|--:|--:|--:|--:|--:|")
     for fp, vol, effort, bugs, time_, vocab, length in rows:
@@ -314,7 +341,9 @@ def section_complexipy(lines: list[str]) -> None:
     data = load_json(REPORTS / "complexipy" / "complexipy-results.json")
     lines.append("## 🧠 Cognitive Complexity (complexipy)\n")
     if data is None:
-        lines.append("> _No complexipy-results.json found — run `uv run bash scripts/static-analysis.sh`_\n")
+        lines.append(
+            "> _No complexipy-results.json found — run `uv run bash scripts/static-analysis.sh`_\n"
+        )
         return
 
     if not isinstance(data, list):
@@ -325,11 +354,15 @@ def section_complexipy(lines: list[str]) -> None:
     violations = [f for f in data if f.get("complexity", 0) > threshold]
     ok = len(data) - len(violations)
 
-    lines.append(f"_Threshold: **{threshold}** · functions above threshold are flagged ❌_\n")
-    lines.append(f"| Metric | Value |\n|---|---|\n"
-                 f"| Total functions | {len(data)} |\n"
-                 f"| ✅ Within threshold | {ok} |\n"
-                 f"| ❌ Violations | {len(violations)} |\n")
+    lines.append(
+        f"_Threshold: **{threshold}** · functions above threshold are flagged ❌_\n"
+    )
+    lines.append(
+        f"| Metric | Value |\n|---|---|\n"
+        f"| Total functions | {len(data)} |\n"
+        f"| ✅ Within threshold | {ok} |\n"
+        f"| ❌ Violations | {len(violations)} |\n"
+    )
     lines.append("")
 
     if violations:
@@ -350,12 +383,19 @@ def section_complexipy(lines: list[str]) -> None:
         for f in sorted(data, key=lambda x: x.get("complexity", 0), reverse=True):
             full = f.get("path") or f.get("file_name", "?")
             score = f.get("complexity", 0)
-            icon = "❌" if score > threshold else ("⚠️" if score >= threshold * 0.8 else "✅")
-            lines.append(f"| `{full}` | `{f.get('function_name', '?')}` | {icon} {score} |")
+            icon = (
+                "❌"
+                if score > threshold
+                else ("⚠️" if score >= threshold * 0.8 else "✅")
+            )
+            lines.append(
+                f"| `{full}` | `{f.get('function_name', '?')}` | {icon} {score} |"
+            )
         lines.append("")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> int:
     lines: list[str] = []
