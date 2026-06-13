@@ -7,14 +7,14 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
         package = importlib.import_module("odoo_sdk")
 
         expected_exports = {
-            "command_registry",
+            "commands",
             "OdooClient",
             "OdooConnectionSettings",
             "OdooEnv",
             "OdooExecutor",
             "OdooRecordset",
             "OdooRpcExecutor",
-            "CommandDispatcher",
+            "Registry",
             "Domain",
             "DomainExpression",
             "Record",

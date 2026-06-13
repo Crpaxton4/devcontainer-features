@@ -25,7 +25,7 @@ dev = [
 [tool.setuptools]
 packages = [
     "odoo_sdk",
-    "odoo_sdk.command_registry",
+    "odoo_sdk.commands",
     "odoo_sdk.client",
     "odoo_sdk.transport",
     "odoo_sdk.config",
@@ -40,7 +40,7 @@ packages = [
 
 [tool.setuptools.package-dir]
 "odoo_sdk" = "src/odoo_sdk"
-"odoo_sdk.command_registry" = "src/odoo_sdk/command_registry"
+"odoo_sdk.commands" = "src/odoo_sdk/commands"
 "odoo_sdk.client" = "src/odoo_sdk/client"
 "odoo_sdk.transport" = "src/odoo_sdk/transport"
 "odoo_sdk.config" = "src/odoo_sdk/config"
