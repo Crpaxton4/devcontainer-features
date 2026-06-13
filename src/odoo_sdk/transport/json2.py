@@ -6,6 +6,7 @@ import urllib.request
 from io import BytesIO
 from typing import Any
 
+from ._http_error_mapping import map_http_error
 from .errors import (
     OdooAccessError,
     OdooAuthenticationError,
@@ -15,7 +16,6 @@ from .errors import (
     OdooTransportError,
     OdooValidationError,
 )
-from ._http_error_mapping import map_http_error
 from .executor import OdooExecutor
 
 
@@ -132,26 +132,3 @@ class OdooJson2Executor(OdooExecutor):
                 method=method,
                 detail=raw[:500],
             )
-
-    def execute_as(self, uid: int, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Not supported — JSON-2 connections are scoped to a single API key.
-
-        This method is necessary to satisfy the ``OdooExecutor`` interface but must
-        raise ``NotImplementedError`` because user impersonation is not possible when
-        using bearer token authentication.
-
-        :param uid: Ignored; user switching is not supported.
-        :type uid: int
-        :param model: Ignored.
-        :type model: str
-        :param method: Ignored.
-        :type method: str
-        :raises NotImplementedError: Always raised; this executor does not support
-            user impersonation.
-        :return: Never returns.
-        :rtype: Any
-        """
-        raise NotImplementedError(
-            "OdooJson2Executor does not support user impersonation; "
-            "the connection is scoped to a single API key"
-        )

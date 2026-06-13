@@ -64,14 +64,14 @@ class OdooRpcExecutor(OdooExecutor):
 
         if self._uid is None:
             with self._lock:
-                if self._uid is None:
-                    self._uid = self._common.authenticate(
-                        self.db,
-                        self.username,
-                        self._password,
-                        {},
-                    )
-        return self._uid
+                self._uid = self._common.authenticate(
+                    self.db,
+                    self.username,
+                    self._password,
+                    {},
+                )
+        # Hack to make static type checking not complain. There is likely a better way
+        return int(str(self._uid))
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over Odoo's `execute_kw` XML-RPC API.
@@ -93,35 +93,6 @@ class OdooRpcExecutor(OdooExecutor):
         return self._object.execute_kw(
             self.db,
             self.uid,
-            self._password,
-            model,
-            method,
-            list(args),
-            kwargs,
-        )
-
-    def execute_as(self, uid: int, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Execute one model method using an explicit user id.
-
-        This method is necessary so derived environments can override the authenticated
-        uid on a per-call basis without mutating this executor's own credentials.
-
-        :param uid: User id to use for this call instead of the authenticated uid.
-        :type uid: int
-        :param model: Name of the Odoo model to call.
-        :type model: str
-        :param method: Name of the Odoo method to invoke.
-        :type method: str
-        :param args: Positional arguments forwarded to `execute_kw`.
-        :type args: Any
-        :param kwargs: Keyword arguments forwarded to `execute_kw`.
-        :type kwargs: Any
-        :return: Result returned by the XML-RPC endpoint.
-        :rtype: Any
-        """
-        return self._object.execute_kw(
-            self.db,
-            uid,
             self._password,
             model,
             method,

@@ -137,7 +137,9 @@ class TestOdooRpcExecutor(unittest.TestCase):
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        result = executor.execute("res.partner", "search", [("active", "=", True)], limit=3)
+        result = executor.execute(
+            "res.partner", "search", [("active", "=", True)], limit=3
+        )
 
         self.assertEqual(result, [{"id": 1}])
         object_proxy.execute_kw.assert_called_once_with(
@@ -149,46 +151,3 @@ class TestOdooRpcExecutor(unittest.TestCase):
             [[("active", "=", True)]],
             {"limit": 3},
         )
-
-    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_as_uses_given_uid_not_authenticated_uid(
-        self, mock_server_proxy: Mock
-    ) -> None:
-        common_proxy = Mock()
-        object_proxy = Mock()
-        common_proxy.authenticate.return_value = 1
-        object_proxy.execute_kw.return_value = True
-        mock_server_proxy.side_effect = [common_proxy, object_proxy]
-
-        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
-        result = executor.execute_as(999, "res.partner", "write", [7], {"name": "X"})
-
-        self.assertTrue(result)
-        object_proxy.execute_kw.assert_called_once_with(
-            "db",
-            999,
-            "pw",
-            "res.partner",
-            "write",
-            [[7], {"name": "X"}],
-            {},
-        )
-        # authenticate should not have been called because execute_as bypasses self.uid
-        common_proxy.authenticate.assert_not_called()
-
-    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_as_does_not_change_authenticated_uid(
-        self, mock_server_proxy: Mock
-    ) -> None:
-        common_proxy = Mock()
-        object_proxy = Mock()
-        common_proxy.authenticate.return_value = 1
-        object_proxy.execute_kw.return_value = True
-        mock_server_proxy.side_effect = [common_proxy, object_proxy]
-
-        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
-        executor.execute_as(999, "res.partner", "write", [7], {"name": "X"})
-
-        # The executor's own uid is still derived from authentication, not overridden
-        self.assertEqual(executor.uid, 1)
-

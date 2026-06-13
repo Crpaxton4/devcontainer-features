@@ -2,12 +2,10 @@ import json
 import unittest
 import urllib.error
 import urllib.request
-from io import BytesIO
 from http.client import HTTPMessage
+from io import BytesIO
 from unittest.mock import MagicMock, Mock, patch
 
-
-from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.errors import (
     OdooAccessError,
     OdooAuthenticationError,
@@ -16,6 +14,7 @@ from odoo_sdk.transport.errors import (
     OdooTransportError,
     OdooValidationError,
 )
+from odoo_sdk.transport.json2 import OdooJson2Executor
 
 
 def _make_response(body: dict | list | str, status: int = 200):
@@ -66,7 +65,9 @@ class TestOdooJson2ExecutorRequest(unittest.TestCase):
         ex = OdooJson2Executor("https://example.com", "mydb", "key")
         ex.execute("res.partner", "search", [("active", "=", True)])
         request = mock_urlopen.call_args[0][0]
-        self.assertEqual(request.full_url, "https://example.com/json/2/res.partner/search")
+        self.assertEqual(
+            request.full_url, "https://example.com/json/2/res.partner/search"
+        )
         self.assertEqual(request.method, "POST")
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
@@ -88,7 +89,9 @@ class TestOdooJson2ExecutorRequest(unittest.TestCase):
         )
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
-    def test_search_sends_database_header_when_db_given(self, mock_urlopen: Mock) -> None:
+    def test_search_sends_database_header_when_db_given(
+        self, mock_urlopen: Mock
+    ) -> None:
         mock_urlopen.return_value = _make_response([])
         ex = OdooJson2Executor("https://example.com", "mydb", "key")
         ex.execute("res.partner", "search", [])
@@ -229,7 +232,9 @@ class TestOdooJson2ExecutorErrors(unittest.TestCase):
             ex.execute("res.partner", "search", domain=[])
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
-    def test_api_key_not_in_authentication_error_message(self, mock_urlopen: Mock) -> None:
+    def test_api_key_not_in_authentication_error_message(
+        self, mock_urlopen: Mock
+    ) -> None:
         mock_urlopen.side_effect = _make_http_error(
             {"name": "odoo.exceptions.AccessDenied", "message": "unauthorized"}, 401
         )
@@ -251,7 +256,9 @@ class TestOdooJson2ExecutorErrors(unittest.TestCase):
         self.assertNotIn(secret, repr(caught.exception))
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
-    def test_non_json_success_response_raises_transport_error(self, mock_urlopen: Mock) -> None:
+    def test_non_json_success_response_raises_transport_error(
+        self, mock_urlopen: Mock
+    ) -> None:
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"not json at all"
         mock_resp.__enter__ = lambda s: s
@@ -260,18 +267,3 @@ class TestOdooJson2ExecutorErrors(unittest.TestCase):
         ex = OdooJson2Executor("https://example.com", "mydb", "key")
         with self.assertRaises(OdooTransportError):
             ex.execute("res.partner", "search", domain=[])
-
-
-class TestOdooJson2ExecutorExecuteAs(unittest.TestCase):
-    def test_execute_as_raises_not_implemented_error(self) -> None:
-        ex = OdooJson2Executor("https://example.com", "mydb", "key")
-        with self.assertRaises(NotImplementedError) as caught:
-            ex.execute_as(7, "res.partner", "search", domain=[])
-        self.assertIn("impersonation", str(caught.exception))
-
-    def test_execute_as_message_does_not_contain_api_key(self) -> None:
-        secret = "super-secret-api-key"
-        ex = OdooJson2Executor("https://example.com", "mydb", secret)
-        with self.assertRaises(NotImplementedError) as caught:
-            ex.execute_as(1, "res.partner", "read", [1])
-        self.assertNotIn(secret, str(caught.exception))

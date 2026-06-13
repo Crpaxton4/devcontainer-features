@@ -1,14 +1,12 @@
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 from odoo_sdk.config.settings import OdooConnectionSettings
 from odoo_sdk.env.env import OdooEnv
+from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
-
-if TYPE_CHECKING:
-    from odoo_sdk.records.recordset import OdooRecordset
 
 
 class OdooClient(OdooExecutor):
@@ -208,9 +206,7 @@ class OdooClient(OdooExecutor):
         if model_name not in self._model_recordsets:
             with self._lock:
                 if model_name not in self._model_recordsets:
-                    self._model_recordsets[model_name] = self._env.recordset(
-                        model_name
-                    )
+                    self._model_recordsets[model_name] = self._env.recordset(model_name)
         return self._model_recordsets[model_name]
 
     def __iter__(self) -> None:

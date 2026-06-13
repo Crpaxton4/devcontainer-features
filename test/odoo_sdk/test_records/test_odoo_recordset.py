@@ -2,12 +2,12 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import Mock, call
 
-from odoo_sdk.transport.errors import OdooMissingRecordError
-from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.env.env import OdooEnv
-from odoo_sdk.transport.executor import OdooExecutor
-from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.fields.commands import Command
+from odoo_sdk.fields.values import RelationCollection, RelationValue
+from odoo_sdk.records.recordset import OdooRecordset
+from odoo_sdk.transport.errors import OdooMissingRecordError
+from odoo_sdk.transport.executor import OdooExecutor
 
 
 class TestOdooRecordset(unittest.TestCase):
@@ -737,8 +737,8 @@ class TestOdooRecordset(unittest.TestCase):
         self.executor.execute.assert_called_once_with(
             "sale.order",
             "read_group",
-            [],        # domain
-            [],        # server_aggregates (fields)
+            [],  # domain
+            [],  # server_aggregates (fields)
             ["stage_id"],  # groupby
             context={"lang": "en_US"},
             lazy=False,
@@ -1198,44 +1198,6 @@ class TestOdooRecordsetSetOperations(unittest.TestCase):
             _ = self._rs([1, 2], "res.partner") >= self._rs([1], "res.users")
 
 
-class TestOdooRecordsetWithUser(unittest.TestCase):
-    def setUp(self) -> None:
-        self.executor = Mock(spec=OdooExecutor)
-        self.env = OdooEnv(self.executor, {"lang": "en_US"})
-
-    def test_with_user_returns_new_recordset(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        derived = rs.with_user(99)
-        self.assertIsNot(derived, rs)
-
-    def test_with_user_derived_recordset_same_model_and_ids(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7, 8])
-        derived = rs.with_user(99)
-        self.assertEqual(derived.model_name, "res.partner")
-        self.assertEqual(derived.ids, (7, 8))
-
-    def test_with_user_original_recordset_env_unchanged(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        rs.with_user(99)
-        self.assertIs(rs.env, self.env)
-
-    def test_with_user_derived_recordset_has_different_env(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        derived = rs.with_user(99)
-        self.assertIsNot(derived.env, self.env)
-
-    def test_with_user_execute_uses_override_uid(self) -> None:
-        self.executor.execute_as.return_value = True
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        derived = rs.with_user(99)
-
-        derived.write({"name": "Alice"})
-
-        self.executor.execute_as.assert_called_once_with(
-            99, "res.partner", "write", [7], {"name": "Alice"}, context={"lang": "en_US"}
-        )
-
-
 class TestOdooRecordsetWithCompany(unittest.TestCase):
     def setUp(self) -> None:
         self.executor = Mock(spec=OdooExecutor)
@@ -1307,20 +1269,3 @@ class TestOdooRecordsetArchive(unittest.TestCase):
         self.executor.execute.return_value = False
         rs = OdooRecordset(self.env, "res.partner", [7])
         self.assertFalse(rs.action_unarchive())
-
-
-class TestOdooRecordsetSudo(unittest.TestCase):
-    def setUp(self) -> None:
-        self.executor = Mock(spec=OdooExecutor)
-        self.env = OdooEnv(self.executor)
-
-    def test_sudo_raises_not_implemented_error(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        with self.assertRaises(NotImplementedError):
-            rs.sudo()
-
-    def test_sudo_error_message_references_with_user(self) -> None:
-        rs = OdooRecordset(self.env, "res.partner", [7])
-        with self.assertRaises(NotImplementedError) as ctx:
-            rs.sudo()
-        self.assertIn("with_user", str(ctx.exception))

@@ -136,9 +136,9 @@ def smoke_d3_functional(client: OdooClient) -> None:
     # filtered_domain
     domain_companies = sample.filtered_domain([("is_company", "=", True)])
     _ok(f"filtered_domain(is_company=True) => {len(domain_companies.ids)} record(s)")
-    assert set(companies.ids) == set(domain_companies.ids), (
-        "filtered and filtered_domain must agree on is_company results"
-    )
+    assert set(companies.ids) == set(
+        domain_companies.ids
+    ), "filtered and filtered_domain must agree on is_company results"
     _ok("filtered and filtered_domain agree")
 
     # mapped callable
@@ -210,25 +210,15 @@ def smoke_d5_env_alterations(client: OdooClient) -> list[int]:
     partners = client["res.partner"]
     created_ids: list[int] = []
 
-    # with_user on OdooEnv — returns a new env; OdooEnv has no public uid attribute
-    # (uid lives on OdooClient / executor), so we verify by identity and by making
-    # a successful call through the derived env.
-    env2 = env.with_user(client.uid)
-    assert env2 is not env, "with_user must return a new env, not mutate the original"
-    _ok(f"env.with_user({client.uid!r}) => new OdooEnv created, original unmodified")
-
-    # with_user on OdooRecordset
-    rs2 = partners.with_user(client.uid)
-    assert rs2._env is not partners._env, "recordset.with_user must derive a new env"
-    _ok(f"recordset.with_user({client.uid!r}) => new env derived for recordset")
-
     # with_company
     companies = client["res.company"].search([], limit=1)
     if companies.ids:
         cid = companies.ids[0]
         env_co = env.with_company(cid)
         ctx = env_co.context
-        _ok(f"env.with_company({cid!r}) allowed_company_ids={ctx.get('allowed_company_ids')!r}")
+        _ok(
+            f"env.with_company({cid!r}) allowed_company_ids={ctx.get('allowed_company_ids')!r}"
+        )
 
         rs_co = partners.with_company(cid)
         _ok(
@@ -237,7 +227,9 @@ def smoke_d5_env_alterations(client: OdooClient) -> list[int]:
         )
 
     # action_archive / action_unarchive
-    demo_id = partners.create({"name": "SDK Phase D Smoke Archive Test", "active": True})
+    demo_id = partners.create(
+        {"name": "SDK Phase D Smoke Archive Test", "active": True}
+    )
     demo = partners.browse(demo_id)
     created_ids.append(demo.id)
     _ok(f"created partner id={demo.id!r}")
@@ -245,9 +237,8 @@ def smoke_d5_env_alterations(client: OdooClient) -> list[int]:
     result = demo.action_archive()
     _ok(f"action_archive() => {result!r}")
 
-    inactive = (
-        partners.with_context({"active_test": False})
-        .search([("id", "=", demo.id)])
+    inactive = partners.with_context({"active_test": False}).search(
+        [("id", "=", demo.id)]
     )
     assert inactive.ids, "archived partner must appear in active_test=False search"
     _ok("archived partner found in active_test=False search")
@@ -298,17 +289,23 @@ def smoke_d6_domain_builder(client: OdooClient) -> None:
 
     # Live search with composed domain
     results = partners.search(d_and, limit=3, order="id asc")
-    _ok(f"live search with AND domain => {len(results.ids)} partner(s): {list(results.ids)}")
+    _ok(
+        f"live search with AND domain => {len(results.ids)} partner(s): {list(results.ids)}"
+    )
 
     results_or = partners.search(d_or, limit=3, order="id asc")
-    _ok(f"live search with OR domain  => {len(results_or.ids)} partner(s): {list(results_or.ids)}")
+    _ok(
+        f"live search with OR domain  => {len(results_or.ids)} partner(s): {list(results_or.ids)}"
+    )
 
     # Dynamic time value strings (e.g. '-3d', '=monday -1w') are Odoo view-domain
     # expressions.  They serialize through the builder unchanged, which is the
     # correct SDK behaviour.  They are NOT valid as raw SQL timestamps, so they
     # must not be passed to a live XML-RPC search call directly.
     d_recent = DomainExpression.normalize([("create_date", ">=", "-3d")])
-    _ok(f"dynamic '-3d' serializes => {d_recent.serialize()!r}  (pass-through confirmed; not sent to server)")
+    _ok(
+        f"dynamic '-3d' serializes => {d_recent.serialize()!r}  (pass-through confirmed; not sent to server)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +332,9 @@ def run_smoke(client: OdooClient) -> None:
             partners = client["res.partner"]
             rs = partners.browse(all_created_ids)
             rs.unlink()
-            print(f"  Unlinked {len(all_created_ids)} demo partner(s): {all_created_ids}")
+            print(
+                f"  Unlinked {len(all_created_ids)} demo partner(s): {all_created_ids}"
+            )
 
 
 def main() -> None:

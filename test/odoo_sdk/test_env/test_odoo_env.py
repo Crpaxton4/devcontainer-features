@@ -1,14 +1,13 @@
-from copy import deepcopy
 import unittest
+from copy import deepcopy
 from unittest.mock import Mock, call
 
 from hypothesis import given, strategies
 
 import odoo_sdk.env.env as odoo_env_module
 from odoo_sdk.env.env import OdooEnv, _UidOverrideExecutor
-from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.records.recordset import OdooRecordset
-
+from odoo_sdk.transport.executor import OdooExecutor
 
 CONTEXT_KEYS = strategies.text(min_size=1, max_size=20)
 CONTEXT_SCALARS = (
@@ -275,9 +274,7 @@ class TestOdooEnv(unittest.TestCase):
         self.assertEqual(self.executor.execute.call_count, 4)
 
     @given(strategies.text())
-    def test_model_lookup_returns_model_bound_recordset(
-        self, model_name: str
-    ) -> None:
+    def test_model_lookup_returns_model_bound_recordset(self, model_name: str) -> None:
         env = OdooEnv(self.executor, {"lang": "en_US"})
 
         model = env[model_name]
@@ -299,64 +296,6 @@ class TestOdooEnv(unittest.TestCase):
         self.assertIs(recordset.env, env)
         self.assertEqual(recordset.model_name, model_name)
         self.assertEqual(recordset.ids, tuple(ids))
-
-
-class TestOdooEnvWithUser(unittest.TestCase):
-    def setUp(self) -> None:
-        self.executor = Mock(spec=OdooExecutor)
-
-    def test_with_user_returns_new_env(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        derived = env.with_user(7)
-        self.assertIsNot(derived, env)
-
-    def test_with_user_original_env_executor_unchanged(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        env.with_user(7)
-        self.assertIs(env.executor, self.executor)
-
-    def test_with_user_derived_env_uses_uid_override_executor(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        derived = env.with_user(7)
-        self.assertIsInstance(derived.executor, _UidOverrideExecutor)
-
-    def test_with_user_derived_env_delegates_execute_with_override_uid(self) -> None:
-        self.executor.execute_as.return_value = [1]
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        derived = env.with_user(7)
-
-        derived.executor.execute("res.partner", "search", [])
-
-        self.executor.execute_as.assert_called_once_with(
-            7, "res.partner", "search", []
-        )
-
-    def test_with_user_preserves_context(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        derived = env.with_user(7)
-        self.assertEqual(derived.context, {"lang": "en_US"})
-
-    def test_with_user_preserves_metadata_cache_reference(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        derived = env.with_user(7)
-        self.assertIs(derived.metadata_cache, env.metadata_cache)
-
-    def test_with_user_original_context_unchanged_after_derive(self) -> None:
-        env = OdooEnv(self.executor, {"lang": "en_US"})
-        env.with_user(7)
-        self.assertEqual(env.context, {"lang": "en_US"})
-
-    def test_with_user_chained_uid_override_uses_latest_uid(self) -> None:
-        self.executor.execute_as.return_value = True
-        env = OdooEnv(self.executor, {})
-        derived = env.with_user(7).with_user(99)
-
-        derived.executor.execute("res.partner", "write", [1], {"name": "X"})
-
-        # The outermost override (99) should win
-        self.executor.execute_as.assert_called_once_with(
-            99, "res.partner", "write", [1], {"name": "X"}
-        )
 
 
 class TestOdooEnvWithCompany(unittest.TestCase):
@@ -395,25 +334,9 @@ class TestOdooEnvWithCompany(unittest.TestCase):
         self.assertNotIn("allowed_company_ids", env.context)
 
 
-class TestOdooEnvSudo(unittest.TestCase):
-    def test_sudo_raises_not_implemented_error(self) -> None:
-        executor = Mock(spec=OdooExecutor)
-        env = OdooEnv(executor)
-        with self.assertRaises(NotImplementedError):
-            env.sudo()
-
-    def test_sudo_error_message_references_xmlrpc(self) -> None:
-        executor = Mock(spec=OdooExecutor)
-        env = OdooEnv(executor)
-        with self.assertRaises(NotImplementedError) as ctx:
-            env.sudo()
-        self.assertIn("with_user", str(ctx.exception))
-
-
 class TestOdooEnvActiveTest(unittest.TestCase):
     def test_active_test_false_is_preserved_in_derived_env_context(self) -> None:
         executor = Mock(spec=OdooExecutor)
         env = OdooEnv(executor, {"lang": "en_US"})
         derived = env.with_context({"active_test": False})
         self.assertFalse(derived.context["active_test"])
-

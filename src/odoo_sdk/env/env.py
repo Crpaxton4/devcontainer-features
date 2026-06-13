@@ -2,37 +2,12 @@ from __future__ import annotations
 
 import threading
 from copy import deepcopy
-from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
+from typing import Any, Dict, Optional, Sequence, Union
 
-from .metadata_cache import MetadataCache
+from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.executor import OdooExecutor
 
-if TYPE_CHECKING:
-    from odoo_sdk.records.recordset import OdooRecordset
-
-
-class _UidOverrideExecutor(OdooExecutor):
-    """Wrap an executor and substitute a fixed uid on every call.
-
-    This class is necessary so ``OdooEnv.with_user`` can return a derived
-    environment whose calls use a different user id without mutating the shared
-    underlying executor.
-
-    :param inner: The real executor to delegate calls to.
-    :type inner: OdooExecutor
-    :param uid: User id to use in place of the inner executor's own uid.
-    :type uid: int
-    """
-
-    def __init__(self, inner: OdooExecutor, uid: int) -> None:
-        self._inner = inner
-        self._uid = uid
-
-    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        return self._inner.execute_as(self._uid, model, method, *args, **kwargs)
-
-    def execute_as(self, uid: int, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        return self._inner.execute_as(uid, model, method, *args, **kwargs)
+from .metadata_cache import MetadataCache
 
 
 class OdooEnv:
@@ -77,10 +52,10 @@ class OdooEnv:
         :rtype: None
         """
         self._executor = executor
-        self._context: Dict[str, Any] = (
-            deepcopy(context) if context is not None else {}
+        self._context: Dict[str, Any] = deepcopy(context) if context is not None else {}
+        self._metadata_cache = (
+            metadata_cache if metadata_cache is not None else MetadataCache()
         )
-        self._metadata_cache = metadata_cache if metadata_cache is not None else MetadataCache()
         self._record_value_cache: dict[tuple[str, int], dict[str, Any]] = {}
         self._record_value_lock = threading.Lock()
 
@@ -140,24 +115,6 @@ class OdooEnv:
             metadata_cache=self._metadata_cache,
         )
 
-    def with_user(self, uid: int) -> "OdooEnv":
-        """Create a derived environment where calls execute as a different user.
-
-        This method is necessary for user-switch workflows that need to perform
-        actions as a specific uid without rebuilding the entire client or mutating
-        the shared executor.
-
-        :param uid: User id to use for calls on the returned environment.
-        :type uid: int
-        :return: A new environment backed by a uid-overriding executor wrapper.
-        :rtype: OdooEnv
-        """
-        return OdooEnv(
-            _UidOverrideExecutor(self._executor, uid),
-            deepcopy(self._context),
-            metadata_cache=self._metadata_cache,
-        )
-
     def with_company(self, company_id: int) -> "OdooEnv":
         """Create a derived environment restricted to one company.
 
@@ -171,21 +128,6 @@ class OdooEnv:
         :rtype: OdooEnv
         """
         return self.with_context({"allowed_company_ids": [company_id]})
-
-    def sudo(self) -> "OdooEnv":
-        """Not implemented — raises ``NotImplementedError`` unconditionally.
-
-        ``sudo()`` is excluded because Odoo's external XML-RPC API enforces
-        permissions for the authenticated user and provides no server-side
-        mechanism to escalate privileges from the outside. Use ``with_user``
-        with an appropriate uid instead.
-
-        :raises NotImplementedError: Always raised with an explanatory message.
-        """
-        raise NotImplementedError(
-            "sudo() is not supported by the Odoo external XML-RPC API. "
-            "Use with_user(uid) to switch to a specific user instead."
-        )
 
     def clear_metadata_cache(self, model_name: Optional[str] = None) -> None:
         """Clear cached metadata for this runtime boundary.

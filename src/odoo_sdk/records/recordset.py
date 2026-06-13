@@ -2,26 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from collections.abc import Sequence as SequenceABC
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterator,
-    Optional,
-    Sequence,
-    TypeAlias,
-    Union,
-)
+from typing import Any, Dict, Iterator, Optional, Sequence, TypeAlias, Union
 
-from odoo_sdk.query.domain import DomainExpression, DomainInput
-from odoo_sdk.fields import adapt_field_value, adapt_record_values
-from odoo_sdk.fields.values import RelationCollection, RelationValue
-from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 from odoo_sdk._utils import _dedup_field_names
-
-if TYPE_CHECKING:
-    from odoo_sdk.env.env import OdooEnv
-
+from odoo_sdk.env.env import OdooEnv
+from odoo_sdk.fields import adapt_field_value, adapt_record_values
+from odoo_sdk.fields.commands import Command, normalize_x2many_commands
+from odoo_sdk.fields.values import RelationCollection, RelationValue
+from odoo_sdk.query.domain import DomainExpression, DomainInput
 
 Record: TypeAlias = Mapping[str, Any]
 
@@ -1450,19 +1438,6 @@ class OdooRecordset:
         """
         return self._derive(self._ids, env=self._env.with_context(context))
 
-    def with_user(self, uid: int) -> OdooRecordset:
-        """Return a new recordset bound to an environment that calls as a different user.
-
-        This method is necessary for user-switch workflows that need to perform
-        operations on the same records as a specific uid.
-
-        :param uid: User id to use for calls on the returned recordset.
-        :type uid: int
-        :return: Derived recordset bound to a uid-overriding environment.
-        :rtype: OdooRecordset
-        """
-        return self._derive(self._ids, env=self._env.with_user(uid))
-
     def with_company(self, company_id: int) -> OdooRecordset:
         """Return a new recordset bound to an environment restricted to one company.
 
@@ -1498,21 +1473,6 @@ class OdooRecordset:
         :rtype: bool
         """
         return self.write({"active": True})
-
-    def sudo(self) -> OdooRecordset:
-        """Not implemented — raises ``NotImplementedError`` unconditionally.
-
-        ``sudo()`` is excluded because Odoo's external XML-RPC API enforces
-        permissions for the authenticated user and provides no server-side
-        mechanism to escalate privileges from the outside. Use ``with_user``
-        with an appropriate uid instead.
-
-        :raises NotImplementedError: Always raised with an explanatory message.
-        """
-        raise NotImplementedError(
-            "sudo() is not supported by the Odoo external XML-RPC API. "
-            "Use with_user(uid) to switch to a specific user instead."
-        )
 
     # ------------------------------------------------------------------
     # In-memory functional operations
@@ -1746,9 +1706,7 @@ class OdooRecordset:
                 f"Cannot traverse dotted path: field {field_name!r} is"
                 f" not a relational field"
             )
-        merged = OdooRecordset(
-            self._env, relation_model, _dedup_relation_ids(values)
-        )
+        merged = OdooRecordset(self._env, relation_model, _dedup_relation_ids(values))
         return merged._mapped_path(remaining)
 
     def sorted(
@@ -1797,7 +1755,9 @@ class OdooRecordset:
             record_ids = list(self._ids)
             for field_spec_name, direction, nulls_first in reversed(specs):
                 spec_reverse = direction == "DESC"
-                effective_nulls_first = nulls_first if not spec_reverse else not nulls_first
+                effective_nulls_first = (
+                    nulls_first if not spec_reverse else not nulls_first
+                )
 
                 def make_key(
                     rid: int,
@@ -1808,6 +1768,7 @@ class OdooRecordset:
                         self._model_name, rid, fn
                     )
                     from odoo_sdk.query.domain import _extract_comparison_value
+
                     extracted = _extract_comparison_value(v if found else None)
                     return _SortKey(extracted, nulls_first=nf)
 

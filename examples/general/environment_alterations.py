@@ -20,23 +20,6 @@ def run(client: OdooClient) -> None:
     env = client.env
     partners = client["res.partner"]
 
-    # ------------------------------------------------------------------ D5-1
-    # with_user on OdooEnv — derive a new env that calls as a different uid
-    # ------------------------------------------------------------------ D5-1
-    env_as_self = env.with_user(client.uid)
-    print(f"env.uid={env.uid!r}  env_as_self.uid={env_as_self.uid!r}")
-    # The original env must be unmodified
-    assert env.uid == env_as_self.uid, "with_user must not mutate the source env"
-
-    # ------------------------------------------------------------------ D5-2
-    # with_user on OdooRecordset — same uid propagation but on a bound recordset
-    # ------------------------------------------------------------------ D5-2
-    rs_as_self = partners.with_user(client.uid)
-    print(
-        f"partners env uid={partners._env.uid!r}"
-        f"  rs_as_self env uid={rs_as_self._env.uid!r}"
-    )
-
     # ------------------------------------------------------------------ D5-3
     # with_company on OdooEnv — inject allowed_company_ids into context
     # ------------------------------------------------------------------ D5-3
@@ -73,12 +56,13 @@ def run(client: OdooClient) -> None:
     print(f"action_archive() => {archive_result!r}")
 
     # Verify archived: search with active_test=False to include archived records
-    inactive_rs = (
-        partners.with_context({"active_test": False})
-        .search([("id", "=", demo.id)])
+    inactive_rs = partners.with_context({"active_test": False}).search(
+        [("id", "=", demo.id)]
     )
     archived_meta = inactive_rs.get_metadata()
-    print(f"partner after archive: id={demo.id!r}, found in inactive search: {bool(inactive_rs.ids)}")
+    print(
+        f"partner after archive: id={demo.id!r}, found in inactive search: {bool(inactive_rs.ids)}"
+    )
 
     unarchive_result = demo.action_unarchive()
     print(f"action_unarchive() => {unarchive_result!r}")
