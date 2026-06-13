@@ -3,20 +3,13 @@
 {
 	"name": "Python 3",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/python:3-3.14-bookworm",
+	"image": "mcr.microsoft.com/devcontainers/python:3.13",
 	"mounts": [
 		"source=${localWorkspaceFolder}/.devcontainer/vscode-config/tasks.json,target=${containerWorkspaceFolder}/.vscode/tasks.json,type=bind,consistency=cached"
 	],
 	"features": {
 		"ghcr.io/devcontainers/features/copilot-cli:1": {
 			"version": "latest"
-		},
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {
-			"moby": true,
-			"azureDnsAutoDetection": true,
-			"installDockerBuildx": true,
-			"version": "latest",
-			"dockerDashComposeVersion": "v2"
 		},
 		"ghcr.io/devcontainers/features/github-cli:1": {
 			"installDirectlyFromGitHubRelease": true,
