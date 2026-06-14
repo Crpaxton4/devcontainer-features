@@ -21,6 +21,9 @@ dev = [
     "pygount>=3.2.0",
     "radon>=6.0.1",
 ]
+docs = [
+    "sphinx>=9.1.0"
+]
 
 [tool.setuptools]
 packages = [

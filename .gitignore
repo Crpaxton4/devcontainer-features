@@ -38,7 +38,8 @@
 !/.vscode/
 !/.vscode/**
 
-!requirements.dev.txt
+!/requirements/
+!/requirements/**
 !requirements.txt
 
 # Specific files to exclude

@@ -315,6 +315,4 @@ class OdooEnv:
         :return: Recordset bound to the requested model and ids.
         :rtype: OdooRecordset
         """
-        from odoo_sdk.records.recordset import OdooRecordset
-
         return OdooRecordset(self, model_name, ids)
