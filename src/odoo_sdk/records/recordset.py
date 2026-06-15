@@ -1,61 +1,104 @@
 from __future__ import annotations
 
+import re as _re
+import threading
 from collections.abc import Mapping
 from collections.abc import Sequence as SequenceABC
+from copy import deepcopy
 from typing import Any, Dict, Iterator, Optional, Sequence, TypeAlias, Union
 
 from odoo_sdk._utils import _dedup_field_names
-from odoo_sdk.env.env import OdooEnv
+from odoo_sdk.env.metadata_cache import MetadataCache
 from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.query.domain import DomainExpression, DomainInput
+from odoo_sdk.transport.executor import OdooExecutor
 
 Record: TypeAlias = Mapping[str, Any]
 
 
 class OdooRecordset:
-    """Represent immutable record identity bound to one environment and model.
+    """Represent immutable record identity with owned runtime state and model binding.
 
     The recordset is the architectural center of the SDK. It is necessary because it
-    carries ids, model identity, environment context, metadata-driven reads, and x2many
-    write normalization through one reusable abstraction.
+    carries ids, model identity, executor, context, metadata-driven reads, and x2many
+    write normalization through one unified abstraction.
 
-    :param env: Environment that owns executor, context, and metadata state.
-    :type env: OdooEnv
+    :param executor: Executor used to issue Odoo calls for this recordset.
+    :type executor: OdooExecutor
     :param model_name: Name of the Odoo model represented by the recordset.
     :type model_name: str
     :param ids: Record id or ordered ids bound to the recordset, defaults to an empty
         recordset.
     :type ids: Union[int, Sequence[int]]
+    :param context: Initial Odoo context values, defaults to None.
+    :type context: Optional[Dict[str, Any]]
+    :param metadata_cache: Existing metadata cache to share, defaults to None.
+    :type metadata_cache: Optional[MetadataCache]
+    :param record_value_cache: Existing record-value cache to share, defaults to None.
+    :type record_value_cache: Optional[dict[tuple[int, ...], Dict[str, Any]]]
+    :param record_value_lock: Existing lock for record-value cache, defaults to None.
+    :type record_value_lock: Optional[threading.Lock]
+    :param prefetch_ids: Record ids to prefetch, defaults to None.
+    :type prefetch_ids: Union[int, Sequence[int], None]
     """
 
     def __init__(
         self,
-        env: OdooEnv,
+        executor: OdooExecutor,
         model_name: str,
         ids: Union[int, Sequence[int]] = (),
-        *,
+        context: Optional[Dict[str, Any]] = None,
+        metadata_cache: Optional[MetadataCache] = None,
+        record_value_cache: Optional[dict[tuple[str, int], Dict[str, Any]]] = None,
+        record_value_lock: Optional[threading.Lock] = None,
         prefetch_ids: Union[int, Sequence[int], None] = None,
     ):
-        """Initialize a recordset with environment, model, and identity state.
+        """Initialize a recordset as unified runtime+identity object.
 
-        The constructor is necessary because recordsets must retain immutable identity
-        while sharing the environment boundary that powers execution and metadata.
+        When executor/metadata_cache/locks are provided, they are expected to be shared
+        across all recordsets for a given runtime boundary. Record value cache is
+        optional and lazily created if None.
 
-        :param env: Environment that owns executor, context, and metadata state.
-        :type env: OdooEnv
+        :param executor: Executor used to issue Odoo calls for this recordset.
+        :type executor: OdooExecutor
         :param model_name: Name of the Odoo model represented by the recordset.
         :type model_name: str
         :param ids: Record id or ordered ids bound to the recordset, defaults to an
             empty recordset.
         :type ids: Union[int, Sequence[int]]
+        :param context: Initial Odoo context values to copy into the recordset,
+            defaults to None.
+        :type context: Optional[Dict[str, Any]]
+        :param metadata_cache: Existing metadata cache to share with derived
+            recordsets, defaults to None.
+        :type metadata_cache: Optional[MetadataCache]
+        :param record_value_cache: Existing record-value cache dict to share,
+            defaults to None.
+        :type record_value_cache: Optional[dict[tuple[int, ...], Dict[str, Any]]]
+        :param record_value_lock: Existing lock for record-value cache,
+            defaults to None.
+        :type record_value_lock: Optional[threading.Lock]
+        :param prefetch_ids: Record ids to prefetch, defaults to None.
+        :type prefetch_ids: Union[int, Sequence[int], None]
         :return: None.
         :rtype: None
         """
-        self._env = env
+
+        self._executor = executor
         self._model_name = model_name
         self._ids = self._normalize_ids(ids)
+        self._context: Dict[str, Any] = deepcopy(context) if context is not None else {}
+        self._metadata_cache = (
+            metadata_cache if metadata_cache is not None else MetadataCache()
+        )
+        self._record_value_cache = (
+            record_value_cache if record_value_cache is not None else {}
+        )
+        self._record_value_lock = (
+            record_value_lock if record_value_lock is not None else threading.Lock()
+        )
         self._prefetch_ids = self._normalize_ids(
             self._ids if prefetch_ids is None else prefetch_ids
         )
@@ -77,16 +120,40 @@ class OdooRecordset:
         return tuple(ids)
 
     @property
-    def env(self) -> OdooEnv:
-        """Expose the environment bound to this recordset.
+    def executor(self) -> OdooExecutor:
+        """Expose the executor bound to this recordset.
 
-        This property is necessary because derived recordsets and advanced callers may
-        need access to the shared context and metadata boundary.
+        This property is necessary because recordsets delegate actual transport work
+        through the executor rather than storing independent execution state.
 
-        :return: Environment bound to this recordset.
-        :rtype: OdooEnv
+        :return: Executor that backs this recordset.
+        :rtype: OdooExecutor
         """
-        return self._env
+        return self._executor
+
+    @property
+    def context(self) -> Dict[str, Any]:
+        """Return a defensive copy of the current Odoo context.
+
+        Returning a copy is necessary so callers can inspect context safely without
+        mutating the recordset's shared runtime state.
+
+        :return: Copied Odoo context mapping.
+        :rtype: Dict[str, Any]
+        """
+        return deepcopy(self._context)
+
+    @property
+    def metadata_cache(self) -> MetadataCache:
+        """Expose the shared metadata cache for this runtime boundary.
+
+        This property is necessary so advanced internal flows can coordinate cache
+        reuse and invalidation without bypassing the recordset abstraction.
+
+        :return: Metadata cache shared by related recordsets.
+        :rtype: MetadataCache
+        """
+        return self._metadata_cache
 
     @property
     def model_name(self) -> str:
@@ -138,29 +205,266 @@ class OdooRecordset:
             raise ValueError(f"Expected singleton: {self}")
         return self
 
+    def with_context(self, context: Dict[str, Any]) -> "OdooRecordset":
+        """Create a derived recordset with merged context values.
+
+        This method is necessary because Odoo context is request-scoped, but callers
+        need to fork that state without mutating the root recordset shared by other
+        model, query, or recordset objects.
+
+        :param context: Additional context keys to merge into the current state.
+        :type context: Dict[str, Any]
+        :return: A new recordset sharing the same executor and metadata cache.
+        :rtype: OdooRecordset
+        """
+        merged = deepcopy({**self._context, **context})
+        return OdooRecordset(
+            executor=self._executor,
+            model_name=self._model_name,
+            ids=self._ids,
+            context=merged,
+            metadata_cache=self._metadata_cache,
+            record_value_cache=self._record_value_cache,
+            record_value_lock=self._record_value_lock,
+            prefetch_ids=self._prefetch_ids,
+        )
+
+    def with_company(self, company_id: int) -> "OdooRecordset":
+        """Create a derived recordset restricted to one company.
+
+        This method is necessary for multi-company workflows that need to switch
+        ``allowed_company_ids`` in context without mutating the current recordset.
+
+        :param company_id: Id of the company to set as the active company.
+        :type company_id: int
+        :return: A new recordset with ``allowed_company_ids`` set to
+            ``[company_id]``.
+        :rtype: OdooRecordset
+        """
+        return self.with_context({"allowed_company_ids": [company_id]})
+
+    def clear_metadata_cache(self, model_name: Optional[str] = None) -> None:
+        """Clear cached metadata for this runtime boundary.
+
+        This method is necessary when callers know `fields_get` results may have
+        changed and must invalidate cached metadata either globally or for one model.
+
+        :param model_name: Model whose cached metadata should be removed, or None to
+            clear all cached metadata, defaults to None.
+        :type model_name: Optional[str]
+        :return: None.
+        :rtype: None
+        """
+        self._metadata_cache.clear(model_name=model_name)
+
+    def get_missing_field_ids(
+        self,
+        model_name: str,
+        record_ids: Sequence[int],
+        field_name: str,
+    ) -> list[int]:
+        """Return ids that do not yet have a cached value for one field.
+
+        :param model_name: Model whose cached values are being queried.
+        :type model_name: str
+        :param record_ids: Candidate record ids to inspect.
+        :type record_ids: Sequence[int]
+        :param field_name: Field whose cached presence should be checked.
+        :type field_name: str
+        :return: Ordered ids missing the requested field value in cache.
+        :rtype: list[int]
+        """
+        with self._record_value_lock:
+            return [
+                record_id
+                for record_id in record_ids
+                if field_name
+                not in self._record_value_cache.get((model_name, record_id), {})
+            ]
+
+    def get_cached_field_value(
+        self,
+        model_name: str,
+        record_id: int,
+        field_name: str,
+    ) -> tuple[bool, Any]:
+        """Return one cached field value when present.
+
+        :param model_name: Model whose cached values are being queried.
+        :type model_name: str
+        :param record_id: Record id whose cached field value is requested.
+        :type record_id: int
+        :param field_name: Field name to retrieve from cache.
+        :type field_name: str
+        :return: Tuple of cache-hit flag and cached value.
+        :rtype: tuple[bool, Any]
+        """
+        with self._record_value_lock:
+            values = self._record_value_cache.get((model_name, record_id), {})
+            if field_name not in values:
+                return False, None
+            return True, values[field_name]
+
+    def cache_record_field_values(
+        self,
+        model_name: str,
+        record_id: int,
+        values: Dict[str, Any],
+    ) -> None:
+        """Store cached field values for one record.
+
+        :param model_name: Model whose cached values are being updated.
+        :type model_name: str
+        :param record_id: Record id whose values are being updated.
+        :type record_id: int
+        :param values: Field values to cache for the record.
+        :type values: Dict[str, Any]
+        :return: None.
+        :rtype: None
+        """
+
+        with self._record_value_lock:
+            cached = self._record_value_cache.setdefault((model_name, record_id), {})
+            cached.update(values)
+
+    def get_field_metadata(
+        self,
+        model_name: str,
+        fields: Optional[Sequence[str]] = None,
+        attributes: Optional[Sequence[str]] = None,
+        *,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        """Fetch and cache raw `fields_get` metadata for one model.
+
+        This method is necessary because metadata-driven behaviors such as field
+        adaptation and x2many normalization require a single shared loading and cache
+        boundary instead of ad hoc `fields_get` calls scattered across the codebase.
+
+        :param model_name: Name of the Odoo model whose metadata is requested.
+        :type model_name: str
+        :param fields: Optional subset of field names to request, defaults to None.
+        :type fields: Optional[Sequence[str]]
+        :param attributes: Optional subset of metadata attributes to request,
+            defaults to None.
+        :type attributes: Optional[Sequence[str]]
+        :param refresh: When True, bypass the cached entry and load fresh metadata,
+            defaults to False.
+        :type refresh: bool
+        :return: Raw metadata keyed by field name.
+        :rtype: Dict[str, Any]
+        """
+        context = self.context
+        kwargs = self._build_fields_get_kwargs(fields, attributes, context)
+        return self._metadata_cache.get_or_load(
+            model_name,
+            fields=fields,
+            attributes=attributes,
+            context=context,
+            refresh=refresh,
+            loader=lambda: self._executor.execute(model_name, "fields_get", **kwargs),
+        )
+
+    def _build_fields_get_kwargs(
+        self,
+        fields: Optional[Sequence[str]],
+        attributes: Optional[Sequence[str]],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the ``fields_get`` keyword arguments from optional parameters.
+
+        This helper is necessary because ``get_field_metadata`` should read as a
+        single-purpose orchestrator rather than embedding conditional kwargs assembly
+        inline.
+
+        :param fields: Optional subset of field names to request.
+        :type fields: Optional[Sequence[str]]
+        :param attributes: Optional subset of metadata attributes to request.
+        :type attributes: Optional[Sequence[str]]
+        :param context: Current Odoo context to include when non-empty.
+        :type context: Dict[str, Any]
+        :return: Keyword arguments for the ``fields_get`` executor call.
+        :rtype: Dict[str, Any]
+        """
+        kwargs: Dict[str, Any] = {}
+        if fields is not None:
+            kwargs["allfields"] = list(fields)
+        if attributes is not None:
+            kwargs["attributes"] = list(attributes)
+        if context:
+            kwargs["context"] = context
+        return kwargs
+
+    def __getitem__(self, model_name: str) -> "OdooRecordset":
+        """Return an empty model-bound recordset anchored to this recordset's runtime.
+
+        This convenience is necessary because model-first flows and public callers both
+        use Odoo-style `recordset["model"]` lookup to start from a model-bound recordset.
+
+        :param model_name: Name of the Odoo model to bind.
+        :type model_name: str
+        :return: Empty recordset bound to this runtime and model.
+        :rtype: OdooRecordset
+        """
+        return self.recordset(model_name)
+
+    def recordset(
+        self,
+        model_name: str,
+        ids: Union[int, Sequence[int]] = (),
+    ) -> OdooRecordset:
+        """Return a recordset bound to this runtime and model.
+
+        This factory is necessary because recordsets are the architectural center of
+        the SDK, and callers need one canonical way to bind ids, model identity, and
+        shared runtime state together.
+
+        :param model_name: Name of the Odoo model the recordset targets.
+        :type model_name: str
+        :param ids: Record identifier or ordered identifiers to bind, defaults to an
+            empty recordset.
+        :type ids: Union[int, Sequence[int]]
+        :return: Recordset bound to the requested model and ids.
+        :rtype: OdooRecordset
+        """
+        # TODO This can almost certainly be consolidated with `_derive`
+        #      the only difference is that `recordset` accepts a new model name
+        #      Unify into one with optional `model_name` defaulting to current model.
+        return OdooRecordset(
+            executor=self._executor,
+            model_name=model_name,
+            ids=ids,
+            context=deepcopy(self._context),
+            metadata_cache=self._metadata_cache,
+            record_value_cache=self._record_value_cache,
+            record_value_lock=self._record_value_lock,
+        )
+
     def _derive(
         self,
         ids: Union[int, Sequence[int]] = (),
-        *,
-        env: OdooEnv | None = None,
         prefetch_ids: Union[int, Sequence[int], None] = None,
     ) -> OdooRecordset:
-        """Create a same-model recordset with optionally new ids or environment.
+        """Create a same-model recordset with optionally new ids, sharing runtime.
 
-        This helper is necessary because recordset operations should return new objects
+        This helper factory is necessary because recordset operations should return new objects
         rather than mutating existing identity or context state in place.
 
         :param ids: Replacement record id or ids, defaults to an empty recordset.
         :type ids: Union[int, Sequence[int]]
-        :param env: Replacement environment to bind, defaults to None.
-        :type env: OdooEnv | None
-        :return: Derived recordset sharing the model identity.
+        :param prefetch_ids: Replacement prefetch ids, defaults to None.
+        :type prefetch_ids: Union[int, Sequence[int], None]
+        :return: Derived recordset sharing the model identity and runtime.
         :rtype: OdooRecordset
         """
         return OdooRecordset(
-            self._env if env is None else env,
-            self._model_name,
-            ids,
+            executor=self._executor,
+            model_name=self._model_name,
+            ids=ids,
+            context=deepcopy(self._context),
+            metadata_cache=self._metadata_cache,
+            record_value_cache=self._record_value_cache,
+            record_value_lock=self._record_value_lock,
             prefetch_ids=self._prefetch_ids if prefetch_ids is None else prefetch_ids,
         )
 
@@ -189,19 +493,6 @@ class OdooRecordset:
         for record_id in self._ids:
             yield self._derive((record_id,))
 
-    def __getitem__(self, key: int | slice) -> OdooRecordset:
-        """Return a singleton recordset or sliced subset by positional lookup.
-
-        :param key: Integer index or slice over the bound ids.
-        :type key: int | slice
-        :return: Singleton recordset for integer indexing or subset recordset for a slice.
-        :rtype: OdooRecordset
-        :raises IndexError: Propagated when the integer index is out of range.
-        """
-        if isinstance(key, slice):
-            return self._derive(self._ids[key])
-        return self._derive((self._ids[key],))
-
     def __getattr__(self, name: str) -> Any:
         """Resolve singleton field access using metadata and cached values.
 
@@ -211,7 +502,7 @@ class OdooRecordset:
         :rtype: Any
         :raises AttributeError: When the name does not describe a model field.
         """
-        metadata = self._env.get_field_metadata(
+        metadata = self.get_field_metadata(
             self._model_name,
             fields=[name],
             attributes=["type", "relation"],
@@ -381,7 +672,7 @@ class OdooRecordset:
         :rtype: Any
         """
         record_id = self.id
-        found, value = self._env.get_cached_field_value(
+        found, value = self.get_cached_field_value(
             self._model_name,
             record_id,
             field_name,
@@ -389,7 +680,7 @@ class OdooRecordset:
         if found:
             return value
 
-        ids_to_fetch = self._env.get_missing_field_ids(
+        ids_to_fetch = self.get_missing_field_ids(
             self._model_name,
             self._prefetch_ids,
             field_name,
@@ -397,7 +688,7 @@ class OdooRecordset:
         if ids_to_fetch:
             self._populate_field_cache(field_name, field_metadata, ids_to_fetch)
 
-        found, value = self._env.get_cached_field_value(
+        found, value = self.get_cached_field_value(
             self._model_name,
             record_id,
             field_name,
@@ -436,7 +727,7 @@ class OdooRecordset:
                 row.get(field_name),
                 field_metadata,
             )
-            self._env.cache_record_field_values(
+            self.cache_record_field_values(
                 self._model_name,
                 row["id"],
                 {field_name: adapted_value},
@@ -462,11 +753,11 @@ class OdooRecordset:
         if field_type == "many2one" and relation_model:
             relation = adapt_field_value(value, field_metadata)
             if relation is None:
-                return self._env.recordset(relation_model)
+                return self.recordset(relation_model)
             if isinstance(relation, RelationValue):
-                related = self._env.recordset(relation.model_name, relation.id)
+                related = self.recordset(relation.model_name, relation.id)
                 if relation.label is not None:
-                    self._env.cache_record_field_values(
+                    self.cache_record_field_values(
                         relation.model_name,
                         relation.id,
                         {"display_name": relation.label},
@@ -477,8 +768,8 @@ class OdooRecordset:
         if field_type in {"one2many", "many2many"} and relation_model:
             relation = adapt_field_value(value, field_metadata)
             if isinstance(relation, RelationCollection):
-                return self._env.recordset(relation.model_name, relation.ids)
-            return self._env.recordset(relation_model)
+                return self.recordset(relation.model_name, relation.ids)
+            return self.recordset(relation_model)
 
         return adapt_field_value(value, field_metadata)
 
@@ -497,7 +788,7 @@ class OdooRecordset:
         :return: Result returned by Odoo.
         :rtype: Any
         """
-        return self._env.executor.execute(self._model_name, method, *args, **kwargs)
+        return self._executor.execute(self._model_name, method, *args, **kwargs)
 
     def _context_kwargs(self) -> Dict[str, Any]:
         """Build RPC keyword arguments for the current environment context.
@@ -508,7 +799,7 @@ class OdooRecordset:
         :return: Context keyword arguments, or an empty mapping.
         :rtype: Dict[str, Any]
         """
-        context = self._env.context
+        context = self.context
         if not context:
             return {}
         return {"context": context}
@@ -534,7 +825,7 @@ class OdooRecordset:
         if not fields_to_check:
             return normalized
 
-        metadata = self._env.get_field_metadata(
+        metadata = self.get_field_metadata(
             self._model_name,
             fields=fields_to_check,
             attributes=["type"],
@@ -773,7 +1064,7 @@ class OdooRecordset:
         if not metadata_fields:
             return [dict(record) for record in records]
 
-        metadata = self._env.get_field_metadata(
+        metadata = self.get_field_metadata(
             self._model_name,
             metadata_fields,
             ["type", "relation"],
@@ -898,7 +1189,7 @@ class OdooRecordset:
         :return: Raw metadata keyed by field name.
         :rtype: Dict[str, Any]
         """
-        return self._env.get_field_metadata(
+        return self.get_field_metadata(
             self._model_name,
             fields=allfields,
             attributes=attributes,
@@ -1360,7 +1651,7 @@ class OdooRecordset:
         :rtype: Dict[str, Any]
         """
         field_names = [spec.split(":")[0] for spec in recordset_specs]
-        return self._env.get_field_metadata(
+        return self.get_field_metadata(
             self._model_name,
             fields=field_names,
             attributes=["relation"],
@@ -1423,34 +1714,15 @@ class OdooRecordset:
         relation_model = (metadata.get(field_name) or {}).get(
             "relation", self._model_name
         )
-        return OdooRecordset(self._env, relation_model, value or [])
-
-    def with_context(self, context: Dict[str, Any]) -> OdooRecordset:
-        """Return a new recordset bound to a derived environment context.
-
-        This method is necessary because context changes should fork the environment
-        while preserving the current model identity and record ids.
-
-        :param context: Additional Odoo context keys to merge.
-        :type context: Dict[str, Any]
-        :return: Derived recordset bound to a derived environment.
-        :rtype: OdooRecordset
-        """
-        return self._derive(self._ids, env=self._env.with_context(context))
-
-    def with_company(self, company_id: int) -> OdooRecordset:
-        """Return a new recordset bound to an environment restricted to one company.
-
-        This method is necessary for multi-company workflows that need to switch
-        ``allowed_company_ids`` in context without mutating the current recordset.
-
-        :param company_id: Id of the company to set as the active company.
-        :type company_id: int
-        :return: Derived recordset bound to an environment with
-            ``allowed_company_ids`` set to ``[company_id]``.
-        :rtype: OdooRecordset
-        """
-        return self._derive(self._ids, env=self._env.with_company(company_id))
+        return OdooRecordset(
+            executor=self._executor,
+            model_name=relation_model,
+            ids=value or [],
+            context=deepcopy(self._context),
+            metadata_cache=self._metadata_cache,
+            record_value_cache=self._record_value_cache,
+            record_value_lock=self._record_value_lock,
+        )
 
     def action_archive(self) -> bool:
         """Set ``active=False`` on all records in this recordset.
@@ -1492,7 +1764,7 @@ class OdooRecordset:
         """
         if not self._ids or not field_names:
             return
-        metadata = self._env.get_field_metadata(
+        metadata = self.get_field_metadata(
             self._model_name,
             fields=field_names,
             attributes=["type", "relation"],
@@ -1504,7 +1776,7 @@ class OdooRecordset:
                 )
         ids_to_fetch: set[int] = set()
         for field_name in field_names:
-            missing = self._env.get_missing_field_ids(
+            missing = self.get_missing_field_ids(
                 self._model_name, list(self._ids), field_name
             )
             ids_to_fetch.update(missing)
@@ -1520,7 +1792,7 @@ class OdooRecordset:
                     continue
                 field_meta = metadata.get(field_name, {})
                 adapted = self._adapt_field_access_value(row[field_name], field_meta)
-                self._env.cache_record_field_values(
+                self.cache_record_field_values(
                     self._model_name, record_id, {field_name: adapted}
                 )
 
@@ -1593,7 +1865,7 @@ class OdooRecordset:
         for record_id in self._ids:
             record_values: Dict[str, Any] = {}
             for field_name in field_names:
-                found, value = self._env.get_cached_field_value(
+                found, value = self.get_cached_field_value(
                     self._model_name, record_id, field_name
                 )
                 if found:
@@ -1658,7 +1930,7 @@ class OdooRecordset:
         field_name = parts[0]
         remaining = parts[1:]
 
-        metadata = self._env.get_field_metadata(
+        metadata = self.get_field_metadata(
             self._model_name,
             fields=[field_name],
             attributes=["type", "relation"],
@@ -1675,7 +1947,7 @@ class OdooRecordset:
 
         if remaining:
             return self._mapped_path_hop(values, relation_model, remaining, field_name)
-        return _mapped_path_terminal(self._env, relation_model, is_relational, values)
+        return _mapped_path_terminal(self, relation_model, is_relational, values)
 
     def _mapped_path_hop(
         self,
@@ -1706,7 +1978,15 @@ class OdooRecordset:
                 f"Cannot traverse dotted path: field {field_name!r} is"
                 f" not a relational field"
             )
-        merged = OdooRecordset(self._env, relation_model, _dedup_relation_ids(values))
+        merged = OdooRecordset(
+            executor=self._executor,
+            model_name=relation_model,
+            ids=_dedup_relation_ids(values),
+            context=deepcopy(self._context),
+            metadata_cache=self._metadata_cache,
+            record_value_cache=self._record_value_cache,
+            record_value_lock=self._record_value_lock,
+        )
         return merged._mapped_path(remaining)
 
     def sorted(
@@ -1764,9 +2044,7 @@ class OdooRecordset:
                     fn: str = field_spec_name,
                     nf: bool = effective_nulls_first,
                 ) -> _SortKey:
-                    found, v = self._env.get_cached_field_value(
-                        self._model_name, rid, fn
-                    )
+                    found, v = self.get_cached_field_value(self._model_name, rid, fn)
                     from odoo_sdk.query.domain import _extract_comparison_value
 
                     extracted = _extract_comparison_value(v if found else None)
@@ -1893,7 +2171,7 @@ def _dedup_relation_ids(values: list[Any]) -> list[int]:
 
 
 def _mapped_path_terminal(
-    env: Any,
+    recordset: OdooRecordset,
     relation_model: str,
     is_relational: bool,
     values: list[Any],
@@ -1903,8 +2181,8 @@ def _mapped_path_terminal(
     This helper is necessary so ``_mapped_path`` can separate terminal-result
     logic from the traversal loop without duplicating the id-dedup code.
 
-    :param env: Environment bound to the originating recordset.
-    :type env: OdooEnv
+    :param recordset: Recordset bound to the originating runtime.
+    :type recordset: OdooRecordset
     :param relation_model: Related model name to use for recordset construction.
     :type relation_model: str
     :param is_relational: True when the terminal field is many2one/x2many.
@@ -1916,7 +2194,15 @@ def _mapped_path_terminal(
     :rtype: list[Any] | OdooRecordset
     """
     if is_relational:
-        return OdooRecordset(env, relation_model, _dedup_relation_ids(values))
+        return OdooRecordset(
+            executor=recordset._executor,
+            model_name=relation_model,
+            ids=_dedup_relation_ids(values),
+            context=deepcopy(recordset._context),
+            metadata_cache=recordset._metadata_cache,
+            record_value_cache=recordset._record_value_cache,
+            record_value_lock=recordset._record_value_lock,
+        )
     return values
 
 

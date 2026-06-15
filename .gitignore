@@ -30,9 +30,9 @@
 !/pyproject.toml
 !/uv.lock
 
-# General Development Scripts
-!/scripts/
-!/scripts/**
+# General Development Tooling
+!/tools/
+!/tools/**
 
 # VS Code workspace settings
 !/.vscode/

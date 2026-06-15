@@ -30,14 +30,12 @@ class TestOdooRpcExecutor(unittest.TestCase):
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        self.assertFalse(executor.uid)
-        self.assertFalse(executor.uid)
+        self.assertEqual(executor.uid, -1)
+        self.assertEqual(executor.uid, -1)
         common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_uid_returns_auth_result_without_conversion(
-        self, mock_server_proxy: Mock
-    ) -> None:
+    def test_uid_returns_auth_result(self, mock_server_proxy: Mock) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         common_proxy.authenticate.return_value = "7"
@@ -45,7 +43,7 @@ class TestOdooRpcExecutor(unittest.TestCase):
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        self.assertEqual(executor.uid, "7")
+        self.assertEqual(executor.uid, 7)
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
     def test_execute_passes_through_authentication_fault(

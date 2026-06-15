@@ -8,7 +8,6 @@ from hypothesis import given, strategies
 
 from odoo_sdk.client.client import OdooClient
 from odoo_sdk.config.settings import OdooConnectionSettings
-from odoo_sdk.env.env import OdooEnv
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.errors import OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
@@ -24,19 +23,18 @@ class TestOdooClientContract(unittest.TestCase):
         executor = Mock(spec=OdooExecutor)
         client = OdooClient(executor=executor)
 
-        first_env = client.env.with_context({"lang": "en_US"})
-        env = client.env
-        model = env[model_name]
+        first_recordset = client[model_name].with_context({"lang": "en_US"})
+        model = client[model_name]
 
-        self.assertIsInstance(env, OdooEnv)
-        self.assertIs(env.executor, executor)
-        self.assertEqual(env.context, {})
-        self.assertIsNot(first_env, env)
-        self.assertIs(client.env, env)
         self.assertIsInstance(model, OdooRecordset)
+        self.assertEqual(model.executor, executor)
+        self.assertEqual(model.context, {})
+        self.assertIsNot(first_recordset, model)
+        self.assertIs(client[model_name], model)
         self.assertEqual(model.model_name, model_name)
         self.assertEqual(model.ids, ())
-        self.assertIs(model.env, env)
+        # Verify shared metadata cache
+        self.assertIs(first_recordset.metadata_cache, model.metadata_cache)
 
     def test_client_and_env_recordsets_share_cached_metadata(self) -> None:
         executor = Mock(spec=OdooExecutor)
@@ -44,7 +42,7 @@ class TestOdooClientContract(unittest.TestCase):
         client = OdooClient(executor=executor)
 
         first = client["res.partner"].fields_get(["name"], ["type"])
-        second = client.env["res.partner"].fields_get(["name"], ["type"])
+        second = client["res.partner"].fields_get(["name"], ["type"])
 
         self.assertEqual(first, second)
         executor.execute.assert_called_once_with(

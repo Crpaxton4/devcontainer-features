@@ -1276,6 +1276,18 @@ wheels = [
 ]
 
 [[package]]
+name = "mdit-py-plugins"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/fc/f8d0863f8862f25602c0404d75568e89fb6b4109804645e5cdfb1be5cf56/mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0", size = 56114, upload-time = "2026-05-13T09:03:38.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl", hash = "sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d", size = 66663, upload-time = "2026-05-13T09:03:37.76Z" },
+]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1402,12 +1414,29 @@ wheels = [
 ]
 
 [[package]]
+name = "myst-parser"
+version = "5.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docutils" },
+    { name = "jinja2" },
+    { name = "markdown-it-py" },
+    { name = "mdit-py-plugins" },
+    { name = "pyyaml" },
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/21/dc/603751677fff302f34396e206b610f556a59d7fe58b9a2145f54e96b48e8/myst_parser-5.1.0.tar.gz", hash = "sha256:ab69322dc6719dcc7f296479dbb70181b66df6ed315064f92dbc85c0e1bf2f02", size = 101182, upload-time = "2026-05-13T09:38:19.361Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/09/dc/f3dfb7488b770f3f67e6545085bf2abea5172e88f57b8ad25ef860ca704c/myst_parser-5.1.0-py3-none-any.whl", hash = "sha256:9c91c52b3cdb4d94a6506e4fab4e2f296c7623a0da0dcbe6de1565c3dad67a8a", size = 85817, upload-time = "2026-05-13T09:38:17.904Z" },
+]
+
+[[package]]
 name = "odoo-sdk"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
-    { name = "sphinx" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -1417,17 +1446,33 @@ dev = [
     { name = "cosmic-ray" },
     { name = "coverage" },
     { name = "hypothesis" },
+    { name = "myst-parser" },
+    { name = "pygount" },
+    { name = "radon" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+]
+static-analysis = [
+    { name = "black" },
+    { name = "complexipy" },
     { name = "pygount" },
     { name = "radon" },
 ]
-docs = [
-    { name = "sphinx" },
+test = [
+    { name = "cosmic-ray" },
+    { name = "coverage" },
+    { name = "hypothesis" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.2" },
-    { name = "sphinx", specifier = ">=9.1.0" },
+    { name = "pydantic", specifier = ">=2.13.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -1437,10 +1482,28 @@ dev = [
     { name = "cosmic-ray", specifier = ">=8.4.6" },
     { name = "coverage", extras = ["toml"], specifier = ">=7.6.0" },
     { name = "hypothesis", specifier = ">=6.0.0" },
+    { name = "myst-parser", specifier = ">=5.1.0" },
+    { name = "pygount", specifier = ">=3.2.0" },
+    { name = "radon", specifier = ">=6.0.1" },
+    { name = "sphinx", specifier = ">=9.1.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=3.11.0" },
+]
+docs = [
+    { name = "myst-parser", specifier = ">=5.1.0" },
+    { name = "sphinx", specifier = ">=9.1.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=3.11.0" },
+]
+static-analysis = [
+    { name = "black", specifier = ">=24.10.0" },
+    { name = "complexipy", specifier = ">=5.5.0" },
     { name = "pygount", specifier = ">=3.2.0" },
     { name = "radon", specifier = ">=6.0.1" },
 ]
-docs = [{ name = "sphinx" }]
+test = [
+    { name = "cosmic-ray", specifier = ">=8.4.6" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.6.0" },
+    { name = "hypothesis", specifier = ">=6.0.0" },
+]
 
 [[package]]
 name = "openapi-pydantic"
@@ -2187,6 +2250,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cd/bd/f08eb0f4eed5c83f1ba2a3bd18f7745a2b1525fad70660a1c00224ec468a/sphinx-9.1.0.tar.gz", hash = "sha256:7741722357dd75f8190766926071fed3bdc211c74dd2d7d4df5404da95930ddb", size = 8718324, upload-time = "2025-12-31T15:09:27.646Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/73/f7/b1884cb3188ab181fc81fa00c266699dab600f927a964df02ec3d5d1916a/sphinx-9.1.0-py3-none-any.whl", hash = "sha256:c84fdd4e782504495fe4f2c0b3413d6c2bf388589bb352d439b2a3bb99991978", size = 3921742, upload-time = "2025-12-31T15:09:25.561Z" },
+]
+
+[[package]]
+name = "sphinx-autodoc-typehints"
+version = "3.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/ac/99f66f906b15718687525fdf3601ca0b50d19c5e88d57cd4275a89355926/sphinx_autodoc_typehints-3.11.0.tar.gz", hash = "sha256:0112b322e2ebd993c0561af3c9e4615481b42dec199d665d6bacc875f3371e96", size = 82518, upload-time = "2026-06-11T18:48:34.225Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/55/7aaa2439e77cff66a6f348bb2d9894abf2b7b153595a5b974c5c277e9145/sphinx_autodoc_typehints-3.11.0-py3-none-any.whl", hash = "sha256:4ab73fe735c33168be3f34818034581155416e8e248d32ea1b604e90bea75223", size = 41610, upload-time = "2026-06-11T18:48:33.056Z" },
 ]
 
 [[package]]

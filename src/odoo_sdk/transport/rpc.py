@@ -71,7 +71,7 @@ class OdooRpcExecutor(OdooExecutor):
                     {},
                 )
         # Hack to make static type checking not complain. There is likely a better way
-        return int(str(self._uid))
+        return int(str(self._uid)) if self._uid else -1
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over Odoo's `execute_kw` XML-RPC API.

@@ -1,8 +1,8 @@
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence, Union
 
 from odoo_sdk.config.settings import OdooConnectionSettings
-from odoo_sdk.env.env import OdooEnv
+from odoo_sdk.env.metadata_cache import MetadataCache
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
@@ -92,7 +92,12 @@ class OdooClient(OdooExecutor):
                     settings.username,  # type: ignore[arg-type]
                     settings.password,  # type: ignore[arg-type]
                 )
-        self._env = OdooEnv(self._executor)
+        self._root_recordset = OdooRecordset(
+            executor=self._executor,
+            model_name="",
+            ids=(),
+            context={},
+        )
         self._model_recordsets: Dict[str, OdooRecordset] = {}
         self._lock = threading.Lock()
 
@@ -146,19 +151,6 @@ class OdooClient(OdooExecutor):
         return int(self._executor.uid)
 
     @property
-    def env(self) -> OdooEnv:
-        """Expose the root environment shared by client-created objects.
-
-        This property is necessary so advanced callers and compatibility layers can
-        anchor recordsets and derived contexts to the same metadata cache and
-        executor-owned runtime state.
-
-        :return: Root environment bound to this client.
-        :rtype: OdooEnv
-        """
-        return self._env
-
-    @property
     def authenticated(self) -> bool:
         """Indicate whether the client has successfully authenticated.
 
@@ -194,9 +186,8 @@ class OdooClient(OdooExecutor):
     def __getitem__(self, model_name: str) -> OdooRecordset:
         """Return a cached model-bound recordset for one Odoo model name.
 
-        This lookup is necessary because the client acts like Odoo's env-bound model
-        registry, and the supported high-level contract now starts from empty
-        model-bound recordsets rather than model proxy wrappers.
+        This lookup is necessary because the client acts like Odoo's model registry,
+        and the supported high-level contract starts from empty model-bound recordsets.
 
         :param model_name: Name of the Odoo model to access.
         :type model_name: str
@@ -206,7 +197,9 @@ class OdooClient(OdooExecutor):
         if model_name not in self._model_recordsets:
             with self._lock:
                 if model_name not in self._model_recordsets:
-                    self._model_recordsets[model_name] = self._env.recordset(model_name)
+                    self._model_recordsets[model_name] = self._root_recordset.recordset(
+                        model_name
+                    )
         return self._model_recordsets[model_name]
 
     def __iter__(self) -> None:

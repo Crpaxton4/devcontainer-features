@@ -4,24 +4,14 @@ This module makes the `src` directory act as the `odoo_sdk` package
 as configured in `pyproject.toml` (package-dir mapping).
 
 It re-exports common symbols for a flatter, convenient public API.
-The supported public surface is recordset-first, with `OdooEnv`,
-`DomainExpression`, and `OdooRecordset` exposed alongside legacy
-compatibility wrappers.
+The supported public surface is recordset-first, with
+`DomainExpression`, `OdooRecordset`, and `OdooClient` as core types.
 """
 
-from importlib.metadata import PackageNotFoundError, version
-
 from . import commands
-
-try:
-    __version__ = version("odoo_sdk")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
-
 from .client import OdooClient
 from .commands import Registry
 from .config import OdooConnectionSettings
-from .env import OdooEnv
 from .fields.commands import Command
 from .query.domain import Domain, DomainExpression
 from .records import OdooRecordset
@@ -32,7 +22,6 @@ __all__ = [
     "commands",
     "OdooClient",
     "OdooConnectionSettings",
-    "OdooEnv",
     "OdooExecutor",
     "OdooRecordset",
     "OdooRpcExecutor",
@@ -40,5 +29,4 @@ __all__ = [
     "Domain",
     "DomainExpression",
     "Record",
-    "__version__",
 ]

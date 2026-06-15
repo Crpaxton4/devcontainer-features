@@ -10,7 +10,6 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
             "commands",
             "OdooClient",
             "OdooConnectionSettings",
-            "OdooEnv",
             "OdooExecutor",
             "OdooRecordset",
             "OdooRpcExecutor",
@@ -18,7 +17,6 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
             "Domain",
             "DomainExpression",
             "Record",
-            "__version__",
         }
 
         self.assertEqual(set(package.__all__), expected_exports)
@@ -26,10 +24,8 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
     def test_top_level_all_promotes_recordset_primitives(self) -> None:
         package = importlib.import_module("odoo_sdk")
 
-        self.assertIn("OdooEnv", package.__all__)
         self.assertIn("DomainExpression", package.__all__)
         self.assertIn("OdooRecordset", package.__all__)
-        self.assertTrue(hasattr(package, "OdooEnv"))
         self.assertTrue(hasattr(package, "DomainExpression"))
         self.assertTrue(hasattr(package, "OdooRecordset"))
 

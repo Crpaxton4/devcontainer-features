@@ -34,7 +34,7 @@ def _freeze_context_value(value: Any) -> Any:
 
 
 def _normalize_requested_names(
-    names: Optional[Sequence[str]],
+    names: Sequence[str],
 ) -> Optional[tuple[str, ...]]:
     """Normalize requested field or attribute names for cache-key use.
 
@@ -46,13 +46,11 @@ def _normalize_requested_names(
     :return: Sorted unique names, or None when no names were requested.
     :rtype: Optional[tuple[str, ...]]
     """
-    if names is None:
-        return None
     return tuple(sorted(set(names)))
 
 
 def _normalize_context(
-    context: Optional[dict[str, Any]],
+    context: dict[str, Any],
 ) -> Optional[tuple[tuple[str, Any], ...]]:
     """Normalize an Odoo context mapping for cache-key use.
 
@@ -64,8 +62,6 @@ def _normalize_context(
     :return: Sorted frozen context items, or None when the context is empty.
     :rtype: Optional[tuple[tuple[str, Any], ...]]
     """
-    if not context:
-        return None
     return tuple(
         sorted(
             (str(key), _freeze_context_value(value)) for key, value in context.items()
@@ -205,7 +201,7 @@ class MetadataCache:
             self._entries[key] = loaded
             return deepcopy(loaded)
 
-    def clear(self, *, model_name: Optional[str] = None) -> None:
+    def clear(self, model_name: Optional[str] = None) -> None:
         """Clear cached metadata globally or for one model.
 
         This method is necessary because metadata may change at runtime and callers
