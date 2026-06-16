@@ -5,8 +5,6 @@ supporting direct execution from the repository root with the shorter command
 path used during local smoke checks.
 """
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 

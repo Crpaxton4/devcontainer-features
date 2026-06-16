@@ -185,8 +185,6 @@ def main() -> None:
             [
                 "cosmic-ray",
                 "baseline",
-                "--session-file",
-                str(BASELINE_FILE),
                 str(TOML_PATH),
             ]
         )

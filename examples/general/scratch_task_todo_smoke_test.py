@@ -21,8 +21,6 @@ Run with explicit task inputs:
         --todo-name "Call customer back"
 """
 
-from __future__ import annotations
-
 import argparse
 from pprint import pprint
 from typing import Any, Dict, Optional, Tuple
