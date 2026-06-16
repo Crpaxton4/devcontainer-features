@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.1.0...personal-features-v1.1.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **personal-features:** depend on node Feature and harden install against missing/old Node ([#5](https://github.com/Crpaxton4/devcontainer-features/issues/5)) ([d95697f](https://github.com/Crpaxton4/devcontainer-features/commit/d95697f9817622c0541086a26daa0c766b4adc07))
+
 ## [1.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.0.0...personal-features-v1.1.0) (2026-06-16)
 
 
