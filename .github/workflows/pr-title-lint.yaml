@@ -1,0 +1,25 @@
+name: "Lint PR Title"
+
+# Squash-merge is the only merge strategy allowed on this repo, so the PR
+# title (not the individual commit messages) is what release-please will see
+# on main. Using `pull_request` rather than `pull_request_target` so this
+# check resolves from the PR's own branch and can validate the PR that
+# introduces it; this repo doesn't take outside-fork contributions, so the
+# `pull_request_target` fork-safety tradeoff doesn't apply here.
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  lint-pr-title:
+    name: "Validate PR title"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
