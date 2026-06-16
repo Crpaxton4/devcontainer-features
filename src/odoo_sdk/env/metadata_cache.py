@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import threading
 from copy import deepcopy
 from dataclasses import dataclass
@@ -32,7 +34,7 @@ def _freeze_context_value(value: Any) -> Any:
 
 
 def _normalize_requested_names(
-    names: Sequence[str],
+    names: Optional[Sequence[str]],
 ) -> Optional[tuple[str, ...]]:
     """Normalize requested field or attribute names for cache-key use.
 
@@ -44,11 +46,13 @@ def _normalize_requested_names(
     :return: Sorted unique names, or None when no names were requested.
     :rtype: Optional[tuple[str, ...]]
     """
+    if names is None:
+        return None
     return tuple(sorted(set(names)))
 
 
 def _normalize_context(
-    context: dict[str, Any],
+    context: Optional[dict[str, Any]],
 ) -> Optional[tuple[tuple[str, Any], ...]]:
     """Normalize an Odoo context mapping for cache-key use.
 
@@ -60,6 +64,8 @@ def _normalize_context(
     :return: Sorted frozen context items, or None when the context is empty.
     :rtype: Optional[tuple[tuple[str, Any], ...]]
     """
+    if not context:
+        return None
     return tuple(
         sorted(
             (str(key), _freeze_context_value(value)) for key, value in context.items()

@@ -13,7 +13,7 @@
 			"version": "latest"
 		},
 		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
-		"ghcr.io/devcontainers-extra/features/claude-code": {}
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],

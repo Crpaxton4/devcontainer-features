@@ -1,6 +1,7 @@
 import signal
 import socket
 import subprocess
+import sys
 import tomllib
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -54,8 +55,6 @@ def run(
         stderr=subprocess.STDOUT,
         text=True,
     ) as proc:
-        assert proc.stdout is not None  # Invalid: Must have stdout
-
         # ─────────────────────────────────────────────
         # Input handling
         # ─────────────────────────────────────────────
@@ -69,11 +68,11 @@ def run(
         # ─────────────────────────────────────────────
         output_chunks: list[str] = []
 
-        while proc.poll() is None:
-            line = proc.stdout.readline()
-            if not quiet:
-                print(line, end="")
-            output_chunks.append(line)
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                if not quiet:
+                    print(line, end="", flush=True)
+                output_chunks.append(line)
 
         output = "".join(output_chunks)
 
@@ -164,10 +163,20 @@ def cr_workers(toml_path: Path, repo_root: Path, timeout: int = 10):
 # ─────────────────────────────────────────────────────────────
 
 
+def _prompt(message: str) -> None:
+    """Prompt user to continue, or skip if stdin is not interactive."""
+    if not sys.stdin.isatty():
+        return
+    try:
+        input(message)
+    except EOFError:
+        pass
+
+
 def main() -> None:
     # ── Init session
     print(f"Init: {SESSION_NAME}")
-    input("Press Enter to continue...")
+    _prompt("Press Enter to continue...")
     run(
         [
             "cosmic-ray",
@@ -191,7 +200,7 @@ def main() -> None:
 
         # ── Exec Mutations ───────────────────────────────────────
         print(f"exec: {SESSION_NAME}")
-        input("Press Enter to continue...")
+        _prompt("Press Enter to continue...")
         run(
             [
                 "cosmic-ray",
@@ -203,7 +212,7 @@ def main() -> None:
 
     # ── Report generation ────────────────────────────────────
     print(f"cr-report: {SESSION_NAME}")
-    input("Press Enter to continue...")
+    _prompt("Press Enter to continue...")
     run(
         [
             "cr-report",
@@ -213,7 +222,7 @@ def main() -> None:
     )
 
     print(f"cr-html: {SESSION_NAME}")
-    input("Press Enter to continue...")
+    _prompt("Press Enter to continue...")
     run(
         [
             "cr-html",
@@ -225,7 +234,7 @@ def main() -> None:
 
     # ── JSON export ──────────────────────────────────────────
     print(f"dump: {SESSION_NAME}")
-    input("Press Enter to continue...")
+    _prompt("Press Enter to continue...")
     dump = run(
         [
             "cosmic-ray",
@@ -237,7 +246,7 @@ def main() -> None:
     )
 
     print(f"jq: {SESSION_NAME}")
-    input("Press Enter to continue...")
+    _prompt("Press Enter to continue...")
     run(
         [
             "jq",

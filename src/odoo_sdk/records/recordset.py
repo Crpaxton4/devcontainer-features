@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re as _re
 import threading
 from collections.abc import Mapping

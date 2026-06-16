@@ -3,19 +3,22 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 SRC = ROOT / "src" / "odoo_sdk"
-REPORTS = ROOT / "reports" / "static"
+REPORTS = ROOT / "reports"
 
 
 def run(cmd: list[str], out: Path | None = None):
-    result = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=(out is not None),
-        check=True,
-    )
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+        lines = []
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            lines.append(line)
+        proc.wait()
+
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
 
     if isinstance(out, Path):
-        out.write_text(result.stdout)
+        out.write_text("".join(lines))
 
 
 def main():

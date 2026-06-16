@@ -42,6 +42,10 @@
 !/requirements/**
 !requirements.txt
 
+# Make
+!Makefile
+
+
 # Specific files to exclude
 **/__pycache__/
 *.py[cod]

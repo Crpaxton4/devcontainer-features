@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
