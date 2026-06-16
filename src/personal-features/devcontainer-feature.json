@@ -2,29 +2,8 @@
     "name": "Personal Features",
     "id": "personal-features",
     "version": "1.1.1",
-    "description": "Installs the owner's personal dev container tooling (currently Claude Code, Anthropic's CLI) for use inside a VS Code dev container, wraps the `claude` command so it auto-connects to the IDE, and persists Claude's and the gh CLI's auth/config across container rebuilds and across projects.",
-    "options": {
-        "cliTools": {
-            "type": "boolean",
-            "default": true,
-            "description": "Install language-agnostic productivity/navigation CLIs (ripgrep, fd, fzf, bat, jq, yq, eza, zoxide, tldr)."
-        },
-        "gitHooks": {
-            "type": "boolean",
-            "default": true,
-            "description": "Enforce Conventional Commits and (if secretsScanning is enabled) secret scanning machine-wide via a global git core.hooksPath, regardless of whether the repo being committed to has any hook config of its own."
-        },
-        "secretsScanning": {
-            "type": "boolean",
-            "default": true,
-            "description": "Install gitleaks for secret scanning, used manually and (if gitHooks is enabled) by the global pre-commit hook."
-        },
-        "shellEnhancements": {
-            "type": "boolean",
-            "default": false,
-            "description": "Install the Starship prompt and shell aliases for the new CLIs, and persist shell history across rebuilds/projects via a mounted volume."
-        }
-    },
+    "description": "Installs the owner's personal dev container tooling: Claude Code (wrapped to auto-connect to the IDE), productivity/navigation CLIs, gitleaks secret scanning, machine-wide Conventional Commits + secret-scanning git hooks, and shell enhancements (Starship, aliases, persisted history) - and persists Claude's, the gh CLI's, and shell history config across container rebuilds and across projects. This is the owner's personal, opinionated setup, not a configurable toolkit, so it has no options: tools are added or removed outright rather than gated behind flags.",
+    "options": {},
     "dependsOn": {
         "ghcr.io/devcontainers/features/node:1": {}
     },

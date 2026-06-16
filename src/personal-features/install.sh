@@ -76,16 +76,12 @@ esac
 EOF
 chmod +x "$WRAPPER_PATH"
 
-# --- Optional tooling, each gated by its own Feature option -----------------
-# These are independent of the Claude/Node logic above: they install via apt
-# or static binaries so they don't depend on Node being present, matching the
-# fact that cliTools/gitHooks/secretsScanning are meant to work even if a
-# consumer somehow ends up without the node Feature.
-
-: "${CLITOOLS:=true}"
-: "${GITHOOKS:=true}"
-: "${SECRETSSCANNING:=true}"
-: "${SHELLENHANCEMENTS:=false}"
+# --- Additional personal tooling --------------------------------------------
+# Opinionated, always installed - this Feature is the owner's own personal
+# config, not a general-purpose toolkit, so none of this is optional. If a
+# tool stops being useful here, remove it instead of gating it behind an
+# option. Independent of the Claude/Node logic above: installs via apt or
+# static binaries, no dependency on Node being present.
 
 APT_UPDATED=false
 apt_update_once() {
@@ -138,39 +134,34 @@ install_gh_release_tar() {
     fi
 }
 
-if [ "$CLITOOLS" = "true" ]; then
-    echo "Installing productivity/navigation CLI tools"
-    apt_update_once
-    apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
+echo "Installing productivity/navigation CLI tools"
+apt_update_once
+apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
 
-    # Debian/Ubuntu's apt packages ship these under different binary names to
-    # avoid clashing with existing system commands.
-    [ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
-    [ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
+# Debian/Ubuntu's apt packages ship these under different binary names to
+# avoid clashing with existing system commands.
+[ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
+[ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
 
-    install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq
-    install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$"
-    install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr
+install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq
+install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$"
+install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr
 
-    curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
-        || echo "WARNING: failed to install zoxide, skipping" >&2
-fi
+curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
+    || echo "WARNING: failed to install zoxide, skipping" >&2
 
-if [ "$SECRETSSCANNING" = "true" ]; then
-    echo "Installing gitleaks for secret scanning"
-    install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$"
-fi
+echo "Installing gitleaks for secret scanning"
+install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$"
 
-if [ "$GITHOOKS" = "true" ]; then
-    echo "Configuring global git hooks (core.hooksPath)"
-    GIT_HOOKS_DIR="/usr/local/share/git-hooks"
-    mkdir -p "$GIT_HOOKS_DIR"
+echo "Configuring global git hooks (core.hooksPath)"
+GIT_HOOKS_DIR="/usr/local/share/git-hooks"
+mkdir -p "$GIT_HOOKS_DIR"
 
-    # Enforces Conventional Commits (https://www.conventionalcommits.org/)
-    # machine-wide, regardless of whether the repo being committed to has any
-    # hook tooling of its own. A repo with its own core.hooksPath (e.g. via
-    # Husky) overrides this as normal Git config precedence.
-    cat > "$GIT_HOOKS_DIR/commit-msg" << 'EOF'
+# Enforces Conventional Commits (https://www.conventionalcommits.org/)
+# machine-wide, regardless of whether the repo being committed to has any
+# hook tooling of its own. A repo with its own core.hooksPath (e.g. via
+# Husky) overrides this as normal Git config precedence.
+cat > "$GIT_HOOKS_DIR/commit-msg" << 'EOF'
 #!/bin/sh
 set -e
 
@@ -191,8 +182,8 @@ if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|bui
 fi
 EOF
 
-    # Runs gitleaks against staged changes when it's installed (SECRETSSCANNING).
-    cat > "$GIT_HOOKS_DIR/pre-commit" << 'EOF'
+# Runs gitleaks against staged changes when it's installed.
+cat > "$GIT_HOOKS_DIR/pre-commit" << 'EOF'
 #!/bin/sh
 set -e
 
@@ -201,28 +192,26 @@ if command -v gitleaks >/dev/null 2>&1; then
 fi
 EOF
 
-    chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
-    git config --system core.hooksPath "$GIT_HOOKS_DIR"
-fi
+chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
+git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
-if [ "$SHELLENHANCEMENTS" = "true" ]; then
-    echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-    curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
-        || echo "WARNING: failed to install starship, skipping" >&2
+echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
+curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+    || echo "WARNING: failed to install starship, skipping" >&2
 
-    SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
-    mkdir -p "$SHELL_HISTORY_VOLUME"
-    for HIST in bash_history zsh_history; do
-        touch "$SHELL_HISTORY_VOLUME/$HIST"
-        rm -f "$_REMOTE_USER_HOME/.$HIST"
-        ln -s "$SHELL_HISTORY_VOLUME/$HIST" "$_REMOTE_USER_HOME/.$HIST"
-    done
-    chown -R "$_REMOTE_USER" "$SHELL_HISTORY_VOLUME"
+SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
+mkdir -p "$SHELL_HISTORY_VOLUME"
+for HIST in bash_history zsh_history; do
+    touch "$SHELL_HISTORY_VOLUME/$HIST"
+    rm -f "$_REMOTE_USER_HOME/.$HIST"
+    ln -s "$SHELL_HISTORY_VOLUME/$HIST" "$_REMOTE_USER_HOME/.$HIST"
+done
+chown -R "$_REMOTE_USER" "$SHELL_HISTORY_VOLUME"
 
-    SNIPPET_BEGIN="# >>> personal-features >>>"
-    # $SHELL_HISTORY_VOLUME is expanded now (install time); $-escaped parts
-    # are left literal so they're evaluated later, in the user's shell.
-    SNIPPET="$(cat << EOF
+SNIPPET_BEGIN="# >>> personal-features >>>"
+# $SHELL_HISTORY_VOLUME is expanded now (install time); $-escaped parts
+# are left literal so they're evaluated later, in the user's shell.
+SNIPPET="$(cat << EOF
 $SNIPPET_BEGIN
 command -v starship >/dev/null 2>&1 && eval "\$(starship init \$(basename "\$SHELL"))"
 command -v zoxide >/dev/null 2>&1 && eval "\$(zoxide init \$(basename "\$SHELL"))"
@@ -234,10 +223,9 @@ export HISTFILE="$SHELL_HISTORY_VOLUME/\$(basename "\$SHELL")_history"
 EOF
 )"
 
-    for RC_FILE in "$_REMOTE_USER_HOME/.bashrc" "$_REMOTE_USER_HOME/.zshrc"; do
-        [ -f "$RC_FILE" ] || continue
-        grep -qF "$SNIPPET_BEGIN" "$RC_FILE" 2>/dev/null && continue
-        printf '\n%s\n' "$SNIPPET" >> "$RC_FILE"
-        chown "$_REMOTE_USER" "$RC_FILE"
-    done
-fi
+for RC_FILE in "$_REMOTE_USER_HOME/.bashrc" "$_REMOTE_USER_HOME/.zshrc"; do
+    [ -f "$RC_FILE" ] || continue
+    grep -qF "$SNIPPET_BEGIN" "$RC_FILE" 2>/dev/null && continue
+    printf '\n%s\n' "$SNIPPET" >> "$RC_FILE"
+    chown "$_REMOTE_USER" "$RC_FILE"
+done
