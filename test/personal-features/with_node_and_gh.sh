@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Executed against the 'with_node_and_gh' scenario in scenarios.json, which
-# combines the 'claude' Feature with the official node and github-cli
-# Features the way a real devcontainer.json would use them together.
+# combines the 'personal-features' Feature with the official node and
+# github-cli Features the way a real devcontainer.json would use them together.
 
 set -e
 

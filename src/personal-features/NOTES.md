@@ -1,6 +1,6 @@
 ## Companion Features
 
-This Feature only installs Claude Code itself. Pair it with the official Node.js and GitHub CLI Features in your `devcontainer.json`:
+This Feature currently only installs Claude Code. Pair it with the official Node.js and GitHub CLI Features in your `devcontainer.json`:
 
 ```jsonc
 {
@@ -9,7 +9,7 @@ This Feature only installs Claude Code itself. Pair it with the official Node.js
             "version": "lts"
         },
         "ghcr.io/devcontainers/features/github-cli:1": {},
-        "ghcr.io/<owner>/<repo>/claude:1": {}
+        "ghcr.io/<owner>/<repo>/personal-features:1": {}
     }
 }
 ```
@@ -18,8 +18,8 @@ This Feature only installs Claude Code itself. Pair it with the official Node.js
 
 Two named Docker volumes are mounted at fixed container paths and reused by every project/container on the same machine:
 
-- `claude-code-config` (`/usr/local/share/claude-code-home`) — `~/.claude` and `~/.claude.json` are symlinked here, so Claude Code's auth (`~/.claude/.credentials.json`) and settings survive rebuilds and follow you across projects.
-- `gh-cli-config` (`/usr/local/share/gh-cli-config`) — set as `GH_CONFIG_DIR`, so `gh auth login` only needs to happen once per machine.
+- `personal-features-claude-config` (`/usr/local/share/claude-code-home`) — `~/.claude` and `~/.claude.json` are symlinked here, so Claude Code's auth (`~/.claude/.credentials.json`) and settings survive rebuilds and follow you across projects.
+- `personal-features-gh-config` (`/usr/local/share/gh-cli-config`) — set as `GH_CONFIG_DIR`, so `gh auth login` only needs to happen once per machine.
 
 ## The `claude` command
 

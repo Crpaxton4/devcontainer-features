@@ -6,7 +6,7 @@
                 "version": "lts"
             },
             "ghcr.io/devcontainers/features/github-cli:1": {},
-            "claude": {}
+            "personal-features": {}
         },
         "remoteUser": "vscode"
     }

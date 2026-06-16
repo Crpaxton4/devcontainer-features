@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "Activating feature 'claude'"
+echo "Activating feature 'personal-features'"
 
 # install.sh always runs as root. _REMOTE_USER/_REMOTE_USER_HOME come from the
 # dev container CLI; default them so this also works under harnesses that run

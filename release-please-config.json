@@ -1,9 +1,9 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
     "packages": {
-        "src/claude": {
+        "src/personal-features": {
             "release-type": "simple",
-            "component": "claude",
+            "component": "personal-features",
             "extra-files": [
                 {
                     "type": "json",
