@@ -211,3 +211,12 @@ Checklist
 
 Done when
 - MCP server validated against a live Odoo instance and documentation is current.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-h/*
+```

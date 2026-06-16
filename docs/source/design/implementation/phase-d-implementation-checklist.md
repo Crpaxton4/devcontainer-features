@@ -281,3 +281,12 @@ Checklist
 
 Done when
 - Phase D changes are validated locally with both unit tests and live integration checks, and the documentation reflects the new SDK capabilities.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-d/*
+```

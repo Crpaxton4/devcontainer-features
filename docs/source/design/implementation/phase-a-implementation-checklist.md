@@ -279,3 +279,12 @@ Done when
 - [ ] Local tests cover both the new architecture and the preserved public surfaces.
 - [ ] The documented setup, coverage, and mutation commands match the commands maintainers actually run from the repository root.
 - [ ] Phase A docs are sufficient to draft separate PRDs later without revisiting the architecture baseline.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-a/*
+```

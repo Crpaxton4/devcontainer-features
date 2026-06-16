@@ -276,3 +276,12 @@ Done when
 - [ ] The async facade boundary has a documented decision and does not destabilize the sync facade.
 - [ ] Local tests cover the new Phase C extensibility and operational behaviors.
 - [ ] Phase C docs are sufficient to draft later PRDs without revisiting the implementation baseline.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-c/*
+```

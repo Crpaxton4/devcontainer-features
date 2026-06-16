@@ -292,3 +292,12 @@ Done when
 - [ ] `OdooModel` and `OdooQuery` compatibility behavior still works.
 - [ ] Local integration checks exercise the key new Phase B semantics against a live Odoo instance.
 - [ ] Phase B docs are sufficient to draft separate PRDs later without revisiting the implementation baseline.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-b/*
+```

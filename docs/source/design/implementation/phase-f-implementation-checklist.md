@@ -231,3 +231,12 @@ Checklist
 
 Done when
 - Schema reflection is validated against a live instance and documentation is current.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-f/*
+```

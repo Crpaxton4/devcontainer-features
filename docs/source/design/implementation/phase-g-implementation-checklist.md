@@ -264,3 +264,12 @@ Checklist
 
 Done when
 - Typed models are validated in both Pydantic-present and Pydantic-absent environments.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-g/*
+```

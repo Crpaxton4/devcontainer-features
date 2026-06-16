@@ -243,3 +243,12 @@ Checklist
 
 Done when
 - Both transports are validated against a live Odoo instance and produce identical results.
+
+## Detailed PRDs
+
+```{toctree}
+:maxdepth: 1
+:glob:
+
+phase-e/*
+```

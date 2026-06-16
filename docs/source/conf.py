@@ -3,6 +3,8 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+import os
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
@@ -19,6 +21,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "sphinx_autodoc_typehints",
     "myst_parser",
 ]
 
@@ -36,8 +39,25 @@ source_suffix = {
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = "alabaster"
+html_theme = "furo"
 html_static_path = ["_static"]
+
+# Copies the standalone diagram viewer into the build output. html_extra_path
+# entries are resolved relative to this confdir (docs/source) and a single
+# file is copied flat to the output root, hence the ../ link in the page that
+# references it (see design/odoo-sdk-architecture-plan.md).
+html_extra_path = ["design/odoo-sdk-architecture-diagrams.html"]
+
+
+# -- API reference generation -------------------------------------------------
+# sphinx-apidoc paths must be absolute: Sphinx does not chdir into the conf.py
+# directory before running this hook, so plain relative paths resolve against
+# whatever directory `sphinx-build` was invoked from, not against this file.
+
+_SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SOURCE_DIR, "..", ".."))
+_PACKAGE_DIR = os.path.join(_REPO_ROOT, "src", "odoo_sdk")
+_API_OUT_DIR = os.path.join(_SOURCE_DIR, "api")
 
 
 def setup(*_):
@@ -46,8 +66,10 @@ def setup(*_):
     main(
         [
             "-f",
+            "--separate",
+            "--module-first",
             "-o",
-            "source/api",
-            "../../src/odoo_sdk",
+            _API_OUT_DIR,
+            _PACKAGE_DIR,
         ]
     )

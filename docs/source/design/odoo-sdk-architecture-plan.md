@@ -137,7 +137,7 @@ Phase B is primarily concerned with the shared semantic boundaries already livin
 
 ## System Architecture
 > All Mermaid diagrams with detailed explanations.
-> Link to HTML viewer: [View Interactive Diagrams](./odoo-sdk-architecture-diagrams.html)
+> Link to HTML viewer: <a href="../odoo-sdk-architecture-diagrams.html">View Interactive Diagrams</a>
 
 Current implementation review
 

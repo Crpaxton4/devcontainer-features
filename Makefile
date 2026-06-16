@@ -85,6 +85,7 @@ clean:
 	rm -rf reports
 	rm -rf .cosmic-ray
 	rm -rf $(SPHINX_BUILD_DIR)
+	rm -rf $(SPHINX_SOURCE_DIR)/api
 	rm -rf .complexipy_cache
 	rm -rf .hypothesis
 	rm -rf *.egg-info
