@@ -1,11 +1,15 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+from odoo_sdk.commands import Command
 
-class SearchPartnersCommand:
-    def __init__(self, client):
-        self.client = client
 
-    def __call__(
+class SearchPartnersCommand(Command):
+    """Search ``res.partner`` records matching an optional domain filter."""
+
+    _name = "search_partners"
+    _description = "Search partners matching a domain and return their details."
+
+    def execute(
         self, domain: Optional[List[Tuple[str, str, Any]]] = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Searches for partners matching the given domain and returns their details.
@@ -21,7 +25,7 @@ class SearchPartnersCommand:
         fields_to_fetch = ["name", "email", "is_company", "country_id", "phone"]
 
         return (
-            self.client["res.partner"]
+            self._client["res.partner"]
             .search(
                 domain,
                 limit=limit,

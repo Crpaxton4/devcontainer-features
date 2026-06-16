@@ -167,9 +167,7 @@ class TestOdooEnvGetFieldMetadata(unittest.TestCase):
         env = OdooEnv(self.executor)
         result = env.get_field_metadata("res.partner")
         self.assertEqual(result, {"name": {"type": "char"}})
-        self.executor.execute.assert_called_once_with(
-            "res.partner", "fields_get"
-        )
+        self.executor.execute.assert_called_once_with("res.partner", "fields_get")
 
     def test_get_field_metadata_with_fields_passes_allfields(self):
         self.executor.execute.return_value = {}
@@ -198,9 +196,7 @@ class TestOdooEnvGetFieldMetadata(unittest.TestCase):
     def test_get_field_metadata_with_all_params(self):
         self.executor.execute.return_value = {}
         env = OdooEnv(self.executor, {"lang": "en_US"})
-        env.get_field_metadata(
-            "res.partner", fields=["name"], attributes=["type"]
-        )
+        env.get_field_metadata("res.partner", fields=["name"], attributes=["type"])
         self.executor.execute.assert_called_once_with(
             "res.partner",
             "fields_get",

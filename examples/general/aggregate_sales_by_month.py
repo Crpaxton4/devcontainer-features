@@ -1,13 +1,15 @@
 from typing import Any, Dict, List, Optional
 
+from odoo_sdk.commands import Command
 
-class AggregateSalesByMonthCommand:
+
+class AggregateSalesByMonthCommand(Command):
     """Group sale orders by month and sum the total amount per month."""
 
-    def __init__(self, client):
-        self.client = client
+    _name = "aggregate_sales_by_month"
+    _description = "Group sale orders by month and sum the total amount per month."
 
-    def __call__(
+    def execute(
         self,
         domain: Optional[List] = None,
         limit: Optional[int] = None,
@@ -21,7 +23,7 @@ class AggregateSalesByMonthCommand:
         :return: List of dicts with ``month`` and ``total`` keys.
         :rtype: List[Dict[str, Any]]
         """
-        rows = self.client["sale.order"]._read_group(
+        rows = self._client["sale.order"]._read_group(
             domain=domain,
             groupby=("date_order:month",),
             aggregates=("amount_total:sum",),

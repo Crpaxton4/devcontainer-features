@@ -1,13 +1,15 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+from odoo_sdk.commands import Command
 
-class GetTasksCommand:
+
+class GetTasksCommand(Command):
     """Lists project tasks with an optional domain filter."""
 
-    def __init__(self, client):
-        self.client = client
+    _name = "get_tasks"
+    _description = "Lists project tasks with an optional domain filter."
 
-    def __call__(
+    def execute(
         self, domain: Optional[List[Tuple[str, str, Any]]] = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         task_domain = domain or []
@@ -21,7 +23,7 @@ class GetTasksCommand:
         ]
 
         return (
-            self.client["project.task"]
+            self._client["project.task"]
             .search(task_domain, limit=limit)
             .read(fields_to_fetch)
         )

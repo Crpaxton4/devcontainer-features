@@ -1,5 +1,6 @@
 import unittest
 
+from odoo_sdk.commands.command import Command
 from odoo_sdk.commands.command_registry import Registry
 
 
@@ -8,12 +9,12 @@ class DummyClient:
         self.uid = uid
 
 
-class DummyGetUidCommand:
-    def __init__(self, client):
-        self.client = client
+class DummyGetUidCommand(Command):
+    _name = "get_uid"
+    _description = "Return the current user's UID."
 
-    def __call__(self):
-        return self.client.uid
+    def execute(self):
+        return self._client.uid
 
 
 class TestDispatcher(unittest.TestCase):
@@ -21,7 +22,7 @@ class TestDispatcher(unittest.TestCase):
         dispatcher = Registry(DummyClient(uid=42))
         dispatcher.register("get_uid", DummyGetUidCommand)
 
-        self.assertEqual(dispatcher["get_uid"](), 42)
+        self.assertEqual(dispatcher["get_uid"].execute(), 42)
 
     def test_dispatcher_raises_for_unknown_command(self) -> None:
         dispatcher = Registry(DummyClient(uid=61))

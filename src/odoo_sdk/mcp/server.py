@@ -1,25 +1,36 @@
-from typing import Any, Optional
+import functools
+import inspect
+from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools.tool import Tool
 
-from odoo_sdk.client.client import OdooClient
-from odoo_sdk.commands import Registry
+from odoo_sdk.commands import Command, Registry
 
 
 class OdooMCPServer:
-    """
-    Dynamically exposes Odoo SDK Commands as MCP Tools via FastMCP.
+    """Dynamically expose the commands in a :class:`Registry` as MCP tools.
+
+    Every command registered in the supplied registry becomes a FastMCP tool at
+    construction time. The tool's name is the registration key, its description
+    comes from the command's ``description`` (falling back to the ``execute``
+    docstring), and its input schema is introspected from the command's
+    ``execute`` signature so agents receive a fully typed tool definition.
+
+    The registry already owns the shared :class:`OdooClient` and instantiates
+    each command with it, so the server does not need a separate client.
+
+    :param registry: Registry whose commands are exposed as tools.
+    :type registry: Registry
+    :param server_name: Human-readable name advertised by the MCP server.
+    :type server_name: str
     """
 
     def __init__(
         self,
         registry: Registry,
-        client: Optional[OdooClient] = None,
         server_name: str = "Odoo MCP Server",
     ):
-        # Implicitly initialize client using default settings/ini if one is not provided.
-        # This will fail fast if the environment configuration is invalid.
-        self.client = client
         self.registry: Registry = registry
         self.mcp: FastMCP = FastMCP(
             server_name,
@@ -28,21 +39,64 @@ class OdooMCPServer:
         self._bootstrap_tools()
 
     def _bootstrap_tools(self) -> None:
+        """Register every command in the registry as an MCP tool.
+
+        Each command is handled by :meth:`_register_command` so the tool wrapper
+        closes over a per-iteration binding instead of a shared loop variable.
+
+        :return: None.
+        :rtype: None
         """
-        Iterates over the registry, instantiates commands, registers them as internal FastMCP tools,
-        and applies ToolTransforms to cleanly expose their configured names and descriptions.
+
+        for name, command in self.registry.items():
+            self._register_command(name, command)
+
+    def _register_command(self, name: str, command: Command) -> None:
+        """Build a typed tool for ``command`` and add it to the server.
+
+        :param name: Public tool name (the registry registration key).
+        :type name: str
+        :param command: Command instance bound to the shared client.
+        :type command: Command
+        :return: None.
+        :rtype: None
         """
-        for command in self.registry:
-            # Instantiate the command using the configured client
-            command = command(client=self.client)
 
-            @self.mcp.tool(name=command.name, description=command.description)
-            def _command_tool(*args: Any, **kwargs: Any) -> Any:
-                return command.execute(*args, **kwargs)
+        self.mcp.add_tool(self._build_tool(name, command))
 
-            # Register the tool with FastMCP under its internal name
-            self.mcp.add_tool(_command_tool)
+    @staticmethod
+    def _build_tool(name: str, command: Command) -> Tool:
+        """Create a FastMCP tool mirroring ``command.execute``.
 
-    def run(self) -> None:
-        """Starts the FastMCP server."""
-        self.mcp.run()
+        The wrapper carries the bound ``execute`` signature via
+        ``__signature__`` so FastMCP introspects the real, typed parameters
+        (rather than the variadic wrapper) when generating the input schema.
+
+        :param name: Public tool name (the registry registration key).
+        :type name: str
+        :param command: Command instance bound to the shared client.
+        :type command: Command
+        :return: A FastMCP tool that delegates to ``command.execute``.
+        :rtype: Tool
+        """
+
+        execute = command.execute
+
+        @functools.wraps(execute)
+        def tool_fn(*args: Any, **kwargs: Any) -> Any:
+            return command.execute(*args, **kwargs)
+
+        tool_fn.__signature__ = inspect.signature(execute)
+        description = command.description or inspect.getdoc(execute)
+        return Tool.from_function(tool_fn, name=name, description=description)
+
+    def run(self, **kwargs: Any) -> None:
+        """Start the FastMCP server.
+
+        :param kwargs: Transport options forwarded to ``FastMCP.run`` (defaults
+            to stdio when none are given).
+        :return: None.
+        :rtype: None
+        """
+
+        self.mcp.run(**kwargs)

@@ -51,5 +51,35 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(res2, "new")
 
 
+class TestRegistryItems(unittest.TestCase):
+    def test_items_yields_name_and_client_bound_instance(self):
+        client = object()
+        registry = Registry(client)
+        registry.register("dummy", DummyCommandOk)
+
+        items = dict(registry.items())
+
+        self.assertEqual(set(items), {"dummy"})
+        self.assertIsInstance(items["dummy"], DummyCommandOk)
+        self.assertIs(items["dummy"].client, client)
+
+    def test_items_empty_registry_is_empty(self):
+        self.assertEqual(list(Registry(object()).items()), [])
+
+    def test_iter_yields_registered_classes(self):
+        registry = Registry(object())
+        registry.register("ok", DummyCommandOk)
+        registry.register("alt", DummyCommandAlt)
+
+        self.assertEqual(set(registry), {DummyCommandOk, DummyCommandAlt})
+
+    def test_items_covers_all_registered_commands(self):
+        registry = Registry(object())
+        registry.register("ok", DummyCommandOk)
+        registry.register("alt", DummyCommandAlt)
+
+        self.assertEqual({name for name, _ in registry.items()}, {"ok", "alt"})
+
+
 if __name__ == "__main__":
     unittest.main()

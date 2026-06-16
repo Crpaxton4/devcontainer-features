@@ -1,15 +1,23 @@
 from typing import Any, Dict, Optional
 
-from odoo_sdk.commands import Command
+from ..command import Command
 
 
 class GetTodoCommand(Command):
-    """Returns one project task by id, or None if not found."""
+    """Fetch a single project task by id."""
 
     _name = "get_todo"
     _description = "Returns one project task by id, or None if not found."
 
     def execute(self, task_id: int) -> Optional[Dict[str, Any]]:
+        """Return the ``project.task`` with ``task_id``, or ``None``.
+
+        :param task_id: Identifier of the project task to fetch.
+        :type task_id: int
+        :return: The task record, or ``None`` when no task matches.
+        :rtype: Optional[Dict[str, Any]]
+        """
+
         fields_to_fetch = [
             "name",
             "project_id",
@@ -23,7 +31,3 @@ class GetTodoCommand(Command):
             .read(fields_to_fetch)
         )
         return records[0] if records else None
-
-
-# Backward-compatible alias for previous class name.
-GetToDoCommand = GetTodoCommand
