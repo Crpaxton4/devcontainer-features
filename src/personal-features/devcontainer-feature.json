@@ -1,0 +1,28 @@
+{
+    "name": "Personal Features",
+    "id": "personal-features",
+    "version": "1.0.0",
+    "description": "Installs the owner's personal dev container tooling (currently Claude Code, Anthropic's CLI) for use inside a VS Code dev container, wraps the `claude` command so it auto-connects to the IDE, and persists Claude's and the gh CLI's auth/config across container rebuilds and across projects.",
+    "options": {},
+    "installsAfter": [
+        "ghcr.io/devcontainers/features/node",
+        "ghcr.io/devcontainers/features/github-cli",
+        "ghcr.io/devcontainers/features/common-utils"
+    ],
+    "containerEnv": {
+        "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
+        "DISABLE_AUTOUPDATER": "1"
+    },
+    "mounts": [
+        {
+            "source": "personal-features-claude-config",
+            "target": "/usr/local/share/claude-code-home",
+            "type": "volume"
+        },
+        {
+            "source": "personal-features-gh-config",
+            "target": "/usr/local/share/gh-cli-config",
+            "type": "volume"
+        }
+    ]
+}
