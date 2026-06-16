@@ -259,7 +259,7 @@ Checklist
 - [ ] Add or update compatibility tests for preserved surfaces.
 - [ ] Document the repository-root setup command: `uv venv --allow-existing .venv && uv sync`.
 - [ ] Document the repository baseline validation command: `uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html`.
-- [ ] Document the required mutation workflow: `./scripts/cosmic-ray-init.sh <session>`, `./scripts/cosmic-ray-baseline.sh <session>`, `./scripts/cosmic-ray-exec.sh <session>`, and `./scripts/cosmic-ray-report.sh <session>`.
+- [ ] Document the required mutation workflow: `make mutation` (or `uv run python tools/mutation.py`).
 - [ ] Require the repository coverage gate to remain at or above 90%.
 - [ ] Require the Cosmic Ray kill rate to remain at or above 90%.
 - [ ] Confirm that local validation does not require CI or hosted infrastructure.

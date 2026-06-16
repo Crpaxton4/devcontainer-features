@@ -39,7 +39,7 @@ Define a repeatable local validation path for Phase A and require tests that cov
 - [ ] Unit tests exist for the new Phase A abstractions and compatibility tests exist for preserved entry points.
 - [ ] The local setup command is documented as `uv venv --allow-existing .venv && uv sync` or an equivalent repository-approved command.
 - [ ] The local validation command is documented as `uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html` or an equivalent repository-approved command.
-- [ ] The local mutation workflow is documented with `./scripts/cosmic-ray-init.sh <session>`, `./scripts/cosmic-ray-baseline.sh <session>`, `./scripts/cosmic-ray-exec.sh <session>`, and `./scripts/cosmic-ray-report.sh <session>` or equivalent repository-approved commands.
+- [ ] The local mutation workflow is documented with `make mutation` (or `uv run python tools/mutation.py`) or equivalent repository-approved commands.
 - [ ] The documented Phase A validation path does not require CI or hosted infrastructure.
 - [ ] Coverage remains at or above the repository's configured threshold after Phase A changes.
 - [ ] Mutation kill rate remains at or above 90% after Phase A changes.
