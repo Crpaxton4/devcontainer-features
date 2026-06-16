@@ -1,13 +1,12 @@
 ## Companion Features
 
-This Feature currently only installs Claude Code. Pair it with the official Node.js and GitHub CLI Features in your `devcontainer.json`:
+This Feature `dependsOn` the official Node.js Feature, so it's installed automatically even if a consumer only adds `personal-features` (e.g. via `dev.containers.defaultFeatures`) — npm installs Claude Code, so a base image's own system Node can't be relied on (some base images, like Odoo's, bundle an ancient one ahead of it on PATH; `install.sh` also hard-fails with a clear error if it ends up on Node <18 for any reason).
+
+Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` has something to persist:
 
 ```jsonc
 {
     "features": {
-        "ghcr.io/devcontainers/features/node:1": {
-            "version": "lts"
-        },
         "ghcr.io/devcontainers/features/github-cli:1": {},
         "ghcr.io/<owner>/<repo>/personal-features:1": {}
     }
