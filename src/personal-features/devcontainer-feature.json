@@ -1,7 +1,7 @@
 {
     "name": "Personal Features",
     "id": "personal-features",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Installs the owner's personal dev container tooling (currently Claude Code, Anthropic's CLI) for use inside a VS Code dev container, wraps the `claude` command so it auto-connects to the IDE, and persists Claude's and the gh CLI's auth/config across container rebuilds and across projects.",
     "options": {},
     "dependsOn": {
