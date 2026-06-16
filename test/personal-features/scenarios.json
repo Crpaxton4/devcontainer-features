@@ -9,5 +9,17 @@
             "personal-features": {}
         },
         "remoteUser": "vscode"
+    },
+    "with_shell_enhancements": {
+        "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "features": {
+            "ghcr.io/devcontainers/features/node:1": {
+                "version": "lts"
+            },
+            "personal-features": {
+                "shellEnhancements": true
+            }
+        },
+        "remoteUser": "vscode"
     }
 }

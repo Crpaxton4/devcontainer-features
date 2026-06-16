@@ -33,4 +33,26 @@ check "~/.claude is symlinked into the persisted volume" bash -c "test -L \"\$HO
 check "~/.claude.json is symlinked into the persisted volume" bash -c "test -L \"\$HOME/.claude.json\""
 check "GH_CONFIG_DIR points at the persisted volume" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# cliTools (default true)
+check "ripgrep is installed" rg --version
+check "fd is installed" fd --version
+check "fzf is installed" fzf --version
+check "bat is installed" bat --version
+check "jq is installed" jq --version
+check "yq is installed" yq --version
+check "eza is installed" eza --version
+check "zoxide is installed" zoxide --version
+check "tldr is installed" tldr --version
+
+# secretsScanning (default true)
+check "gitleaks is installed" gitleaks version
+
+# gitHooks (default true)
+check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
+check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"
+check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/git-hooks/pre-commit"
+
+# shellEnhancements (default false)
+check "shell history volume is mounted" bash -c "test -d /usr/local/share/shell-history"
+
 reportResults
