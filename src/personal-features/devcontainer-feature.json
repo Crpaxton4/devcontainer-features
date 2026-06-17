@@ -2,7 +2,7 @@
     "name": "Personal Features",
     "id": "personal-features",
     "version": "1.1.1",
-    "description": "Installs the owner's personal dev container tooling (currently Claude Code, Anthropic's CLI) for use inside a VS Code dev container, wraps the `claude` command so it auto-connects to the IDE, and persists Claude's and the gh CLI's auth/config across container rebuilds and across projects.",
+    "description": "Installs the owner's personal dev container tooling: Claude Code (wrapped to auto-connect to the IDE), productivity/navigation CLIs, gitleaks secret scanning, machine-wide Conventional Commits + secret-scanning git hooks, and shell enhancements (Starship, aliases, persisted history) - and persists Claude's, the gh CLI's, and shell history config across container rebuilds and across projects. This is the owner's personal, opinionated setup, not a configurable toolkit, so it has no options: tools are added or removed outright rather than gated behind flags.",
     "options": {},
     "dependsOn": {
         "ghcr.io/devcontainers/features/node:1": {}
@@ -25,6 +25,11 @@
         {
             "source": "personal-features-gh-config",
             "target": "/usr/local/share/gh-cli-config",
+            "type": "volume"
+        },
+        {
+            "source": "personal-features-shell-history",
+            "target": "/usr/local/share/shell-history",
             "type": "volume"
         }
     ]
