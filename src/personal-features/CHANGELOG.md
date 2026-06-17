@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.4.0...personal-features-v1.5.0) (2026-06-17)
+
+
+### Features
+
+* **personal-features:** simplify starship prompt config ([#21](https://github.com/Crpaxton4/devcontainer-features/issues/21)) ([90fe166](https://github.com/Crpaxton4/devcontainer-features/commit/90fe1668f71790b6f771118be0d2af6fd862c7eb))
+
 ## [1.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.3.0...personal-features-v1.4.0) (2026-06-17)
 
 
