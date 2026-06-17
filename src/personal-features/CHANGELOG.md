@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.2.0...personal-features-v1.3.0) (2026-06-17)
+
+
+### Features
+
+* **personal-features:** extended tooling ([#12](https://github.com/Crpaxton4/devcontainer-features/issues/12)) ([1b571d8](https://github.com/Crpaxton4/devcontainer-features/commit/1b571d89f6474afb552846cb061f983ed1c56824))
+* **personal-features:** use CLAUDE_CONFIG_DIR to persist config via volume ([#11](https://github.com/Crpaxton4/devcontainer-features/issues/11)) ([42be0b9](https://github.com/Crpaxton4/devcontainer-features/commit/42be0b90783542550d7deedb56567a644d3ba48b))
+
+
+### Performance Improvements
+
+* **personal-features:** parallelize binary downloads and cache devcontainer CLI ([#14](https://github.com/Crpaxton4/devcontainer-features/issues/14)) ([c494c82](https://github.com/Crpaxton4/devcontainer-features/commit/c494c829b9442d091ac3db37183f90a3e43607dc))
+
 ## [1.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.1.1...personal-features-v1.2.0) (2026-06-17)
 
 
