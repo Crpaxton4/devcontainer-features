@@ -75,3 +75,157 @@ case "\$1" in
 esac
 EOF
 chmod +x "$WRAPPER_PATH"
+
+# --- Additional personal tooling --------------------------------------------
+# Opinionated, always installed - this Feature is the owner's own personal
+# config, not a general-purpose toolkit, so none of this is optional. If a
+# tool stops being useful here, remove it instead of gating it behind an
+# option. Independent of the Claude/Node logic above: installs via apt or
+# static binaries, no dependency on Node being present.
+
+APT_UPDATED=false
+apt_update_once() {
+    if [ "$APT_UPDATED" = false ]; then
+        apt-get update -y
+        APT_UPDATED=true
+    fi
+}
+
+DPKG_ARCH="$(dpkg --print-architecture)" # amd64 | arm64
+
+# Maps DPKG_ARCH to the arch string a given tool's release assets use, e.g.
+# `tool_arch amd64 arm64` echoes "amd64" or "arm64" depending on DPKG_ARCH;
+# `tool_arch x86_64 aarch64` echoes the GNU-triple style some tools use.
+tool_arch() {
+    case "$DPKG_ARCH" in
+        amd64) echo "$1" ;;
+        arm64) echo "$2" ;;
+    esac
+}
+
+# Looks up the first release asset URL matching a regex against the latest
+# GitHub release of $1.
+gh_latest_asset_url() {
+    curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
+        | grep -o '"browser_download_url": *"[^"]*"' \
+        | cut -d'"' -f4 \
+        | grep -E "$2" \
+        | head -1
+}
+
+# Installs a single-file GitHub release asset as an executable at $3.
+# Best-effort: these are optional, non-Claude tools, so a failure here warns
+# and continues rather than failing the whole install.
+install_gh_release_bin() {
+    URL="$(gh_latest_asset_url "$1" "$2")"
+    if [ -z "$URL" ] || ! curl -fsSL "$URL" -o "$3"; then
+        echo "WARNING: failed to install $3 from $1, skipping" >&2
+        return
+    fi
+    chmod +x "$3"
+}
+
+# Installs a .tar.gz GitHub release asset by extracting it directly into
+# /usr/local/bin. Same best-effort behavior as install_gh_release_bin.
+install_gh_release_tar() {
+    URL="$(gh_latest_asset_url "$1" "$2")"
+    if [ -z "$URL" ] || ! curl -fsSL "$URL" | tar -xz -C /usr/local/bin; then
+        echo "WARNING: failed to install $1, skipping" >&2
+    fi
+}
+
+echo "Installing productivity/navigation CLI tools"
+apt_update_once
+apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
+
+# Debian/Ubuntu's apt packages ship these under different binary names to
+# avoid clashing with existing system commands.
+[ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
+[ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
+
+install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq
+install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$"
+install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr
+
+curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
+    || echo "WARNING: failed to install zoxide, skipping" >&2
+
+echo "Installing gitleaks for secret scanning"
+install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$"
+
+echo "Configuring global git hooks (core.hooksPath)"
+GIT_HOOKS_DIR="/usr/local/share/git-hooks"
+mkdir -p "$GIT_HOOKS_DIR"
+
+# Enforces Conventional Commits (https://www.conventionalcommits.org/)
+# machine-wide, regardless of whether the repo being committed to has any
+# hook tooling of its own. A repo with its own core.hooksPath (e.g. via
+# Husky) overrides this as normal Git config precedence.
+cat > "$GIT_HOOKS_DIR/commit-msg" << 'EOF'
+#!/bin/sh
+set -e
+
+MSG_FILE="$1"
+FIRST_LINE="$(head -n1 "$MSG_FILE")"
+
+case "$FIRST_LINE" in
+    Merge\ *|Revert\ *|fixup!\ *|squash!\ *)
+        exit 0
+        ;;
+esac
+
+if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([a-zA-Z0-9_.-]+\))?!?: .+'; then
+    echo "ERROR: commit message does not follow Conventional Commits:" >&2
+    echo "  $FIRST_LINE" >&2
+    echo "Expected: <type>(<optional scope>): <description>, e.g. 'fix(api): handle empty response'" >&2
+    exit 1
+fi
+EOF
+
+# Runs gitleaks against staged changes when it's installed.
+cat > "$GIT_HOOKS_DIR/pre-commit" << 'EOF'
+#!/bin/sh
+set -e
+
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks protect --staged --no-banner --redact
+fi
+EOF
+
+chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
+git config --system core.hooksPath "$GIT_HOOKS_DIR"
+
+echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
+curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+    || echo "WARNING: failed to install starship, skipping" >&2
+
+SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
+mkdir -p "$SHELL_HISTORY_VOLUME"
+for HIST in bash_history zsh_history; do
+    touch "$SHELL_HISTORY_VOLUME/$HIST"
+    rm -f "$_REMOTE_USER_HOME/.$HIST"
+    ln -s "$SHELL_HISTORY_VOLUME/$HIST" "$_REMOTE_USER_HOME/.$HIST"
+done
+chown -R "$_REMOTE_USER" "$SHELL_HISTORY_VOLUME"
+
+SNIPPET_BEGIN="# >>> personal-features >>>"
+# $SHELL_HISTORY_VOLUME is expanded now (install time); $-escaped parts
+# are left literal so they're evaluated later, in the user's shell.
+SNIPPET="$(cat << EOF
+$SNIPPET_BEGIN
+command -v starship >/dev/null 2>&1 && eval "\$(starship init \$(basename "\$SHELL"))"
+command -v zoxide >/dev/null 2>&1 && eval "\$(zoxide init \$(basename "\$SHELL"))"
+command -v bat >/dev/null 2>&1 && alias cat=bat
+command -v fd >/dev/null 2>&1 && alias find=fd
+command -v eza >/dev/null 2>&1 && alias ls=eza
+export HISTFILE="$SHELL_HISTORY_VOLUME/\$(basename "\$SHELL")_history"
+# <<< personal-features <<<
+EOF
+)"
+
+for RC_FILE in "$_REMOTE_USER_HOME/.bashrc" "$_REMOTE_USER_HOME/.zshrc"; do
+    [ -f "$RC_FILE" ] || continue
+    grep -qF "$SNIPPET_BEGIN" "$RC_FILE" 2>/dev/null && continue
+    printf '\n%s\n' "$SNIPPET" >> "$RC_FILE"
+    chown "$_REMOTE_USER" "$RC_FILE"
+done
