@@ -203,12 +203,28 @@ mkdir -p "$_REMOTE_USER_HOME/.config"
 cat > "$_REMOTE_USER_HOME/.config/starship.toml" << 'EOF'
 [git_branch]
 symbol = "⎇ "
+format = "⎇ [$branch]($style) "
+
+[git_status]
+format = '([$all_status$ahead_behind]($style) )'
+conflicted = "!"
+ahead = "↑${count}"
+behind = "↓${count}"
+diverged = "↕↑${ahead_count}↓${behind_count}"
+up_to_date = ""
+untracked = "?"
+stashed = "≡"
+modified = "~"
+staged = "+"
+renamed = "»"
+deleted = "✗"
 
 [package]
-symbol = "◆ "
+disabled = true
 
 [python]
 symbol = "λ "
+format = "λ [$pyenv_prefix($version )(\($virtualenv\))]($style) "
 
 [docker_context]
 disabled = true
@@ -225,12 +241,13 @@ symbol = "✗"
 disabled = false
 time_format = "%H:%M"
 utc_time_offset = "+0"
+format = "[$time]($style) "
 
 [env_var.ODOO_VERSION]
 format = "[$env_value]($style) "
 
 [container]
-format = "▣ [$name]($style) "
+disabled = true
 EOF
 chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
 
