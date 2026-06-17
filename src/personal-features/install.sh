@@ -200,55 +200,7 @@ wait
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
 mkdir -p "$_REMOTE_USER_HOME/.config"
-cat > "$_REMOTE_USER_HOME/.config/starship.toml" << 'EOF'
-[git_branch]
-symbol = "⎇ "
-format = "⎇ [$branch]($style) "
-
-[git_status]
-format = '([$all_status$ahead_behind]($style) )'
-conflicted = "!"
-ahead = "↑${count}"
-behind = "↓${count}"
-diverged = "↕↑${ahead_count}↓${behind_count}"
-up_to_date = ""
-untracked = "?"
-stashed = "≡"
-modified = "~"
-staged = "+"
-renamed = "»"
-deleted = "✗"
-
-[package]
-disabled = true
-
-[python]
-symbol = "λ "
-format = "λ [$pyenv_prefix($version )(\($virtualenv\))]($style) "
-
-[docker_context]
-disabled = true
-
-[cmd_duration]
-min_time = 5_000
-format = "⧗ [$duration](bold yellow) "
-
-[status]
-disabled = false
-symbol = "✗"
-
-[time]
-disabled = false
-time_format = "%H:%M"
-utc_time_offset = "+0"
-format = "[$time]($style) "
-
-[env_var.ODOO_VERSION]
-format = "[$env_value]($style) "
-
-[container]
-disabled = true
-EOF
+cp "$(dirname "$0")/starship.toml" "$_REMOTE_USER_HOME/.config/starship.toml"
 chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
 
 SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
