@@ -197,6 +197,43 @@ echo "Installing shell enhancements (Starship prompt, aliases, persisted history
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
 wait
 
+# Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
+# Font glyphs), extra modules useful for Odoo dev work.
+mkdir -p "$_REMOTE_USER_HOME/.config"
+cat > "$_REMOTE_USER_HOME/.config/starship.toml" << 'EOF'
+[git_branch]
+symbol = "⎇ "
+
+[package]
+symbol = "◆ "
+
+[python]
+symbol = "λ "
+
+[docker_context]
+disabled = true
+
+[cmd_duration]
+min_time = 5_000
+format = "⧗ [$duration](bold yellow) "
+
+[status]
+disabled = false
+symbol = "✗"
+
+[time]
+disabled = false
+time_format = "%H:%M"
+utc_time_offset = "+0"
+
+[env_var.ODOO_VERSION]
+format = "[$env_value]($style) "
+
+[container]
+format = "▣ [$name]($style) "
+EOF
+chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
+
 SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_VOLUME"
 for HIST in bash_history zsh_history; do
