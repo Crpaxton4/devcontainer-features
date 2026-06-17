@@ -24,6 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache npm global store
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-devcontainers-cli
+
       - name: "Install latest devcontainer CLI"
         run: npm install -g @devcontainers/cli
 
@@ -39,6 +45,12 @@ jobs:
           - personal-features
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache npm global store
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-devcontainers-cli
 
       - name: "Install latest devcontainer CLI"
         run: npm install -g @devcontainers/cli
