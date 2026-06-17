@@ -139,15 +139,14 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
 [ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
 [ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
 
-install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq
-install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$"
-install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr
-
-curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
-    || echo "WARNING: failed to install zoxide, skipping" >&2
-
-echo "Installing gitleaks for secret scanning"
-install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$"
+# Run all binary downloads in parallel — they're independent and each blocks
+# on a GitHub API call + download, so sequential execution wastes wall time.
+install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq &
+install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$" &
+install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr &
+( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
+    || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
+install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$" &
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -192,8 +191,11 @@ chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
-    || echo "WARNING: failed to install starship, skipping" >&2
+( curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+    || echo "WARNING: failed to install starship, skipping" >&2 ) &
+
+# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
+wait
 
 SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_VOLUME"
