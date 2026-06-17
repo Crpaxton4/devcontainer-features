@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.1.1...personal-features-v1.2.0) (2026-06-17)
+
+
+### Features
+
+* **personal-features:** add optional CLI tools, global git hooks, and shell enhancements ([#8](https://github.com/Crpaxton4/devcontainer-features/issues/8)) ([2153bbb](https://github.com/Crpaxton4/devcontainer-features/commit/2153bbbae15713ab426dac83145f6de811e2f5b4))
+
 ## [1.1.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.1.0...personal-features-v1.1.1) (2026-06-16)
 
 
