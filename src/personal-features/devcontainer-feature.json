@@ -17,22 +17,26 @@
         "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
         "DISABLE_AUTOUPDATER": "1"
     },
-    "postStartCommand": "sudo chown -R \"$(id -u):$(id -g)\" /usr/local/share/claude-home /usr/local/share/gh-cli-config /usr/local/share/shell-history 2>/dev/null || true",
     "mounts": [
         {
-            "source": "personal-features-claude-home",
+            "source": "${localEnv:HOME}/.claude",
             "target": "/usr/local/share/claude-home",
-            "type": "volume"
+            "type": "bind"
         },
         {
-            "source": "personal-features-gh-config",
+            "source": "${localEnv:HOME}/.config/gh",
             "target": "/usr/local/share/gh-cli-config",
-            "type": "volume"
+            "type": "bind"
         },
         {
-            "source": "personal-features-shell-history",
-            "target": "/usr/local/share/shell-history",
-            "type": "volume"
+            "source": "${localEnv:HOME}/.bash_history",
+            "target": "/usr/local/share/shell-history/bash_history",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}/.zsh_history",
+            "target": "/usr/local/share/shell-history/zsh_history",
+            "type": "bind"
         }
     ]
 }

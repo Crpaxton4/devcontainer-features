@@ -31,8 +31,8 @@ check "wrapper passes known subcommands through untouched" bash -c "grep -q 'mcp
 
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
-check "CLAUDE_CONFIG_DIR points at the persisted volume" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
-check "GH_CONFIG_DIR points at the persisted volume" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
+check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
+check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
@@ -55,9 +55,9 @@ check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/g
 
 # shell enhancements
 check "starship is installed" starship --version
-check "shell history volume is mounted" bash -c "test -d /usr/local/share/shell-history"
-check "~/.bash_history is symlinked into the persisted volume" bash -c "test -L \"\$HOME/.bash_history\""
-check "~/.zsh_history is symlinked into the persisted volume" bash -c "test -L \"\$HOME/.zsh_history\""
+check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
+check "~/.bash_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.bash_history\""
+check "~/.zsh_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.zsh_history\""
 check "shell snippet was appended to .bashrc" bash -c "grep -q 'personal-features' \"\$HOME/.bashrc\""
 
 reportResults

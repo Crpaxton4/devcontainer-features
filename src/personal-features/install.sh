@@ -9,17 +9,15 @@ echo "Activating feature 'personal-features'"
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
 
-CLAUDE_HOME_VOLUME="/usr/local/share/claude-home"
-GH_CONFIG_VOLUME="/usr/local/share/gh-cli-config"
+CLAUDE_HOME="/usr/local/share/claude-home"
+GH_CONFIG="/usr/local/share/gh-cli-config"
 
-# CLAUDE_CONFIG_DIR (set in devcontainer-feature.json) points Claude Code
-# directly at the named volume mount — no symlinks needed for ~/.claude.
-# gh CLI uses the same pattern via GH_CONFIG_DIR; ensure both volume dirs
-# exist and are owned by the remote user so the tools can write to them at
-# runtime (and so the dirs are present even when the volume isn't mounted,
-# e.g. during feature tests).
-mkdir -p "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
-chown -R "$_REMOTE_USER" "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
+# Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
+# point at and that the bind mounts overlay at runtime. Creating them here
+# means the feature still works in test containers where no bind mounts are
+# active (e.g. the devcontainer features test harness).
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG"
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
@@ -203,26 +201,23 @@ mkdir -p "$_REMOTE_USER_HOME/.config"
 cp "$(dirname "$0")/starship.toml" "$_REMOTE_USER_HOME/.config/starship.toml"
 chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
 
-SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
-mkdir -p "$SHELL_HISTORY_VOLUME"
+SHELL_HISTORY_DIR="/usr/local/share/shell-history"
+mkdir -p "$SHELL_HISTORY_DIR"
 for HIST in bash_history zsh_history; do
-    touch "$SHELL_HISTORY_VOLUME/$HIST"
+    touch "$SHELL_HISTORY_DIR/$HIST"
     rm -f "$_REMOTE_USER_HOME/.$HIST"
-    ln -s "$SHELL_HISTORY_VOLUME/$HIST" "$_REMOTE_USER_HOME/.$HIST"
+    ln -s "$SHELL_HISTORY_DIR/$HIST" "$_REMOTE_USER_HOME/.$HIST"
 done
-chown -R "$_REMOTE_USER" "$SHELL_HISTORY_VOLUME"
+chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
 
 SNIPPET_BEGIN="# >>> personal-features >>>"
-# $SHELL_HISTORY_VOLUME is expanded now (install time); $-escaped parts
-# are left literal so they're evaluated later, in the user's shell.
-SNIPPET="$(cat << EOF
-$SNIPPET_BEGIN
-command -v starship >/dev/null 2>&1 && eval "\$(starship init \$(basename "\$SHELL"))"
-command -v zoxide >/dev/null 2>&1 && eval "\$(zoxide init \$(basename "\$SHELL"))"
+SNIPPET="$(cat << 'EOF'
+# >>> personal-features >>>
+command -v starship >/dev/null 2>&1 && eval "$(starship init $(basename "$SHELL"))"
+command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init $(basename "$SHELL"))"
 command -v bat >/dev/null 2>&1 && alias cat=bat
 command -v fd >/dev/null 2>&1 && alias find=fd
 command -v eza >/dev/null 2>&1 && alias ls=eza
-export HISTFILE="$SHELL_HISTORY_VOLUME/\$(basename "\$SHELL")_history"
 # <<< personal-features <<<
 EOF
 )"

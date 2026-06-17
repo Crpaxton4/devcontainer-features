@@ -15,23 +15,54 @@ Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` 
 
 ## One-time host setup
 
-Three named Docker volumes must exist on the host before the first container start. Run the repo's `setup.sh` once per machine:
+Run the repo's `setup.sh` once per machine before starting any dev container that uses this Feature:
 
 ```sh
 ./setup.sh
 ```
 
-This creates the volumes and seeds their root directory with the correct ownership for your uid. It's safe to re-run — `docker volume create` is a no-op if the volume already exists.
+This creates the host-side directories and files that are bind-mounted into the container:
 
-If you skip this step, Docker auto-creates the volumes on first container start, which may seed them under the wrong uid (e.g. if the first container to use them runs as a different user). The Feature's `postStartCommand` corrects this automatically via `sudo chown` on each start, so things will still work — but running `setup.sh` first avoids the need for sudo at runtime.
+```
+~/.claude        — Claude Code auth and settings
+~/.config/gh     — gh CLI auth and settings
+~/.bash_history  — bash history file
+~/.zsh_history   — zsh history file
+```
+
+It's safe to re-run — `mkdir -p` and `touch` are no-ops when targets already exist.
+
+If you skip this step, `install.sh` creates these paths as fallbacks at build time, so the feature still works — but they'll be local to the container image layer rather than bind-mounted from your host home directory, and they won't persist across rebuilds.
 
 ## What persists, and where
 
-Three named Docker volumes are mounted at fixed container paths and reused by every project/container on the same machine:
+Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
-- `personal-features-claude-home` → `/usr/local/share/claude-home` — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds and follow you across projects.
-- `personal-features-gh-config` → `/usr/local/share/gh-cli-config` — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
-- `personal-features-shell-history` → `/usr/local/share/shell-history` — `~/.bash_history`/`~/.zsh_history` are symlinked here, so shell history follows you across rebuilds and projects.
+- `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
+- `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
+
+## Migrating from the old named-volume scheme
+
+If you were previously using this Feature before it switched to bind mounts, copy your existing data out of the old Docker volumes before rebuilding:
+
+```sh
+docker run --rm \
+    -v personal-features-claude-home:/src \
+    -v "$HOME/.claude:/dst" \
+    alpine sh -c "cp -a /src/. /dst/"
+
+docker run --rm \
+    -v personal-features-gh-config:/src \
+    -v "$HOME/.config/gh:/dst" \
+    alpine sh -c "cp -a /src/. /dst/"
+```
+
+Then remove the old volumes if you no longer need them:
+
+```sh
+docker volume rm personal-features-claude-home personal-features-gh-config personal-features-shell-history
+```
 
 ## The `claude` command
 
