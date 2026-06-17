@@ -1,35 +1,19 @@
 #!/bin/sh
-# One-time host setup for personal-features dev container volumes.
+# One-time host setup for personal-features bind mounts.
 #
-# Run this once per machine (or after a factory reset) before starting any
-# dev container that uses the personal-features Feature. It creates the three
-# named Docker volumes and seeds them with the correct ownership for your user,
-# so that the first container start doesn't race to claim them under the wrong
-# uid.
+# Run this once per machine before starting any dev container that uses the
+# personal-features Feature. It creates the host-side directories and files
+# that are bind-mounted into the container, so Docker doesn't create them as
+# root or as directories when they should be files.
 #
-# Safe to re-run: docker volume create is a no-op if the volume already exists,
-# and the chown step only touches the root of each volume (not files inside it).
+# Safe to re-run: mkdir -p and touch are no-ops when the targets already exist.
 
 set -e
 
-VOLUMES="
-personal-features-claude-home
-personal-features-gh-config
-personal-features-shell-history
-"
+echo "Creating host directories and files for personal-features bind mounts..."
+mkdir -p "$HOME/.claude"
+mkdir -p "$HOME/.config/gh"
+touch "$HOME/.bash_history"
+touch "$HOME/.zsh_history"
 
-echo "Creating personal-features Docker volumes (no-op if they already exist)..."
-for VOL in $VOLUMES; do
-    docker volume create "$VOL"
-done
-
-echo "Setting ownership to $(id -u):$(id -g) on each volume root..."
-for VOL in $VOLUMES; do
-    docker run --rm \
-        -v "${VOL}:/vol" \
-        --user root \
-        alpine \
-        chown "$(id -u):$(id -g)" /vol
-done
-
-echo "Done. Volumes are ready for use."
+echo "Done. Host paths are ready for use."
