@@ -197,6 +197,24 @@ echo "Installing shell enhancements (Starship prompt, aliases, persisted history
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
 wait
 
+# Starship config: replace emoji symbols with text alternatives and disable the
+# docker_context module (context name alone is not meaningful at a glance).
+mkdir -p "$_REMOTE_USER_HOME/.config"
+cat > "$_REMOTE_USER_HOME/.config/starship.toml" << 'EOF'
+[git_branch]
+symbol = "⎇ "
+
+[package]
+symbol = "pkg "
+
+[python]
+symbol = "py "
+
+[docker_context]
+disabled = true
+EOF
+chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
+
 SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_VOLUME"
 for HIST in bash_history zsh_history; do
