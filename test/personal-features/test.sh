@@ -29,10 +29,10 @@ check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 check "wrapper passes known subcommands through untouched" bash -c "grep -q 'mcp' \"\$(command -v claude)\""
 
-check "claude config dir exists at default path" bash -c "test -d \"\$HOME/.claude\""
-check "gh config dir exists at default path" bash -c "test -d \"\$HOME/.config/gh\""
-check "CLAUDE_CONFIG_DIR is not set" bash -c "[ -z \"\${CLAUDE_CONFIG_DIR:-}\" ]"
-check "GH_CONFIG_DIR is not set" bash -c "[ -z \"\${GH_CONFIG_DIR:-}\" ]"
+check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
+check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
+check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
+check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
@@ -55,8 +55,9 @@ check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/g
 
 # shell enhancements
 check "starship is installed" starship --version
-check "~/.bash_history exists at default path" bash -c "test -f \"\$HOME/.bash_history\""
-check "~/.zsh_history exists at default path" bash -c "test -f \"\$HOME/.zsh_history\""
+check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
+check "~/.bash_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.bash_history\""
+check "~/.zsh_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.zsh_history\""
 check "shell snippet was appended to .bashrc" bash -c "grep -q 'personal-features' \"\$HOME/.bashrc\""
 
 reportResults

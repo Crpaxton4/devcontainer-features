@@ -9,16 +9,15 @@ echo "Activating feature 'personal-features'"
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
 
-# Ensure default config dirs/files exist so tools work immediately, and so the
-# bind-mount targets are valid paths even in test containers where no bind
-# mounts are active (e.g. the devcontainer features test harness).
-mkdir -p "${_REMOTE_USER_HOME}/.claude" "${_REMOTE_USER_HOME}/.config/gh"
-touch "${_REMOTE_USER_HOME}/.bash_history" "${_REMOTE_USER_HOME}/.zsh_history"
-chown "$_REMOTE_USER" \
-    "${_REMOTE_USER_HOME}/.claude" \
-    "${_REMOTE_USER_HOME}/.config/gh" \
-    "${_REMOTE_USER_HOME}/.bash_history" \
-    "${_REMOTE_USER_HOME}/.zsh_history"
+CLAUDE_HOME="/usr/local/share/claude-home"
+GH_CONFIG="/usr/local/share/gh-cli-config"
+
+# Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
+# point at and that the bind mounts overlay at runtime. Creating them here
+# means the feature still works in test containers where no bind mounts are
+# active (e.g. the devcontainer features test harness).
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG"
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
@@ -201,6 +200,15 @@ wait
 mkdir -p "$_REMOTE_USER_HOME/.config"
 cp "$(dirname "$0")/starship.toml" "$_REMOTE_USER_HOME/.config/starship.toml"
 chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
+
+SHELL_HISTORY_DIR="/usr/local/share/shell-history"
+mkdir -p "$SHELL_HISTORY_DIR"
+for HIST in bash_history zsh_history; do
+    touch "$SHELL_HISTORY_DIR/$HIST"
+    rm -f "$_REMOTE_USER_HOME/.$HIST"
+    ln -s "$SHELL_HISTORY_DIR/$HIST" "$_REMOTE_USER_HOME/.$HIST"
+done
+chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
 
 SNIPPET_BEGIN="# >>> personal-features >>>"
 SNIPPET="$(cat << 'EOF'

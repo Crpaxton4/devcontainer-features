@@ -13,27 +13,29 @@
         "ghcr.io/devcontainers/features/common-utils"
     ],
     "containerEnv": {
+        "CLAUDE_CONFIG_DIR": "/usr/local/share/claude-home",
+        "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
         "DISABLE_AUTOUPDATER": "1"
     },
     "mounts": [
         {
             "source": "${localEnv:HOME}/.claude",
-            "target": "${containerEnv:HOME}/.claude",
+            "target": "/usr/local/share/claude-home",
             "type": "bind"
         },
         {
             "source": "${localEnv:HOME}/.config/gh",
-            "target": "${containerEnv:HOME}/.config/gh",
+            "target": "/usr/local/share/gh-cli-config",
             "type": "bind"
         },
         {
             "source": "${localEnv:HOME}/.bash_history",
-            "target": "${containerEnv:HOME}/.bash_history",
+            "target": "/usr/local/share/shell-history/bash_history",
             "type": "bind"
         },
         {
             "source": "${localEnv:HOME}/.zsh_history",
-            "target": "${containerEnv:HOME}/.zsh_history",
+            "target": "/usr/local/share/shell-history/zsh_history",
             "type": "bind"
         }
     ]

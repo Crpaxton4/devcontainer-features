@@ -36,11 +36,11 @@ If you skip this step, `install.sh` creates these paths as fallbacks at build ti
 
 ## What persists, and where
 
-Config and history are bind-mounted directly from your host home directory, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
+Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
-- `~/.claude` — Claude Code's auth token and settings. No `CLAUDE_CONFIG_DIR` override; the tool finds it at its standard default path.
-- `~/.config/gh` — gh CLI auth and config. No `GH_CONFIG_DIR` override; the tool finds it at its standard default path.
-- `~/.bash_history` / `~/.zsh_history` — shell history at the shell's standard default paths, no `HISTFILE` override.
+- `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
+- `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
 
 ## Migrating from the old named-volume scheme
 
