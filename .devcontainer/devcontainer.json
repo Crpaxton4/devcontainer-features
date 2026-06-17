@@ -1,24 +1,25 @@
 {
-    "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
-    "customizations": {
-        "vscode": {
-            "settings": {
-                "json.schemas": [
-                    {
-                        "fileMatch": [
-                            "*/devcontainer-feature.json"
-                        ],
-                        "url": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainerFeature.schema.json"
-                    }
-                ]
-            }
+"image": "mcr.microsoft.com/devcontainers/javascript-node:24-bookworm",
+"customizations": {
+    "vscode": {
+        "settings": {
+            "json.schemas": [
+                {
+            "fileMatch": [
+                "*/devcontainer-feature.json"
+            ],
+            "url": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainerFeature.schema.json"
         }
-    },
-    "features": {
-        "ghcr.io/devcontainers/features/docker-in-docker:3": {
-            "installDockerBuildx": false
-        }
-    },
-    "remoteUser": "node",
-    "updateContentCommand": "npm install -g @devcontainers/cli"
+    ]
+}
+}
+},
+"features": {
+"ghcr.io/devcontainers/features/docker-in-docker:3": {
+"installDockerBuildx": false
+},
+"ghcr.io/devcontainers/features/github-cli:1": {}
+},
+"remoteUser": "node",
+"updateContentCommand": "npm install -g @devcontainers/cli"
 }
