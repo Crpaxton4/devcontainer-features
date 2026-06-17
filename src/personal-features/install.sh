@@ -9,20 +9,16 @@ echo "Activating feature 'personal-features'"
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
 
-CLAUDE_HOME_VOLUME="/usr/local/share/claude-code-home"
+CLAUDE_HOME_VOLUME="/usr/local/share/claude-home"
 GH_CONFIG_VOLUME="/usr/local/share/gh-cli-config"
 
-# The volumes declared in devcontainer-feature.json mount at fixed,
-# user-independent paths (Feature `mounts` can't reference ${localEnv:HOME}).
-# Symlink the real per-user config locations into them so auth persists
-# across rebuilds and across every project that uses this Feature.
-mkdir -p "$CLAUDE_HOME_VOLUME/dot-claude" "$GH_CONFIG_VOLUME"
-touch "$CLAUDE_HOME_VOLUME/dot-claude.json"
-
-rm -rf "$_REMOTE_USER_HOME/.claude" "$_REMOTE_USER_HOME/.claude.json"
-ln -s "$CLAUDE_HOME_VOLUME/dot-claude" "$_REMOTE_USER_HOME/.claude"
-ln -s "$CLAUDE_HOME_VOLUME/dot-claude.json" "$_REMOTE_USER_HOME/.claude.json"
-
+# CLAUDE_CONFIG_DIR (set in devcontainer-feature.json) points Claude Code
+# directly at the named volume mount — no symlinks needed for ~/.claude.
+# gh CLI uses the same pattern via GH_CONFIG_DIR; ensure both volume dirs
+# exist and are owned by the remote user so the tools can write to them at
+# runtime (and so the dirs are present even when the volume isn't mounted,
+# e.g. during feature tests).
+mkdir -p "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
 chown -R "$_REMOTE_USER" "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
 
 # Installed via npm (rather than the standalone native installer) so it rides
@@ -143,15 +139,14 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
 [ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
 [ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
 
-install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq
-install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$"
-install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr
-
-curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
-    || echo "WARNING: failed to install zoxide, skipping" >&2
-
-echo "Installing gitleaks for secret scanning"
-install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$"
+# Run all binary downloads in parallel — they're independent and each blocks
+# on a GitHub API call + download, so sequential execution wastes wall time.
+install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq &
+install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$" &
+install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr &
+( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
+    || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
+install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$" &
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -196,8 +191,11 @@ chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
-    || echo "WARNING: failed to install starship, skipping" >&2
+( curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+    || echo "WARNING: failed to install starship, skipping" >&2 ) &
+
+# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
+wait
 
 SHELL_HISTORY_VOLUME="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_VOLUME"
