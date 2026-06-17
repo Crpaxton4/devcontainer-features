@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.5.0...personal-features-v1.6.0) (2026-06-17)
+
+
+### Features
+
+* **personal-features:** switch volumes to host bind mounts ([#26](https://github.com/Crpaxton4/devcontainer-features/issues/26)) ([c2921db](https://github.com/Crpaxton4/devcontainer-features/commit/c2921db4a3a59a7f49f93a9191930f70e8539103))
+
+
+### Bug Fixes
+
+* **devcontainer:** runtime errors ([#24](https://github.com/Crpaxton4/devcontainer-features/issues/24)) ([1199343](https://github.com/Crpaxton4/devcontainer-features/commit/11993439b1393cebf3f6c19fd8b5e0bb3fed3bf3))
+
 ## [1.5.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.4.0...personal-features-v1.5.0) (2026-06-17)
 
 
