@@ -13,13 +13,25 @@ Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` 
 }
 ```
 
+## One-time host setup
+
+Three named Docker volumes must exist on the host before the first container start. Run the repo's `setup.sh` once per machine:
+
+```sh
+./setup.sh
+```
+
+This creates the volumes and seeds their root directory with the correct ownership for your uid. It's safe to re-run — `docker volume create` is a no-op if the volume already exists.
+
+If you skip this step, Docker auto-creates the volumes on first container start, which may seed them under the wrong uid (e.g. if the first container to use them runs as a different user). The Feature's `postStartCommand` corrects this automatically via `sudo chown` on each start, so things will still work — but running `setup.sh` first avoids the need for sudo at runtime.
+
 ## What persists, and where
 
 Three named Docker volumes are mounted at fixed container paths and reused by every project/container on the same machine:
 
-- `personal-features-claude-config` (`/usr/local/share/claude-code-home`) — `~/.claude` and `~/.claude.json` are symlinked here, so Claude Code's auth (`~/.claude/.credentials.json`) and settings survive rebuilds and follow you across projects.
-- `personal-features-gh-config` (`/usr/local/share/gh-cli-config`) — set as `GH_CONFIG_DIR`, so `gh auth login` only needs to happen once per machine.
-- `personal-features-shell-history` (`/usr/local/share/shell-history`) — `~/.bash_history`/`~/.zsh_history` are symlinked here, so shell history follows you across rebuilds and projects.
+- `personal-features-claude-home` → `/usr/local/share/claude-home` — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds and follow you across projects.
+- `personal-features-gh-config` → `/usr/local/share/gh-cli-config` — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `personal-features-shell-history` → `/usr/local/share/shell-history` — `~/.bash_history`/`~/.zsh_history` are symlinked here, so shell history follows you across rebuilds and projects.
 
 ## The `claude` command
 
