@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.3.0...personal-features-v1.4.0) (2026-06-17)
+
+
+### Features
+
+* **personal-features:** Enhance starship config ([#18](https://github.com/Crpaxton4/devcontainer-features/issues/18)) ([4307426](https://github.com/Crpaxton4/devcontainer-features/commit/43074263def08304e88a9604f20af4ee6d3d1cc1))
+
+
+### Bug Fixes
+
+* **personal-features:** correct volume ownership mismatch across containers ([#16](https://github.com/Crpaxton4/devcontainer-features/issues/16)) ([1ae5c26](https://github.com/Crpaxton4/devcontainer-features/commit/1ae5c2648c621b21b8e10b3f6a7a8c9dc95c458f))
+
 ## [1.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.2.0...personal-features-v1.3.0) (2026-06-17)
 
 
