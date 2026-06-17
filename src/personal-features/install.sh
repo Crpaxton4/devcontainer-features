@@ -9,20 +9,16 @@ echo "Activating feature 'personal-features'"
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
 
-CLAUDE_HOME_VOLUME="/usr/local/share/claude-code-home"
+CLAUDE_HOME_VOLUME="/usr/local/share/claude-home"
 GH_CONFIG_VOLUME="/usr/local/share/gh-cli-config"
 
-# The volumes declared in devcontainer-feature.json mount at fixed,
-# user-independent paths (Feature `mounts` can't reference ${localEnv:HOME}).
-# Symlink the real per-user config locations into them so auth persists
-# across rebuilds and across every project that uses this Feature.
-mkdir -p "$CLAUDE_HOME_VOLUME/dot-claude" "$GH_CONFIG_VOLUME"
-touch "$CLAUDE_HOME_VOLUME/dot-claude.json"
-
-rm -rf "$_REMOTE_USER_HOME/.claude" "$_REMOTE_USER_HOME/.claude.json"
-ln -s "$CLAUDE_HOME_VOLUME/dot-claude" "$_REMOTE_USER_HOME/.claude"
-ln -s "$CLAUDE_HOME_VOLUME/dot-claude.json" "$_REMOTE_USER_HOME/.claude.json"
-
+# CLAUDE_CONFIG_DIR (set in devcontainer-feature.json) points Claude Code
+# directly at the named volume mount — no symlinks needed for ~/.claude.
+# gh CLI uses the same pattern via GH_CONFIG_DIR; ensure both volume dirs
+# exist and are owned by the remote user so the tools can write to them at
+# runtime (and so the dirs are present even when the volume isn't mounted,
+# e.g. during feature tests).
+mkdir -p "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
 chown -R "$_REMOTE_USER" "$CLAUDE_HOME_VOLUME" "$GH_CONFIG_VOLUME"
 
 # Installed via npm (rather than the standalone native installer) so it rides

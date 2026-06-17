@@ -13,13 +13,14 @@
         "ghcr.io/devcontainers/features/common-utils"
     ],
     "containerEnv": {
+        "CLAUDE_CONFIG_DIR": "/usr/local/share/claude-home",
         "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
         "DISABLE_AUTOUPDATER": "1"
     },
     "mounts": [
         {
-            "source": "personal-features-claude-config",
-            "target": "/usr/local/share/claude-code-home",
+            "source": "personal-features-claude-home",
+            "target": "/usr/local/share/claude-home",
             "type": "volume"
         },
         {
