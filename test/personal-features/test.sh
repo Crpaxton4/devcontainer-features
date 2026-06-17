@@ -29,10 +29,9 @@ check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 check "wrapper passes known subcommands through untouched" bash -c "grep -q 'mcp' \"\$(command -v claude)\""
 
-check "claude config volume is mounted" bash -c "test -d /usr/local/share/claude-code-home"
-check "gh config volume is mounted" bash -c "test -d /usr/local/share/gh-cli-config"
-check "~/.claude is symlinked into the persisted volume" bash -c "test -L \"\$HOME/.claude\""
-check "~/.claude.json is symlinked into the persisted volume" bash -c "test -L \"\$HOME/.claude.json\""
+check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
+check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
+check "CLAUDE_CONFIG_DIR points at the persisted volume" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the persisted volume" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
 # productivity/navigation CLIs
