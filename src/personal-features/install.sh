@@ -185,9 +185,7 @@ wait
 
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
-mkdir -p "$_REMOTE_USER_HOME/.config"
-cp "$(dirname "$0")/starship.toml" "$_REMOTE_USER_HOME/.config/starship.toml"
-chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
+cp "$(dirname "$0")/starship.toml" /usr/local/share/starship.toml
 
 SHELL_HISTORY_DIR="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_DIR"
@@ -196,10 +194,11 @@ rm -f "$_REMOTE_USER_HOME/.bash_history"
 ln -s "$SHELL_HISTORY_DIR/bash_history" "$_REMOTE_USER_HOME/.bash_history"
 chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
 
-if ! grep -qF "# >>> personal-features >>>" "$_REMOTE_USER_HOME/.bashrc" 2>/dev/null; then
-    printf '\n' >> "$_REMOTE_USER_HOME/.bashrc"
-    cat >> "$_REMOTE_USER_HOME/.bashrc" << 'EOF'
+if ! grep -qF "# >>> personal-features >>>" /etc/bash.bashrc 2>/dev/null; then
+    printf '\n' >> /etc/bash.bashrc
+    cat >> /etc/bash.bashrc << 'EOF'
 # >>> personal-features >>>
+export STARSHIP_CONFIG=/usr/local/share/starship.toml
 command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init bash)"
 command -v bat >/dev/null 2>&1 && alias cat=bat
@@ -207,5 +206,4 @@ command -v fd >/dev/null 2>&1 && alias find=fd
 command -v eza >/dev/null 2>&1 && alias ls=eza
 # <<< personal-features <<<
 EOF
-    chown "$_REMOTE_USER" "$_REMOTE_USER_HOME/.bashrc"
 fi

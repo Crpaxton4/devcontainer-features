@@ -57,7 +57,7 @@ check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/g
 check "starship is installed" starship --version
 check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
 check "~/.bash_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.bash_history\""
-check "starship.toml was placed in .config" bash -c "test -f \"\$HOME/.config/starship.toml\""
-check "shell snippet was appended to .bashrc" bash -c "grep -q 'personal-features' \"\$HOME/.bashrc\""
+check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
+check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
 
 reportResults
