@@ -43,7 +43,7 @@ renamed = "»"
 deleted = "✗"
 
 [nodejs]
-disabled = true
+format = "[$version]($style) "
 
 [package]
 disabled = true
