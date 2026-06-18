@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.7.0...personal-features-v1.7.1) (2026-06-18)
+
+
+### Bug Fixes
+
+* **personal-features:** shell rc portability ([#30](https://github.com/Crpaxton4/devcontainer-features/issues/30)) ([2bc46e9](https://github.com/Crpaxton4/devcontainer-features/commit/2bc46e98f03c3acfc8c10bcff153e3758126e028))
+
 ## [1.7.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.6.0...personal-features-v1.7.0) (2026-06-18)
 
 
