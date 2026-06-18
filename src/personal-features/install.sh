@@ -223,7 +223,7 @@ EOF
 )"
 
 for RC_FILE in "$_REMOTE_USER_HOME/.bashrc" "$_REMOTE_USER_HOME/.zshrc"; do
-    [ -f "$RC_FILE" ] || continue
+    touch "$RC_FILE"
     grep -qF "$SNIPPET_BEGIN" "$RC_FILE" 2>/dev/null && continue
     printf '\n%s\n' "$SNIPPET" >> "$RC_FILE"
     chown "$_REMOTE_USER" "$RC_FILE"

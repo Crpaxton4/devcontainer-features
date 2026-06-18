@@ -24,9 +24,13 @@ format = "[+$lines_added/-$lines_removed]($style) "
 threshold = 0.0
 style = "white"
 
+[directory]
+repo_root_style = "bold cyan"
+repo_root_format = "[$repo_root]($repo_root_style)[$path]($style)[$read_only]($read_only_style)"
+
 [git_branch]
-symbol = "⎇ "
-format = "⎇ [$branch]($style) "
+symbol = "::"
+format = "$symbol[$branch]($style) "
 
 [git_status]
 format = '([$all_status$ahead_behind]($style) )'
@@ -49,11 +53,8 @@ format = "[$version]($style) "
 disabled = true
 
 [python]
-symbol = "λ "
-format = 'λ [$pyenv_prefix($version )(\($virtualenv\))]($style) '
-
-[docker_context]
-disabled = true
+symbol = "λ"
+format = '[$symbol$pyenv_prefix($version )(\($virtualenv\))]($style) '
 
 [cmd_duration]
 min_time = 5_000
