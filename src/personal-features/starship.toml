@@ -42,6 +42,9 @@ staged = "+"
 renamed = "»"
 deleted = "✗"
 
+[nodejs]
+disabled = true
+
 [package]
 disabled = true
 
