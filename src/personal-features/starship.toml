@@ -1,3 +1,76 @@
+[profiles]
+claude-code = "${custom.claude_rate}${custom.claude_rate_maxed}$claude_context$directory$git_branch$claude_cost"
+
+[claude_context]
+gauge_width = 5
+format = "[$gauge $percentage]($style) "
+
+[[claude_context.display]]
+threshold = 0
+style = "white"
+
+[[claude_context.display]]
+threshold = 80
+style = "yellow"
+
+[[claude_context.display]]
+threshold = 90
+style = "red"
+
+[claude_cost]
+format = "[+$lines_added/-$lines_removed]($style) "
+
+[[claude_cost.display]]
+threshold = 0.0
+style = "white"
+
+[custom.claude_rate]
+description = "Claude Code 5h rate limit bar"
+when = '''
+file="${CLAUDE_STATUS_FILE:-/tmp/claude_status.json}"
+[ -f "$file" ] || exit 1
+pct=$(jq -r '.rate_limits.five_hour.used_percentage // 0' "$file" 2>/dev/null)
+pct=$(printf '%.0f' "${pct:-0}")
+[ "$pct" -lt 100 ]
+'''
+command = '''
+file="${CLAUDE_STATUS_FILE:-/tmp/claude_status.json}"
+pct=$(jq -r '.rate_limits.five_hour.used_percentage // 0' "$file" 2>/dev/null)
+pct=$(printf '%.0f' "${pct:-0}")
+filled=$(( pct * 5 / 100 ))
+[ "$filled" -gt 5 ] && filled=5
+empty=$(( 5 - filled ))
+bar=""
+i=0; while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
+i=0; while [ $i -lt "$empty" ];  do bar="${bar}░"; i=$(( i + 1 )); done
+printf '[%s]' "$bar"
+'''
+shell = ["sh"]
+format = "[$output]($style) "
+style = "white"
+
+[custom.claude_rate_maxed]
+description = "Claude Code 5h rate limit reset countdown"
+when = '''
+file="${CLAUDE_STATUS_FILE:-/tmp/claude_status.json}"
+[ -f "$file" ] || exit 1
+pct=$(jq -r '.rate_limits.five_hour.used_percentage // 0' "$file" 2>/dev/null)
+pct=$(printf '%.0f' "${pct:-0}")
+[ "$pct" -ge 100 ]
+'''
+command = '''
+file="${CLAUDE_STATUS_FILE:-/tmp/claude_status.json}"
+resets_at=$(jq -r '.rate_limits.five_hour.resets_at // 0' "$file" 2>/dev/null)
+now=$(date +%s)
+secs=$(( resets_at - now ))
+mins=$(( secs / 60 ))
+[ "$mins" -lt 0 ] && mins=0
+printf '%dm' "$mins"
+'''
+shell = ["sh"]
+format = "[$output]($style) "
+style = "bold red"
+
 [git_branch]
 symbol = "⎇ "
 format = "⎇ [$branch]($style) "
