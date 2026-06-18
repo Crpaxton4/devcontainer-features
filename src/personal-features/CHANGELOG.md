@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.7.1...personal-features-v1.8.0) (2026-06-18)
+
+
+### Features
+
+* **starthip:** changes git up to date symbol to '⇋' ([#35](https://github.com/Crpaxton4/devcontainer-features/issues/35)) ([0073e78](https://github.com/Crpaxton4/devcontainer-features/commit/0073e785109ffdf06ed6b05918df36caea510413))
+
+
+### Bug Fixes
+
+* **personal-features:** write shell rc to global etc files ([#32](https://github.com/Crpaxton4/devcontainer-features/issues/32)) ([9606ba7](https://github.com/Crpaxton4/devcontainer-features/commit/9606ba7a9d26af7b093b831901bb15c46723c627))
+
 ## [1.7.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.7.0...personal-features-v1.7.1) (2026-06-18)
 
 
