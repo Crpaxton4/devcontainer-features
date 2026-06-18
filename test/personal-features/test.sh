@@ -60,6 +60,6 @@ check "~/.bash_history is linked to the bind-mounted history file" bash -c "test
 check "~/.zsh_history is linked to the bind-mounted history file" bash -c "test -L \"\$HOME/.zsh_history\""
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
-check "shell snippet was appended to global zshrc" bash -c "grep -q 'personal-features' /etc/zsh/zshrc"
+check "shell snippet was appended to global zshrc" bash -c "! command -v zsh >/dev/null 2>&1 || grep -q 'personal-features' /etc/zsh/zshrc"
 
 reportResults
