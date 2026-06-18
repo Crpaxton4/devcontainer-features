@@ -1,3 +1,29 @@
+[profiles]
+claude-code = "$claude_context$directory$git_branch$claude_cost"
+
+[claude_context]
+gauge_width = 5
+format = "[$gauge $percentage]($style) "
+
+[[claude_context.display]]
+threshold = 0
+style = "white"
+
+[[claude_context.display]]
+threshold = 80
+style = "yellow"
+
+[[claude_context.display]]
+threshold = 90
+style = "red"
+
+[claude_cost]
+format = "[+$lines_added/-$lines_removed]($style) "
+
+[[claude_cost.display]]
+threshold = 0.0
+style = "white"
+
 [git_branch]
 symbol = "⎇ "
 format = "⎇ [$branch]($style) "
@@ -15,6 +41,9 @@ modified = "~"
 staged = "+"
 renamed = "»"
 deleted = "✗"
+
+[nodejs]
+format = "[$version]($style) "
 
 [package]
 disabled = true
