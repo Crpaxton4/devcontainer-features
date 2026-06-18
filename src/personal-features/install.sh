@@ -197,9 +197,7 @@ wait
 
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
-mkdir -p "$_REMOTE_USER_HOME/.config"
-cp "$(dirname "$0")/starship.toml" "$_REMOTE_USER_HOME/.config/starship.toml"
-chown -R "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
+cp "$(dirname "$0")/starship.toml" /usr/local/share/starship.toml
 
 SHELL_HISTORY_DIR="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_DIR"
@@ -213,6 +211,7 @@ chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
 SNIPPET_BEGIN="# >>> personal-features >>>"
 SNIPPET="$(cat << 'EOF'
 # >>> personal-features >>>
+export STARSHIP_CONFIG=/usr/local/share/starship.toml
 command -v starship >/dev/null 2>&1 && eval "$(starship init $(basename "$SHELL"))"
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init $(basename "$SHELL"))"
 command -v bat >/dev/null 2>&1 && alias cat=bat
@@ -222,9 +221,10 @@ command -v eza >/dev/null 2>&1 && alias ls=eza
 EOF
 )"
 
-for RC_FILE in "$_REMOTE_USER_HOME/.bashrc" "$_REMOTE_USER_HOME/.zshrc"; do
-    touch "$RC_FILE"
-    grep -qF "$SNIPPET_BEGIN" "$RC_FILE" 2>/dev/null && continue
-    printf '\n%s\n' "$SNIPPET" >> "$RC_FILE"
-    chown "$_REMOTE_USER" "$RC_FILE"
-done
+grep -qF "$SNIPPET_BEGIN" /etc/bash.bashrc 2>/dev/null || printf '\n%s\n' "$SNIPPET" >> /etc/bash.bashrc
+
+if command -v zsh >/dev/null 2>&1; then
+    mkdir -p /etc/zsh
+    touch /etc/zsh/zshrc
+    grep -qF "$SNIPPET_BEGIN" /etc/zsh/zshrc 2>/dev/null || printf '\n%s\n' "$SNIPPET" >> /etc/zsh/zshrc
+fi
