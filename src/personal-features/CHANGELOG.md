@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.6.0...personal-features-v1.7.0) (2026-06-18)
+
+
+### Features
+
+* **personal-features:** claude statusline ([#28](https://github.com/Crpaxton4/devcontainer-features/issues/28)) ([185de36](https://github.com/Crpaxton4/devcontainer-features/commit/185de36ef1b3ef6c42b55ea8b3379825eeee9124))
+
 ## [1.6.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.5.0...personal-features-v1.6.0) (2026-06-17)
 
 
