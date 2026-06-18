@@ -32,9 +32,10 @@ if [ -d /usr/local/share/nvm/current/bin ]; then
 fi
 
 NODE_BIN="$(command -v node || true)"
+NODE_VERSION="$( [ -n "$NODE_BIN" ] && "$NODE_BIN" --version 2>/dev/null || echo 'n/a')"
 NODE_MAJOR="$( [ -n "$NODE_BIN" ] && "$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-if [ -z "$NODE_BIN" ] || [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
-    echo "ERROR: personal-features requires Node.js >=18 on PATH to install @anthropic-ai/claude-code, but found: ${NODE_BIN:-no node on PATH} ($("$NODE_BIN" --version 2>/dev/null || echo 'n/a'))." >&2
+if [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
+    echo "ERROR: personal-features requires Node.js >=18 on PATH to install @anthropic-ai/claude-code, but found: ${NODE_BIN:-no node on PATH} ($NODE_VERSION)." >&2
     echo "This Feature depends on ghcr.io/devcontainers/features/node, but Feature install order across base images/configs is not guaranteed - some base images (e.g. Odoo's) bundle their own old Node ahead of it on PATH. Add or pin a Node >=18 Feature explicitly in your devcontainer.json (or dev.containers.defaultFeatures), and ensure it installs before personal-features." >&2
     exit 1
 fi
@@ -77,25 +78,12 @@ chmod +x "$WRAPPER_PATH"
 # option. Independent of the Claude/Node logic above: installs via apt or
 # static binaries, no dependency on Node being present.
 
-APT_UPDATED=false
-apt_update_once() {
-    if [ "$APT_UPDATED" = false ]; then
-        apt-get update -y
-        APT_UPDATED=true
-    fi
-}
-
 DPKG_ARCH="$(dpkg --print-architecture)" # amd64 | arm64
-
-# Maps DPKG_ARCH to the arch string a given tool's release assets use, e.g.
-# `tool_arch amd64 arm64` echoes "amd64" or "arm64" depending on DPKG_ARCH;
-# `tool_arch x86_64 aarch64` echoes the GNU-triple style some tools use.
-tool_arch() {
-    case "$DPKG_ARCH" in
-        amd64) echo "$1" ;;
-        arm64) echo "$2" ;;
-    esac
-}
+case "$DPKG_ARCH" in
+    amd64) ARCH_DEB=amd64; ARCH_GNU=x86_64; ARCH_SHORT=x64 ;;
+    arm64) ARCH_DEB=arm64; ARCH_GNU=aarch64; ARCH_SHORT=arm64 ;;
+    *) echo "ERROR: unsupported architecture: $DPKG_ARCH" >&2; exit 1 ;;
+esac
 
 # Looks up the first release asset URL matching a regex against the latest
 # GitHub release of $1.
@@ -107,29 +95,29 @@ gh_latest_asset_url() {
         | head -1
 }
 
-# Installs a single-file GitHub release asset as an executable at $3.
+# Installs a GitHub release asset. With $3, downloads a single binary to that
+# path; without $3, extracts a .tar.gz directly into /usr/local/bin.
 # Best-effort: these are optional, non-Claude tools, so a failure here warns
 # and continues rather than failing the whole install.
-install_gh_release_bin() {
+install_gh_release() {
     URL="$(gh_latest_asset_url "$1" "$2")"
-    if [ -z "$URL" ] || ! curl -fsSL "$URL" -o "$3"; then
-        echo "WARNING: failed to install $3 from $1, skipping" >&2
+    if [ -z "$URL" ]; then
+        echo "WARNING: failed to install $1, skipping" >&2
         return
     fi
-    chmod +x "$3"
-}
-
-# Installs a .tar.gz GitHub release asset by extracting it directly into
-# /usr/local/bin. Same best-effort behavior as install_gh_release_bin.
-install_gh_release_tar() {
-    URL="$(gh_latest_asset_url "$1" "$2")"
-    if [ -z "$URL" ] || ! curl -fsSL "$URL" | tar -xz -C /usr/local/bin; then
-        echo "WARNING: failed to install $1, skipping" >&2
+    if [ -n "${3-}" ]; then
+        if curl -fsSL "$URL" -o "$3"; then
+            chmod +x "$3"
+        else
+            echo "WARNING: failed to install $1, skipping" >&2
+        fi
+    else
+        curl -fsSL "$URL" | tar -xz -C /usr/local/bin || echo "WARNING: failed to install $1, skipping" >&2
     fi
 }
 
 echo "Installing productivity/navigation CLI tools"
-apt_update_once
+apt-get update -y
 apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
 
 # Debian/Ubuntu's apt packages ship these under different binary names to
@@ -139,12 +127,12 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
 
 # Run all binary downloads in parallel — they're independent and each blocks
 # on a GitHub API call + download, so sequential execution wastes wall time.
-install_gh_release_bin mikefarah/yq "yq_linux_$(tool_arch amd64 arm64)\$" /usr/local/bin/yq &
-install_gh_release_tar eza-community/eza "eza_$(tool_arch x86_64 aarch64)-unknown-linux-gnu\\.tar\\.gz\$" &
-install_gh_release_bin dbrgn/tealdeer "tealdeer-linux-$(tool_arch x86_64 aarch64)-musl\$" /usr/local/bin/tldr &
+install_gh_release mikefarah/yq "yq_linux_${ARCH_DEB}\$" /usr/local/bin/yq &
+install_gh_release eza-community/eza "eza_${ARCH_GNU}-unknown-linux-gnu\\.tar\\.gz\$" &
+install_gh_release dbrgn/tealdeer "tealdeer-linux-${ARCH_GNU}-musl\$" /usr/local/bin/tldr &
 ( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
     || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
-install_gh_release_tar gitleaks/gitleaks "linux_$(tool_arch x64 arm64)\\.tar\\.gz\$" &
+install_gh_release gitleaks/gitleaks "linux_${ARCH_SHORT}\\.tar\\.gz\$" &
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -201,30 +189,21 @@ cp "$(dirname "$0")/starship.toml" /usr/local/share/starship.toml
 
 SHELL_HISTORY_DIR="/usr/local/share/shell-history"
 mkdir -p "$SHELL_HISTORY_DIR"
-for HIST in bash_history zsh_history; do
-    touch "$SHELL_HISTORY_DIR/$HIST"
-    rm -f "$_REMOTE_USER_HOME/.$HIST"
-    ln -s "$SHELL_HISTORY_DIR/$HIST" "$_REMOTE_USER_HOME/.$HIST"
-done
+touch "$SHELL_HISTORY_DIR/bash_history"
+rm -f "$_REMOTE_USER_HOME/.bash_history"
+ln -s "$SHELL_HISTORY_DIR/bash_history" "$_REMOTE_USER_HOME/.bash_history"
 chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
 
-SNIPPET_BEGIN="# >>> personal-features >>>"
-SNIPPET="$(cat << 'EOF'
+if ! grep -qF "# >>> personal-features >>>" /etc/bash.bashrc 2>/dev/null; then
+    printf '\n' >> /etc/bash.bashrc
+    cat >> /etc/bash.bashrc << 'EOF'
 # >>> personal-features >>>
 export STARSHIP_CONFIG=/usr/local/share/starship.toml
-command -v starship >/dev/null 2>&1 && eval "$(starship init $(basename "$SHELL"))"
-command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init $(basename "$SHELL"))"
+command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"
+command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init bash)"
 command -v bat >/dev/null 2>&1 && alias cat=bat
 command -v fd >/dev/null 2>&1 && alias find=fd
 command -v eza >/dev/null 2>&1 && alias ls=eza
 # <<< personal-features <<<
 EOF
-)"
-
-grep -qF "$SNIPPET_BEGIN" /etc/bash.bashrc 2>/dev/null || printf '\n%s\n' "$SNIPPET" >> /etc/bash.bashrc
-
-if command -v zsh >/dev/null 2>&1; then
-    mkdir -p /etc/zsh
-    touch /etc/zsh/zshrc
-    grep -qF "$SNIPPET_BEGIN" /etc/zsh/zshrc 2>/dev/null || printf '\n%s\n' "$SNIPPET" >> /etc/zsh/zshrc
 fi

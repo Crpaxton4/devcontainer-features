@@ -32,11 +32,6 @@
             "source": "${localEnv:HOME}/.bash_history",
             "target": "/usr/local/share/shell-history/bash_history",
             "type": "bind"
-        },
-        {
-            "source": "${localEnv:HOME}/.zsh_history",
-            "target": "/usr/local/share/shell-history/zsh_history",
-            "type": "bind"
         }
     ]
 }
