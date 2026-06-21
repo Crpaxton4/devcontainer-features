@@ -59,24 +59,25 @@ echo ""
 
 info "Step 1: Copying repos to isolated temp dir..."
 cp -r "$ORIGINAL_DCF" "$TEMP_DCF"
-cp -r "$ORIGINAL_ODOO" "$TEMP_ODOO"
+# Suppress symlink errors from .venv (symlinks to Python executables fail in temp dirs)
+cp -r "$ORIGINAL_ODOO" "$TEMP_ODOO" 2>/dev/null || true
+rm -rf "$TEMP_ODOO/.venv"  # Remove broken venv; uv sync will recreate it during tests
+[[ -d "$TEMP_ODOO/.git" ]] || { echo "[ERROR] odoo_sdk copy failed (.git missing)"; exit 1; }
 ok "devcontainer-features → $TEMP_DCF"
-ok "odoo_sdk              → $TEMP_ODOO"
+ok "odoo_sdk              → $TEMP_ODOO  (.venv excluded)"
 
 # ─── Step 2: Commit untracked scripts ────────────────────────────────────────
 # merge-odoo-sdk.sh requires a clean working tree before running.
 # The merge scripts are currently untracked; commit them in the temp copy.
 
-info "Step 2: Preparing temp devcontainer-features (committing untracked files)..."
-UNTRACKED=$(git -C "$TEMP_DCF" status --porcelain | awk '/^\?\?/ {print $2}')
-if [[ -n "$UNTRACKED" ]]; then
-  echo "$UNTRACKED" | xargs git -C "$TEMP_DCF" add
+info "Step 2: Preparing temp devcontainer-features (committing pending changes)..."
+if [[ -n "$(git -C "$TEMP_DCF" status --porcelain)" ]]; then
+  git -C "$TEMP_DCF" add -A
   git -C "$TEMP_DCF" \
     -c user.email="test@test.local" \
     -c user.name="Test Runner" \
     commit -q -m "test: stage merge scripts"
-  FILE_COUNT=$(echo "$UNTRACKED" | wc -l | tr -d ' ')
-  ok "Committed $FILE_COUNT untracked file(s): $(echo "$UNTRACKED" | tr '\n' ' ')"
+  ok "Committed all pending changes in temp copy"
 else
   ok "Working tree already clean"
 fi
@@ -195,9 +196,9 @@ check_contains   "devcontainer.json: Python 3.13 base image" \
 check_contains   "devcontainer.json: docker-in-docker feature" \
   ".devcontainer/devcontainer.json" "docker-in-docker"
 check_contains   "devcontainer.json: uv feature" \
-  ".devcontainer/devcontainer.json" '"uv"'
+  ".devcontainer/devcontainer.json" "/uv:"
 check_contains   "devcontainer.json: node feature" \
-  ".devcontainer/devcontainer.json" '"node"'
+  ".devcontainer/devcontainer.json" "/node:"
 check_contains   "devcontainer.json: test/odoo_sdk in unittestArgs" \
   ".devcontainer/devcontainer.json" "test/odoo_sdk"
 check_contains   ".gitignore: __pycache__ deny entry added" \

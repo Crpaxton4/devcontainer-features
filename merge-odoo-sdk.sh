@@ -75,7 +75,7 @@ ok "Prerequisites OK"
 
 info "Step 1: Cloning odoo_sdk ($ODOO_SDK_BRANCH) → temp dir..."
 rm -rf "$TEMP_CLONE"
-git clone --branch "$ODOO_SDK_BRANCH" "$ODOO_SDK_PATH" "$TEMP_CLONE" --quiet
+git clone --branch "$ODOO_SDK_BRANCH" --no-local "$ODOO_SDK_PATH" "$TEMP_CLONE" --quiet
 ok "Cloned to $TEMP_CLONE"
 
 info "Step 1b: Remapping tests/ → test/odoo_sdk/ via git filter-repo..."
