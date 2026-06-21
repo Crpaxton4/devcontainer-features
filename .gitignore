@@ -4,3 +4,16 @@ CLAUDE.md
 
 # Node
 node_modules/
+
+# Python (consolidated from odoo_sdk)
+**/__pycache__/
+*.py[cod]
+.venv/
+docs/build/
+docs/source/api/
+.hypothesis/
+.cosmic-ray/
+reports/
+*.egg-info/
+.coverage
+.complexipy_cache/

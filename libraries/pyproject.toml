@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo_sdk"
+version = "0.1.0"
+description = "Python SDK for Odoo XML-RPC access and command dispatch helpers."
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.4.2",
+    "pydantic>=2.13.4",
+]
+
+[dependency-groups]
+static-analysis = [
+    "black>=24.10.0",
+    "complexipy>=5.5.0",
+    "pygount>=3.2.0",
+    "radon>=6.0.1",
+]
+docs = [
+    "furo>=2024.8.6",
+    "myst-parser>=5.1.0",
+    "sphinx>=9.1.0",
+    "sphinx-autodoc-typehints>=3.11.0",
+]
+test = [
+    "coverage[toml]>=7.6.0",
+    "hypothesis>=6.0.0",
+    "cosmic-ray>=8.4.6",
+]
+dev = [
+    {include-group = "static-analysis"},
+    {include-group = "docs"},
+    {include-group = "test"},
+]
+
+[project.scripts]
+odoo-mcp = "odoo_sdk.mcp.__main__:main"
+
+[tool.setuptools]
+packages = [
+    "odoo_sdk",
+    "odoo_sdk.commands",
+    "odoo_sdk.commands.builtin",
+    "odoo_sdk.client",
+    "odoo_sdk.transport",
+    "odoo_sdk.config",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
+    "odoo_sdk.env",
+    "odoo_sdk.mcp",
+]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.setuptools.package-dir]
+"odoo_sdk" = "src/odoo_sdk"
+"odoo_sdk.commands" = "src/odoo_sdk/commands"
+"odoo_sdk.commands.builtin" = "src/odoo_sdk/commands/builtin"
+"odoo_sdk.client" = "src/odoo_sdk/client"
+"odoo_sdk.transport" = "src/odoo_sdk/transport"
+"odoo_sdk.config" = "src/odoo_sdk/config"
+"odoo_sdk.records" = "src/odoo_sdk/records"
+"odoo_sdk.query" = "src/odoo_sdk/query"
+"odoo_sdk.fields" = "src/odoo_sdk/fields"
+"odoo_sdk.env" = "src/odoo_sdk/env"
+"odoo_sdk.mcp" = "src/odoo_sdk/mcp"
+
+[tool.black]
+target-version = ["py313"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/odoo_sdk"]
+omit = ["*/tests/odoo_sdk/*", "*/examples/*"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = "reports/coverage/html"
+
+[tool.coverage.json]
+output = "reports/coverage/coverage.json"
+pretty_print = true
+
+[tool.radon]
+exclude = "tests/*,examples/*"
+cc_min = "A"
+show_complexity = true
+average = true
+show_mi = true
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15
+exclude = ["tests", "examples", "build", "htmlcov"]
+output-format = ["json"]
+output = "reports/complexipy/"
+
+[tool.uv.workspace]
+members = [
+    ".",
+]
+
+[tool.uv.sources]
+odoo_sdk = { workspace = true }
