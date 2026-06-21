@@ -2,10 +2,9 @@
 module-path = "src"
 timeout = 120.0
 excluded-modules = [
-	"**/tests/**",
-	"**/examples/**", 
+	"**/examples/**",
 ]
-test-command = 'python -m unittest discover -s tests -p "test_*.py"'
+test-command = 'python -m unittest discover -s test/odoo_sdk -p "test_*.py" -t .'
 
 [cosmic-ray.distributor]
 name = "http"
