@@ -1,0 +1,8 @@
+graph LR
+    Consumer["Python consumer"] --> SDK["odoo_sdk"]
+    Extensions["Optional extensions"] --> SDK
+    SDK --> Common["common endpoint"]
+    SDK --> Object["object endpoint"]
+    Common --> Odoo["Odoo server"]
+    Object --> Odoo
+    Odoo --> Data["Odoo models and PostgreSQL"]

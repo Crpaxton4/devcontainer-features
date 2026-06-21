@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant User as Consumer code
+    participant Client as OdooClient
+    participant Env as OdooEnv
+    participant Meta as Metadata cache
+    participant Serializer as Domain and command serializer
+    participant Transport as XML-RPC transport
+    participant Odoo as Odoo server
+
+    User->>Client: resolve model
+    Client->>Env: create model handle with context
+    User->>Env: search or browse
+    Env->>Meta: request field metadata
+    alt metadata miss
+        Meta->>Transport: fields_get
+        Transport->>Odoo: execute_kw(fields_get)
+        Odoo-->>Meta: field metadata
+    end
+    Env->>Serializer: serialize domain, context, x2many commands
+    Serializer->>Transport: execute_kw(search, read, write, ...)
+    Transport->>Odoo: authenticated XML-RPC call
+    Odoo-->>Transport: raw payload
+    Transport-->>Env: raw response or fault
+    Env-->>User: recordset, ids, rows, or mapped error

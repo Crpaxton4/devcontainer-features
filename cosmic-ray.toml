@@ -1,0 +1,23 @@
+[cosmic-ray]
+module-path = "src"
+timeout = 120.0
+excluded-modules = [
+	"**/tests/**",
+	"**/examples/**", 
+]
+test-command = 'python -m unittest discover -s tests -p "test_*.py"'
+
+[cosmic-ray.distributor]
+name = "http"
+
+[cosmic-ray.distributor.http]
+worker-urls = [
+	"http://127.0.0.1:18101",
+	"http://127.0.0.1:18102",
+	"http://127.0.0.1:18103",
+	"http://127.0.0.1:18104",
+	"http://127.0.0.1:18105",
+	"http://127.0.0.1:18106",
+	"http://127.0.0.1:18107",
+	"http://127.0.0.1:18108",
+]

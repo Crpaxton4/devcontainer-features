@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "odoo_sdk: Prepare environment",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "uv venv --allow-existing .venv && uv sync"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "odoo_sdk: Run unit tests + coverage",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "uv run coverage run -m unittest -v && uv run coverage report && uv run coverage html"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Mutation Test",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "uv run ./scripts/mutation-test.sh"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "focus": true,
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

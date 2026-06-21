@@ -1,0 +1,9 @@
+graph TB
+    Workspace["Local workspace"] --> Tooling["uv, unittest, coverage, Cosmic Ray scripts"]
+    Tooling --> Examples["Examples and smoke tests"]
+    Tooling --> SDK["odoo_sdk source tree"]
+    Secrets["Local config or env vars"] --> Examples
+    Examples --> Net["HTTPS XML-RPC"]
+    SDK --> Net
+    Net --> Odoo["Odoo application server"]
+    Odoo --> DB["PostgreSQL database"]
