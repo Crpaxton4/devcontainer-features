@@ -52,7 +52,7 @@
         "python.testing.unittestEnabled": true,
         "python.testing.pytestEnabled": false,
         "python.testing.cwd": "${workspaceFolder}",
-        "python.testing.unittestArgs": ["-v", "-s", "test/odoo_sdk", "-p", "test_*.py", "-t", "."],
+        "python.testing.unittestArgs": ["-v", "-s", "tests/odoo_sdk", "-p", "test_*.py", "-t", "."],
         "testing.coverageToolbarEnabled": false,
         "testing.gutterEnabled": true,
         "testing.showCoverageInExplorer": true,

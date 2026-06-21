@@ -9,7 +9,7 @@ timeout = 120.0
 excluded-modules = [
 	"**/examples/**",
 ]
-test-command = 'python -m unittest discover -s test/odoo_sdk -p "test_*.py" -t .'
+test-command = 'python -m unittest discover -s tests/odoo_sdk -p "test_*.py" -t .'
 
 [cosmic-ray.distributor]
 name = "local"

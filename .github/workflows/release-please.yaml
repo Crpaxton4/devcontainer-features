@@ -12,7 +12,7 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      personal_features_release_created: ${{ steps.release.outputs['features/src/personal-features--release_created'] }}
+      personal_features_release_created: ${{ steps.release.outputs['devcontainer-features/src/personal-features--release_created'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release

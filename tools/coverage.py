@@ -9,7 +9,7 @@ def main():
     subprocess.run(
         [
             "coverage", "run", "-m", "unittest",
-            "discover", "-s", "test/odoo_sdk", "-p", "test_*.py", "-t", ".",
+            "discover", "-s", "tests/odoo_sdk", "-p", "test_*.py", "-t", ".",
         ],
         check=True,
     )

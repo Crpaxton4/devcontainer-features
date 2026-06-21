@@ -76,7 +76,7 @@ target-version = ["py313"]
 [tool.coverage.run]
 branch = true
 source = ["src/odoo_sdk"]
-omit = ["*/test/odoo_sdk/*", "*/examples/*"]
+omit = ["*/tests/odoo_sdk/*", "*/examples/*"]
 
 [tool.coverage.report]
 fail_under = 90

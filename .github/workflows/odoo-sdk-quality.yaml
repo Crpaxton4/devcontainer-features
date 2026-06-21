@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'src/odoo_sdk/**'
-      - 'test/odoo_sdk/**'
+      - 'tests/odoo_sdk/**'
       - 'pyproject.toml'
       - 'tools/**'
       - 'cosmic-ray*.toml'
@@ -14,7 +14,7 @@ on:
   pull_request:
     paths:
       - 'src/odoo_sdk/**'
-      - 'test/odoo_sdk/**'
+      - 'tests/odoo_sdk/**'
       - 'pyproject.toml'
       - 'tools/**'
       - 'cosmic-ray*.toml'
