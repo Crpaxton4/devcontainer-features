@@ -11,9 +11,6 @@
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
   },
-  "mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/vscode-config/tasks.json,target=${containerWorkspaceFolder}/.vscode/tasks.json,type=bind,consistency=cached"
-  ],
   "updateContentCommand": "npm install -g @devcontainers/cli",
   "remoteUser": "vscode",
   "customizations": {
