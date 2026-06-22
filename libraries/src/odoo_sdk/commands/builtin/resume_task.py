@@ -1,0 +1,39 @@
+from datetime import datetime, timezone
+from typing import Any
+
+from ..command import Command
+from odoo_sdk.task_tracker.env_check import assert_odoo_devcontainer
+from odoo_sdk.task_tracker.odoo_ops import post_chatter_note
+from odoo_sdk.task_tracker.state import TaskStateDB
+
+
+class ResumeTaskCommand(Command):
+    """Resume a task session that is AWAITING_ANSWERS, transitioning it back to RUNNING."""
+
+    _name = "resume_task"
+    _description = (
+        "Resume an AWAITING_ANSWERS task session after receiving stakeholder answers. "
+        "Posts a chatter note and transitions the session back to RUNNING."
+    )
+
+    def execute(self, task_id: int) -> dict[str, Any]:
+        """Transition task from AWAITING_ANSWERS to RUNNING.
+
+        :param task_id: Odoo project.task record id.
+        :return: Confirmation with task name and resumed_at timestamp.
+        """
+        assert_odoo_devcontainer()
+        db = TaskStateDB()
+        session = db.transition_to_running(task_id)
+        post_chatter_note(
+            self._client,
+            task_id,
+            "Resuming implementation with received answers.",
+        )
+        resumed_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "task_name": session.task_name,
+            "project_name": session.project_name,
+            "state": session.state.value,
+            "resumed_at": resumed_at,
+        }

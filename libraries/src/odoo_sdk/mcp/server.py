@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import inspect
 from typing import Any
@@ -82,9 +83,14 @@ class OdooMCPServer:
 
         execute = command.execute
 
-        @functools.wraps(execute)
-        def tool_fn(*args: Any, **kwargs: Any) -> Any:
-            return command.execute(*args, **kwargs)
+        if asyncio.iscoroutinefunction(execute):
+            @functools.wraps(execute)
+            async def tool_fn(*args: Any, **kwargs: Any) -> Any:
+                return await command.execute(*args, **kwargs)
+        else:
+            @functools.wraps(execute)
+            def tool_fn(*args: Any, **kwargs: Any) -> Any:
+                return command.execute(*args, **kwargs)
 
         tool_fn.__signature__ = inspect.signature(execute)
         description = command.description or inspect.getdoc(execute)

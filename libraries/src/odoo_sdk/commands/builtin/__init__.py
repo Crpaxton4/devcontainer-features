@@ -12,6 +12,13 @@ from .get_models import GetModelsCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
+from .resume_task import ResumeTaskCommand
+from .start_task import StartTaskCommand
+from .stop_task import StopTaskCommand
+from .task_list import TaskListCommand
+from .task_note import TaskNoteCommand
+from .task_question import TaskQuestionCommand
+from .task_status import TaskStatusCommand
 
 BUILTIN_COMMANDS = {
     "get_uid": GetUidCommand,
@@ -19,6 +26,13 @@ BUILTIN_COMMANDS = {
     "get_tasks": GetTasksCommand,
     "get_todo": GetTodoCommand,
     "create_task": CreateTaskCommand,
+    "start_task": StartTaskCommand,
+    "stop_task": StopTaskCommand,
+    "resume_task": ResumeTaskCommand,
+    "task_status": TaskStatusCommand,
+    "task_note": TaskNoteCommand,
+    "task_list": TaskListCommand,
+    "task_question": TaskQuestionCommand,
 }
 
 
@@ -44,4 +58,11 @@ __all__ = [
     "GetTasksCommand",
     "GetTodoCommand",
     "CreateTaskCommand",
+    "StartTaskCommand",
+    "StopTaskCommand",
+    "ResumeTaskCommand",
+    "TaskStatusCommand",
+    "TaskNoteCommand",
+    "TaskListCommand",
+    "TaskQuestionCommand",
 ]
