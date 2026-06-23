@@ -1,5 +1,5 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/python:3.13",
+  "image": "mcr.microsoft.com/devcontainers/python:3.13-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:3": {
       "installDockerBuildx": false
@@ -52,7 +52,15 @@
         "python.testing.unittestEnabled": true,
         "python.testing.pytestEnabled": false,
         "python.testing.cwd": "${workspaceFolder}/libraries",
-        "python.testing.unittestArgs": ["-v", "-s", "tests/odoo_sdk", "-p", "test_*.py", "-t", "."],
+        "python.testing.unittestArgs": [
+          "-v",
+          "-s",
+          "tests/odoo_sdk",
+          "-p",
+          "test_*.py",
+          "-t",
+          "."
+        ],
         "testing.coverageToolbarEnabled": false,
         "testing.gutterEnabled": true,
         "testing.showCoverageInExplorer": true,
