@@ -34,6 +34,7 @@ dev = [
     {include-group = "static-analysis"},
     {include-group = "docs"},
     {include-group = "test"},
+    "pytest>=9.1.1",
 ]
 
 [project.scripts]
@@ -52,6 +53,8 @@ packages = [
     "odoo_sdk.fields",
     "odoo_sdk.env",
     "odoo_sdk.mcp",
+    "odoo_sdk.task_tracker",
+    "odoo_sdk.cli",
 ]
 
 [tool.setuptools.package-data]
@@ -69,6 +72,8 @@ packages = [
 "odoo_sdk.fields" = "src/odoo_sdk/fields"
 "odoo_sdk.env" = "src/odoo_sdk/env"
 "odoo_sdk.mcp" = "src/odoo_sdk/mcp"
+"odoo_sdk.task_tracker" = "src/odoo_sdk/task_tracker"
+"odoo_sdk.cli" = "src/odoo_sdk/cli"
 
 [tool.black]
 target-version = ["py313"]
