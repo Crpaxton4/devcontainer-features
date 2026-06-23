@@ -43,40 +43,15 @@ dev = [
 [project.scripts]
 odoo-mcp = "odoo_sdk.mcp.__main__:main"
 
-[tool.setuptools]
-packages = [
-    "odoo_sdk",
-    "odoo_sdk.commands",
-    "odoo_sdk.commands.builtin",
-    "odoo_sdk.client",
-    "odoo_sdk.transport",
-    "odoo_sdk.config",
-    "odoo_sdk.records",
-    "odoo_sdk.query",
-    "odoo_sdk.fields",
-    "odoo_sdk.env",
-    "odoo_sdk.mcp",
-    "odoo_sdk.task_tracker",
-    "odoo_sdk.cli",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
 
-[tool.setuptools.package-dir]
-"odoo_sdk" = "src/odoo_sdk"
-"odoo_sdk.commands" = "src/odoo_sdk/commands"
-"odoo_sdk.commands.builtin" = "src/odoo_sdk/commands/builtin"
-"odoo_sdk.client" = "src/odoo_sdk/client"
-"odoo_sdk.transport" = "src/odoo_sdk/transport"
-"odoo_sdk.config" = "src/odoo_sdk/config"
-"odoo_sdk.records" = "src/odoo_sdk/records"
-"odoo_sdk.query" = "src/odoo_sdk/query"
-"odoo_sdk.fields" = "src/odoo_sdk/fields"
-"odoo_sdk.env" = "src/odoo_sdk/env"
-"odoo_sdk.mcp" = "src/odoo_sdk/mcp"
-"odoo_sdk.task_tracker" = "src/odoo_sdk/task_tracker"
-"odoo_sdk.cli" = "src/odoo_sdk/cli"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
 
 [tool.black]
 target-version = ["py313"]
