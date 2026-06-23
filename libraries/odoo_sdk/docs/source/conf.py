@@ -60,7 +60,7 @@ html_extra_path = ["design/odoo-sdk-architecture-diagrams.html"]
 # whatever directory `sphinx-build` was invoked from, not against this file.
 
 _SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.abspath(os.path.join(_SOURCE_DIR, "..", "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(_SOURCE_DIR, "..", ".."))
 _PACKAGE_DIR = os.path.join(_REPO_ROOT, "src", "odoo_sdk")
 _API_OUT_DIR = os.path.join(_SOURCE_DIR, "api")
 

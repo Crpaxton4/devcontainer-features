@@ -48,28 +48,28 @@ docs: linkcheck html
 # Core test execution
 # ─────────────────────────────────────────────
 coverage:
-	$(PYTHON_CMD) tools/odoo_sdk/coverage.py
+	$(PYTHON_CMD) tools/coverage.py
 
 # ─────────────────────────────────────────────
 # Static analysis
 # ─────────────────────────────────────────────
 
 static:
-	$(PYTHON_CMD) tools/odoo_sdk/static_analysis.py
+	$(PYTHON_CMD) tools/static_analysis.py
 
 # ─────────────────────────────────────────────
 # Mutation testing
 # ─────────────────────────────────────────────
 
 mutation:
-	$(PYTHON_CMD) tools/odoo_sdk/mutation.py
+	$(PYTHON_CMD) tools/mutation.py
 
 # ─────────────────────────────────────────────
 # Report generation
 # ─────────────────────────────────────────────
 
 report:
-	$(PYTHON_CMD) tools/odoo_sdk/report.py
+	$(PYTHON_CMD) tools/report.py
 
 # ─────────────────────────────────────────────
 # Full quality pipeline
