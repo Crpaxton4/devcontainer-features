@@ -71,6 +71,21 @@ esac
 EOF
 chmod +x "$WRAPPER_PATH"
 
+# --- Python libraries -------------------------------------------------------
+# Wheels are bundled into this feature at release time. Install them system-wide
+# so they're available in every project in the container without a venv.
+FEATURE_DIR="$(dirname "$0")"
+for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
+    [ -f "$wheel" ] || continue
+    if command -v uv >/dev/null 2>&1; then
+        uv pip install --system "$wheel"
+    elif command -v pip3 >/dev/null 2>&1; then
+        pip3 install --break-system-packages "$wheel"
+    else
+        echo "WARNING: no pip available, skipping Python library installation" >&2
+    fi
+done
+
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
 # config, not a general-purpose toolkit, so none of this is optional. If a
