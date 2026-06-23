@@ -8,6 +8,9 @@
     "ghcr.io/devcontainers/features/node:1": {
       "version": "lts"
     },
+    "ghcr.io/devcontainers/features/apt-packages:1": {
+      "packages": "pandoc"
+    },
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
   },
@@ -22,6 +25,8 @@
         "ms-python.vscode-python-envs",
         "ms-python.python",
         "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.vscode-jupyter-slideshow",
         "njpwerner.autodocstring",
         "coderabbit.coderabbit-vscode",
         "ms-python.isort"
