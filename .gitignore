@@ -10,10 +10,13 @@ node_modules/
 *.py[cod]
 .venv/
 docs/build/
-docs/source/api/
+libraries/docs/odoo_sdk/source/api/
 .hypothesis/
 .cosmic-ray/
 reports/
 *.egg-info/
 .coverage
 .complexipy_cache/
+
+# Secrets
+.odoo_sdk.ini
