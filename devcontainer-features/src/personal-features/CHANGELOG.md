@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.8.0...personal-features-v1.9.0) (2026-06-23)
+
+
+### Features
+
+* consolidate odoo_sdk into devcontainer-features monorepo ([#36](https://github.com/Crpaxton4/devcontainer-features/issues/36)) ([57968b0](https://github.com/Crpaxton4/devcontainer-features/commit/57968b06d7d7928f91b8c1af447fd8126a153d10))
+
 ## [1.8.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.7.1...personal-features-v1.8.0) (2026-06-18)
 
 
