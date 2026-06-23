@@ -11,13 +11,14 @@ echo "Activating feature 'personal-features'"
 
 CLAUDE_HOME="/usr/local/share/claude-home"
 GH_CONFIG="/usr/local/share/gh-cli-config"
+ODOO_SDK_CONFIG="/usr/local/share/odoo-sdk-config"
 
 # Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
 # point at and that the bind mounts overlay at runtime. Creating them here
 # means the feature still works in test containers where no bind mounts are
 # active (e.g. the devcontainer features test harness).
-mkdir -p "$CLAUDE_HOME" "$GH_CONFIG"
-chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG"
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG"
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
@@ -208,6 +209,13 @@ touch "$SHELL_HISTORY_DIR/bash_history"
 rm -f "$_REMOTE_USER_HOME/.bash_history"
 ln -s "$SHELL_HISTORY_DIR/bash_history" "$_REMOTE_USER_HOME/.bash_history"
 chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
+
+# Symlink ~/.config/odoo_sdk → the bind-mount target so the SDK's XDG config
+# lookup resolves to the host-persisted config without needing an env-var override.
+mkdir -p "$_REMOTE_USER_HOME/.config"
+rm -rf "$_REMOTE_USER_HOME/.config/odoo_sdk"
+ln -s "$ODOO_SDK_CONFIG" "$_REMOTE_USER_HOME/.config/odoo_sdk"
+chown "$_REMOTE_USER" "$_REMOTE_USER_HOME/.config"
 
 if ! grep -qF "# >>> personal-features >>>" /etc/bash.bashrc 2>/dev/null; then
     printf '\n' >> /etc/bash.bashrc
