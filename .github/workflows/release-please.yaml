@@ -12,7 +12,7 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      personal_features_release_created: ${{ steps.release.outputs['devcontainer-features/src/personal-features--release_created'] }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -21,12 +21,9 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Merging the release PR that release-please opens cuts a GitHub Release,
-  # which should immediately publish the new Feature version to GHCR instead
-  # of waiting for someone to remember to run the manual workflow_dispatch.
-  publish:
+  publish-devcontainer:
     needs: release-please
-    if: ${{ needs.release-please.outputs.personal_features_release_created == 'true' }}
+    if: needs.release-please.outputs.releases_created == 'true'
     uses: ./.github/workflows/release.yaml
     permissions:
       contents: write
