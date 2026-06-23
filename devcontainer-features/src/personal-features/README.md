@@ -103,4 +103,4 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
 ---
 
-_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/Crpaxton4/devcontainer-features/blob/main/src/personal-features/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
+_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/Crpaxton4/devcontainer-features/blob/main/devcontainer-features/src/personal-features/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
