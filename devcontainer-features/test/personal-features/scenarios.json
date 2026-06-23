@@ -9,5 +9,15 @@
             "personal-features": {}
         },
         "remoteUser": "vscode"
+    },
+    "on_odoo_base_image": {
+        "image": "odoo:19",
+        "features": {
+            "ghcr.io/devcontainers/features/node:1": {
+                "version": "lts"
+            },
+            "personal-features": {}
+        },
+        "remoteUser": "root"
     }
 }

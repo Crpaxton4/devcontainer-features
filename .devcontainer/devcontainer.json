@@ -8,9 +8,6 @@
     "ghcr.io/devcontainers/features/node:1": {
       "version": "lts"
     },
-    "ghcr.io/devcontainers/features/apt-packages:1": {
-      "packages": "pandoc"
-    },
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
   },
@@ -19,6 +16,9 @@
   "remoteEnv": {
     "UV_PROJECT_ENVIRONMENT": "${containerWorkspaceFolder}/.venv"
   },
+  "runArgs": [
+    "--network=host"
+  ],
   "remoteUser": "vscode",
   "customizations": {
     "vscode": {
