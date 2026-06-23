@@ -12,7 +12,7 @@
                 },
                 {
                     "type": "toml",
-                    "path": "libraries/pyproject.toml",
+                    "path": "libraries/odoo_sdk/pyproject.toml",
                     "jsonpath": "$.project.version"
                 }
             ]

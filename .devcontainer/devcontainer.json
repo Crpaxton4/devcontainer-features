@@ -15,7 +15,7 @@
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
   },
   "updateContentCommand": "npm install -g @devcontainers/cli",
-  "postCreateCommand": "cd libraries && uv sync --group dev",
+  "postCreateCommand": "cd libraries/odoo_sdk && uv sync --group dev",
   "remoteEnv": {
     "UV_PROJECT_ENVIRONMENT": "${containerWorkspaceFolder}/.venv"
   },
@@ -59,8 +59,8 @@
         "isort.args": ["--profile", "black"],
         "python.testing.pytestEnabled": true,
         "python.testing.unittestEnabled": false,
-        "python.testing.cwd": "${workspaceFolder}/libraries",
-        "python.testing.pytestArgs": ["tests/odoo_sdk"],
+        "python.testing.cwd": "${workspaceFolder}/libraries/odoo_sdk",
+        "python.testing.pytestArgs": ["tests"],
         "testing.coverageToolbarEnabled": false,
         "testing.gutterEnabled": true,
         "testing.showCoverageInExplorer": true,

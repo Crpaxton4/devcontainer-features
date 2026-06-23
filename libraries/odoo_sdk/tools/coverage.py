@@ -7,7 +7,7 @@ COVERAGE_REPORT_DIR = ROOT / "reports" / "coverage"
 
 def main():
     subprocess.run(
-        ["coverage", "run", "-m", "pytest", "tests/odoo_sdk"],
+        ["coverage", "run", "-m", "pytest", "tests"],
         check=True,
     )
     subprocess.run(["coverage", "report"], check=True)

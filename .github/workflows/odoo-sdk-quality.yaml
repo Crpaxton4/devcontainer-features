@@ -5,25 +5,25 @@ on:
     branches:
       - main
     paths:
-      - 'libraries/src/odoo_sdk/**'
-      - 'libraries/tests/odoo_sdk/**'
-      - 'libraries/pyproject.toml'
-      - 'libraries/tools/**'
-      - 'libraries/cosmic-ray*.toml'
+      - 'libraries/odoo_sdk/src/**'
+      - 'libraries/odoo_sdk/tests/**'
+      - 'libraries/odoo_sdk/pyproject.toml'
+      - 'libraries/odoo_sdk/tools/**'
+      - 'libraries/odoo_sdk/cosmic-ray*.toml'
       - '.github/workflows/odoo-sdk-quality.yaml'
   pull_request:
     paths:
-      - 'libraries/src/odoo_sdk/**'
-      - 'libraries/tests/odoo_sdk/**'
-      - 'libraries/pyproject.toml'
-      - 'libraries/tools/**'
-      - 'libraries/cosmic-ray*.toml'
+      - 'libraries/odoo_sdk/src/**'
+      - 'libraries/odoo_sdk/tests/**'
+      - 'libraries/odoo_sdk/pyproject.toml'
+      - 'libraries/odoo_sdk/tools/**'
+      - 'libraries/odoo_sdk/cosmic-ray*.toml'
       - '.github/workflows/odoo-sdk-quality.yaml'
   workflow_dispatch:
 
 defaults:
   run:
-    working-directory: libraries
+    working-directory: libraries/odoo_sdk
 
 jobs:
   tests:
@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: libraries/reports/coverage/
+          path: libraries/odoo_sdk/reports/coverage/
 
   static:
     name: "Static Analysis"
@@ -72,7 +72,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: static-analysis-report
-          path: libraries/reports/
+          path: libraries/odoo_sdk/reports/
 
   mutation:
     name: "Mutation Testing"
@@ -105,4 +105,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutation-report
-          path: libraries/reports/mutation/
+          path: libraries/odoo_sdk/reports/mutation/
