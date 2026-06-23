@@ -23,6 +23,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx_autodoc_typehints",
     "myst_parser",
+    "nbsphinx",
 ]
 
 templates_path = ["_templates"]
@@ -34,6 +35,10 @@ source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
 }
+
+# Never execute notebooks during the docs build — cells require a live Odoo
+# connection and valid credentials that are not available in CI.
+nbsphinx_execute = "never"
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -55,7 +60,7 @@ html_extra_path = ["design/odoo-sdk-architecture-diagrams.html"]
 # whatever directory `sphinx-build` was invoked from, not against this file.
 
 _SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.abspath(os.path.join(_SOURCE_DIR, "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(_SOURCE_DIR, "..", "..", ".."))
 _PACKAGE_DIR = os.path.join(_REPO_ROOT, "src", "odoo_sdk")
 _API_OUT_DIR = os.path.join(_SOURCE_DIR, "api")
 

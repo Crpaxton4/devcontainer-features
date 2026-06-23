@@ -58,6 +58,7 @@ with `odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
 :maxdepth: 2
 :caption: Contents
 
+walkthrough
 api/modules
 design/index
 ```
