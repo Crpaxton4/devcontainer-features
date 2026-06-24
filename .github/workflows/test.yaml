@@ -34,7 +34,7 @@ jobs:
         run: npm install -g @devcontainers/cli
 
       - name: "Create bind mount source paths on runner"
-        run: mkdir -p ~/.claude ~/.config/gh && touch ~/.bash_history ~/.zsh_history
+        run: mkdir -p ~/.claude ~/.config/gh ~/.config/odoo_sdk && touch ~/.bash_history ~/.zsh_history
 
       - name: "Generating tests for '${{ matrix.features }}' against '${{ matrix.baseImage }}'"
         run: devcontainer features test -p ./devcontainer-features --skip-scenarios -f ${{ matrix.features }} -i ${{ matrix.baseImage }} .

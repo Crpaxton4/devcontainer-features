@@ -1,7 +1,7 @@
 {
     "name": "Personal Features",
     "id": "personal-features",
-    "version": "1.9.0",
+    "version": "1.10.0",
     "description": "Installs the owner's personal dev container tooling: Claude Code (wrapped to auto-connect to the IDE), productivity/navigation CLIs, gitleaks secret scanning, machine-wide Conventional Commits + secret-scanning git hooks, and shell enhancements (Starship, aliases, persisted history) - and persists Claude's, the gh CLI's, and shell history config across container rebuilds and across projects. This is the owner's personal, opinionated setup, not a configurable toolkit, so it has no options: tools are added or removed outright rather than gated behind flags.",
     "options": {},
     "dependsOn": {
@@ -26,6 +26,11 @@
         {
             "source": "${localEnv:HOME}/.config/gh",
             "target": "/usr/local/share/gh-cli-config",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}/.config/odoo_sdk",
+            "target": "/usr/local/share/odoo-sdk-config",
             "type": "bind"
         },
         {
