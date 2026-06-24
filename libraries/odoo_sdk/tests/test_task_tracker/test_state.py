@@ -299,17 +299,16 @@ class TestGetProjectDir(unittest.TestCase):
                 _get_project_dir()
 
     def test_creates_dir_from_remote_url(self):
+        mock_run = type("R", (), {"stdout": "git@github.com:org/repo.git\n"})()
         with (
-            patch(
-                "odoo_sdk.task_tracker.state.subprocess.run",
-                return_value=type("R", (), {"stdout": "git@github.com:org/repo.git\n"})(),
-            ),
+            patch("odoo_sdk.task_tracker.state.subprocess.run", return_value=mock_run),
             patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": "/tmp/tt-test"}),
             patch("odoo_sdk.task_tracker.state.Path.mkdir"),
         ):
-            path = _get_project_dir()
-        # Should be a subdir with a 16-char hex name
-        self.assertEqual(len(path.name), 16)
+            path1 = _get_project_dir()
+            path2 = _get_project_dir()
+        self.assertEqual(len(path1.name), 16)
+        self.assertEqual(path1, path2)
 
 
 if __name__ == "__main__":

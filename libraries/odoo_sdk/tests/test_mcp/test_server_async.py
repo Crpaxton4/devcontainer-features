@@ -53,7 +53,7 @@ class TestAsyncToolWrap(unittest.TestCase):
 
     def test_async_tool_returns_correct_result(self):
         _, added = _build_server(AsyncCommand)
-        result = asyncio.get_event_loop().run_until_complete(added[0].fn(value=5))
+        result = asyncio.run(added[0].fn(value=5))
         self.assertEqual(result, 10)
 
     def test_sync_tool_returns_correct_result(self):

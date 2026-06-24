@@ -186,8 +186,12 @@ class TestCmdNormalize(unittest.TestCase):
         db.stop_session(1)
         args = MagicMock(apply=False)
         captured = StringIO()
-        with patch("sys.stdout", captured):
+        with (
+            patch("sys.stdout", captured),
+            patch("odoo_sdk.cli.__main__.merge_timesheets") as mock_merge,
+        ):
             cli.cmd_normalize(db, args, _client())
+        mock_merge.assert_not_called()
         output = captured.getvalue()
         self.assertIn("Dry run", output)
         self.assertIn("[10, 11]", output)
