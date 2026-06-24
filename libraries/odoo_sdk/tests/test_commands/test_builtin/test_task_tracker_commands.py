@@ -259,7 +259,7 @@ class TestResumeTaskCommand(unittest.TestCase):
 
 class TestStartTaskCommand(unittest.TestCase):
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def _ctx(self, *responses) -> MagicMock:
         ctx = MagicMock()
@@ -508,7 +508,7 @@ class TestStartTaskCommand(unittest.TestCase):
 
 class TestStopTaskCommand(unittest.TestCase):
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def _ctx_accept(self, description: str) -> MagicMock:
         ctx = MagicMock()
