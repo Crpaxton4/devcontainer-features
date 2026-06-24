@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.0...personal-features-v1.10.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* **personal-features:** handle Debian-managed packages blocking pip on odoo:19 ([#50](https://github.com/Crpaxton4/devcontainer-features/issues/50)) ([9a9e986](https://github.com/Crpaxton4/devcontainer-features/commit/9a9e986a73f3d7db57b16e73973acace4dcd111b))
+
 ## [1.10.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.9.0...personal-features-v1.10.0) (2026-06-23)
 
 
