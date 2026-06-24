@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.1...personal-features-v1.10.2) (2026-06-24)
+
+
+### Bug Fixes
+
+* **personal-features:** replace odoo_sdk symlink with env var, pre-create task tracker dir ([#52](https://github.com/Crpaxton4/devcontainer-features/issues/52)) ([43556fd](https://github.com/Crpaxton4/devcontainer-features/commit/43556fd4d3083ff8f69cb852f501c886cb1dddbc))
+
 ## [1.10.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.0...personal-features-v1.10.1) (2026-06-24)
 
 
