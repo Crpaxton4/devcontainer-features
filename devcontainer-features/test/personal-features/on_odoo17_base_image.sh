@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Executed against the 'on_odoo17_base_image' scenario in scenarios.json, which
-# installs 'personal-features' on top of the official odoo:17 image. odoo:17
-# ships a pip version older than 22.1 that does not recognise
-# --break-system-packages; this scenario verifies the runtime capability check
-# in install.sh handles that gracefully.
+# Executed against the 'on_odoo17_base_image' scenario in scenarios.json.
+# odoo:17 ships Python 3.10 — the minimum version required by odoo_sdk (fastmcp
+# lower bound). This scenario is the canonical test for the Python 3.10 baseline:
+# odoo_sdk must install and import correctly, and install.sh must handle the
+# absence of --break-system-packages (pip <22.1) via its runtime capability check.
 
 set -e
 
