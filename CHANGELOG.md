@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.5](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.4...personal-features-v1.10.5) (2026-06-25)
+
+
+### Bug Fixes
+
+* **personal-features:** isolate odoo_sdk install to avoid system cryptography conflict ([#58](https://github.com/Crpaxton4/devcontainer-features/issues/58)) ([0492778](https://github.com/Crpaxton4/devcontainer-features/commit/0492778d59262dca951003e83cc40ca363c24859))
+
 ## [1.10.4](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.3...personal-features-v1.10.4) (2026-06-25)
 
 
