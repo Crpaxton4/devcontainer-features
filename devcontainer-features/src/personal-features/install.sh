@@ -74,28 +74,26 @@ EOF
 chmod +x "$WRAPPER_PATH"
 
 # --- Python libraries -------------------------------------------------------
-# Wheels are bundled into this feature at release time. Install them system-wide
-# so they're available in every project in the container without a venv.
-# odoo_sdk depends on fastmcp which requires Python 3.10+; skip silently on
-# older images (e.g. odoo:16) rather than aborting the whole feature install.
+# Wheels are bundled into this feature at release time. Installed as an isolated
+# tool (uv tool install / dedicated venv) to avoid touching system cryptography,
+# which would break pyOpenSSL on odoo:17 and earlier base images. odoo_sdk
+# depends on fastmcp which requires Python 3.10+; skip silently on older images.
 FEATURE_DIR="$(dirname "$0")"
 if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
     for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
         [ -f "$wheel" ] || continue
         if command -v uv >/dev/null 2>&1; then
-            uv pip install --system "$wheel"
+            # Isolated tool environment — system cryptography is never touched.
+            uv tool install --force \
+                --tool-dir /usr/local/share/uv/tools \
+                --bin-dir /usr/local/bin \
+                "$wheel"
         elif command -v pip3 >/dev/null 2>&1; then
-            # --ignore-installed prevents pip from trying to uninstall Debian-managed
-            # packages that lack a RECORD file (e.g. typing_extensions on odoo:19).
-            # pip installs to /usr/local/lib which precedes /usr/lib in sys.path,
-            # so the newer version is always loaded even when the Debian one remains.
-            # --break-system-packages is required on PEP-668 systems (pip 22.1+) but
-            # unrecognized on older pip — check at runtime.
-            if pip3 install --help 2>&1 | grep -q -- '--break-system-packages'; then
-                pip3 install --break-system-packages --ignore-installed "$wheel"
-            else
-                pip3 install --ignore-installed "$wheel"
-            fi
+            # Dedicated venv for the same isolation guarantee on pip-only images.
+            _SDK_VENV=/usr/local/lib/odoo-sdk-env
+            python3 -m venv "$_SDK_VENV"
+            "$_SDK_VENV/bin/pip" install "$wheel"
+            ln -sf "$_SDK_VENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
         else
             echo "WARNING: no pip available, skipping Python library installation" >&2
         fi

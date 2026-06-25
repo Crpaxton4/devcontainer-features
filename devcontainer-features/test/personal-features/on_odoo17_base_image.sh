@@ -1,10 +1,12 @@
 #!/bin/bash
 
 # Executed against the 'on_odoo17_base_image' scenario in scenarios.json.
-# odoo:17 ships Python 3.10 — the minimum version required by odoo_sdk (fastmcp
-# lower bound). This scenario is the canonical test for the Python 3.10 baseline:
-# odoo_sdk must install and import correctly, and install.sh must handle the
-# absence of --break-system-packages (pip <22.1) via its runtime capability check.
+# odoo:17 ships Python 3.10 — the minimum version required by odoo_sdk — and
+# pre-23.2.0 pyOpenSSL that references _lib.X509_V_FLAG_NOTIFY_POLICY. That
+# constant does not exist in cryptography 41+ (which uses OpenSSL 3.x CFFI
+# bindings), so installing cryptography 41+ system-wide would break odoo:17's
+# pyOpenSSL. The isolated install avoids this entirely: system cryptography is
+# never touched, and the OpenSSL check must pass to prove that.
 
 set -e
 
@@ -15,12 +17,12 @@ check "claude is on PATH and executable" bash -c "test -x \"\$(command -v claude
 check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 
-# odoo_sdk Python package: verify the full import succeeds without errors from
-# dependency version conflicts.
-check "odoo_sdk package is importable" python3 -c "import odoo_sdk"
+# odoo_sdk: installed into an isolated tool environment.
+check "odoo_sdk is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
 
-# Verify the public API is reachable end-to-end.
-check "odoo_sdk core API is accessible" python3 -c "
+check "odoo_sdk core API is accessible in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
 from odoo_sdk import (
     OdooClient,
     OdooConnectionSettings,
@@ -29,13 +31,13 @@ from odoo_sdk import (
     Domain,
     DomainExpression,
 )
-"
+'"
 
-# NOTE: the OpenSSL compat check present in the odoo:18/19 test scripts is
-# intentionally omitted here. odoo:17 ships a pre-23.2.0 pyOpenSSL that
-# references _lib.X509_V_FLAG_NOTIFY_POLICY, a constant not exposed by any
-# modern cryptography build. That is a base-image incompatibility unrelated to
-# our SDK; the cryptography<43 pin is only relevant for pyOpenSSL >=23.2.0.
+# System OpenSSL regression guard: this is the critical check for odoo:17.
+# If the isolated install accidentally upgraded system cryptography, pre-23.2.0
+# pyOpenSSL would fail here with AttributeError on X509_V_FLAG_NOTIFY_POLICY.
+check "system OpenSSL is intact (isolated install didn't touch cryptography)" \
+    python3 -c "from OpenSSL import SSL, crypto"
 
 # The odoo-mcp console script is the primary runtime entry point used in
 # devcontainers. Verify it is on PATH and executable.
