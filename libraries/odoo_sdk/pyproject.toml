@@ -11,7 +11,6 @@ dependencies = [
     "cryptography>=41.0.7,<43",
     "fastmcp>=3.4.2",
     "pydantic>=2.13.4",
-    "typing_extensions>=4.5; python_version < '3.11'",
 ]
 
 [dependency-groups]

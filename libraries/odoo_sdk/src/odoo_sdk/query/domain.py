@@ -6,11 +6,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias, Union
 
-try:
-    from typing import Self
-except ImportError:
-    from typing_extensions import Self  # Python 3.10 compat
-
 from odoo_sdk._utils import _is_sequence
 
 DomainCondition: TypeAlias = tuple[str, str, Any]
@@ -107,7 +102,7 @@ class DomainExpression:
     _nodes: tuple[DomainNode, ...] = ()
 
     @classmethod
-    def normalize(cls, domain: DomainInput) -> Self:
+    def normalize(cls, domain: DomainInput) -> DomainExpression:
         """Normalize supported domain input into a canonical expression object.
 
         This factory is necessary because callers may already hold a normalized
@@ -182,7 +177,7 @@ class DomainExpression:
         return all(_evaluate_node(record_values, node) for node in self._nodes)
 
     @classmethod
-    def AND(cls, iterable: Iterable[Any]) -> Self:
+    def AND(cls, iterable: Iterable[Any]) -> DomainExpression:
         """Combine an iterable of domains with logical AND.
 
         :param iterable: Iterable of ``DomainExpression`` instances or raw domain lists.
@@ -203,7 +198,7 @@ class DomainExpression:
         return cls((BooleanExpression("&", tuple(nodes)),))
 
     @classmethod
-    def OR(cls, iterable: Iterable[Any]) -> Self:
+    def OR(cls, iterable: Iterable[Any]) -> DomainExpression:
         """Combine an iterable of domains with logical OR.
 
         :param iterable: Iterable of ``DomainExpression`` instances or raw domain lists.
@@ -221,7 +216,7 @@ class DomainExpression:
         nodes = tuple(_to_domain_node(item) for item in items)
         return cls((BooleanExpression("|", nodes),))  # type: ignore[arg-type]
 
-    def __invert__(self) -> Self:
+    def __invert__(self) -> DomainExpression:
         """Return the logical negation of this domain.
 
         :return: New domain expression with a ``!`` node wrapping this expression.
@@ -233,7 +228,7 @@ class DomainExpression:
         assert node is not None
         return type(self)((BooleanExpression("!", (node,)),))
 
-    def __and__(self, other: Any) -> Self:
+    def __and__(self, other: Any) -> DomainExpression:
         """Return the logical AND of this domain and another.
 
         :param other: Another ``DomainExpression`` or raw domain list.
@@ -243,7 +238,7 @@ class DomainExpression:
         """
         return type(self).AND([self, type(self).normalize(other)])
 
-    def __or__(self, other: Any) -> Self:
+    def __or__(self, other: Any) -> DomainExpression:
         """Return the logical OR of this domain and another.
 
         :param other: Another ``DomainExpression`` or raw domain list.

@@ -2450,7 +2450,6 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastmcp" },
     { name = "pydantic" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 
 [package.dev-dependencies]
@@ -2501,7 +2500,6 @@ requires-dist = [
     { name = "cryptography", specifier = ">=41.0.7,<43" },
     { name = "fastmcp", specifier = ">=3.4.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.5" },
 ]
 
 [package.metadata.requires-dev]
