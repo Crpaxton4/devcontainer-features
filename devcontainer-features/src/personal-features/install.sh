@@ -75,11 +75,21 @@ chmod +x "$WRAPPER_PATH"
 
 # --- Python libraries -------------------------------------------------------
 # Wheels are bundled into this feature at release time. Installed as an isolated
-# tool (uv tool install / dedicated venv) to avoid touching system cryptography,
-# which would break pyOpenSSL on odoo:17 and earlier base images. odoo_sdk
-# depends on fastmcp which requires Python 3.10+; skip silently on older images.
+# uv tool to avoid touching system cryptography, which would break pyOpenSSL on
+# odoo:17 (cryptography 41+ uses OpenSSL 3.x CFFI bindings that removed
+# X509_V_FLAG_NOTIFY_POLICY). odoo_sdk requires Python 3.10+; skip silently on
+# older images (e.g. odoo:16).
 FEATURE_DIR="$(dirname "$0")"
 if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+    # odoo base images don't ship uv. Download it so we can use uv tool install
+    # for proper isolation — the pip --system path touches system cryptography.
+    if ! command -v uv >/dev/null 2>&1; then
+        UV_INSTALL_DIR=/usr/local/bin
+        export UV_INSTALL_DIR
+        curl -fsSL https://astral.sh/uv/install.sh | sh \
+            || echo "WARNING: failed to install uv, will fall back to pip" >&2
+        unset UV_INSTALL_DIR
+    fi
     for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
         [ -f "$wheel" ] || continue
         if command -v uv >/dev/null 2>&1; then
@@ -89,13 +99,15 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
                 --bin-dir /usr/local/bin \
                 "$wheel"
         elif command -v pip3 >/dev/null 2>&1; then
-            # Dedicated venv for the same isolation guarantee on pip-only images.
+            # Last-resort pip3 path: isolated venv. python3-venv may not be
+            # pre-installed on the base image; ensure it is before creating the venv.
+            apt-get install -y --no-install-recommends python3-venv 2>/dev/null || true
             _SDK_VENV=/usr/local/lib/odoo-sdk-env
             python3 -m venv "$_SDK_VENV"
             "$_SDK_VENV/bin/pip" install "$wheel"
             ln -sf "$_SDK_VENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
         else
-            echo "WARNING: no pip available, skipping Python library installation" >&2
+            echo "WARNING: no uv or pip available, skipping Python library installation" >&2
         fi
     done
 else
