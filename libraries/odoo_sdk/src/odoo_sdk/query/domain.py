@@ -4,7 +4,12 @@ import re
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Final, Self, TypeAlias, Union
+from typing import Any, Final, TypeAlias, Union
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self  # Python 3.10 compat
 
 from odoo_sdk._utils import _is_sequence
 
