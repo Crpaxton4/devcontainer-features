@@ -76,27 +76,33 @@ chmod +x "$WRAPPER_PATH"
 # --- Python libraries -------------------------------------------------------
 # Wheels are bundled into this feature at release time. Install them system-wide
 # so they're available in every project in the container without a venv.
+# odoo_sdk depends on fastmcp which requires Python 3.10+; skip silently on
+# older images (e.g. odoo:16) rather than aborting the whole feature install.
 FEATURE_DIR="$(dirname "$0")"
-for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
-    [ -f "$wheel" ] || continue
-    if command -v uv >/dev/null 2>&1; then
-        uv pip install --system "$wheel"
-    elif command -v pip3 >/dev/null 2>&1; then
-        # --ignore-installed prevents pip from trying to uninstall Debian-managed
-        # packages that lack a RECORD file (e.g. typing_extensions on odoo:19).
-        # pip installs to /usr/local/lib which precedes /usr/lib in sys.path,
-        # so the newer version is always loaded even when the Debian one remains.
-        # --break-system-packages is required on PEP-668 systems (pip 22.1+) but
-        # unrecognized on older pip (e.g. odoo:17 and earlier) — check at runtime.
-        if pip3 install --help 2>&1 | grep -q -- '--break-system-packages'; then
-            pip3 install --break-system-packages --ignore-installed "$wheel"
+if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+    for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
+        [ -f "$wheel" ] || continue
+        if command -v uv >/dev/null 2>&1; then
+            uv pip install --system "$wheel"
+        elif command -v pip3 >/dev/null 2>&1; then
+            # --ignore-installed prevents pip from trying to uninstall Debian-managed
+            # packages that lack a RECORD file (e.g. typing_extensions on odoo:19).
+            # pip installs to /usr/local/lib which precedes /usr/lib in sys.path,
+            # so the newer version is always loaded even when the Debian one remains.
+            # --break-system-packages is required on PEP-668 systems (pip 22.1+) but
+            # unrecognized on older pip — check at runtime.
+            if pip3 install --help 2>&1 | grep -q -- '--break-system-packages'; then
+                pip3 install --break-system-packages --ignore-installed "$wheel"
+            else
+                pip3 install --ignore-installed "$wheel"
+            fi
         else
-            pip3 install --ignore-installed "$wheel"
+            echo "WARNING: no pip available, skipping Python library installation" >&2
         fi
-    else
-        echo "WARNING: no pip available, skipping Python library installation" >&2
-    fi
-done
+    done
+else
+    echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
+fi
 
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
