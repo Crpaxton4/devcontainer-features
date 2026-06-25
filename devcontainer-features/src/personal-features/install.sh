@@ -93,11 +93,15 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
     for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
         [ -f "$wheel" ] || continue
         if command -v uv >/dev/null 2>&1; then
-            # Isolated tool environment — system cryptography is never touched.
-            uv tool install --force \
-                --tool-dir /usr/local/share/uv/tools \
-                --bin-dir /usr/local/bin \
-                "$wheel"
+            # Isolated venv — system cryptography is never touched.
+            # uv venv + uv pip install is used instead of uv tool install because
+            # the --tool-dir/--bin-dir flags were not available in all uv versions
+            # (uv 0.11.x and earlier reject them). uv venv/pip are stable across
+            # all versions.
+            _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
+            uv venv "$_SDK_ENV"
+            uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+            ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
         elif command -v pip3 >/dev/null 2>&1; then
             # Last-resort pip3 path: isolated venv. python3-venv may not be
             # pre-installed on the base image; ensure it is before creating the venv.
