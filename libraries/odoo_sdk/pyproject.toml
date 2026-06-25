@@ -93,6 +93,12 @@ exclude = ["tests", "examples", "build", "htmlcov"]
 output-format = ["json"]
 output = "reports/complexipy/"
 
+[tool.uv]
+# Dev tooling (sphinx, furo) requires Python >=3.12, so restrict uv's lockfile
+# resolution to that range. The wheel's requires-python = ">=3.10" is the
+# correct runtime minimum and is unaffected by this setting.
+environments = ["python_version >= '3.12'"]
+
 [tool.uv.workspace]
 members = [
     ".",
