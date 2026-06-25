@@ -86,7 +86,13 @@ for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
         # packages that lack a RECORD file (e.g. typing_extensions on odoo:19).
         # pip installs to /usr/local/lib which precedes /usr/lib in sys.path,
         # so the newer version is always loaded even when the Debian one remains.
-        pip3 install --break-system-packages --ignore-installed "$wheel"
+        # --break-system-packages is required on PEP-668 systems (pip 22.1+) but
+        # unrecognized on older pip (e.g. odoo:17 and earlier) — check at runtime.
+        if pip3 install --help 2>&1 | grep -q -- '--break-system-packages'; then
+            pip3 install --break-system-packages --ignore-installed "$wheel"
+        else
+            pip3 install --ignore-installed "$wheel"
+        fi
     else
         echo "WARNING: no pip available, skipping Python library installation" >&2
     fi

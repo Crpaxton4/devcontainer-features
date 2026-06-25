@@ -19,5 +19,29 @@
             "personal-features": {}
         },
         "remoteUser": "root"
+    },
+    "on_odoo18_base_image": {
+        "image": "odoo:18",
+        "features": {
+            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "personal-features": {}
+        },
+        "remoteUser": "root"
+    },
+    "on_odoo17_base_image": {
+        "image": "odoo:17",
+        "features": {
+            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "personal-features": {}
+        },
+        "remoteUser": "root"
+    },
+    "on_odoo16_base_image": {
+        "image": "odoo:16",
+        "features": {
+            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "personal-features": {}
+        },
+        "remoteUser": "root"
     }
 }
