@@ -16,6 +16,7 @@
             "ghcr.io/devcontainers/features/node:1": {
                 "version": "lts"
             },
+            "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
         "remoteUser": "root"
@@ -24,6 +25,7 @@
         "image": "odoo:18",
         "features": {
             "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
         "remoteUser": "root"
@@ -32,6 +34,7 @@
         "image": "odoo:17",
         "features": {
             "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
         "remoteUser": "root"
@@ -40,6 +43,7 @@
         "image": "odoo:16",
         "features": {
             "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
         "remoteUser": "root"

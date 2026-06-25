@@ -41,4 +41,9 @@ check "system OpenSSL is intact (isolated install didn't touch cryptography)" \
 check "odoo-mcp console script is on PATH" bash -c "command -v odoo-mcp"
 check "odoo-mcp entrypoint is executable" bash -c "test -x \"\$(command -v odoo-mcp)\""
 
+check "postgresql is ready" pg_isready
+
+check "odoo initializes base module without error" \
+    bash -c "odoo -d odoo -i base --stop-after-init --db_host localhost --db_user postgres"
+
 reportResults

@@ -31,4 +31,9 @@ check "odoo_sdk was not installed (Python <3.10 guard)" \
 check "odoo-mcp was not installed (Python <3.10 guard)" \
     bash -c "! command -v odoo-mcp 2>/dev/null"
 
+check "postgresql is ready" pg_isready
+
+check "odoo initializes base module without error" \
+    bash -c "odoo -d odoo -i base --stop-after-init --db_host localhost --db_user postgres"
+
 reportResults
