@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.3](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.2...personal-features-v1.10.3) (2026-06-25)
+
+
+### Bug Fixes
+
+* **libraries:** constrain cryptography&lt;43 to fix pyOpenSSL compat on odoo:19 ([#54](https://github.com/Crpaxton4/devcontainer-features/issues/54)) ([1690c84](https://github.com/Crpaxton4/devcontainer-features/commit/1690c84809e6de362cbc431b5b07d44de6685805))
+
 ## [1.10.2](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.1...personal-features-v1.10.2) (2026-06-24)
 
 
