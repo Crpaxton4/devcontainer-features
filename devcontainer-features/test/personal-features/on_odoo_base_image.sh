@@ -37,6 +37,12 @@ from odoo_sdk import (
 )
 "
 
+# Regression guard: cryptography must stay in the range pyOpenSSL 23.2.0
+# (shipped by Ubuntu Noble / odoo:19) supports (<43). cryptography >=43
+# removes _lib.GEN_EMAIL, which pyOpenSSL 23.2.0 references at import time.
+check "OpenSSL is importable (pyopenssl/cryptography version compat)" \
+    python3 -c "from OpenSSL import SSL, crypto"
+
 # The odoo-mcp console script is the primary runtime entry point used in
 # devcontainers. Verify it is on PATH and executable. (The command validates
 # Odoo connection settings at startup before processing any flags, so it
