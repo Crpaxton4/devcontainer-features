@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.4](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.3...personal-features-v1.10.4) (2026-06-25)
+
+
+### Bug Fixes
+
+* **personal-features:** guard --break-system-packages on pip capability check ([#56](https://github.com/Crpaxton4/devcontainer-features/issues/56)) ([3577088](https://github.com/Crpaxton4/devcontainer-features/commit/3577088bd03047512455c5e5768b83bd0586144f))
+
 ## [1.10.3](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.2...personal-features-v1.10.3) (2026-06-25)
 
 
