@@ -9,6 +9,7 @@ from odoo_sdk.mcp.prompts.builtin.implement_task import (
     _build_messages,
     make_implement_task_prompt,
 )
+from odoo_sdk.mcp.prompts.builtin.report_incident import report_incident
 from odoo_sdk.mcp.server import OdooMCPServer
 
 
@@ -75,7 +76,7 @@ class TestPromptRegistration(unittest.TestCase):
 
     def test_implement_task_registered_on_server(self):
         _, captured = self._build(_empty_registry())
-        self.assertEqual(len(captured), 1)
+        self.assertEqual(len(captured), 2)
 
     def test_registered_prompt_is_a_prompt_instance(self):
         from fastmcp.prompts import Prompt
@@ -209,6 +210,70 @@ class TestBuildMessages(unittest.TestCase):
         task = _make_task(tags=None)
         msgs = _build_messages(task)
         self.assertIn("—", msgs[0]["content"])
+
+
+class TestReportIncidentPromptRegistration(unittest.TestCase):
+    """report_incident prompt is registered with the correct metadata."""
+
+    def _build(self, registry: Registry):
+        mock_mcp = MagicMock()
+        captured: list = []
+        mock_mcp.add_prompt.side_effect = captured.append
+        with patch("odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp):
+            OdooMCPServer(registry)
+        return mock_mcp, captured
+
+    def _get_report_incident_prompt(self):
+        from fastmcp.prompts import Prompt
+
+        _, captured = self._build(_empty_registry())
+        return next(p for p in captured if isinstance(p, Prompt) and p.name == "report_incident")
+
+    def test_prompt_name_is_report_incident(self):
+        prompt = self._get_report_incident_prompt()
+        self.assertEqual(prompt.name, "report_incident")
+
+    def test_prompt_has_description(self):
+        prompt = self._get_report_incident_prompt()
+        self.assertIsNotNone(prompt.description)
+        self.assertGreater(len(prompt.description), 0)
+
+
+class TestReportIncidentMessages(unittest.TestCase):
+    """report_incident message content and privacy rules."""
+
+    def test_returns_exactly_one_message(self):
+        msgs = report_incident()
+        self.assertEqual(len(msgs), 1)
+
+    def test_message_role_is_user(self):
+        msgs = report_incident()
+        self.assertEqual(msgs[0]["role"], "user")
+
+    def test_message_contains_gh_issue_create(self):
+        msgs = report_incident()
+        self.assertIn("gh issue create", msgs[0]["content"])
+
+    def test_message_contains_repo_url(self):
+        msgs = report_incident()
+        self.assertIn("https://github.com/Crpaxton4/devcontainer-features/", msgs[0]["content"])
+
+    def test_message_contains_transport_env_value(self):
+        with patch.dict("os.environ", {"ODOO_TRANSPORT": "json2"}):
+            msgs = report_incident()
+        self.assertIn("json2", msgs[0]["content"])
+
+    def test_message_contains_sdk_version_tag(self):
+        msgs = report_incident()
+        self.assertIn("<sdk_version>", msgs[0]["content"])
+
+    def test_message_contains_python_version_tag(self):
+        msgs = report_incident()
+        self.assertIn("<python_version>", msgs[0]["content"])
+
+    def test_message_contains_privacy_guardrail(self):
+        msgs = report_incident()
+        self.assertIn("ODOO_URL", msgs[0]["content"])
 
 
 if __name__ == "__main__":
