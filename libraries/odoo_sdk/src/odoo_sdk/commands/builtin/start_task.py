@@ -39,6 +39,35 @@ async def _disambiguate(ctx: Any, message: str, items: list[dict], schema_cls: t
     return items[idx]
 
 
+def _get_employee_id(client: Any, db: Any) -> int:
+    """Return employee_id from cache or Odoo, caching on first fetch."""
+    cached = db.get_setting("employee_id")
+    if cached is not None:
+        return int(cached)
+    employee_id = get_employee_id(client, client.uid)
+    db.set_setting("employee_id", str(employee_id))
+    return employee_id
+
+
+def _lookup_task_by_id(client: Any, task_id: int) -> Optional[tuple[dict, dict]]:
+    """Look up a task directly by ID; return (task, project) or None if not found."""
+    records = client.execute(
+        "project.task",
+        "search_read",
+        [[("id", "=", task_id)]],
+        {"fields": ["id", "name", "project_id"], "limit": 1},
+    )
+    if not records:
+        return None
+    r = records[0]
+    project_raw = r.get("project_id")
+    project = {
+        "id": project_raw[0] if isinstance(project_raw, (list, tuple)) else project_raw,
+        "name": project_raw[1] if isinstance(project_raw, (list, tuple)) else str(project_raw),
+    }
+    return {"id": r["id"], "name": r["name"]}, project
+
+
 async def _resolve_project(ctx: Any, client: Any, query: str) -> tuple[Optional[dict], Optional[str]]:
     """Return (project, error_string) — exactly one will be non-None."""
     projects = name_search_projects(client, query, limit=10)
@@ -98,25 +127,13 @@ class StartTaskCommand(Command):
         project: Optional[dict] = None
 
         if task_id is not None:
-            records = self._client.execute(
-                "project.task",
-                "search_read",
-                [[("id", "=", task_id)]],
-                {"fields": ["id", "name", "project_id"], "limit": 1},
-            )
-            if records:
-                r = records[0]
-                project_raw = r.get("project_id")
-                project = {
-                    "id": project_raw[0] if isinstance(project_raw, (list, tuple)) else project_raw,
-                    "name": project_raw[1] if isinstance(project_raw, (list, tuple)) else str(project_raw),
-                }
-                task = {"id": r["id"], "name": r["name"]}
+            found = _lookup_task_by_id(self._client, task_id)
+            if found is not None:
+                task, project = found
+            elif task_name_query:
+                warning = f"Task ID {task_id} not found; falling back to name search."
             else:
-                if task_name_query:
-                    warning = f"Task ID {task_id} not found; falling back to name search."
-                else:
-                    return {"error": f"Task {task_id} not found."}
+                return {"error": f"Task {task_id} not found."}
 
         if task is None:
             err: Optional[str]
@@ -145,13 +162,7 @@ class StartTaskCommand(Command):
                 )
             }
 
-        uid = self._client.uid
-        cached_eid = db.get_setting("employee_id")
-        if cached_eid is not None:
-            employee_id = int(cached_eid)
-        else:
-            employee_id = get_employee_id(self._client, uid)
-            db.set_setting("employee_id", str(employee_id))
+        employee_id = _get_employee_id(self._client, db)
 
         timesheet_id = create_timesheet(
             self._client, task["id"], project["id"], employee_id, date.today()
