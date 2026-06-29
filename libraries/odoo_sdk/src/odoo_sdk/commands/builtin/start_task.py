@@ -186,6 +186,30 @@ async def _resolve_task(ctx: Any, client: Any, query: str, project_id: int, proj
     return task, None
 
 
+def _build_session_result(
+    session: Any,
+    task: dict,
+    project: dict,
+    timesheet_id: int,
+    *,
+    branch_name: Optional[str] = None,
+    warning: Optional[str] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "session_id": session.id,
+        "task_id": task["id"],
+        "task_name": task["name"],
+        "project_name": project["name"],
+        "started_at": session.started_at.isoformat(),
+        "timesheet_id": timesheet_id,
+    }
+    if branch_name is not None:
+        result["branch_name"] = branch_name
+    if warning is not None:
+        result["warning"] = warning
+    return result
+
+
 class StartTaskCommand(Command):
     """Start time-tracking a project task, creating a placeholder timesheet entry."""
 
@@ -272,16 +296,8 @@ class StartTaskCommand(Command):
             timesheet_id=timesheet_id,
         )
 
-        result: dict[str, Any] = {
-            "session_id": session.id,
-            "task_id": task["id"],
-            "task_name": task["name"],
-            "project_name": project["name"],
-            "started_at": session.started_at.isoformat(),
-            "timesheet_id": timesheet_id,
-        }
-        if branch_name is not None:
-            result["branch_name"] = branch_name
-        if warning is not None:
-            result["warning"] = warning
-        return result
+        return _build_session_result(
+            session, task, project, timesheet_id,
+            branch_name=branch_name,
+            warning=warning,
+        )
