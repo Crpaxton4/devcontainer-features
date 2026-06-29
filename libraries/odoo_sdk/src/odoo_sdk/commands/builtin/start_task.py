@@ -39,6 +39,35 @@ async def _disambiguate(ctx: Any, message: str, items: list[dict], schema_cls: t
     return items[idx]
 
 
+def _get_employee_id(client: Any, db: Any) -> int:
+    """Return employee_id from cache or Odoo, caching on first fetch."""
+    cached = db.get_setting("employee_id")
+    if cached is not None:
+        return int(cached)
+    employee_id = get_employee_id(client, client.uid)
+    db.set_setting("employee_id", str(employee_id))
+    return employee_id
+
+
+def _lookup_task_by_id(client: Any, task_id: int) -> Optional[tuple[dict, dict]]:
+    """Look up a task directly by ID; return (task, project) or None if not found."""
+    records = client.execute(
+        "project.task",
+        "search_read",
+        [[("id", "=", task_id)]],
+        {"fields": ["id", "name", "project_id"], "limit": 1},
+    )
+    if not records:
+        return None
+    r = records[0]
+    project_raw = r.get("project_id")
+    project = {
+        "id": project_raw[0] if isinstance(project_raw, (list, tuple)) else project_raw,
+        "name": project_raw[1] if isinstance(project_raw, (list, tuple)) else str(project_raw),
+    }
+    return {"id": r["id"], "name": r["name"]}, project
+
+
 async def _resolve_project(ctx: Any, client: Any, query: str) -> tuple[Optional[dict], Optional[str]]:
     """Return (project, error_string) — exactly one will be non-None."""
     projects = name_search_projects(client, query, limit=10)
@@ -70,8 +99,9 @@ class StartTaskCommand(Command):
 
     _name = "start_task"
     _description = (
-        "Begin tracking time on an Odoo project.task. Searches for the project and task "
-        "by name, prompts for disambiguation when multiple matches exist, and always asks "
+        "Begin tracking time on an Odoo project.task. When task_id is supplied, looks up "
+        "the task directly and skips name-search disambiguation. Without task_id, searches "
+        "by task_name_query and project_name_query with disambiguation prompts. Always asks "
         "for confirmation before starting. Creates a placeholder timesheet entry in Odoo."
     )
 
@@ -80,23 +110,40 @@ class StartTaskCommand(Command):
         task_name_query: str,
         ctx: Any,
         project_name_query: Optional[str] = None,
+        task_id: Optional[int] = None,
     ) -> dict[str, Any]:
         """Start a task tracking session.
 
-        :param task_name_query: Task name substring to search for.
+        :param task_name_query: Task name substring to search for (used when task_id is absent or lookup fails).
         :param ctx: FastMCP Context for elicitation.
         :param project_name_query: Optional project name substring to narrow search.
+        :param task_id: Optional Odoo task ID. When provided, looks up the task directly.
         :return: Session details including task name, project, and started_at.
         """
         assert_odoo_devcontainer()
 
-        project, err = await _resolve_project(ctx, self._client, project_name_query or "")
-        if err:
-            return {"error": err}
+        warning: Optional[str] = None
+        task: Optional[dict] = None
+        project: Optional[dict] = None
 
-        task, err = await _resolve_task(ctx, self._client, task_name_query, project["id"], project["name"])
-        if err:
-            return {"error": err}
+        if task_id is not None:
+            found = _lookup_task_by_id(self._client, task_id)
+            if found is not None:
+                task, project = found
+            elif task_name_query:
+                warning = f"Task ID {task_id} not found; falling back to name search."
+            else:
+                return {"error": f"Task {task_id} not found."}
+
+        if task is None:
+            err: Optional[str]
+            project, err = await _resolve_project(ctx, self._client, project_name_query or "")
+            if err:
+                return {"error": err}
+
+            task, err = await _resolve_task(ctx, self._client, task_name_query, project["id"], project["name"])
+            if err:
+                return {"error": err}
 
         confirm = await ctx.elicit(
             f"Start tracking time on task:\n  Task: {task['name']}\n  Project: {project['name']}\n\nConfirm?",
@@ -115,13 +162,7 @@ class StartTaskCommand(Command):
                 )
             }
 
-        uid = self._client.uid
-        cached_eid = db.get_setting("employee_id")
-        if cached_eid is not None:
-            employee_id = int(cached_eid)
-        else:
-            employee_id = get_employee_id(self._client, uid)
-            db.set_setting("employee_id", str(employee_id))
+        employee_id = _get_employee_id(self._client, db)
 
         timesheet_id = create_timesheet(
             self._client, task["id"], project["id"], employee_id, date.today()
@@ -135,7 +176,7 @@ class StartTaskCommand(Command):
             timesheet_id=timesheet_id,
         )
 
-        return {
+        result: dict[str, Any] = {
             "session_id": session.id,
             "task_id": task["id"],
             "task_name": task["name"],
@@ -143,3 +184,6 @@ class StartTaskCommand(Command):
             "started_at": session.started_at.isoformat(),
             "timesheet_id": timesheet_id,
         }
+        if warning is not None:
+            result["warning"] = warning
+        return result
