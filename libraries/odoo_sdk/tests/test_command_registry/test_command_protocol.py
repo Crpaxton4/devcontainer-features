@@ -5,10 +5,13 @@ from odoo_sdk.commands.command import Command
 
 
 class ConcreteCommand(Command):
-    """Minimal concrete class using all Protocol default method bodies."""
+    """Minimal concrete subclass for testing Command base behaviour."""
 
     _name = "concrete"
     _description = "A concrete command"
+
+    def execute(self, *args, **kwargs):
+        return None
 
 
 class TestCommandProtocolDefaultBodies(unittest.TestCase):
