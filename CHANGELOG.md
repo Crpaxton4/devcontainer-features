@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.5...personal-features-v1.11.0) (2026-06-29)
+
+
+### Features
+
+* **odoo-sdk:** add get_task and get_task_chatter commands with HTML-to-Markdown conversion ([#61](https://github.com/Crpaxton4/devcontainer-features/issues/61)) ([06b647d](https://github.com/Crpaxton4/devcontainer-features/commit/06b647db14f4de3f4f4d8f0cb27ace370e2bd403))
+* **odoo-sdk:** add implement_task MCP prompt and start_task task_id lookup ([#63](https://github.com/Crpaxton4/devcontainer-features/issues/63)) ([9e1af4d](https://github.com/Crpaxton4/devcontainer-features/commit/9e1af4d975c1cff70027f3df2a7c61959ffb2833))
+
 ## [1.10.5](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.4...personal-features-v1.10.5) (2026-06-25)
 
 
