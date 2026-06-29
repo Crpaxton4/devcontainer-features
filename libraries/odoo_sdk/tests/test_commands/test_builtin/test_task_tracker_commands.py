@@ -571,6 +571,97 @@ class TestStartTaskCommand(unittest.TestCase):
             result = self._run(StartTaskCommand(client).execute("x", ctx))
         self.assertIn("error", result)
 
+    def test_task_id_bypasses_name_search(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}]
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_projects") as mock_proj,
+            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks") as mock_task,
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
+        mock_proj.assert_not_called()
+        mock_task.assert_not_called()
+        self.assertEqual(result["task_id"], 10)
+        self.assertEqual(result["task_name"], "Fix VAT")
+        self.assertEqual(result["project_name"], "Accounting")
+
+    def test_task_id_lookup_extracts_project_from_tuple(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = [{"id": 20, "name": "Task", "project_id": [7, "HR"]}]
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            result = self._run(StartTaskCommand(client).execute("Task", ctx, task_id=20))
+        self.assertEqual(result["project_name"], "HR")
+
+    def test_task_id_fallback_to_name_search_with_warning(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = []  # task_id lookup fails
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.name_search_projects",
+                return_value=[{"id": 5, "name": "Acct"}],
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
+                return_value=[{"id": 10, "name": "Fix VAT"}],
+            ),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=99))
+        self.assertIn("warning", result)
+        self.assertEqual(result["task_id"], 10)
+
+    def test_task_id_not_found_and_no_name_query_returns_error(self):
+        client = _client()
+        client.execute.return_value = []
+        ctx = MagicMock()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=_tmp_db()),
+        ):
+            result = self._run(StartTaskCommand(client).execute("", ctx, task_id=999))
+        self.assertIn("error", result)
+        self.assertIn("999", result["error"])
+
+    def test_task_id_result_has_no_warning_on_success(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
+        self.assertNotIn("warning", result)
+
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 

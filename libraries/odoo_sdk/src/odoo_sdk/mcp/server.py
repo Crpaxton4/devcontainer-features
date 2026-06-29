@@ -32,12 +32,15 @@ class OdooMCPServer:
         registry: Registry,
         server_name: str = "Odoo MCP Server",
     ):
+        from odoo_sdk.mcp.prompts import register_builtin_prompts
+
         self.registry: Registry = registry
         self.mcp: FastMCP = FastMCP(
             server_name,
             instructions="Provides tools for interacting with Odoo ERP",
         )
         self._bootstrap_tools()
+        register_builtin_prompts(self.mcp, self.registry)
 
     def _bootstrap_tools(self) -> None:
         """Register every command in the registry as an MCP tool.
