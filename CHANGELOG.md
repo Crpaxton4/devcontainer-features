@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.12.0...personal-features-v1.13.0) (2026-06-29)
+
+
+### Features
+
+* **odoo-sdk:** auto-create task branch on start_task ([#70](https://github.com/Crpaxton4/devcontainer-features/issues/70)) ([8c64568](https://github.com/Crpaxton4/devcontainer-features/commit/8c64568eda3afefbced69e1700cc519168b06e08))
+
 ## [1.12.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.11.1...personal-features-v1.12.0) (2026-06-29)
 
 
