@@ -1,4 +1,4 @@
-"""Tests for the 7 task-tracking Command subclasses."""
+"""Tests for task-tracking Command subclasses."""
 
 import asyncio
 import tempfile
@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from odoo_sdk.commands.builtin.get_task import GetTaskCommand
+from odoo_sdk.commands.builtin.get_task_chatter import GetTaskChatterCommand
 from odoo_sdk.commands.builtin.resume_task import ResumeTaskCommand
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
@@ -47,6 +49,72 @@ def _cancelled() -> MagicMock:
     r = MagicMock()
     r.action = "cancel"
     return r
+
+
+# ── GetTaskChatterCommand ─────────────────────────────────────────────────────
+
+class TestGetTaskChatterCommand(unittest.TestCase):
+    def test_delegates_to_odoo_ops(self):
+        client = _client()
+        expected = [{"id": 1, "author": "Jane", "body": "Hello"}]
+        with patch(
+            "odoo_sdk.commands.builtin.get_task_chatter.get_task_chatter",
+            return_value=expected,
+        ) as mock_chatter:
+            result = GetTaskChatterCommand(client).execute(task_id=42)
+        mock_chatter.assert_called_once_with(client, 42, limit=100)
+        self.assertEqual(result, expected)
+
+    def test_passes_custom_limit(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.get_task_chatter.get_task_chatter",
+            return_value=[],
+        ) as mock_chatter:
+            GetTaskChatterCommand(client).execute(task_id=10, limit=5)
+        mock_chatter.assert_called_once_with(client, 10, limit=5)
+
+
+# ── GetTaskCommand ────────────────────────────────────────────────────────────
+
+class TestGetTaskCommand(unittest.TestCase):
+    def test_returns_none_when_task_not_found(self):
+        client = _client()
+        with (
+            patch("odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=None),
+            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter") as mock_chatter,
+        ):
+            result = GetTaskCommand(client).execute(task_id=999)
+        self.assertIsNone(result)
+        mock_chatter.assert_not_called()
+
+    def test_merges_chatter_into_task(self):
+        client = _client()
+        task_data = {"task_id": 42, "name": "Feature X", "description": "Do it"}
+        chatter_data = [{"id": 1, "author": "Jane", "body": "Note"}]
+        with (
+            patch("odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=task_data),
+            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter", return_value=chatter_data),
+        ):
+            result = GetTaskCommand(client).execute(task_id=42)
+        self.assertEqual(result["chatter"], chatter_data)
+        self.assertEqual(result["name"], "Feature X")
+
+    def test_calls_both_helpers_with_same_task_id(self):
+        client = _client()
+        with (
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_detail",
+                return_value={"task_id": 7, "name": "T"},
+            ) as mock_detail,
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_chatter",
+                return_value=[],
+            ) as mock_chatter,
+        ):
+            GetTaskCommand(client).execute(task_id=7)
+        mock_detail.assert_called_once_with(client, 7)
+        mock_chatter.assert_called_once_with(client, 7)
 
 
 # ── TaskListCommand ───────────────────────────────────────────────────────────
