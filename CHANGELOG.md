@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.11.0...personal-features-v1.11.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** replace Command Protocol with ABC to fix Python 3.10 startup crash ([#65](https://github.com/Crpaxton4/devcontainer-features/issues/65)) ([9fe2f9a](https://github.com/Crpaxton4/devcontainer-features/commit/9fe2f9a4c84423a3c9a284881c4e36720b2c26f4))
+
 ## [1.11.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.10.5...personal-features-v1.11.0) (2026-06-29)
 
 
