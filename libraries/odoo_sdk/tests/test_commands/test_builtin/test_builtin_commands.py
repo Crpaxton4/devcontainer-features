@@ -6,6 +6,8 @@ from odoo_sdk.commands.builtin import (
     BUILTIN_COMMANDS,
     CreateTaskCommand,
     GetModelsCommand,
+    GetTaskCommand,
+    GetTaskChatterCommand,
     GetTasksCommand,
     GetTodoCommand,
     GetUidCommand,
@@ -102,6 +104,16 @@ class TestCreateTaskCommand(unittest.TestCase):
         tasks.create.assert_called_once_with(
             {"name": "[MCP] Quick", "project_id": 2, "description": ""}
         )
+
+
+class TestGetTaskAndChatterInBuiltins(unittest.TestCase):
+    def test_get_task_in_builtin_commands(self):
+        self.assertIn("get_task", BUILTIN_COMMANDS)
+        self.assertIs(BUILTIN_COMMANDS["get_task"], GetTaskCommand)
+
+    def test_get_task_chatter_in_builtin_commands(self):
+        self.assertIn("get_task_chatter", BUILTIN_COMMANDS)
+        self.assertIs(BUILTIN_COMMANDS["get_task_chatter"], GetTaskChatterCommand)
 
 
 class TestRegisterBuiltins(unittest.TestCase):

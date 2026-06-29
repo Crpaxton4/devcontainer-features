@@ -9,6 +9,8 @@ themselves; see ``examples/general/mcp_custom_commands_example.py``.
 from ..command_registry import Registry
 from .create_task import CreateTaskCommand
 from .get_models import GetModelsCommand
+from .get_task import GetTaskCommand
+from .get_task_chatter import GetTaskChatterCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
@@ -25,6 +27,8 @@ BUILTIN_COMMANDS = {
     "get_models": GetModelsCommand,
     "get_tasks": GetTasksCommand,
     "get_todo": GetTodoCommand,
+    "get_task": GetTaskCommand,
+    "get_task_chatter": GetTaskChatterCommand,
     "create_task": CreateTaskCommand,
     "start_task": StartTaskCommand,
     "stop_task": StopTaskCommand,
@@ -57,6 +61,8 @@ __all__ = [
     "GetModelsCommand",
     "GetTasksCommand",
     "GetTodoCommand",
+    "GetTaskCommand",
+    "GetTaskChatterCommand",
     "CreateTaskCommand",
     "StartTaskCommand",
     "StopTaskCommand",

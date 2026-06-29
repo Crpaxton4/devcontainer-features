@@ -1,9 +1,21 @@
 """Odoo API helpers for task time-tracking operations."""
 
+import io
 from datetime import date
 from typing import Any
 
+from markitdown import MarkItDown
+
 from odoo_sdk.client import OdooClient
+
+_md_converter = MarkItDown()
+
+
+def _html_to_markdown(html: str) -> str:
+    if not html:
+        return ""
+    result = _md_converter.convert_stream(io.BytesIO(html.encode()), file_extension=".html")
+    return result.text_content.strip()
 
 
 def name_search_projects(
@@ -93,6 +105,80 @@ def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
             "subtype_xmlid": "mail.mt_note",
         },
     )
+
+
+def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list[dict]:
+    """Fetch chatter messages for a task, sorted oldest-first."""
+    messages = client.execute(
+        "mail.message",
+        "search_read",
+        [[("res_model", "=", "project.task"), ("res_id", "=", task_id)]],
+        {
+            "fields": ["id", "date", "author_id", "message_type", "subtype_id", "body"],
+            "order": "date asc",
+            "limit": limit,
+        },
+    )
+    result = []
+    for m in messages:
+        author = m["author_id"][1] if isinstance(m["author_id"], (list, tuple)) else (m["author_id"] or "")
+        subtype = m["subtype_id"][1] if isinstance(m["subtype_id"], (list, tuple)) else (m["subtype_id"] or "")
+        result.append({
+            "id": m["id"],
+            "date": m["date"],
+            "author": author,
+            "type": m["message_type"],
+            "subtype": subtype,
+            "body": _html_to_markdown(m.get("body", "")),
+        })
+    return result
+
+
+def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
+    """Fetch task fields for a single task; returns None if not found."""
+    records = client.execute(
+        "project.task",
+        "search_read",
+        [[("id", "=", task_id)]],
+        {
+            "fields": ["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
+            "limit": 1,
+        },
+    )
+    if not records:
+        return None
+    r = records[0]
+
+    def _name(field_val):
+        if isinstance(field_val, (list, tuple)) and len(field_val) == 2:
+            return field_val[1]
+        return field_val
+
+    assignees = []
+    for uid in (r.get("user_ids") or []):
+        if isinstance(uid, (list, tuple)):
+            assignees.append(uid[1])
+        else:
+            assignees.append(uid)
+
+    tags = []
+    for tag in (r.get("tag_ids") or []):
+        if isinstance(tag, (list, tuple)):
+            tags.append(tag[1])
+        else:
+            tags.append(tag)
+
+    return {
+        "task_id": task_id,
+        "name": r["name"],
+        "project": _name(r.get("project_id")),
+        "stage": _name(r.get("stage_id")),
+        "assignees": assignees,
+        "deadline": r.get("date_deadline"),
+        "priority": r.get("priority"),
+        "tags": tags,
+        "description": _html_to_markdown(r.get("description") or ""),
+    }
 
 
 def merge_timesheets(
