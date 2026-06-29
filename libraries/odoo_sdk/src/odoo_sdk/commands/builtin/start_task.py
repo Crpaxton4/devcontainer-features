@@ -1,3 +1,5 @@
+import re
+import subprocess
 from datetime import date
 from typing import Any, Optional
 
@@ -25,6 +27,96 @@ class _SelectTask(BaseModel):
 
 class _ConfirmTask(BaseModel):
     confirmed: bool
+
+
+class _SelectBranch(BaseModel):
+    selection: int
+
+
+def _current_branch() -> Optional[str]:
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True,
+    )
+    name = result.stdout.strip()
+    return name if result.returncode == 0 and name != "HEAD" else None
+
+
+def _list_local_branches() -> list[str]:
+    result = subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    branches = [b.strip() for b in result.stdout.splitlines() if b.strip() and "#" not in b]
+    return sorted(branches, key=lambda b: (len(b), b))
+
+
+def _is_dirty() -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _create_task_branch(branch_name: str, base_branch: str) -> None:
+    stashed = False
+    if _is_dirty():
+        subprocess.run(["git", "stash", "push", "-m", f"auto-stash: {branch_name}"], check=True)
+        stashed = True
+    try:
+        subprocess.run(["git", "checkout", "-b", branch_name, base_branch], check=True)
+    finally:
+        if stashed:
+            subprocess.run(["git", "stash", "pop"], check=True)
+
+
+async def _generate_branch_description(ctx: Any, task_name: str, project_name: str) -> str:
+    response = await ctx.sample(
+        f"Generate a git branch name suffix for this task.\n"
+        f"Rules: lowercase only, hyphens instead of spaces/special chars, max 45 chars, no leading/trailing hyphens.\n"
+        f"Output ONLY the suffix text, nothing else.\n"
+        f"Task: {task_name}\nProject: {project_name}",
+        max_tokens=30,
+    )
+    raw = response.text.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")[:45]
+    if not slug:
+        slug = re.sub(r"[^a-z0-9]+", "-", task_name.lower()).strip("-")[:45]
+    return slug
+
+
+async def _setup_task_branch(
+    ctx: Any, task: dict, project: dict
+) -> tuple[Optional[str], Optional[str]]:
+    task_id = task["id"]
+    current = _current_branch()
+    if current and current.startswith(f"{task_id}#"):
+        return None, None
+
+    branches = _list_local_branches()
+    if not branches:
+        return None, "No local git branches found. Ensure the working directory is a git repo."
+
+    numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
+    result = await ctx.elicit(
+        f"Select base branch to fork from:\n{numbered}\nSelect number:",
+        _SelectBranch,
+    )
+    if result.action != "accept":
+        return None, "Branch selection cancelled."
+    idx = result.data.selection - 1
+    if not (0 <= idx < len(branches)):
+        return None, "Invalid branch selection."
+    base_branch = branches[idx]
+
+    description = await _generate_branch_description(ctx, task["name"], project["name"])
+    branch_name = f"{task_id}#{description}"
+
+    _create_task_branch(branch_name, base_branch)
+    return branch_name, None
 
 
 async def _disambiguate(ctx: Any, message: str, items: list[dict], schema_cls: type) -> Optional[dict]:
@@ -94,6 +186,30 @@ async def _resolve_task(ctx: Any, client: Any, query: str, project_id: int, proj
     return task, None
 
 
+def _build_session_result(
+    session: Any,
+    task: dict,
+    project: dict,
+    timesheet_id: int,
+    *,
+    branch_name: Optional[str] = None,
+    warning: Optional[str] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "session_id": session.id,
+        "task_id": task["id"],
+        "task_name": task["name"],
+        "project_name": project["name"],
+        "started_at": session.started_at.isoformat(),
+        "timesheet_id": timesheet_id,
+    }
+    if branch_name is not None:
+        result["branch_name"] = branch_name
+    if warning is not None:
+        result["warning"] = warning
+    return result
+
+
 class StartTaskCommand(Command):
     """Start time-tracking a project task, creating a placeholder timesheet entry."""
 
@@ -152,6 +268,10 @@ class StartTaskCommand(Command):
         if confirm.action != "accept" or not confirm.data.confirmed:
             return {"error": "Task start cancelled."}
 
+        branch_name, branch_err = await _setup_task_branch(ctx, task, project)
+        if branch_err:
+            return {"error": branch_err}
+
         db = TaskStateDB()
         existing = db.get_active_session(task["id"])
         if existing is not None:
@@ -176,14 +296,8 @@ class StartTaskCommand(Command):
             timesheet_id=timesheet_id,
         )
 
-        result: dict[str, Any] = {
-            "session_id": session.id,
-            "task_id": task["id"],
-            "task_name": task["name"],
-            "project_name": project["name"],
-            "started_at": session.started_at.isoformat(),
-            "timesheet_id": timesheet_id,
-        }
-        if warning is not None:
-            result["warning"] = warning
-        return result
+        return _build_session_result(
+            session, task, project, timesheet_id,
+            branch_name=branch_name,
+            warning=warning,
+        )
