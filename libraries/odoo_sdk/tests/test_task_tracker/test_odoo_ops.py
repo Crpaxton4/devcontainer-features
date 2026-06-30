@@ -59,8 +59,9 @@ class TestGetEmployeeId(unittest.TestCase):
         client.execute.assert_called_once_with(
             "hr.employee",
             "search_read",
-            [[("user_id", "=", 7)]],
-            {"fields": ["id"], "limit": 1},
+            [("user_id", "=", 7)],
+            fields=["id"],
+            limit=1,
         )
         self.assertEqual(result, 42)
 
@@ -192,20 +193,17 @@ class TestGetTaskChatter(unittest.TestCase):
         client.execute.assert_called_once_with(
             "mail.message",
             "search_read",
-            [[("res_model", "=", "project.task"), ("res_id", "=", 42)]],
-            {
-                "fields": ["id", "date", "author_id", "message_type", "subtype_id", "body"],
-                "order": "date asc",
-                "limit": 100,
-            },
+            [("res_model", "=", "project.task"), ("res_id", "=", 42)],
+            fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
+            order="date asc",
+            limit=100,
         )
 
     def test_respects_custom_limit(self):
         client = _client()
         client.execute.return_value = []
         get_task_chatter(client, task_id=1, limit=5)
-        call_kwargs = client.execute.call_args.args[3]
-        self.assertEqual(call_kwargs["limit"], 5)
+        self.assertEqual(client.execute.call_args.kwargs["limit"], 5)
 
     def test_extracts_display_names_from_tuples(self):
         client = _client()
@@ -256,11 +254,9 @@ class TestGetTaskDetail(unittest.TestCase):
         client.execute.assert_called_once_with(
             "project.task",
             "search_read",
-            [[("id", "=", 42)]],
-            {
-                "fields": ["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
-                "limit": 1,
-            },
+            [("id", "=", 42)],
+            fields=["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
+            limit=1,
         )
 
     def test_returns_none_when_not_found(self):

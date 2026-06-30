@@ -146,8 +146,9 @@ def _lookup_task_by_id(client: Any, task_id: int) -> Optional[tuple[dict, dict]]
     records = client.execute(
         "project.task",
         "search_read",
-        [[("id", "=", task_id)]],
-        {"fields": ["id", "name", "project_id"], "limit": 1},
+        [("id", "=", task_id)],
+        fields=["id", "name", "project_id"],
+        limit=1,
     )
     if not records:
         return None

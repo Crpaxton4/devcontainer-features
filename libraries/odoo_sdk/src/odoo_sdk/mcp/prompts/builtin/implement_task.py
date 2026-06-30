@@ -2,7 +2,7 @@ from odoo_sdk.commands import Registry
 
 
 def make_implement_task_prompt(command_registry: Registry):
-    def implement_task(task_id: int) -> list[dict]:
+    def implement_task(task_id: int) -> list[str]:
         """Prime the agent to implement an Odoo task using the FSM workflow.
 
         Fetches full task context (description + chatter) and returns structured
@@ -29,7 +29,7 @@ def _format_chatter(chatter: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _build_messages(task: dict) -> list[dict]:
+def _build_messages(task: dict) -> list[str]:
     task_id = task.get("task_id", "")
     name = task.get("name", "")
     project = task.get("project", "")
@@ -84,7 +84,4 @@ def _build_messages(task: dict) -> list[dict]:
         f"</workflow_instructions>"
     )
 
-    return [
-        {"role": "user", "content": context_msg},
-        {"role": "user", "content": workflow_msg},
-    ]
+    return [context_msg, workflow_msg]

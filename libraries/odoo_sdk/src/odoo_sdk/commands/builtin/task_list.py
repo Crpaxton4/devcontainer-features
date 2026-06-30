@@ -44,9 +44,7 @@ class TaskListCommand(Command):
         return self._client.execute(
             "project.task",
             "search_read",
-            [domain],
-            {
-                "fields": ["id", "name", "project_id", "stage_id", "date_deadline", "user_ids"],
-                "limit": limit,
-            },
+            domain,
+            fields=["id", "name", "project_id", "stage_id", "date_deadline", "user_ids"],
+            limit=limit,
         )
