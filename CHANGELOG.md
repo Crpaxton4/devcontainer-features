@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.0...personal-features-v1.13.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** remove double-wrapped domain in search_read calls ([#71](https://github.com/Crpaxton4/devcontainer-features/issues/71), [#67](https://github.com/Crpaxton4/devcontainer-features/issues/67)) ([#75](https://github.com/Crpaxton4/devcontainer-features/issues/75)) ([975b6d0](https://github.com/Crpaxton4/devcontainer-features/commit/975b6d0f062ac6a83eb77166348e0bffb02cad0f))
+* **odoo-sdk:** return list[str] from prompt functions for FastMCP compatibility ([#72](https://github.com/Crpaxton4/devcontainer-features/issues/72)) ([#74](https://github.com/Crpaxton4/devcontainer-features/issues/74)) ([c60d925](https://github.com/Crpaxton4/devcontainer-features/commit/c60d925c13b41f55bba99fae6965695fd9feab0d))
+
 ## [1.13.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.12.0...personal-features-v1.13.0) (2026-06-29)
 
 
