@@ -113,7 +113,7 @@ def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list
     messages = client.execute(
         "mail.message",
         "search_read",
-        [("res_model", "=", "project.task"), ("res_id", "=", task_id)],
+        [("model", "=", "project.task"), ("res_id", "=", task_id)],
         fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
         order="date asc",
         limit=limit,

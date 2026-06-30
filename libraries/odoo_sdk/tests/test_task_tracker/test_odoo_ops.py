@@ -193,7 +193,7 @@ class TestGetTaskChatter(unittest.TestCase):
         client.execute.assert_called_once_with(
             "mail.message",
             "search_read",
-            [("res_model", "=", "project.task"), ("res_id", "=", 42)],
+            [("model", "=", "project.task"), ("res_id", "=", 42)],
             fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
             order="date asc",
             limit=100,
