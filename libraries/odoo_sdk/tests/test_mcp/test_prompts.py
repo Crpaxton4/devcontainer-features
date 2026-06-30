@@ -110,19 +110,12 @@ class TestImplementTaskPromptFactory(unittest.TestCase):
         messages = fn(task_id=42)
         self.assertEqual(len(messages), 2)
 
-    def test_all_messages_have_user_role(self):
+    def test_all_messages_are_strings(self):
         reg = _registry_with_get_task(_make_task())
         fn = make_implement_task_prompt(reg)
         messages = fn(task_id=42)
         for msg in messages:
-            self.assertEqual(msg["role"], "user")
-
-    def test_no_system_role_in_messages(self):
-        reg = _registry_with_get_task(_make_task())
-        fn = make_implement_task_prompt(reg)
-        messages = fn(task_id=42)
-        roles = {msg["role"] for msg in messages}
-        self.assertNotIn("system", roles)
+            self.assertIsInstance(msg, str)
 
     def test_calls_get_task_with_task_id(self):
         reg = _registry_with_get_task(_make_task())
@@ -147,69 +140,69 @@ class TestBuildMessages(unittest.TestCase):
 
     def test_first_message_contains_task_id(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("42", msgs[0]["content"])
+        self.assertIn("42", msgs[0])
 
     def test_first_message_contains_task_name(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("Fix VAT calculation", msgs[0]["content"])
+        self.assertIn("Fix VAT calculation", msgs[0])
 
     def test_first_message_contains_project(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("Accounting", msgs[0]["content"])
+        self.assertIn("Accounting", msgs[0])
 
     def test_first_message_contains_description(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("Correct the rounding error", msgs[0]["content"])
+        self.assertIn("Correct the rounding error", msgs[0])
 
     def test_first_message_contains_chatter(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("Please fix ASAP", msgs[0]["content"])
+        self.assertIn("Please fix ASAP", msgs[0])
 
     def test_second_message_contains_start_task_step(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("start_task", msgs[1]["content"])
+        self.assertIn("start_task", msgs[1])
 
     def test_second_message_contains_stop_task_step(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("stop_task", msgs[1]["content"])
+        self.assertIn("stop_task", msgs[1])
 
     def test_second_message_contains_fsm_tool_table(self):
         msgs = _build_messages(_make_task())
-        content = msgs[1]["content"]
+        content = msgs[1]
         self.assertIn("task_note", content)
         self.assertIn("task_question", content)
         self.assertIn("resume_task", content)
 
     def test_second_message_mentions_guard_conditions(self):
         msgs = _build_messages(_make_task())
-        content = msgs[1]["content"]
+        content = msgs[1]
         self.assertIn("TaskAlreadyRunningError", content)
         self.assertIn("TaskNotRunningError", content)
 
     def test_second_message_embeds_task_id_in_tool_calls(self):
         msgs = _build_messages(_make_task())
-        self.assertIn("task_note(42", msgs[1]["content"])
-        self.assertIn("stop_task(42", msgs[1]["content"])
+        self.assertIn("task_note(42", msgs[1])
+        self.assertIn("stop_task(42", msgs[1])
 
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])
         msgs = _build_messages(task)
-        self.assertIn("(no messages)", msgs[0]["content"])
+        self.assertIn("(no messages)", msgs[0])
 
     def test_empty_description_shows_placeholder(self):
         task = _make_task(description="")
         msgs = _build_messages(task)
-        self.assertIn("(no description)", msgs[0]["content"])
+        self.assertIn("(no description)", msgs[0])
 
     def test_none_assignees_does_not_crash(self):
         task = _make_task(assignees=None)
         msgs = _build_messages(task)
-        self.assertIn("—", msgs[0]["content"])
+        self.assertIn("—", msgs[0])
 
     def test_none_tags_does_not_crash(self):
         task = _make_task(tags=None)
         msgs = _build_messages(task)
-        self.assertIn("—", msgs[0]["content"])
+        self.assertIn("—", msgs[0])
 
 
 class TestReportIncidentPromptRegistration(unittest.TestCase):
@@ -246,34 +239,34 @@ class TestReportIncidentMessages(unittest.TestCase):
         msgs = report_incident()
         self.assertEqual(len(msgs), 1)
 
-    def test_message_role_is_user(self):
+    def test_message_is_a_string(self):
         msgs = report_incident()
-        self.assertEqual(msgs[0]["role"], "user")
+        self.assertIsInstance(msgs[0], str)
 
     def test_message_contains_gh_issue_create(self):
         msgs = report_incident()
-        self.assertIn("gh issue create", msgs[0]["content"])
+        self.assertIn("gh issue create", msgs[0])
 
     def test_message_contains_repo_url(self):
         msgs = report_incident()
-        self.assertIn("https://github.com/Crpaxton4/devcontainer-features/", msgs[0]["content"])
+        self.assertIn("https://github.com/Crpaxton4/devcontainer-features/", msgs[0])
 
     def test_message_contains_transport_env_value(self):
         with patch.dict("os.environ", {"ODOO_TRANSPORT": "json2"}):
             msgs = report_incident()
-        self.assertIn("json2", msgs[0]["content"])
+        self.assertIn("json2", msgs[0])
 
     def test_message_contains_sdk_version_tag(self):
         msgs = report_incident()
-        self.assertIn("<sdk_version>", msgs[0]["content"])
+        self.assertIn("<sdk_version>", msgs[0])
 
     def test_message_contains_python_version_tag(self):
         msgs = report_incident()
-        self.assertIn("<python_version>", msgs[0]["content"])
+        self.assertIn("<python_version>", msgs[0])
 
     def test_message_contains_privacy_guardrail(self):
         msgs = report_incident()
-        self.assertIn("ODOO_URL", msgs[0]["content"])
+        self.assertIn("ODOO_URL", msgs[0])
 
 
 if __name__ == "__main__":

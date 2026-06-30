@@ -5,7 +5,7 @@ import sys
 _REPO = "https://github.com/Crpaxton4/devcontainer-features/"
 
 
-def report_incident() -> list[dict]:
+def report_incident() -> list[str]:
     """Create a GitHub issue for a live-environment incident via the gh CLI.
 
     Reads safe SDK environment details at invocation time and returns structured
@@ -50,4 +50,4 @@ def report_incident() -> list[dict]:
         f"</incident_report_instructions>"
     )
 
-    return [{"role": "user", "content": instructions}]
+    return [instructions]
