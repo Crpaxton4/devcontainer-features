@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.2](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.1...personal-features-v1.13.2) (2026-06-30)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** use mail.message.model instead of res_model in chatter query ([#78](https://github.com/Crpaxton4/devcontainer-features/issues/78)) ([ef5458a](https://github.com/Crpaxton4/devcontainer-features/commit/ef5458a5dbf81a852ff6b42dbf1635bc719ed77a))
+
 ## [1.13.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.0...personal-features-v1.13.1) (2026-06-30)
 
 
