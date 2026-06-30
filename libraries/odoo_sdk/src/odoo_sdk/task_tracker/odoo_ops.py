@@ -48,8 +48,9 @@ def get_employee_id(client: OdooClient, uid: int) -> int:
     records = client.execute(
         "hr.employee",
         "search_read",
-        [[("user_id", "=", uid)]],
-        {"fields": ["id"], "limit": 1},
+        [("user_id", "=", uid)],
+        fields=["id"],
+        limit=1,
     )
     if not records:
         raise RuntimeError(
@@ -112,12 +113,10 @@ def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list
     messages = client.execute(
         "mail.message",
         "search_read",
-        [[("res_model", "=", "project.task"), ("res_id", "=", task_id)]],
-        {
-            "fields": ["id", "date", "author_id", "message_type", "subtype_id", "body"],
-            "order": "date asc",
-            "limit": limit,
-        },
+        [("res_model", "=", "project.task"), ("res_id", "=", task_id)],
+        fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
+        order="date asc",
+        limit=limit,
     )
     result = []
     for m in messages:
@@ -139,11 +138,9 @@ def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
     records = client.execute(
         "project.task",
         "search_read",
-        [[("id", "=", task_id)]],
-        {
-            "fields": ["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
-            "limit": 1,
-        },
+        [("id", "=", task_id)],
+        fields=["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
+        limit=1,
     )
     if not records:
         return None

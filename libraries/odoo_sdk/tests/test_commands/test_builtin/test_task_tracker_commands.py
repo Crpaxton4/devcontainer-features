@@ -127,7 +127,7 @@ class TestTaskListCommand(unittest.TestCase):
             result = TaskListCommand(client).execute()
         client.execute.assert_called_once()
         call = client.execute.call_args
-        domain = call.args[2][0]
+        domain = call.args[2]
         self.assertIn(("user_ids", "in", [7]), domain)
         self.assertEqual(result, [{"id": 1, "name": "Bug fix"}])
 
@@ -137,7 +137,7 @@ class TestTaskListCommand(unittest.TestCase):
         with patch(_LIST_GUARD):
             TaskListCommand(client).execute(stage="Done")
         call = client.execute.call_args
-        domain = call.args[2][0]
+        domain = call.args[2]
         self.assertIn(("stage_id.name", "ilike", "Done"), domain)
 
     def test_returns_empty_when_no_project_match(self):
@@ -164,7 +164,7 @@ class TestTaskListCommand(unittest.TestCase):
         ):
             TaskListCommand(client).execute(project_name_query="Acct")
         call = client.execute.call_args
-        domain = call.args[2][0]
+        domain = call.args[2]
         self.assertIn(("project_id", "in", [5]), domain)
 
     def test_respects_limit(self):
@@ -173,7 +173,7 @@ class TestTaskListCommand(unittest.TestCase):
         with patch(_LIST_GUARD):
             TaskListCommand(client).execute(limit=5)
         call = client.execute.call_args
-        self.assertEqual(call.args[3]["limit"], 5)
+        self.assertEqual(call.kwargs["limit"], 5)
 
 
 # ── TaskStatusCommand ─────────────────────────────────────────────────────────
