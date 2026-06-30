@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.13.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.12.0...personal-features-v1.13.0) (2026-06-29)
+
+
+### Features
+
+* **odoo-sdk:** auto-create task branch on start_task ([#70](https://github.com/Crpaxton4/devcontainer-features/issues/70)) ([8c64568](https://github.com/Crpaxton4/devcontainer-features/commit/8c64568eda3afefbced69e1700cc519168b06e08))
+
+## [1.12.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.11.1...personal-features-v1.12.0) (2026-06-29)
+
+
+### Features
+
+* **odoo-sdk:** add report_incident MCP prompt for live incident GitHub issues ([#68](https://github.com/Crpaxton4/devcontainer-features/issues/68)) ([1f2d857](https://github.com/Crpaxton4/devcontainer-features/commit/1f2d85722096548afe0bbfa569104adc8d2a92e8))
+
 ## [1.11.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.11.0...personal-features-v1.11.1) (2026-06-29)
 
 

@@ -17,6 +17,8 @@ from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
 from odoo_sdk.task_tracker.state import TaskNotRunningError, TaskStateDB
 
+_SP_PATCH = "odoo_sdk.commands.builtin.start_task.subprocess"
+
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
 _NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
@@ -49,6 +51,24 @@ def _cancelled() -> MagicMock:
     r = MagicMock()
     r.action = "cancel"
     return r
+
+
+def _make_sp(current_branch: str = "main", branches: tuple = ("main",), dirty: bool = False) -> MagicMock:
+    """Build a subprocess mock for start_task git branch helpers."""
+    sp = MagicMock()
+    def _run(args, **kwargs):
+        r = MagicMock()
+        r.returncode = 0
+        r.stdout = ""
+        if "rev-parse" in args:
+            r.stdout = f"{current_branch}\n"
+        elif args[1] == "branch":
+            r.stdout = "".join(f"{b}\n" for b in branches)
+        elif args[1] == "status":
+            r.stdout = "M file.py\n" if dirty else ""
+        return r
+    sp.run.side_effect = _run
+    return sp
 
 
 # ── GetTaskChatterCommand ─────────────────────────────────────────────────────
@@ -337,9 +357,11 @@ class TestStartTaskCommand(unittest.TestCase):
     def test_single_project_and_task_with_confirmation(self):
         client = _client()
         db = _tmp_db()
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -384,9 +406,12 @@ class TestStartTaskCommand(unittest.TestCase):
         ctx = self._ctx(
             _accepted(MagicMock(selection=2)),
             _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
         )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -409,9 +434,12 @@ class TestStartTaskCommand(unittest.TestCase):
         ctx = self._ctx(
             _accepted(MagicMock(selection=1)),
             _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
         )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -464,9 +492,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         db.create_session(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -484,9 +514,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         db.set_setting("employee_id", "42")
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="task"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -575,9 +607,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.start_task.name_search_projects") as mock_proj,
             patch("odoo_sdk.commands.builtin.start_task.name_search_tasks") as mock_task,
@@ -596,9 +630,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         client.execute.return_value = [{"id": 20, "name": "Task", "project_id": [7, "HR"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="task"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
             patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
@@ -613,9 +649,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         client.execute.return_value = []  # task_id lookup fails
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
                 "odoo_sdk.commands.builtin.start_task.name_search_projects",
@@ -649,9 +687,11 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         with (
             patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
             patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
             patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
@@ -661,6 +701,74 @@ class TestStartTaskCommand(unittest.TestCase):
         ):
             result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
         self.assertNotIn("warning", result)
+
+    def test_start_task_skips_branch_if_already_on_task_branch(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
+        ctx.sample = AsyncMock()
+        with (
+            patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp(current_branch="10#some-desc")),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
+        ctx.sample.assert_not_called()
+        # only one elicit call (the confirmation), not a second one for branch selection
+        self.assertEqual(ctx.elicit.call_count, 1)
+        self.assertNotIn("branch_name", result)
+
+    def test_start_task_branch_selection_cancelled(self):
+        client = _client()
+        db = _tmp_db()
+        ctx = self._ctx(
+            _accepted(MagicMock(confirmed=True)),
+            _cancelled(),
+        )
+        ctx.sample = AsyncMock()
+        with (
+            patch(_START_GUARD),
+            patch(_SP_PATCH, _make_sp()),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.name_search_projects",
+                return_value=[{"id": 5, "name": "Acct"}],
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
+                return_value=[{"id": 10, "name": "Fix VAT"}],
+            ),
+        ):
+            result = self._run(StartTaskCommand(client).execute("VAT", ctx))
+        self.assertEqual(result, {"error": "Branch selection cancelled."})
+
+    def test_start_task_auto_stashes_dirty_tree(self):
+        client = _client()
+        db = _tmp_db()
+        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
+        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
+        sp = _make_sp(dirty=True)
+        with (
+            patch(_START_GUARD),
+            patch(_SP_PATCH, sp),
+            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
+            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertTrue(any(c[:3] == ["git", "stash", "push"] for c in called))
+        self.assertIn(["git", "stash", "pop"], called)
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
