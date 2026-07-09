@@ -143,7 +143,12 @@ class TestServerProfilingWiring(unittest.TestCase):
             "odoo_sdk.mcp.server.FastMCP", return_value=MagicMock()
         ), patch("odoo_sdk.mcp.server._profiled", return_value=a) as mock_profiled:
             OdooMCPServer(_registry(), explicit_tools={"a": a}, profiling=True)
-        mock_profiled.assert_called_once_with(a, "a")
+        # TOON wraps first (inner), profiling wraps the result (outer), so the
+        # tool passed to _profiled is the TOON wrapper around ``a``, not ``a``.
+        mock_profiled.assert_called_once()
+        wrapped_fn, tool_name = mock_profiled.call_args.args
+        self.assertEqual(tool_name, "a")
+        self.assertIs(wrapped_fn.__wrapped__, a)
 
 
 if __name__ == "__main__":

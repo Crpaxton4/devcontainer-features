@@ -3,6 +3,7 @@ import cProfile
 import functools
 import inspect
 import logging
+import os
 import tempfile
 import time
 import zipfile
@@ -18,6 +19,87 @@ log = logging.getLogger(__name__)
 
 # A tool spec is either a bare callable, or a ``(callable, description)`` pair.
 ToolSpec = Union[Callable[..., Any], Tuple[Callable[..., Any], str]]
+
+#: Environment variable that gates TOON-encoded tool output. When set to a
+#: truthy value (``1``/``true``/``yes``/``on``), structured tool results are
+#: serialized to `TOON <https://github.com/toon-format/toon-python>`_ instead of
+#: being returned as native objects, trading a marginal encoding cost for a
+#: substantial reduction in the tokens an LLM spends reading the result.
+TOON_OUTPUT_ENV = "ODOO_TOON_OUTPUT"
+
+
+def _toon_output_enabled() -> bool:
+    """Return whether TOON output is enabled via the environment flag.
+
+    Reading the flag on every call (rather than at import time) keeps the
+    behavior togglable per process invocation and makes the gate trivial to
+    exercise from tests.
+
+    :return: ``True`` when :data:`TOON_OUTPUT_ENV` is set to a truthy value.
+    :rtype: bool
+    """
+
+    return os.environ.get(TOON_OUTPUT_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _to_toon(result: Any) -> Any:
+    """Serialize a structured tool ``result`` to TOON, gated by the env flag.
+
+    Only dicts and lists are converted; scalars and any values TOON cannot
+    encode are returned unchanged so existing behavior is preserved when the
+    flag is off or the payload is not structured data.
+
+    :param result: The raw value returned by a command's ``execute``.
+    :type result: Any
+    :return: A TOON string when conversion applies, otherwise ``result``.
+    :rtype: Any
+    """
+
+    if not _toon_output_enabled() or not isinstance(result, (dict, list)):
+        return result
+    from toon_format import encode
+
+    try:
+        return encode(result)
+    except Exception:
+        # Defensive: never let an encoding hiccup break a tool call; fall back
+        # to the raw payload so the flag-on path degrades to flag-off behavior.
+        return result
+
+
+def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool callable so its result is routed through :func:`_to_toon`.
+
+    The wrapper is always applied, but :func:`_to_toon` is a no-op unless the
+    ``ODOO_TOON_OUTPUT`` flag is set, so behavior is unchanged when the flag is
+    off. Sync and async tools are handled separately, and the original typed
+    signature is preserved so FastMCP builds the same wire schema (including any
+    ``ctx`` parameter).
+
+    :param tool_fn: The tool callable to wrap.
+    :type tool_fn: Callable[..., Any]
+    :return: A signature-preserving wrapper that TOON-encodes the result.
+    :rtype: Callable[..., Any]
+    """
+    if asyncio.iscoroutinefunction(tool_fn):
+
+        @functools.wraps(tool_fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return _to_toon(await tool_fn(*args, **kwargs))
+
+    else:
+
+        @functools.wraps(tool_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return _to_toon(tool_fn(*args, **kwargs))
+
+    wrapper.__signature__ = inspect.signature(tool_fn)
+    return wrapper
 
 
 class OdooMCPServer:
@@ -67,9 +149,11 @@ class OdooMCPServer:
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.
 
-        When profiling is enabled the tool callable is wrapped so every dispatch
-        is profiled; the wrapper preserves the original typed signature so the
-        wire schema (including any FastMCP ``ctx`` parameter) is unchanged.
+        Each tool callable is wrapped so its result is routed through
+        :func:`_to_toon` (a no-op unless ``ODOO_TOON_OUTPUT`` is set) and, when
+        profiling is enabled, wrapped again so every dispatch is profiled. Both
+        wrappers preserve the original typed signature so the wire schema
+        (including any FastMCP ``ctx`` parameter) is unchanged.
 
         :return: None.
         :rtype: None
@@ -77,6 +161,7 @@ class OdooMCPServer:
 
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
+            tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
                 tool_fn = _profiled(tool_fn, name)
             self.mcp.add_tool(
