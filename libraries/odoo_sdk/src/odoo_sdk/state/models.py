@@ -56,3 +56,47 @@ class TaskSession:
         h, rem = divmod(total, 3600)
         m, s = divmod(rem, 60)
         return f"{h}h {m}m {s}s"
+
+
+@dataclass
+class EventRecord:
+    """A point-in-time event row in the unified ``events`` timeseries table.
+
+    This is the persistence-layer twin of the pure
+    :class:`odoo_sdk.sessionization.RawEvent`. It is typed by ``source`` (e.g.
+    ``commit``, ``merge``, ``review``, ``agent``) and carries the extracted task
+    identifiers as a JSON list so a single event may attribute to several tasks.
+    """
+
+    id: Optional[int]
+    source: str
+    timestamp: datetime
+    task_ids: list[str]
+    repo: str
+    pr_num: int = 0
+    branch: str = ""
+    subject: str = ""
+    payload: Optional[dict] = None
+
+
+@dataclass
+class SessionWindow:
+    """A per-task computed time window in the unified ``sessions`` table.
+
+    Rows are produced by the sessionization ETL and are queryable by date range.
+    They live alongside the ``task_sessions`` FSM store rather than replacing it.
+    """
+
+    id: Optional[int]
+    task_id: str
+    repo: str
+    started_at: datetime
+    ended_at: datetime
+    strategy_name: str = "development"
+    category: str = "Development"
+    pr_num: int = 0
+
+    @property
+    def duration_seconds(self) -> float:
+        """Return the window duration in seconds."""
+        return (self.ended_at - self.started_at).total_seconds()

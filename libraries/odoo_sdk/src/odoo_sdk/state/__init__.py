@@ -8,8 +8,10 @@ injected into commands alongside :class:`~odoo_sdk.client.client.OdooClient`.
 from .config import LocalConfig, OdooConnectionSettings
 from .db import LocalStateClient, TaskStateDB
 from .models import (
+    EventRecord,
     InvalidStateTransitionError,
     ProjectIdError,
+    SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskSession,
@@ -23,6 +25,8 @@ __all__ = [
     "OdooConnectionSettings",
     "TaskState",
     "TaskSession",
+    "EventRecord",
+    "SessionWindow",
     "TaskAlreadyRunningError",
     "TaskNotRunningError",
     "InvalidStateTransitionError",

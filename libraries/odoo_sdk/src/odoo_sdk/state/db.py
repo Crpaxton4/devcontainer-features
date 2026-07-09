@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Optional
 
 from .models import (
+    EventRecord,
     InvalidStateTransitionError,
     ProjectIdError,
+    SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskSession,
@@ -48,6 +50,38 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+"""
+
+
+# Unified event/session model for the sessionization ETL. This is additive and
+# lives alongside the ``task_sessions`` FSM above; it never modifies it.
+_SESSIONIZATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    source    TEXT    NOT NULL,
+    timestamp TEXT    NOT NULL,
+    task_ids  TEXT    NOT NULL DEFAULT '[]',
+    repo      TEXT    NOT NULL DEFAULT '',
+    pr_num    INTEGER NOT NULL DEFAULT 0,
+    branch    TEXT    NOT NULL DEFAULT '',
+    subject   TEXT    NOT NULL DEFAULT '',
+    payload   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id       TEXT    NOT NULL,
+    repo          TEXT    NOT NULL DEFAULT '',
+    started_at    TEXT    NOT NULL,
+    ended_at      TEXT    NOT NULL,
+    strategy_name TEXT    NOT NULL DEFAULT 'development',
+    category      TEXT    NOT NULL DEFAULT 'Development',
+    pr_num        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
 """
 
 
@@ -100,6 +134,35 @@ def _parse_session(row: tuple) -> TaskSession:
     )
 
 
+def _parse_event(row: tuple) -> EventRecord:
+    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload) = row
+    return EventRecord(
+        id=id_,
+        source=source,
+        timestamp=datetime.fromisoformat(ts),
+        task_ids=json.loads(task_ids),
+        repo=repo,
+        pr_num=pr_num,
+        branch=branch,
+        subject=subject,
+        payload=json.loads(payload) if payload else None,
+    )
+
+
+def _parse_session_window(row: tuple) -> SessionWindow:
+    (id_, task_id, repo, started, ended, strategy, category, pr_num) = row
+    return SessionWindow(
+        id=id_,
+        task_id=task_id,
+        repo=repo,
+        started_at=datetime.fromisoformat(started),
+        ended_at=datetime.fromisoformat(ended),
+        strategy_name=strategy,
+        category=category,
+        pr_num=pr_num,
+    )
+
+
 class LocalStateClient:
     """SQLite-backed state store for task tracking sessions."""
 
@@ -117,6 +180,7 @@ class LocalStateClient:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            conn.executescript(_SESSIONIZATION_SCHEMA)
 
     def get_active_session(self, task_id: int) -> Optional[TaskSession]:
         with self._connect() as conn:
@@ -266,6 +330,118 @@ class LocalStateClient:
                 "UPDATE task_sessions SET timesheet_id = ? WHERE timesheet_id = ?",
                 (new_timesheet_id, old_timesheet_id),
             )
+
+    # ── Unified event/session model (additive; alongside the FSM store) ──────
+
+    def add_event(self, event: EventRecord) -> EventRecord:
+        """Insert one event into the unified ``events`` timeseries table."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO events (source, timestamp, task_ids, repo, pr_num, "
+                "branch, subject, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.source,
+                    event.timestamp.isoformat(),
+                    json.dumps(event.task_ids),
+                    event.repo,
+                    event.pr_num,
+                    event.branch,
+                    event.subject,
+                    json.dumps(event.payload) if event.payload is not None else None,
+                ),
+            )
+            event_id = cursor.lastrowid
+        return self.get_event(event_id)  # type: ignore[return-value]
+
+    def get_event(self, event_id: int) -> Optional[EventRecord]:
+        """Return one event by id, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, source, timestamp, task_ids, repo, pr_num, branch, "
+                "subject, payload FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        return _parse_event(tuple(row)) if row else None
+
+    def get_events(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[EventRecord]:
+        """Return events ordered by timestamp, optionally bounded by range."""
+        clauses: list[str] = []
+        params: list[str] = []
+        if start is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start.isoformat())
+        if end is not None:
+            clauses.append("timestamp < ?")
+            params.append(end.isoformat())
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, source, timestamp, task_ids, repo, pr_num, branch, "
+                f"subject, payload FROM events{where} ORDER BY timestamp",
+                tuple(params),
+            ).fetchall()
+        return [_parse_event(tuple(r)) for r in rows]
+
+    def add_session_window(self, window: SessionWindow) -> SessionWindow:
+        """Insert one computed session window into the ``sessions`` table."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO sessions (task_id, repo, started_at, ended_at, "
+                "strategy_name, category, pr_num) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    window.task_id,
+                    window.repo,
+                    window.started_at.isoformat(),
+                    window.ended_at.isoformat(),
+                    window.strategy_name,
+                    window.category,
+                    window.pr_num,
+                ),
+            )
+            window_id = cursor.lastrowid
+        return self.get_session_window(window_id)  # type: ignore[return-value]
+
+    def get_session_window(self, window_id: int) -> Optional[SessionWindow]:
+        """Return one session window by id, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, task_id, repo, started_at, ended_at, strategy_name, "
+                "category, pr_num FROM sessions WHERE id = ?",
+                (window_id,),
+            ).fetchone()
+        return _parse_session_window(tuple(row)) if row else None
+
+    def get_session_windows(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[SessionWindow]:
+        """Return session windows ordered by start, optionally range-bounded."""
+        clauses: list[str] = []
+        params: list[str] = []
+        if start is not None:
+            clauses.append("started_at >= ?")
+            params.append(start.isoformat())
+        if end is not None:
+            clauses.append("started_at < ?")
+            params.append(end.isoformat())
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, task_id, repo, started_at, ended_at, strategy_name, "
+                f"category, pr_num FROM sessions{where} ORDER BY started_at",
+                tuple(params),
+            ).fetchall()
+        return [_parse_session_window(tuple(r)) for r in rows]
+
+    def clear_session_windows(self) -> None:
+        """Delete all computed session windows (a fresh materialization)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM sessions")
 
     def get_setting(self, key: str) -> Optional[str]:
         with self._connect() as conn:
