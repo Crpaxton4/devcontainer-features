@@ -1,9 +1,9 @@
 from typing import Any
 
 from ..command import Command
-from odoo_sdk.task_tracker.env_check import assert_odoo_devcontainer
-from odoo_sdk.task_tracker.odoo_ops import post_chatter_note
-from odoo_sdk.task_tracker.state import TaskStateDB
+from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 class TaskNoteCommand(Command):
@@ -26,7 +26,7 @@ class TaskNoteCommand(Command):
         db = TaskStateDB()
         session = db.get_active_session(task_id)
         if session is None:
-            from odoo_sdk.task_tracker.state import TaskNotRunningError
+            from odoo_sdk.state import TaskNotRunningError
             raise TaskNotRunningError(f"No active session for task {task_id}.")
 
         message_id = post_chatter_note(self._client, task_id, note)

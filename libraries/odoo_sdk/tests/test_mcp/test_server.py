@@ -1,53 +1,24 @@
+import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_sdk.commands import Command
 from odoo_sdk.commands.command_registry import Registry
 from odoo_sdk.mcp.server import OdooMCPServer
 
 INSTRUCTIONS = "Provides tools for interacting with Odoo ERP"
 
 
-class EchoCommand(Command):
-    """Echo a message back, optionally shouting it."""
-
-    _name = "internal_echo"
-    _description = "Echo a message back."
-
-    def execute(self, message: str, shout: bool = False) -> str:
-        return message.upper() if shout else message
+def _registry():
+    return Registry(Mock())
 
 
-class CmdA(Command):
-    _name = "a"
-    _description = "A"
-
-    def execute(self) -> str:
-        return "A-result"
-
-
-class CmdB(Command):
-    _name = "b"
-    _description = "B"
-
-    def execute(self) -> str:
-        return "B-result"
-
-
-def _registry(**commands):
-    registry = Registry(Mock())
-    for name, command in commands.items():
-        registry.register(name, command)
-    return registry
-
-
-def _build_with_mock_mcp(registry):
+def _build_with_mock_mcp(registry, explicit_tools=None):
     """Build a server with FastMCP patched out; capture the tools added."""
     mock_mcp = MagicMock()
     added = []
     mock_mcp.add_tool.side_effect = added.append
     with patch("odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp):
-        server = OdooMCPServer(registry)
+        server = OdooMCPServer(registry, explicit_tools=explicit_tools)
     return server, mock_mcp, added
 
 
@@ -71,68 +42,120 @@ class TestServerConstruction(unittest.TestCase):
         )
 
 
-class TestBootstrapTools(unittest.TestCase):
-    def test_registers_one_tool_per_command(self):
-        registry = _registry(a=CmdA, b=CmdB)
-        _, mock_mcp, _ = _build_with_mock_mcp(registry)
-        self.assertEqual(mock_mcp.add_tool.call_count, 2)
-
-    def test_empty_registry_registers_no_tools(self):
+class TestExplicitToolRegistration(unittest.TestCase):
+    def test_no_explicit_tools_registers_no_tools(self):
         _, mock_mcp, _ = _build_with_mock_mcp(_registry())
         mock_mcp.add_tool.assert_not_called()
 
-    def test_tool_name_comes_from_registry_key(self):
-        # Registration key differs from the command's _name.
-        registry = _registry(public_name=EchoCommand)
-        _, _, added = _build_with_mock_mcp(registry)
+    def test_registers_one_tool_per_explicit_tool(self):
+        def a() -> str:
+            """Tool A."""
+            return "A-result"
+
+        def b() -> str:
+            """Tool B."""
+            return "B-result"
+
+        _, mock_mcp, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"a": a, "b": b}
+        )
+        self.assertEqual(mock_mcp.add_tool.call_count, 2)
+        self.assertEqual(sorted(t.name for t in added), ["a", "b"])
+
+    def test_tool_name_comes_from_mapping_key(self):
+        def impl(message: str, shout: bool = False) -> str:
+            """Echo a message back."""
+            return message.upper() if shout else message
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"public_name": impl}
+        )
         self.assertEqual(added[0].name, "public_name")
 
-    def test_tool_description_from_command(self):
-        registry = _registry(echo=EchoCommand)
-        _, _, added = _build_with_mock_mcp(registry)
+    def test_description_from_spec_pair(self):
+        def impl() -> str:
+            return "x"
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"echo": (impl, "Echo a message back.")}
+        )
         self.assertEqual(added[0].description, "Echo a message back.")
 
-    def test_tool_schema_introspected_from_execute(self):
-        registry = _registry(echo=EchoCommand)
-        _, _, added = _build_with_mock_mcp(registry)
+    def test_description_falls_back_to_docstring(self):
+        def impl() -> str:
+            """Docstring description."""
+            return "x"
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"echo": impl}
+        )
+        self.assertEqual(added[0].description, "Docstring description.")
+
+    def test_schema_from_explicit_signature(self):
+        def echo(message: str, shout: bool = False) -> str:
+            """Echo a message back."""
+            return message.upper() if shout else message
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"echo": echo}
+        )
         params = added[0].parameters
         self.assertEqual(set(params["properties"]), {"message", "shout"})
         self.assertEqual(params["required"], ["message"])
         self.assertEqual(params["properties"]["message"]["type"], "string")
 
-    def test_each_tool_routes_to_its_own_command(self):
-        # Regression guard for the closure-capture bug where every tool ran the
-        # last registered command.
-        registry = _registry(a=CmdA, b=CmdB)
-        _, _, added = _build_with_mock_mcp(registry)
+    def test_each_tool_routes_to_its_own_callable(self):
+        def a() -> str:
+            """A."""
+            return "A-result"
+
+        def b() -> str:
+            """B."""
+            return "B-result"
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"a": a, "b": b}
+        )
         tools = {tool.name: tool for tool in added}
         self.assertEqual(tools["a"].fn(), "A-result")
         self.assertEqual(tools["b"].fn(), "B-result")
 
-    def test_tool_invokes_command_with_arguments(self):
-        registry = _registry(echo=EchoCommand)
-        _, _, added = _build_with_mock_mcp(registry)
+    def test_tool_invokes_callable_with_arguments(self):
+        def echo(message: str, shout: bool = False) -> str:
+            """Echo."""
+            return message.upper() if shout else message
+
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"echo": echo}
+        )
         self.assertEqual(added[0].fn(message="hi", shout=True), "HI")
 
-    def test_command_instantiated_with_registry_client(self):
-        seen = []
+    def test_async_tool_registered_as_coroutine(self):
+        async def async_cmd(value: int) -> int:
+            """Async tool."""
+            return value * 2
 
-        class TrackingCommand(Command):
-            _name = "tracked"
-            _description = "tracked"
+        _, _, added = _build_with_mock_mcp(
+            _registry(), explicit_tools={"async_cmd": async_cmd}
+        )
+        self.assertTrue(asyncio.iscoroutinefunction(added[0].fn))
+        self.assertEqual(asyncio.run(added[0].fn(value=5)), 10)
 
-            def __init__(self, client=None):
-                super().__init__(client)
-                seen.append(self._client)
+    def test_sync_and_async_tools_registered_independently(self):
+        async def async_cmd(value: int) -> int:
+            """Async."""
+            return value * 2
 
-            def execute(self) -> str:
-                return "ok"
+        def sync_cmd(value: int) -> int:
+            """Sync."""
+            return value + 1
 
-        client = Mock()
-        registry = Registry(client)
-        registry.register("tracked", TrackingCommand)
-        _build_with_mock_mcp(registry)
-        self.assertIn(client, seen)
+        _, _, added = _build_with_mock_mcp(
+            _registry(),
+            explicit_tools={"async_cmd": async_cmd, "sync_cmd": sync_cmd},
+        )
+        names = {t.name for t in added}
+        self.assertEqual(names, {"async_cmd", "sync_cmd"})
 
 
 class TestRun(unittest.TestCase):

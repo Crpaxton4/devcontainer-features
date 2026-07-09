@@ -1,23 +1,23 @@
 """Tests for task-tracking Command subclasses."""
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin.get_task import GetTaskCommand
 from odoo_sdk.commands.builtin.get_task_chatter import GetTaskChatterCommand
 from odoo_sdk.commands.builtin.resume_task import ResumeTaskCommand
+from odoo_sdk.commands.builtin.search_projects import SearchProjectsCommand
+from odoo_sdk.commands.builtin.search_tasks import SearchTasksCommand
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.commands.builtin.task_list import TaskListCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
-from odoo_sdk.task_tracker.state import TaskNotRunningError, TaskStateDB
-
-_SP_PATCH = "odoo_sdk.commands.builtin.start_task.subprocess"
+from odoo_sdk.state import LocalStateClient as TaskStateDB
+from odoo_sdk.state import TaskNotRunningError
 
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
@@ -40,35 +40,9 @@ def _client(uid: int = 7) -> MagicMock:
     return c
 
 
-def _accepted(data) -> MagicMock:
-    r = MagicMock()
-    r.action = "accept"
-    r.data = data
-    return r
-
-
-def _cancelled() -> MagicMock:
-    r = MagicMock()
-    r.action = "cancel"
-    return r
-
-
-def _make_sp(current_branch: str = "main", branches: tuple = ("main",), dirty: bool = False) -> MagicMock:
-    """Build a subprocess mock for start_task git branch helpers."""
-    sp = MagicMock()
-    def _run(args, **kwargs):
-        r = MagicMock()
-        r.returncode = 0
-        r.stdout = ""
-        if "rev-parse" in args:
-            r.stdout = f"{current_branch}\n"
-        elif args[1] == "branch":
-            r.stdout = "".join(f"{b}\n" for b in branches)
-        elif args[1] == "status":
-            r.stdout = "M file.py\n" if dirty else ""
-        return r
-    sp.run.side_effect = _run
-    return sp
+def _cmd_with_db(cmd_cls, client, db):
+    """Instantiate a command with an injected local state client (db)."""
+    return cmd_cls(client, state=db)
 
 
 # ── GetTaskChatterCommand ─────────────────────────────────────────────────────
@@ -334,7 +308,7 @@ class TestResumeTaskCommand(unittest.TestCase):
     def test_raises_when_running(self):
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        from odoo_sdk.task_tracker.state import InvalidStateTransitionError
+        from odoo_sdk.state import InvalidStateTransitionError
         with (
             patch(_RESUME_GUARD),
             patch("odoo_sdk.commands.builtin.resume_task.TaskStateDB", return_value=db),
@@ -343,517 +317,198 @@ class TestResumeTaskCommand(unittest.TestCase):
                 ResumeTaskCommand(_client()).execute(1)
 
 
+
+# ── SearchProjectsCommand ─────────────────────────────────────────────────────
+
+class TestSearchProjectsCommand(unittest.TestCase):
+    def test_delegates_to_name_search_projects(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.search_projects.name_search_projects",
+            return_value=[{"id": 5, "name": "Accounting"}],
+        ) as mock_search:
+            result = SearchProjectsCommand(client).execute("Acc")
+        mock_search.assert_called_once_with(client, "Acc", limit=10)
+        self.assertEqual(result, [{"id": 5, "name": "Accounting"}])
+
+    def test_passes_custom_limit(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.search_projects.name_search_projects",
+            return_value=[],
+        ) as mock_search:
+            SearchProjectsCommand(client).execute("x", limit=3)
+        mock_search.assert_called_once_with(client, "x", limit=3)
+
+    def test_returns_empty_list_when_no_matches(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.search_projects.name_search_projects",
+            return_value=[],
+        ):
+            self.assertEqual(SearchProjectsCommand(client).execute("nope"), [])
+
+
+# ── SearchTasksCommand ────────────────────────────────────────────────────────
+
+class TestSearchTasksCommand(unittest.TestCase):
+    def test_delegates_to_name_search_tasks_with_project_scope(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.search_tasks.name_search_tasks",
+            return_value=[{"id": 10, "name": "Fix VAT"}],
+        ) as mock_search:
+            result = SearchTasksCommand(client).execute("VAT", project_id=5)
+        mock_search.assert_called_once_with(client, "VAT", 5, limit=10)
+        self.assertEqual(result, [{"id": 10, "name": "Fix VAT"}])
+
+    def test_passes_custom_limit(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.search_tasks.name_search_tasks",
+            return_value=[],
+        ) as mock_search:
+            SearchTasksCommand(client).execute("x", project_id=1, limit=2)
+        mock_search.assert_called_once_with(client, "x", 1, limit=2)
+
+
 # ── StartTaskCommand ──────────────────────────────────────────────────────────
 
 class TestStartTaskCommand(unittest.TestCase):
-    def _run(self, coro):
-        return asyncio.run(coro)
-
-    def _ctx(self, *responses) -> MagicMock:
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(side_effect=list(responses))
-        return ctx
-
-    def test_single_project_and_task_with_confirmation(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
+    def _start(self, client, db, **kwargs):
         with (
             patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Accounting"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
             patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
-            result = self._run(StartTaskCommand(client).execute("VAT", ctx, "Accounting"))
+            result = _cmd_with_db(StartTaskCommand, client, db).execute(**kwargs)
+        return result, mock_note
+
+    def _base_kwargs(self, **overrides):
+        kwargs = {
+            "task_id": 10,
+            "task_name": "Fix VAT",
+            "project_id": 5,
+            "project_name": "Accounting",
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_creates_session_and_timesheet(self):
+        client = _client()
+        db = _tmp_db()
+        result, mock_note = self._start(client, db, **self._base_kwargs())
         self.assertEqual(result["task_id"], 10)
         self.assertEqual(result["task_name"], "Fix VAT")
+        self.assertEqual(result["project_name"], "Accounting")
         self.assertEqual(result["timesheet_id"], 99)
+        self.assertIn("session_id", result)
+        mock_note.assert_called_once_with(client, 10, "Work started on this task.")
+        self.assertIsNotNone(db.get_active_session(10))
 
-    def test_cancels_on_declined_confirmation(self):
+    def test_echoes_branch_name_and_warning(self):
         client = _client()
         db = _tmp_db()
-        ctx = self._ctx(_cancelled())
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Accounting"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("VAT", ctx))
-        self.assertIn("error", result)
-        self.assertIn("cancel", result["error"].lower())
-
-    def test_disambiguates_multiple_projects(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(
-            _accepted(MagicMock(selection=2)),
-            _accepted(MagicMock(confirmed=True)),
-            _accepted(MagicMock(selection=1)),
+        result, _ = self._start(
+            client, db, **self._base_kwargs(branch_name="10#fix-vat", warning="heads up")
         )
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 1, "name": "HR"}, {"id": 2, "name": "Accounting"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("VAT", ctx))
-        self.assertEqual(result["task_id"], 10)
+        self.assertEqual(result["branch_name"], "10#fix-vat")
+        self.assertEqual(result["warning"], "heads up")
 
-    def test_disambiguates_multiple_tasks(self):
+    def test_no_branch_or_warning_keys_when_absent(self):
         client = _client()
         db = _tmp_db()
-        ctx = self._ctx(
-            _accepted(MagicMock(selection=1)),
-            _accepted(MagicMock(confirmed=True)),
-            _accepted(MagicMock(selection=1)),
-        )
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Accounting"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}, {"id": 11, "name": "Fix Rounding"}],
-            ),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("Fix", ctx))
-        self.assertEqual(result["task_id"], 10)
-
-    def test_error_when_no_projects(self):
-        client = _client()
-        ctx = MagicMock()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[],
-            ),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=_tmp_db()),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
-
-    def test_error_when_no_tasks(self):
-        client = _client()
-        ctx = MagicMock()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[],
-            ),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=_tmp_db()),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
+        result, _ = self._start(client, db, **self._base_kwargs())
+        self.assertNotIn("branch_name", result)
+        self.assertNotIn("warning", result)
 
     def test_error_when_already_active(self):
         client = _client()
         db = _tmp_db()
         db.create_session(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Accounting"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("VAT", ctx))
+        result, _ = self._start(client, db, **self._base_kwargs())
         self.assertIn("error", result)
+        self.assertIn("active session", result["error"])
 
     def test_uses_cached_employee_id(self):
         client = _client()
         db = _tmp_db()
         db.set_setting("employee_id", "42")
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="task"))
         with (
             patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Task"}],
-            ),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id") as mock_eid,
             patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
-            self._run(StartTaskCommand(client).execute("Task", ctx))
+            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
         mock_eid.assert_not_called()
 
-    def test_out_of_range_project_selection_errors(self):
+    def test_fetches_and_caches_employee_id_when_absent(self):
         client = _client()
         db = _tmp_db()
-        ctx = self._ctx(_accepted(MagicMock(selection=99)))
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
             patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 1, "name": "HR"}, {"id": 2, "name": "IT"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
-
-    def test_cancelled_project_selection_errors(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(_cancelled())
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 1, "name": "HR"}, {"id": 2, "name": "IT"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
-
-    def test_cancelled_task_selection_errors(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(_cancelled())
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
-
-    def test_out_of_range_task_selection_errors(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(_accepted(MagicMock(selection=99)))
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("x", ctx))
-        self.assertIn("error", result)
-
-    def test_task_id_bypasses_name_search(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_projects") as mock_proj,
-            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks") as mock_task,
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
-        mock_proj.assert_not_called()
-        mock_task.assert_not_called()
-        self.assertEqual(result["task_id"], 10)
-        self.assertEqual(result["task_name"], "Fix VAT")
-        self.assertEqual(result["project_name"], "Accounting")
-
-    def test_task_id_lookup_extracts_project_from_tuple(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = [{"id": 20, "name": "Task", "project_id": [7, "HR"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="task"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+                "odoo_sdk.commands.builtin.start_task.get_employee_id",
+                return_value=77,
+            ) as mock_eid,
             patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
-            result = self._run(StartTaskCommand(client).execute("Task", ctx, task_id=20))
-        self.assertEqual(result["project_name"], "HR")
-
-    def test_task_id_fallback_to_name_search_with_warning(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = []  # task_id lookup fails
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=99))
-        self.assertIn("warning", result)
-        self.assertEqual(result["task_id"], 10)
-
-    def test_task_id_not_found_and_no_name_query_returns_error(self):
-        client = _client()
-        client.execute.return_value = []
-        ctx = MagicMock()
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=_tmp_db()),
-        ):
-            result = self._run(StartTaskCommand(client).execute("", ctx, task_id=999))
-        self.assertIn("error", result)
-        self.assertIn("999", result["error"])
-
-    def test_task_id_result_has_no_warning_on_success(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
-        self.assertNotIn("warning", result)
-
-    def test_start_task_skips_branch_if_already_on_task_branch(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)))
-        ctx.sample = AsyncMock()
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp(current_branch="10#some-desc")),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            result = self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
-        ctx.sample.assert_not_called()
-        # only one elicit call (the confirmation), not a second one for branch selection
-        self.assertEqual(ctx.elicit.call_count, 1)
-        self.assertNotIn("branch_name", result)
-
-    def test_start_task_branch_selection_cancelled(self):
-        client = _client()
-        db = _tmp_db()
-        ctx = self._ctx(
-            _accepted(MagicMock(confirmed=True)),
-            _cancelled(),
-        )
-        ctx.sample = AsyncMock()
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, _make_sp()),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_projects",
-                return_value=[{"id": 5, "name": "Acct"}],
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.name_search_tasks",
-                return_value=[{"id": 10, "name": "Fix VAT"}],
-            ),
-        ):
-            result = self._run(StartTaskCommand(client).execute("VAT", ctx))
-        self.assertEqual(result, {"error": "Branch selection cancelled."})
-
-    def test_start_task_auto_stashes_dirty_tree(self):
-        client = _client()
-        db = _tmp_db()
-        client.execute.return_value = [{"id": 10, "name": "Fix VAT", "project_id": [5, "Acct"]}]
-        ctx = self._ctx(_accepted(MagicMock(confirmed=True)), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
-        sp = _make_sp(dirty=True)
-        with (
-            patch(_START_GUARD),
-            patch(_SP_PATCH, sp),
-            patch("odoo_sdk.commands.builtin.start_task.TaskStateDB", return_value=db),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_projects"),
-            patch("odoo_sdk.commands.builtin.start_task.name_search_tasks"),
-            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
-            self._run(StartTaskCommand(client).execute("Fix VAT", ctx, task_id=10))
-        called = [c.args[0] for c in sp.run.call_args_list]
-        self.assertTrue(any(c[:3] == ["git", "stash", "push"] for c in called))
-        self.assertIn(["git", "stash", "pop"], called)
+            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+        mock_eid.assert_called_once()
+        self.assertEqual(db.get_setting("employee_id"), "77")
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
 class TestStopTaskCommand(unittest.TestCase):
-    def _run(self, coro):
-        return asyncio.run(coro)
-
-    def _ctx_accept(self, description: str) -> MagicMock:
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(return_value=_accepted(MagicMock(description=description)))
-        return ctx
-
-    def _ctx_cancel(self) -> MagicMock:
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(return_value=_cancelled())
-        return ctx
-
     def test_stops_session_and_updates_timesheet(self):
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
-        ctx = self._ctx_accept("Fixed the bug")
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.stop_task.update_timesheet") as mock_update,
         ):
-            result = self._run(StopTaskCommand(client).execute(1, "Fixed the bug", ctx))
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "Fixed the bug")
         mock_update.assert_called_once()
         self.assertIn("elapsed", result)
         self.assertIn("[/]", result["description"])
+        from odoo_sdk.state import TaskState
         session = db.get_session_by_id(result["session_id"])
-        from odoo_sdk.task_tracker.state import TaskState
         self.assertEqual(session.state, TaskState.STOPPED)
 
     def test_description_not_double_prefixed(self):
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
-        ctx = self._ctx_accept("[/] Already prefixed")
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.stop_task.update_timesheet"),
         ):
-            result = self._run(StopTaskCommand(client).execute(1, "", ctx))
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "[/] Already prefixed")
         self.assertTrue(result["description"].startswith("[/]"))
         self.assertFalse(result["description"].startswith("[/] [/]"))
 
-    def test_cancels_when_elicitation_declined(self):
-        client = _client()
-        db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
-        ctx = self._ctx_cancel()
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
-        ):
-            result = self._run(StopTaskCommand(client).execute(1, "desc", ctx))
-        self.assertIn("error", result)
-
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
-        ctx = self._ctx_accept("done")
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
-        ):
+        with patch(_STOP_GUARD):
             with self.assertRaises(TaskNotRunningError):
-                self._run(StopTaskCommand(_client()).execute(999, "desc", ctx))
+                _cmd_with_db(StopTaskCommand, _client(), db).execute(999, "desc")
 
     def test_stop_from_awaiting_answers(self):
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
         db.transition_to_awaiting(1)
-        ctx = self._ctx_accept("Answers received, no changes needed")
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.stop_task.update_timesheet"),
         ):
-            result = self._run(StopTaskCommand(client).execute(1, "done", ctx))
-        from odoo_sdk.task_tracker.state import TaskState
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
+        from odoo_sdk.state import TaskState
         session = db.get_session_by_id(result["session_id"])
         self.assertEqual(session.state, TaskState.STOPPED)
 
@@ -861,13 +516,11 @@ class TestStopTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=None)
-        ctx = self._ctx_accept("done")
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.TaskStateDB", return_value=db),
             patch("odoo_sdk.commands.builtin.stop_task.update_timesheet") as mock_update,
         ):
-            self._run(StopTaskCommand(client).execute(1, "done", ctx))
+            _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
         mock_update.assert_not_called()
 
 

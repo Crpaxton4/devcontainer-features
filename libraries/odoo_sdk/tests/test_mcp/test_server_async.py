@@ -1,71 +1,82 @@
-"""Tests for the async _build_tool branch in OdooMCPServer."""
+"""Integration tests: build_explicit_tools wired into OdooMCPServer.
+
+Verifies the full builtin tool surface is registered explicitly (no
+auto-reflection) and that composition tools remain async.
+"""
 
 import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_sdk.commands.command import Command
-from odoo_sdk.commands.command_registry import Registry
+from odoo_sdk.commands import Registry
+from odoo_sdk.commands.builtin import BUILTIN_COMMANDS, register_builtins
 from odoo_sdk.mcp.server import OdooMCPServer
+from odoo_sdk.mcp.tools import build_explicit_tools
 
 
-class AsyncCommand(Command):
-    """Command with an async execute method."""
-
-    _name = "async_cmd"
-    _description = "An async command."
-
-    async def execute(self, value: int) -> int:
-        return value * 2
+def _full_registry() -> Registry:
+    return register_builtins(Registry(Mock()))
 
 
-class SyncCommand(Command):
-    """Command with a sync execute method."""
-
-    _name = "sync_cmd"
-    _description = "A sync command."
-
-    def execute(self, value: int) -> int:
-        return value + 1
-
-
-def _build_server(*commands):
-    registry = Registry(Mock())
-    for cmd in commands:
-        registry.register(cmd._name, cmd)
+def _build(registry, explicit_tools):
     mock_mcp = MagicMock()
     added = []
     mock_mcp.add_tool.side_effect = added.append
     with patch("odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp):
-        server = OdooMCPServer(registry)
-    return server, added
+        OdooMCPServer(registry, explicit_tools=explicit_tools)
+    return added
 
 
-class TestAsyncToolWrap(unittest.TestCase):
-    def test_async_command_produces_coroutine_function(self):
-        _, added = _build_server(AsyncCommand)
-        import asyncio
-        self.assertTrue(asyncio.iscoroutinefunction(added[0].fn))
+class TestFullToolSurface(unittest.TestCase):
+    def test_every_builtin_command_has_an_explicit_tool(self):
+        registry = _full_registry()
+        tools = build_explicit_tools(registry)
+        self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
 
-    def test_sync_command_produces_regular_function(self):
-        _, added = _build_server(SyncCommand)
-        self.assertFalse(asyncio.iscoroutinefunction(added[0].fn))
+    def test_server_registers_all_builtin_tools(self):
+        registry = _full_registry()
+        added = _build(registry, build_explicit_tools(registry))
+        self.assertEqual({t.name for t in added}, set(BUILTIN_COMMANDS))
 
-    def test_async_tool_returns_correct_result(self):
-        _, added = _build_server(AsyncCommand)
-        result = asyncio.run(added[0].fn(value=5))
-        self.assertEqual(result, 10)
+    def test_descriptions_sourced_from_commands(self):
+        registry = _full_registry()
+        added = _build(registry, build_explicit_tools(registry))
+        by_name = {t.name for t in added if t.description}
+        # Every builtin has a non-empty description.
+        self.assertEqual(by_name, set(BUILTIN_COMMANDS))
 
-    def test_sync_tool_returns_correct_result(self):
-        _, added = _build_server(SyncCommand)
-        result = added[0].fn(value=3)
-        self.assertEqual(result, 4)
+    def test_composition_tools_are_async(self):
+        registry = _full_registry()
+        added = _build(registry, build_explicit_tools(registry))
+        by_name = {t.name: t for t in added}
+        self.assertTrue(asyncio.iscoroutinefunction(by_name["start_task"].fn))
+        self.assertTrue(asyncio.iscoroutinefunction(by_name["stop_task"].fn))
 
-    def test_both_tools_registered_independently(self):
-        _, added = _build_server(AsyncCommand, SyncCommand)
-        self.assertEqual(len(added), 2)
-        names = {t.name for t in added}
-        self.assertEqual(names, {"async_cmd", "sync_cmd"})
+    def test_atomic_tools_are_sync(self):
+        registry = _full_registry()
+        added = _build(registry, build_explicit_tools(registry))
+        by_name = {t.name: t for t in added}
+        self.assertFalse(asyncio.iscoroutinefunction(by_name["get_uid"].fn))
+        self.assertFalse(asyncio.iscoroutinefunction(by_name["task_note"].fn))
+
+
+class TestAtomicToolRouting(unittest.TestCase):
+    def test_get_uid_tool_delegates_to_command(self):
+        client = Mock()
+        client.uid = 99
+        registry = register_builtins(Registry(client))
+        tools = build_explicit_tools(registry)
+        get_uid_fn, _ = tools["get_uid"]
+        self.assertEqual(get_uid_fn(), 99)
+
+    def test_create_task_tool_forwards_arguments(self):
+        client = Mock()
+        client.__getitem__ = Mock(return_value=Mock(create=Mock(return_value=7)))
+        registry = register_builtins(Registry(client))
+        tools = build_explicit_tools(registry)
+        create_fn, _ = tools["create_task"]
+        result = create_fn("My Task", 3, "desc")
+        self.assertEqual(result, 7)
 
 
 if __name__ == "__main__":

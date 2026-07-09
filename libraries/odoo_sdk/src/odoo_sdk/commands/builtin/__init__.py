@@ -15,6 +15,8 @@ from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
 from .resume_task import ResumeTaskCommand
+from .search_projects import SearchProjectsCommand
+from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
 from .stop_task import StopTaskCommand
 from .task_list import TaskListCommand
@@ -30,6 +32,8 @@ BUILTIN_COMMANDS = {
     "get_task": GetTaskCommand,
     "get_task_chatter": GetTaskChatterCommand,
     "create_task": CreateTaskCommand,
+    "search_projects": SearchProjectsCommand,
+    "search_tasks": SearchTasksCommand,
     "start_task": StartTaskCommand,
     "stop_task": StopTaskCommand,
     "resume_task": ResumeTaskCommand,
@@ -64,6 +68,8 @@ __all__ = [
     "GetTaskCommand",
     "GetTaskChatterCommand",
     "CreateTaskCommand",
+    "SearchProjectsCommand",
+    "SearchTasksCommand",
     "StartTaskCommand",
     "StopTaskCommand",
     "ResumeTaskCommand",

@@ -1,21 +1,62 @@
-"""Odoo API helpers for task time-tracking operations."""
+"""Odoo API helpers for task time-tracking operations.
 
-import io
+This module hosts two kinds of helpers:
+
+* Pure functions (``resolve_many2one``, ``format_chatter``) that accept and
+  return only primitives with no side effects.
+* Thin Odoo-operation wrappers that take an ``OdooClient`` and issue a single
+  well-defined call. They keep command bodies free of raw ``client.execute``
+  plumbing so business logic reads at one altitude.
+"""
+
 from datetime import date
 from typing import Any
 
-from markitdown import MarkItDown
-
 from odoo_sdk.client import OdooClient
 
-_md_converter = MarkItDown()
+from .html import html_to_markdown
+
+# Backwards-compatible private alias kept so existing tests that patch
+# ``_html_to_markdown`` on this module continue to resolve.
+_html_to_markdown = html_to_markdown
 
 
-def _html_to_markdown(html: str) -> str:
-    if not html:
-        return ""
-    result = _md_converter.convert_stream(io.BytesIO(html.encode()), file_extension=".html")
-    return result.text_content.strip()
+def resolve_many2one(field_val: Any) -> Any:
+    """Return the display name of a many2one field value.
+
+    Odoo returns many2one values as ``[id, "Display Name"]`` pairs. This pure
+    helper extracts the display name, passing through scalars untouched.
+
+    :param field_val: Raw many2one field value or scalar.
+    :type field_val: Any
+    :return: Display name when a ``[id, name]`` pair is given, else the value.
+    :rtype: Any
+    """
+    if isinstance(field_val, (list, tuple)) and len(field_val) == 2:
+        return field_val[1]
+    return field_val
+
+
+def format_chatter(chatter: list[dict]) -> str:
+    """Render chatter messages into a plain-text block.
+
+    :param chatter: Chatter message dicts with ``date``/``author``/``body`` keys.
+    :type chatter: list[dict]
+    :return: Newline-joined, human-readable chatter transcript.
+    :rtype: str
+    """
+    lines: list[str] = []
+    for msg in chatter:
+        header = (
+            f"[{msg.get('date', '')}] {msg.get('author', '')} "
+            f"({msg.get('subtype', msg.get('type', ''))})"
+        )
+        lines.append(header)
+        body = msg.get("body", "").strip()
+        if body:
+            lines.append(body)
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def name_search_projects(
@@ -120,16 +161,18 @@ def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list
     )
     result = []
     for m in messages:
-        author = m["author_id"][1] if isinstance(m["author_id"], (list, tuple)) else (m["author_id"] or "")
-        subtype = m["subtype_id"][1] if isinstance(m["subtype_id"], (list, tuple)) else (m["subtype_id"] or "")
-        result.append({
-            "id": m["id"],
-            "date": m["date"],
-            "author": author,
-            "type": m["message_type"],
-            "subtype": subtype,
-            "body": _html_to_markdown(m.get("body", "")),
-        })
+        author = resolve_many2one(m["author_id"]) or ""
+        subtype = resolve_many2one(m["subtype_id"]) or ""
+        result.append(
+            {
+                "id": m["id"],
+                "date": m["date"],
+                "author": author,
+                "type": m["message_type"],
+                "subtype": subtype,
+                "body": html_to_markdown(m.get("body", "")),
+            }
+        )
     return result
 
 
@@ -139,42 +182,35 @@ def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
         "project.task",
         "search_read",
         [("id", "=", task_id)],
-        fields=["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
+        fields=[
+            "name",
+            "description",
+            "project_id",
+            "stage_id",
+            "user_ids",
+            "date_deadline",
+            "priority",
+            "tag_ids",
+        ],
         limit=1,
     )
     if not records:
         return None
     r = records[0]
 
-    def _name(field_val):
-        if isinstance(field_val, (list, tuple)) and len(field_val) == 2:
-            return field_val[1]
-        return field_val
-
-    assignees = []
-    for uid in (r.get("user_ids") or []):
-        if isinstance(uid, (list, tuple)):
-            assignees.append(uid[1])
-        else:
-            assignees.append(uid)
-
-    tags = []
-    for tag in (r.get("tag_ids") or []):
-        if isinstance(tag, (list, tuple)):
-            tags.append(tag[1])
-        else:
-            tags.append(tag)
+    assignees = [resolve_many2one(uid) for uid in (r.get("user_ids") or [])]
+    tags = [resolve_many2one(tag) for tag in (r.get("tag_ids") or [])]
 
     return {
         "task_id": task_id,
         "name": r["name"],
-        "project": _name(r.get("project_id")),
-        "stage": _name(r.get("stage_id")),
+        "project": resolve_many2one(r.get("project_id")),
+        "stage": resolve_many2one(r.get("stage_id")),
         "assignees": assignees,
         "deadline": r.get("date_deadline"),
         "priority": r.get("priority"),
         "tags": tags,
-        "description": _html_to_markdown(r.get("description") or ""),
+        "description": html_to_markdown(r.get("description") or ""),
     }
 
 
@@ -191,7 +227,9 @@ def merge_timesheets(
     )
     total_hours = sum(r["unit_amount"] for r in records)
     descriptions = list(
-        dict.fromkeys(r["name"] for r in records if r["name"] != "[/] Work in progress")
+        dict.fromkeys(
+            r["name"] for r in records if r["name"] != "[/] Work in progress"
+        )
     )
     merged_desc = " | ".join(descriptions) if descriptions else "[/] Work in progress"
     update_timesheet(client, primary_id, total_hours, merged_desc)

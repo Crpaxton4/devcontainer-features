@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
-from odoo_sdk.task_tracker.state import TaskStateDB
+from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
@@ -28,7 +28,7 @@ def _client() -> MagicMock:
 
 class TestAssertEnv(unittest.TestCase):
     def test_exits_when_not_devcontainer(self):
-        from odoo_sdk.task_tracker.env_check import OdooDevcontainerRequiredError
+        from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
         with patch(ASSERT_GUARD, side_effect=OdooDevcontainerRequiredError("bad env")):
             with self.assertRaises(SystemExit) as ctx:

@@ -83,3 +83,35 @@ class TestRegistryItems(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRegistryDependencyInjection(unittest.TestCase):
+    def test_injects_state_and_config_into_command_instances(self):
+        from unittest.mock import Mock
+
+        from odoo_sdk.commands.command import Command
+
+        class TrackingCommand(Command):
+            _name = "tracked"
+            _description = "tracked"
+
+            def execute(self):
+                return None
+
+        client = Mock()
+        state = Mock()
+        config = Mock()
+        registry = Registry(client, state_client=state, config=config)
+        registry.register("tracked", TrackingCommand)
+
+        cmd = registry["tracked"]
+        self.assertIs(cmd._client, client)
+        self.assertIs(cmd.state, state)
+        self.assertIs(cmd.config, config)
+
+    def test_positional_client_only_still_supported(self):
+        client = object()
+        registry = Registry(client)
+        registry.register("dummy", DummyCommandOk)
+        result = registry["dummy"].execute()
+        self.assertIs(result[1], client)

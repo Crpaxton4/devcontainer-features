@@ -1,8 +1,8 @@
 from typing import Any, Optional
 
 from ..command import Command
-from odoo_sdk.task_tracker.env_check import assert_odoo_devcontainer
-from odoo_sdk.task_tracker.odoo_ops import name_search_projects
+from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.odoo_helpers import name_search_projects
 
 
 class TaskListCommand(Command):

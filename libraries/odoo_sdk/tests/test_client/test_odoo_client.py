@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from hypothesis import given, strategies
 
 from odoo_sdk.client.client import OdooClient
-from odoo_sdk.config.settings import OdooConnectionSettings
+from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.errors import OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
@@ -241,7 +241,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
     def test_raises_for_missing_configuration(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             with patch(
-                "odoo_sdk.config.settings._resolve_config_path",
+                "odoo_sdk.state.config._resolve_config_path",
                 return_value=None,
             ):
                 with self.assertRaisesRegex(
@@ -316,7 +316,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
         self.assertEqual(settings.username, "file-user")
         self.assertEqual(settings.password, "environment-password")
 
-    @patch("odoo_sdk.config.settings._resolve_relative_to_invoking_script")
+    @patch("odoo_sdk.state.config._resolve_relative_to_invoking_script")
     def test_relative_config_path_resolves_from_invoking_script_directory(
         self, mock_resolve_relative_to_invoking_script: Mock
     ) -> None:
@@ -415,7 +415,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
             clear=True,
         ):
             with patch(
-                "odoo_sdk.config.settings._resolve_config_path",
+                "odoo_sdk.state.config._resolve_config_path",
                 return_value=None,
             ):
                 with self.assertRaisesRegex(
@@ -472,3 +472,55 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
             settings.db,
             settings.api_key,
         )
+
+
+class TestOdooClientFromConfig(unittest.TestCase):
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_from_config_builds_executor_from_local_config(
+        self, mock_rpc: Mock
+    ) -> None:
+        from odoo_sdk.state.config import LocalConfig
+
+        built = Mock(spec=OdooExecutor)
+        mock_rpc.return_value = built
+        config = LocalConfig(
+            connection={
+                "url": "https://cfg.example.com",
+                "db": "cfg-db",
+                "username": "cfg-user",
+                "password": "cfg-pass",
+            }
+        )
+
+        client = OdooClient.from_config(config)
+
+        self.assertIs(client._executor, built)
+        mock_rpc.assert_called_once_with(
+            "https://cfg.example.com", "cfg-db", "cfg-user", "cfg-pass"
+        )
+
+    @patch("odoo_sdk.client.client.OdooJson2Executor")
+    def test_config_kwarg_selects_json2_transport(self, mock_json2: Mock) -> None:
+        from odoo_sdk.state.config import LocalConfig
+
+        built = Mock(spec=OdooExecutor)
+        mock_json2.return_value = built
+        config = LocalConfig(
+            connection={
+                "url": "https://cfg.example.com",
+                "db": "cfg-db",
+                "api_key": "cfg-key",
+                "transport": "json2",
+            }
+        )
+
+        client = OdooClient(config=config)
+
+        self.assertIs(client._executor, built)
+        mock_json2.assert_called_once_with(
+            "https://cfg.example.com", "cfg-db", "cfg-key"
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

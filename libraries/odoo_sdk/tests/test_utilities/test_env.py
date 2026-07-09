@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from odoo_sdk.task_tracker.env_check import (
+from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
 )
@@ -12,13 +12,13 @@ class TestAssertOdooDevcontainer(unittest.TestCase):
         """Patch environment so all three checks pass."""
         return (
             patch.dict("os.environ", {"ODOO_VERSION": "17.0"}),
-            patch("odoo_sdk.task_tracker.env_check.Path.exists", return_value=True),
+            patch("odoo_sdk.utilities.env.Path.exists", return_value=True),
         )
 
     def test_passes_when_all_conditions_met(self):
         with (
             patch.dict("os.environ", {"ODOO_VERSION": "17.0"}),
-            patch("odoo_sdk.task_tracker.env_check.Path.exists", return_value=True),
+            patch("odoo_sdk.utilities.env.Path.exists", return_value=True),
         ):
             assert_odoo_devcontainer()  # must not raise
 
@@ -26,7 +26,7 @@ class TestAssertOdooDevcontainer(unittest.TestCase):
         env = {"HOME": "/home/user"}  # deliberately no ODOO_VERSION
         with (
             patch.dict("os.environ", env, clear=True),
-            patch("odoo_sdk.task_tracker.env_check.Path.exists", return_value=True),
+            patch("odoo_sdk.utilities.env.Path.exists", return_value=True),
         ):
             with self.assertRaises(OdooDevcontainerRequiredError) as ctx:
                 assert_odoo_devcontainer()
@@ -39,7 +39,7 @@ class TestAssertOdooDevcontainer(unittest.TestCase):
         with (
             patch.dict("os.environ", {"ODOO_VERSION": "17.0"}),
             patch(
-                "odoo_sdk.task_tracker.env_check.Path.exists",
+                "odoo_sdk.utilities.env.Path.exists",
                 autospec=True,
                 side_effect=exists_side_effect,
             ),
@@ -55,7 +55,7 @@ class TestAssertOdooDevcontainer(unittest.TestCase):
         with (
             patch.dict("os.environ", {"ODOO_VERSION": "17.0"}),
             patch(
-                "odoo_sdk.task_tracker.env_check.Path.exists",
+                "odoo_sdk.utilities.env.Path.exists",
                 autospec=True,
                 side_effect=exists_side_effect,
             ),
