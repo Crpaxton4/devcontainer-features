@@ -44,6 +44,11 @@ check "system OpenSSL is intact (isolated install didn't touch cryptography)" \
 check "odoo-mcp console script is on PATH" bash -c "command -v odoo-mcp"
 check "odoo-mcp entrypoint is executable" bash -c "test -x \"\$(command -v odoo-mcp)\""
 
+# Regression guard for #120: the odoo-tui curses TUI console script must also be
+# symlinked onto PATH (it was defined in the SDK but not linked by the feature).
+check "odoo-tui console script is on PATH" bash -c "command -v odoo-tui"
+check "odoo-tui entrypoint is executable" bash -c "test -x \"\$(command -v odoo-tui)\""
+
 check "postgresql starts and is ready" /usr/local/share/pq-init.sh
 
 check "odoo postgresql role created" \
