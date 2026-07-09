@@ -322,11 +322,23 @@ _CONNECTION_DEFAULTS: dict[str, Optional[str]] = {
 # against this shared set (TOML booleans and defaults arrive as real bools).
 _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
+# The fixed sessionization inactivity gap, in minutes. Seeded from the pure
+# core's historical default (``DEFAULT_WINDOW_GAP_SECS`` = 3600s = 60 min). This
+# gap is a stable session-identity constant, not a per-run tuning knob: it is
+# what the incremental sessionizer uses to decide session boundaries.
+_DEFAULT_SESSION_GAP_MINS = 60
+
 # Environment variables that override behavior settings when no file value is set.
-_BEHAVIOR_ENV_VARS: dict[str, str] = {"profiling": "ODOO_PROFILING"}
+_BEHAVIOR_ENV_VARS: dict[str, str] = {
+    "profiling": "ODOO_PROFILING",
+    "session_gap_mins": "ODOO_SESSION_GAP_MINS",
+}
 
 # Sensible defaults for the reserved [behavior] section.
-_BEHAVIOR_DEFAULTS: dict[str, Any] = {"profiling": False}
+_BEHAVIOR_DEFAULTS: dict[str, Any] = {
+    "profiling": False,
+    "session_gap_mins": _DEFAULT_SESSION_GAP_MINS,
+}
 
 
 class LocalConfig:
@@ -410,6 +422,35 @@ class LocalConfig:
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in _TRUTHY_VALUES
+
+    @property
+    def session_gap_mins(self) -> int:
+        """Return the fixed sessionization inactivity gap in minutes.
+
+        Resolved from the ``[behavior] session_gap_mins`` file setting, the
+        ``ODOO_SESSION_GAP_MINS`` environment variable, or the default
+        (``60``), with the standard File > Environment Variable > Default
+        precedence. String sources are coerced to ``int``; an invalid value
+        falls back to the default rather than raising.
+
+        This gap is a stable session-identity constant: sessions are boundaries
+        of runs separated by more than this gap, and the value must not change
+        per query or the identity of already-detected sessions would shift.
+
+        :return: The inactivity gap in whole minutes.
+        :rtype: int
+        """
+        value = self._behavior.get("session_gap_mins", _DEFAULT_SESSION_GAP_MINS)
+        try:
+            gap = int(value)
+        except (TypeError, ValueError):
+            return _DEFAULT_SESSION_GAP_MINS
+        return gap if gap > 0 else _DEFAULT_SESSION_GAP_MINS
+
+    @property
+    def session_gap_secs(self) -> int:
+        """Return the fixed sessionization inactivity gap in whole seconds."""
+        return self.session_gap_mins * 60
 
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.

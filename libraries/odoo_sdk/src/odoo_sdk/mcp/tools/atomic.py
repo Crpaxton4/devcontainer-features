@@ -147,12 +147,11 @@ def make_optimize_sessions_tool(registry: Registry):
     def optimize_sessions(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        persist: bool = False,
         sweep_min_gap_mins: Optional[int] = None,
         sweep_max_gap_mins: Optional[int] = None,
         sweep_step_mins: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Sweep inactivity gaps over stored events and pick the best gap."""
+        """Analyze stored events by sweeping gaps; report the best gap (read-only)."""
         overrides = {
             "sweep_min_gap_mins": sweep_min_gap_mins,
             "sweep_max_gap_mins": sweep_max_gap_mins,
@@ -161,11 +160,45 @@ def make_optimize_sessions_tool(registry: Registry):
         return registry["optimize_sessions"].execute(
             start_date=start_date,
             end_date=end_date,
-            persist=persist,
             **overrides,
         )
 
     return optimize_sessions
+
+
+def make_ingest_sessions_tool(registry: Registry):
+    def ingest_sessions(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Ingest stored events into global cross-day sessions incrementally."""
+        return registry["ingest_sessions"].execute(
+            start_date=start_date, end_date=end_date
+        )
+
+    return ingest_sessions
+
+
+def make_query_sessions_tool(registry: Registry):
+    def query_sessions(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        task_id: Optional[str] = None,
+        repo: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        include_events: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Query global cross-day sessions overlapping a date range (whole)."""
+        return registry["query_sessions"].execute(
+            start_date=start_date,
+            end_date=end_date,
+            task_id=task_id,
+            repo=repo,
+            strategy_name=strategy_name,
+            include_events=include_events,
+        )
+
+    return query_sessions
 
 
 # Tool name -> factory(registry) -> tool callable, for the atomic commands.
@@ -185,4 +218,6 @@ ATOMIC_TOOL_FACTORIES = {
     "task_list": make_task_list_tool,
     "task_question": make_task_question_tool,
     "optimize_sessions": make_optimize_sessions_tool,
+    "ingest_sessions": make_ingest_sessions_tool,
+    "query_sessions": make_query_sessions_tool,
 }

@@ -379,6 +379,8 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "task_list": (),
             "task_question": (5, "q?"),
             "optimize_sessions": (),
+            "ingest_sessions": (),
+            "query_sessions": (),
         }
         for name, factory in ATOMIC_TOOL_FACTORIES.items():
             tool = factory(self._registry())

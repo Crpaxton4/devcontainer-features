@@ -14,7 +14,9 @@ from .get_task_chatter import GetTaskChatterCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
+from .ingest_sessions import IngestSessionsCommand
 from .optimize_sessions import OptimizeSessionsCommand
+from .query_sessions import QuerySessionsCommand
 from .resume_task import ResumeTaskCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
@@ -43,6 +45,8 @@ BUILTIN_COMMANDS = {
     "task_list": TaskListCommand,
     "task_question": TaskQuestionCommand,
     "optimize_sessions": OptimizeSessionsCommand,
+    "ingest_sessions": IngestSessionsCommand,
+    "query_sessions": QuerySessionsCommand,
 }
 
 
@@ -80,4 +84,6 @@ __all__ = [
     "TaskListCommand",
     "TaskQuestionCommand",
     "OptimizeSessionsCommand",
+    "IngestSessionsCommand",
+    "QuerySessionsCommand",
 ]

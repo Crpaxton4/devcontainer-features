@@ -1,11 +1,19 @@
-"""Builtin command exposing the sessionization optimizer and manual knobs."""
+"""Builtin command exposing the gap-sweep utilisation analysis (read-only).
+
+Session identity is now fixed by the configured gap and maintained incrementally
+(see :mod:`odoo_sdk.commands.builtin.ingest_sessions`). The gap sweep here is a
+decoupled, analysis-only reporting concern: it explores what utilisation *would*
+result at each candidate gap to recommend one, but it never materializes or
+mutates the ``sessions`` table, so it cannot shift the identity of detected
+sessions. It reports; it does not write.
+"""
 
 from __future__ import annotations
 
 from datetime import date
 from typing import Any, Optional
 
-from odoo_sdk.adapters import load_raw_events, persist_session_windows
+from odoo_sdk.adapters import load_raw_events
 from odoo_sdk.sessionization import SessionizationConfig, transform
 
 from ..command import Command
@@ -55,42 +63,39 @@ def _build_config(
 
 
 class OptimizeSessionsCommand(Command):
-    """Run the pure sessionization sweep over stored events.
+    """Run the read-only gap-sweep utilisation analysis over stored events.
 
-    Reads raw events from the local ``events`` table, runs the gap sweep and
-    utilisation optimizer, optionally materializes the best-gap windows into the
-    ``sessions`` table, and returns a summary. All manual knobs (date range,
-    sweep bounds, scoring coefficients) are keyword arguments so every manual
-    interaction is a command argument rather than an in-script flag.
+    Reads raw events from the local ``events`` table and runs the gap sweep and
+    utilisation optimizer purely to *report* the best-utilisation gap. It never
+    writes to the ``sessions`` table: session identity is owned by the fixed
+    configured gap and the incremental ingester, so this analysis is decoupled
+    from it and cannot mutate it. All manual knobs (date range, sweep bounds,
+    scoring coefficients) are keyword arguments so every manual interaction is a
+    command argument rather than an in-script flag.
     """
 
     _name = "optimize_sessions"
     _description = (
-        "Sweep inactivity gaps over stored events and select the best "
-        "utilisation gap, optionally materializing per-task session windows."
+        "Analyze stored events by sweeping inactivity gaps and reporting the "
+        "best-utilisation gap. Read-only: it never mutates session identity."
     )
 
     def execute(
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        persist: bool = False,
         **overrides: Any,
     ) -> dict[str, Any]:
-        """Optimize sessions and return the sweep summary.
+        """Analyze sessions and return the sweep summary (no persistence).
 
         :param start_date: Inclusive ISO start date (``YYYY-MM-DD``).
         :param end_date: Inclusive ISO end date (``YYYY-MM-DD``).
-        :param persist: When True, write best-gap windows to the sessions table.
         :param overrides: Optional sweep/scoring hyperparameter overrides.
         :return: A summary dict with the best gap, score, totals, and counts.
         """
         config = _build_config(start_date, end_date, overrides)
         events = load_raw_events(self.state, config.range_start, config.range_end)
         result = transform(events, config)
-        persisted = 0
-        if persist:
-            persisted = len(persist_session_windows(self.state, result.best_gap_entries))
         return {
             "best_gap_mins": result.sweep.best_gap,
             "best_score": result.sweep.best_score,
@@ -98,5 +103,4 @@ class OptimizeSessionsCommand(Command):
             "num_days": result.sweep.num_days,
             "event_count": len(events),
             "entry_count": len(result.best_gap_entries),
-            "persisted_windows": persisted,
         }
