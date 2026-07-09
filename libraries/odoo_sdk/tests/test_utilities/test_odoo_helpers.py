@@ -1,7 +1,10 @@
 import unittest
 from datetime import date
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+from odoo_sdk.client import OdooClient
+from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.odoo_helpers import (
     create_timesheet,
     get_employee_id,
@@ -17,6 +20,41 @@ from odoo_sdk.utilities.odoo_helpers import (
 
 def _client() -> MagicMock:
     return MagicMock()
+
+
+class _KeywordOnlyMessagePostExecutor(OdooExecutor):
+    """Fake executor mimicking Odoo's positional-args / keyword-options split.
+
+    ``execute`` forwards positional ``*args`` as the record arguments and
+    ``**kwargs`` as the method options, exactly like ``execute_kw`` does. The
+    stubbed ``message_post`` is keyword-only, so any trailing positional options
+    dict (the #131 bug) reaches ``_message_post`` as a second positional argument
+    and raises ``TypeError`` — reproducing the server-side crash locally.
+    """
+
+    def __init__(self) -> None:
+        self.recorded: dict[str, Any] = {}
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if (model, method) != ("project.task", "message_post"):
+            raise AssertionError(f"unexpected call: {model}.{method}")
+        return self._message_post(*args, **kwargs)
+
+    def _message_post(
+        self,
+        ids: list[int],
+        *,
+        body: str = "",
+        message_type: str = "notification",
+        subtype_xmlid: str | None = None,
+    ) -> int:
+        self.recorded = {
+            "ids": ids,
+            "body": body,
+            "message_type": message_type,
+            "subtype_xmlid": subtype_xmlid,
+        }
+        return 777
 
 
 class TestNameSearchProjects(unittest.TestCase):
@@ -106,7 +144,12 @@ class TestUpdateTimesheet(unittest.TestCase):
 
 
 class TestPostChatterNote(unittest.TestCase):
-    def test_calls_message_post_and_returns_id(self):
+    def test_passes_options_as_keyword_arguments(self):
+        # Regression for #131: Odoo's ``message_post`` is keyword-only, so the
+        # options must be forwarded as ``execute`` keyword arguments. The record
+        # ids stay the only positional RPC argument; there must be NO trailing
+        # positional options dict (that would land as a positional method arg on
+        # the server and crash with ``TypeError``).
         client = _client()
         client.execute.return_value = 777
         result = post_chatter_note(client, task_id=5, body="Hello")
@@ -114,13 +157,34 @@ class TestPostChatterNote(unittest.TestCase):
             "project.task",
             "message_post",
             [5],
+            body="Hello",
+            message_type="comment",
+            subtype_xmlid="mail.mt_note",
+        )
+        # No positional options dict may sneak in after the record ids.
+        pos_args = client.execute.call_args.args
+        self.assertEqual(pos_args, ("project.task", "message_post", [5]))
+        self.assertEqual(result, 777)
+
+    def test_drives_keyword_only_message_post_without_type_error(self):
+        # Stronger reproduction of #131: a fake executor that mimics Odoo's
+        # split of positional record args vs. keyword method options. Its
+        # ``message_post`` is keyword-only, so a trailing positional options
+        # dict (the old bug) raises ``TypeError``. This test would fail against
+        # the pre-fix implementation and passes only when the options are keyword.
+        executor = _KeywordOnlyMessagePostExecutor()
+        client = OdooClient(executor=executor)
+        result = post_chatter_note(client, task_id=5, body="Hello")
+        self.assertEqual(result, 777)
+        self.assertEqual(
+            executor.recorded,
             {
+                "ids": [5],
                 "body": "Hello",
                 "message_type": "comment",
                 "subtype_xmlid": "mail.mt_note",
             },
         )
-        self.assertEqual(result, 777)
 
 
 class TestMergeTimesheets(unittest.TestCase):
