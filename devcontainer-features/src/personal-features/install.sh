@@ -13,13 +13,19 @@ CLAUDE_HOME="/usr/local/share/claude-home"
 GH_CONFIG="/usr/local/share/gh-cli-config"
 ODOO_SDK_CONFIG="/usr/local/share/odoo-sdk-config"
 TASK_TRACKER_DIR="/usr/local/share/odoo-task-tracker"
+PR_AUTOMATION_CONFIG="/usr/local/share/pr-automation"
 
 # Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
 # point at and that the bind mounts overlay at runtime. Creating them here
 # means the feature still works in test containers where no bind mounts are
 # active (e.g. the devcontainer features test harness).
-mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR"
-chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR"
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG"
+
+# create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
+# YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
+# containers — the script tolerates missing config at every level).
+install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).

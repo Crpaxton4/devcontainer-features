@@ -24,10 +24,11 @@ Run the repo's `setup.sh` once per machine before starting any dev container tha
 This creates the host-side directories and files that are bind-mounted into the container:
 
 ```
-~/.claude        — Claude Code auth and settings
-~/.config/gh     — gh CLI auth and settings
-~/.bash_history  — bash history file
-~/.zsh_history   — zsh history file
+~/.claude              — Claude Code auth and settings
+~/.config/gh           — gh CLI auth and settings
+~/.config/pr-automation — create-pr config (global.yaml + projects/)
+~/.bash_history        — bash history file
+~/.zsh_history         — zsh history file
 ```
 
 It's safe to re-run — `mkdir -p` and `touch` are no-ops when targets already exist.
@@ -40,7 +41,40 @@ Config and history are bind-mounted from your host home directory into fixed con
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
 - `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
+
+## The `create-pr` command
+
+`create-pr` opens a pull request for the current branch with `gh pr create --fill --assignee @me`, applying config-driven defaults so PR creation stays consistent across projects without interactive prompts. Every layer is optional — with no config at all it still creates a PR using `gh`'s own defaults.
+
+What it does:
+
+- **Repo path** — derived from `git config remote.origin.url` (`OWNER/REPO`, scheme/host and trailing `.git` stripped).
+- **PR title** — derived from the branch name. A branch named `<num>#<slug>` (e.g. `20545#fast-follow-cleanup`) becomes the title `20545: fast follow cleanup` (hyphens → spaces). Other branch names fall back to `--fill` (commit subject).
+- **Config** — reads `$PR_AUTOMATION_CONFIG_DIR/global.yaml` and `$PR_AUTOMATION_CONFIG_DIR/projects/<OWNER>/<REPO>.yaml` via `yq`. A per-project file *replaces* the global defaults (no merging). Supported keys: `base_branch`, `reviewers` (list), and `github_templates.pull_request` (path within the repo's `.github/`).
+- **PR template** — if the project config maps `github_templates.pull_request` and the file exists under the repo's `.github/`, its contents are passed as `--body-file`. Otherwise `gh`'s default template handling applies.
+- **Existing PR** — if a PR already exists for the branch, `create-pr` runs `gh pr edit` to update the title/base/reviewers and prints a notice; it does **not** overwrite the existing body.
+
+Host config layout (bind-mounted from `~/.config/pr-automation`):
+
+```
+~/.config/pr-automation/
+├── global.yaml                 # base_branch, reviewers (optional)
+└── projects/
+    └── CoreFXIngredients/
+        └── my-repo.yaml        # per-project overrides (optional)
+```
+
+Example `projects/CoreFXIngredients/my-repo.yaml`:
+
+```yaml
+base_branch: UAT
+reviewers:
+  - other-team-handle
+github_templates:
+  pull_request: PULL_REQUEST_TEMPLATE/default.md
+```
 
 ## Migrating from the old named-volume scheme
 

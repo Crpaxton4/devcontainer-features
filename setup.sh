@@ -12,6 +12,7 @@ set -e
 
 mkdir -p "$HOME/.claude"
 mkdir -p "$HOME/.config/gh"
+mkdir -p "$HOME/.config/pr-automation/projects"
 touch "$HOME/.bash_history"
 touch "$HOME/.zsh_history"
 
