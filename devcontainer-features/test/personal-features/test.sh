@@ -60,6 +60,11 @@ check "PR_AUTOMATION_CONFIG_DIR points at the bind mount" bash -c \
   "[ \"\$PR_AUTOMATION_CONFIG_DIR\" = '/usr/local/share/pr-automation' ]"
 check "pr-automation config dir exists" bash -c "test -d /usr/local/share/pr-automation"
 
+# CodeRabbit CLI (best-effort install; check the binary is present + on PATH)
+check "coderabbit is installed" bash -c "test -x \"\$(command -v coderabbit)\""
+check "coderabbit config dir exists" bash -c "test -d /usr/local/share/coderabbit-config"
+check "CODERABBIT_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CODERABBIT_CONFIG_DIR\" = '/usr/local/share/coderabbit-config' ]"
+
 # global git hooks
 check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
 check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"

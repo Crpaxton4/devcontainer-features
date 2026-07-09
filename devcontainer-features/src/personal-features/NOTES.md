@@ -27,6 +27,7 @@ This creates the host-side directories and files that are bind-mounted into the 
 ~/.claude              — Claude Code auth and settings
 ~/.config/gh           — gh CLI auth and settings
 ~/.config/pr-automation — create-pr config (global.yaml + projects/)
+~/.config/coderabbit   — CodeRabbit CLI config/auth state
 ~/.bash_history        — bash history file
 ~/.zsh_history         — zsh history file
 ```
@@ -43,6 +44,32 @@ Config and history are bind-mounted from your host home directory into fixed con
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
 - `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
+- `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
+
+## CodeRabbit CLI
+
+The [CodeRabbit CLI](https://docs.coderabbit.ai/cli) (`coderabbit`, alias `cr`) is installed to `/usr/local/bin` via the upstream installer (it isn't published as GitHub release assets, so the usual `install_gh_release` path doesn't apply). It powers the Claude Code CodeRabbit plugin (`/plugin install coderabbit`); plugin state persists for free via the existing `~/.claude` mount.
+
+Authentication is user-specific and is deliberately **not** baked into the image. Run it once after the container is created:
+
+```sh
+coderabbit auth login                       # browser-based, or:
+coderabbit auth login --api-key "$CODERABBIT_API_KEY"   # headless
+```
+
+To make `CODERABBIT_API_KEY` available inside the container from your host env, add it to `remoteEnv` in your `devcontainer.json`:
+
+```jsonc
+"remoteEnv": {
+    "CODERABBIT_API_KEY": "${localEnv:CODERABBIT_API_KEY}"
+}
+```
+
+Caveats:
+
+- **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which typically isn't running in a container — in that case it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` is set to the bind-mounted dir above so any on-disk config/auth survives rebuilds, but the exact config-dir env var / path the CLI honors isn't formally documented and may change; the reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key` (cheap, one command). Verify with `coderabbit doctor`.
+- `.coderabbit.yaml` is a per-repo config file read by CodeRabbit's cloud service. It's authored by the user at the repo root and is **not** managed by this Feature.
+- The Claude Code CodeRabbit plugin / Agentic API access may require a paid CodeRabbit plan — check your account's plan if `/coderabbit:review` reports auth or entitlement errors.
 
 ## The `create-pr` command
 
@@ -108,6 +135,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
 - Language-agnostic productivity/navigation CLIs: `ripgrep`, `fd`, `fzf`, `bat`, `jq`, `yq`, `eza`, `zoxide`, `tldr` (tealdeer).
 - [`gitleaks`](https://github.com/gitleaks/gitleaks) for secret scanning. Usable manually, and invoked automatically by the global `pre-commit` hook below.
+- [`coderabbit`](https://docs.coderabbit.ai/cli) (CodeRabbit CLI) for AI code review, and to back the Claude Code CodeRabbit plugin — see the [CodeRabbit CLI](#coderabbit-cli) section above for auth and config-persistence details.
 - Standards enforced **machine-wide** rather than per-repo, since most of this owner's projects aren't mature enough to have their own hook config checked in. Sets `git config --system core.hooksPath` to a Feature-installed directory (`/usr/local/share/git-hooks`) containing:
   - `commit-msg` — rejects commits whose subject line doesn't follow [Conventional Commits](https://www.conventionalcommits.org/).
   - `pre-commit` — runs `gitleaks protect --staged`.
