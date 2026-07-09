@@ -255,9 +255,135 @@ class TestGetTaskDetail(unittest.TestCase):
             "project.task",
             "search_read",
             [("id", "=", 42)],
-            fields=["name", "description", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "tag_ids"],
+            fields=[
+                "name",
+                "project_id",
+                "stage_id",
+                "user_ids",
+                "date_deadline",
+                "priority",
+                "tag_ids",
+                "description",
+            ],
             limit=1,
         )
+
+    def test_default_is_description_only_no_relation_fields(self):
+        client = _client()
+        client.execute.return_value = [self._make_record()]
+        result = get_task_detail(client, task_id=42)
+        # Only the single search_read; no follow-up reads for relations.
+        client.execute.assert_called_once()
+        requested = client.execute.call_args.kwargs["fields"]
+        for relation_field in (
+            "depend_on_ids",
+            "dependent_ids",
+            "timesheet_ids",
+            "child_ids",
+        ):
+            self.assertNotIn(relation_field, requested)
+        self.assertIn("description", result)
+        for absent in ("blocked_by", "blocks", "timesheets", "subtasks", "chatter"):
+            self.assertNotIn(absent, result)
+
+    def test_empty_include_omits_description(self):
+        client = _client()
+        client.execute.return_value = [self._make_record()]
+        result = get_task_detail(client, task_id=42, include=[])
+        self.assertNotIn("description", result)
+        self.assertNotIn("description", client.execute.call_args.kwargs["fields"])
+        # Base identity fields still present.
+        self.assertEqual(result["name"], "Implement Feature X")
+        self.assertEqual(result["project"], "My Project")
+
+    def test_dependencies_hydrated_only_when_requested(self):
+        client = _client()
+        record = self._make_record()
+        record["depend_on_ids"] = [100]
+        record["dependent_ids"] = [200]
+        client.execute.side_effect = [
+            [record],
+            [{"id": 100, "name": "Blocker", "stage_id": [1, "Todo"]}],
+            [{"id": 200, "name": "Blocked", "stage_id": [2, "Doing"]}],
+        ]
+        result = get_task_detail(client, task_id=42, include=["dependencies"])
+        requested = client.execute.call_args_list[0].kwargs["fields"]
+        self.assertIn("depend_on_ids", requested)
+        self.assertIn("dependent_ids", requested)
+        self.assertEqual(result["blocked_by"], [[100, "Blocker", "Todo"]])
+        self.assertEqual(result["blocks"], [[200, "Blocked", "Doing"]])
+
+    def test_timesheets_hydrated_only_when_requested(self):
+        client = _client()
+        record = self._make_record()
+        record["timesheet_ids"] = [7]
+        client.execute.side_effect = [
+            [record],
+            [
+                {
+                    "id": 7,
+                    "date": "2026-07-01",
+                    "employee_id": [9, "Jane"],
+                    "unit_amount": 2.5,
+                    "name": "Work",
+                }
+            ],
+        ]
+        result = get_task_detail(client, task_id=42, include=["timesheets"])
+        self.assertIn("timesheet_ids", client.execute.call_args_list[0].kwargs["fields"])
+        self.assertEqual(
+            result["timesheets"],
+            [{"date": "2026-07-01", "employee": "Jane", "hours": 2.5, "name": "Work"}],
+        )
+
+    def test_subtasks_hydrated_only_when_requested(self):
+        client = _client()
+        record = self._make_record()
+        record["child_ids"] = [11]
+        client.execute.side_effect = [
+            [record],
+            [{"id": 11, "name": "Sub", "stage_id": [3, "Done"], "user_ids": [4]}],
+        ]
+        result = get_task_detail(client, task_id=42, include=["subtasks"])
+        self.assertIn("child_ids", client.execute.call_args_list[0].kwargs["fields"])
+        self.assertEqual(
+            result["subtasks"],
+            [{"id": 11, "name": "Sub", "stage": "Done", "assignees": [4]}],
+        )
+
+    def test_dependencies_skip_missing_related_records(self):
+        client = _client()
+        record = self._make_record()
+        record["depend_on_ids"] = [100, 101]
+        record["dependent_ids"] = []
+        client.execute.side_effect = [
+            [record],
+            # 101 is absent from the read result (e.g. deleted mid-flight).
+            [{"id": 100, "name": "Blocker", "stage_id": [1, "Todo"]}],
+        ]
+        result = get_task_detail(client, task_id=42, include=["dependencies"])
+        self.assertEqual(result["blocked_by"], [[100, "Blocker", "Todo"]])
+        self.assertEqual(result["blocks"], [])
+
+    def test_empty_relations_skip_followup_reads(self):
+        client = _client()
+        record = self._make_record()
+        record["depend_on_ids"] = []
+        record["dependent_ids"] = []
+        record["timesheet_ids"] = []
+        record["child_ids"] = []
+        client.execute.return_value = [record]
+        result = get_task_detail(
+            client,
+            task_id=42,
+            include=["dependencies", "timesheets", "subtasks"],
+        )
+        # No follow-up reads when the relation lists are empty.
+        client.execute.assert_called_once()
+        self.assertEqual(result["blocked_by"], [])
+        self.assertEqual(result["blocks"], [])
+        self.assertEqual(result["timesheets"], [])
+        self.assertEqual(result["subtasks"], [])
 
     def test_returns_none_when_not_found(self):
         client = _client()

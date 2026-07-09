@@ -176,22 +176,151 @@ def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list
     return result
 
 
-def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
-    """Fetch task fields for a single task; returns None if not found."""
+# Base identity fields always fetched for a task, regardless of ``include``.
+_TASK_BASE_FIELDS = [
+    "name",
+    "project_id",
+    "stage_id",
+    "user_ids",
+    "date_deadline",
+    "priority",
+    "tag_ids",
+]
+
+# Extra Odoo fields required to hydrate each opt-in ``include`` selector.
+_TASK_INCLUDE_FIELDS = {
+    "description": ["description"],
+    "dependencies": ["depend_on_ids", "dependent_ids"],
+    "timesheets": ["timesheet_ids"],
+    "subtasks": ["child_ids"],
+}
+
+
+def _task_related_stages(client: OdooClient, task_ids: list[int]) -> list[list]:
+    """Read ``[id, name, stage]`` rows for the given task ids, order preserved."""
+    if not task_ids:
+        return []
+    records = client.execute(
+        "project.task",
+        "read",
+        [task_ids],
+        {"fields": ["name", "stage_id"]},
+    )
+    by_id = {rec["id"]: rec for rec in records}
+    rows = []
+    for tid in task_ids:
+        rec = by_id.get(tid)
+        if rec is None:
+            continue
+        rows.append([tid, rec["name"], resolve_many2one(rec.get("stage_id"))])
+    return rows
+
+
+def _task_timesheets(client: OdooClient, timesheet_ids: list[int]) -> list[dict]:
+    """Read timesheet entries as date / employee / hours / name dicts."""
+    if not timesheet_ids:
+        return []
+    records = client.execute(
+        "account.analytic.line",
+        "read",
+        [timesheet_ids],
+        {"fields": ["date", "employee_id", "unit_amount", "name"]},
+    )
+    return [
+        {
+            "date": rec.get("date"),
+            "employee": resolve_many2one(rec.get("employee_id")),
+            "hours": rec.get("unit_amount"),
+            "name": rec.get("name"),
+        }
+        for rec in records
+    ]
+
+
+def _task_subtasks(client: OdooClient, child_ids: list[int]) -> list[dict]:
+    """Read subtasks as id / name / stage / assignees dicts."""
+    if not child_ids:
+        return []
+    records = client.execute(
+        "project.task",
+        "read",
+        [child_ids],
+        {"fields": ["name", "stage_id", "user_ids"]},
+    )
+    return [
+        {
+            "id": rec["id"],
+            "name": rec["name"],
+            "stage": resolve_many2one(rec.get("stage_id")),
+            "assignees": [resolve_many2one(uid) for uid in (rec.get("user_ids") or [])],
+        }
+        for rec in records
+    ]
+
+
+def _task_detail_fields(selected: list[str]) -> list[str]:
+    """Build the Odoo ``fields`` list for the selected ``include`` keys."""
+    fields = list(_TASK_BASE_FIELDS)
+    extra = [
+        field
+        for key in selected
+        for field in _TASK_INCLUDE_FIELDS.get(key, [])
+        if field not in _TASK_BASE_FIELDS
+    ]
+    fields.extend(dict.fromkeys(extra))
+    return fields
+
+
+def _task_extra_detail(
+    client: OdooClient, record: dict, selected: list[str]
+) -> dict[str, Any]:
+    """Assemble the opt-in detail collections for the selected ``include`` keys."""
+    extra: dict[str, Any] = {}
+    if "description" in selected:
+        extra["description"] = html_to_markdown(record.get("description") or "")
+    if "dependencies" in selected:
+        extra["blocked_by"] = _task_related_stages(
+            client, record.get("depend_on_ids") or []
+        )
+        extra["blocks"] = _task_related_stages(
+            client, record.get("dependent_ids") or []
+        )
+    if "timesheets" in selected:
+        extra["timesheets"] = _task_timesheets(
+            client, record.get("timesheet_ids") or []
+        )
+    if "subtasks" in selected:
+        extra["subtasks"] = _task_subtasks(client, record.get("child_ids") or [])
+    return extra
+
+
+def get_task_detail(
+    client: OdooClient, task_id: int, include: list[str] | None = None
+) -> dict | None:
+    """Fetch task fields for a single task; returns None if not found.
+
+    Base identity fields (name, project, stage, assignees, deadline, priority,
+    tags) are always present. Each entry in ``include`` opts into an extra,
+    more expensive collection. When ``include`` is ``None`` the default is
+    description only, and no relation fields are fetched.
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :param task_id: The project.task id to fetch.
+    :type task_id: int
+    :param include: Opt-in selectors: ``description``, ``dependencies``,
+        ``timesheets``, ``subtasks``. Defaults to ``["description"]``.
+    :type include: list[str] | None
+    :return: Task detail dict, or ``None`` if the task does not exist.
+    :rtype: dict | None
+    """
+    selected = ["description"] if include is None else include
+
     records = client.execute(
         "project.task",
         "search_read",
         [("id", "=", task_id)],
-        fields=[
-            "name",
-            "description",
-            "project_id",
-            "stage_id",
-            "user_ids",
-            "date_deadline",
-            "priority",
-            "tag_ids",
-        ],
+        fields=_task_detail_fields(selected),
         limit=1,
     )
     if not records:
@@ -201,7 +330,7 @@ def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
     assignees = [resolve_many2one(uid) for uid in (r.get("user_ids") or [])]
     tags = [resolve_many2one(tag) for tag in (r.get("tag_ids") or [])]
 
-    return {
+    result = {
         "task_id": task_id,
         "name": r["name"],
         "project": resolve_many2one(r.get("project_id")),
@@ -210,8 +339,9 @@ def get_task_detail(client: OdooClient, task_id: int) -> dict | None:
         "deadline": r.get("date_deadline"),
         "priority": r.get("priority"),
         "tags": tags,
-        "description": html_to_markdown(r.get("description") or ""),
     }
+    result.update(_task_extra_detail(client, r, selected))
+    return result
 
 
 def merge_timesheets(

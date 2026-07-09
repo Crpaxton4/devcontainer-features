@@ -383,3 +383,52 @@ class TestAtomicToolInvocation(unittest.TestCase):
             tool = factory(self._registry())
             result = tool(*calls[name])
             self.assertEqual(result, f"{name}-result")
+
+
+class TestGetTaskToolSchema(unittest.TestCase):
+    """Introspect the get_task tool's wire schema as the server builds it."""
+
+    def _tool(self):
+        from fastmcp.tools.tool import Tool
+
+        from odoo_sdk.mcp.tools.atomic import make_get_task_tool
+
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: {"task_id": a[0]}
+                return cmd
+
+        fn = make_get_task_tool(_Reg())
+        return Tool.from_function(fn, name="get_task")
+
+    def test_include_selector_in_input_schema(self):
+        schema = self._tool().parameters
+        self.assertIn("include", schema["properties"])
+
+    def test_task_id_only_call_still_valid(self):
+        # ``task_id`` is the sole required property, so a task_id-only call is
+        # schema-valid (backwards compatibility).
+        schema = self._tool().parameters
+        self.assertEqual(schema["required"], ["task_id"])
+        self.assertIn("task_id", schema["properties"])
+
+    def test_include_defaults_to_none(self):
+        schema = self._tool().parameters
+        self.assertEqual(schema["properties"]["include"].get("default"), None)
+
+    def test_task_id_only_invocation_routes(self):
+        fn = make_get_task_tool_reg()
+        self.assertEqual(fn(5), {"task_id": 5})
+
+
+def make_get_task_tool_reg():
+    from odoo_sdk.mcp.tools.atomic import make_get_task_tool
+
+    class _Reg:
+        def __getitem__(self, name):
+            cmd = MagicMock()
+            cmd.execute.side_effect = lambda *a, **k: {"task_id": a[0]}
+            return cmd
+
+    return make_get_task_tool(_Reg())

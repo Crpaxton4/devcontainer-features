@@ -82,7 +82,7 @@ class TestGetTaskCommand(unittest.TestCase):
         self.assertIsNone(result)
         mock_chatter.assert_not_called()
 
-    def test_merges_chatter_into_task(self):
+    def test_merges_chatter_when_requested(self):
         client = _client()
         task_data = {"task_id": 42, "name": "Feature X", "description": "Do it"}
         chatter_data = [{"id": 1, "author": "Jane", "body": "Note"}]
@@ -90,11 +90,26 @@ class TestGetTaskCommand(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=task_data),
             patch("odoo_sdk.commands.builtin.get_task.get_task_chatter", return_value=chatter_data),
         ):
-            result = GetTaskCommand(client).execute(task_id=42)
+            result = GetTaskCommand(client).execute(task_id=42, include=["chatter"])
         self.assertEqual(result["chatter"], chatter_data)
         self.assertEqual(result["name"], "Feature X")
 
-    def test_calls_both_helpers_with_same_task_id(self):
+    def test_default_does_not_fetch_chatter(self):
+        client = _client()
+        task_data = {"task_id": 42, "name": "Feature X", "description": "Do it"}
+        with (
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_detail",
+                return_value=task_data,
+            ) as mock_detail,
+            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter") as mock_chatter,
+        ):
+            result = GetTaskCommand(client).execute(task_id=42)
+        self.assertNotIn("chatter", result)
+        mock_chatter.assert_not_called()
+        mock_detail.assert_called_once_with(client, 42, include=None)
+
+    def test_forwards_include_to_get_task_detail(self):
         client = _client()
         with (
             patch(
@@ -106,8 +121,10 @@ class TestGetTaskCommand(unittest.TestCase):
                 return_value=[],
             ) as mock_chatter,
         ):
-            GetTaskCommand(client).execute(task_id=7)
-        mock_detail.assert_called_once_with(client, 7)
+            GetTaskCommand(client).execute(task_id=7, include=["subtasks", "chatter"])
+        mock_detail.assert_called_once_with(
+            client, 7, include=["subtasks", "chatter"]
+        )
         mock_chatter.assert_called_once_with(client, 7)
 
 
