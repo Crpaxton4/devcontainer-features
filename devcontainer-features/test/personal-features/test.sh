@@ -39,6 +39,13 @@ check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = 
 check "odoo-sdk MCP server is registered when odoo-mcp is present" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || claude mcp get odoo-sdk"
 
+# Regression guard for #120: the odoo-tui curses TUI console script is symlinked
+# onto PATH whenever the SDK is installed (i.e. whenever odoo-mcp is present).
+# Scoped the same way as the MCP check so it no-ops on <3.10 base images where
+# the SDK wheel isn't installed.
+check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
+
 # Regression guard for #115: the feature must NOT force the task-tracker state
 # onto the root-provisioned /usr/local/share path via ODOO_TASK_TRACKER_DIR.
 # That path is chown'd to the build-time user (uid mismatch with the runtime

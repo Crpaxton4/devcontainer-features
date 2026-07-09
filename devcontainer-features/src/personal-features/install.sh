@@ -108,6 +108,7 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
         uv venv "$_SDK_ENV"
         uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
         ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
+        ln -sf "$_SDK_ENV/bin/odoo-tui" /usr/local/bin/odoo-tui
     done
 
     # mempalace: global cross-project memory palace, auto-mined via Claude Code

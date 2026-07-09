@@ -44,6 +44,11 @@ check "system OpenSSL is intact (isolated install didn't touch cryptography)" \
 check "odoo-mcp console script is on PATH" bash -c "command -v odoo-mcp"
 check "odoo-mcp entrypoint is executable" bash -c "test -x \"\$(command -v odoo-mcp)\""
 
+# Regression guard for #120: the odoo-tui curses TUI console script must also be
+# symlinked onto PATH (it was defined in the SDK but not linked by the feature).
+check "odoo-tui console script is on PATH" bash -c "command -v odoo-tui"
+check "odoo-tui entrypoint is executable" bash -c "test -x \"\$(command -v odoo-tui)\""
+
 # Regression guard for #115: the feature must not force the task-tracker state
 # onto the root-provisioned /usr/local/share path (which the runtime user can't
 # write). With ODOO_TASK_TRACKER_DIR unset, the SDK resolves its state root to
