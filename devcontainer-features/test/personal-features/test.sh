@@ -39,6 +39,19 @@ check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = 
 check "odoo-sdk MCP server is registered when odoo-mcp is present" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || claude mcp get odoo-sdk"
 
+# Regression guard for #115: the feature must NOT force the task-tracker state
+# onto the root-provisioned /usr/local/share path via ODOO_TASK_TRACKER_DIR.
+# That path is chown'd to the build-time user (uid mismatch with the runtime
+# odoo user), so it lands unwritable and every FSM tool that writes a session
+# file fails with EACCES. With the override gone, the SDK falls back to the
+# runtime user's own $XDG_STATE_HOME/~/.local/state, which it owns and can
+# write. Assert the override isn't reintroduced pointing back at that path, and
+# that the feature no longer provisions the unwritable dir.
+check "ODOO_TASK_TRACKER_DIR does not force the unwritable root state path" bash -c \
+  "[ \"\$ODOO_TASK_TRACKER_DIR\" != '/usr/local/share/odoo-task-tracker' ]"
+check "task-tracker state dir is not root-provisioned in /usr/local/share" bash -c \
+  "! test -d /usr/local/share/odoo-task-tracker"
+
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
 check "fd is installed" fd --version
