@@ -45,6 +45,7 @@ This creates the host-side directories and files that are bind-mounted into the 
 ```
 ~/.claude              — Claude Code auth and settings
 ~/.config/gh           — gh CLI auth and settings
+~/.config/pr-automation — create-pr config (global.yaml + projects/)
 ~/.config/coderabbit   — CodeRabbit CLI config/auth state
 ~/.bash_history        — bash history file
 ~/.zsh_history         — zsh history file
@@ -60,6 +61,7 @@ Config and history are bind-mounted from your host home directory into fixed con
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
 - `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
 - `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
 
@@ -87,6 +89,38 @@ Caveats:
 - **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which typically isn't running in a container — in that case it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` is set to the bind-mounted dir above so any on-disk config/auth survives rebuilds, but the exact config-dir env var / path the CLI honors isn't formally documented and may change; the reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key` (cheap, one command). Verify with `coderabbit doctor`.
 - `.coderabbit.yaml` is a per-repo config file read by CodeRabbit's cloud service. It's authored by the user at the repo root and is **not** managed by this Feature.
 - The Claude Code CodeRabbit plugin / Agentic API access may require a paid CodeRabbit plan — check your account's plan if `/coderabbit:review` reports auth or entitlement errors.
+
+## The `create-pr` command
+
+`create-pr` opens a pull request for the current branch with `gh pr create --fill --assignee @me`, applying config-driven defaults so PR creation stays consistent across projects without interactive prompts. Every layer is optional — with no config at all it still creates a PR using `gh`'s own defaults.
+
+What it does:
+
+- **Repo path** — derived from `git config remote.origin.url` (`OWNER/REPO`, scheme/host and trailing `.git` stripped).
+- **PR title** — derived from the branch name. A branch named `<num>#<slug>` (e.g. `20545#fast-follow-cleanup`) becomes the title `20545: fast follow cleanup` (hyphens → spaces). Other branch names fall back to `--fill` (commit subject).
+- **Config** — reads `$PR_AUTOMATION_CONFIG_DIR/global.yaml` and `$PR_AUTOMATION_CONFIG_DIR/projects/<OWNER>/<REPO>.yaml` via `yq`. A per-project file *replaces* the global defaults (no merging). Supported keys: `base_branch`, `reviewers` (list), and `github_templates.pull_request` (path within the repo's `.github/`).
+- **PR template** — if the project config maps `github_templates.pull_request` and the file exists under the repo's `.github/`, its contents are passed as `--body-file`. Otherwise `gh`'s default template handling applies.
+- **Existing PR** — if a PR already exists for the branch, `create-pr` runs `gh pr edit` to update the title/base/reviewers and prints a notice; it does **not** overwrite the existing body.
+
+Host config layout (bind-mounted from `~/.config/pr-automation`):
+
+```
+~/.config/pr-automation/
+├── global.yaml                 # base_branch, reviewers (optional)
+└── projects/
+    └── CoreFXIngredients/
+        └── my-repo.yaml        # per-project overrides (optional)
+```
+
+Example `projects/CoreFXIngredients/my-repo.yaml`:
+
+```yaml
+base_branch: UAT
+reviewers:
+  - other-team-handle
+github_templates:
+  pull_request: PULL_REQUEST_TEMPLATE/default.md
+```
 
 ## Migrating from the old named-volume scheme
 
@@ -127,6 +161,25 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   This is native Git config, so it applies to *every* repo on the machine with zero per-repo opt-in. A repo that sets its own `core.hooksPath` locally (e.g. via Husky) overrides this as normal Git config precedence — this only fills the gap for repos that don't.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Two manual steps are required because devcontainer Features cannot add mounts or run per-user Claude commands:
+
+  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target the container user's home (`/root` when running as root):
+
+     ```jsonc
+     "mounts": [
+         "source=${localEnv:HOME}/.mempalace,target=/root/.mempalace,type=bind,consistency=cached"
+     ]
+     ```
+
+     Create the host directory once (`mkdir -p ~/.mempalace`) before first launch.
+
+  2. **Plugin registration (one-time)** — inside the container, register the Claude Code plugin at user scope so its Stop/SessionEnd/PreCompact hooks fire automatically:
+
+     ```sh
+     claude plugin install --scope user mempalace
+     ```
+
+     This writes only to `~/.claude/` (user scope), never to a project directory.
 
 
 ---
