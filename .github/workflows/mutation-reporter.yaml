@@ -1,0 +1,58 @@
+name: "Mutation Gate Reporter"
+
+# The `mutation-testing` status is a *required* check on `main`, but the run
+# that produces it is a manual, multi-hour job we only want to gate the
+# release-please PR. Required checks on `main` otherwise apply to every PR, so
+# this cheap reporter auto-posts `mutation-testing` = success for
+# *non-release* PRs, leaving the status unreported (pending) only on the
+# release PR — which is exactly where the manual mutation run must supply it.
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  STATUS_CONTEXT: "mutation-testing"
+
+jobs:
+  auto-pass:
+    name: "Auto-pass non-release PRs"
+    runs-on: ubuntu-latest
+    steps:
+      # A release-please PR is identified by its head branch
+      # (`release-please--branches--main--...`) or the `autorelease: pending`
+      # label. For those, do NOT post — the manual mutation run must gate them.
+      - name: Post mutation-testing status for non-release PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          REPO: ${{ github.repository }}
+        run: |
+          is_release="false"
+          case "$HEAD_REF" in
+            release-please--branches--main--*) is_release="true" ;;
+          esac
+          if printf '%s' "$LABELS" | jq -e 'index("autorelease: pending")' >/dev/null; then
+            is_release="true"
+          fi
+
+          if [ "$is_release" = "true" ]; then
+            echo "Release PR (head '$HEAD_REF'); leaving mutation-testing pending for the manual run."
+            exit 0
+          fi
+
+          echo "Non-release PR; auto-passing mutation-testing on $HEAD_SHA."
+          gh api \
+            --method POST \
+            "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f "state=success" \
+            -f "context=$STATUS_CONTEXT" \
+            -f "description=Not a release PR; mutation gate not required."
