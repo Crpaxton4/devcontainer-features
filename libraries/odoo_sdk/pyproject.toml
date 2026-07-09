@@ -11,6 +11,7 @@ dependencies = [
     "fastmcp>=3.4.2",
     "markitdown>=0.1.0",
     "pydantic>=2.13.4",
+    "toon-format>=0.9.0b1",
 ]
 
 [dependency-groups]
@@ -92,6 +93,11 @@ max-complexity-allowed = 15
 exclude = ["tests", "examples", "build", "htmlcov"]
 output-format = ["json"]
 output = "reports/complexipy/"
+
+[tool.uv]
+# ``toon-format`` currently ships its first functional encoder only as a
+# pre-release, so allow uv to resolve pre-release versions.
+prerelease = "allow"
 
 [tool.uv.workspace]
 members = [
