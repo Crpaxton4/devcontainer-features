@@ -143,6 +143,31 @@ def make_task_question_tool(registry: Registry):
     return task_question
 
 
+def make_optimize_sessions_tool(registry: Registry):
+    def optimize_sessions(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        persist: bool = False,
+        sweep_min_gap_mins: Optional[int] = None,
+        sweep_max_gap_mins: Optional[int] = None,
+        sweep_step_mins: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Sweep inactivity gaps over stored events and pick the best gap."""
+        overrides = {
+            "sweep_min_gap_mins": sweep_min_gap_mins,
+            "sweep_max_gap_mins": sweep_max_gap_mins,
+            "sweep_step_mins": sweep_step_mins,
+        }
+        return registry["optimize_sessions"].execute(
+            start_date=start_date,
+            end_date=end_date,
+            persist=persist,
+            **overrides,
+        )
+
+    return optimize_sessions
+
+
 # Tool name -> factory(registry) -> tool callable, for the atomic commands.
 ATOMIC_TOOL_FACTORIES = {
     "get_uid": make_get_uid_tool,
@@ -159,4 +184,5 @@ ATOMIC_TOOL_FACTORIES = {
     "task_note": make_task_note_tool,
     "task_list": make_task_list_tool,
     "task_question": make_task_question_tool,
+    "optimize_sessions": make_optimize_sessions_tool,
 }

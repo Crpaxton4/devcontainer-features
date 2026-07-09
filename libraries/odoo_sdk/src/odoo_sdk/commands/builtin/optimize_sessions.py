@@ -1,0 +1,102 @@
+"""Builtin command exposing the sessionization optimizer and manual knobs."""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any, Optional
+
+from odoo_sdk.adapters import load_raw_events, persist_session_windows
+from odoo_sdk.sessionization import SessionizationConfig, transform
+
+from ..command import Command
+
+
+def _parse_date(value: Optional[str]) -> Optional[date]:
+    """Parse an ISO ``YYYY-MM-DD`` string into a :class:`date`, or None."""
+    return date.fromisoformat(value) if value else None
+
+
+def _build_config(
+    start_date: Optional[str],
+    end_date: Optional[str],
+    overrides: dict[str, Any],
+) -> SessionizationConfig:
+    """Build a :class:`SessionizationConfig` from CLI-style knobs.
+
+    Only recognised, non-None override fields are applied so callers may pass a
+    sparse set of tuning knobs (sweep bounds, scoring coefficients, etc.).
+    """
+    values: dict[str, Any] = {}
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if start is not None:
+        values["start_date"] = start
+    if end is not None:
+        values["end_date"] = end
+    allowed = {
+        "window_gap_secs",
+        "min_task_minutes",
+        "billing_step_mins",
+        "sweep_min_gap_mins",
+        "sweep_max_gap_mins",
+        "sweep_step_mins",
+        "b_low",
+        "b_high",
+        "s_low",
+        "s_high",
+        "k1",
+        "k2",
+        "k3",
+    }
+    values.update(
+        {k: v for k, v in overrides.items() if k in allowed and v is not None}
+    )
+    return SessionizationConfig(**values)
+
+
+class OptimizeSessionsCommand(Command):
+    """Run the pure sessionization sweep over stored events.
+
+    Reads raw events from the local ``events`` table, runs the gap sweep and
+    utilisation optimizer, optionally materializes the best-gap windows into the
+    ``sessions`` table, and returns a summary. All manual knobs (date range,
+    sweep bounds, scoring coefficients) are keyword arguments so every manual
+    interaction is a command argument rather than an in-script flag.
+    """
+
+    _name = "optimize_sessions"
+    _description = (
+        "Sweep inactivity gaps over stored events and select the best "
+        "utilisation gap, optionally materializing per-task session windows."
+    )
+
+    def execute(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        persist: bool = False,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        """Optimize sessions and return the sweep summary.
+
+        :param start_date: Inclusive ISO start date (``YYYY-MM-DD``).
+        :param end_date: Inclusive ISO end date (``YYYY-MM-DD``).
+        :param persist: When True, write best-gap windows to the sessions table.
+        :param overrides: Optional sweep/scoring hyperparameter overrides.
+        :return: A summary dict with the best gap, score, totals, and counts.
+        """
+        config = _build_config(start_date, end_date, overrides)
+        events = load_raw_events(self.state, config.range_start, config.range_end)
+        result = transform(events, config)
+        persisted = 0
+        if persist:
+            persisted = len(persist_session_windows(self.state, result.best_gap_entries))
+        return {
+            "best_gap_mins": result.sweep.best_gap,
+            "best_score": result.sweep.best_score,
+            "best_total_secs": result.sweep.best_total,
+            "num_days": result.sweep.num_days,
+            "event_count": len(events),
+            "entry_count": len(result.best_gap_entries),
+            "persisted_windows": persisted,
+        }
