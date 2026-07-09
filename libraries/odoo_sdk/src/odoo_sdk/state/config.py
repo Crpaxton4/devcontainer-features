@@ -317,11 +317,16 @@ _CONNECTION_DEFAULTS: dict[str, Optional[str]] = {
     "transport": "xmlrpc",
 }
 
+# String tokens interpreted as an enabled boolean flag. INI and environment
+# values arrive as strings, so behavior flags stored as strings are coerced
+# against this shared set (TOML booleans and defaults arrive as real bools).
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
 # Environment variables that override behavior settings when no file value is set.
-_BEHAVIOR_ENV_VARS: dict[str, str] = {}
+_BEHAVIOR_ENV_VARS: dict[str, str] = {"profiling": "ODOO_PROFILING"}
 
 # Sensible defaults for the reserved [behavior] section.
-_BEHAVIOR_DEFAULTS: dict[str, Any] = {}
+_BEHAVIOR_DEFAULTS: dict[str, Any] = {"profiling": False}
 
 
 class LocalConfig:
@@ -388,6 +393,23 @@ class LocalConfig:
     def get(self, key: str, default: Any = None) -> Any:
         """Return one resolved behavior setting, or ``default`` when absent."""
         return self._behavior.get(key, default)
+
+    @property
+    def profiling(self) -> bool:
+        """Return whether per-call MCP profiling is enabled.
+
+        Resolved from the ``[behavior] profiling`` file setting, the
+        ``ODOO_PROFILING`` environment variable, or the default (disabled), with
+        the standard File > Environment Variable > Default precedence. String
+        sources (``"1"``, ``"true"``, ``"yes"``, ``"on"``) are treated as truthy.
+
+        :return: True when profiling should be enabled, False otherwise.
+        :rtype: bool
+        """
+        value = self._behavior.get("profiling", False)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in _TRUTHY_VALUES
 
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.
