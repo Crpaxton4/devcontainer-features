@@ -1,15 +1,27 @@
 name: "Mutation Testing"
 
 # Mutation testing is slow (hours), so it never runs on push/PR. It is a
-# reusable workflow triggered either manually (`workflow_dispatch`) or on a
-# release commit (`workflow_call` from release-please.yaml).
+# manually-triggered gate on the release-please PR: dispatch it against the
+# release PR, it runs cosmic-ray, enforces the >=90% kill-rate floor, and
+# publishes a `mutation-testing` commit status on the PR's head SHA. That
+# status is a *required* check on the release PR (see repo ruleset), so the
+# release cannot be cut until a manual run passes on the exact head commit.
 on:
   workflow_dispatch:
-  workflow_call:
+    inputs:
+      pr:
+        description: "Release PR number to gate (its head SHA receives the status)."
+        required: true
+        type: string
 
 defaults:
   run:
     working-directory: libraries/odoo_sdk
+
+# Fixed context name that the branch ruleset marks required. Kept in one place
+# so this workflow and the reporter workflow cannot drift apart.
+env:
+  STATUS_CONTEXT: "mutation-testing"
 
 jobs:
   mutation:
@@ -17,8 +29,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      statuses: write
+      issues: write
     steps:
+      # Resolve the PR's head SHA up front: a workflow_dispatch run is not
+      # associated with any PR, so we look it up and check that ref out so
+      # cosmic-ray mutates exactly the code the release PR would merge.
+      - name: Resolve PR head SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha="$(gh pr view "${{ inputs.pr }}" \
+            --repo "${{ github.repository }}" \
+            --json headRefOid --jq '.headRefOid')"
+          if [ -z "$sha" ]; then
+            echo "Could not resolve head SHA for PR #${{ inputs.pr }}" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
 
       - uses: astral-sh/setup-uv@v4
         with:
@@ -37,6 +70,8 @@ jobs:
           cosmic-ray exec cosmic-ray-ci.toml .cosmic-ray/session.sqlite
           cr-report --surviving-only .cosmic-ray/session.sqlite | tee reports/mutation/surviving.txt
           cr-html .cosmic-ray/session.sqlite > reports/mutation/report.html
+          # JSON export drives the kill-rate gate (.github/scripts/mutation_gate.py).
+          cosmic-ray dump .cosmic-ray/session.sqlite | jq -sn '[inputs]' > reports/mutation/mutation.json
 
       - name: Upload mutation report
         if: always()
@@ -44,3 +79,93 @@ jobs:
         with:
           name: mutation-report
           path: libraries/odoo_sdk/reports/mutation/
+
+      # Enforce the floor. The gate exits non-zero below 90%, but we mask that
+      # here with `|| true` so the status + issue steps always run; the
+      # `passed` output is the authoritative pass/fail signal.
+      - name: Evaluate kill-rate floor
+        id: gate
+        run: |
+          # Stdlib-only CI helper; no venv needed. Path is repo-root-relative
+          # because the working directory is libraries/odoo_sdk.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
+            reports/mutation/mutation.json >> "$GITHUB_OUTPUT" || true
+
+      - name: Publish mutation-testing status on PR head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PASSED: ${{ steps.gate.outputs.passed }}
+          KILL_RATE: ${{ steps.gate.outputs.kill_rate }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          if [ "$PASSED" = "true" ]; then
+            state="success"
+            desc="Kill rate ${KILL_RATE}% (>= 90% floor)"
+          else
+            state="failure"
+            desc="Kill rate ${KILL_RATE}% (< 90% floor)"
+          fi
+          gh api \
+            --method POST \
+            "repos/${{ github.repository }}/statuses/${HEAD_SHA}" \
+            -f "state=$state" \
+            -f "context=$STATUS_CONTEXT" \
+            -f "description=$desc" \
+            -f "target_url=$RUN_URL"
+
+      - name: File / update mutation-drift issue
+        if: steps.gate.outputs.passed != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KILL_RATE: ${{ steps.gate.outputs.kill_rate }}
+          SURVIVED: ${{ steps.gate.outputs.survived }}
+          PR_NUMBER: ${{ inputs.pr }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPO: ${{ github.repository }}
+        run: |
+          # Ensure the label exists (no-op if it already does).
+          gh label create "mutation-drift" \
+            --repo "$REPO" \
+            --color "b60205" \
+            --description "Mutation kill rate below the 90% floor" 2>/dev/null || true
+
+          title="Mutation kill rate below 90% floor (${KILL_RATE}%)"
+          survivors="$(python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
+            --survivors reports/mutation/mutation.json)"
+          # Backticks below are literal Markdown, not command substitution.
+          # shellcheck disable=SC2016
+          {
+            printf 'Mutation testing on PR #%s (head `%s`) reported a kill rate of **%s%%**, below the required 90%% floor.\n\n' \
+              "$PR_NUMBER" "$HEAD_SHA" "$KILL_RATE"
+            printf -- '- **Survived mutants:** %s\n' "$SURVIVED"
+            printf -- '- **Run:** %s\n' "$RUN_URL"
+            printf -- '- **Report:** download the `mutation-report` artifact from that run.\n\n'
+            printf '### Surviving mutants\n%s\n' "$survivors"
+          } > /tmp/mutation-drift-body.md
+
+          existing="$(gh issue list \
+            --repo "$REPO" \
+            --state open \
+            --label "mutation-drift" \
+            --json number --jq '.[0].number')"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file /tmp/mutation-drift-body.md
+            gh issue edit "$existing" --repo "$REPO" --title "$title"
+          else
+            gh issue create \
+              --repo "$REPO" \
+              --title "$title" \
+              --label "mutation-drift" \
+              --body-file /tmp/mutation-drift-body.md
+          fi
+
+      # Reflect the gate in the job's own status so a red run is obvious in the
+      # Actions UI even though the authoritative gate is the commit status.
+      - name: Fail job if below floor
+        if: steps.gate.outputs.passed != 'true'
+        run: |
+          echo "Kill rate ${{ steps.gate.outputs.kill_rate }}% is below the 90% floor." >&2
+          exit 1
