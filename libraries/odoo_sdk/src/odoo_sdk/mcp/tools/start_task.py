@@ -2,8 +2,10 @@
 
 This module owns all MCP-specific concerns for starting a task — argument
 elicitation (project/task disambiguation, confirmation), git branch setup, and
-AI branch-name generation via ``ctx.sample`` — and then delegates the actual
-Odoo/state mutation to the atomic :class:`StartTaskCommand`. Commands never see
+optional AI branch-name generation via ``ctx.sample`` (gated on the client
+advertising the ``sampling`` capability, with a deterministic slug fallback) —
+and then delegates the actual Odoo/state mutation to the atomic
+:class:`StartTaskCommand`. Commands never see
 the FastMCP ``ctx``; primitives resolved here are passed to the command.
 """
 
@@ -12,6 +14,7 @@ import subprocess
 from typing import Any, Optional
 
 from fastmcp import Context
+from mcp.types import ClientCapabilities, SamplingCapability
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
@@ -73,19 +76,49 @@ def _create_task_branch(branch_name: str, base_branch: str) -> None:
             subprocess.run(["git", "stash", "pop"], check=True)
 
 
+def _slugify(text: str) -> str:
+    """Lowercase, hyphenate, and trim ``text`` into a git-safe branch suffix."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:45]
+
+
+def _client_supports_sampling(ctx: Any) -> bool:
+    """True only when the MCP client advertised the ``sampling`` capability.
+
+    Sampling (server->client LLM completion) is optional; clients like Claude
+    Code do not advertise it. Probing here lets us degrade gracefully instead
+    of hard-failing inside ``ctx.sample``.
+    """
+    try:
+        return bool(
+            ctx.session.check_client_capability(
+                ClientCapabilities(sampling=SamplingCapability())
+            )
+        )
+    except Exception:
+        return False
+
+
 async def _generate_branch_description(ctx: Any, task_name: str, project_name: str) -> str:
-    response = await ctx.sample(
-        f"Generate a git branch name suffix for this task.\n"
-        f"Rules: lowercase only, hyphens instead of spaces/special chars, max 45 chars, no leading/trailing hyphens.\n"
-        f"Output ONLY the suffix text, nothing else.\n"
-        f"Task: {task_name}\nProject: {project_name}",
-        max_tokens=30,
-    )
-    raw = response.text.strip().lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")[:45]
-    if not slug:
-        slug = re.sub(r"[^a-z0-9]+", "-", task_name.lower()).strip("-")[:45]
-    return slug
+    """Return a branch-name suffix, preferring an LLM-sampled slug.
+
+    Falls back to a deterministic slug derived from ``task_name`` whenever the
+    client cannot sample or sampling yields nothing, so the ``start_task`` flow
+    never hard-fails on this optional capability.
+    """
+    fallback = _slugify(task_name)
+    if not _client_supports_sampling(ctx):
+        return fallback
+    try:
+        response = await ctx.sample(
+            f"Generate a git branch name suffix for this task.\n"
+            f"Rules: lowercase only, hyphens instead of spaces/special chars, max 45 chars, no leading/trailing hyphens.\n"
+            f"Output ONLY the suffix text, nothing else.\n"
+            f"Task: {task_name}\nProject: {project_name}",
+            max_tokens=30,
+        )
+    except Exception:
+        return fallback
+    return _slugify(response.text.strip()) or fallback
 
 
 async def _setup_task_branch(

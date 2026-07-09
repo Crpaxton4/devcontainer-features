@@ -314,6 +314,90 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertIn(["git", "stash", "pop"], called)
 
 
+def _sampling_ctx(*responses, supports_sampling=True) -> MagicMock:
+    """ctx whose client advertises (or not) the sampling capability."""
+    ctx = _ctx(*responses)
+    ctx.session.check_client_capability.return_value = supports_sampling
+    return ctx
+
+
+class TestBranchDescriptionSampling(unittest.TestCase):
+    """`_generate_branch_description` degrades gracefully without sampling."""
+
+    def test_no_sampling_capability_uses_deterministic_slug(self):
+        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
+
+        ctx = MagicMock()
+        ctx.session.check_client_capability.return_value = False
+        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
+        slug = _run(_generate_branch_description(ctx, "Fix VAT rounding", "Acct"))
+        self.assertEqual(slug, "fix-vat-rounding")
+        ctx.sample.assert_not_called()
+
+    def test_sampling_capability_uses_sampled_slug(self):
+        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
+
+        ctx = MagicMock()
+        ctx.session.check_client_capability.return_value = True
+        ctx.sample = AsyncMock(return_value=MagicMock(text="  Sampled Slug!  "))
+        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
+        self.assertEqual(slug, "sampled-slug")
+
+    def test_empty_sample_result_falls_back_to_task_name(self):
+        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
+
+        ctx = MagicMock()
+        ctx.session.check_client_capability.return_value = True
+        ctx.sample = AsyncMock(return_value=MagicMock(text="   !!!   "))
+        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
+        self.assertEqual(slug, "fix-vat")
+
+    def test_sample_failure_falls_back_to_task_name(self):
+        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
+
+        ctx = MagicMock()
+        ctx.session.check_client_capability.return_value = True
+        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
+        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
+        self.assertEqual(slug, "fix-vat")
+
+    def test_missing_session_falls_back_gracefully(self):
+        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
+
+        ctx = MagicMock()
+        ctx.session.check_client_capability.side_effect = AttributeError("no session")
+        ctx.sample = AsyncMock()
+        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
+        self.assertEqual(slug, "fix-vat")
+        ctx.sample.assert_not_called()
+
+    def test_resolved_fastpath_completes_without_sampling(self):
+        # Fully-resolved call (task_id) on a client that cannot sample must
+        # complete into a session using the deterministic branch slug.
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"session_id": 1, **kw},
+        )
+        ctx = _sampling_ctx(
+            _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
+            supports_sampling=False,
+        )
+        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("Fix VAT", ctx, "Accounting", task_id=10))
+        self.assertEqual(result["session_id"], 1)
+        self.assertEqual(result["branch_name"], "10#fix-vat")
+        ctx.sample.assert_not_called()
+
+
 class TestStopTaskTool(unittest.TestCase):
     def test_reviews_and_stops(self):
         reg = _FakeRegistry(
