@@ -1,0 +1,150 @@
+#!/bin/sh
+# create-pr — automated, config-driven PR creation.
+#
+# Resolves the current repo from `git remote`, derives the PR title from the
+# branch name (`<num>#<slug>` -> `<num>: <slug words>`), applies global +
+# per-project YAML config (base branch, reviewers, PR template mapping), and
+# runs `gh pr create --fill --assignee @me`. If a PR already exists for the
+# branch, it updates the title/reviewers but leaves an existing body intact.
+#
+# Every config layer is optional: with no config at all this still creates a
+# PR using `gh` defaults. Installed by personal-features' install.sh.
+set -e
+
+# Root of the host-mounted PR automation config. Overridable for tests.
+CONFIG_ROOT="${PR_AUTOMATION_CONFIG_DIR:-/usr/local/share/pr-automation}"
+GLOBAL_YAML="$CONFIG_ROOT/global.yaml"
+
+die() {
+    echo "create-pr: $1" >&2
+    exit 1
+}
+
+# yq is installed by this Feature; without it we can't read config, but we can
+# still fall back to `gh` defaults, so warn rather than fail.
+have_yq() { command -v yq >/dev/null 2>&1; }
+
+# Read a scalar key from a YAML file. Prints nothing (empty) if the file is
+# missing, yq is unavailable, or the key is absent/null.
+yaml_get() {
+    _file="$1"
+    _expr="$2"
+    [ -f "$_file" ] || return 0
+    have_yq || return 0
+    _val="$(yq -r "$_expr" "$_file" 2>/dev/null || true)"
+    [ "$_val" = "null" ] && _val=""
+    printf '%s' "$_val"
+}
+
+# Read a sequence key as newline-separated values (empty if absent).
+yaml_get_list() {
+    _file="$1"
+    _expr="$2"
+    [ -f "$_file" ] || return 0
+    have_yq || return 0
+    yq -r "$_expr" "$_file" 2>/dev/null | grep -v '^null$' || true
+}
+
+command -v gh >/dev/null 2>&1 || die "gh CLI not found on PATH"
+command -v git >/dev/null 2>&1 || die "git not found on PATH"
+have_yq || echo "create-pr: warning: yq not found; ignoring PR automation config" >&2
+
+# --- Resolve repo path from the git remote ---------------------------------
+# origin URL forms: git@host:OWNER/REPO(.git) or https://host/OWNER/REPO(.git)
+REMOTE_URL="$(git config --get remote.origin.url 2>/dev/null || true)"
+[ -n "$REMOTE_URL" ] || die "no 'origin' remote configured"
+
+# Strip scheme/user@host and trailing .git, leaving OWNER/REPO.
+REPO_PATH="$REMOTE_URL"
+REPO_PATH="${REPO_PATH#*://}"        # drop https:// etc.
+REPO_PATH="${REPO_PATH#*@}"          # drop git@ user
+REPO_PATH="${REPO_PATH#*:}"          # drop host: for scp-style URLs
+case "$REPO_PATH" in
+    */*/*) REPO_PATH="${REPO_PATH#*/}" ;;  # drop leading host/ if still present
+esac
+REPO_PATH="${REPO_PATH%.git}"        # drop trailing .git
+[ -n "$REPO_PATH" ] || die "could not derive OWNER/REPO from remote: $REMOTE_URL"
+
+# --- Derive PR title from the branch name ----------------------------------
+# `<num>#<slug>` -> `<num>: <slug words>`; otherwise leave title empty so
+# `gh pr create --fill` uses the commit subject.
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
+    die "could not determine current branch"
+fi
+
+PR_TITLE=""
+case "$BRANCH" in
+    *#*)
+        _num="${BRANCH%%#*}"
+        _slug="${BRANCH#*#}"
+        # Only treat a leading all-digits segment as a task number.
+        case "$_num" in
+            ''|*[!0-9]*) : ;;  # not purely numeric — leave title empty
+            *)
+                _words="$(printf '%s' "$_slug" | tr '-' ' ')"
+                PR_TITLE="$_num: $_words"
+                ;;
+        esac
+        ;;
+esac
+
+# --- Per-project config path ------------------------------------------------
+# projects/<OWNER>/<REPO>.yaml, mirroring the OWNER/REPO remote path.
+PROJECT_YAML="$CONFIG_ROOT/projects/$REPO_PATH.yaml"
+
+# --- Resolve config (project replaces global; no merging) ------------------
+if [ -f "$PROJECT_YAML" ]; then
+    BASE_BRANCH="$(yaml_get "$PROJECT_YAML" '.base_branch')"
+    REVIEWERS="$(yaml_get_list "$PROJECT_YAML" '.reviewers[]')"
+    TEMPLATE_REL="$(yaml_get "$PROJECT_YAML" '.github_templates.pull_request')"
+else
+    BASE_BRANCH="$(yaml_get "$GLOBAL_YAML" '.base_branch')"
+    REVIEWERS="$(yaml_get_list "$GLOBAL_YAML" '.reviewers[]')"
+    TEMPLATE_REL=""
+fi
+
+# --- Resolve the PR template body file --------------------------------------
+# Prefer an explicit project mapping under .github; otherwise let `gh` pick up
+# a repo's default PULL_REQUEST_TEMPLATE on its own.
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+BODY_FILE=""
+if [ -n "$REPO_ROOT" ] && [ -n "$TEMPLATE_REL" ]; then
+    _candidate="$REPO_ROOT/.github/$TEMPLATE_REL"
+    if [ -f "$_candidate" ]; then
+        BODY_FILE="$_candidate"
+    else
+        echo "create-pr: warning: configured template not found: $_candidate" >&2
+    fi
+fi
+
+# --- Create or update -------------------------------------------------------
+# `gh pr view` exits non-zero when no PR exists for the branch. Reviewer flags
+# differ between the two subcommands (`--reviewer` vs `--add-reviewer`), so
+# build each arg list separately with `set --` to keep quoting intact.
+if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+    echo "create-pr: PR already exists for '$BRANCH'; updating title/reviewers (body left intact)"
+    set -- gh pr edit "$BRANCH"
+    [ -n "$PR_TITLE" ] && set -- "$@" --title "$PR_TITLE"
+    [ -n "$BASE_BRANCH" ] && set -- "$@" --base "$BASE_BRANCH"
+    _REVIEWER_FLAG=--add-reviewer
+else
+    set -- gh pr create --fill --assignee @me
+    [ -n "$PR_TITLE" ] && set -- "$@" --title "$PR_TITLE"
+    [ -n "$BASE_BRANCH" ] && set -- "$@" --base "$BASE_BRANCH"
+    [ -n "$BODY_FILE" ] && set -- "$@" --body-file "$BODY_FILE"
+    _REVIEWER_FLAG=--reviewer
+fi
+
+# Append one reviewer flag per configured entry, skipping blanks.
+if [ -n "$REVIEWERS" ]; then
+    IFS='
+'
+    for _r in $REVIEWERS; do
+        [ -n "$_r" ] || continue
+        set -- "$@" "$_REVIEWER_FLAG" "$_r"
+    done
+    unset IFS
+fi
+
+exec "$@"

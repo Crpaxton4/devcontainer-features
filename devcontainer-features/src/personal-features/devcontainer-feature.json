@@ -18,7 +18,8 @@
         "DISABLE_AUTOUPDATER": "1",
         "odoo_sdk_CONFIG": "/usr/local/share/odoo-sdk-config/config.ini",
         "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker",
-        "MEMPAL_DIR": "/workspaces"
+        "MEMPAL_DIR": "/workspaces",
+        "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation"
     },
     "mounts": [
         {
@@ -34,6 +35,11 @@
         {
             "source": "${localEnv:HOME}/.config/odoo_sdk",
             "target": "/usr/local/share/odoo-sdk-config",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}/.config/pr-automation",
+            "target": "/usr/local/share/pr-automation",
             "type": "bind"
         },
         {

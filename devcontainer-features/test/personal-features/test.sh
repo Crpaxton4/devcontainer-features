@@ -53,6 +53,13 @@ check "tldr is installed" tldr --version
 # secret scanning
 check "gitleaks is installed" gitleaks version
 
+# create-pr (config-driven gh pr create wrapper)
+check "create-pr is installed and executable" bash -c "test -x /usr/local/bin/create-pr"
+check "create-pr passes shell syntax check" bash -c "sh -n /usr/local/bin/create-pr"
+check "PR_AUTOMATION_CONFIG_DIR points at the bind mount" bash -c \
+  "[ \"\$PR_AUTOMATION_CONFIG_DIR\" = '/usr/local/share/pr-automation' ]"
+check "pr-automation config dir exists" bash -c "test -d /usr/local/share/pr-automation"
+
 # global git hooks
 check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
 check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"
