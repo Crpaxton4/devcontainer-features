@@ -11,6 +11,7 @@ import re
 import subprocess
 from typing import Any, Optional
 
+from fastmcp import Context
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
@@ -221,7 +222,7 @@ def make_start_task_tool(registry: Registry):
 
     async def start_task(
         task_name_query: str,
-        ctx: Any,
+        ctx: Context,
         project_name_query: Optional[str] = None,
         task_id: Optional[int] = None,
     ) -> dict[str, Any]:

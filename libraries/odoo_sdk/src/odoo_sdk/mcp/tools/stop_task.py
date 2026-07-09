@@ -7,6 +7,7 @@ primitive.
 
 from typing import Any
 
+from fastmcp import Context
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
@@ -27,7 +28,7 @@ def make_stop_task_tool(registry: Registry):
     async def stop_task(
         task_id: int,
         description: str,
-        ctx: Any,
+        ctx: Context,
     ) -> dict[str, Any]:
         """Stop an active task tracking session.
 
