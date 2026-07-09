@@ -47,9 +47,18 @@ def make_get_todo_tool(registry: Registry):
 
 
 def make_get_task_tool(registry: Registry):
-    def get_task(task_id: int) -> Optional[dict]:
-        """Fetch full task context (fields plus chatter) for a project task."""
-        return registry["get_task"].execute(task_id)
+    def get_task(
+        task_id: int, include: Optional[List[str]] = None
+    ) -> Optional[dict]:
+        """Fetch task context for a project task with opt-in extra detail.
+
+        Base identity fields (name, project, stage, assignees, deadline,
+        priority, tags) are always returned. ``include`` selects extra, more
+        expensive detail; each entry is one of: ``description``, ``chatter``,
+        ``dependencies``, ``timesheets``, ``subtasks``. When omitted the cheap
+        default is description only.
+        """
+        return registry["get_task"].execute(task_id, include=include)
 
     return get_task
 
