@@ -34,6 +34,11 @@ check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# odoo-sdk MCP server is registered at user scope when the odoo-mcp binary was
+# installed (skipped on <3.10 base images where the SDK wheel isn't installed).
+check "odoo-sdk MCP server is registered when odoo-mcp is present" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || claude mcp get odoo-sdk"
+
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
 check "fd is installed" fd --version
