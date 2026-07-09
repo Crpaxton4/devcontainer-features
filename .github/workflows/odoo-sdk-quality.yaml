@@ -73,36 +73,3 @@ jobs:
         with:
           name: static-analysis-report
           path: libraries/odoo_sdk/reports/
-
-  mutation:
-    name: "Mutation Testing"
-    runs-on: ubuntu-latest
-    # Mutation tests are slow — run only when explicitly triggered.
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v4
-        with:
-          python-version: "3.13"
-          enable-cache: true
-
-      - name: Install test dependencies
-        run: uv sync --group test
-
-      - name: Run mutation tests (local distributor)
-        run: |
-          mkdir -p .cosmic-ray reports/mutation
-          . .venv/bin/activate
-          cosmic-ray init cosmic-ray-ci.toml .cosmic-ray/session.sqlite
-          cosmic-ray baseline cosmic-ray-ci.toml
-          cosmic-ray exec cosmic-ray-ci.toml .cosmic-ray/session.sqlite
-          cr-report --surviving-only .cosmic-ray/session.sqlite | tee reports/mutation/surviving.txt
-          cr-html .cosmic-ray/session.sqlite > reports/mutation/report.html
-
-      - name: Upload mutation report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mutation-report
-          path: libraries/odoo_sdk/reports/mutation/

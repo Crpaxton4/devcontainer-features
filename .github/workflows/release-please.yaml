@@ -30,3 +30,13 @@ jobs:
       pull-requests: write
       packages: write
     secrets: inherit
+
+  # Mutation testing is slow (hours) so it never runs on push/PR. Run it on the
+  # release commit whenever a release is cut, so mutation coverage tracks each
+  # released version instead of being neglected between manual dispatches.
+  mutation:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    uses: ./.github/workflows/mutation.yaml
+    permissions:
+      contents: read
