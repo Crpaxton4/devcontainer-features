@@ -34,6 +34,7 @@ test = [
     "coverage[toml]>=7.6.0",
     "hypothesis>=6.0.0",
     "cosmic-ray>=8.4.6",
+    "pyte>=0.8.2",
 ]
 dev = [
     {include-group = "static-analysis"},
@@ -44,6 +45,7 @@ dev = [
 
 [project.scripts]
 odoo-mcp = "odoo_sdk.mcp.__main__:main"
+odoo-tui = "odoo_sdk.tui.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
