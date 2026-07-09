@@ -2,6 +2,8 @@
 
 import asyncio
 import unittest
+import warnings
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from odoo_sdk.mcp.tools import build_explicit_tools
@@ -23,7 +25,8 @@ def _accepted(data) -> MagicMock:
 
 
 def _confirmed() -> MagicMock:
-    """A data-less accepted elicitation (pure confirm, ``response_type=None``)."""
+    """A data-less accepted elicitation (pure confirm via the ``_ConfirmGate``
+    fieldless schema — the accept action itself is the answer)."""
     r = MagicMock()
     r.action = "accept"
     r.data = None
@@ -175,9 +178,9 @@ class TestStartTaskTool(unittest.TestCase):
 
     def test_confirmation_is_a_dataless_gate(self):
         # The confirm prompt must be a single accept/decline checkpoint, not a
-        # form with a ``confirmed`` field: it is elicited with
-        # ``response_type=None`` and accepting proceeds even though ``data`` is
-        # ``None`` (issue #121).
+        # form with a ``confirmed`` field: it is elicited with the fieldless
+        # ``_ConfirmGate`` schema and accepting proceeds even though ``data``
+        # carries no user-entered value (issue #121).
         reg = self._registry(
             projects=[{"id": 5, "name": "Acct"}],
             tasks=[{"id": 10, "name": "Fix"}],
@@ -190,9 +193,52 @@ class TestStartTaskTool(unittest.TestCase):
             result = _run(tool("Fix", ctx))
         self.assertEqual(result["task_id"], 10)
         confirm_call = ctx.elicit.await_args_list[0]
-        self.assertEqual(confirm_call.kwargs.get("response_type"), None)
-        # No positional schema is passed for the confirm gate.
-        self.assertEqual(len(confirm_call.args), 1)
+        schema_cls = confirm_call.args[1]
+        # Confirm gate uses the fieldless _ConfirmGate schema, not response_type=None.
+        self.assertEqual(schema_cls.__name__, "_ConfirmGate")
+        self.assertIsNone(confirm_call.kwargs.get("response_type"))
+        # The schema exposes no properties the user must fill (single Accept/Decline).
+        self.assertEqual(schema_cls.model_json_schema().get("properties", {}), {})
+        self.assertNotIn("required", schema_cls.model_json_schema())
+
+    def test_confirmation_schema_emits_no_deprecation_warning(self):
+        # Driving the real Context.elicit with the confirm gate's schema must
+        # NOT trigger the FastMCPDeprecationWarning that response_type=None does
+        # in FastMCP 3.4.x. This guards the exact schema start_task passes.
+        from fastmcp.exceptions import FastMCPDeprecationWarning
+        from fastmcp.server.context import Context
+        from odoo_sdk.mcp.tools.start_task import _ConfirmGate
+
+        session = MagicMock()
+        session.elicit = AsyncMock(
+            return_value=SimpleNamespace(action="accept", content={})
+        )
+        ctx = MagicMock(spec=Context)
+        ctx.is_background_task = False
+        ctx.request_id = "1"
+        ctx.session = session
+
+        def _deprecations(coro):
+            with warnings.catch_warnings(record=True) as recorded:
+                warnings.simplefilter("always")
+                result = _run(coro)
+            return result, [
+                w
+                for w in recorded
+                if issubclass(w.category, FastMCPDeprecationWarning)
+            ]
+
+        gate_result, gate_deprecations = _deprecations(
+            Context.elicit(ctx, "Confirm?", _ConfirmGate)
+        )
+        _, none_deprecations = _deprecations(Context.elicit(ctx, "Confirm?", None))
+
+        self.assertEqual(gate_result.action, "accept")
+        # The confirm gate schema raises no deprecation warning ...
+        self.assertEqual(gate_deprecations, [])
+        # ... while the deprecated response_type=None sentinel still does,
+        # proving the test would catch a regression back to it.
+        self.assertTrue(none_deprecations, "response_type=None should still warn")
 
     def test_disambiguates_multiple_projects(self):
         reg = self._registry(

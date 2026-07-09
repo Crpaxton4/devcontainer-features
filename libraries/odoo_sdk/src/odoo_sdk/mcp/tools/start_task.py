@@ -25,6 +25,16 @@ class _SelectTask(BaseModel):
     selection: int
 
 
+class _ConfirmGate(BaseModel):
+    """Fieldless schema for a pure confirmation.
+
+    An empty object schema (no properties, nothing required) makes FastMCP
+    render a single Accept/Decline with no form field — the accept/decline
+    action itself is the answer. Unlike ``response_type=None`` this is not
+    deprecated in FastMCP 3.4.x, so it emits no ``FastMCPDeprecationWarning``.
+    """
+
+
 class _SelectBranch(BaseModel):
     selection: int
 
@@ -238,7 +248,7 @@ def make_start_task_tool(registry: Registry):
         confirm = await ctx.elicit(
             f"Start tracking time on task:\n  Task: {task['name']}\n"
             f"  Project: {project['name']}\n\nConfirm?",
-            response_type=None,
+            _ConfirmGate,
         )
         if confirm.action != "accept":
             return {"error": "Task start cancelled."}
