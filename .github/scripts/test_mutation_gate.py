@@ -1,8 +1,10 @@
-"""Unit tests for the CI mutation kill-rate gate (``tools/mutation_gate.py``).
+"""Unit tests for the CI mutation kill-rate gate (``mutation_gate.py``).
 
 These exercise the pure logic that the mutation workflow relies on: kill-rate
-computation (reused from ``tools/report.py``), the pass/fail decision against
-the 90% floor, surviving-mutant extraction, and issue-body assembly.
+computation, the pass/fail decision against the 90% floor, surviving-mutant
+extraction, issue-body assembly, and CLI exit codes. The gate is a CI-only
+helper and must NOT depend on the ``odoo_sdk`` package, so this test imports it
+directly by path from the same directory.
 """
 
 import importlib.util
@@ -12,13 +14,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
-sys.path.insert(0, str(TOOLS_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 
 
 def _load_gate():
     spec = importlib.util.spec_from_file_location(
-        "mutation_gate", TOOLS_DIR / "mutation_gate.py"
+        "mutation_gate", SCRIPT_DIR / "mutation_gate.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -36,6 +38,12 @@ def _mutant(outcome, module="src/odoo_sdk/x.py", operator="core/ReplaceOp", occ=
         "operator": operator,
         "occurrence": occ,
     }
+
+
+def _write(mutants):
+    tmp = Path(tempfile.mkdtemp()) / "mutation.json"
+    tmp.write_text(json.dumps(mutants))
+    return tmp
 
 
 class TestComputeKillRate(unittest.TestCase):
@@ -93,15 +101,10 @@ class TestFormatSurvivors(unittest.TestCase):
 
 
 class TestEvaluate(unittest.TestCase):
-    def _write(self, mutants):
-        tmp = Path(tempfile.mkdtemp()) / "mutation.json"
-        tmp.write_text(json.dumps(mutants))
-        return tmp
-
     def test_passes_at_floor(self):
         # 9 killed / 10 completed = 90.0, exactly the floor → pass.
         mutants = [_mutant("killed") for _ in range(9)] + [_mutant("survived")]
-        result = gate.evaluate(self._write(mutants))
+        result = gate.evaluate(_write(mutants))
         self.assertEqual(result["kill_rate"], 90.0)
         self.assertTrue(result["passed"])
         self.assertEqual(result["survived"], 1)
@@ -112,10 +115,17 @@ class TestEvaluate(unittest.TestCase):
         mutants = [_mutant("killed") for _ in range(8)] + [
             _mutant("survived") for _ in range(2)
         ]
-        result = gate.evaluate(self._write(mutants))
+        result = gate.evaluate(_write(mutants))
         self.assertEqual(result["kill_rate"], 80.0)
         self.assertFalse(result["passed"])
         self.assertEqual(result["survived"], 2)
+
+    def test_custom_floor_overrides_default(self):
+        # 80% passes when the floor is lowered to 75%.
+        mutants = [_mutant("killed") for _ in range(8)] + [
+            _mutant("survived") for _ in range(2)
+        ]
+        self.assertTrue(gate.evaluate(_write(mutants), floor=75.0)["passed"])
 
     def test_rejects_non_list_json(self):
         tmp = Path(tempfile.mkdtemp()) / "mutation.json"
@@ -125,24 +135,19 @@ class TestEvaluate(unittest.TestCase):
 
 
 class TestMainExitCode(unittest.TestCase):
-    def _write(self, mutants):
-        tmp = Path(tempfile.mkdtemp()) / "mutation.json"
-        tmp.write_text(json.dumps(mutants))
-        return tmp
-
     def test_exit_zero_when_passing(self):
-        path = self._write([_mutant("killed")])
+        path = _write([_mutant("killed")])
         self.assertEqual(gate.main(["mutation_gate.py", str(path)]), 0)
 
     def test_exit_one_when_failing(self):
-        path = self._write([_mutant("survived")])
+        path = _write([_mutant("survived")])
         self.assertEqual(gate.main(["mutation_gate.py", str(path)]), 1)
 
     def test_usage_error_on_bad_args(self):
         self.assertEqual(gate.main(["mutation_gate.py"]), 2)
 
     def test_survivors_mode_exits_zero_even_when_failing(self):
-        path = self._write([_mutant("survived")])
+        path = _write([_mutant("survived")])
         self.assertEqual(
             gate.main(["mutation_gate.py", "--survivors", str(path)]), 0
         )

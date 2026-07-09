@@ -70,7 +70,7 @@ jobs:
           cosmic-ray exec cosmic-ray-ci.toml .cosmic-ray/session.sqlite
           cr-report --surviving-only .cosmic-ray/session.sqlite | tee reports/mutation/surviving.txt
           cr-html .cosmic-ray/session.sqlite > reports/mutation/report.html
-          # JSON export drives the kill-rate gate (reuses tools/report.py logic).
+          # JSON export drives the kill-rate gate (.github/scripts/mutation_gate.py).
           cosmic-ray dump .cosmic-ray/session.sqlite | jq -sn '[inputs]' > reports/mutation/mutation.json
 
       - name: Upload mutation report
@@ -86,8 +86,10 @@ jobs:
       - name: Evaluate kill-rate floor
         id: gate
         run: |
-          . .venv/bin/activate
-          python tools/mutation_gate.py reports/mutation/mutation.json >> "$GITHUB_OUTPUT" || true
+          # Stdlib-only CI helper; no venv needed. Path is repo-root-relative
+          # because the working directory is libraries/odoo_sdk.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
+            reports/mutation/mutation.json >> "$GITHUB_OUTPUT" || true
 
       - name: Publish mutation-testing status on PR head
         env:
@@ -123,7 +125,6 @@ jobs:
           RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           REPO: ${{ github.repository }}
         run: |
-          . .venv/bin/activate
           # Ensure the label exists (no-op if it already does).
           gh label create "mutation-drift" \
             --repo "$REPO" \
@@ -131,7 +132,8 @@ jobs:
             --description "Mutation kill rate below the 90% floor" 2>/dev/null || true
 
           title="Mutation kill rate below 90% floor (${KILL_RATE}%)"
-          survivors="$(python tools/mutation_gate.py --survivors reports/mutation/mutation.json)"
+          survivors="$(python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
+            --survivors reports/mutation/mutation.json)"
           # Backticks below are literal Markdown, not command substitution.
           # shellcheck disable=SC2016
           {

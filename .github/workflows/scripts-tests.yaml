@@ -1,0 +1,26 @@
+name: "CI - .github/scripts tests"
+
+# Lightweight gate for the CI helper scripts under .github/scripts/. These are
+# stdlib-only and intentionally decoupled from the odoo_sdk package, so this
+# job needs neither uv, the SDK, nor the coverage gate — just a Python
+# interpreter. It only runs when those scripts (or their tests) change.
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/**'
+      - '.github/workflows/scripts-tests.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: "Run .github/scripts tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run unit tests (stdlib unittest)
+        run: python -m unittest discover -s .github/scripts -p "test_*.py"

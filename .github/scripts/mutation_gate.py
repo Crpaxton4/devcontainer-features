@@ -1,39 +1,43 @@
 #!/usr/bin/env python3
 """Enforce the mutation kill-rate floor and assemble CI drift artifacts.
 
-This is a thin, pure wrapper around ``tools/report.py`` so CI does not
-re-implement (and drift from) the kill-rate threshold or its computation.
+CI-only helper for the mutation-testing gate (see
+``.github/workflows/mutation.yaml``). It is intentionally self-contained: it
+depends only on the Python stdlib and must NOT import the ``odoo_sdk`` package,
+so it runs without the SDK being installed.
+
 It reads the cosmic-ray ``mutation.json`` export (a list of mutant records,
-each with a ``test_outcome``) and emits, on stdout, ``KEY=VALUE`` lines that
-a GitHub Actions step can append to ``$GITHUB_OUTPUT``:
+each with a ``test_outcome``) and emits, on stdout, ``KEY=VALUE`` lines that a
+GitHub Actions step can append to ``$GITHUB_OUTPUT``:
 
     kill_rate=<float, 1 decimal>
     passed=<true|false>
     survived=<int>
     total=<int>
 
-Exit code is 0 when the floor is met and 1 when it is not, so a workflow
-step can gate on either the exit status or the ``passed`` output.
+Exit code is 0 when the floor is met and 1 when it is not, so a workflow step
+can gate on either the exit status or the ``passed`` output.
 
-With ``--survivors`` it instead prints the surviving mutants as a Markdown
-list (for a drift-issue body) and always exits 0.
+With ``--survivors`` it instead prints the surviving mutants as a Markdown list
+(for a drift-issue body) and always exits 0.
+
+The 90% floor is a CI policy value; override it with ``KILL_RATE_FLOOR``.
 
 Usage:
-    python tools/mutation_gate.py reports/mutation/mutation.json
-    python tools/mutation_gate.py --survivors reports/mutation/mutation.json
+    python .github/scripts/mutation_gate.py <mutation.json>
+    python .github/scripts/mutation_gate.py --survivors <mutation.json>
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-# Reuse the single source of truth for the threshold and the kill-rate
-# computation. ``report.py`` lives alongside this file in ``tools/``.
-from report import KILL_RATE_FAIL, compute_kill_rate  # noqa: E402
+# CI policy: the minimum acceptable mutation kill rate (percent). Kept here as
+# the single CI-side source of truth; override via the KILL_RATE_FLOOR env var.
+KILL_RATE_FLOOR = float(os.environ.get("KILL_RATE_FLOOR", "90.0"))
 
 SURVIVOR_LIMIT = 50
 
@@ -44,6 +48,20 @@ def load_mutants(path: Path) -> list[dict]:
     if not isinstance(data, list):
         raise ValueError(f"expected a JSON list in {path}, got {type(data).__name__}")
     return data
+
+
+def compute_kill_rate(mutants: list[dict]) -> float:
+    """Kill rate (percent) over *completed* mutants in a cosmic-ray dump.
+
+    Only mutants that ran (``test_outcome is not None``) count toward the rate;
+    a mutant is killed iff its outcome is ``"killed"``. Returns ``0.0`` when
+    nothing has completed.
+    """
+    completed = [m for m in mutants if m.get("test_outcome") is not None]
+    if not completed:
+        return 0.0
+    killed = [m for m in completed if m.get("test_outcome") == "killed"]
+    return len(killed) / len(completed) * 100
 
 
 def surviving_mutants(mutants: list[dict]) -> list[dict]:
@@ -67,7 +85,7 @@ def format_survivors(survivors: list[dict], limit: int = SURVIVOR_LIMIT) -> str:
     return "\n".join(lines)
 
 
-def evaluate(path: Path) -> dict:
+def evaluate(path: Path, floor: float = KILL_RATE_FLOOR) -> dict:
     """Compute the gate result for a ``mutation.json`` export."""
     mutants = load_mutants(path)
     # Decide pass/fail on the same rounded value we report, so the published
@@ -76,7 +94,7 @@ def evaluate(path: Path) -> dict:
     survivors = surviving_mutants(mutants)
     return {
         "kill_rate": kill_rate,
-        "passed": kill_rate >= KILL_RATE_FAIL,
+        "passed": kill_rate >= floor,
         "survived": len(survivors),
         "total": len(mutants),
         "survivors": survivors,

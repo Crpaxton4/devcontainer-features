@@ -22,22 +22,6 @@ MI_RANKS = {"A": "✅", "B": "⚠️", "C": "❌"}
 COMPLEXITY_THRESHOLD = 15
 
 
-def compute_kill_rate(mutants: list[dict]) -> float:
-    """Kill rate (percent) over *completed* mutants in a cosmic-ray dump.
-
-    ``mutants`` is the ``mutation.json`` export: a list of records each with a
-    ``test_outcome``. Only mutants that ran (``test_outcome is not None``) count
-    toward the rate; a mutant is killed iff its outcome is ``"killed"``. Returns
-    ``0.0`` when nothing has completed. Single source of truth so both the
-    quality report and the CI gate agree on how the rate is derived.
-    """
-    completed = [m for m in mutants if m.get("test_outcome") is not None]
-    if not completed:
-        return 0.0
-    killed = [m for m in completed if m.get("test_outcome") == "killed"]
-    return len(killed) / len(completed) * 100
-
-
 def badge(value: float, warn: float, fail: float, fmt: str = ".1f") -> str:
     icon = "✅" if value >= warn else ("⚠️" if value >= fail else "❌")
     return f"{icon} **{value:{fmt}}%**"
@@ -158,7 +142,7 @@ def section_mutation(lines: list[str]) -> None:
     survived = [m for m in completed if m.get("test_outcome") != "killed"]
     pending = total - len(completed)
 
-    kill_rate = compute_kill_rate(data)
+    kill_rate = len(killed) / len(completed) * 100 if completed else 0.0
 
     lines.append(
         f"| Metric | Value |\n|---|---|\n"
