@@ -16,14 +16,14 @@ def build_implement_task_messages(task: dict) -> list[str]:
     :return: ``[context_message, workflow_message]``.
     :rtype: list[str]
     """
-    task_id = task.get("task_id", "")
+    task_id = str(task.get("task_id", ""))
     name = task.get("name", "")
     project = task.get("project", "")
     stage = task.get("stage", "")
-    assignees = ", ".join(task.get("assignees") or []) or "—"
+    assignees = ", ".join(str(x) for x in task.get("assignees") or []) or "—"
     deadline = task.get("deadline") or "—"
     priority = task.get("priority") or "—"
-    tags = ", ".join(task.get("tags") or []) or "—"
+    tags = ", ".join(str(x) for x in task.get("tags") or []) or "—"
     description = task.get("description", "").strip() or "(no description)"
     chatter_text = format_chatter(task.get("chatter") or []) or "(no messages)"
 

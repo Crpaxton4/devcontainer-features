@@ -204,6 +204,14 @@ class TestBuildMessages(unittest.TestCase):
         msgs = _build_messages(task)
         self.assertIn("—", msgs[0])
 
+    def test_int_task_id_and_non_string_list_members_render(self):
+        task = _make_task(task_id=27577, assignees=[101, "Bob"], tags=[7, "bug"])
+        msgs = _build_messages(task)
+        self.assertIn("27577", msgs[0])
+        self.assertIn("101", msgs[0])
+        self.assertIn("7", msgs[0])
+        self.assertIn("task_note(27577", msgs[1])
+
 
 class TestReportIncidentPromptRegistration(unittest.TestCase):
     """report_incident prompt is registered with the correct metadata."""
