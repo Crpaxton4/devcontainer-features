@@ -14,13 +14,14 @@ GH_CONFIG="/usr/local/share/gh-cli-config"
 ODOO_SDK_CONFIG="/usr/local/share/odoo-sdk-config"
 TASK_TRACKER_DIR="/usr/local/share/odoo-task-tracker"
 PR_AUTOMATION_CONFIG="/usr/local/share/pr-automation"
+CR_CONFIG="/usr/local/share/coderabbit-config"
 
 # Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
 # point at and that the bind mounts overlay at runtime. Creating them here
 # means the feature still works in test containers where no bind mounts are
 # active (e.g. the devcontainer features test harness).
-mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG"
-chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG"
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
 
 # create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
 # YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
@@ -171,7 +172,7 @@ install_gh_release() {
 
 echo "Installing productivity/navigation CLI tools"
 apt-get update -y
-apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq
+apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
 
 # Debian/Ubuntu's apt packages ship these under different binary names to
 # avoid clashing with existing system commands.
@@ -186,6 +187,18 @@ install_gh_release dbrgn/tealdeer "tealdeer-linux-${ARCH_GNU}-musl\$" /usr/local
 ( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
     || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
 install_gh_release gitleaks/gitleaks "linux_${ARCH_SHORT}\\.tar\\.gz\$" &
+
+# CodeRabbit CLI — not published as GitHub release assets, so use the upstream
+# installer (https://cli.coderabbit.ai/install.sh) pinned to /usr/local/bin.
+# CI=1 suppresses the interactive post-install login prompt; the installer's
+# own PATH/profile edits are harmless no-ops here since it lands on a dir
+# already on PATH. The vars must be exported (not just prefixed on curl) so the
+# piped `sh` — a separate process from curl — actually inherits them. Auth is
+# user-specific and persisted via the mount below, so it is deliberately not
+# baked in. Best-effort like the tools above.
+( export CODERABBIT_INSTALL_DIR=/usr/local/bin CI=1
+    curl -fsSL https://cli.coderabbit.ai/install.sh | sh \
+    || echo "WARNING: failed to install coderabbit, skipping" >&2 ) &
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
