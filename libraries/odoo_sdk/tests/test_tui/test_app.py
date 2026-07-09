@@ -8,7 +8,7 @@ terminal and no live Odoo are involved.
 import curses
 import unittest
 from datetime import date
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from odoo_sdk.tui.app import (
     AppState,
@@ -20,6 +20,7 @@ from odoo_sdk.tui.app import (
     query_sessions,
     refresh,
     request_upload,
+    run,
     _numeric_task_id,
     _upload_sessions,
 )
@@ -291,6 +292,30 @@ class TestHandleKey(unittest.TestCase):
         state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
         result, _ = handle_key(registry, state, ord("c"), writer=self._writer())
         self.assertIn("exported csv", result.status)
+
+
+class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
+    """``Ctrl+C`` at the blocking ``getch`` must exit cleanly (issue #125)."""
+
+    def test_run_swallows_keyboard_interrupt(self):
+        # ``curses.wrapper`` restores the terminal, then re-raises Ctrl+C as a
+        # KeyboardInterrupt; ``run`` must treat it as a normal quit.
+        def boom(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom) as wrapper:
+            run(_registry())  # must not raise
+
+        wrapper.assert_called_once()
+
+    def test_run_propagates_other_errors(self):
+        # Only KeyboardInterrupt is a normal quit; real errors still surface.
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("curses exploded")
+
+        with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom):
+            with self.assertRaises(RuntimeError):
+                run(_registry())
 
 
 if __name__ == "__main__":
