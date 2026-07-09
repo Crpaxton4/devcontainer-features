@@ -172,6 +172,45 @@ DEFAULT_SESSION_STRATEGY_CONFIGS: tuple[SessionStrategyConfig, ...] = (
 )
 
 
+class DuplicateStrategyOwnershipError(ValueError):
+    """Raised when one :class:`EventType` is claimed by more than one strategy.
+
+    Single-strategy ownership is an invariant of sessionization: every event type
+    must route to exactly one strategy, or an event could be counted under two
+    sessions (double-counted time). This error names the offending event type and
+    the competing strategies so misconfiguration is diagnosable.
+    """
+
+
+def validate_single_strategy_ownership(
+    settings_rows: tuple[SessionStrategyConfig, ...],
+) -> dict[EventType, str]:
+    """Assert each event type is owned by exactly one strategy config row.
+
+    This surfaces, over the same ownership map :func:`_strategy_event_type_map`
+    builds, the single-strategy-ownership invariant as an explicit, callable
+    check operating on flat config rows (no strategy instances required).
+
+    :param settings_rows: The configured strategy rows to validate.
+    :type settings_rows: tuple[SessionStrategyConfig, ...]
+    :raises DuplicateStrategyOwnershipError: When any event type is owned by more
+        than one row.
+    :return: Mapping of each covered event type to its owning strategy name.
+    :rtype: dict[EventType, str]
+    """
+    owner: dict[EventType, str] = {}
+    for row in settings_rows:
+        for event_type in row.event_types:
+            existing = owner.get(event_type)
+            if existing is not None and existing != row.name:
+                raise DuplicateStrategyOwnershipError(
+                    f"event type {event_type.name} is owned by multiple "
+                    f"strategies: {existing!r} and {row.name!r}"
+                )
+            owner[event_type] = row.name
+    return owner
+
+
 def _strategy_event_type_map(
     strategies: list[SessionizationStrategy],
 ) -> dict[EventType, SessionizationStrategy]:
@@ -180,7 +219,11 @@ def _strategy_event_type_map(
     for strategy in strategies:
         for event_type in strategy.settings.event_types:
             if event_type in by_type:
-                raise ValueError(f"duplicate strategy for {event_type.name}")
+                raise DuplicateStrategyOwnershipError(
+                    f"event type {event_type.name} is owned by multiple "
+                    f"strategies: {by_type[event_type].settings.name!r} and "
+                    f"{strategy.settings.name!r}"
+                )
             by_type[event_type] = strategy
     _validate_strategy_coverage(by_type)
     return by_type

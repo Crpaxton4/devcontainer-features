@@ -49,7 +49,7 @@ class TestOptimizeSessionsCommand(unittest.TestCase):
     def _command(self, state):
         return OptimizeSessionsCommand(client=MagicMock(), state=state)
 
-    def test_returns_summary_without_persisting(self):
+    def test_returns_summary(self):
         state = _tmp_state()
         _seed(state)
         result = self._command(state).execute(
@@ -57,19 +57,17 @@ class TestOptimizeSessionsCommand(unittest.TestCase):
         )
         self.assertEqual(result["event_count"], 3)
         self.assertGreaterEqual(result["best_gap_mins"], 30)
-        self.assertEqual(result["persisted_windows"], 0)
-        self.assertEqual(state.get_session_windows(), [])
 
-    def test_persist_writes_windows(self):
+    def test_analysis_never_mutates_sessions(self):
+        # The optimizer is decoupled/read-only: it must not write session rows,
+        # and it no longer exposes a persistence knob or count.
         state = _tmp_state()
         _seed(state)
         result = self._command(state).execute(
-            start_date="2026-06-01", end_date="2026-06-01", persist=True
+            start_date="2026-06-01", end_date="2026-06-01"
         )
-        self.assertGreater(result["persisted_windows"], 0)
-        self.assertEqual(
-            len(state.get_session_windows()), result["persisted_windows"]
-        )
+        self.assertEqual(state.get_session_windows(), [])
+        self.assertNotIn("persisted_windows", result)
 
     def test_metadata(self):
         cmd = self._command(_tmp_state())

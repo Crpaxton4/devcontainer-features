@@ -77,6 +77,13 @@ class EventRecord:
     branch: str = ""
     subject: str = ""
     payload: Optional[dict] = None
+    session_id: Optional[int] = None
+    """The ``sessions`` row this event is linked to, or ``None`` when unlinked.
+
+    Every non-excluded event is linked to exactly one session by the incremental
+    sessionizer; this column is the persisted event to session edge that lets
+    ingestion be maintained incrementally rather than rebuilt from scratch.
+    """
 
 
 @dataclass

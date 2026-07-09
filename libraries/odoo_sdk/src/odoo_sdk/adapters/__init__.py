@@ -8,6 +8,7 @@ external systems lives here, never in the pure core.
 
 from .state_persistence import (
     event_record_to_raw_event,
+    ingest_events_incrementally,
     load_raw_events,
     persist_session_windows,
     raw_event_to_event_record,
@@ -20,4 +21,5 @@ __all__ = [
     "time_entry_to_session_window",
     "load_raw_events",
     "persist_session_windows",
+    "ingest_events_incrementally",
 ]

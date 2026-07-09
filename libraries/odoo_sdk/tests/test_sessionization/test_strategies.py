@@ -2,12 +2,14 @@ import unittest
 
 from odoo_sdk.sessionization import (
     DEFAULT_SESSION_STRATEGY_CONFIGS,
+    DuplicateStrategyOwnershipError,
     EventType,
     FixedDurationStrategy,
     SessionizationContext,
     SessionStrategyConfig,
     WindowedSessionStrategy,
     make_sessionization_context,
+    validate_single_strategy_ownership,
 )
 from odoo_sdk.sessionization.strategies import (
     StrategyEventGroup,
@@ -15,6 +17,59 @@ from odoo_sdk.sessionization.strategies import (
 )
 
 from ._helpers import one_day_config, raw_event
+
+
+class TestSingleStrategyOwnership(unittest.TestCase):
+    def test_default_configs_have_single_ownership(self):
+        owner = validate_single_strategy_ownership(DEFAULT_SESSION_STRATEGY_CONFIGS)
+        # Every event type maps to exactly one owning strategy name.
+        self.assertEqual(owner[EventType.COMMIT], "development")
+        self.assertEqual(owner[EventType.AGENT], "development")
+        self.assertEqual(owner[EventType.MERGE], "merge")
+        self.assertEqual(owner[EventType.REVIEW], "review")
+
+    def test_duplicate_ownership_raises(self):
+        rows = (
+            SessionStrategyConfig(
+                "a", "A", (EventType.COMMIT,), "session",
+                ("strategy", "repo", "task_id"),
+            ),
+            SessionStrategyConfig(
+                "b", "B", (EventType.COMMIT,), "session",
+                ("strategy", "repo", "task_id"),
+            ),
+        )
+        with self.assertRaises(DuplicateStrategyOwnershipError) as ctx:
+            validate_single_strategy_ownership(rows)
+        self.assertIn("COMMIT", str(ctx.exception))
+        self.assertIn("'a'", str(ctx.exception))
+        self.assertIn("'b'", str(ctx.exception))
+
+    def test_same_row_repeated_event_type_is_ok(self):
+        # A single row may legitimately own several event types.
+        rows = (
+            SessionStrategyConfig(
+                "dev", "Dev", (EventType.COMMIT, EventType.AGENT), "session",
+                ("strategy", "repo", "task_id"),
+            ),
+        )
+        owner = validate_single_strategy_ownership(rows)
+        self.assertEqual(owner[EventType.COMMIT], "dev")
+        self.assertEqual(owner[EventType.AGENT], "dev")
+
+    def test_context_construction_raises_typed_error_on_duplicate(self):
+        dup = (
+            SessionStrategyConfig(
+                "a", "A", (EventType.COMMIT,), "session",
+                ("strategy", "repo", "task_id"),
+            ),
+            SessionStrategyConfig(
+                "b", "B", (EventType.COMMIT,), "session",
+                ("strategy", "repo", "task_id"),
+            ),
+        )
+        with self.assertRaises(DuplicateStrategyOwnershipError):
+            make_sessionization_context(dup)
 
 
 class TestContextConstruction(unittest.TestCase):
