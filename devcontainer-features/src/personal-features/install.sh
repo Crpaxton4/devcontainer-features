@@ -100,6 +100,14 @@ else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
 fi
 
+# Register the odoo-sdk MCP server at user scope so it's available in every
+# container without users running `claude mcp add` by hand. Idempotent: skip if
+# already registered (e.g. re-provisioned container over a persisted config).
+if command -v claude >/dev/null 2>&1 && [ -x /usr/local/bin/odoo-mcp ]; then
+    CLAUDE_CONFIG_DIR="$CLAUDE_HOME" claude mcp get odoo-sdk >/dev/null 2>&1 || \
+        CLAUDE_CONFIG_DIR="$CLAUDE_HOME" claude mcp add --scope user odoo-sdk odoo-mcp
+fi
+
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
 # config, not a general-purpose toolkit, so none of this is optional. If a
