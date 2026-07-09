@@ -12,7 +12,6 @@ echo "Activating feature 'personal-features'"
 CLAUDE_HOME="/usr/local/share/claude-home"
 GH_CONFIG="/usr/local/share/gh-cli-config"
 ODOO_SDK_CONFIG="/usr/local/share/odoo-sdk-config"
-TASK_TRACKER_DIR="/usr/local/share/odoo-task-tracker"
 PR_AUTOMATION_CONFIG="/usr/local/share/pr-automation"
 CR_CONFIG="/usr/local/share/coderabbit-config"
 
@@ -20,8 +19,15 @@ CR_CONFIG="/usr/local/share/coderabbit-config"
 # point at and that the bind mounts overlay at runtime. Creating them here
 # means the feature still works in test containers where no bind mounts are
 # active (e.g. the devcontainer features test harness).
-mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
-chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$TASK_TRACKER_DIR" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
+#
+# The odoo-sdk task-tracker state dir is deliberately NOT provisioned here.
+# chown'ing it to the build-time $_REMOTE_USER doesn't map to the runtime uid
+# (the MCP server runs as odoo/uid 1002), leaving it root/uid-100-owned and
+# unwritable at runtime (see #115). It has no bind mount, so nothing depends on
+# a fixed location; the SDK's default ($XDG_STATE_HOME or ~/.local/state) is
+# created lazily by and owned by the runtime user, so leave it to the SDK.
+mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
+chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
 
 # create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
 # YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
