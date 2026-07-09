@@ -1,3 +1,5 @@
+"""Environment guard for Odoo devcontainer-only operations."""
+
 import os
 from pathlib import Path
 

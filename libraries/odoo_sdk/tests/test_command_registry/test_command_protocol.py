@@ -43,3 +43,38 @@ class TestCommandProtocolDefaultBodies(unittest.TestCase):
     def test_description_property_returns_class_description(self):
         cmd = ConcreteCommand(client=Mock())
         self.assertEqual(cmd.description, "A concrete command")
+
+
+class TestCommandDependencyInjection(unittest.TestCase):
+    def test_injected_state_is_returned(self):
+        state = Mock()
+        cmd = ConcreteCommand(client=Mock(), state=state)
+        self.assertIs(cmd.state, state)
+
+    def test_injected_config_is_returned(self):
+        config = Mock()
+        cmd = ConcreteCommand(client=Mock(), config=config)
+        self.assertIs(cmd.config, config)
+
+    def test_state_lazily_created_when_absent(self):
+        created = Mock()
+        with patch(
+            "odoo_sdk.commands.command.LocalStateClient", return_value=created
+        ) as MockState:
+            cmd = ConcreteCommand(client=Mock())
+            got = cmd.state
+        MockState.assert_called_once_with()
+        self.assertIs(got, created)
+        # Second access reuses the cached instance.
+        self.assertIs(cmd.state, created)
+
+    def test_config_lazily_loaded_when_absent(self):
+        loaded = Mock()
+        with patch(
+            "odoo_sdk.commands.command.LocalConfig.load", return_value=loaded
+        ) as mock_load:
+            cmd = ConcreteCommand(client=Mock())
+            got = cmd.config
+        mock_load.assert_called_once_with()
+        self.assertIs(got, loaded)
+        self.assertIs(cmd.config, loaded)

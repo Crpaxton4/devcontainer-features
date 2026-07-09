@@ -1,12 +1,14 @@
 import threading
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from odoo_sdk.config.settings import OdooConnectionSettings
-from odoo_sdk.env.metadata_cache import MetadataCache
 from odoo_sdk.records.recordset import OdooRecordset
+from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
+
+if TYPE_CHECKING:  # pragma: no cover
+    from odoo_sdk.state.config import LocalConfig
 
 
 class OdooClient(OdooExecutor):
@@ -40,6 +42,7 @@ class OdooClient(OdooExecutor):
         password: Optional[str] = None,
         executor: Optional[OdooExecutor] = None,
         config_path: Optional[str] = None,
+        config: Optional["LocalConfig"] = None,
     ):
         """Initialize the facade with either injected or resolved connection state.
 
@@ -72,13 +75,16 @@ class OdooClient(OdooExecutor):
         if executor is not None:
             self._executor = executor
         else:
-            settings = OdooConnectionSettings.from_sources(
-                url=url,
-                db=db,
-                username=username,
-                password=password,
-                config_path=config_path,
-            )
+            if config is not None:
+                settings = config.connection_settings()
+            else:
+                settings = OdooConnectionSettings.from_sources(
+                    url=url,
+                    db=db,
+                    username=username,
+                    password=password,
+                    config_path=config_path,
+                )
             if settings.transport == "json2":
                 self._executor = OdooJson2Executor(
                     settings.url,
@@ -136,6 +142,21 @@ class OdooClient(OdooExecutor):
         :rtype: OdooClient
         """
         return cls(executor=OdooJson2Executor(url, db, api_key))
+
+    @classmethod
+    def from_config(cls, config: "LocalConfig") -> "OdooClient":
+        """Create a client whose executor is built from an injected LocalConfig.
+
+        This factory realizes the layered design where connection settings are
+        resolved once (File > Env > Default) by :class:`LocalConfig` and injected,
+        rather than each client resolving settings internally.
+
+        :param config: Resolved local configuration.
+        :type config: LocalConfig
+        :return: OdooClient backed by the transport chosen by ``config``.
+        :rtype: OdooClient
+        """
+        return cls(config=config)
 
     @property
     def uid(self) -> int:

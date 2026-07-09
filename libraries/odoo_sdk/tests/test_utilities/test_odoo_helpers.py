@@ -2,7 +2,7 @@ import unittest
 from datetime import date
 from unittest.mock import MagicMock, patch
 
-from odoo_sdk.task_tracker.odoo_ops import (
+from odoo_sdk.utilities.odoo_helpers import (
     create_timesheet,
     get_employee_id,
     get_task_chatter,
@@ -208,7 +208,7 @@ class TestGetTaskChatter(unittest.TestCase):
     def test_extracts_display_names_from_tuples(self):
         client = _client()
         client.execute.return_value = [self._make_message()]
-        with patch("odoo_sdk.task_tracker.odoo_ops._html_to_markdown", return_value="Hello"):
+        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="Hello"):
             result = get_task_chatter(client, task_id=1)
         self.assertEqual(result[0]["author"], "Jane Smith")
         self.assertEqual(result[0]["subtype"], "Discussions")
@@ -267,7 +267,7 @@ class TestGetTaskDetail(unittest.TestCase):
     def test_flattens_many2one_display_names(self):
         client = _client()
         client.execute.return_value = [self._make_record()]
-        with patch("odoo_sdk.task_tracker.odoo_ops._html_to_markdown", return_value="desc"):
+        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="desc"):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["project"], "My Project")
         self.assertEqual(result["stage"], "In Progress")
@@ -282,7 +282,7 @@ class TestGetTaskDetail(unittest.TestCase):
     def test_task_id_in_result(self):
         client = _client()
         client.execute.return_value = [self._make_record()]
-        with patch("odoo_sdk.task_tracker.odoo_ops._html_to_markdown", return_value=""):
+        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value=""):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["task_id"], 42)
 

@@ -1,5 +1,5 @@
 from ..command import Command
-from odoo_sdk.task_tracker.odoo_ops import get_task_chatter, get_task_detail
+from odoo_sdk.utilities.odoo_helpers import get_task_chatter, get_task_detail
 
 
 class GetTaskCommand(Command):

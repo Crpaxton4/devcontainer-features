@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..command import Command
-from odoo_sdk.task_tracker.env_check import assert_odoo_devcontainer
-from odoo_sdk.task_tracker.odoo_ops import post_chatter_note
-from odoo_sdk.task_tracker.state import TaskStateDB
+from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 class ResumeTaskCommand(Command):

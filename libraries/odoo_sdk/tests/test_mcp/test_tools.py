@@ -1,0 +1,385 @@
+"""Tests for explicit MCP tools that compose commands with ctx.elicit/sample."""
+
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from odoo_sdk.mcp.tools import build_explicit_tools
+from odoo_sdk.mcp.tools.start_task import make_start_task_tool
+from odoo_sdk.mcp.tools.stop_task import make_stop_task_tool
+
+_SP_PATCH = "odoo_sdk.mcp.tools.start_task.subprocess"
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _accepted(data) -> MagicMock:
+    r = MagicMock()
+    r.action = "accept"
+    r.data = data
+    return r
+
+
+def _cancelled() -> MagicMock:
+    r = MagicMock()
+    r.action = "cancel"
+    return r
+
+
+def _make_sp(current_branch="main", branches=("main",), dirty=False) -> MagicMock:
+    sp = MagicMock()
+
+    def _r(args, **kwargs):
+        r = MagicMock()
+        r.returncode = 0
+        r.stdout = ""
+        if "rev-parse" in args:
+            r.stdout = f"{current_branch}\n"
+        elif args[1] == "branch":
+            r.stdout = "".join(f"{b}\n" for b in branches)
+        elif args[1] == "status":
+            r.stdout = "M f.py\n" if dirty else ""
+        return r
+
+    sp.run.side_effect = _r
+    return sp
+
+
+class _FakeRegistry:
+    """Minimal registry: maps command name -> object with execute()."""
+
+    def __init__(self, client=None, **commands):
+        self._client = client if client is not None else MagicMock()
+        self._commands = {}
+        for name, fn in commands.items():
+            self._commands[name] = fn
+
+    def __getitem__(self, name):
+        cmd = MagicMock()
+        impl = self._commands[name]
+        cmd.execute.side_effect = impl
+        cmd._client = self._client
+        return cmd
+
+
+def _search_projects_returning(*results):
+    it = iter(results)
+
+    def _fn(query, limit=10):
+        return next(it)
+
+    return _fn
+
+
+def _ctx(*responses) -> MagicMock:
+    ctx = MagicMock()
+    ctx.elicit = AsyncMock(side_effect=list(responses))
+    return ctx
+
+
+class TestBuildExplicitTools(unittest.TestCase):
+    def test_builds_full_tool_surface(self):
+        from odoo_sdk.commands import Registry
+        from odoo_sdk.commands.builtin import BUILTIN_COMMANDS, register_builtins
+
+        registry = register_builtins(Registry(MagicMock()))
+        tools = build_explicit_tools(registry)
+        self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
+        # Each entry is a (callable, description) pair.
+        start_fn, start_desc = tools["start_task"]
+        stop_fn, _ = tools["stop_task"]
+        self.assertTrue(asyncio.iscoroutinefunction(start_fn))
+        self.assertTrue(asyncio.iscoroutinefunction(stop_fn))
+        self.assertIn("track", start_desc.lower())
+
+    def test_description_empty_when_command_missing(self):
+        class _EmptyRegistry:
+            def __getitem__(self, name):
+                raise KeyError(name)
+
+        tools = build_explicit_tools(_EmptyRegistry())
+        # Tools are still built; descriptions default to empty string.
+        _, desc = tools["get_uid"]
+        self.assertEqual(desc, "")
+
+
+class TestStartTaskTool(unittest.TestCase):
+    def _registry(self, *, projects, tasks, start_result):
+        return _FakeRegistry(
+            search_projects=lambda query, limit=10: projects,
+            search_tasks=lambda query, project_id, limit=10: tasks,
+            start_task=lambda **kw: {**start_result, **kw},
+        )
+
+    def test_single_project_and_task_confirmed(self):
+        reg = self._registry(
+            projects=[{"id": 5, "name": "Accounting"}],
+            tasks=[{"id": 10, "name": "Fix VAT"}],
+            start_result={"session_id": 1, "task_id": 10},
+        )
+        ctx = _ctx(
+            _accepted(MagicMock(confirmed=True)),  # confirm
+            _accepted(MagicMock(selection=1)),  # branch pick
+        )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("VAT", ctx, "Accounting"))
+        self.assertEqual(result["task_id"], 10)
+        self.assertEqual(result["project_name"], "Accounting")
+
+    def test_no_projects_returns_error(self):
+        reg = self._registry(projects=[], tasks=[], start_result={})
+        tool = make_start_task_tool(reg)
+        result = _run(tool("x", MagicMock(), "Nope"))
+        self.assertIn("error", result)
+        self.assertIn("No projects", result["error"])
+
+    def test_declined_confirmation_cancels(self):
+        reg = self._registry(
+            projects=[{"id": 5, "name": "Acct"}],
+            tasks=[{"id": 10, "name": "T"}],
+            start_result={},
+        )
+        ctx = _ctx(_accepted(MagicMock(confirmed=False)))
+        tool = make_start_task_tool(reg)
+        result = _run(tool("T", ctx))
+        self.assertEqual(result, {"error": "Task start cancelled."})
+
+    def test_disambiguates_multiple_projects(self):
+        reg = self._registry(
+            projects=[{"id": 1, "name": "HR"}, {"id": 2, "name": "Acct"}],
+            tasks=[{"id": 10, "name": "Fix VAT"}],
+            start_result={"session_id": 1, "task_id": 10},
+        )
+        ctx = _ctx(
+            _accepted(MagicMock(selection=2)),  # pick project
+            _accepted(MagicMock(confirmed=True)),  # confirm
+            _accepted(MagicMock(selection=1)),  # branch pick
+        )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("VAT", ctx))
+        self.assertEqual(result["task_id"], 10)
+
+    def test_cancelled_project_selection_errors(self):
+        reg = self._registry(
+            projects=[{"id": 1, "name": "HR"}, {"id": 2, "name": "IT"}],
+            tasks=[],
+            start_result={},
+        )
+        ctx = _ctx(_cancelled())
+        tool = make_start_task_tool(reg)
+        result = _run(tool("x", ctx))
+        self.assertIn("error", result)
+
+    def test_no_tasks_returns_error(self):
+        reg = self._registry(
+            projects=[{"id": 5, "name": "Acct"}], tasks=[], start_result={}
+        )
+        ctx = MagicMock()
+        tool = make_start_task_tool(reg)
+        result = _run(tool("x", ctx))
+        self.assertIn("error", result)
+
+    def test_task_id_bypasses_name_search(self):
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}
+        ]
+        called = {"search": False}
+
+        def _search(*a, **k):
+            called["search"] = True
+            return []
+
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=_search,
+            search_tasks=_search,
+            start_task=lambda **kw: {"session_id": 1, **kw},
+        )
+        ctx = _ctx(
+            _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
+        )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("Fix VAT", ctx, task_id=10))
+        self.assertFalse(called["search"])
+        self.assertEqual(result["project_name"], "Accounting")
+
+    def test_task_id_not_found_no_query_errors(self):
+        client = MagicMock()
+        client.execute.return_value = []
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {},
+        )
+        result = _run(make_start_task_tool(reg)("", MagicMock(), task_id=999))
+        self.assertIn("999", result["error"])
+
+    def test_task_id_fallback_to_name_search_warns(self):
+        client = MagicMock()
+        client.execute.return_value = []  # id lookup fails
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
+            start_task=lambda **kw: {"session_id": 1, **kw},
+        )
+        ctx = _ctx(
+            _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
+        )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("Fix", ctx, task_id=99))
+        self.assertIn("warning", result)
+
+    def test_skips_branch_when_already_on_task_branch(self):
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"session_id": 1, **kw},
+        )
+        ctx = _ctx(_accepted(MagicMock(confirmed=True)))
+        ctx.sample = AsyncMock()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp(current_branch="10#x")):
+            result = _run(tool("Fix", ctx, task_id=10))
+        ctx.sample.assert_not_called()
+        self.assertEqual(ctx.elicit.call_count, 1)
+        self.assertIsNone(result.get("branch_name"))
+
+    def test_branch_selection_cancelled(self):
+        reg = self._registry(
+            projects=[{"id": 5, "name": "Acct"}],
+            tasks=[{"id": 10, "name": "Fix"}],
+            start_result={},
+        )
+        ctx = _ctx(_accepted(MagicMock(confirmed=True)), _cancelled())
+        ctx.sample = AsyncMock()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool("Fix", ctx))
+        self.assertEqual(result, {"error": "Branch selection cancelled."})
+
+    def test_no_branches_available_errors(self):
+        reg = self._registry(
+            projects=[{"id": 5, "name": "Acct"}],
+            tasks=[{"id": 10, "name": "Fix"}],
+            start_result={},
+        )
+        ctx = _ctx(_accepted(MagicMock(confirmed=True)))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp(branches=())):
+            result = _run(tool("Fix", ctx))
+        self.assertIn("No local git branches", result["error"])
+
+    def test_auto_stashes_dirty_tree(self):
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"session_id": 1, **kw},
+        )
+        ctx = _ctx(
+            _accepted(MagicMock(confirmed=True)),
+            _accepted(MagicMock(selection=1)),
+        )
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        sp = _make_sp(dirty=True)
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            _run(tool("Fix", ctx, task_id=10))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertTrue(any(c[:3] == ["git", "stash", "push"] for c in called))
+        self.assertIn(["git", "stash", "pop"], called)
+
+
+class TestStopTaskTool(unittest.TestCase):
+    def test_reviews_and_stops(self):
+        reg = _FakeRegistry(
+            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock(
+            return_value=_accepted(MagicMock(description="Reviewed text"))
+        )
+        result = _run(make_stop_task_tool(reg)(1, "orig", ctx))
+        self.assertEqual(result["description"], "Reviewed text")
+
+    def test_falls_back_to_supplied_description(self):
+        reg = _FakeRegistry(
+            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock(return_value=_accepted(MagicMock(description="")))
+        result = _run(make_stop_task_tool(reg)(1, "fallback", ctx))
+        self.assertEqual(result["description"], "fallback")
+
+    def test_cancel_returns_error(self):
+        reg = _FakeRegistry(stop_task=lambda task_id, desc: {})
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock(return_value=_cancelled())
+        result = _run(make_stop_task_tool(reg)(1, "x", ctx))
+        self.assertEqual(result, {"error": "Stop task cancelled."})
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestAtomicToolInvocation(unittest.TestCase):
+    """Each atomic tool delegates to its like-named command's execute()."""
+
+    def _registry(self):
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: f"{name}-result"
+                cmd.description = f"{name} description"
+                return cmd
+
+        return _Reg()
+
+    def test_all_atomic_tools_route_to_command(self):
+        from odoo_sdk.mcp.tools.atomic import ATOMIC_TOOL_FACTORIES
+
+        calls = {
+            "get_uid": (),
+            "get_models": (),
+            "get_tasks": (),
+            "get_todo": (5,),
+            "get_task": (5,),
+            "get_task_chatter": (5,),
+            "create_task": ("n", 1, "d"),
+            "search_projects": ("q",),
+            "search_tasks": ("q", 1),
+            "resume_task": (5,),
+            "task_status": (),
+            "task_note": (5, "note"),
+            "task_list": (),
+            "task_question": (5, "q?"),
+        }
+        for name, factory in ATOMIC_TOOL_FACTORIES.items():
+            tool = factory(self._registry())
+            result = tool(*calls[name])
+            self.assertEqual(result, f"{name}-result")

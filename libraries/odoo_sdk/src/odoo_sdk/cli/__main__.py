@@ -13,15 +13,15 @@ Subcommands:
 
 import argparse
 import sys
-from datetime import date
 
 from odoo_sdk.client import OdooClient
-from odoo_sdk.task_tracker.env_check import (
+from odoo_sdk.state import LocalStateClient as TaskStateDB
+from odoo_sdk.state import TaskState
+from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
 )
-from odoo_sdk.task_tracker.odoo_ops import merge_timesheets, update_timesheet
-from odoo_sdk.task_tracker.state import TaskStateDB
+from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
 
 
 def _assert_env() -> None:
@@ -62,7 +62,6 @@ def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> N
     if session is None:
         print(f"Error: no session with id {session_id}.", file=sys.stderr)
         sys.exit(1)
-    from odoo_sdk.task_tracker.state import TaskState
     if session.state == TaskState.STOPPED:
         print(f"Session {session_id} is already stopped.")
         return

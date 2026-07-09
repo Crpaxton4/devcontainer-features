@@ -5,15 +5,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from odoo_sdk.task_tracker.state import (
+from odoo_sdk.state.db import (
+    LocalStateClient as TaskStateDB,
+    _get_project_dir,
+)
+from odoo_sdk.state.models import (
     InvalidStateTransitionError,
     ProjectIdError,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskSession,
     TaskState,
-    TaskStateDB,
-    _get_project_dir,
 )
 
 
@@ -52,7 +54,7 @@ class TestTaskSessionProperties(unittest.TestCase):
         started = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         fixed_now = datetime(2024, 1, 1, 13, 0, 0, tzinfo=timezone.utc)
         session = self._session(started)
-        with patch("odoo_sdk.task_tracker.state.datetime") as mock_dt:
+        with patch("odoo_sdk.state.models.datetime") as mock_dt:
             mock_dt.now.return_value = fixed_now
             mock_dt.fromisoformat = datetime.fromisoformat
             self.assertAlmostEqual(session.elapsed_seconds, 3600, delta=1)
@@ -292,7 +294,7 @@ class TestTaskStateDBOtherOps(unittest.TestCase):
 class TestGetProjectDir(unittest.TestCase):
     def test_raises_project_id_error_on_git_failure(self):
         with patch(
-            "odoo_sdk.task_tracker.state.subprocess.run",
+            "odoo_sdk.state.db.subprocess.run",
             side_effect=subprocess.CalledProcessError(128, "git"),
         ):
             with self.assertRaises(ProjectIdError):
@@ -301,9 +303,9 @@ class TestGetProjectDir(unittest.TestCase):
     def test_creates_dir_from_remote_url(self):
         mock_run = type("R", (), {"stdout": "git@github.com:org/repo.git\n"})()
         with (
-            patch("odoo_sdk.task_tracker.state.subprocess.run", return_value=mock_run),
+            patch("odoo_sdk.state.db.subprocess.run", return_value=mock_run),
             patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": "/tmp/tt-test"}),
-            patch("odoo_sdk.task_tracker.state.Path.mkdir"),
+            patch("odoo_sdk.state.db.Path.mkdir"),
         ):
             path1 = _get_project_dir()
             path2 = _get_project_dir()

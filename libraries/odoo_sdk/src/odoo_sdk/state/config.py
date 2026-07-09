@@ -1,9 +1,28 @@
+"""Local configuration for the Odoo SDK.
+
+This module hosts two related concerns of the local state layer:
+
+* :class:`OdooConnectionSettings` — the resolved, validated connection value
+  object consumed by :class:`~odoo_sdk.client.client.OdooClient`. It resolves
+  from explicit args, environment variables, and INI files.
+* :class:`LocalConfig` — a first-class, read-only settings object promoted to a
+  peer dependency of commands (alongside ``OdooClient`` and
+  ``LocalStateClient``). It resolves each setting with the precedence
+
+      File  >  Environment Variable  >  Sensible Default
+
+  so that consuming programs (Claude Desktop, other MCP hosts) can change SDK
+  behavior by editing a local config file without touching the host launch
+  command. A ``[behavior]`` section is reserved for future behavioral flags
+  (profiling, log level, ...) without further structural changes.
+"""
+
 import configparser
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 DEFAULT_CONFIG_ENV_VAR = "odoo_sdk_CONFIG"
 DEFAULT_SECTION = "odoo"
@@ -19,6 +38,11 @@ DEFAULT_CONFIG_LOCATIONS = (
     ".odoo_sdk.ini",
     "~/.config/odoo_sdk/config.ini",
 )
+
+# LocalConfig discovery: default config file path and the env var that overrides
+# it. The file is the highest-precedence source (File > Env > Default).
+LOCAL_CONFIG_ENV_VAR = "ODOO_SDK_CONFIG"
+DEFAULT_LOCAL_CONFIG_PATH = "~/.config/odoo-sdk/config.toml"
 
 
 @dataclass(frozen=True)
@@ -279,3 +303,198 @@ def _resolve_relative_to_invoking_script(config_path: Path) -> Optional[str]:
 
     candidate = Path(main_file).resolve().parent / config_path
     return str(candidate) if candidate.is_file() else None
+
+
+# ── LocalConfig ───────────────────────────────────────────────────────────────
+
+# Sensible defaults applied at the lowest precedence (File > Env > Default).
+_CONNECTION_DEFAULTS: dict[str, Optional[str]] = {
+    "url": None,
+    "db": None,
+    "username": None,
+    "password": None,
+    "api_key": None,
+    "transport": "xmlrpc",
+}
+
+# Environment variables that override behavior settings when no file value is set.
+_BEHAVIOR_ENV_VARS: dict[str, str] = {}
+
+# Sensible defaults for the reserved [behavior] section.
+_BEHAVIOR_DEFAULTS: dict[str, Any] = {}
+
+
+class LocalConfig:
+    """Resolved, read-only SDK settings promoted to the local state layer.
+
+    ``LocalConfig`` is injected into commands as a peer dependency alongside
+    ``OdooClient`` and ``LocalStateClient``. Each setting is resolved with the
+    precedence **File > Environment Variable > Sensible Default**, so the local
+    config file always wins when present.
+
+    :param connection: Resolved connection settings keyed by setting name.
+    :type connection: Mapping[str, Optional[str]]
+    :param behavior: Resolved behavior settings (reserved for future flags).
+    :type behavior: Mapping[str, Any]
+    """
+
+    def __init__(
+        self,
+        connection: Optional[Mapping[str, Optional[str]]] = None,
+        behavior: Optional[Mapping[str, Any]] = None,
+    ):
+        self._connection: dict[str, Optional[str]] = {
+            **_CONNECTION_DEFAULTS,
+            **(dict(connection) if connection else {}),
+        }
+        self._behavior: dict[str, Any] = {
+            **_BEHAVIOR_DEFAULTS,
+            **(dict(behavior) if behavior else {}),
+        }
+
+    @classmethod
+    def load(cls, config_path: Optional[str] = None) -> "LocalConfig":
+        """Resolve settings from file, environment, and defaults.
+
+        :param config_path: Explicit config file path override; when omitted the
+            ``ODOO_SDK_CONFIG`` env var and default path are consulted.
+        :type config_path: Optional[str]
+        :return: A resolved, read-only ``LocalConfig``.
+        :rtype: LocalConfig
+        """
+        file_data = _load_local_config_file(config_path)
+        connection = _resolve_section(
+            file_data.get("connection", {}),
+            CONNECTION_ENV_VARS,
+            _CONNECTION_DEFAULTS,
+        )
+        behavior = _resolve_section(
+            file_data.get("behavior", {}),
+            _BEHAVIOR_ENV_VARS,
+            _BEHAVIOR_DEFAULTS,
+        )
+        return cls(connection=connection, behavior=behavior)
+
+    @property
+    def connection(self) -> Mapping[str, Optional[str]]:
+        """Return the resolved connection settings as a read-only mapping."""
+        return dict(self._connection)
+
+    @property
+    def behavior(self) -> Mapping[str, Any]:
+        """Return the resolved behavior settings as a read-only mapping."""
+        return dict(self._behavior)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Return one resolved behavior setting, or ``default`` when absent."""
+        return self._behavior.get(key, default)
+
+    def connection_settings(self) -> OdooConnectionSettings:
+        """Build validated :class:`OdooConnectionSettings` from resolved values.
+
+        :raises ValueError: When required connection settings are unresolved.
+        :return: Validated connection settings for client construction.
+        :rtype: OdooConnectionSettings
+        """
+        conn = self._connection
+        return OdooConnectionSettings.from_sources(
+            url=conn.get("url"),
+            db=conn.get("db"),
+            username=conn.get("username"),
+            password=conn.get("password"),
+            api_key=conn.get("api_key"),
+            transport=conn.get("transport"),
+        )
+
+
+def _resolve_local_config_path(config_path: Optional[str]) -> Optional[Path]:
+    """Return the config file to read, honoring explicit path, env var, default.
+
+    Only an existing file is returned; a missing file yields ``None`` so callers
+    fall back to environment variables and defaults.
+
+    :param config_path: Explicit path override, defaults to None.
+    :type config_path: Optional[str]
+    :return: Path to an existing config file, or None.
+    :rtype: Optional[Path]
+    """
+    candidate = (
+        config_path
+        or os.environ.get(LOCAL_CONFIG_ENV_VAR)
+        or DEFAULT_LOCAL_CONFIG_PATH
+    )
+    path = Path(candidate).expanduser()
+    return path if path.is_file() else None
+
+
+def _load_local_config_file(config_path: Optional[str]) -> dict[str, dict[str, Any]]:
+    """Load ``[connection]`` and ``[behavior]`` sections from the config file.
+
+    Supports TOML (``.toml``) and INI files. Returns an empty mapping when no
+    file applies.
+
+    :param config_path: Explicit path override, defaults to None.
+    :type config_path: Optional[str]
+    :return: Parsed sections keyed by section name.
+    :rtype: dict[str, dict[str, Any]]
+    """
+    path = _resolve_local_config_path(config_path)
+    if path is None:
+        return {}
+    if path.suffix == ".toml":
+        return _load_toml_sections(path)
+    return _load_ini_sections(path)
+
+
+def _load_toml_sections(path: Path) -> dict[str, dict[str, Any]]:
+    """Parse the ``connection`` and ``behavior`` tables from a TOML file."""
+    import tomllib
+
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+    return {
+        "connection": dict(data.get("connection", {})),
+        "behavior": dict(data.get("behavior", {})),
+    }
+
+
+def _load_ini_sections(path: Path) -> dict[str, dict[str, Any]]:
+    """Parse the ``connection`` and ``behavior`` sections from an INI file."""
+    parser = configparser.ConfigParser()
+    parser.read(path)
+    sections: dict[str, dict[str, Any]] = {}
+    for name in ("connection", "behavior"):
+        if parser.has_section(name):
+            sections[name] = dict(parser.items(name))
+    return sections
+
+
+def _resolve_section(
+    file_values: Mapping[str, Any],
+    env_vars: Mapping[str, str],
+    defaults: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge one section with File > Environment Variable > Default precedence.
+
+    :param file_values: Values read from the config file for this section.
+    :type file_values: Mapping[str, Any]
+    :param env_vars: Mapping of setting name to environment variable name.
+    :type env_vars: Mapping[str, str]
+    :param defaults: Sensible defaults for this section.
+    :type defaults: Mapping[str, Any]
+    :return: Resolved values keyed by setting name.
+    :rtype: dict[str, Any]
+    """
+    keys = set(defaults) | set(env_vars) | set(file_values)
+    resolved: dict[str, Any] = {}
+    for key in keys:
+        if key in file_values and file_values[key] not in (None, ""):
+            resolved[key] = file_values[key]
+            continue
+        env_name = env_vars.get(key)
+        env_value = os.environ.get(env_name) if env_name else None
+        if env_value not in (None, ""):
+            resolved[key] = env_value
+            continue
+        resolved[key] = defaults.get(key)
+    return resolved
