@@ -136,16 +136,21 @@ def update_timesheet(
 
 
 def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
-    """Post a chatter note on project.task and return the message id."""
+    """Post a chatter note on project.task and return the message id.
+
+    Odoo's ``mail.thread.message_post`` is keyword-only
+    (``def message_post(self, *, body='', ...)``). The message options must
+    therefore be forwarded as ``execute_kw`` keyword arguments; passing them as
+    a trailing positional dict makes Odoo treat the dict as a positional method
+    argument and raise ``TypeError`` (see issue #131).
+    """
     return client.execute(
         "project.task",
         "message_post",
         [task_id],
-        {
-            "body": body,
-            "message_type": "comment",
-            "subtype_xmlid": "mail.mt_note",
-        },
+        body=body,
+        message_type="comment",
+        subtype_xmlid="mail.mt_note",
     )
 
 
