@@ -25,10 +25,6 @@ class _SelectTask(BaseModel):
     selection: int
 
 
-class _ConfirmTask(BaseModel):
-    confirmed: bool
-
-
 class _SelectBranch(BaseModel):
     selection: int
 
@@ -242,9 +238,9 @@ def make_start_task_tool(registry: Registry):
         confirm = await ctx.elicit(
             f"Start tracking time on task:\n  Task: {task['name']}\n"
             f"  Project: {project['name']}\n\nConfirm?",
-            _ConfirmTask,
+            response_type=None,
         )
-        if confirm.action != "accept" or not confirm.data.confirmed:
+        if confirm.action != "accept":
             return {"error": "Task start cancelled."}
 
         branch_name, branch_err = await _setup_task_branch(ctx, task, project)
