@@ -96,6 +96,16 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
         uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
         ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
     done
+
+    # mempalace: global cross-project memory palace, auto-mined via Claude Code
+    # hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
+    # dir as odoo-sdk and link the entry point onto /usr/local/bin so it lands
+    # on every user's PATH (install.sh runs as root, so uv's default ~/.local
+    # would be root-only). Best-effort - a PyPI/network hiccup shouldn't fail
+    # the whole build, matching the other optional-tool installs.
+    UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
+        uv tool install mempalace \
+        || echo "WARNING: failed to install mempalace, skipping" >&2
 else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
 fi

@@ -17,7 +17,8 @@
         "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
         "DISABLE_AUTOUPDATER": "1",
         "odoo_sdk_CONFIG": "/usr/local/share/odoo-sdk-config/config.ini",
-        "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker"
+        "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker",
+        "MEMPAL_DIR": "/workspaces"
     },
     "mounts": [
         {
