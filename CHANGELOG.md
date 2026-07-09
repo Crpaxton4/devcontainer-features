@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.15.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.15.0...personal-features-v1.15.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** degrade start_task branch-name gen when sampling unavailable ([#126](https://github.com/Crpaxton4/devcontainer-features/issues/126)) ([2b22b39](https://github.com/Crpaxton4/devcontainer-features/commit/2b22b39cea7d5597ef50a805451418d15694a158)), closes [#122](https://github.com/Crpaxton4/devcontainer-features/issues/122)
+* **odoo-sdk:** exit odoo-tui cleanly on Ctrl+C ([#128](https://github.com/Crpaxton4/devcontainer-features/issues/128)) ([73044ad](https://github.com/Crpaxton4/devcontainer-features/commit/73044ada8d8d94cddd322839e627602fd9a2734d)), closes [#125](https://github.com/Crpaxton4/devcontainer-features/issues/125)
+* **odoo-sdk:** make start_task confirmation a single accept/decline gate ([#124](https://github.com/Crpaxton4/devcontainer-features/issues/124)) ([768fd71](https://github.com/Crpaxton4/devcontainer-features/commit/768fd71d116e9a6ef860511d1742d4b9ceced2c6))
+* **personal-features:** expose odoo-tui console script on PATH ([#123](https://github.com/Crpaxton4/devcontainer-features/issues/123)) ([63be023](https://github.com/Crpaxton4/devcontainer-features/commit/63be023c1c0a1c63ba9d40448594c74589635872)), closes [#120](https://github.com/Crpaxton4/devcontainer-features/issues/120)
+
 ## [1.15.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.14.0...personal-features-v1.15.0) (2026-07-09)
 
 
