@@ -18,7 +18,16 @@ from .models import (
     TaskState,
 )
 
-_DEFAULT_ROOT = Path("/usr/local/share/odoo-task-tracker")
+
+def _default_root() -> Path:
+    """Resolve the user-writable base directory for tracker state.
+
+    Precedence: ``$XDG_STATE_HOME/odoo-task-tracker`` when ``XDG_STATE_HOME``
+    is set, otherwise ``~/.local/state/odoo-task-tracker``.
+    """
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg_state_home) if xdg_state_home else Path.home() / ".local" / "state"
+    return base / "odoo-task-tracker"
 
 
 _SCHEMA = """
@@ -43,7 +52,8 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 def _get_project_dir() -> Path:
-    root = Path(os.environ.get("ODOO_TASK_TRACKER_DIR", _DEFAULT_ROOT))
+    override = os.environ.get("ODOO_TASK_TRACKER_DIR")
+    root = Path(override) if override else _default_root()
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
