@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.15.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.14.0...personal-features-v1.15.0) (2026-07-09)
+
+
+### Features
+
+* **odoo-sdk:** btop-style curses TUI for session exploration ([#119](https://github.com/Crpaxton4/devcontainer-features/issues/119)) ([ad26a65](https://github.com/Crpaxton4/devcontainer-features/commit/ad26a65160c169f4701f13065de7b91c10fa6c9c)), closes [#109](https://github.com/Crpaxton4/devcontainer-features/issues/109)
+* **odoo-sdk:** global incremental cross-day sessionization ([#118](https://github.com/Crpaxton4/devcontainer-features/issues/118)) ([a8c2e5b](https://github.com/Crpaxton4/devcontainer-features/commit/a8c2e5be7de1dcecfb5ef5ec8830dd6425899b3a)), closes [#108](https://github.com/Crpaxton4/devcontainer-features/issues/108)
+* **odoo-sdk:** integrate timelog.py as a pure sessionization ETL module ([#113](https://github.com/Crpaxton4/devcontainer-features/issues/113)) ([065aeb8](https://github.com/Crpaxton4/devcontainer-features/commit/065aeb881ab89bddd614d400ca8e605fbd070089)), closes [#105](https://github.com/Crpaxton4/devcontainer-features/issues/105)
+* **odoo-sdk:** make get_task detail selectable via include ([#112](https://github.com/Crpaxton4/devcontainer-features/issues/112)) ([1a42659](https://github.com/Crpaxton4/devcontainer-features/commit/1a426598d103be75b5d1ce1b510b345559a3316a)), closes [#100](https://github.com/Crpaxton4/devcontainer-features/issues/100)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** annotate injected ctx as Context so it is not in tool schema ([#110](https://github.com/Crpaxton4/devcontainer-features/issues/110)) ([c69aa9f](https://github.com/Crpaxton4/devcontainer-features/commit/c69aa9f8cc21b1f6d014ea2dcd5742bc28ea3896)), closes [#107](https://github.com/Crpaxton4/devcontainer-features/issues/107)
+* **odoo-sdk:** resolve tracker state dir to user-writable path ([#111](https://github.com/Crpaxton4/devcontainer-features/issues/111)) ([f552024](https://github.com/Crpaxton4/devcontainer-features/commit/f552024fa6399c2a4e1f9c316ce2198b340e4330)), closes [#106](https://github.com/Crpaxton4/devcontainer-features/issues/106)
+* **personal-features:** stop forcing task-tracker state onto unwritable root path ([#117](https://github.com/Crpaxton4/devcontainer-features/issues/117)) ([c4baac3](https://github.com/Crpaxton4/devcontainer-features/commit/c4baac33182e1e87e88b6e5676c8d852ff6ff014)), closes [#115](https://github.com/Crpaxton4/devcontainer-features/issues/115)
+
 ## [1.14.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.2...personal-features-v1.14.0) (2026-07-09)
 
 
