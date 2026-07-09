@@ -80,3 +80,22 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   This is native Git config, so it applies to *every* repo on the machine with zero per-repo opt-in. A repo that sets its own `core.hooksPath` locally (e.g. via Husky) overrides this as normal Git config precedence — this only fills the gap for repos that don't.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Two manual steps are required because devcontainer Features cannot add mounts or run per-user Claude commands:
+
+  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target the container user's home (`/root` when running as root):
+
+     ```jsonc
+     "mounts": [
+         "source=${localEnv:HOME}/.mempalace,target=/root/.mempalace,type=bind,consistency=cached"
+     ]
+     ```
+
+     Create the host directory once (`mkdir -p ~/.mempalace`) before first launch.
+
+  2. **Plugin registration (one-time)** — inside the container, register the Claude Code plugin at user scope so its Stop/SessionEnd/PreCompact hooks fire automatically:
+
+     ```sh
+     claude plugin install --scope user mempalace
+     ```
+
+     This writes only to `~/.claude/` (user scope), never to a project directory.
