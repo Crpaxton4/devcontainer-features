@@ -272,5 +272,13 @@ def _loop(stdscr: Any, registry: Registry) -> None:  # pragma: no cover
 
 
 def run(registry: Registry) -> None:  # pragma: no cover
-    """Start the curses TUI bound to ``registry`` and run until quit."""
-    curses.wrapper(_loop, registry)
+    """Start the curses TUI bound to ``registry`` and run until quit.
+
+    ``Ctrl+C`` at the blocking ``getch`` surfaces as ``KeyboardInterrupt``; treat
+    it as a normal quit. ``curses.wrapper`` already restores the terminal in its
+    own ``finally``, so swallowing the interrupt just avoids a noisy traceback.
+    """
+    try:
+        curses.wrapper(_loop, registry)
+    except KeyboardInterrupt:
+        pass  # Ctrl+C is a normal quit; the terminal is already restored.
