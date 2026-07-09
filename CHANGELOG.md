@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.14.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.2...personal-features-v1.14.0) (2026-07-09)
+
+
+### Features
+
+* **odoo-sdk:** add optional TOON tool output ([#90](https://github.com/Crpaxton4/devcontainer-features/issues/90)) ([#97](https://github.com/Crpaxton4/devcontainer-features/issues/97)) ([dd95bce](https://github.com/Crpaxton4/devcontainer-features/commit/dd95bcedac614caef34d99e7b1cfa59ff89cc8ae))
+* **odoo-sdk:** add per-call MCP profiling option via cProfile ([#98](https://github.com/Crpaxton4/devcontainer-features/issues/98)) ([9187b35](https://github.com/Crpaxton4/devcontainer-features/commit/9187b35dbd80acf4cc307cc061fed46c1ab2a2e0)), closes [#86](https://github.com/Crpaxton4/devcontainer-features/issues/86)
+* **personal-features:** add config-driven create-pr command ([#96](https://github.com/Crpaxton4/devcontainer-features/issues/96)) ([e44f277](https://github.com/Crpaxton4/devcontainer-features/commit/e44f277cd5c1cd56f27c66b032cad827defab5d5))
+* **personal-features:** integrate CodeRabbit CLI with Claude Code plugin ([#99](https://github.com/Crpaxton4/devcontainer-features/issues/99)) ([6bf9d56](https://github.com/Crpaxton4/devcontainer-features/commit/6bf9d56a6b24329f418a49cdb48f254b8b86b677))
+* **personal-features:** integrate mempalace with auto-mining and global config ([#94](https://github.com/Crpaxton4/devcontainer-features/issues/94)) ([dfbafa8](https://github.com/Crpaxton4/devcontainer-features/commit/dfbafa873144ee6f7fc4ba1ef6d4042be685fcf2)), closes [#88](https://github.com/Crpaxton4/devcontainer-features/issues/88)
+* **personal-features:** register odoo-sdk MCP server at user scope ([#92](https://github.com/Crpaxton4/devcontainer-features/issues/92)) ([4124218](https://github.com/Crpaxton4/devcontainer-features/commit/41242181f0d966d50fc15628665871afc76a743c)), closes [#87](https://github.com/Crpaxton4/devcontainer-features/issues/87)
+* **timelog:** add time-log aggregation ETL script ([#95](https://github.com/Crpaxton4/devcontainer-features/issues/95)) ([a341fe2](https://github.com/Crpaxton4/devcontainer-features/commit/a341fe20fcb07a6f182eb8adc71c0913ae5635ff)), closes [#89](https://github.com/Crpaxton4/devcontainer-features/issues/89)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** coerce int task_id and list members in implement_task prompt ([f1113a6](https://github.com/Crpaxton4/devcontainer-features/commit/f1113a692d7a6c472322509410f675221ca13e09))
+* **odoo-sdk:** coerce int task_id in implement_task prompt ([#91](https://github.com/Crpaxton4/devcontainer-features/issues/91)) ([f1113a6](https://github.com/Crpaxton4/devcontainer-features/commit/f1113a692d7a6c472322509410f675221ca13e09))
+* **odoo-sdk:** make tests unittest-discoverable for cosmic-ray baseline ([#93](https://github.com/Crpaxton4/devcontainer-features/issues/93)) ([08f4080](https://github.com/Crpaxton4/devcontainer-features/commit/08f40808cd089ff572d08096c042d57df3e27d18))
+
 ## [1.13.2](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.13.1...personal-features-v1.13.2) (2026-06-30)
 
 
