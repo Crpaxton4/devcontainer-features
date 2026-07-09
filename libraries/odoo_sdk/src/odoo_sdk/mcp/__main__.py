@@ -16,18 +16,28 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.mcp.tools import build_explicit_tools
+from odoo_sdk.state.config import LocalConfig
 
 
 def main() -> None:
     """Build the default registry and run the MCP server over stdio.
 
+    Per-call profiling is resolved from the ``[behavior] profiling`` config
+    setting and the ``ODOO_PROFILING`` environment variable (File > Env >
+    Default) via :class:`LocalConfig`, then passed to the server.
+
     :return: None.
     :rtype: None
     """
 
+    config = LocalConfig.load()
     client = OdooClient()
     registry = register_builtins(Registry(client))
-    OdooMCPServer(registry, explicit_tools=build_explicit_tools(registry)).run()
+    OdooMCPServer(
+        registry,
+        explicit_tools=build_explicit_tools(registry),
+        profiling=config.profiling,
+    ).run()
 
 
 if __name__ == "__main__":
