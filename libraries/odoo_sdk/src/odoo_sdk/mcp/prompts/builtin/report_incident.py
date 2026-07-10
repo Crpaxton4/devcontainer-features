@@ -5,12 +5,15 @@ import sys
 _REPO = "https://github.com/Crpaxton4/devcontainer-features/"
 
 
-def report_incident() -> list[str]:
+def report_incident(description: str = "") -> list[str]:
     """Create a GitHub issue for a live-environment incident via the gh CLI.
 
     Reads safe SDK environment details at invocation time and returns structured
     instructions for creating a terse, AI-friendly issue. Never include sensitive
     data: Odoo URL, DB name, credentials, or customer identifiers.
+
+    When ``description`` is provided, it is woven into the instructions as a
+    pre-populated Summary so the caller does not start from an empty issue.
     """
     try:
         sdk_version = importlib.metadata.version("odoo_sdk")
@@ -28,9 +31,17 @@ def report_incident() -> list[str]:
         f"</environment>"
     )
 
+    summary_block = ""
+    if description:
+        summary_block = (
+            f"## Summary/description (pre-populated)\n"
+            f"{description}\n\n"
+        )
+
     instructions = (
         f"<incident_report_instructions>\n"
         f"Create a GitHub issue in `{_REPO}` using the gh CLI to report the current incident.\n\n"
+        f"{summary_block}"
         f"## Command\n"
         f"gh issue create --repo {_REPO} --title \"<title>\" --body \"<body>\"\n\n"
         f"## Issue format (terse, AI-friendly)\n"

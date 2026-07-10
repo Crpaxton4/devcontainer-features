@@ -276,6 +276,27 @@ class TestReportIncidentMessages(unittest.TestCase):
         msgs = report_incident()
         self.assertIn("ODOO_URL", msgs[0])
 
+    def test_description_argument_exposed_via_from_function(self):
+        from fastmcp.prompts import Prompt
+
+        prompt = Prompt.from_function(report_incident)
+        arg_names = {arg.name for arg in (prompt.arguments or [])}
+        self.assertIn("description", arg_names)
+
+    def test_passed_description_appears_in_message(self):
+        msgs = report_incident(description="boom")
+        self.assertIn("boom", msgs[0])
+
+    def test_default_description_omits_summary_section(self):
+        msgs = report_incident()
+        self.assertNotIn("Summary/description (pre-populated)", msgs[0])
+
+    def test_description_preserves_privacy_and_env_block(self):
+        msgs = report_incident(description="db exploded")
+        self.assertIn("db exploded", msgs[0])
+        self.assertIn("ODOO_URL", msgs[0])
+        self.assertIn("<environment>", msgs[0])
+
 
 if __name__ == "__main__":
     unittest.main()
