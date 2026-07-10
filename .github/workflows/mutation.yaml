@@ -38,6 +38,9 @@ jobs:
       # cosmic-ray mutates exactly the code the release PR would merge.
       - name: Resolve PR head SHA
         id: pr
+        # Runs before checkout, so it must not inherit the job-level
+        # libraries/odoo_sdk working directory (it does not exist yet).
+        working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
