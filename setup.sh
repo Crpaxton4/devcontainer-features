@@ -8,7 +8,9 @@
 #
 # Safe to re-run: mkdir -p and touch are no-ops when the targets already exist.
 
-set -e
+set -eu
+
+: "${HOME:?HOME must be set}"
 
 mkdir -p "$HOME/.claude"
 mkdir -p "$HOME/.config/gh"
@@ -16,5 +18,3 @@ mkdir -p "$HOME/.config/pr-automation/projects"
 mkdir -p "$HOME/.config/coderabbit"
 touch "$HOME/.bash_history"
 touch "$HOME/.zsh_history"
-
-echo "Done. Bind mount paths are ready."
