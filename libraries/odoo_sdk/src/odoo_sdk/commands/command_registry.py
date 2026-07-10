@@ -77,10 +77,12 @@ class Registry:
     def __getitem__(self, command_name: str) -> Command:
         """Instantiate and return the command bound to the shared dependencies.
 
-        The command is constructed with the shared client positionally (preserving
-        the original contract). When the command is a :class:`Command` subclass and
-        the registry holds a state client or config, those peers are injected onto
-        the instance so commands do not resolve their own.
+        For :class:`Command` subclasses, the shared client, state client, and
+        config are passed as constructor arguments; :meth:`Command.__init__`
+        stores each peer and lazily resolves its own default when the registry
+        passes ``None``, so omitting the optional state client or config is
+        behavior-preserving. Classes that merely satisfy the ``Command`` Protocol
+        (whose ``__init__`` accepts only the client) receive the client alone.
 
         :param command_name: Registered command name to resolve.
         :type command_name: str
@@ -90,13 +92,13 @@ class Registry:
         """
 
         command_cls = self._commands[command_name]
-        command = command_cls(self._client)
-        if isinstance(command, Command):
-            if self._state_client is not None:
-                command._injected_state = self._state_client
-            if self._config is not None:
-                command._injected_config = self._config
-        return command
+        if issubclass(command_cls, Command):
+            return command_cls(
+                self._client,
+                state=self._state_client,
+                config=self._config,
+            )
+        return command_cls(self._client)
 
     def __iter__(self) -> Iterator[Type[Command]]:
         """Allows iteration over registered command classes."""
