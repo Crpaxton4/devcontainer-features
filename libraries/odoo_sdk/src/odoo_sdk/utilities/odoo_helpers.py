@@ -117,7 +117,7 @@ def create_timesheet(
         "date": today.isoformat(),
         "employee_id": employee_id,
     }
-    return client.execute("account.analytic.line", "create", [vals])
+    return client.execute("account.analytic.line", "create", vals)
 
 
 def update_timesheet(
