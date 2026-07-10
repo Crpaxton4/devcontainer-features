@@ -14,18 +14,25 @@ GitHub Actions step can append to ``$GITHUB_OUTPUT``:
     passed=<true|false>
     survived=<int>
     total=<int>
+    floor=<float, 1 decimal>
+
+``floor`` is the single source of truth for the kill-rate floor: workflow
+steps interpolate it into every human-facing string instead of restating the
+number, so the policy value lives in exactly one place.
 
 Exit code is 0 when the floor is met and 1 when it is not, so a workflow step
 can gate on either the exit status or the ``passed`` output.
 
-With ``--survivors`` it instead prints the surviving mutants as a Markdown list
-(for a drift-issue body) and always exits 0.
+The optional ``--survivors-file`` writes the surviving mutants as a Markdown
+list (for a drift-issue body) to the given path in the same run, so the
+workflow needs only one invocation to produce both the gate outputs and the
+survivor list.
 
 The 90% floor is a CI policy value; override it with ``KILL_RATE_FLOOR``.
 
 Usage:
     python .github/scripts/mutation_gate.py <mutation.json>
-    python .github/scripts/mutation_gate.py --survivors <mutation.json>
+    python .github/scripts/mutation_gate.py --survivors-file <path> <mutation.json>
 """
 
 from __future__ import annotations
@@ -97,32 +104,43 @@ def evaluate(path: Path, floor: float = KILL_RATE_FLOOR) -> dict:
         "passed": kill_rate >= floor,
         "survived": len(survivors),
         "total": len(mutants),
+        "floor": round(floor, 1),
         "survivors": survivors,
     }
 
 
 def main(argv: list[str]) -> int:
     args = argv[1:]
-    survivors_only = False
-    if args and args[0] == "--survivors":
-        survivors_only = True
-        args = args[1:]
+    survivors_file: str | None = None
+    if args and args[0] == "--survivors-file":
+        if len(args) < 2:
+            print(
+                "usage: mutation_gate.py [--survivors-file <path>] <mutation.json>",
+                file=sys.stderr,
+            )
+            return 2
+        survivors_file = args[1]
+        args = args[2:]
 
     if len(args) != 1:
         print(
-            "usage: mutation_gate.py [--survivors] <mutation.json>", file=sys.stderr
+            "usage: mutation_gate.py [--survivors-file <path>] <mutation.json>",
+            file=sys.stderr,
         )
         return 2
 
     result = evaluate(Path(args[0]))
-    if survivors_only:
-        print(format_survivors(result["survivors"]))
-        return 0
+
+    # A single invocation emits both the gate outputs and (optionally) the
+    # survivor list, so the workflow never has to parse the JSON twice.
+    if survivors_file is not None:
+        Path(survivors_file).write_text(format_survivors(result["survivors"]))
 
     print(f"kill_rate={result['kill_rate']}")
     print(f"passed={'true' if result['passed'] else 'false'}")
     print(f"survived={result['survived']}")
     print(f"total={result['total']}")
+    print(f"floor={result['floor']}")
     return 0 if result["passed"] else 1
 
 

@@ -7,7 +7,9 @@ helper and must NOT depend on the ``odoo_sdk`` package, so this test imports it
 directly by path from the same directory.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -109,6 +111,12 @@ class TestEvaluate(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["survived"], 1)
         self.assertEqual(result["total"], 10)
+        self.assertEqual(result["floor"], 90.0)
+
+    def test_reports_custom_floor(self):
+        # The evaluated floor is echoed back so the workflow can display it.
+        mutants = [_mutant("killed")]
+        self.assertEqual(gate.evaluate(_write(mutants), floor=75.0)["floor"], 75.0)
 
     def test_fails_below_floor(self):
         # 8 killed / 10 completed = 80.0 → fail.
@@ -146,11 +154,44 @@ class TestMainExitCode(unittest.TestCase):
     def test_usage_error_on_bad_args(self):
         self.assertEqual(gate.main(["mutation_gate.py"]), 2)
 
-    def test_survivors_mode_exits_zero_even_when_failing(self):
+    def test_survivors_file_requires_a_path(self):
         path = _write([_mutant("survived")])
         self.assertEqual(
-            gate.main(["mutation_gate.py", "--survivors", str(path)]), 0
+            gate.main(["mutation_gate.py", "--survivors-file"]), 2
         )
+        # A dangling flag with only the JSON arg is a usage error too.
+        self.assertEqual(
+            gate.main(["mutation_gate.py", "--survivors-file", str(path)]), 2
+        )
+
+    def test_emits_floor_output(self):
+        # The floor is echoed as a $GITHUB_OUTPUT key so the workflow reuses it.
+        path = _write([_mutant("killed")])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            gate.main(["mutation_gate.py", str(path)])
+        self.assertIn("floor=90.0", buf.getvalue())
+
+    def test_survivors_file_written_and_exit_reflects_floor(self):
+        # The single invocation still gates (exit 1 below floor) while writing
+        # the survivor Markdown list to the requested file.
+        path = _write([_mutant("survived", module="m.py")])
+        out_dir = Path(tempfile.mkdtemp())
+        survivors_path = out_dir / "survivors.md"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = gate.main(
+                [
+                    "mutation_gate.py",
+                    "--survivors-file",
+                    str(survivors_path),
+                    str(path),
+                ]
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("`m.py`", survivors_path.read_text())
+        # Gate outputs are still printed alongside the file write.
+        self.assertIn("kill_rate=", buf.getvalue())
 
 
 if __name__ == "__main__":
