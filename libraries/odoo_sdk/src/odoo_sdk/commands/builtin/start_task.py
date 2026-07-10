@@ -7,11 +7,7 @@ from odoo_sdk.utilities.odoo_helpers import (
     get_employee_id,
     post_chatter_note,
 )
-from odoo_sdk.utilities.timesheet import (
-    delete_anchor,
-    emit_agent_event,
-    ensure_anchor,
-)
+from odoo_sdk.utilities.timesheet import emit_agent_event, ensure_anchor
 
 
 def _get_employee_id(client: Any, db: Any) -> int:
@@ -98,23 +94,19 @@ class StartTaskCommand(Command):
 
         employee_id = _get_employee_id(self._client, db)
 
-        timesheet_id, created = ensure_anchor(
+        timesheet_id = ensure_anchor(
             self._client, task_id, project_id, employee_id, date.today()
         )
-        try:
-            session = db.create_session(
-                task_id=task_id,
-                task_name=task_name,
-                project_id=project_id,
-                project_name=project_name,
-                timesheet_id=timesheet_id,
-            )
-        except Exception:
-            # Only roll back a row this call created; an adopted anchor predates
-            # us and must survive (deleting it would reintroduce #177 churn).
-            if created:
-                delete_anchor(self._client, timesheet_id)
-            raise
+        # If the local session insert fails, re-raise so the failure surfaces
+        # loudly. The freshly-created anchor is intentionally left in Odoo:
+        # record deletion (unlink) is purposefully not implemented for safety.
+        session = db.create_session(
+            task_id=task_id,
+            task_name=task_name,
+            project_id=project_id,
+            project_name=project_name,
+            timesheet_id=timesheet_id,
+        )
         post_chatter_note(self._client, task_id, "Work started on this task.")
         emit_agent_event(db, task_id, f"start_task: {task_name}")
 

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.state.config import OdooConnectionSettings
+from odoo_sdk.transport.errors import forbid_unlink
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
@@ -202,6 +203,7 @@ class OdooClient(OdooExecutor):
         :return: Result returned by the executor.
         :rtype: Any
         """
+        forbid_unlink(method)
         return self._executor.execute(model, method, *args, **kwargs)
 
     def __getitem__(self, model_name: str) -> OdooRecordset:

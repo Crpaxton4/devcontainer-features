@@ -121,7 +121,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
             ),
             patch(
                 "odoo_sdk.commands.builtin.start_task.ensure_anchor",
-                return_value=(99, True),
+                return_value=99,
             ),
         ):
             StartTaskCommand(client, state=db).execute(

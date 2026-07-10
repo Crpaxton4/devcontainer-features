@@ -214,10 +214,10 @@ class TestErrorMapping(unittest.TestCase):
     def test_map_fault_falls_back_to_server_error(self) -> None:
         fault = xmlrpc.client.Fault(10, "unexpected crash")
 
-        error = map_fault(fault, model="res.partner", method="unlink")
+        error = map_fault(fault, model="res.partner", method="write")
 
         self.assertIsInstance(error, OdooServerError)
-        self.assertEqual(str(error), "Odoo server error (res.partner.unlink)")
+        self.assertEqual(str(error), "Odoo server error (res.partner.write)")
 
     def test_map_transport_error_defaults_to_execute_operation(self) -> None:
         error = map_transport_error(OSError("  network\n down  "))

@@ -396,7 +396,7 @@ class TestStartTaskCommand(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
             result = _cmd_with_db(StartTaskCommand, client, db).execute(**kwargs)
@@ -455,7 +455,7 @@ class TestStartTaskCommand(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id") as mock_eid,
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(1, True)),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=1),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
@@ -470,14 +470,18 @@ class TestStartTaskCommand(unittest.TestCase):
                 "odoo_sdk.commands.builtin.start_task.get_employee_id",
                 return_value=77,
             ) as mock_eid,
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(1, True)),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=1),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
         mock_eid.assert_called_once()
         self.assertEqual(db.get_setting("employee_id"), "77")
 
-    def test_unlinks_timesheet_and_skips_note_when_session_fails(self):
+    def test_session_insert_failure_reraises_without_deleting_anchor(self):
+        # Record deletion (unlink) is purposefully not implemented, so a session
+        # insert failure re-raises loudly and the freshly-created anchor is left
+        # in Odoo — no rollback delete. The chatter note is never posted because
+        # the failure short-circuits before it.
         client = _client()
         db = MagicMock()
         db.get_active_session.return_value = None
@@ -485,33 +489,14 @@ class TestStartTaskCommand(unittest.TestCase):
         db.create_session.side_effect = RuntimeError("insert failed")
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
             with self.assertRaises(RuntimeError):
                 _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-        client.execute.assert_called_once_with(
-            "account.analytic.line", "unlink", [99]
-        )
-        mock_note.assert_not_called()
-
-    def test_does_not_unlink_adopted_anchor_when_session_fails(self):
-        # When ensure_anchor *adopted* a pre-existing anchor (created=False), a
-        # later session-insert failure must NOT delete that row — it predates
-        # this call and unlinking it would reintroduce #177 churn.
-        client = _client()
-        db = MagicMock()
-        db.get_active_session.return_value = None
-        db.get_setting.return_value = "3"
-        db.create_session.side_effect = RuntimeError("insert failed")
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(88, False)),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
-        ):
-            with self.assertRaises(RuntimeError):
-                _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-        client.execute.assert_not_called()  # adopted anchor is left intact
+        # No Odoo call is made from the command body itself (ensure_anchor is
+        # mocked); crucially, nothing attempts to delete the anchor.
+        client.execute.assert_not_called()
         mock_note.assert_not_called()
 
     def test_order_is_timesheet_then_session_then_note(self):
@@ -529,7 +514,7 @@ class TestStartTaskCommand(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
             patch(
                 "odoo_sdk.commands.builtin.start_task.ensure_anchor",
-                side_effect=lambda *a, **k: (order.append("timesheet"), (99, True))[1],
+                side_effect=lambda *a, **k: order.append("timesheet") or 99,
             ),
             patch(
                 "odoo_sdk.commands.builtin.start_task.post_chatter_note",
@@ -637,7 +622,7 @@ class TestAgentEventProduction(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(

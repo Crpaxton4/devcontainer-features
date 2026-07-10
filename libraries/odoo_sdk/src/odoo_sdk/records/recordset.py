@@ -13,6 +13,7 @@ from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.query.domain import DomainExpression, DomainInput
+from odoo_sdk.transport.errors import forbid_unlink
 from odoo_sdk.transport.executor import OdooExecutor
 
 Record: TypeAlias = Mapping[str, Any]
@@ -788,6 +789,7 @@ class OdooRecordset:
         :return: Result returned by Odoo.
         :rtype: Any
         """
+        forbid_unlink(method)
         return self._executor.execute(self._model_name, method, *args, **kwargs)
 
     def _context_kwargs(self) -> Dict[str, Any]:
@@ -1230,37 +1232,6 @@ class OdooRecordset:
             order=order,
         ).write(values)
 
-    def search_unlink(
-        self,
-        domain: DomainInput,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> bool:
-        """Search for matching records and delete them.
-
-        This method is necessary because search-driven delete flows should still reuse
-        recordset-owned unlink semantics after ids are resolved.
-
-        :param domain: Domain used to select records for deletion.
-        :type domain: DomainInput
-        :param limit: Maximum number of records to delete, defaults to None.
-        :type limit: Optional[int]
-        :param offset: Number of matched rows to skip, defaults to None.
-        :type offset: Optional[int]
-        :param order: Odoo order expression, defaults to None.
-        :type order: Optional[str]
-        :return: True when Odoo reports a successful delete.
-        :rtype: bool
-        """
-        return self.search(
-            domain,
-            limit=limit,
-            offset=offset,
-            order=order,
-        ).unlink()
-
     def read(self, fields: Optional[list[str]] = None) -> list[Record]:
         """Read the current ids using raw Phase A semantics.
 
@@ -1310,21 +1281,6 @@ class OdooRecordset:
             "write",
             list(self._ids),
             normalized_values,
-            **self._context_kwargs(),
-        )
-
-    def unlink(self) -> bool:
-        """Delete the current ids.
-
-        This method is necessary because the recordset is the canonical owner of unlink
-        semantics for its bound identity and environment.
-
-        :return: True when Odoo reports a successful delete.
-        :rtype: bool
-        """
-        return self._execute(
-            "unlink",
-            list(self._ids),
             **self._context_kwargs(),
         )
 

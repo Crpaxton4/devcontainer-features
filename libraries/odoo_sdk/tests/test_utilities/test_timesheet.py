@@ -19,7 +19,6 @@ from odoo_sdk.state import LocalStateClient
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.timesheet import (
     ANCHOR_NAME,
-    delete_anchor,
     emit_agent_event,
     ensure_anchor,
     reconcile,
@@ -53,7 +52,7 @@ class _AnchorExecutor(OdooExecutor):
             (vals,) = args
             # Single-dict create → scalar id (batch would be a list).
             return [self._new_id] if isinstance(vals, list) else self._new_id
-        if method in ("write", "unlink"):
+        if method == "write":
             return True
         raise AssertionError(f"unexpected call: {model}.{method}")
 
@@ -68,11 +67,10 @@ class TestEnsureAnchor(unittest.TestCase):
     def test_creates_anchor_when_none_exists(self):
         executor = _AnchorExecutor(existing=[], new_id=99)
         client = OdooClient(executor=executor)
-        anchor_id, created = ensure_anchor(
+        anchor_id = ensure_anchor(
             client, task_id=10, project_id=5, employee_id=3, today=date(2026, 7, 1)
         )
         self.assertEqual(anchor_id, 99)
-        self.assertTrue(created)
         creates = executor.creates()
         self.assertEqual(len(creates), 1)
         vals = creates[0][2][0]
@@ -89,7 +87,7 @@ class TestEnsureAnchor(unittest.TestCase):
         # create must be issued and the result unwrapped to a scalar int.
         executor = _AnchorExecutor(existing=[], new_id=77)
         client = OdooClient(executor=executor)
-        anchor_id, _ = ensure_anchor(
+        anchor_id = ensure_anchor(
             client, task_id=1, project_id=2, employee_id=3, today=date(2026, 7, 1)
         )
         self.assertIsInstance(anchor_id, int)
@@ -111,23 +109,21 @@ class TestEnsureAnchor(unittest.TestCase):
 
         client = OdooClient(executor=executor)
         with patch.object(client, "execute", _list_execute):
-            anchor_id, created = ensure_anchor(
+            anchor_id = ensure_anchor(
                 client, task_id=1, project_id=2, employee_id=3, today=date(2026, 7, 1)
             )
         self.assertIsInstance(anchor_id, int)
         self.assertEqual(anchor_id, 42)
-        self.assertTrue(created)
 
     def test_adopts_existing_anchor_instead_of_duplicating(self):
         # #177: a second start must reuse the existing "[/] Work in progress"
         # row rather than create a duplicate placeholder.
         executor = _AnchorExecutor(existing=[{"id": 55}])
         client = OdooClient(executor=executor)
-        anchor_id, created = ensure_anchor(
+        anchor_id = ensure_anchor(
             client, task_id=10, project_id=5, employee_id=3, today=date(2026, 7, 1)
         )
         self.assertEqual(anchor_id, 55)
-        self.assertFalse(created)  # adopted, not created
         self.assertEqual(executor.creates(), [])  # never creates a second row
 
     def test_search_keys_on_task_and_marker(self):
@@ -140,16 +136,6 @@ class TestEnsureAnchor(unittest.TestCase):
         domain = search[2][0]
         self.assertIn(("task_id", "=", 42), domain)
         self.assertIn(("name", "=", ANCHOR_NAME), domain)
-
-
-class TestDeleteAnchor(unittest.TestCase):
-    def test_unlinks_the_row(self):
-        executor = _AnchorExecutor()
-        client = OdooClient(executor=executor)
-        delete_anchor(client, 99)
-        unlink = next(c for c in executor.calls if c[1] == "unlink")
-        self.assertEqual(unlink[0], "account.analytic.line")
-        self.assertEqual(unlink[2][0], [99])
 
 
 class TestReconcile(unittest.TestCase):

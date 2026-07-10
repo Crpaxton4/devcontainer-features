@@ -9,8 +9,8 @@ is verified through the whole producer path with no live Odoo:
 * (b) ``AGENT`` rows appear in ``db.get_events()`` (producer side — #180).
 * (c) the incremental sessionizer derives a non-empty set of session windows
   from those agent events, and ``query_sessions`` returns them.
-* (d) NO ``account.analytic.line`` write/unlink occurs outside the unified
-  module (the fake asserts the only writer is the timesheet module's reconcile).
+* (d) the only ``account.analytic.line`` write is the unified module's
+  reconcile, and no record deletion is ever attempted.
 """
 
 import tempfile
@@ -129,9 +129,9 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
 
         # (a) exactly one create for the anchor across the whole flow.
         self.assertEqual(len(client.analytic_calls("create")), 1)
-        # (d) the only writes/unlinks are the reconcile write; no unlink fired.
+        # (d) the only account.analytic.line write is the reconcile write; no
+        # deletion happens (the recording client would crash loudly on unlink).
         self.assertEqual(len(client.analytic_calls("write")), 1)
-        self.assertEqual(len(client.analytic_calls("unlink")), 0)
 
         # (b) AGENT rows landed for start + note + stop.
         agent = [e for e in db.get_events() if e.source == "agent"]
@@ -159,11 +159,9 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
 
         from odoo_sdk.utilities.timesheet import ensure_anchor
 
-        first_id, first_created = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
-        second_id, second_created = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
-        self.assertEqual(first_id, second_id)
-        self.assertTrue(first_created)
-        self.assertFalse(second_created)  # adopted the first anchor
+        first_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
+        second_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
+        self.assertEqual(first_id, second_id)  # adopted the first anchor
         self.assertEqual(len(client.analytic_calls("create")), 1)
 
     def test_new_anchor_after_reconcile(self):

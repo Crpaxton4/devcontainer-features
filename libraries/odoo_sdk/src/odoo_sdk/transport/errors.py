@@ -100,3 +100,40 @@ class OdooServerError(OdooError):
     This subtype is necessary as the fallback classification when the mapper cannot
     safely narrow a remote failure into a more specific SDK exception.
     """
+
+
+class DeletionNotSupportedError(OdooError):
+    """Raised when any caller attempts an explicit Odoo record ``unlink``.
+
+    Record deletion is *purposefully* not implemented in this SDK: an on-demand
+    ``unlink`` risks irrecoverable data loss, so it is forbidden system-wide and
+    must never be implemented. This is intentional, permanent idiot-proofing —
+    a correct implementation never reaches this guard. If it fires, that is a
+    bug in the caller and the program must fail hard, loudly, and immediately.
+
+    ORM-internal cascade deletes (triggered server-side by ``write`` / x2many
+    ``(2, id)`` / ``(3, id)`` commands) are unaffected; only an explicit
+    ``unlink`` method call is blocked.
+    """
+
+
+_FORBIDDEN_DELETION_MESSAGE = (
+    "Record deletion via 'unlink' is purposefully not implemented for safety. "
+    "This operation is permanently disallowed and must never be implemented."
+)
+
+
+def forbid_unlink(method: str) -> None:
+    """Raise :class:`DeletionNotSupportedError` when ``method`` is ``unlink``.
+
+    The single shared guard invoked at both public execute seams
+    (:meth:`OdooClient.execute` and :meth:`OdooRecordset._execute`) so every
+    path to an explicit record delete — including recordset-originated deletes
+    and calls through injected test executors — is blocked with one canonical
+    error. A no-op for every other method.
+
+    :param method: The Odoo model method about to be executed.
+    :raises DeletionNotSupportedError: When ``method == "unlink"``.
+    """
+    if method == "unlink":
+        raise DeletionNotSupportedError(_FORBIDDEN_DELETION_MESSAGE, method=method)

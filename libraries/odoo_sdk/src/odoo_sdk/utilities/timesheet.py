@@ -1,9 +1,13 @@
 """Single-owner module for all ``account.analytic.line`` manipulation.
 
 This module is the **sole owner** of every ``account.analytic.line``
-create / write / unlink in the SDK (issue #181). No command, TUI surface, or
-other utility writes Odoo timesheets directly — they route through the two
-idempotent operations here:
+create / write in the SDK (issue #181). No command, TUI surface, or other
+utility writes Odoo timesheets directly — they route through the two idempotent
+operations here. Record deletion (``unlink``) is purposefully not implemented
+anywhere in the SDK (see :func:`odoo_sdk.transport.errors.forbid_unlink`), so
+this module never deletes a timesheet row.
+
+The operations:
 
 * :func:`ensure_anchor` — create (or **adopt** an existing) single anchor row
   for a task, keyed by the task and the ``[/] Work in progress`` marker so a
@@ -104,7 +108,7 @@ def ensure_anchor(
     project_id: int,
     employee_id: int,
     today: date,
-) -> tuple[int, bool]:
+) -> int:
     """Return the single anchor timesheet id for a task, creating one if needed.
 
     Idempotent: when an unreconciled ``[/] Work in progress`` row already exists
@@ -118,14 +122,11 @@ def ensure_anchor(
     :param project_id: Resolved ``project.project`` id.
     :param employee_id: The ``hr.employee`` id logging the time.
     :param today: The anchor row's date.
-    :return: ``(anchor_id, created)`` — the scalar anchor id and whether this
-        call created it (``False`` when an existing row was adopted). The flag
-        lets the caller unlink only a row it created on a later failure, never
-        an adopted one.
+    :return: The scalar ``account.analytic.line`` id of the anchor.
     """
     existing = _find_anchor(client, task_id)
     if existing is not None:
-        return existing, False
+        return existing
     vals = {
         "name": ANCHOR_NAME,
         "unit_amount": 0.0,
@@ -134,18 +135,7 @@ def ensure_anchor(
         "date": today.isoformat(),
         "employee_id": employee_id,
     }
-    created = _scalar_id(client.execute("account.analytic.line", "create", vals))
-    return created, True
-
-
-def delete_anchor(client: OdooClient, timesheet_id: int) -> None:
-    """Unlink an anchor row this module created (the module owns every unlink).
-
-    Used as the rollback when the local session insert fails right after a fresh
-    anchor was created (#171): keeping the unlink here preserves the invariant
-    that no other module ever writes/unlinks ``account.analytic.line``.
-    """
-    client.execute("account.analytic.line", "unlink", [timesheet_id])
+    return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
 def reconcile(
