@@ -45,19 +45,52 @@ def _declined() -> MagicMock:
     return r
 
 
-def _make_sp(current_branch="main", branches=("main",), dirty=False) -> MagicMock:
+def _make_sp(
+    current_branch="main",
+    branches=("main",),
+    dirty=False,
+    dirty_kind="tracked",
+    existing_branches=(),
+) -> MagicMock:
+    """Fake ``subprocess`` for the git helpers in ``start_task``.
+
+    :param current_branch: Value returned by ``git rev-parse --abbrev-ref HEAD``.
+    :param branches: Local branches listed by ``git branch``.
+    :param dirty: Whether ``git status --porcelain`` reports changes.
+    :param dirty_kind: ``"tracked"`` (``git stash push`` creates an entry) or
+        ``"untracked"`` (only ``push -u`` creates an entry).
+    :param existing_branches: Branch names for which ``git rev-parse --verify``
+        (the ``_branch_exists`` probe) reports success.
+    """
     sp = MagicMock()
+    state = {"stash_entries": 0}
 
     def _r(args, **kwargs):
         r = MagicMock()
         r.returncode = 0
         r.stdout = ""
-        if "rev-parse" in args:
+        if args[1] == "rev-parse" and "--verify" in args:
+            ref = args[-1].rsplit("/", 1)[-1]
+            r.returncode = 0 if ref in existing_branches else 1
+        elif args[1] == "rev-parse":
             r.stdout = f"{current_branch}\n"
         elif args[1] == "branch":
             r.stdout = "".join(f"{b}\n" for b in branches)
         elif args[1] == "status":
-            r.stdout = "M f.py\n" if dirty else ""
+            r.stdout = "?? f.py\n" if dirty else ""
+        elif args[1:3] == ["stash", "list"]:
+            r.stdout = "".join(
+                f"stash@{{{i}}}: entry\n" for i in range(state["stash_entries"])
+            )
+        elif args[1:3] == ["stash", "push"]:
+            # Plain push saves nothing for untracked-only trees; -u carries them.
+            if dirty_kind == "tracked" or "-u" in args:
+                state["stash_entries"] += 1
+        elif args[1:3] == ["stash", "pop"]:
+            if state["stash_entries"] == 0:
+                r.returncode = 1
+            else:
+                state["stash_entries"] -= 1
         return r
 
     sp.run.side_effect = _r
@@ -402,8 +435,62 @@ class TestStartTaskTool(unittest.TestCase):
         with patch(_SP_PATCH, sp):
             _run(tool("Fix", ctx, task_id=10))
         called = [c.args[0] for c in sp.run.call_args_list]
-        self.assertTrue(any(c[:3] == ["git", "stash", "push"] for c in called))
+        # push must carry untracked files (-u) so the balanced pop has an entry.
+        self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in called))
         self.assertIn(["git", "stash", "pop"], called)
+
+
+class TestCreateTaskBranch(unittest.TestCase):
+    """`_create_task_branch` is idempotent (#149) and stash-safe (#150)."""
+
+    @staticmethod
+    def _calls(sp):
+        return [c.args[0] for c in sp.run.call_args_list]
+
+    def test_creates_branch_when_absent(self):
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp()
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], calls)
+
+    def test_checks_out_existing_branch_idempotently(self):
+        # #149: a re-run where the target branch already exists must not
+        # `checkout -b` (git exit 128); it checks out the existing branch.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(existing_branches=("10#fix",))
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "10#fix"], calls)
+        self.assertFalse(
+            any(c[:3] == ["git", "checkout", "-b"] for c in calls),
+            "must not recreate an existing branch",
+        )
+
+    def test_untracked_only_tree_does_not_pop_without_entry(self):
+        # #150: a plain stash on an untracked-only tree saves nothing; using
+        # `push -u` creates an entry, so the balanced pop succeeds.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(dirty=True, dirty_kind="untracked")
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")  # must not raise
+        calls = self._calls(sp)
+        self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in calls))
+        self.assertIn(["git", "stash", "pop"], calls)
+
+    def test_clean_tree_does_not_stash(self):
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(dirty=False)
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertFalse(any(c[:2] == ["git", "stash"] for c in calls))
 
 
 def _sampling_ctx(*responses, supports_sampling=True) -> MagicMock:

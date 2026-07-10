@@ -70,13 +70,64 @@ def _is_dirty() -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+def _branch_exists(branch_name: str) -> bool:
+    """True when ``branch_name`` already exists locally.
+
+    :param branch_name: Local branch ref to probe.
+    :type branch_name: str
+    :return: Whether the branch resolves to a commit.
+    :rtype: bool
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}"],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def _stash_count() -> int:
+    """Return the number of entries currently on the git stash.
+
+    :return: Count of stash entries, or ``0`` when the command fails.
+    :rtype: int
+    """
+    result = subprocess.run(
+        ["git", "stash", "list"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return 0
+    return sum(1 for line in result.stdout.splitlines() if line.strip())
+
+
 def _create_task_branch(branch_name: str, base_branch: str) -> None:
+    """Create or switch to ``branch_name``, preserving any local changes.
+
+    Idempotent (#149): when ``branch_name`` already exists it is checked out
+    instead of re-created (``git checkout -b`` aborts with exit 128 otherwise).
+    Stash-safe (#150): ``git stash push -u`` carries untracked files, and the
+    matching ``pop`` runs only when an entry was actually pushed — a plain
+    stash on an untracked-only tree saves nothing, so an unconditional ``pop``
+    would fail with "No stash entries found".
+
+    :param branch_name: Target branch to end up on.
+    :type branch_name: str
+    :param base_branch: Base branch to fork from when creating a new branch.
+    :type base_branch: str
+    """
     stashed = False
     if _is_dirty():
-        subprocess.run(["git", "stash", "push", "-m", f"auto-stash: {branch_name}"], check=True)
-        stashed = True
+        before = _stash_count()
+        subprocess.run(
+            ["git", "stash", "push", "-u", "-m", f"auto-stash: {branch_name}"],
+            check=True,
+        )
+        stashed = _stash_count() > before
     try:
-        subprocess.run(["git", "checkout", "-b", branch_name, base_branch], check=True)
+        if _branch_exists(branch_name):
+            subprocess.run(["git", "checkout", branch_name], check=True)
+        else:
+            subprocess.run(["git", "checkout", "-b", branch_name, base_branch], check=True)
     finally:
         if stashed:
             subprocess.run(["git", "stash", "pop"], check=True)
