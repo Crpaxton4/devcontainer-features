@@ -1,4 +1,5 @@
 from .errors import (
+    DeletionNotSupportedError,
     OdooAccessError,
     OdooAuthenticationError,
     OdooError,
@@ -6,6 +7,7 @@ from .errors import (
     OdooServerError,
     OdooTransportError,
     OdooValidationError,
+    forbid_unlink,
 )
 from .executor import OdooExecutor
 from .json2 import OdooJson2Executor
@@ -22,4 +24,6 @@ __all__ = [
     "OdooMissingRecordError",
     "OdooTransportError",
     "OdooServerError",
+    "DeletionNotSupportedError",
+    "forbid_unlink",
 ]

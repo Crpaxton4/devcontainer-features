@@ -487,35 +487,6 @@ class TestOdooRecordset(unittest.TestCase):
             ],
         )
 
-    def test_search_unlink_delegates_to_search_then_unlink(self) -> None:
-        self.executor.execute.side_effect = [[], True]
-        recordset = OdooRecordset(
-            self.executor, "res.partner", context={"lang": "en_US"}
-        )
-
-        result = recordset.search_unlink(
-            [("active", "=", True)],
-        )
-
-        self.assertTrue(result)
-        self.assertEqual(
-            self.executor.execute.call_args_list,
-            [
-                call(
-                    "res.partner",
-                    "search",
-                    [("active", "=", True)],
-                    context={"lang": "en_US"},
-                ),
-                call(
-                    "res.partner",
-                    "unlink",
-                    [],
-                    context={"lang": "en_US"},
-                ),
-            ],
-        )
-
     def test_write_updates_current_ids_with_context(self) -> None:
         self.executor.execute.return_value = True
         recordset = OdooRecordset(
@@ -690,37 +661,6 @@ class TestOdooRecordset(unittest.TestCase):
             "write",
             [1],
             {},
-            context={"lang": "en_US"},
-        )
-
-    def test_unlink_deletes_current_ids_with_context(self) -> None:
-        self.executor.execute.return_value = True
-        recordset = OdooRecordset(
-            self.executor, "res.partner", [7, 8], context={"lang": "en_US"}
-        )
-
-        result = recordset.unlink()
-
-        self.assertTrue(result)
-        self.executor.execute.assert_called_once_with(
-            "res.partner",
-            "unlink",
-            [7, 8],
-            context={"lang": "en_US"},
-        )
-
-    def test_unlink_passes_empty_ids_to_executor(self) -> None:
-        self.executor.execute.return_value = True
-
-        result = OdooRecordset(
-            self.executor, "res.partner", [], context={"lang": "en_US"}
-        ).unlink()
-
-        self.assertTrue(result)
-        self.executor.execute.assert_called_once_with(
-            "res.partner",
-            "unlink",
-            [],
             context={"lang": "en_US"},
         )
 

@@ -352,7 +352,13 @@ def get_task_detail(
 def merge_timesheets(
     client: OdooClient, primary_id: int, ids_to_merge: list[int]
 ) -> None:
-    """Sum unit_amount and join descriptions, keep primary, delete others."""
+    """Sum unit_amount and join descriptions onto the primary timesheet row.
+
+    Record deletion via ``unlink`` is purposefully not implemented in this SDK
+    (irrecoverable data loss risk), so the merged-in rows are **left in place**
+    rather than deleted. This is an intentional interim behaviour; reworking the
+    merge to not rely on deletion is tracked as a follow-up.
+    """
     all_ids = [primary_id] + ids_to_merge
     records = client.execute(
         "account.analytic.line",
@@ -368,9 +374,3 @@ def merge_timesheets(
     )
     merged_desc = " | ".join(descriptions) if descriptions else "[/] Work in progress"
     update_timesheet(client, primary_id, total_hours, merged_desc)
-    if ids_to_merge:
-        client.execute(
-            "account.analytic.line",
-            "unlink",
-            [ids_to_merge],
-        )

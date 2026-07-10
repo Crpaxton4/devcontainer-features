@@ -120,7 +120,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
                 return_value=3,
             ),
             patch(
-                "odoo_sdk.commands.builtin.start_task.create_timesheet",
+                "odoo_sdk.commands.builtin.start_task.ensure_anchor",
                 return_value=99,
             ),
         ):

@@ -321,10 +321,11 @@ class TestMergeTimesheets(unittest.TestCase):
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
             ],
             None,  # write
-            None,  # unlink
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
-        # Second call is write
+        # Merge is now read + write only; deletion of merged-in rows is
+        # purposefully not implemented (rows are left in place).
+        self.assertEqual(client.execute.call_count, 2)
         write_call = client.execute.call_args_list[1]
         self.assertEqual(write_call.args[0], "account.analytic.line")
         self.assertEqual(write_call.args[1], "write")
@@ -332,9 +333,6 @@ class TestMergeTimesheets(unittest.TestCase):
         self.assertAlmostEqual(vals["unit_amount"], 1.5)
         self.assertIn("Work A", vals["name"])
         self.assertIn("Work B", vals["name"])
-        # Third call is unlink
-        unlink_call = client.execute.call_args_list[2]
-        self.assertEqual(unlink_call.args[1], "unlink")
 
     def test_no_merge_when_no_others(self):
         client = _client()
@@ -343,7 +341,7 @@ class TestMergeTimesheets(unittest.TestCase):
             None,  # write
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[])
-        # Only 2 calls: read + write; unlink should not be called
+        # Only 2 calls: read + write.
         self.assertEqual(client.execute.call_count, 2)
 
     def test_skips_in_progress_descriptions(self):
@@ -353,7 +351,6 @@ class TestMergeTimesheets(unittest.TestCase):
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work in progress"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Real work"},
             ],
-            None,
             None,
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
