@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.16.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.16.0...personal-features-v1.16.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** create_timesheet issues single create for scalar id ([#170](https://github.com/Crpaxton4/devcontainer-features/issues/170)) ([22f8b6a](https://github.com/Crpaxton4/devcontainer-features/commit/22f8b6ab915579dcd7fea73720b061c9b267c66f)), closes [#167](https://github.com/Crpaxton4/devcontainer-features/issues/167)
+* **odoo-sdk:** do not orphan Odoo records when the local insert fails ([#171](https://github.com/Crpaxton4/devcontainer-features/issues/171)) ([c08436b](https://github.com/Crpaxton4/devcontainer-features/commit/c08436b723b1475410f6d1689b48a1314a0feb51)), closes [#168](https://github.com/Crpaxton4/devcontainer-features/issues/168)
+* **odoo-sdk:** pass read fields as keyword in task include helpers ([#169](https://github.com/Crpaxton4/devcontainer-features/issues/169)) ([bdb9444](https://github.com/Crpaxton4/devcontainer-features/commit/bdb9444b9bfd941e1d12672b2ce1db2f1319db8b)), closes [#166](https://github.com/Crpaxton4/devcontainer-features/issues/166)
+* **odoo-sdk:** roll back created git branch when start_task fails ([#174](https://github.com/Crpaxton4/devcontainer-features/issues/174)) ([96f24cb](https://github.com/Crpaxton4/devcontainer-features/commit/96f24cb59cc7511588c145cc43aba67d5930c7ca)), closes [#164](https://github.com/Crpaxton4/devcontainer-features/issues/164)
+
 ## [1.16.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.15.1...personal-features-v1.16.0) (2026-07-10)
 
 
