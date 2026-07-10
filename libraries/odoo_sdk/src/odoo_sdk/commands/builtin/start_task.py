@@ -97,14 +97,20 @@ class StartTaskCommand(Command):
         timesheet_id = create_timesheet(
             self._client, task_id, project_id, employee_id, date.today()
         )
+        try:
+            session = db.create_session(
+                task_id=task_id,
+                task_name=task_name,
+                project_id=project_id,
+                project_name=project_name,
+                timesheet_id=timesheet_id,
+            )
+        except Exception:
+            self._client.execute(
+                "account.analytic.line", "unlink", [timesheet_id]
+            )
+            raise
         post_chatter_note(self._client, task_id, "Work started on this task.")
-        session = db.create_session(
-            task_id=task_id,
-            task_name=task_name,
-            project_id=project_id,
-            project_name=project_name,
-            timesheet_id=timesheet_id,
-        )
 
         return _build_session_result(
             session, task_id, task_name, project_name, timesheet_id,

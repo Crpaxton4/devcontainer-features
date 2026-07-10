@@ -477,6 +477,50 @@ class TestStartTaskCommand(unittest.TestCase):
         mock_eid.assert_called_once()
         self.assertEqual(db.get_setting("employee_id"), "77")
 
+    def test_unlinks_timesheet_and_skips_note_when_session_fails(self):
+        client = _client()
+        db = MagicMock()
+        db.get_active_session.return_value = None
+        db.get_setting.return_value = "3"
+        db.create_session.side_effect = RuntimeError("insert failed")
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
+        ):
+            with self.assertRaises(RuntimeError):
+                _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+        client.execute.assert_called_once_with(
+            "account.analytic.line", "unlink", [99]
+        )
+        mock_note.assert_not_called()
+
+    def test_order_is_timesheet_then_session_then_note(self):
+        client = _client()
+        db = _tmp_db()
+        order: list[str] = []
+        real_create_session = db.create_session
+
+        def _tracked_create_session(*args, **kwargs):
+            order.append("session")
+            return real_create_session(*args, **kwargs)
+
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.create_timesheet",
+                side_effect=lambda *a, **k: order.append("timesheet") or 99,
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
+                side_effect=lambda *a, **k: order.append("note"),
+            ),
+            patch.object(db, "create_session", side_effect=_tracked_create_session),
+        ):
+            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+        self.assertEqual(order, ["timesheet", "session", "note"])
+
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
