@@ -1,7 +1,7 @@
 """Phase D5 reference example — environment alterations.
 
 Demonstrates ``with_user``, ``with_company``, ``action_archive``, and
-``action_unarchive`` on ``OdooEnv`` and ``OdooRecordset``.
+``action_unarchive`` on ``OdooRecordset``.
 
 Run from the repository root:
 
@@ -17,31 +17,18 @@ from odoo_sdk import OdooClient
 
 
 def run(client: OdooClient) -> None:
-    env = client.env
     partners = client["res.partner"]
 
-    # ------------------------------------------------------------------ D5-3
-    # with_company on OdooEnv — inject allowed_company_ids into context
-    # ------------------------------------------------------------------ D5-3
+    # ------------------------------------------------------------------ D5-4
+    # with_company on OdooRecordset — inject allowed_company_ids into context
+    # ------------------------------------------------------------------ D5-4
     companies = client["res.company"].search([], limit=1)
-    if companies.ids:
-        company_id = companies.ids[0]
-        env_co = env.with_company(company_id)
-        ctx = env_co.context
-        print(
-            f"with_company({company_id!r}) allowed_company_ids="
-            f"{ctx.get('allowed_company_ids')!r}"
-        )
-
-    # ------------------------------------------------------------------ D5-4
-    # with_company on OdooRecordset
-    # ------------------------------------------------------------------ D5-4
     if companies.ids:
         company_id = companies.ids[0]
         rs_co = partners.with_company(company_id)
         print(
-            f"recordset with_company allowed_company_ids="
-            f"{rs_co._env.context.get('allowed_company_ids')!r}"
+            f"recordset with_company({company_id!r}) allowed_company_ids="
+            f"{rs_co.context.get('allowed_company_ids')!r}"
         )
 
     # ------------------------------------------------------------------ D5-5
