@@ -201,7 +201,7 @@ class _CreateSemanticsExecutor(OdooExecutor):
     Odoo's ORM ``create`` returns a *list* of ids for a batch (list-of-dicts)
     call and a *scalar* id for a single-dict call. ``create_timesheet`` must
     issue the single-dict form so the id survives the SQLite bind in
-    ``db.create_session`` (a list argument raises "type 'list' is not
+    ``db.create_run`` (a list argument raises "type 'list' is not
     supported" — issue #167). This executor reproduces that split locally.
     """
 
@@ -242,7 +242,7 @@ class TestCreateTimesheet(unittest.TestCase):
     def test_returns_scalar_id_not_list(self):
         # Regression for #167: passing a list-of-one-dict is a *batch* create,
         # which Odoo answers with ``[id]`` (a list). A list then breaks the
-        # SQLite bind in ``db.create_session`` ("type 'list' is not supported").
+        # SQLite bind in ``db.create_run`` ("type 'list' is not supported").
         # ``create_timesheet`` must send a single dict so the result is a scalar
         # int. This test fails on the pre-fix (list-wrapped) implementation.
         executor = _CreateSemanticsExecutor()

@@ -136,7 +136,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
             def __getitem__(self, name):
                 cmd = MagicMock()
                 cmd._client = client
-                cmd.execute.side_effect = lambda *a, **k: {"session_id": 1, **k}
+                cmd.execute.side_effect = lambda *a, **k: {"run_id": 1, **k}
                 return cmd
 
         ctx = MagicMock()
@@ -148,7 +148,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
         tool = make_start_task_tool(_Reg())
         with patch(_SP_PATCH, sp):
             result = _run(tool("Fix", ctx, task_id=10))
-        self.assertEqual(result["session_id"], 1)
+        self.assertEqual(result["run_id"], 1)
         pop_codes = _returncodes_for(sp, ["git", "stash", "pop"])
         self.assertTrue(pop_codes and all(rc == 0 for rc in pop_codes))
         # And the tree is clean again: successful pushes and pops net to zero.

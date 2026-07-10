@@ -29,7 +29,7 @@ class InvalidStateTransitionError(RuntimeError):
 
 
 @dataclass
-class TaskSession:
+class TaskRun:
     id: int
     task_id: int
     task_name: str
@@ -91,7 +91,7 @@ class SessionWindow:
     """A per-task computed time window in the unified ``sessions`` table.
 
     Rows are produced by the sessionization ETL and are queryable by date range.
-    They live alongside the ``task_sessions`` FSM store rather than replacing it.
+    They live alongside the ``task_runs`` FSM store rather than replacing it.
     """
 
     id: Optional[int]

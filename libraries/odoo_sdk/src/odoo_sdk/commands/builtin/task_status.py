@@ -21,10 +21,10 @@ class TaskStatusCommand(Command):
         """
         assert_odoo_devcontainer()
         db = TaskStateDB()
-        sessions = db.get_all_active_sessions()
+        runs = db.get_all_active_runs()
         return [
             {
-                "session_id": s.id,
+                "run_id": s.id,
                 "task_id": s.task_id,
                 "task_name": s.task_name,
                 "project_name": s.project_name,
@@ -32,5 +32,5 @@ class TaskStatusCommand(Command):
                 "started_at": s.started_at.isoformat(),
                 "elapsed": s.elapsed_human,
             }
-            for s in sessions
+            for s in runs
         ]

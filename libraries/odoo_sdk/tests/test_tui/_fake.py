@@ -69,7 +69,7 @@ def build_fake_registry() -> FakeRegistry:
     return FakeRegistry(
         {
             "query_sessions": FakeCommand(result=sample_sessions()),
-            "start_task": FakeCommand(result={"session_id": 1}),
+            "start_task": FakeCommand(result={"run_id": 1}),
             "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
         }
     )

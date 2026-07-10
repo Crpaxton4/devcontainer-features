@@ -137,7 +137,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_resume_task_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
         with (
             patch(_RESUME_GUARD),
@@ -156,7 +156,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_task_note_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
             patch(
@@ -170,7 +170,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_task_question_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_QUESTION_GUARD),
             patch(

@@ -201,8 +201,8 @@ class TestTaskStatusCommand(unittest.TestCase):
 
     def test_returns_active_sessions(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        db.create_session(2, "Feature", 10, "Project A", timesheet_id=2)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
         with (
             patch(_STATUS_GUARD),
             patch("odoo_sdk.commands.builtin.task_status.TaskStateDB", return_value=db),
@@ -214,7 +214,7 @@ class TestTaskStatusCommand(unittest.TestCase):
 
     def test_result_contains_required_keys(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_STATUS_GUARD),
             patch("odoo_sdk.commands.builtin.task_status.TaskStateDB", return_value=db),
@@ -228,10 +228,10 @@ class TestTaskStatusCommand(unittest.TestCase):
 # ── TaskNoteCommand ───────────────────────────────────────────────────────────
 
 class TestTaskNoteCommand(unittest.TestCase):
-    def test_posts_note_and_appends_to_session(self):
+    def test_posts_note_and_appends_to_run(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
             patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
@@ -243,8 +243,8 @@ class TestTaskNoteCommand(unittest.TestCase):
             result = TaskNoteCommand(client).execute(1, "Note text")
         mock_post.assert_called_once_with(client, 1, "Note text")
         self.assertEqual(result["message_id"], 55)
-        session = db.get_active_session(1)
-        self.assertIn("Note text", session.notes)  # type: ignore[union-attr]
+        run = db.get_active_run(1)
+        self.assertIn("Note text", run.notes)  # type: ignore[union-attr]
 
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
@@ -262,7 +262,7 @@ class TestTaskQuestionCommand(unittest.TestCase):
     def test_posts_prefixed_question_and_transitions(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_QUESTION_GUARD),
             patch("odoo_sdk.commands.builtin.task_question.TaskStateDB", return_value=db),
@@ -279,7 +279,7 @@ class TestTaskQuestionCommand(unittest.TestCase):
     def test_self_loop_on_awaiting_answers(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
         with (
             patch(_QUESTION_GUARD),
@@ -305,7 +305,7 @@ class TestResumeTaskCommand(unittest.TestCase):
     def test_transitions_and_posts_note(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
         with (
             patch(_RESUME_GUARD),
@@ -324,7 +324,7 @@ class TestResumeTaskCommand(unittest.TestCase):
 
     def test_raises_when_running(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         from odoo_sdk.state import InvalidStateTransitionError
         with (
             patch(_RESUME_GUARD),
@@ -412,7 +412,7 @@ class TestStartTaskCommand(unittest.TestCase):
         kwargs.update(overrides)
         return kwargs
 
-    def test_creates_session_and_timesheet(self):
+    def test_creates_run_and_timesheet(self):
         client = _client()
         db = _tmp_db()
         result, mock_note = self._start(client, db, **self._base_kwargs())
@@ -420,9 +420,9 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertEqual(result["task_name"], "Fix VAT")
         self.assertEqual(result["project_name"], "Accounting")
         self.assertEqual(result["timesheet_id"], 99)
-        self.assertIn("session_id", result)
+        self.assertIn("run_id", result)
         mock_note.assert_called_once_with(client, 10, "Work started on this task.")
-        self.assertIsNotNone(db.get_active_session(10))
+        self.assertIsNotNone(db.get_active_run(10))
 
     def test_echoes_branch_name_and_warning(self):
         client = _client()
@@ -443,7 +443,7 @@ class TestStartTaskCommand(unittest.TestCase):
     def test_error_when_already_active(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
+        db.create_run(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
         result, _ = self._start(client, db, **self._base_kwargs())
         self.assertIn("error", result)
         self.assertIn("active session", result["error"])
@@ -477,16 +477,16 @@ class TestStartTaskCommand(unittest.TestCase):
         mock_eid.assert_called_once()
         self.assertEqual(db.get_setting("employee_id"), "77")
 
-    def test_session_insert_failure_reraises_without_deleting_anchor(self):
-        # Record deletion (unlink) is purposefully not implemented, so a session
+    def test_run_insert_failure_reraises_without_deleting_anchor(self):
+        # Record deletion (unlink) is purposefully not implemented, so a run
         # insert failure re-raises loudly and the freshly-created anchor is left
         # in Odoo — no rollback delete. The chatter note is never posted because
         # the failure short-circuits before it.
         client = _client()
         db = MagicMock()
-        db.get_active_session.return_value = None
+        db.get_active_run.return_value = None
         db.get_setting.return_value = "3"
-        db.create_session.side_effect = RuntimeError("insert failed")
+        db.create_run.side_effect = RuntimeError("insert failed")
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
@@ -499,15 +499,15 @@ class TestStartTaskCommand(unittest.TestCase):
         client.execute.assert_not_called()
         mock_note.assert_not_called()
 
-    def test_order_is_timesheet_then_session_then_note(self):
+    def test_order_is_timesheet_then_run_then_note(self):
         client = _client()
         db = _tmp_db()
         order: list[str] = []
-        real_create_session = db.create_session
+        real_create_run = db.create_run
 
-        def _tracked_create_session(*args, **kwargs):
-            order.append("session")
-            return real_create_session(*args, **kwargs)
+        def _tracked_create_run(*args, **kwargs):
+            order.append("run")
+            return real_create_run(*args, **kwargs)
 
         with (
             patch(_START_GUARD),
@@ -520,19 +520,19 @@ class TestStartTaskCommand(unittest.TestCase):
                 "odoo_sdk.commands.builtin.start_task.post_chatter_note",
                 side_effect=lambda *a, **k: order.append("note"),
             ),
-            patch.object(db, "create_session", side_effect=_tracked_create_session),
+            patch.object(db, "create_run", side_effect=_tracked_create_run),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-        self.assertEqual(order, ["timesheet", "session", "note"])
+        self.assertEqual(order, ["timesheet", "run", "note"])
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
 class TestStopTaskCommand(unittest.TestCase):
-    def test_stops_session_and_reconciles_timesheet(self):
+    def test_stops_run_and_reconciles_timesheet(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_STOP_GUARD),
             patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
@@ -550,13 +550,13 @@ class TestStopTaskCommand(unittest.TestCase):
         self.assertIn("elapsed", result)
         self.assertIn("[/]", result["description"])
         from odoo_sdk.state import TaskState
-        session = db.get_session_by_id(result["session_id"])
-        self.assertEqual(session.state, TaskState.STOPPED)
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
 
     def test_description_not_double_prefixed(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_STOP_GUARD),
             patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
@@ -574,7 +574,7 @@ class TestStopTaskCommand(unittest.TestCase):
     def test_stop_from_awaiting_answers(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         db.transition_to_awaiting(1)
         with (
             patch(_STOP_GUARD),
@@ -582,8 +582,8 @@ class TestStopTaskCommand(unittest.TestCase):
         ):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
         from odoo_sdk.state import TaskState
-        session = db.get_session_by_id(result["session_id"])
-        self.assertEqual(session.state, TaskState.STOPPED)
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
 
     def test_reconcile_called_even_without_timesheet_id(self):
         # The unified module owns the None-anchor decision (it no-ops), so
@@ -591,7 +591,7 @@ class TestStopTaskCommand(unittest.TestCase):
         # gating on the session's timesheet_id.
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=None)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
         with (
             patch(_STOP_GUARD),
             patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
@@ -633,7 +633,7 @@ class TestAgentEventProduction(unittest.TestCase):
     def test_stop_task_emits_agent_event(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_STOP_GUARD),
             patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
@@ -644,7 +644,7 @@ class TestAgentEventProduction(unittest.TestCase):
     def test_task_note_emits_agent_event(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
             patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
@@ -656,7 +656,7 @@ class TestAgentEventProduction(unittest.TestCase):
     def test_task_question_emits_agent_event(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_QUESTION_GUARD),
             patch("odoo_sdk.commands.builtin.task_question.TaskStateDB", return_value=db),
@@ -668,7 +668,7 @@ class TestAgentEventProduction(unittest.TestCase):
     def test_resume_task_emits_agent_event(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
         with (
             patch(_RESUME_GUARD),

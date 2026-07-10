@@ -167,7 +167,7 @@ class TestStartTaskTool(unittest.TestCase):
         reg = self._registry(
             projects=[{"id": 5, "name": "Accounting"}],
             tasks=[{"id": 10, "name": "Fix VAT"}],
-            start_result={"session_id": 1, "task_id": 10},
+            start_result={"run_id": 1, "task_id": 10},
         )
         ctx = _ctx(
             _confirmed(),  # confirm
@@ -217,7 +217,7 @@ class TestStartTaskTool(unittest.TestCase):
         reg = self._registry(
             projects=[{"id": 5, "name": "Acct"}],
             tasks=[{"id": 10, "name": "Fix"}],
-            start_result={"session_id": 1, "task_id": 10},
+            start_result={"run_id": 1, "task_id": 10},
         )
         ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
@@ -277,7 +277,7 @@ class TestStartTaskTool(unittest.TestCase):
         reg = self._registry(
             projects=[{"id": 1, "name": "HR"}, {"id": 2, "name": "Acct"}],
             tasks=[{"id": 10, "name": "Fix VAT"}],
-            start_result={"session_id": 1, "task_id": 10},
+            start_result={"run_id": 1, "task_id": 10},
         )
         ctx = _ctx(
             _accepted(MagicMock(selection=2)),  # pick project
@@ -325,7 +325,7 @@ class TestStartTaskTool(unittest.TestCase):
             client=client,
             search_projects=_search,
             search_tasks=_search,
-            start_task=lambda **kw: {"session_id": 1, **kw},
+            start_task=lambda **kw: {"run_id": 1, **kw},
         )
         ctx = _ctx(
             _confirmed(),
@@ -357,7 +357,7 @@ class TestStartTaskTool(unittest.TestCase):
             client=client,
             search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
             search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
-            start_task=lambda **kw: {"session_id": 1, **kw},
+            start_task=lambda **kw: {"run_id": 1, **kw},
         )
         ctx = _ctx(
             _confirmed(),
@@ -378,7 +378,7 @@ class TestStartTaskTool(unittest.TestCase):
             client=client,
             search_projects=lambda *a, **k: [],
             search_tasks=lambda *a, **k: [],
-            start_task=lambda **kw: {"session_id": 1, **kw},
+            start_task=lambda **kw: {"run_id": 1, **kw},
         )
         ctx = _ctx(_confirmed())
         ctx.sample = AsyncMock()
@@ -423,7 +423,7 @@ class TestStartTaskTool(unittest.TestCase):
             client=client,
             search_projects=lambda *a, **k: [],
             search_tasks=lambda *a, **k: [],
-            start_task=lambda **kw: {"session_id": 1, **kw},
+            start_task=lambda **kw: {"run_id": 1, **kw},
         )
         ctx = _ctx(
             _confirmed(),
@@ -631,7 +631,7 @@ class TestBranchDescriptionSampling(unittest.TestCase):
             client=client,
             search_projects=lambda *a, **k: [],
             search_tasks=lambda *a, **k: [],
-            start_task=lambda **kw: {"session_id": 1, **kw},
+            start_task=lambda **kw: {"run_id": 1, **kw},
         )
         ctx = _sampling_ctx(
             _accepted(MagicMock(confirmed=True)),
@@ -642,7 +642,7 @@ class TestBranchDescriptionSampling(unittest.TestCase):
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool("Fix VAT", ctx, "Accounting", task_id=10))
-        self.assertEqual(result["session_id"], 1)
+        self.assertEqual(result["run_id"], 1)
         self.assertEqual(result["branch_name"], "10#fix-vat")
         ctx.sample.assert_not_called()
 

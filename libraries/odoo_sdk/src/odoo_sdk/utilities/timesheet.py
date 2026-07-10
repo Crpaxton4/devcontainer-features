@@ -75,7 +75,7 @@ def _scalar_id(result: Any) -> int:
 
     Odoo's ORM ``create`` answers a *batch* (list-of-dicts) call with ``[id]``
     and a *single* (dict) call with a scalar ``id``. A list id breaks the
-    SQLite bind in ``create_session`` and, one hop later, the timesheet write in
+    SQLite bind in ``create_run`` and, one hop later, the timesheet write in
     ``stop_task`` (``TypeError: unhashable type: list`` — #176). Unwrapping here
     guarantees the stored id is always a scalar int.
     """
@@ -174,13 +174,13 @@ def reconcile(
 def _resolve_anchor_id(
     client: OdooClient, state: LocalStateClient, task_id: int
 ) -> Optional[int]:
-    """Return the anchor id for a task from the session store, else from Odoo.
+    """Return the anchor id for a task from the run store, else from Odoo.
 
-    Prefers the active session's ``timesheet_id`` (the anchor created at start);
+    Prefers the active run's ``timesheet_id`` (the anchor created at start);
     falls back to an Odoo lookup so a reconcile still lands when the local
-    session has already been stopped or is otherwise unavailable.
+    run has already been stopped or is otherwise unavailable.
     """
-    session = state.get_active_session(task_id)
-    if session is not None and session.timesheet_id is not None:
-        return session.timesheet_id
+    run = state.get_active_run(task_id)
+    if run is not None and run.timesheet_id is not None:
+        return run.timesheet_id
     return _find_anchor(client, task_id)

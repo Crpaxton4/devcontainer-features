@@ -51,9 +51,9 @@ class TestCmdList(unittest.TestCase):
             cli.cmd_list(db, args)
         self.assertIn("No active", captured.getvalue())
 
-    def test_prints_active_sessions(self):
+    def test_prints_active_runs(self):
         db = _tmp_db()
-        db.create_session(1, "Bug Fix", 10, "Accounting", timesheet_id=1)
+        db.create_run(1, "Bug Fix", 10, "Accounting", timesheet_id=1)
         args = MagicMock()
         captured = StringIO()
         with patch("sys.stdout", captured):
@@ -64,11 +64,11 @@ class TestCmdList(unittest.TestCase):
 # ── cmd_stop ─────────────────────────────────────────────────────────────────
 
 class TestCmdStop(unittest.TestCase):
-    def test_stops_active_session(self):
+    def test_stops_active_run(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
-        session_id = db.get_active_session(1).id
-        args = MagicMock(session_id=session_id)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
+        run_id = db.get_active_run(1).id
+        args = MagicMock(run_id=run_id)
         client = _client()
         captured = StringIO()
         with (
@@ -81,26 +81,26 @@ class TestCmdStop(unittest.TestCase):
 
     def test_skips_already_stopped(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
-        db.stop_session(1)
-        session_id = db.get_session_by_id(1).id
-        args = MagicMock(session_id=session_id)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.stop_run(1)
+        run_id = db.get_run_by_id(1).id
+        args = MagicMock(run_id=run_id)
         captured = StringIO()
         with patch("sys.stdout", captured):
             cli.cmd_stop(db, args, _client())
         self.assertIn("already stopped", captured.getvalue())
 
-    def test_exits_for_unknown_session(self):
+    def test_exits_for_unknown_run(self):
         db = _tmp_db()
-        args = MagicMock(session_id=9999)
+        args = MagicMock(run_id=9999)
         with self.assertRaises(SystemExit):
             cli.cmd_stop(db, args, _client())
 
     def test_skips_timesheet_update_when_no_timesheet(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=None)
-        session_id = db.get_active_session(1).id
-        args = MagicMock(session_id=session_id)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
+        run_id = db.get_active_run(1).id
+        args = MagicMock(run_id=run_id)
         with patch("odoo_sdk.cli.__main__.update_timesheet") as mock_update:
             cli.cmd_stop(db, args, _client())
         mock_update.assert_not_called()
@@ -119,8 +119,8 @@ class TestCmdStopAll(unittest.TestCase):
 
     def test_stops_all_active(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        db.create_session(2, "Feature", 10, "Project A", timesheet_id=2)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
         args = MagicMock()
         captured = StringIO()
         with (
@@ -129,7 +129,7 @@ class TestCmdStopAll(unittest.TestCase):
         ):
             cli.cmd_stop_all(db, args, _client())
         self.assertIn("Stopped", captured.getvalue())
-        self.assertEqual(len(db.get_all_active_sessions()), 0)
+        self.assertEqual(len(db.get_all_active_runs()), 0)
 
 
 # ── cmd_report ────────────────────────────────────────────────────────────────
@@ -137,9 +137,9 @@ class TestCmdStopAll(unittest.TestCase):
 class TestCmdReport(unittest.TestCase):
     def test_active_only_by_default(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        db.create_session(2, "Done", 10, "Project A", timesheet_id=2)
-        db.stop_session(2)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(2, "Done", 10, "Project A", timesheet_id=2)
+        db.stop_run(2)
         args = MagicMock(all=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
@@ -150,8 +150,8 @@ class TestCmdReport(unittest.TestCase):
 
     def test_all_flag_includes_stopped(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        db.stop_session(1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.stop_run(1)
         args = MagicMock(all=True)
         captured = StringIO()
         with patch("sys.stdout", captured):
@@ -164,7 +164,7 @@ class TestCmdReport(unittest.TestCase):
         captured = StringIO()
         with patch("sys.stdout", captured):
             cli.cmd_report(db, args)
-        self.assertIn("No sessions", captured.getvalue())
+        self.assertIn("No runs", captured.getvalue())
 
 
 # ── cmd_normalize ─────────────────────────────────────────────────────────────
@@ -180,10 +180,10 @@ class TestCmdNormalize(unittest.TestCase):
 
     def test_dry_run_reports_without_merging(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=10)
-        db.stop_session(1)
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=11)
-        db.stop_session(1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=10)
+        db.stop_run(1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=11)
+        db.stop_run(1)
         args = MagicMock(apply=False)
         captured = StringIO()
         with (
@@ -198,10 +198,10 @@ class TestCmdNormalize(unittest.TestCase):
 
     def test_apply_merges(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=10)
-        db.stop_session(1)
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=11)
-        db.stop_session(1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=10)
+        db.stop_run(1)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=11)
+        db.stop_run(1)
         args = MagicMock(apply=True)
         captured = StringIO()
         with (
@@ -251,7 +251,7 @@ class TestMain(unittest.TestCase):
         captured = StringIO()
         with patch("sys.stdout", captured):
             self._run_main(["report"])
-        self.assertIn("No sessions", captured.getvalue())
+        self.assertIn("No runs", captured.getvalue())
 
     def test_normalize_command(self):
         captured = StringIO()
@@ -264,8 +264,8 @@ class TestMain(unittest.TestCase):
 
     def test_stop_command(self):
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
-        session_id = db.get_active_session(1).id
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        run_id = db.get_active_run(1).id
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
@@ -273,7 +273,7 @@ class TestMain(unittest.TestCase):
             patch("odoo_sdk.cli.__main__.update_timesheet"),
             patch(ASSERT_GUARD),
             patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
-            patch("sys.argv", ["odoo_sdk.cli", "stop", str(session_id)]),
+            patch("sys.argv", ["odoo_sdk.cli", "stop", str(run_id)]),
         ):
             cli.main()
         self.assertIn("Stopped", captured.getvalue())

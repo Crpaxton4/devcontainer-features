@@ -115,7 +115,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # start_task twice: second call short-circuits on the active session but
         # even if it reached ensure_anchor it would adopt the first row.
         first = self._start(client, db, **self._kwargs())
-        self.assertIn("session_id", first)
+        self.assertIn("run_id", first)
         second = self._start(client, db, **self._kwargs())
         self.assertIn("error", second)  # already active; no duplicate anchor
 

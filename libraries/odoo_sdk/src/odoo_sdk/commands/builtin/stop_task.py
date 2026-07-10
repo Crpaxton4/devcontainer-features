@@ -37,23 +37,23 @@ class StopTaskCommand(Command):
         """
         assert_odoo_devcontainer()
         db = self.state
-        session = db.get_active_session(task_id)
-        if session is None:
+        run = db.get_active_run(task_id)
+        if run is None:
             raise TaskNotRunningError(f"No active session for task {task_id}.")
 
         final_description = _finalize_description(description)
-        elapsed_hours = session.elapsed_hours
+        elapsed_hours = run.elapsed_hours
 
         # The unified timesheet module is the sole writer of the anchor row; the
         # reconcile is idempotent (upserts the one anchor) and resolves the id
-        # from the active session before it is stopped below.
+        # from the active run before it is stopped below.
         reconcile(self._client, db, task_id, final_description, elapsed_hours)
-        emit_agent_event(db, task_id, f"stop_task: {session.task_name}")
+        emit_agent_event(db, task_id, f"stop_task: {run.task_name}")
 
-        stopped = db.stop_session(task_id)
+        stopped = db.stop_run(task_id)
 
         return {
-            "session_id": stopped.id,
+            "run_id": stopped.id,
             "task_name": stopped.task_name,
             "project_name": stopped.project_name,
             "elapsed": stopped.elapsed_human,

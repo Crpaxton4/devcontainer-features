@@ -20,8 +20,8 @@ def _get_employee_id(client: Any, db: Any) -> int:
     return employee_id
 
 
-def _build_session_result(
-    session: Any,
+def _build_run_result(
+    run: Any,
     task_id: int,
     task_name: str,
     project_name: str,
@@ -31,11 +31,11 @@ def _build_session_result(
     warning: Optional[str] = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
-        "session_id": session.id,
+        "run_id": run.id,
         "task_id": task_id,
         "task_name": task_name,
         "project_name": project_name,
-        "started_at": session.started_at.isoformat(),
+        "started_at": run.started_at.isoformat(),
         "timesheet_id": timesheet_id,
     }
     if branch_name is not None:
@@ -83,7 +83,7 @@ class StartTaskCommand(Command):
         assert_odoo_devcontainer()
 
         db = self.state
-        existing = db.get_active_session(task_id)
+        existing = db.get_active_run(task_id)
         if existing is not None:
             return {
                 "error": (
@@ -97,10 +97,10 @@ class StartTaskCommand(Command):
         timesheet_id = ensure_anchor(
             self._client, task_id, project_id, employee_id, date.today()
         )
-        # If the local session insert fails, re-raise so the failure surfaces
+        # If the local run insert fails, re-raise so the failure surfaces
         # loudly. The freshly-created anchor is intentionally left in Odoo:
         # record deletion (unlink) is purposefully not implemented for safety.
-        session = db.create_session(
+        run = db.create_run(
             task_id=task_id,
             task_name=task_name,
             project_id=project_id,
@@ -110,8 +110,8 @@ class StartTaskCommand(Command):
         post_chatter_note(self._client, task_id, "Work started on this task.")
         emit_agent_event(db, task_id, f"start_task: {task_name}")
 
-        return _build_session_result(
-            session, task_id, task_name, project_name, timesheet_id,
+        return _build_run_result(
+            run, task_id, task_name, project_name, timesheet_id,
             branch_name=branch_name,
             warning=warning,
         )
