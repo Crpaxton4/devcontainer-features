@@ -1,6 +1,8 @@
 from abc import ABC
 from typing import Any
 
+from odoo_sdk.transport.errors import forbid_unlink
+
 
 class OdooExecutor(ABC):
     """Define the minimal execution contract shared by SDK facade objects.
@@ -31,3 +33,32 @@ class OdooExecutor(ABC):
         :rtype: Any
         """
         raise NotImplementedError("Subclasses must implement `execute`")
+
+
+def guarded_execute(
+    executor: OdooExecutor, model: str, method: str, *args: Any, **kwargs: Any
+) -> Any:
+    """Route one model-method call through the single guarded transport seam.
+
+    This gateway is the ONE chokepoint every model-method call crosses. Both
+    :meth:`OdooClient.execute` and :meth:`OdooRecordset._execute` delegate here so
+    the cross-cutting :func:`forbid_unlink` guard is applied in exactly one place,
+    before any executor delegation — so even an injected test executor cannot let
+    an explicit ``unlink`` through.
+
+    :param executor: Executor that owns the concrete transport implementation.
+    :type executor: OdooExecutor
+    :param model: Name of the Odoo model to call.
+    :type model: str
+    :param method: Name of the Odoo method to invoke.
+    :type method: str
+    :param args: Positional RPC arguments forwarded to the executor.
+    :type args: Any
+    :param kwargs: Keyword RPC arguments forwarded to the executor.
+    :type kwargs: Any
+    :raises DeletionNotSupportedError: When ``method`` is ``unlink``.
+    :return: Result returned by the executor.
+    :rtype: Any
+    """
+    forbid_unlink(method)
+    return executor.execute(model, method, *args, **kwargs)

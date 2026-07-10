@@ -13,8 +13,7 @@ from odoo_sdk.fields import adapt_field_value, adapt_record_values
 from odoo_sdk.fields.commands import Command, normalize_x2many_commands
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.query.domain import DomainExpression, DomainInput
-from odoo_sdk.transport.errors import forbid_unlink
-from odoo_sdk.transport.executor import OdooExecutor
+from odoo_sdk.transport.executor import OdooExecutor, guarded_execute
 
 Record: TypeAlias = Mapping[str, Any]
 
@@ -775,10 +774,14 @@ class OdooRecordset:
         return adapt_field_value(value, field_metadata)
 
     def _execute(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Execute one method on the bound model through the environment executor.
+        """Execute one method on the bound model through the shared guarded seam.
 
         This helper is necessary because recordsets centralize model identity and thus
         can issue executor calls without every public method rebuilding that context.
+        It routes through :func:`guarded_execute` — the single chokepoint that
+        applies the cross-cutting ``forbid_unlink`` guard exactly once — so a
+        recordset-originated ``unlink`` is blocked identically to a client-originated
+        one.
 
         :param method: Name of the Odoo method to invoke.
         :type method: str
@@ -789,8 +792,7 @@ class OdooRecordset:
         :return: Result returned by Odoo.
         :rtype: Any
         """
-        forbid_unlink(method)
-        return self._executor.execute(self._model_name, method, *args, **kwargs)
+        return guarded_execute(self._executor, self._model_name, method, *args, **kwargs)
 
     def _context_kwargs(self) -> Dict[str, Any]:
         """Build RPC keyword arguments for the current environment context.

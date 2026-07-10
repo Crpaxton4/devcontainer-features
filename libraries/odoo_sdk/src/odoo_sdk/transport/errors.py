@@ -126,11 +126,12 @@ _FORBIDDEN_DELETION_MESSAGE = (
 def forbid_unlink(method: str) -> None:
     """Raise :class:`DeletionNotSupportedError` when ``method`` is ``unlink``.
 
-    The single shared guard invoked at both public execute seams
-    (:meth:`OdooClient.execute` and :meth:`OdooRecordset._execute`) so every
-    path to an explicit record delete — including recordset-originated deletes
-    and calls through injected test executors — is blocked with one canonical
-    error. A no-op for every other method.
+    The single shared guard invoked from :func:`odoo_sdk.transport.executor.guarded_execute`,
+    the one transport chokepoint that both :meth:`OdooClient.execute` and
+    :meth:`OdooRecordset._execute` cross, so every path to an explicit record
+    delete — including recordset-originated deletes and calls through injected
+    test executors — is blocked with one canonical error. A no-op for every
+    other method.
 
     :param method: The Odoo model method about to be executed.
     :raises DeletionNotSupportedError: When ``method == "unlink"``.
