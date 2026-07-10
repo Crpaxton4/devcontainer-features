@@ -355,9 +355,11 @@ def merge_timesheets(
     """Sum unit_amount and join descriptions onto the primary timesheet row.
 
     Record deletion via ``unlink`` is purposefully not implemented in this SDK
-    (irrecoverable data loss risk), so the merged-in rows are **left in place**
-    rather than deleted. This is an intentional interim behaviour; reworking the
-    merge to not rely on deletion is tracked as a follow-up.
+    (irrecoverable data loss risk), so the merged-in rows are **kept in place**
+    rather than deleted. To stop them double-counting their hours after the sum
+    is written onto the primary row, their ``unit_amount`` is zeroed with a
+    single ``write`` and their ``name`` is prefixed with ``[merged]`` for
+    traceability. The rows remain readable but contribute 0 hours.
     """
     all_ids = [primary_id] + ids_to_merge
     records = client.execute(
@@ -374,3 +376,12 @@ def merge_timesheets(
     )
     merged_desc = " | ".join(descriptions) if descriptions else "[/] Work in progress"
     update_timesheet(client, primary_id, total_hours, merged_desc)
+    if ids_to_merge:
+        # Zero the merged-in rows so they no longer double-count their hours,
+        # keeping them in place because ``unlink`` is forbidden system-wide.
+        client.execute(
+            "account.analytic.line",
+            "write",
+            [ids_to_merge],
+            {"unit_amount": 0.0, "name": "[merged] " + merged_desc},
+        )
