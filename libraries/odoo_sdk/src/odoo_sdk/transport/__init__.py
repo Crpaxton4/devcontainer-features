@@ -9,12 +9,13 @@ from .errors import (
     OdooValidationError,
     forbid_unlink,
 )
-from .executor import OdooExecutor
+from .executor import OdooExecutor, guarded_execute
 from .json2 import OdooJson2Executor
 from .rpc import OdooRpcExecutor
 
 __all__ = [
     "OdooExecutor",
+    "guarded_execute",
     "OdooJson2Executor",
     "OdooRpcExecutor",
     "OdooError",

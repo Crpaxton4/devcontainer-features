@@ -3,8 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.state.config import OdooConnectionSettings
-from odoo_sdk.transport.errors import forbid_unlink
-from odoo_sdk.transport.executor import OdooExecutor
+from odoo_sdk.transport.executor import OdooExecutor, guarded_execute
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
 
@@ -186,11 +185,13 @@ class OdooClient(OdooExecutor):
         return bool(self._executor.uid)
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Delegate one model method call to the underlying executor.
+        """Delegate one model method call through the shared guarded seam.
 
         This wrapper is necessary because the public facade must satisfy the executor
         contract while still allowing the injected or constructed executor to own the
-        actual transport implementation.
+        actual transport implementation. It routes through
+        :func:`guarded_execute` — the single chokepoint that applies the
+        cross-cutting ``forbid_unlink`` guard exactly once.
 
         :param model: Name of the Odoo model to call.
         :type model: str
@@ -203,8 +204,7 @@ class OdooClient(OdooExecutor):
         :return: Result returned by the executor.
         :rtype: Any
         """
-        forbid_unlink(method)
-        return self._executor.execute(model, method, *args, **kwargs)
+        return guarded_execute(self._executor, model, method, *args, **kwargs)
 
     def __getitem__(self, model_name: str) -> OdooRecordset:
         """Return a cached model-bound recordset for one Odoo model name.
