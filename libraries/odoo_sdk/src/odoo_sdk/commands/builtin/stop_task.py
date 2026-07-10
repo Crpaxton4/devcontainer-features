@@ -3,7 +3,7 @@ from typing import Any
 from ..command import Command
 from odoo_sdk.state import TaskNotRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.utilities.odoo_helpers import update_timesheet
+from odoo_sdk.utilities.timesheet import emit_agent_event, reconcile
 
 
 def _finalize_description(description: str) -> str:
@@ -44,13 +44,11 @@ class StopTaskCommand(Command):
         final_description = _finalize_description(description)
         elapsed_hours = session.elapsed_hours
 
-        if session.timesheet_id is not None:
-            update_timesheet(
-                self._client,
-                session.timesheet_id,
-                elapsed_hours,
-                final_description,
-            )
+        # The unified timesheet module is the sole writer of the anchor row; the
+        # reconcile is idempotent (upserts the one anchor) and resolves the id
+        # from the active session before it is stopped below.
+        reconcile(self._client, db, task_id, final_description, elapsed_hours)
+        emit_agent_event(db, task_id, f"stop_task: {session.task_name}")
 
         stopped = db.stop_session(task_id)
 

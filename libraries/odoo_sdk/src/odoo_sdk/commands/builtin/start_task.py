@@ -4,9 +4,13 @@ from typing import Any, Optional
 from ..command import Command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import (
-    create_timesheet,
     get_employee_id,
     post_chatter_note,
+)
+from odoo_sdk.utilities.timesheet import (
+    delete_anchor,
+    emit_agent_event,
+    ensure_anchor,
 )
 
 
@@ -94,7 +98,7 @@ class StartTaskCommand(Command):
 
         employee_id = _get_employee_id(self._client, db)
 
-        timesheet_id = create_timesheet(
+        timesheet_id, created = ensure_anchor(
             self._client, task_id, project_id, employee_id, date.today()
         )
         try:
@@ -106,11 +110,13 @@ class StartTaskCommand(Command):
                 timesheet_id=timesheet_id,
             )
         except Exception:
-            self._client.execute(
-                "account.analytic.line", "unlink", [timesheet_id]
-            )
+            # Only roll back a row this call created; an adopted anchor predates
+            # us and must survive (deleting it would reintroduce #177 churn).
+            if created:
+                delete_anchor(self._client, timesheet_id)
             raise
         post_chatter_note(self._client, task_id, "Work started on this task.")
+        emit_agent_event(db, task_id, f"start_task: {task_name}")
 
         return _build_session_result(
             session, task_id, task_name, project_name, timesheet_id,

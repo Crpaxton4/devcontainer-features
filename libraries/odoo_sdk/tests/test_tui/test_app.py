@@ -46,9 +46,10 @@ def _sessions(n=2):
 class FakeCommand:
     """A recording stand-in for a registry command."""
 
-    def __init__(self, result=None, state=None):
+    def __init__(self, result=None, state=None, client=None):
         self._result = result
         self.state = state
+        self._client = client
         self.calls = []
 
     def execute(self, **kwargs):
@@ -67,13 +68,20 @@ class FakeRegistry:
 
 
 def _registry(query_result=None, store=None):
+    # ``_upload_sessions`` resolves its (client, state) pair off the stop_task
+    # command, so the fake carries both. A MagicMock stands in for the Odoo
+    # client the unified ``reconcile`` writes through.
     return FakeRegistry(
         {
             "query_sessions": FakeCommand(
                 result=query_result or _sessions(), state=store
             ),
             "start_task": FakeCommand(result={"session_id": 1}),
-            "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
+            "stop_task": FakeCommand(
+                result={"elapsed_hours": 1.0},
+                state=MagicMock(),
+                client=MagicMock(),
+            ),
         }
     )
 
@@ -176,21 +184,23 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        resolved = confirm_upload(state, registry, confirmed=False)
+        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+            resolved = confirm_upload(state, registry, confirmed=False)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("cancelled", resolved.status)
-        self.assertEqual(len(registry["start_task"].calls), 0)
+        mock_reconcile.assert_not_called()
 
     def test_confirm_runs_upload(self):
         registry = _registry()
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        resolved = confirm_upload(state, registry, confirmed=True)
+        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+            resolved = confirm_upload(state, registry, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
-        self.assertEqual(len(registry["start_task"].calls), 2)
-        self.assertEqual(len(registry["stop_task"].calls), 2)
+        # One reconcile (the sole timesheet writer) per queried session.
+        self.assertEqual(mock_reconcile.call_count, 2)
 
 
 class TestUploadSessions(unittest.TestCase):
@@ -204,15 +214,28 @@ class TestUploadSessions(unittest.TestCase):
         registry = _registry()
         sessions = _sessions(1)
         sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 99})
-        count = _upload_sessions(registry, sessions)
+        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+            count = _upload_sessions(registry, sessions)
         self.assertEqual(count, 1)  # only the numeric one is billed
+        self.assertEqual(mock_reconcile.call_count, 1)
 
-    def test_upload_is_idempotent_shape(self):
-        # Each session drives exactly one start+stop pair (idempotent via FSM).
+    def test_upload_reconciles_once_per_session(self):
+        # Each session drives exactly one reconcile (idempotent single-writer).
         registry = _registry()
-        _upload_sessions(registry, _sessions(3))
-        self.assertEqual(len(registry["start_task"].calls), 3)
-        self.assertEqual(len(registry["stop_task"].calls), 3)
+        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+            _upload_sessions(registry, _sessions(3))
+        self.assertEqual(mock_reconcile.call_count, 3)
+
+    def test_reconcile_receives_task_id_and_elapsed_hours(self):
+        registry = _registry()
+        sessions = [
+            {"session_id": 5, "task_id": "100", "duration_secs": 7200, "events": []}
+        ]
+        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+            _upload_sessions(registry, sessions)
+        args = mock_reconcile.call_args.args
+        self.assertEqual(args[2], 100)  # numeric task id
+        self.assertEqual(args[4], 2.0)  # 7200s -> 2.0h
 
 
 class TestHandleKey(unittest.TestCase):

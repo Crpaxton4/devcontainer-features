@@ -396,7 +396,7 @@ class TestStartTaskCommand(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
             result = _cmd_with_db(StartTaskCommand, client, db).execute(**kwargs)
@@ -455,7 +455,7 @@ class TestStartTaskCommand(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id") as mock_eid,
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(1, True)),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
@@ -470,7 +470,7 @@ class TestStartTaskCommand(unittest.TestCase):
                 "odoo_sdk.commands.builtin.start_task.get_employee_id",
                 return_value=77,
             ) as mock_eid,
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=1),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(1, True)),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
@@ -485,7 +485,7 @@ class TestStartTaskCommand(unittest.TestCase):
         db.create_session.side_effect = RuntimeError("insert failed")
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.create_timesheet", return_value=99),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
             with self.assertRaises(RuntimeError):
@@ -493,6 +493,25 @@ class TestStartTaskCommand(unittest.TestCase):
         client.execute.assert_called_once_with(
             "account.analytic.line", "unlink", [99]
         )
+        mock_note.assert_not_called()
+
+    def test_does_not_unlink_adopted_anchor_when_session_fails(self):
+        # When ensure_anchor *adopted* a pre-existing anchor (created=False), a
+        # later session-insert failure must NOT delete that row — it predates
+        # this call and unlinking it would reintroduce #177 churn.
+        client = _client()
+        db = MagicMock()
+        db.get_active_session.return_value = None
+        db.get_setting.return_value = "3"
+        db.create_session.side_effect = RuntimeError("insert failed")
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(88, False)),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
+        ):
+            with self.assertRaises(RuntimeError):
+                _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+        client.execute.assert_not_called()  # adopted anchor is left intact
         mock_note.assert_not_called()
 
     def test_order_is_timesheet_then_session_then_note(self):
@@ -509,8 +528,8 @@ class TestStartTaskCommand(unittest.TestCase):
             patch(_START_GUARD),
             patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
             patch(
-                "odoo_sdk.commands.builtin.start_task.create_timesheet",
-                side_effect=lambda *a, **k: order.append("timesheet") or 99,
+                "odoo_sdk.commands.builtin.start_task.ensure_anchor",
+                side_effect=lambda *a, **k: (order.append("timesheet"), (99, True))[1],
             ),
             patch(
                 "odoo_sdk.commands.builtin.start_task.post_chatter_note",
@@ -525,16 +544,24 @@ class TestStartTaskCommand(unittest.TestCase):
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
 class TestStopTaskCommand(unittest.TestCase):
-    def test_stops_session_and_updates_timesheet(self):
+    def test_stops_session_and_reconciles_timesheet(self):
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.update_timesheet") as mock_update,
+            patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
         ):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "Fixed the bug")
-        mock_update.assert_called_once()
+        # reconcile is the sole writer of the anchor row; it is called with the
+        # (client, state, task_id, description, elapsed_hours) contract *before*
+        # the session is stopped (so it can resolve the still-active anchor id).
+        mock_reconcile.assert_called_once()
+        args = mock_reconcile.call_args.args
+        self.assertEqual(args[0], client)
+        self.assertEqual(args[1], db)
+        self.assertEqual(args[2], 1)
+        self.assertTrue(args[3].startswith("[/]"))
         self.assertIn("elapsed", result)
         self.assertIn("[/]", result["description"])
         from odoo_sdk.state import TaskState
@@ -547,7 +574,7 @@ class TestStopTaskCommand(unittest.TestCase):
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.update_timesheet"),
+            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
         ):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "[/] Already prefixed")
         self.assertTrue(result["description"].startswith("[/]"))
@@ -566,23 +593,105 @@ class TestStopTaskCommand(unittest.TestCase):
         db.transition_to_awaiting(1)
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.update_timesheet"),
+            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
         ):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
         from odoo_sdk.state import TaskState
         session = db.get_session_by_id(result["session_id"])
         self.assertEqual(session.state, TaskState.STOPPED)
 
-    def test_skips_timesheet_update_when_no_timesheet_id(self):
+    def test_reconcile_called_even_without_timesheet_id(self):
+        # The unified module owns the None-anchor decision (it no-ops), so
+        # stop_task always routes its write through reconcile rather than
+        # gating on the session's timesheet_id.
         client = _client()
         db = _tmp_db()
         db.create_session(1, "Bug", 10, "Project A", timesheet_id=None)
         with (
             patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.update_timesheet") as mock_update,
+            patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
         ):
             _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
-        mock_update.assert_not_called()
+        mock_reconcile.assert_called_once()
+
+
+# ── AGENT event production (issue #180) ───────────────────────────────────────
+
+class TestAgentEventProduction(unittest.TestCase):
+    """Every task-scoped FSM tool must emit exactly one AGENT event.
+
+    The sessionization ETL is fully wired to *consume* ``EventType.AGENT``; these
+    tests assert the previously-missing *producer* side so agent work reaches
+    ``events -> sessions -> billing``.
+    """
+
+    def _assert_one_agent_event(self, db, task_id):
+        events = db.get_events()
+        agent = [e for e in events if e.source == "agent"]
+        self.assertEqual(len(agent), 1)
+        self.assertEqual(agent[0].task_ids, [str(task_id)])
+
+    def test_start_task_emits_agent_event(self):
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.commands.builtin.start_task.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=(99, True)),
+            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
+        ):
+            _cmd_with_db(StartTaskCommand, client, db).execute(
+                task_id=10, task_name="Fix", project_id=5, project_name="Acct"
+            )
+        self._assert_one_agent_event(db, 10)
+
+    def test_stop_task_emits_agent_event(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        with (
+            patch(_STOP_GUARD),
+            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
+        ):
+            _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
+        self._assert_one_agent_event(db, 1)
+
+    def test_task_note_emits_agent_event(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note", return_value=1),
+        ):
+            TaskNoteCommand(client).execute(1, "progress note")
+        self._assert_one_agent_event(db, 1)
+
+    def test_task_question_emits_agent_event(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_QUESTION_GUARD),
+            patch("odoo_sdk.commands.builtin.task_question.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.task_question.post_chatter_note", return_value=1),
+        ):
+            TaskQuestionCommand(client).execute(1, "which approach?")
+        self._assert_one_agent_event(db, 1)
+
+    def test_resume_task_emits_agent_event(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_session(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.transition_to_awaiting(1)
+        with (
+            patch(_RESUME_GUARD),
+            patch("odoo_sdk.commands.builtin.resume_task.TaskStateDB", return_value=db),
+            patch("odoo_sdk.commands.builtin.resume_task.post_chatter_note", return_value=1),
+        ):
+            ResumeTaskCommand(client).execute(1)
+        self._assert_one_agent_event(db, 1)
 
 
 if __name__ == "__main__":

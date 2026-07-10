@@ -20,6 +20,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.utilities.timesheet import reconcile
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
@@ -141,49 +142,41 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
 
 
 def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
-    """Push each queried session to Odoo via the idempotent timesheet commands.
+    """Reconcile each queried session's hours onto its Odoo anchor timesheet row.
 
-    Composition only: ``start_task`` creates the timesheet then ``stop_task``
-    finalizes it with the elapsed hours. Both are idempotent through the FSM
-    store's ``timesheet_id``, so a re-run does not double-bill. Sessions lacking a
-    numeric task id are skipped (they have no Odoo task to bill).
+    The unified timesheet module (issue #181) is the sole writer of
+    ``account.analytic.line``: this delegates to its idempotent ``reconcile``,
+    which upserts the one anchor row per task rather than re-calling
+    ``start_task`` + ``stop_task`` (which duplicated placeholder rows, #177).
+    A re-run overwrites the same anchor, so it never double-bills. Sessions
+    lacking a numeric task id are skipped (they have no Odoo task to bill).
     """
-    start_cmd = registry["start_task"]
     stop_cmd = registry["stop_task"]
+    client, state = stop_cmd._client, stop_cmd.state
     uploaded = 0
     for session in sessions:
         task_id = _numeric_task_id(session.get("task_id"))
         if task_id is None:
             continue
-        _upload_one(start_cmd, stop_cmd, task_id, session)
+        _reconcile_one(client, state, task_id, session)
         uploaded += 1
     return uploaded
 
 
-def _upload_one(
-    start_cmd: Any, stop_cmd: Any, task_id: int, session: dict[str, Any]
+def _reconcile_one(
+    client: Any, state: Any, task_id: int, session: dict[str, Any]
 ) -> None:
-    """Start then stop one task so its session is billed once (idempotent).
+    """Reconcile one queried session's hours onto its task's anchor row.
 
     Delegation only: the surface passes the identity the queried session carries
-    (its numeric ``task_id`` and ``repo``) straight to the timesheet commands.
-    A sessionization window has no Odoo ``project_id`` — that identity lives in
-    the command/Odoo layer — so ``project_id`` is left unresolved (``0``) and the
-    ``start_task`` command owns validating it. ``start_task`` short-circuits with
-    an error result (never raising) when the task already has an active session,
-    so a re-run stays idempotent and the loop is never interrupted.
+    (its numeric ``task_id`` and derived ``duration_secs``) straight to the
+    unified module's ``reconcile``, which resolves the anchor id (local session
+    store then Odoo) and upserts the single row. When the task has no anchor the
+    module treats it as a no-op, so the loop is never interrupted.
     """
-    repo = str(session.get("repo", ""))
-    start_cmd.execute(
-        task_id=task_id,
-        task_name=repo or f"task {task_id}",
-        project_id=0,
-        project_name=repo,
-    )
-    stop_cmd.execute(
-        task_id=task_id,
-        description=f"session {session.get('session_id')}",
-    )
+    elapsed_hours = float(session.get("duration_secs", 0)) / 3600
+    description = f"[/] session {session.get('session_id')}"
+    reconcile(client, state, task_id, description, elapsed_hours)
 
 
 def _numeric_task_id(value: Any) -> Optional[int]:
