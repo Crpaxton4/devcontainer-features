@@ -125,6 +125,13 @@ def _migrate_events_session_id(conn: sqlite3.Connection) -> None:
     )
 
 
+# Columns selected for every task_session read, in _parse_session order.
+_TASK_SESSION_COLUMNS = (
+    "id, task_id, task_name, project_id, project_name, state, "
+    "started_at, stopped_at, timesheet_id, notes"
+)
+
+
 def _parse_session(row: tuple) -> TaskSession:
     (
         id_,
@@ -221,8 +228,7 @@ class LocalStateClient:
     def get_active_session(self, task_id: int) -> Optional[TaskSession]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, task_id, task_name, project_id, project_name, state, "
-                "started_at, stopped_at, timesheet_id, notes "
+                f"SELECT {_TASK_SESSION_COLUMNS} "
                 "FROM task_sessions WHERE task_id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS')",
                 (task_id,),
             ).fetchone()
@@ -231,8 +237,7 @@ class LocalStateClient:
     def get_session_by_id(self, session_id: int) -> Optional[TaskSession]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, task_id, task_name, project_id, project_name, state, "
-                "started_at, stopped_at, timesheet_id, notes "
+                f"SELECT {_TASK_SESSION_COLUMNS} "
                 "FROM task_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
@@ -241,8 +246,7 @@ class LocalStateClient:
     def get_all_active_sessions(self) -> list[TaskSession]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, task_id, task_name, project_id, project_name, state, "
-                "started_at, stopped_at, timesheet_id, notes "
+                f"SELECT {_TASK_SESSION_COLUMNS} "
                 "FROM task_sessions WHERE state IN ('RUNNING', 'AWAITING_ANSWERS') "
                 "ORDER BY started_at"
             ).fetchall()
@@ -251,8 +255,7 @@ class LocalStateClient:
     def get_all_sessions(self) -> list[TaskSession]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, task_id, task_name, project_id, project_name, state, "
-                "started_at, stopped_at, timesheet_id, notes "
+                f"SELECT {_TASK_SESSION_COLUMNS} "
                 "FROM task_sessions ORDER BY started_at"
             ).fetchall()
         return [_parse_session(tuple(r)) for r in rows]
@@ -260,8 +263,7 @@ class LocalStateClient:
     def get_stopped_sessions_with_timesheet(self) -> list[TaskSession]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, task_id, task_name, project_id, project_name, state, "
-                "started_at, stopped_at, timesheet_id, notes "
+                f"SELECT {_TASK_SESSION_COLUMNS} "
                 "FROM task_sessions WHERE state = 'STOPPED' AND timesheet_id IS NOT NULL "
                 "ORDER BY started_at"
             ).fetchall()
