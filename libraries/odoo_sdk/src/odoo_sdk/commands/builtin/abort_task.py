@@ -8,19 +8,19 @@ class AbortTaskCommand(Command):
     """Force-close a wedged task session without writing any hours.
 
     Unlike ``stop_task``, this never logs elapsed time. It moves a stuck
-    ``RUNNING`` / ``AWAITING_ANSWERS`` session straight to ``STOPPED`` and
-    unlinks the orphaned placeholder timesheet so no zero-hour
-    ``account.analytic.line`` is left behind.
+    ``RUNNING`` / ``AWAITING_ANSWERS`` session straight to ``STOPPED``. The
+    orphaned placeholder timesheet is intentionally left in place: the SDK never
+    deletes records.
     """
 
     _name = "abort_task"
     _description = (
         "Force-close a wedged RUNNING or AWAITING_ANSWERS task session without "
-        "logging hours, and delete its placeholder timesheet entry."
+        "logging hours. The placeholder timesheet entry is left untouched."
     )
 
     def execute(self, task_id: int) -> dict[str, Any]:
-        """Force-close the active session for a task, discarding its timesheet.
+        """Force-close the active session for a task without logging hours.
 
         :param task_id: Odoo project.task record id.
         :return: Summary of the aborted session, or an ``error`` dict when there
@@ -28,25 +28,17 @@ class AbortTaskCommand(Command):
         """
         assert_odoo_devcontainer()
         db = self.state
-        session = db.get_active_session(task_id)
-        if session is None:
+        run = db.get_active_run(task_id)
+        if run is None:
             return {"error": f"No active session for task {task_id}."}
 
-        timesheet_id = session.timesheet_id
-        stopped = db.stop_session(task_id)
-
-        if timesheet_id is not None:
-            self._client.execute(
-                "account.analytic.line",
-                "unlink",
-                [timesheet_id],
-            )
+        stopped = db.stop_run(task_id)
 
         return {
-            "session_id": stopped.id,
+            "run_id": stopped.id,
             "task_name": stopped.task_name,
             "project_name": stopped.project_name,
             "elapsed": stopped.elapsed_human,
             "aborted": True,
-            "timesheet_id": timesheet_id,
+            "timesheet_id": stopped.timesheet_id,
         }

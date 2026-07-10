@@ -29,44 +29,42 @@ def _cmd_with_db(client, db) -> AbortTaskCommand:
 
 
 class TestAbortTaskCommand(unittest.TestCase):
-    def test_stops_session_and_unlinks_placeholder_timesheet(self):
+    def test_stops_session_and_leaves_placeholder_timesheet(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with patch(_ABORT_GUARD):
             result = _cmd_with_db(client, db).execute(1)
-        # The placeholder timesheet is unlinked (deleted), not written.
-        client.execute.assert_called_once_with(
-            "account.analytic.line", "unlink", [50]
-        )
+        # The SDK never deletes records: no Odoo call is made and the
+        # placeholder timesheet id is preserved on the stopped session.
+        client.execute.assert_not_called()
         self.assertTrue(result["aborted"])
         self.assertEqual(result["timesheet_id"], 50)
-        session = db.get_session_by_id(result["session_id"])
-        self.assertEqual(session.state, TaskState.STOPPED)
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
+        self.assertEqual(run.timesheet_id, 50)
 
     def test_aborts_from_awaiting_answers(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         db.transition_to_awaiting(1)
         with patch(_ABORT_GUARD):
             result = _cmd_with_db(client, db).execute(1)
-        client.execute.assert_called_once_with(
-            "account.analytic.line", "unlink", [50]
-        )
-        session = db.get_session_by_id(result["session_id"])
-        self.assertEqual(session.state, TaskState.STOPPED)
+        client.execute.assert_not_called()
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
 
-    def test_no_unlink_when_no_placeholder_timesheet(self):
+    def test_aborts_when_no_placeholder_timesheet(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=None)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
         with patch(_ABORT_GUARD):
             result = _cmd_with_db(client, db).execute(1)
         client.execute.assert_not_called()
         self.assertIsNone(result["timesheet_id"])
-        session = db.get_session_by_id(result["session_id"])
-        self.assertEqual(session.state, TaskState.STOPPED)
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
 
     def test_graceful_error_when_no_active_session(self):
         client = _client()
@@ -80,11 +78,11 @@ class TestAbortTaskCommand(unittest.TestCase):
     def test_does_not_write_hours(self):
         client = _client()
         db = _tmp_db()
-        db.create_session(1, "Bug", 10, "Project A", timesheet_id=50)
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_ABORT_GUARD),
             patch(
-                "odoo_sdk.commands.builtin.stop_task.update_timesheet"
+                "odoo_sdk.utilities.odoo_helpers.update_timesheet"
             ) as mock_update,
         ):
             _cmd_with_db(client, db).execute(1)
