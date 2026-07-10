@@ -707,6 +707,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "search_projects": ("q",),
             "search_tasks": ("q", 1),
             "resume_task": (5,),
+            "abort_task": (5,),
             "task_status": (),
             "task_note": (5, "note"),
             "task_list": (),

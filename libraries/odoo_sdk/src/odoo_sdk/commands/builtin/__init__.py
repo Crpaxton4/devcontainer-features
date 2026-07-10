@@ -7,6 +7,7 @@ themselves; see ``examples/general/mcp_custom_commands_example.py``.
 """
 
 from ..command_registry import Registry
+from .abort_task import AbortTaskCommand
 from .create_task import CreateTaskCommand
 from .get_models import GetModelsCommand
 from .get_task import GetTaskCommand
@@ -39,6 +40,7 @@ BUILTIN_COMMANDS = {
     "search_tasks": SearchTasksCommand,
     "start_task": StartTaskCommand,
     "stop_task": StopTaskCommand,
+    "abort_task": AbortTaskCommand,
     "resume_task": ResumeTaskCommand,
     "task_status": TaskStatusCommand,
     "task_note": TaskNoteCommand,
@@ -78,6 +80,7 @@ __all__ = [
     "SearchTasksCommand",
     "StartTaskCommand",
     "StopTaskCommand",
+    "AbortTaskCommand",
     "ResumeTaskCommand",
     "TaskStatusCommand",
     "TaskNoteCommand",
