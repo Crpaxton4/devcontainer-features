@@ -2,8 +2,9 @@ name: "Mutation Testing"
 
 # Mutation testing is slow (hours), so it never runs on push/PR. It is a
 # manually-triggered gate on the release-please PR: dispatch it against the
-# release PR, it runs cosmic-ray, enforces the >=90% kill-rate floor, and
-# publishes a `mutation-testing` commit status on the PR's head SHA. That
+# release PR, it runs cosmic-ray, enforces the kill-rate floor (owned by
+# .github/scripts/mutation_gate.py and surfaced as the `floor` step output),
+# and publishes a `mutation-testing` commit status on the PR's head SHA. That
 # status is a *required* check on the release PR (see repo ruleset), so the
 # release cannot be cut until a manual run passes on the exact head commit.
 on:
@@ -80,15 +81,19 @@ jobs:
           name: mutation-report
           path: libraries/odoo_sdk/reports/mutation/
 
-      # Enforce the floor. The gate exits non-zero below 90%, but we mask that
-      # here with `|| true` so the status + issue steps always run; the
-      # `passed` output is the authoritative pass/fail signal.
+      # Enforce the floor. The gate exits non-zero below the floor, but we mask
+      # that here with `|| true` so the status + issue steps always run; the
+      # `passed` output is the authoritative pass/fail signal. A single
+      # invocation emits the gate outputs (kill_rate/passed/survived/total/floor)
+      # to $GITHUB_OUTPUT and writes the survivor Markdown list to a file the
+      # drift-issue step reuses, so the JSON is parsed only once.
       - name: Evaluate kill-rate floor
         id: gate
         run: |
           # Stdlib-only CI helper; no venv needed. Path is repo-root-relative
           # because the working directory is libraries/odoo_sdk.
           python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
+            --survivors-file reports/mutation/survivors.md \
             reports/mutation/mutation.json >> "$GITHUB_OUTPUT" || true
 
       - name: Publish mutation-testing status on PR head
@@ -96,15 +101,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PASSED: ${{ steps.gate.outputs.passed }}
           KILL_RATE: ${{ steps.gate.outputs.kill_rate }}
+          FLOOR: ${{ steps.gate.outputs.floor }}
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
           RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           if [ "$PASSED" = "true" ]; then
             state="success"
-            desc="Kill rate ${KILL_RATE}% (>= 90% floor)"
+            desc="Kill rate ${KILL_RATE}% (>= ${FLOOR}% floor)"
           else
             state="failure"
-            desc="Kill rate ${KILL_RATE}% (< 90% floor)"
+            desc="Kill rate ${KILL_RATE}% (< ${FLOOR}% floor)"
           fi
           gh api \
             --method POST \
@@ -119,6 +125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KILL_RATE: ${{ steps.gate.outputs.kill_rate }}
+          FLOOR: ${{ steps.gate.outputs.floor }}
           SURVIVED: ${{ steps.gate.outputs.survived }}
           PR_NUMBER: ${{ inputs.pr }}
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
@@ -129,16 +136,16 @@ jobs:
           gh label create "mutation-drift" \
             --repo "$REPO" \
             --color "b60205" \
-            --description "Mutation kill rate below the 90% floor" 2>/dev/null || true
+            --description "Mutation kill rate below the ${FLOOR}% floor" 2>/dev/null || true
 
-          title="Mutation kill rate below 90% floor (${KILL_RATE}%)"
-          survivors="$(python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
-            --survivors reports/mutation/mutation.json)"
+          title="Mutation kill rate below ${FLOOR}% floor (${KILL_RATE}%)"
+          # Survivor list was rendered by the single gate invocation above.
+          survivors="$(cat reports/mutation/survivors.md)"
           # Backticks below are literal Markdown, not command substitution.
           # shellcheck disable=SC2016
           {
-            printf 'Mutation testing on PR #%s (head `%s`) reported a kill rate of **%s%%**, below the required 90%% floor.\n\n' \
-              "$PR_NUMBER" "$HEAD_SHA" "$KILL_RATE"
+            printf 'Mutation testing on PR #%s (head `%s`) reported a kill rate of **%s%%**, below the required %s%% floor.\n\n' \
+              "$PR_NUMBER" "$HEAD_SHA" "$KILL_RATE" "$FLOOR"
             printf -- '- **Survived mutants:** %s\n' "$SURVIVED"
             printf -- '- **Run:** %s\n' "$RUN_URL"
             printf -- '- **Report:** download the `mutation-report` artifact from that run.\n\n'
@@ -167,5 +174,5 @@ jobs:
       - name: Fail job if below floor
         if: steps.gate.outputs.passed != 'true'
         run: |
-          echo "Kill rate ${{ steps.gate.outputs.kill_rate }}% is below the 90% floor." >&2
+          echo "Kill rate ${{ steps.gate.outputs.kill_rate }}% is below the ${{ steps.gate.outputs.floor }}% floor." >&2
           exit 1
