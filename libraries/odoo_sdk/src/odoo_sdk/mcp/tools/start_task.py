@@ -100,7 +100,26 @@ def _stash_count() -> int:
     return sum(1 for line in result.stdout.splitlines() if line.strip())
 
 
-def _create_task_branch(branch_name: str, base_branch: str) -> None:
+def _rollback_task_branch(branch_name: str, original_branch: Optional[str]) -> None:
+    """Undo a branch created this run: switch back, then delete ``branch_name``.
+
+    Best-effort cleanup when ``start_task`` fails downstream of branch setup
+    (#164), so a raised command does not leave a dangling task branch checked
+    out. Switching off ``branch_name`` first lets ``git branch -D`` succeed
+    (git refuses to delete the current branch).
+
+    :param branch_name: The task branch created this run, to be deleted.
+    :type branch_name: str
+    :param original_branch: Branch to return to; skipped when ``None`` (e.g. a
+        prior detached HEAD).
+    :type original_branch: Optional[str]
+    """
+    if original_branch is not None:
+        subprocess.run(["git", "checkout", original_branch], capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, text=True)
+
+
+def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     """Create or switch to ``branch_name``, preserving any local changes.
 
     Idempotent (#149): when ``branch_name`` already exists it is checked out
@@ -114,6 +133,9 @@ def _create_task_branch(branch_name: str, base_branch: str) -> None:
     :type branch_name: str
     :param base_branch: Base branch to fork from when creating a new branch.
     :type base_branch: str
+    :return: ``True`` when a new branch was created, ``False`` when an existing
+        one was merely checked out — lets callers roll back only fresh branches.
+    :rtype: bool
     """
     stashed = False
     if _is_dirty():
@@ -123,14 +145,16 @@ def _create_task_branch(branch_name: str, base_branch: str) -> None:
             check=True,
         )
         stashed = _stash_count() > before
+    created = not _branch_exists(branch_name)
     try:
-        if _branch_exists(branch_name):
-            subprocess.run(["git", "checkout", branch_name], check=True)
-        else:
+        if created:
             subprocess.run(["git", "checkout", "-b", branch_name, base_branch], check=True)
+        else:
+            subprocess.run(["git", "checkout", branch_name], check=True)
     finally:
         if stashed:
             subprocess.run(["git", "stash", "pop"], check=True)
+    return created
 
 
 def _slugify(text: str) -> str:
@@ -180,15 +204,15 @@ async def _generate_branch_description(ctx: Any, task_name: str, project_name: s
 
 async def _setup_task_branch(
     ctx: Any, task: dict, project: dict
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], bool, Optional[str]]:
     task_id = task["id"]
     current = _current_branch()
     if current and current.startswith(f"{task_id}#"):
-        return None, None
+        return None, False, None
 
     branches = _list_local_branches()
     if not branches:
-        return None, "No local git branches found. Ensure the working directory is a git repo."
+        return None, False, "No local git branches found. Ensure the working directory is a git repo."
 
     numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
     result = await ctx.elicit(
@@ -196,17 +220,17 @@ async def _setup_task_branch(
         _SelectBranch,
     )
     if result.action != "accept":
-        return None, "Branch selection cancelled."
+        return None, False, "Branch selection cancelled."
     idx = result.data.selection - 1
     if not (0 <= idx < len(branches)):
-        return None, "Invalid branch selection."
+        return None, False, "Invalid branch selection."
     base_branch = branches[idx]
 
     description = await _generate_branch_description(ctx, task["name"], project["name"])
     branch_name = f"{task_id}#{description}"
 
-    _create_task_branch(branch_name, base_branch)
-    return branch_name, None
+    created = _create_task_branch(branch_name, base_branch)
+    return branch_name, created, None
 
 
 async def _disambiguate(ctx: Any, message: str, items: list[dict], schema_cls: type) -> Optional[dict]:
@@ -337,17 +361,25 @@ def make_start_task_tool(registry: Registry):
         if confirm.action != "accept":
             return {"error": "Task start cancelled."}
 
-        branch_name, branch_err = await _setup_task_branch(ctx, task, project)
+        original_branch = _current_branch()
+        branch_name, branch_created, branch_err = await _setup_task_branch(ctx, task, project)
         if branch_err:
             return {"error": branch_err}
 
-        return registry["start_task"].execute(
-            task_id=task["id"],
-            task_name=task["name"],
-            project_id=project["id"],
-            project_name=project["name"],
-            branch_name=branch_name,
-            warning=warning,
-        )
+        try:
+            return registry["start_task"].execute(
+                task_id=task["id"],
+                task_name=task["name"],
+                project_id=project["id"],
+                project_name=project["name"],
+                branch_name=branch_name,
+                warning=warning,
+            )
+        except Exception:
+            # Roll back only a branch freshly created this run (#164); re-raise
+            # so the caller still sees the original failure.
+            if branch_created and branch_name is not None:
+                _rollback_task_branch(branch_name, original_branch)
+            raise
 
     return start_task

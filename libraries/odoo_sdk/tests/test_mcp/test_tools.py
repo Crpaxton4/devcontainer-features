@@ -439,6 +439,76 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in called))
         self.assertIn(["git", "stash", "pop"], called)
 
+    def test_rolls_back_branch_when_start_command_fails(self):
+        # #164: a branch created this run must be undone (switch back + delete)
+        # when the start command raises, and the error must propagate.
+        def _boom(**kw):
+            raise RuntimeError("odoo unreachable")
+
+        reg = _FakeRegistry(
+            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
+            start_task=_boom,
+        )
+        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        sp = _make_sp(current_branch="main")
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            with self.assertRaises(RuntimeError):
+                _run(tool("Fix", ctx))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        # Switched back to the original branch, then deleted the task branch.
+        self.assertIn(["git", "checkout", "main"], called)
+        self.assertIn(["git", "branch", "-D", "10#fix"], called)
+
+    def test_no_rollback_when_no_branch_created(self):
+        # #164: when already on the task branch, no branch is created this run,
+        # so a failing start command must not delete anything.
+        def _boom(**kw):
+            raise RuntimeError("odoo unreachable")
+
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=_boom,
+        )
+        ctx = _ctx(_confirmed())
+        ctx.sample = AsyncMock()
+        sp = _make_sp(current_branch="10#x")
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            with self.assertRaises(RuntimeError):
+                _run(tool("Fix", ctx, task_id=10))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertFalse(any(c[:2] == ["git", "branch"] and "-D" in c for c in called))
+
+    def test_no_rollback_when_branch_pre_existed(self):
+        # #164: an idempotent checkout of a pre-existing task branch was not
+        # created this run, so a failing start command must not delete it.
+        def _boom(**kw):
+            raise RuntimeError("odoo unreachable")
+
+        reg = _FakeRegistry(
+            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
+            start_task=_boom,
+        )
+        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        sp = _make_sp(current_branch="main", existing_branches=("10#fix",))
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            with self.assertRaises(RuntimeError):
+                _run(tool("Fix", ctx))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertFalse(any(c[:2] == ["git", "branch"] and "-D" in c for c in called))
+
 
 class TestCreateTaskBranch(unittest.TestCase):
     """`_create_task_branch` is idempotent (#149) and stash-safe (#150)."""
