@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.16.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.15.1...personal-features-v1.16.0) (2026-07-10)
+
+
+### Features
+
+* **ci:** gate release PR on manual required mutation-testing check (&gt;=90% kill rate) ([#130](https://github.com/Crpaxton4/devcontainer-features/issues/130)) ([b9644a4](https://github.com/Crpaxton4/devcontainer-features/commit/b9644a4054af1ad8e020cb8a132f73916bbefedd))
+
+
+### Bug Fixes
+
+* **create-pr:** send "PR already exists" notice to stderr ([#153](https://github.com/Crpaxton4/devcontainer-features/issues/153)) ([adfbdc9](https://github.com/Crpaxton4/devcontainer-features/commit/adfbdc99239f88459f3b0c059b886eb28c05ae9e))
+* **odoo-sdk:** add bounded request timeout to both transports ([#162](https://github.com/Crpaxton4/devcontainer-features/issues/162)) ([3554226](https://github.com/Crpaxton4/devcontainer-features/commit/3554226f847efbfb681e6232889424e61d08a6c6)), closes [#134](https://github.com/Crpaxton4/devcontainer-features/issues/134)
+* **odoo-sdk:** make start_task git branch setup idempotent and stash-safe ([#159](https://github.com/Crpaxton4/devcontainer-features/issues/159)) ([e066de9](https://github.com/Crpaxton4/devcontainer-features/commit/e066de9df7e3cd6360ec420a43ea738bae8e469b))
+* **odoo-sdk:** post chatter notes with keyword message_post options ([#132](https://github.com/Crpaxton4/devcontainer-features/issues/132)) ([88ee86d](https://github.com/Crpaxton4/devcontainer-features/commit/88ee86dbea78d21c05b4ede3e5b4f7ef014fa02c)), closes [#131](https://github.com/Crpaxton4/devcontainer-features/issues/131)
+
 ## [1.15.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.15.0...personal-features-v1.15.1) (2026-07-09)
 
 
