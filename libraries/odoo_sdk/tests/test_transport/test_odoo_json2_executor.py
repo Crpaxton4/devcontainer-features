@@ -14,7 +14,10 @@ from odoo_sdk.transport.errors import (
     OdooTransportError,
     OdooValidationError,
 )
-from odoo_sdk.transport.json2 import OdooJson2Executor
+from odoo_sdk.transport.json2 import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OdooJson2Executor,
+)
 
 
 def _make_response(body: dict | list | str, status: int = 200):
@@ -56,6 +59,32 @@ class TestOdooJson2ExecutorConstructor(unittest.TestCase):
     def test_db_can_be_none(self) -> None:
         ex = OdooJson2Executor("https://example.com", None, "key123")
         self.assertIsNone(ex._db)
+
+    def test_timeout_defaults_to_module_constant(self) -> None:
+        ex = OdooJson2Executor("https://example.com", "mydb", "key123")
+        self.assertEqual(ex._timeout, DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    def test_timeout_can_be_overridden(self) -> None:
+        ex = OdooJson2Executor("https://example.com", "mydb", "key123", timeout=5.0)
+        self.assertEqual(ex._timeout, 5.0)
+
+
+class TestOdooJson2ExecutorTimeout(unittest.TestCase):
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_urlopen_receives_default_timeout(self, mock_urlopen: Mock) -> None:
+        mock_urlopen.return_value = _make_response([])
+        ex = OdooJson2Executor("https://example.com", "mydb", "key")
+        ex.execute("res.partner", "search", [])
+        self.assertEqual(
+            mock_urlopen.call_args.kwargs["timeout"], DEFAULT_REQUEST_TIMEOUT_SECONDS
+        )
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_urlopen_receives_configured_timeout(self, mock_urlopen: Mock) -> None:
+        mock_urlopen.return_value = _make_response([])
+        ex = OdooJson2Executor("https://example.com", "mydb", "key", timeout=2.5)
+        ex.execute("res.partner", "search", [])
+        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 2.5)
 
 
 class TestOdooJson2ExecutorRequest(unittest.TestCase):

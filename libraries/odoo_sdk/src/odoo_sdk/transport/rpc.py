@@ -1,8 +1,105 @@
+import http.client
 import threading
 import xmlrpc.client
 from typing import Any
+from urllib.parse import urlsplit
 
 from .executor import OdooExecutor
+
+#: Default per-request timeout, in seconds, applied to every XML-RPC call.
+#:
+#: This bounds the time the SDK will block on a hung or slow Odoo server so that a
+#: stalled socket surfaces as an error instead of hanging the caller forever.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 30.0
+
+
+class _TimeoutTransport(xmlrpc.client.Transport):
+    """XML-RPC HTTP transport that bounds each connection with a socket timeout.
+
+    This transport is necessary because :class:`xmlrpc.client.ServerProxy` offers no
+    direct timeout parameter, so the connection must be created with an explicit
+    ``timeout`` to bound how long a call may block on a slow or hung server.
+
+    :param timeout: Per-request timeout in seconds.
+    :type timeout: float
+    """
+
+    def __init__(self, timeout: float) -> None:
+        """Store the timeout used when opening each HTTP connection.
+
+        :param timeout: Per-request timeout in seconds.
+        :type timeout: float
+        :return: None.
+        :rtype: None
+        """
+        super().__init__()
+        self._timeout = timeout
+
+    def make_connection(self, host: Any) -> http.client.HTTPConnection:
+        """Create a connection whose socket is bounded by the configured timeout.
+
+        :param host: Host specification passed by the XML-RPC machinery.
+        :type host: Any
+        :return: A connection with the configured socket timeout applied.
+        :rtype: http.client.HTTPConnection
+        """
+        connection = super().make_connection(host)
+        connection.timeout = self._timeout
+        return connection
+
+
+class _SafeTimeoutTransport(xmlrpc.client.SafeTransport):
+    """XML-RPC HTTPS transport that bounds each connection with a socket timeout.
+
+    This transport is necessary because HTTPS endpoints use
+    :class:`xmlrpc.client.SafeTransport`, which likewise exposes no timeout
+    parameter, so the connection must be created with an explicit ``timeout``.
+
+    :param timeout: Per-request timeout in seconds.
+    :type timeout: float
+    """
+
+    def __init__(self, timeout: float) -> None:
+        """Store the timeout used when opening each HTTPS connection.
+
+        :param timeout: Per-request timeout in seconds.
+        :type timeout: float
+        :return: None.
+        :rtype: None
+        """
+        super().__init__()
+        self._timeout = timeout
+
+    def make_connection(self, host: Any) -> http.client.HTTPSConnection:
+        """Create a connection whose socket is bounded by the configured timeout.
+
+        :param host: Host specification passed by the XML-RPC machinery.
+        :type host: Any
+        :return: A connection with the configured socket timeout applied.
+        :rtype: http.client.HTTPSConnection
+        """
+        connection = super().make_connection(host)
+        connection.timeout = self._timeout
+        return connection
+
+
+def _make_timeout_transport(url: str, timeout: float) -> xmlrpc.client.Transport:
+    """Build a timeout-bounded XML-RPC transport matching the URL scheme.
+
+    A scheme-aware factory is necessary because HTTPS endpoints require a
+    :class:`xmlrpc.client.SafeTransport` subclass while plain HTTP uses the base
+    :class:`xmlrpc.client.Transport`; both need the socket timeout applied.
+
+    :param url: Base URL of the Odoo server, used to select HTTP vs HTTPS.
+    :type url: str
+    :param timeout: Per-request timeout in seconds.
+    :type timeout: float
+    :return: A transport that bounds each connection with the given timeout.
+    :rtype: xmlrpc.client.Transport
+    """
+    if urlsplit(url).scheme == "https":
+        return _SafeTimeoutTransport(timeout)
+    return _TimeoutTransport(timeout)
 
 
 class OdooRpcExecutor(OdooExecutor):
@@ -20,9 +117,19 @@ class OdooRpcExecutor(OdooExecutor):
     :type username: str
     :param password: Password or API key used for authentication.
     :type password: str
+    :param timeout: Per-request timeout in seconds. Defaults to
+        :data:`DEFAULT_REQUEST_TIMEOUT_SECONDS`.
+    :type timeout: float
     """
 
-    def __init__(self, url: str, db: str, username: str, password: str):
+    def __init__(
+        self,
+        url: str,
+        db: str,
+        username: str,
+        password: str,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    ):
         """Initialize XML-RPC proxies and deferred authentication state.
 
         The constructor is necessary because the transport needs persistent common
@@ -36,6 +143,10 @@ class OdooRpcExecutor(OdooExecutor):
         :type username: str
         :param password: Password or API key used for authentication.
         :type password: str
+        :param timeout: Per-request timeout in seconds bounding how long each call may
+            block on a slow or hung server. Defaults to
+            :data:`DEFAULT_REQUEST_TIMEOUT_SECONDS`.
+        :type timeout: float
         :return: None.
         :rtype: None
         """
@@ -44,8 +155,14 @@ class OdooRpcExecutor(OdooExecutor):
         self.username = username
         self._password = password
 
-        self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
-        self._object = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
+        self._common = xmlrpc.client.ServerProxy(
+            f"{self.url}/xmlrpc/2/common",
+            transport=_make_timeout_transport(self.url, timeout),
+        )
+        self._object = xmlrpc.client.ServerProxy(
+            f"{self.url}/xmlrpc/2/object",
+            transport=_make_timeout_transport(self.url, timeout),
+        )
 
         self._uid = None
         self._lock = threading.Lock()
