@@ -18,6 +18,13 @@ from .errors import (
 )
 from .executor import OdooExecutor
 
+#: Default per-request timeout, in seconds, applied to every JSON-2 HTTP call.
+#:
+#: This bounds the time the SDK will block on a hung or slow Odoo server so that a
+#: stalled socket surfaces as an :class:`OdooTransportError` instead of hanging the
+#: caller forever.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 30.0
+
 
 class OdooJson2Executor(OdooExecutor):
     """Execute Odoo operations over the JSON-2 HTTP API using bearer token auth.
@@ -32,9 +39,18 @@ class OdooJson2Executor(OdooExecutor):
     :type db: str | None
     :param api_key: API key used for bearer token authentication.
     :type api_key: str
+    :param timeout: Per-request timeout in seconds. Defaults to
+        :data:`DEFAULT_REQUEST_TIMEOUT_SECONDS`.
+    :type timeout: float
     """
 
-    def __init__(self, url: str, db: str | None, api_key: str) -> None:
+    def __init__(
+        self,
+        url: str,
+        db: str | None,
+        api_key: str,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
         """Store connection parameters for later use in each request.
 
         The constructor is necessary to capture the URL, optional database name, and
@@ -47,12 +63,17 @@ class OdooJson2Executor(OdooExecutor):
         :type db: str | None
         :param api_key: Bearer token for request authentication.
         :type api_key: str
+        :param timeout: Per-request timeout in seconds bounding how long each call may
+            block on a slow or hung server. Defaults to
+            :data:`DEFAULT_REQUEST_TIMEOUT_SECONDS`.
+        :type timeout: float
         :return: None.
         :rtype: None
         """
         self._url = url.rstrip("/")
         self._db = db
         self._api_key = api_key
+        self._timeout = timeout
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over the Odoo JSON-2 HTTP API.
@@ -110,7 +131,7 @@ class OdooJson2Executor(OdooExecutor):
         )
 
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8")

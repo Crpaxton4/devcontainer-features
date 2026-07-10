@@ -2,7 +2,13 @@ import unittest
 import xmlrpc.client
 from unittest.mock import Mock, patch
 
-from odoo_sdk.transport.rpc import OdooRpcExecutor
+from odoo_sdk.transport.rpc import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OdooRpcExecutor,
+    _make_timeout_transport,
+    _SafeTimeoutTransport,
+    _TimeoutTransport,
+)
 
 
 class TestOdooRpcExecutor(unittest.TestCase):
@@ -149,3 +155,52 @@ class TestOdooRpcExecutor(unittest.TestCase):
             [[("active", "=", True)]],
             {"limit": 3},
         )
+
+
+class TestOdooRpcExecutorTimeout(unittest.TestCase):
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_default_timeout_applied_to_both_proxies(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        transports = [
+            call.kwargs["transport"] for call in mock_server_proxy.call_args_list
+        ]
+        self.assertEqual(len(transports), 2)
+        for transport in transports:
+            self.assertIsInstance(transport, _SafeTimeoutTransport)
+            self.assertEqual(transport._timeout, DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_configured_timeout_applied_to_both_proxies(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        OdooRpcExecutor("https://example.com", "db", "user", "pw", timeout=3.0)
+
+        transports = [
+            call.kwargs["transport"] for call in mock_server_proxy.call_args_list
+        ]
+        for transport in transports:
+            self.assertEqual(transport._timeout, 3.0)
+
+    def test_https_url_selects_safe_transport(self) -> None:
+        transport = _make_timeout_transport("https://example.com", 4.0)
+        self.assertIsInstance(transport, _SafeTimeoutTransport)
+        self.assertEqual(transport._timeout, 4.0)
+
+    def test_http_url_selects_plain_transport(self) -> None:
+        transport = _make_timeout_transport("http://example.com", 4.0)
+        self.assertIsInstance(transport, _TimeoutTransport)
+        self.assertNotIsInstance(transport, _SafeTimeoutTransport)
+        self.assertEqual(transport._timeout, 4.0)
+
+    def test_transport_applies_timeout_to_connection(self) -> None:
+        transport = _TimeoutTransport(6.0)
+        connection = transport.make_connection("example.com")
+        self.assertEqual(connection.timeout, 6.0)
+
+    def test_safe_transport_applies_timeout_to_connection(self) -> None:
+        transport = _SafeTimeoutTransport(6.0)
+        connection = transport.make_connection("example.com")
+        self.assertEqual(connection.timeout, 6.0)
