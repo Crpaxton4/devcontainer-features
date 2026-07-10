@@ -123,7 +123,7 @@ fi
 # differ between the two subcommands (`--reviewer` vs `--add-reviewer`), so
 # build each arg list separately with `set --` to keep quoting intact.
 if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
-    echo "create-pr: PR already exists for '$BRANCH'; updating title/reviewers (body left intact)"
+    echo "create-pr: PR already exists for '$BRANCH'; updating title/reviewers (body left intact)" >&2
     set -- gh pr edit "$BRANCH"
     [ -n "$PR_TITLE" ] && set -- "$@" --title "$PR_TITLE"
     [ -n "$BASE_BRANCH" ] && set -- "$@" --base "$BASE_BRANCH"
