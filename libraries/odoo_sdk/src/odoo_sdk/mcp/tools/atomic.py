@@ -105,6 +105,14 @@ def make_resume_task_tool(registry: Registry):
     return resume_task
 
 
+def make_abort_task_tool(registry: Registry):
+    def abort_task(task_id: int) -> Dict[str, Any]:
+        """Force-close a wedged session without logging hours; drop its timesheet."""
+        return registry["abort_task"].execute(task_id)
+
+    return abort_task
+
+
 def make_task_status_tool(registry: Registry):
     def task_status() -> List[Dict[str, Any]]:
         """Show all actively tracked tasks with elapsed time."""
@@ -213,6 +221,7 @@ ATOMIC_TOOL_FACTORIES = {
     "search_projects": make_search_projects_tool,
     "search_tasks": make_search_tasks_tool,
     "resume_task": make_resume_task_tool,
+    "abort_task": make_abort_task_tool,
     "task_status": make_task_status_tool,
     "task_note": make_task_note_tool,
     "task_list": make_task_list_tool,
