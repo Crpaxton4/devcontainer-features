@@ -208,8 +208,8 @@ def _task_related_stages(client: OdooClient, task_ids: list[int]) -> list[list]:
     records = client.execute(
         "project.task",
         "read",
-        [task_ids],
-        {"fields": ["name", "stage_id"]},
+        task_ids,
+        fields=["name", "stage_id"],
     )
     by_id = {rec["id"]: rec for rec in records}
     rows = []
@@ -228,8 +228,8 @@ def _task_timesheets(client: OdooClient, timesheet_ids: list[int]) -> list[dict]
     records = client.execute(
         "account.analytic.line",
         "read",
-        [timesheet_ids],
-        {"fields": ["date", "employee_id", "unit_amount", "name"]},
+        timesheet_ids,
+        fields=["date", "employee_id", "unit_amount", "name"],
     )
     return [
         {
@@ -249,8 +249,8 @@ def _task_subtasks(client: OdooClient, child_ids: list[int]) -> list[dict]:
     records = client.execute(
         "project.task",
         "read",
-        [child_ids],
-        {"fields": ["name", "stage_id", "user_ids"]},
+        child_ids,
+        fields=["name", "stage_id", "user_ids"],
     )
     return [
         {
