@@ -3,7 +3,7 @@
 This example is intentionally small and explicit.
 
 Why this file exists:
-- The architecture docs move the SDK toward `OdooClient` -> `OdooEnv` ->
+- The architecture docs move the SDK toward `OdooClient` ->
   recordset-oriented behavior.
 - The current implementation now exposes a recordset-first public path directly,
     while `OdooModel` and `OdooQuery` remain compatibility shims.
