@@ -11,7 +11,6 @@ The supported public surface is recordset-first, with
 from . import commands
 from .client import OdooClient
 from .commands import Registry
-from .fields.commands import Command
 from .state import OdooConnectionSettings
 from .query.domain import Domain, DomainExpression
 from .records import OdooRecordset
