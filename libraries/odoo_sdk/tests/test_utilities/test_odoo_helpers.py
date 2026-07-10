@@ -6,6 +6,9 @@ from unittest.mock import MagicMock, patch
 from odoo_sdk.client import OdooClient
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.odoo_helpers import (
+    _task_related_stages,
+    _task_subtasks,
+    _task_timesheets,
     create_timesheet,
     get_employee_id,
     get_task_chatter,
@@ -55,6 +58,87 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
             "subtype_xmlid": subtype_xmlid,
         }
         return 777
+
+
+class _KeywordFieldsReadExecutor(OdooExecutor):
+    """Fake executor mimicking Odoo's positional-ids / keyword-fields split for ``read``.
+
+    ``execute`` forwards positional ``*args`` as the record arguments and
+    ``**kwargs`` as the method options, exactly like ``execute_kw`` does. The
+    stubbed ``read`` takes the record ids positionally and ``fields`` as a
+    keyword-only argument, so a trailing positional ``{"fields": [...]}`` dict
+    (the #166 bug) reaches ``_read`` as a second positional argument and raises
+    ``TypeError`` — reproducing the server-side ``Invalid field 'fields'`` crash
+    locally.
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.recorded: dict[str, Any] = {}
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if method != "read":
+            raise AssertionError(f"unexpected call: {model}.{method}")
+        return self._read(*args, **kwargs)
+
+    def _read(self, ids: list[int], *, fields: list[str]) -> list[dict]:
+        self.recorded = {"ids": ids, "fields": fields}
+        return self._rows
+
+
+class TestReadPassesFieldsAsKeyword(unittest.TestCase):
+    """Regression for #166: the include ``read`` helpers must pass a raw id
+    list positionally and ``fields`` as a keyword, not a trailing positional
+    ``{"fields": [...]}`` dict that Odoo mis-reads as the positional ``fields``
+    argument and crashes on.
+    """
+
+    def test_related_stages_reads_ids_with_keyword_fields(self):
+        executor = _KeywordFieldsReadExecutor(
+            [{"id": 5, "name": "Blocker", "stage_id": [1, "Todo"]}]
+        )
+        client = OdooClient(executor=executor)
+        rows = _task_related_stages(client, [5])
+        self.assertEqual(executor.recorded, {"ids": [5], "fields": ["name", "stage_id"]})
+        self.assertEqual(rows, [[5, "Blocker", "Todo"]])
+
+    def test_timesheets_reads_ids_with_keyword_fields(self):
+        executor = _KeywordFieldsReadExecutor(
+            [
+                {
+                    "id": 7,
+                    "date": "2026-07-01",
+                    "employee_id": [9, "Jane"],
+                    "unit_amount": 2.5,
+                    "name": "Work",
+                }
+            ]
+        )
+        client = OdooClient(executor=executor)
+        rows = _task_timesheets(client, [7])
+        self.assertEqual(
+            executor.recorded,
+            {"ids": [7], "fields": ["date", "employee_id", "unit_amount", "name"]},
+        )
+        self.assertEqual(
+            rows,
+            [{"date": "2026-07-01", "employee": "Jane", "hours": 2.5, "name": "Work"}],
+        )
+
+    def test_subtasks_reads_ids_with_keyword_fields(self):
+        executor = _KeywordFieldsReadExecutor(
+            [{"id": 11, "name": "Sub", "stage_id": [3, "Done"], "user_ids": [4]}]
+        )
+        client = OdooClient(executor=executor)
+        rows = _task_subtasks(client, [11])
+        self.assertEqual(
+            executor.recorded,
+            {"ids": [11], "fields": ["name", "stage_id", "user_ids"]},
+        )
+        self.assertEqual(
+            rows,
+            [{"id": 11, "name": "Sub", "stage": "Done", "assignees": [4]}],
+        )
 
 
 class TestNameSearchProjects(unittest.TestCase):
