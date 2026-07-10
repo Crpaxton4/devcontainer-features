@@ -95,9 +95,9 @@ odoo-mcp
 ### Setup
 
 ```bash
-cd libraries
+cd libraries/odoo_sdk
 uv sync           # install deps + dev groups
-uv run python -m unittest discover -s tests/odoo_sdk -t .   # run tests
+uv run python -m unittest discover -s tests -t .   # run tests
 make coverage     # run tests + enforce 90 % coverage threshold
 ```
 
@@ -178,11 +178,11 @@ devcontainer features test -p ./devcontainer-features -f personal-features --ski
 ### `odoo_sdk`
 
 ```bash
-cd libraries
+cd libraries/odoo_sdk
 uv sync                      # install all dependency groups
 
 # Unit tests
-uv run python -m unittest discover -s tests/odoo_sdk -p "test_*.py" -t .
+uv run python -m unittest discover -s tests -p "test_*.py" -t .
 
 # Coverage (enforces 90 % threshold)
 make coverage
