@@ -141,9 +141,12 @@ def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient)
         print("\nDry run — pass --apply to execute the merge.")
 
 
-def main() -> None:
-    _assert_env()
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with all subcommands declared.
 
+    :returns: Configured parser for the time-tracking companion CLI.
+    :rtype: argparse.ArgumentParser
+    """
     parser = argparse.ArgumentParser(
         prog="python -m odoo_sdk.cli",
         description="Odoo task time-tracking companion CLI",
@@ -164,29 +167,45 @@ def main() -> None:
     normalize_p.add_argument(
         "--apply", action="store_true", help="Execute merge (default: dry run)"
     )
+    return parser
 
-    args = parser.parse_args()
-    if args.command is None:
-        args.command = "list"
 
-    db = TaskStateDB()
+def _dispatch(
+    parser: argparse.ArgumentParser,
+    db: TaskStateDB,
+    args: argparse.Namespace,
+) -> None:
+    """Route parsed arguments to the matching command handler.
 
+    :param parser: Parser used to print help for unknown commands.
+    :type parser: argparse.ArgumentParser
+    :param db: Local task-state database.
+    :type db: TaskStateDB
+    :param args: Parsed CLI arguments.
+    :type args: argparse.Namespace
+    """
     if args.command == "list":
         cmd_list(db, args)
     elif args.command == "stop":
-        client = OdooClient()
-        cmd_stop(db, args, client)
+        cmd_stop(db, args, OdooClient())
     elif args.command == "stop-all":
-        client = OdooClient()
-        cmd_stop_all(db, args, client)
+        cmd_stop_all(db, args, OdooClient())
     elif args.command == "report":
         cmd_report(db, args)
     elif args.command == "normalize":
-        client = OdooClient()
-        cmd_normalize(db, args, client)
+        cmd_normalize(db, args, OdooClient())
     else:
         parser.print_help()
         sys.exit(1)
+
+
+def main() -> None:
+    _assert_env()
+    parser = _build_parser()
+    args = parser.parse_args()
+    if args.command is None:
+        args.command = "list"
+    _dispatch(parser, TaskStateDB(), args)
 
 
 if __name__ == "__main__":
