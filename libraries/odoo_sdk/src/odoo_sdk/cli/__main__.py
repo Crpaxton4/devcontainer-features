@@ -4,10 +4,10 @@ Usage:
     python -m odoo_sdk.cli [subcommand] [args]
 
 Subcommands:
-    list                    Show all active sessions (default)
-    stop <session_id>       Force-stop one active session
-    stop-all                Force-stop all active sessions
-    report [--all]          Formatted table of sessions
+    list                    Show all active runs (default)
+    stop <run_id>           Force-stop one active run
+    stop-all                Force-stop all active runs
+    report [--all]          Formatted table of runs
     normalize [--apply]     Detect and merge duplicate timesheet entries
 """
 
@@ -32,86 +32,86 @@ def _assert_env() -> None:
         sys.exit(1)
 
 
-def _fmt_row(session, *, include_state: bool = True) -> str:
+def _fmt_row(run, *, include_state: bool = True) -> str:
     parts = [
-        f"[{session.id}]",
-        f"{session.task_name[:40]:<40}",
-        f"{session.project_name[:25]:<25}",
+        f"[{run.id}]",
+        f"{run.task_name[:40]:<40}",
+        f"{run.project_name[:25]:<25}",
     ]
     if include_state:
-        parts.append(f"{session.state.value:<18}")
-    parts.append(session.elapsed_human)
+        parts.append(f"{run.state.value:<18}")
+    parts.append(run.elapsed_human)
     return "  ".join(parts)
 
 
 def cmd_list(db: TaskStateDB, _args: argparse.Namespace) -> None:
-    sessions = db.get_all_active_sessions()
-    if not sessions:
-        print("No active sessions.")
+    runs = db.get_all_active_runs()
+    if not runs:
+        print("No active runs.")
         return
     header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
     print(header)
     print("-" * len(header))
-    for s in sessions:
-        print(_fmt_row(s))
+    for r in runs:
+        print(_fmt_row(r))
 
 
 def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
-    session_id: int = args.session_id
-    session = db.get_session_by_id(session_id)
-    if session is None:
-        print(f"Error: no session with id {session_id}.", file=sys.stderr)
+    run_id: int = args.run_id
+    run = db.get_run_by_id(run_id)
+    if run is None:
+        print(f"Error: no run with id {run_id}.", file=sys.stderr)
         sys.exit(1)
-    if session.state == TaskState.STOPPED:
-        print(f"Session {session_id} is already stopped.")
+    if run.state == TaskState.STOPPED:
+        print(f"Run {run_id} is already stopped.")
         return
 
-    description = "[/] Session ended via CLI force-stop"
-    if session.timesheet_id is not None:
-        update_timesheet(client, session.timesheet_id, session.elapsed_hours, description)
+    description = "[/] Run ended via CLI force-stop"
+    if run.timesheet_id is not None:
+        update_timesheet(client, run.timesheet_id, run.elapsed_hours, description)
 
-    stopped = db.stop_session(session.task_id)
+    stopped = db.stop_run(run.task_id)
     print(
-        f"Stopped session {session_id}: {stopped.task_name!r}  "
+        f"Stopped run {run_id}: {stopped.task_name!r}  "
         f"elapsed={stopped.elapsed_human}"
     )
 
 
 def cmd_stop_all(db: TaskStateDB, _args: argparse.Namespace, client: OdooClient) -> None:
-    sessions = db.get_all_active_sessions()
-    if not sessions:
+    runs = db.get_all_active_runs()
+    if not runs:
         print("Nothing to stop.")
         return
-    description = "[/] Session ended via CLI force-stop"
-    for s in sessions:
-        if s.timesheet_id is not None:
-            update_timesheet(client, s.timesheet_id, s.elapsed_hours, description)
-        db.stop_session(s.task_id)
-        print(f"Stopped session {s.id}: {s.task_name!r}  elapsed={s.elapsed_human}")
+    description = "[/] Run ended via CLI force-stop"
+    for r in runs:
+        if r.timesheet_id is not None:
+            update_timesheet(client, r.timesheet_id, r.elapsed_hours, description)
+        db.stop_run(r.task_id)
+        print(f"Stopped run {r.id}: {r.task_name!r}  elapsed={r.elapsed_human}")
 
 
 def cmd_report(db: TaskStateDB, args: argparse.Namespace) -> None:
-    sessions = db.get_all_sessions() if args.all else db.get_all_active_sessions()
-    if not sessions:
-        print("No sessions found.")
+    runs = db.get_all_runs() if args.all else db.get_all_active_runs()
+    if not runs:
+        print("No runs found.")
         return
     header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
     print(header)
     print("-" * len(header))
-    for s in sessions:
-        print(_fmt_row(s))
+    for r in runs:
+        print(_fmt_row(r))
 
 
 def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
     """Detect and optionally merge duplicate timesheet entries for same task+date."""
-    stopped = db.get_stopped_sessions_with_timesheet()
+    stopped = db.get_stopped_runs_with_timesheet()
 
     # Group by (task_id, calendar_date)
     groups: dict[tuple[int, str], list] = {}
-    for s in stopped:
-        day = s.started_at.date().isoformat()
-        key = (s.task_id, day)
-        groups.setdefault(key, []).append(s)
+    for r in stopped:
+        day = r.started_at.date().isoformat()
+        key = (r.task_id, day)
+        groups.setdefault(key, []).append(r)
 
     duplicates = {k: v for k, v in groups.items() if len(v) > 1}
 
@@ -119,10 +119,10 @@ def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient)
         print("No duplicate timesheet entries found.")
         return
 
-    for (task_id, day), sessions in duplicates.items():
-        task_name = sessions[0].task_name
-        total_hours = sum(s.elapsed_hours for s in sessions)
-        ids = [s.timesheet_id for s in sessions if s.timesheet_id]
+    for (task_id, day), runs in duplicates.items():
+        task_name = runs[0].task_name
+        total_hours = sum(r.elapsed_hours for r in runs)
+        ids = [r.timesheet_id for r in runs if r.timesheet_id]
         print(
             f"Task {task_id!r} ({task_name}) on {day}: "
             f"{len(ids)} entries totalling {total_hours:.2f}h  "
@@ -132,9 +132,9 @@ def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient)
             primary = min(ids)
             others = [i for i in ids if i != primary]
             merge_timesheets(client, primary, others)
-            for s in sessions:
-                if s.timesheet_id in others:
-                    db.remap_timesheet_id(s.timesheet_id, primary)
+            for r in runs:
+                if r.timesheet_id in others:
+                    db.remap_timesheet_id(r.timesheet_id, primary)
             print(f"  -> Merged into timesheet {primary}.")
 
     if not args.apply:
@@ -153,15 +153,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("list", help="Show active sessions (default)")
+    subparsers.add_parser("list", help="Show active runs (default)")
 
-    stop_p = subparsers.add_parser("stop", help="Force-stop one session")
-    stop_p.add_argument("session_id", type=int, help="SQLite session id from 'list'")
+    stop_p = subparsers.add_parser("stop", help="Force-stop one run")
+    stop_p.add_argument("run_id", type=int, help="SQLite run id from 'list'")
 
-    subparsers.add_parser("stop-all", help="Force-stop all active sessions")
+    subparsers.add_parser("stop-all", help="Force-stop all active runs")
 
-    report_p = subparsers.add_parser("report", help="Formatted session table")
-    report_p.add_argument("--all", action="store_true", help="Include STOPPED sessions")
+    report_p = subparsers.add_parser("report", help="Formatted run table")
+    report_p.add_argument("--all", action="store_true", help="Include STOPPED runs")
 
     normalize_p = subparsers.add_parser("normalize", help="Merge duplicate timesheets")
     normalize_p.add_argument(

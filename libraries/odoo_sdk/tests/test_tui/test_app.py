@@ -76,7 +76,7 @@ def _registry(query_result=None, store=None):
             "query_sessions": FakeCommand(
                 result=query_result or _sessions(), state=store
             ),
-            "start_task": FakeCommand(result={"session_id": 1}),
+            "start_task": FakeCommand(result={"run_id": 1}),
             "stop_task": FakeCommand(
                 result={"elapsed_hours": 1.0},
                 state=MagicMock(),

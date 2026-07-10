@@ -27,21 +27,21 @@ class TaskQuestionCommand(Command):
         """
         assert_odoo_devcontainer()
         db = TaskStateDB()
-        session = db.get_active_session(task_id)
-        if session is None:
+        run = db.get_active_run(task_id)
+        if run is None:
             raise TaskNotRunningError(f"No active session for task {task_id}.")
 
         body = f"[?] {question}"
         message_id = post_chatter_note(self._client, task_id, body)
 
-        if session.state == TaskState.RUNNING:
-            session = db.transition_to_awaiting(task_id)
+        if run.state == TaskState.RUNNING:
+            run = db.transition_to_awaiting(task_id)
 
         emit_agent_event(db, task_id, f"task_question: {question}")
 
         return {
-            "task_name": session.task_name,
+            "task_name": run.task_name,
             "message_id": message_id,
             "question": question,
-            "state": session.state.value,
+            "state": run.state.value,
         }

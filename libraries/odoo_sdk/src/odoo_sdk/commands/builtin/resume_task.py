@@ -25,17 +25,17 @@ class ResumeTaskCommand(Command):
         """
         assert_odoo_devcontainer()
         db = TaskStateDB()
-        session = db.transition_to_running(task_id)
+        run = db.transition_to_running(task_id)
         post_chatter_note(
             self._client,
             task_id,
             "Resuming implementation with received answers.",
         )
-        emit_agent_event(db, task_id, f"resume_task: {session.task_name}")
+        emit_agent_event(db, task_id, f"resume_task: {run.task_name}")
         resumed_at = datetime.now(timezone.utc).isoformat()
         return {
-            "task_name": session.task_name,
-            "project_name": session.project_name,
-            "state": session.state.value,
+            "task_name": run.task_name,
+            "project_name": run.project_name,
+            "state": run.state.value,
             "resumed_at": resumed_at,
         }

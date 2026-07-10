@@ -96,8 +96,8 @@ class TestSessionWindowStore(unittest.TestCase):
     def test_coexists_with_fsm_store(self):
         db = _tmp_db()
         db.add_event(_event(0))
-        session = db.create_session(1, "Task 1", 10, "Proj", timesheet_id=5)
-        self.assertIsNotNone(session.id)
+        run = db.create_run(1, "Task 1", 10, "Proj", timesheet_id=5)
+        self.assertIsNotNone(run.id)
         self.assertEqual(len(db.get_events()), 1)
 
 

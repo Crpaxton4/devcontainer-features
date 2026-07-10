@@ -14,7 +14,7 @@ from .models import (
     SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
-    TaskSession,
+    TaskRun,
     TaskState,
 )
 
@@ -24,7 +24,7 @@ __all__ = [
     "LocalConfig",
     "OdooConnectionSettings",
     "TaskState",
-    "TaskSession",
+    "TaskRun",
     "EventRecord",
     "SessionWindow",
     "TaskAlreadyRunningError",

@@ -25,8 +25,8 @@ class TaskNoteCommand(Command):
         """
         assert_odoo_devcontainer()
         db = TaskStateDB()
-        session = db.get_active_session(task_id)
-        if session is None:
+        run = db.get_active_run(task_id)
+        if run is None:
             from odoo_sdk.state import TaskNotRunningError
             raise TaskNotRunningError(f"No active session for task {task_id}.")
 
@@ -34,7 +34,7 @@ class TaskNoteCommand(Command):
         db.append_note(task_id, note)
         emit_agent_event(db, task_id, f"task_note: {note}")
         return {
-            "task_name": session.task_name,
+            "task_name": run.task_name,
             "message_id": message_id,
             "note": note,
         }
