@@ -311,6 +311,25 @@ class TestPostChatterNote(unittest.TestCase):
         )
 
 
+class _RecordingExecutor(OdooExecutor):
+    """Fake executor that records every ``execute`` call and services ``read``.
+
+    Real ``OdooClient`` execution runs through this so the system-wide
+    ``forbid_unlink`` guard is exercised: an ``unlink`` would raise, and any
+    call the code issues is captured in ``calls`` for assertions.
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((model, method, args, kwargs))
+        if method == "read":
+            return self._rows
+        return None
+
+
 class TestMergeTimesheets(unittest.TestCase):
     def test_sums_hours_and_joins_descriptions(self):
         client = _client()
@@ -320,12 +339,13 @@ class TestMergeTimesheets(unittest.TestCase):
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work A"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
             ],
-            None,  # write
+            None,  # primary write
+            None,  # zero-out write on merged-in rows
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
-        # Merge is now read + write only; deletion of merged-in rows is
-        # purposefully not implemented (rows are left in place).
-        self.assertEqual(client.execute.call_count, 2)
+        # Merge is read + primary write + zero-out write of the merged-in rows;
+        # the merged-in rows are kept in place (no ``unlink``).
+        self.assertEqual(client.execute.call_count, 3)
         write_call = client.execute.call_args_list[1]
         self.assertEqual(write_call.args[0], "account.analytic.line")
         self.assertEqual(write_call.args[1], "write")
@@ -334,6 +354,35 @@ class TestMergeTimesheets(unittest.TestCase):
         self.assertIn("Work A", vals["name"])
         self.assertIn("Work B", vals["name"])
 
+    def test_zeros_merged_rows_and_never_unlinks(self):
+        # #185 regression: merged-in rows must contribute 0 hours afterwards
+        # WITHOUT deletion. The primary keeps the summed hours, each source row
+        # is zeroed via a single ``write``, and no ``unlink`` is ever issued.
+        executor = _RecordingExecutor(
+            [
+                {"id": 1, "unit_amount": 1.0, "name": "[/] Work A"},
+                {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
+                {"id": 3, "unit_amount": 0.25, "name": "[/] Work C"},
+            ]
+        )
+        client = OdooClient(executor=executor)
+        merge_timesheets(client, primary_id=1, ids_to_merge=[2, 3])
+
+        methods = [method for _, method, _, _ in executor.calls]
+        self.assertNotIn("unlink", methods)
+
+        primary_write = executor.calls[1]
+        self.assertEqual(primary_write[0], "account.analytic.line")
+        self.assertEqual(primary_write[1], "write")
+        self.assertEqual(primary_write[2][0], [[1]])
+        self.assertAlmostEqual(primary_write[2][1]["unit_amount"], 1.75)
+
+        zero_write = executor.calls[2]
+        self.assertEqual(zero_write[0], "account.analytic.line")
+        self.assertEqual(zero_write[1], "write")
+        self.assertEqual(zero_write[2][0], [[2, 3]])
+        self.assertEqual(zero_write[2][1]["unit_amount"], 0.0)
+
     def test_no_merge_when_no_others(self):
         client = _client()
         client.execute.side_effect = [
@@ -341,7 +390,7 @@ class TestMergeTimesheets(unittest.TestCase):
             None,  # write
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[])
-        # Only 2 calls: read + write.
+        # Empty ids_to_merge: only read + primary write; no zero-out write.
         self.assertEqual(client.execute.call_count, 2)
 
     def test_skips_in_progress_descriptions(self):
@@ -351,7 +400,8 @@ class TestMergeTimesheets(unittest.TestCase):
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work in progress"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Real work"},
             ],
-            None,
+            None,  # primary write
+            None,  # zero-out write
         ]
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
         write_call = client.execute.call_args_list[1]
