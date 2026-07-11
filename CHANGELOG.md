@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.17.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.16.1...personal-features-v1.17.0) (2026-07-10)
+
+
+### Features
+
+* **odoo-sdk:** add abort_task tool to force-close wedged sessions ([#183](https://github.com/Crpaxton4/devcontainer-features/issues/183)) ([2454a1a](https://github.com/Crpaxton4/devcontainer-features/commit/2454a1a2b15b4a44f4e5e507c41d808647c74ed4))
+* **odoo-sdk:** add optional description arg to report_incident prompt ([#182](https://github.com/Crpaxton4/devcontainer-features/issues/182)) ([8eeed8d](https://github.com/Crpaxton4/devcontainer-features/commit/8eeed8d60a24ee548895804acb49f75f001b3e8f))
+
+
+### Bug Fixes
+
+* **ci:** run mutation-testing SHA resolve step before checkout in workspace root ([#192](https://github.com/Crpaxton4/devcontainer-features/issues/192)) ([41b8c10](https://github.com/Crpaxton4/devcontainer-features/commit/41b8c109569576efe8cde6b39fe668f6e9e3624d))
+* **odoo-sdk:** zero merged timesheet rows instead of deleting ([#185](https://github.com/Crpaxton4/devcontainer-features/issues/185)) ([#187](https://github.com/Crpaxton4/devcontainer-features/issues/187)) ([4badba1](https://github.com/Crpaxton4/devcontainer-features/commit/4badba1cc4b2fbc45d4f4e316f2857ed07fe9e23))
+
 ## [1.16.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.16.0...personal-features-v1.16.1) (2026-07-10)
 
 
