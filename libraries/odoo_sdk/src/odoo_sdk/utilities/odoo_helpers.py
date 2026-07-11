@@ -130,7 +130,7 @@ def update_timesheet(
     client.execute(
         "account.analytic.line",
         "write",
-        [[timesheet_id]],
+        [timesheet_id],
         {"unit_amount": unit_amount, "name": description},
     )
 
@@ -382,6 +382,6 @@ def merge_timesheets(
         client.execute(
             "account.analytic.line",
             "write",
-            [ids_to_merge],
+            ids_to_merge,
             {"unit_amount": 0.0, "name": "[merged] " + merged_desc},
         )
