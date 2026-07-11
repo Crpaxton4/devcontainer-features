@@ -149,7 +149,7 @@ class TestReconcile(unittest.TestCase):
         writes = executor.writes()
         self.assertEqual(len(writes), 1)
         ids_arg, vals_arg = writes[0][2]
-        self.assertEqual(ids_arg, [[50]])
+        self.assertEqual(ids_arg, [50])
         self.assertEqual(vals_arg, {"unit_amount": 1.5, "name": "[/] Done"})
 
     def test_falls_back_to_odoo_lookup_when_no_active_session(self):
@@ -181,8 +181,61 @@ class TestReconcile(unittest.TestCase):
         writes = executor.writes()
         self.assertEqual(len(writes), 2)
         for write in writes:
-            self.assertEqual(write[2][0], [[50]])  # same id both times
+            self.assertEqual(write[2][0], [50])  # same id both times
         self.assertEqual(executor.creates(), [])  # never creates
+
+    def test_write_ids_are_flat_scalars_not_nested_lists(self):
+        # Regression for #193 (resurfaced #176/#167): ``stop_task`` -> reconcile
+        # -> ``account.analytic.line.write`` must pass the ids as a FLAT list of
+        # scalar ints. A double-wrapped ``[[id]]`` makes Odoo ``browse([[id]])``,
+        # so ``record._ids[0]`` is itself a list; the stock timesheet write hashes
+        # it as a field-cache key and dies with ``TypeError: unhashable type:
+        # 'list'``. The strict fake below mimics that browse-and-hash exactly.
+        executor = _StrictBrowseHashExecutor()
+        client = OdooClient(executor=executor)
+        db = _tmp_db()
+        db.create_run(10, "Bug", 5, "Proj", timesheet_id=50)
+
+        # The old ``[[50]]`` shape would raise here; the fix keeps it flat.
+        result = reconcile(
+            client, db, task_id=10, description="[/] Done", elapsed_hours=1.5
+        )
+
+        self.assertEqual(result, 50)
+        ids_arg = executor.write_ids
+        self.assertEqual(ids_arg, [50])
+        # Every id handed to ``write`` must be a hashable scalar, never a list.
+        for rec_id in ids_arg:
+            self.assertNotIsInstance(rec_id, list)
+            self.assertIsInstance(rec_id, int)
+
+
+class _StrictBrowseHashExecutor(OdooExecutor):
+    """Fake executor that reproduces Odoo's browse-and-hash on ``write`` ids.
+
+    Odoo turns the write's positional ids list into a recordset and later uses
+    each id as a *dict key* when reading a related field's cache
+    (``field_cache[record._ids[0]]``). A nested ``[id]`` element is therefore an
+    unhashable dict key. This fake hashes each id exactly the way the ORM would,
+    so a double-wrapped ``[[id]]`` raises ``TypeError: unhashable type: 'list'``
+    (the #193 crash) while a flat ``[id]`` passes.
+    """
+
+    def __init__(self, existing: list[dict] | None = None):
+        self._existing = existing or []
+        self.write_ids: Any = None
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "search_read":
+            return list(self._existing)
+        if method == "write":
+            ids = args[0]
+            self.write_ids = ids
+            # Mimic ``field_cache[record._ids[0]]``: each id becomes a dict key.
+            # A list id is unhashable and raises exactly the #193 TypeError.
+            {rec_id: None for rec_id in ids}
+            return True
+        raise AssertionError(f"unexpected call: {model}.{method}")
 
 
 class TestEmitAgentEvent(unittest.TestCase):

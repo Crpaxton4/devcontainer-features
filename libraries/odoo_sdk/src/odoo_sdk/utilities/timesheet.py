@@ -165,7 +165,7 @@ def reconcile(
     client.execute(
         "account.analytic.line",
         "write",
-        [[timesheet_id]],
+        [timesheet_id],
         {"unit_amount": elapsed_hours, "name": description},
     )
     return timesheet_id
