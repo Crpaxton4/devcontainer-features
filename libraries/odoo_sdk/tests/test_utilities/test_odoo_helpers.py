@@ -262,7 +262,7 @@ class TestUpdateTimesheet(unittest.TestCase):
         client.execute.assert_called_once_with(
             "account.analytic.line",
             "write",
-            [[50]],
+            [50],
             {"unit_amount": 1.5, "name": "[/] Done"},
         )
 
@@ -374,13 +374,13 @@ class TestMergeTimesheets(unittest.TestCase):
         primary_write = executor.calls[1]
         self.assertEqual(primary_write[0], "account.analytic.line")
         self.assertEqual(primary_write[1], "write")
-        self.assertEqual(primary_write[2][0], [[1]])
+        self.assertEqual(primary_write[2][0], [1])
         self.assertAlmostEqual(primary_write[2][1]["unit_amount"], 1.75)
 
         zero_write = executor.calls[2]
         self.assertEqual(zero_write[0], "account.analytic.line")
         self.assertEqual(zero_write[1], "write")
-        self.assertEqual(zero_write[2][0], [[2, 3]])
+        self.assertEqual(zero_write[2][0], [2, 3])
         self.assertEqual(zero_write[2][1]["unit_amount"], 0.0)
 
     def test_no_merge_when_no_others(self):
