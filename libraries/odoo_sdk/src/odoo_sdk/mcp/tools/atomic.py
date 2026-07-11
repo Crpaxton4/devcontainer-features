@@ -71,6 +71,25 @@ def make_get_task_chatter_tool(registry: Registry):
     return get_task_chatter
 
 
+def make_get_task_attachments_tool(registry: Registry):
+    def get_task_attachments(
+        task_id: int, include_content: bool = False
+    ) -> List[dict]:
+        """List a task's attachments from both the task and its chatter.
+
+        Each entry always carries metadata: ``id``, ``name``, ``mimetype``,
+        ``file_size``, ``create_date``, and ``source`` (``task`` or ``message``),
+        deduped by attachment id. Raw bytes are opt-in: with the default
+        ``include_content=False`` the base64 ``datas`` payload is omitted to keep
+        the call cheap; set ``True`` to include it.
+        """
+        return registry["get_task_attachments"].execute(
+            task_id, include_content=include_content
+        )
+
+    return get_task_attachments
+
+
 def make_create_task_tool(registry: Registry):
     def create_task(name: str, project_id: int, description: str = "") -> int:
         """Create a project task with standard default values."""
@@ -217,6 +236,7 @@ ATOMIC_TOOL_FACTORIES = {
     "get_todo": make_get_todo_tool,
     "get_task": make_get_task_tool,
     "get_task_chatter": make_get_task_chatter_tool,
+    "get_task_attachments": make_get_task_attachments_tool,
     "create_task": make_create_task_tool,
     "search_projects": make_search_projects_tool,
     "search_tasks": make_search_tasks_tool,

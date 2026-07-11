@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin.get_task import GetTaskCommand
+from odoo_sdk.commands.builtin.get_task_attachments import GetTaskAttachmentsCommand
 from odoo_sdk.commands.builtin.get_task_chatter import GetTaskChatterCommand
 from odoo_sdk.commands.builtin.resume_task import ResumeTaskCommand
 from odoo_sdk.commands.builtin.search_projects import SearchProjectsCommand
@@ -67,6 +68,32 @@ class TestGetTaskChatterCommand(unittest.TestCase):
         ) as mock_chatter:
             GetTaskChatterCommand(client).execute(task_id=10, limit=5)
         mock_chatter.assert_called_once_with(client, 10, limit=5)
+
+
+# ── GetTaskAttachmentsCommand ─────────────────────────────────────────────────
+
+class TestGetTaskAttachmentsCommand(unittest.TestCase):
+    def test_delegates_to_helper(self):
+        client = _client()
+        expected = [{"id": 1, "name": "file.png", "source": "task"}]
+        with patch(
+            "odoo_sdk.commands.builtin.get_task_attachments.get_task_attachments",
+            return_value=expected,
+        ) as mock_helper:
+            result = GetTaskAttachmentsCommand(client).execute(task_id=42)
+        mock_helper.assert_called_once_with(client, 42, include_content=False)
+        self.assertEqual(result, expected)
+
+    def test_passes_include_content(self):
+        client = _client()
+        with patch(
+            "odoo_sdk.commands.builtin.get_task_attachments.get_task_attachments",
+            return_value=[],
+        ) as mock_helper:
+            GetTaskAttachmentsCommand(client).execute(
+                task_id=10, include_content=True
+            )
+        mock_helper.assert_called_once_with(client, 10, include_content=True)
 
 
 # ── GetTaskCommand ────────────────────────────────────────────────────────────
