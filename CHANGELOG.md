@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.18.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.17.0...personal-features-v1.18.0) (2026-07-11)
+
+
+### Features
+
+* **odoo-sdk:** add get_task_attachments MCP tool ([#196](https://github.com/Crpaxton4/devcontainer-features/issues/196)) ([6e940e5](https://github.com/Crpaxton4/devcontainer-features/commit/6e940e535de19c66d04ffb5891ec6bd2e3ca4b45)), closes [#191](https://github.com/Crpaxton4/devcontainer-features/issues/191)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** flatten timesheet write ids to unwedge stop_task ([#195](https://github.com/Crpaxton4/devcontainer-features/issues/195)) ([3dc89f6](https://github.com/Crpaxton4/devcontainer-features/commit/3dc89f654e7e8ab0528bfd89f4bad639ff5b094e)), closes [#193](https://github.com/Crpaxton4/devcontainer-features/issues/193)
+
 ## [1.17.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.16.1...personal-features-v1.17.0) (2026-07-10)
 
 
