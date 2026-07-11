@@ -11,6 +11,7 @@ from .abort_task import AbortTaskCommand
 from .create_task import CreateTaskCommand
 from .get_models import GetModelsCommand
 from .get_task import GetTaskCommand
+from .get_task_attachments import GetTaskAttachmentsCommand
 from .get_task_chatter import GetTaskChatterCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
@@ -35,6 +36,7 @@ BUILTIN_COMMANDS = {
     "get_todo": GetTodoCommand,
     "get_task": GetTaskCommand,
     "get_task_chatter": GetTaskChatterCommand,
+    "get_task_attachments": GetTaskAttachmentsCommand,
     "create_task": CreateTaskCommand,
     "search_projects": SearchProjectsCommand,
     "search_tasks": SearchTasksCommand,
@@ -75,6 +77,7 @@ __all__ = [
     "GetTodoCommand",
     "GetTaskCommand",
     "GetTaskChatterCommand",
+    "GetTaskAttachmentsCommand",
     "CreateTaskCommand",
     "SearchProjectsCommand",
     "SearchTasksCommand",
