@@ -8,8 +8,7 @@
     "ghcr.io/devcontainers/features/node:1": {
       "version": "lts"
     },
-    "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
-    "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
+    "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {}
   },
   // Pinned to match DEVCONTAINERS_CLI_VERSION in .github/workflows/test.yaml.
   // Refresh both together when bumping (no shared source across the two files).
@@ -36,7 +35,9 @@
       "settings": {
         "json.schemas": [
           {
-            "fileMatch": ["*/devcontainer-feature.json"],
+            "fileMatch": [
+              "*/devcontainer-feature.json"
+            ],
             "url": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainerFeature.schema.json"
           }
         ],
@@ -55,11 +56,16 @@
             "source.organizeImports": "explicit"
           }
         },
-        "isort.args": ["--profile", "black"],
+        "isort.args": [
+          "--profile",
+          "black"
+        ],
         "python.testing.pytestEnabled": true,
         "python.testing.unittestEnabled": false,
         "python.testing.cwd": "${workspaceFolder}/libraries/odoo_sdk",
-        "python.testing.pytestArgs": ["tests"],
+        "python.testing.pytestArgs": [
+          "tests"
+        ],
         "testing.coverageToolbarEnabled": false,
         "testing.gutterEnabled": true,
         "testing.showCoverageInExplorer": true,
