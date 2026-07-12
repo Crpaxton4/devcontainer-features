@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.18.0...personal-features-v1.18.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **personal-features:** make bind mounts work on Windows hosts ([#253](https://github.com/Crpaxton4/devcontainer-features/issues/253)) ([6e18a70](https://github.com/Crpaxton4/devcontainer-features/commit/6e18a7063ceaf1d2a82237e9b83811bb34d49836)), closes [#198](https://github.com/Crpaxton4/devcontainer-features/issues/198)
+
 ## [1.18.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.17.0...personal-features-v1.18.0) (2026-07-11)
 
 
