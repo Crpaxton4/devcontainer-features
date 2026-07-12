@@ -34,26 +34,37 @@ Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` 
 
 ## One-time host setup
 
-Run the repo's `setup.sh` once per machine before starting any dev container that uses this Feature:
+Run the repo's setup script once per machine, **before** starting any dev container that uses this Feature. Use the one that matches the host you launch VS Code from:
 
 ```sh
-./setup.sh
+./setup.sh      # Linux, WSL, macOS
 ```
 
-This creates the host-side directories and files that are bind-mounted into the container:
-
-```
-~/.claude              — Claude Code auth and settings
-~/.config/gh           — gh CLI auth and settings
-~/.config/pr-automation — create-pr config (global.yaml + projects/)
-~/.config/coderabbit   — CodeRabbit CLI config/auth state
-~/.bash_history        — bash history file
-~/.zsh_history         — zsh history file
+```powershell
+.\setup.ps1     # native Windows host
 ```
 
-It's safe to re-run — `mkdir -p` and `touch` are no-ops when targets already exist.
+If PowerShell refuses to run it ("running scripts is disabled on this system"), use `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
 
-If you skip this step, `install.sh` creates these paths as fallbacks at build time, so the feature still works — but they'll be local to the container image layer rather than bind-mounted from your host home directory, and they won't persist across rebuilds.
+This creates the host-side directories that are bind-mounted into the container:
+
+```
+~/.claude                            — Claude Code auth and settings
+~/.config/gh                         — gh CLI auth and settings
+~/.config/odoo_sdk                   — odoo_sdk connection config
+~/.config/pr-automation              — create-pr config (global.yaml + projects/)
+~/.config/coderabbit                 — CodeRabbit CLI config/auth state
+~/.config/devcontainer/shell-history — bash history
+```
+
+It's safe to re-run — creating an existing directory is a no-op.
+
+**This step is not optional.** A bind mount whose source doesn't exist on the host is a hard container-create failure, not a fallback:
+
+```
+docker: Error response from daemon: invalid mount config for type "bind":
+bind source path does not exist: /home/you/.claude
+```
 
 ## What persists, and where
 
@@ -61,9 +72,30 @@ Config and history are bind-mounted from your host home directory into fixed con
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
+- `~/.config/odoo_sdk` (host) → `/usr/local/share/odoo-sdk-config` (container) — `odoo_sdk_CONFIG` points at `config.ini` inside it.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
-- `~/.bash_history` / `~/.zsh_history` (host) → `/usr/local/share/shell-history/bash_history|zsh_history` (container) — symlinked from `~/.bash_history` / `~/.zsh_history` in the container, so shell history follows you across rebuilds.
 - `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
+- `~/.config/devcontainer/shell-history` (host) → `/usr/local/share/shell-history` (container) — `HISTFILE` points at `bash_history` inside it, and `~/.bash_history` is symlinked to it, so bash history follows you across rebuilds and is shared across containers. Only bash is wired up; there is no zsh support.
+
+A caveat on the history mount: bash silently drops history if it can't write `HISTFILE`. That's fine by default — Docker Desktop bind mounts are world-writable, and on Linux the dev container CLI remaps the container user to your host uid. But if you set `"updateRemoteUserUID": false` with a non-root `remoteUser` whose uid doesn't match yours on the host, history writes fail without an error.
+
+## Windows and WSL
+
+Mount sources are written as `${localEnv:HOME}${localEnv:USERPROFILE}/...`. The devcontainer spec has no conditional, so this relies on exactly one of the two being defined: Windows sets `USERPROFILE`, Linux/WSL/macOS set `HOME`. They concatenate into a valid path either way.
+
+That leaves one sharp edge. **If `HOME` is set on Windows too, both expand** and the mount source becomes garbage — `/c/Users/you` + `C:\Users\you` + `/.claude` — and the container fails to start with a mount error naming a source that contains *both* `/c/Users/...` and `C:\Users\...`. Git Bash sets `HOME` inside its own shell, so launching VS Code with `code .` from Git Bash leaks it; a `HOME` persisted as a User/Machine variable leaks into every launch. Fix it by removing the persisted `HOME`, or by launching VS Code from PowerShell or the Start menu. `setup.ps1` warns when it detects this.
+
+Mounts resolve against whatever environment launches VS Code, not against where the repo lives. If you open a folder through Remote-WSL, the container mounts the **WSL** home directory — so run `setup.sh` inside WSL, not `setup.ps1` in PowerShell.
+
+## Migrating shell history
+
+Shell history used to be a single-file bind mount of the host's own `~/.bash_history`. It's now a directory mount (`~/.config/devcontainer/shell-history`), because Docker Desktop materialises a missing single-file mount source as a *directory*, which then fails the mount.
+
+Two consequences: your existing history won't appear in the container, and container history no longer writes back into your host shell's history. To carry the old history over:
+
+```sh
+cp ~/.bash_history ~/.config/devcontainer/shell-history/bash_history
+```
 
 ## CodeRabbit CLI
 
@@ -163,15 +195,15 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
 - [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Two manual steps are required because devcontainer Features cannot add mounts or run per-user Claude commands:
 
-  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target the container user's home (`/root` when running as root):
+  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target the container user's home (`/root` when running as root). Note the `${localEnv:HOME}${localEnv:USERPROFILE}` prefix — same reason as the Feature's own mounts, see [Windows and WSL](#windows-and-wsl):
 
      ```jsonc
      "mounts": [
-         "source=${localEnv:HOME}/.mempalace,target=/root/.mempalace,type=bind,consistency=cached"
+         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace,target=/root/.mempalace,type=bind,consistency=cached"
      ]
      ```
 
-     Create the host directory once (`mkdir -p ~/.mempalace`) before first launch.
+     Create the host directory once before first launch — `mkdir -p ~/.mempalace`, or `New-Item -ItemType Directory -Force "$env:USERPROFILE\.mempalace"` in PowerShell.
 
   2. **Plugin registration (one-time)** — inside the container, register the Claude Code plugin at user scope so its Stop/SessionEnd/PreCompact hooks fire automatically:
 
