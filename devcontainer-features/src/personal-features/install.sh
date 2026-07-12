@@ -260,23 +260,50 @@ wait
 # Font glyphs), extra modules useful for Odoo dev work.
 cp "$(dirname "$0")/starship.toml" /usr/local/share/starship.toml
 
+# Shell history is bind-mounted as a *directory*, not a single file (#198):
+# Docker Desktop materialises a missing single-file mount source as a directory
+# on the host, which then fails the mount. Nothing written here survives at
+# runtime - the mount masks this whole dir - but creating it keeps the feature
+# working in test containers, which run with no mounts active. Against an empty
+# host dir the symlink below is briefly dangling; that is fine and self-heals,
+# because bash opens HISTFILE with O_CREAT, which follows the symlink and
+# creates the target. (readlink -f resolves it either way: only the components
+# *before* the last have to exist.)
 SHELL_HISTORY_DIR="/usr/local/share/shell-history"
+BASH_HISTORY_FILE="$SHELL_HISTORY_DIR/bash_history"
 mkdir -p "$SHELL_HISTORY_DIR"
-touch "$SHELL_HISTORY_DIR/bash_history"
+touch "$BASH_HISTORY_FILE"
 rm -f "$_REMOTE_USER_HOME/.bash_history"
-ln -s "$SHELL_HISTORY_DIR/bash_history" "$_REMOTE_USER_HOME/.bash_history"
+ln -s "$BASH_HISTORY_FILE" "$_REMOTE_USER_HOME/.bash_history"
 chown -R "$_REMOTE_USER" "$SHELL_HISTORY_DIR"
+chown -h "$_REMOTE_USER" "$_REMOTE_USER_HOME/.bash_history"
 
+# HISTFILE is set system-wide rather than relying on the symlink above, which
+# only covers $_REMOTE_USER's home: this way history is persisted for every user
+# in the container (root, vscode, su'd shells). histappend is a correctness fix,
+# not polish - without it bash *truncates* HISTFILE on exit and rewrites it from
+# its in-memory list, so with the file now shared across concurrent containers
+# one shell exiting would wipe another's history. `history -a` flushes after
+# each command, so history also survives a killed container, not just a clean
+# exit.
 if ! grep -qF "# >>> personal-features >>>" /etc/bash.bashrc 2>/dev/null; then
     printf '\n' >> /etc/bash.bashrc
     cat >> /etc/bash.bashrc << 'EOF'
 # >>> personal-features >>>
 export STARSHIP_CONFIG=/usr/local/share/starship.toml
+export HISTFILE=/usr/local/share/shell-history/bash_history
+export HISTSIZE=10000
+export HISTFILESIZE=100000
+shopt -s histappend
 command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init bash)"
 command -v bat >/dev/null 2>&1 && alias cat=bat
 command -v fd >/dev/null 2>&1 && alias find=fd
 command -v eza >/dev/null 2>&1 && alias ls=eza
+# Must come last: `starship init` and `zoxide init` both *overwrite*
+# PROMPT_COMMAND, so setting this any earlier silently loses the flush and
+# history would only be written on a clean exit.
+PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 # <<< personal-features <<<
 EOF
 fi

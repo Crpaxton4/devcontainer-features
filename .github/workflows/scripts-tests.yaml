@@ -9,6 +9,11 @@ on:
     paths:
       - '.github/scripts/**'
       - '.github/workflows/scripts-tests.yaml'
+      # test_host_setup_parity.py gates these three against each other, so it has
+      # to run when any of them changes - not only when the scripts dir does.
+      - 'devcontainer-features/src/personal-features/devcontainer-feature.json'
+      - 'setup.sh'
+      - 'setup.ps1'
   workflow_dispatch:
 
 jobs:
@@ -24,3 +29,21 @@ jobs:
 
       - name: Run unit tests (stdlib unittest)
         run: python -m unittest discover -s .github/scripts -p "test_*.py"
+
+      # There is no Windows runner, so setup.ps1 is otherwise only ever checked
+      # statically (by test_host_setup_parity.py). pwsh is preinstalled on
+      # ubuntu-latest, and setup.ps1 falls back to $HOME when USERPROFILE is
+      # unset, so it runs here - catching syntax and logic errors that parsing
+      # the $paths list can't.
+      - name: "Smoke-test setup.ps1 under pwsh"
+        run: |
+          scratch="$(mktemp -d)"
+          HOME="$scratch" pwsh -NoProfile -File ./setup.ps1
+          for dir in .claude .config/gh .config/odoo_sdk \
+                     .config/pr-automation/projects .config/coderabbit \
+                     .config/devcontainer/shell-history; do
+              if [ ! -d "$scratch/$dir" ]; then
+                  echo "setup.ps1 did not create $dir" >&2
+                  exit 1
+              fi
+          done

@@ -4,7 +4,7 @@ This repo holds two packages: a devcontainer [Features](https://containers.dev/i
 
 ## `personal-features`
 
-Personal dev container tooling, meant to be added as a default Feature across projects. Currently it installs [Claude Code](https://code.claude.com/docs) and wraps the `claude` command so a default session automatically connects to the IDE (`--ide`), since this Feature is meant purely for use inside a VS Code dev container. It also persists Claude Code's and the GitHub CLI's auth/config in named Docker volumes shared across every project on the machine, so logging in once is enough.
+Personal dev container tooling, meant to be added as a default Feature across projects. Currently it installs [Claude Code](https://code.claude.com/docs) and wraps the `claude` command so a default session automatically connects to the IDE (`--ide`), since this Feature is meant purely for use inside a VS Code dev container. It also persists Claude Code's and the GitHub CLI's auth/config by bind-mounting them from your host home directory, shared across every project on the machine, so logging in once is enough.
 
 It pairs with the official Node.js and GitHub CLI Features, which it doesn't reimplement.
 
@@ -29,14 +29,32 @@ $ claude mcp
 # subcommands are passed through untouched
 ```
 
+### One-time host setup
+
+The Feature bind-mounts config from your host home directory, and a bind mount whose source doesn't exist is a hard container-create failure. Create the paths once per machine:
+
+```sh
+./setup.sh      # Linux, WSL, macOS
+```
+
+```powershell
+.\setup.ps1     # native Windows host
+```
+
+Run this before `devcontainer features test` too, or the test containers fail to start on the missing mount sources.
+
 ### What persists, and where
 
-| Volume | Mounted at | Used for |
+| Host path | Mounted at | Used for |
 | --- | --- | --- |
-| `personal-features-claude-config` | `/usr/local/share/claude-code-home` | `~/.claude` and `~/.claude.json` are symlinked here — Claude Code's auth (`~/.claude/.credentials.json`) and settings survive rebuilds and follow you across projects. |
-| `personal-features-gh-config` | `/usr/local/share/gh-cli-config` | Set as `GH_CONFIG_DIR` for the gh CLI. |
+| `~/.claude` | `/usr/local/share/claude-home` | `CLAUDE_CONFIG_DIR` — Claude Code's auth (`.credentials.json`) and settings. |
+| `~/.config/gh` | `/usr/local/share/gh-cli-config` | `GH_CONFIG_DIR` — so `gh auth login` happens once per machine. |
+| `~/.config/odoo_sdk` | `/usr/local/share/odoo-sdk-config` | `odoo_sdk_CONFIG` — Odoo connection settings. |
+| `~/.config/pr-automation` | `/usr/local/share/pr-automation` | `PR_AUTOMATION_CONFIG_DIR` — `create-pr`'s global and per-project config. |
+| `~/.config/coderabbit` | `/usr/local/share/coderabbit-config` | `CODERABBIT_CONFIG_DIR` — CodeRabbit CLI config/auth state. |
+| `~/.config/devcontainer/shell-history` | `/usr/local/share/shell-history` | Bash history, shared across containers and projects. |
 
-See [`devcontainer-features/src/personal-features/NOTES.md`](devcontainer-features/src/personal-features/NOTES.md) for more detail.
+See [`devcontainer-features/src/personal-features/NOTES.md`](devcontainer-features/src/personal-features/NOTES.md) for more detail, including the Windows and WSL notes.
 
 ## `odoo_sdk`
 
