@@ -1,0 +1,19 @@
+# Everything in this repo is either executed inside a Linux container
+# (install.sh, create-pr, the git hooks install.sh generates via heredoc, the
+# feature test scripts) or read by Linux tooling. Git for Windows defaults to
+# core.autocrlf=true, so without this a fresh clone on Windows checks those
+# files out with CRLF and they fail in-container with
+# `bad interpreter: /bin/sh^M`. Normalize to LF everywhere (#198).
+* text=auto eol=lf
+
+*.sh  text eol=lf
+*.ps1 text eol=lf
+
+# Extensionless executables - covered by the catch-all above, but pinned
+# explicitly so the intent survives future edits to it.
+devcontainer-features/src/personal-features/create-pr text eol=lf
+.husky/commit-msg                                     text eol=lf
+
+# Never line-ending-convert.
+*.whl binary
+*.png binary

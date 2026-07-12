@@ -95,6 +95,41 @@ check "starship is installed" starship --version
 check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
 check "~/.bash_history is linked to the bind-mounted history file" bash -c \
   "[ \"\$(readlink -f \"\$HOME/.bash_history\")\" = '/usr/local/share/shell-history/bash_history' ]"
+
+# Regression guard for #198: shell history is bind-mounted as a *directory*, not
+# as a single file. Docker Desktop materialises a missing single-file mount
+# source as a directory on the host, which then fails the mount - so the mount
+# target must be the directory, with the history file living inside it.
+check "shell history mount target is a directory, not a file" bash -c \
+  "test -d /usr/local/share/shell-history && ! test -L /usr/local/share/shell-history"
+
+# Regression guard for #198: on a first run against an empty host directory the
+# history file doesn't exist yet, so the ~/.bash_history symlink is dangling.
+# That has to self-heal - bash opens HISTFILE with O_CREAT, which follows the
+# symlink and creates the target. Simulate it by removing the file first.
+check "a dangling history symlink self-heals on first write" bash -c \
+  "rm -f /usr/local/share/shell-history/bash_history \
+   && printf 'echo 198\n' >> \"\$HOME/.bash_history\" \
+   && test -f /usr/local/share/shell-history/bash_history"
+
+# Regression guard for #198: HISTFILE is set system-wide (so history persists
+# for every user, not just the one whose home was symlinked), and histappend is
+# a correctness fix - without it bash truncates HISTFILE on exit and rewrites it
+# from memory, so one shell exiting would wipe a concurrent container's history.
+check "HISTFILE points at the bind-mounted history file" bash -c \
+  "grep -q '^export HISTFILE=/usr/local/share/shell-history/bash_history$' /etc/bash.bashrc"
+check "histappend is enabled so concurrent shells don't truncate history" bash -c \
+  "grep -q '^shopt -s histappend$' /etc/bash.bashrc"
+
+# Regression guard for #198: assert the *runtime* value, not just the file. Both
+# `starship init` and `zoxide init` overwrite PROMPT_COMMAND, so if the flush is
+# set before them in the snippet it is silently dropped and history is only
+# written on a clean exit (losing it whenever the container is killed).
+# /etc/bash.bashrc is guarded by `[ -z "$PS1" ] && return`, so this has to run an
+# interactive shell to see the assembled value at all.
+check "history -a survives starship/zoxide clobbering PROMPT_COMMAND" bash -ic \
+  "[[ \$PROMPT_COMMAND == *'history -a'* ]]"
+
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
 

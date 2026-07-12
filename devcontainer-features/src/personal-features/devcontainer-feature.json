@@ -23,33 +23,33 @@
     },
     "mounts": [
         {
-            "source": "${localEnv:HOME}/.claude",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.claude",
             "target": "/usr/local/share/claude-home",
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}/.config/gh",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh",
             "target": "/usr/local/share/gh-cli-config",
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}/.config/odoo_sdk",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo_sdk",
             "target": "/usr/local/share/odoo-sdk-config",
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}/.config/pr-automation",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/pr-automation",
             "target": "/usr/local/share/pr-automation",
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}/.config/coderabbit",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/coderabbit",
             "target": "/usr/local/share/coderabbit-config",
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}/.bash_history",
-            "target": "/usr/local/share/shell-history/bash_history",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/devcontainer/shell-history",
+            "target": "/usr/local/share/shell-history",
             "type": "bind"
         }
     ]
