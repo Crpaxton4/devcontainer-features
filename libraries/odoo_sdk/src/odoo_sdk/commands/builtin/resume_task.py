@@ -2,12 +2,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.utilities.timesheet import emit_agent_event
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
+@builtin_command
 class ResumeTaskCommand(Command):
     """Resume a task session that is AWAITING_ANSWERS, transitioning it back to RUNNING."""
 

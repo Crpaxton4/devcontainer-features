@@ -1,6 +1,8 @@
 from ..command import Command
+from ._registration import builtin_command
 
 
+@builtin_command
 class GetUidCommand(Command):
     """Return the UID of the authenticated Odoo user."""
 

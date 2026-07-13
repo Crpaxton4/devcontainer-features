@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, Optional
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import (
     get_employee_id,
@@ -45,6 +46,7 @@ def _build_run_result(
     return result
 
 
+@builtin_command
 class StartTaskCommand(Command):
     """Start time-tracking a resolved project task, creating a placeholder timesheet.
 

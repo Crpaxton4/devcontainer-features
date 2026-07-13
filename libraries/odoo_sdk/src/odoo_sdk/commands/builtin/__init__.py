@@ -4,9 +4,17 @@ These commands form the default tool surface exposed when the MCP server is run
 directly (``odoo-mcp`` / ``python -m odoo_sdk.mcp``). Consumers who define their
 own commands register them on a :class:`Registry` and start the server
 themselves; see ``examples/general/mcp_custom_commands_example.py``.
+
+``BUILTIN_COMMANDS`` is populated by the :func:`builtin_command` decorator (see
+:mod:`._registration`) as each command module below is imported. The import list
+stays explicit on purpose — no ``pkgutil`` scanning — so the built-in surface
+stays reviewable and stable for mutation testing. Importing a module both runs
+its decorator (registering the command) and binds the class as a package
+attribute.
 """
 
 from ..command_registry import Registry
+from ._registration import BUILTIN_COMMANDS, builtin_command
 from .abort_task import AbortTaskCommand
 from .create_task import CreateTaskCommand
 from .get_models import GetModelsCommand
@@ -29,30 +37,6 @@ from .task_note import TaskNoteCommand
 from .task_question import TaskQuestionCommand
 from .task_status import TaskStatusCommand
 
-BUILTIN_COMMANDS = {
-    "get_uid": GetUidCommand,
-    "get_models": GetModelsCommand,
-    "get_tasks": GetTasksCommand,
-    "get_todo": GetTodoCommand,
-    "get_task": GetTaskCommand,
-    "get_task_chatter": GetTaskChatterCommand,
-    "get_task_attachments": GetTaskAttachmentsCommand,
-    "create_task": CreateTaskCommand,
-    "search_projects": SearchProjectsCommand,
-    "search_tasks": SearchTasksCommand,
-    "start_task": StartTaskCommand,
-    "stop_task": StopTaskCommand,
-    "abort_task": AbortTaskCommand,
-    "resume_task": ResumeTaskCommand,
-    "task_status": TaskStatusCommand,
-    "task_note": TaskNoteCommand,
-    "task_list": TaskListCommand,
-    "task_question": TaskQuestionCommand,
-    "optimize_sessions": OptimizeSessionsCommand,
-    "ingest_sessions": IngestSessionsCommand,
-    "query_sessions": QuerySessionsCommand,
-}
-
 
 def register_builtins(registry: Registry) -> Registry:
     """Register every built-in command on ``registry``.
@@ -68,28 +52,15 @@ def register_builtins(registry: Registry) -> Registry:
     return registry
 
 
+# ``__all__`` is derived from the decorator-populated registry so the command
+# class exports stay in lockstep with ``BUILTIN_COMMANDS`` automatically: a
+# decorated-and-imported command needs no third hand-maintained list. Each
+# ``__name__`` equals the class binding imported above (Python's naming
+# convention), so every derived entry is a real package attribute; the leading
+# names cover the registration API itself.
 __all__ = [
     "BUILTIN_COMMANDS",
+    "builtin_command",
     "register_builtins",
-    "GetUidCommand",
-    "GetModelsCommand",
-    "GetTasksCommand",
-    "GetTodoCommand",
-    "GetTaskCommand",
-    "GetTaskChatterCommand",
-    "GetTaskAttachmentsCommand",
-    "CreateTaskCommand",
-    "SearchProjectsCommand",
-    "SearchTasksCommand",
-    "StartTaskCommand",
-    "StopTaskCommand",
-    "AbortTaskCommand",
-    "ResumeTaskCommand",
-    "TaskStatusCommand",
-    "TaskNoteCommand",
-    "TaskListCommand",
-    "TaskQuestionCommand",
-    "OptimizeSessionsCommand",
-    "IngestSessionsCommand",
-    "QuerySessionsCommand",
+    *sorted(command.__name__ for command in BUILTIN_COMMANDS.values()),
 ]

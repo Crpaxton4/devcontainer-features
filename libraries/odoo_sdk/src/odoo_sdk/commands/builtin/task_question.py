@@ -1,6 +1,7 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.utilities.timesheet import emit_agent_event
@@ -8,6 +9,7 @@ from odoo_sdk.state import TaskNotRunningError, TaskState
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
+@builtin_command
 class TaskQuestionCommand(Command):
     """Post a question to a task's chatter and transition to AWAITING_ANSWERS."""
 

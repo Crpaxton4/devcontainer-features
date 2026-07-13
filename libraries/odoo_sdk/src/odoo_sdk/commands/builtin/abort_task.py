@@ -1,9 +1,11 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 
 
+@builtin_command
 class AbortTaskCommand(Command):
     """Force-close a wedged task session without writing any hours.
 
