@@ -66,7 +66,7 @@ class OdooConnectionSettings:
     url: str
     db: str
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = field(default=None, repr=False)
     transport: Literal["xmlrpc", "json2"] = "xmlrpc"
     api_key: Optional[str] = field(default=None, repr=False)
 
