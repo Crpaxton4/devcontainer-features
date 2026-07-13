@@ -1,9 +1,9 @@
 from typing import Dict, Iterator, Optional, Tuple, Type
 
-from odoo_sdk.client.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
 
 from .command import Command
+from .protocols import RpcClient
 
 
 class Registry:
@@ -11,14 +11,14 @@ class Registry:
 
     The registry keeps use-case orchestration separate from transport and state
     details while injecting the shared SDK dependencies into each registered
-    command. Commands receive three peers: the :class:`OdooClient`, the
+    command. Commands receive three peers: the :class:`RpcClient`, the
     :class:`LocalStateClient` (SQLite session FSM), and the :class:`LocalConfig`
     (resolved SDK settings). The state client and config are optional; when
     omitted, commands resolve their own lazily on first use, preserving the
     original single-dependency behavior.
 
-    :param client: Odoo client instance shared with all registered commands.
-    :type client: OdooClient
+    :param client: RPC client instance shared with all registered commands.
+    :type client: RpcClient
     :param state_client: Shared local state client, defaults to None.
     :type state_client: Optional[LocalStateClient]
     :param config: Shared resolved SDK configuration, defaults to None.
@@ -27,7 +27,7 @@ class Registry:
 
     def __init__(
         self,
-        client: OdooClient,
+        client: RpcClient,
         state_client: Optional[LocalStateClient] = None,
         config: Optional[LocalConfig] = None,
     ):
@@ -37,8 +37,8 @@ class Registry:
         client and config) that each command will receive when it is created
         lazily on lookup.
 
-        :param client: Odoo client instance shared with all registered commands.
-        :type client: OdooClient
+        :param client: RPC client instance shared with all registered commands.
+        :type client: RpcClient
         :param state_client: Shared local state client, defaults to None.
         :type state_client: Optional[LocalStateClient]
         :param config: Shared resolved SDK configuration, defaults to None.
