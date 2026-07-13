@@ -764,6 +764,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "task_status": (),
             "task_note": (5, "note"),
             "task_list": (),
+            "task_aging": (),
             "task_question": (5, "q?"),
             "optimize_sessions": (),
             "ingest_sessions": (),

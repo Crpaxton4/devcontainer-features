@@ -212,6 +212,21 @@ def make_task_list_tool(registry: Registry):
     return task_list
 
 
+@atomic_tool("task_aging")
+def make_task_aging_tool(registry: Registry):
+    def task_aging(
+        project_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """List open project tasks going stale, sorted stalest-first (read-only)."""
+        return registry["task_aging"].execute(
+            project_id=project_id, stage=stage, limit=limit
+        )
+
+    return task_aging
+
+
 @atomic_tool("task_question")
 def make_task_question_tool(registry: Registry):
     def task_question(task_id: int, question: str) -> Dict[str, Any]:

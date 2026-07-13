@@ -32,6 +32,7 @@ from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
 from .stop_task import StopTaskCommand
+from .task_aging import TaskAgingCommand
 from .task_list import TaskListCommand
 from .task_note import TaskNoteCommand
 from .task_question import TaskQuestionCommand

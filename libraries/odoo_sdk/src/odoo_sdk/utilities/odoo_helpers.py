@@ -9,8 +9,8 @@ This module hosts two kinds of helpers:
   plumbing so business logic reads at one altitude.
 """
 
-from datetime import date
-from typing import Any
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 
 from odoo_sdk.client import OdooClient
 
@@ -385,3 +385,144 @@ def merge_timesheets(
             ids_to_merge,
             {"unit_amount": 0.0, "name": "[merged] " + merged_desc},
         )
+
+
+# ── task_aging (read-only) ────────────────────────────────────────────────────
+
+# Odoo serializes datetime fields as naive UTC strings in this exact format.
+_ODOO_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Fields read from project.task to compute aging; all cheap scalars/many2ones.
+_TASK_AGING_FIELDS = [
+    "id",
+    "name",
+    "project_id",
+    "stage_id",
+    "create_date",
+    "date_last_stage_update",
+]
+
+
+def _odoo_days_since(value: Any, now: datetime) -> Optional[int]:
+    """Whole days elapsed from an Odoo datetime string to ``now``.
+
+    Odoo datetimes arrive as naive UTC strings (``"YYYY-MM-DD HH:MM:SS"``). A
+    falsy value (``False``/``None``/``""`` — Odoo's empty datetime) yields
+    ``None`` so callers can apply their own fallback. An unexpectedly-formatted
+    string also yields ``None`` rather than raising, so one malformed row cannot
+    abort the whole read-only report. The result is floored to whole days
+    (``timedelta.days``).
+
+    :param value: Raw Odoo datetime string, or a falsy empty value.
+    :type value: Any
+    :param now: UTC-aware reference "now".
+    :type now: datetime
+    :return: Whole days elapsed, or ``None`` when ``value`` is empty or
+        unparseable.
+    :rtype: Optional[int]
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, _ODOO_DATETIME_FORMAT)
+    except (ValueError, TypeError):
+        return None
+    return (now - parsed.replace(tzinfo=timezone.utc)).days
+
+
+def _task_aging_record(row: dict, now: datetime) -> dict:
+    """Project one raw ``project.task`` row into an aging record.
+
+    ``days_open`` comes from ``create_date``; ``days_in_stage`` from
+    ``date_last_stage_update``. When the stage-update timestamp is missing/False
+    it falls back to ``create_date`` (so ``days_in_stage`` equals ``days_open``).
+    """
+    days_open = _odoo_days_since(row.get("create_date"), now)
+    days_in_stage = _odoo_days_since(row.get("date_last_stage_update"), now)
+    if days_in_stage is None:
+        days_in_stage = days_open
+    return {
+        "task_id": row["id"],
+        "name": row.get("name"),
+        "project": resolve_many2one(row.get("project_id")),
+        "stage": resolve_many2one(row.get("stage_id")),
+        "days_open": days_open,
+        "days_in_stage": days_in_stage,
+    }
+
+
+def _task_aging_sort_key(record: dict) -> tuple:
+    """Sort key for stalest-first ordering (used with ``reverse=True``).
+
+    Primary key is ``days_in_stage`` (descending), tie-broken by ``days_open``
+    (descending), then ``task_id`` (ascending, via negation) for determinism.
+    Unknown (``None``) day counts sort as ``-1`` so they land last.
+    """
+    days_in_stage = record["days_in_stage"]
+    days_open = record["days_open"]
+    return (
+        days_in_stage if days_in_stage is not None else -1,
+        days_open if days_open is not None else -1,
+        -record["task_id"],
+    )
+
+
+def get_task_aging(
+    client: OdooClient,
+    project_id: Optional[int] = None,
+    stage: Optional[str] = None,
+    limit: int = 20,
+    now: Optional[datetime] = None,
+) -> list[dict]:
+    """List open ``project.task`` records ordered stalest-first.
+
+    "Open" means the task's kanban stage is not folded
+    (``stage_id.fold = False``) and the task is not archived (search_read's
+    default ``active = True`` filter). Folded stages are the collapsed
+    "Done"/"Cancelled" columns Odoo uses to mark completed work.
+
+    For each task, ``days_open`` is the whole days since ``create_date`` and
+    ``days_in_stage`` the whole days since ``date_last_stage_update``; a
+    missing/False ``date_last_stage_update`` falls back to ``create_date``.
+    Results are sorted stalest-first: ``days_in_stage`` descending, ties broken
+    by ``days_open`` descending.
+
+    ``limit`` bounds the query at the database (the tasks with the oldest
+    ``date_last_stage_update`` are fetched), so at most ``limit`` records are
+    returned. ``project_id`` filters by exact project id; ``stage`` is a
+    case-insensitive substring match against the stage's display name.
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :param project_id: Restrict to one project id, or ``None`` for all.
+    :type project_id: Optional[int]
+    :param stage: Case-insensitive stage-name substring filter, or ``None``.
+    :type stage: Optional[str]
+    :param limit: Maximum number of tasks to return.
+    :type limit: int
+    :param now: UTC-aware reference "now"; defaults to the current time.
+        Injected by tests for deterministic day counts.
+    :type now: Optional[datetime]
+    :return: Aging records, stalest-first.
+    :rtype: list[dict]
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    domain: list[Any] = [("stage_id.fold", "=", False)]
+    if project_id is not None:
+        domain.append(("project_id", "=", project_id))
+    if stage:
+        domain.append(("stage_id.name", "ilike", stage))
+
+    rows = client.execute(
+        "project.task",
+        "search_read",
+        domain,
+        fields=_TASK_AGING_FIELDS,
+        order="date_last_stage_update asc",
+        limit=limit,
+    )
+    records = [_task_aging_record(row, now) for row in rows]
+    records.sort(key=_task_aging_sort_key, reverse=True)
+    return records
