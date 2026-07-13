@@ -101,23 +101,29 @@ WRAPPER_PATH="$(command -v claude)"
 REAL_CLAUDE_BIN="$(readlink -f "$WRAPPER_PATH")"
 rm "$WRAPPER_PATH"
 
-# Wrap the real binary so a plain session auto-connects to the IDE (`--ide`),
-# while subcommands like `claude mcp` or `claude auth login` are left
-# untouched since they don't all accept that flag.
+# Wrap the real binary so a *bare interactive* session auto-connects to the IDE
+# (`--ide`), while everything else passes through untouched. Injecting `--ide`
+# only for the zero-arg TTY case - rather than maintaining an allowlist of
+# subcommands to *exclude* from injection - means a new subcommand shipped by a
+# future Claude Code release can never be silently mangled into
+# `claude --ide <subcommand>` (the old allowlist would have needed a manual edit
+# for every new subcommand, and any it missed broke). Subcommands (`claude mcp`,
+# `claude auth login`), flags, prompts, and piped/non-interactive invocations
+# all fall through to the passthrough arm.
+#
+# Accepted trade-off: `claude -c`, `claude -r`, and `claude "prompt"` no longer
+# auto-get `--ide` (strict, predictable rule chosen over guessing intent).
 cat > "$WRAPPER_PATH" << EOF
 #!/bin/sh
 set -e
 
 REAL="$REAL_CLAUDE_BIN"
 
-case "\$1" in
-    update|install|auth|agents|attach|auto-mode|daemon|logs|mcp|plugin|plugins|project|remote-control|respawn|rm|setup-token|stop|kill|ultrareview)
-        exec "\$REAL" "\$@"
-        ;;
-    *)
-        exec "\$REAL" --ide "\$@"
-        ;;
-esac
+if [ \$# -eq 0 ] && [ -t 0 ]; then
+    exec "\$REAL" --ide
+else
+    exec "\$REAL" "\$@"
+fi
 EOF
 chmod +x "$WRAPPER_PATH"
 
