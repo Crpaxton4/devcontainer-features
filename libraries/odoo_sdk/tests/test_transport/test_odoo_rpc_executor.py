@@ -34,30 +34,88 @@ class TestOdooRpcExecutor(unittest.TestCase):
         common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_uid_caches_false_authentication_result(
-        self, mock_server_proxy: Mock
-    ) -> None:
+    def test_uid_raises_on_false_authentication(self, mock_server_proxy: Mock) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         common_proxy.authenticate.return_value = False
         mock_server_proxy.side_effect = [common_proxy, object_proxy]
 
-        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "secret-pw")
 
-        self.assertEqual(executor.uid, -1)
-        self.assertEqual(executor.uid, -1)
-        common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        exc = caught.exception
+        self.assertEqual(
+            str(exc),
+            "Odoo authentication failed for user 'user' on database 'db'",
+        )
+        self.assertIn("db", str(exc))
+        self.assertIn("user", str(exc))
+        self.assertNotIn("secret-pw", str(exc))
+        self.assertEqual(exc.operation, "authenticate")
+        self.assertIsNone(exc.model)
+        self.assertEqual(exc.method, "authenticate")
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_uid_returns_auth_result(self, mock_server_proxy: Mock) -> None:
+    def test_uid_raises_on_zero_authentication(self, mock_server_proxy: Mock) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
-        common_proxy.authenticate.return_value = "7"
+        common_proxy.authenticate.return_value = 0
         mock_server_proxy.side_effect = [common_proxy, object_proxy]
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
+        with self.assertRaises(OdooAuthenticationError):
+            _ = executor.uid
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_raises_on_non_int_authentication(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = None
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooAuthenticationError):
+            _ = executor.uid
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_raises_on_true_authentication(self, mock_server_proxy: Mock) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = True
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        self.assertEqual(
+            str(caught.exception),
+            "Odoo authentication failed for user 'user' on database 'db'",
+        )
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_does_not_cache_failed_authentication(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.side_effect = [False, 7]
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooAuthenticationError):
+            _ = executor.uid
+
         self.assertEqual(executor.uid, 7)
+        self.assertEqual(common_proxy.authenticate.call_count, 2)
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
     def test_execute_maps_authentication_fault(self, mock_server_proxy: Mock) -> None:

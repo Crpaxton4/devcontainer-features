@@ -6,7 +6,7 @@ from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import urlsplit
 
 from ._fault_mapping import map_xmlrpc_fault
-from .errors import OdooTransportError
+from .errors import OdooAuthenticationError, OdooTransportError
 from .executor import OdooExecutor
 
 _T = TypeVar("_T")
@@ -214,7 +214,7 @@ class OdooRpcExecutor(OdooExecutor):
             transport=_make_timeout_transport(self.url, timeout),
         )
 
-        self._uid = None
+        self._uid: Optional[int] = None
         self._lock = threading.Lock()
 
     @property
@@ -222,27 +222,59 @@ class OdooRpcExecutor(OdooExecutor):
         """Authenticate lazily and return the Odoo user id.
 
         Lazy authentication is necessary because many callers construct the executor
-        before they actually issue a request, and repeated calls should not repeat
-        the login handshake.
+        before they actually issue a request, and repeated calls should not repeat the
+        login handshake. A successful login caches the real user id, but a rejected
+        login is never cached, so callers may retry after correcting their credentials.
 
-        :return: Authenticated Odoo user id. 0 if authentication fails.
+        :raises OdooAuthenticationError: When Odoo rejects the credentials, returning a
+            non-positive or non-integer result instead of a user id.
+        :raises OdooTransportError: When a protocol, timeout, or connectivity failure
+            occurs while contacting the authentication endpoint.
+        :return: Authenticated Odoo user id.
         :rtype: int
         """
-
         if self._uid is None:
             with self._lock:
-                self._uid = _mapped_call(
-                    lambda: self._common.authenticate(
-                        self.db,
-                        self.username,
-                        self._password,
-                        {},
-                    ),
-                    model=None,
-                    method="authenticate",
-                )
-        # Hack to make static type checking not complain. There is likely a better way
-        return int(str(self._uid)) if self._uid else -1
+                self._uid = self._authenticate()
+        return self._uid
+
+    def _authenticate(self) -> int:
+        """Perform the XML-RPC login handshake and validate the returned user id.
+
+        Isolating the handshake keeps :attr:`uid` a thin cache: a valid Odoo login
+        yields a positive integer user id, while a rejected login yields ``False`` (or
+        another falsy or non-integer value) that must surface as an explicit
+        authentication failure rather than a sentinel that later reads as authenticated.
+        Booleans are rejected explicitly because ``bool`` subclasses ``int`` in Python,
+        so a server returning ``True`` would otherwise masquerade as ``uid=1``. The
+        password is deliberately excluded from the error message to avoid leaking the
+        credential into logs or tracebacks.
+
+        :raises OdooAuthenticationError: When Odoo returns a boolean, non-positive, or
+            non-integer result, indicating the credentials were rejected.
+        :raises OdooTransportError: When a protocol, timeout, or connectivity failure
+            occurs while contacting the authentication endpoint.
+        :return: The authenticated Odoo user id.
+        :rtype: int
+        """
+        result = _mapped_call(
+            lambda: self._common.authenticate(
+                self.db,
+                self.username,
+                self._password,
+                {},
+            ),
+            model=None,
+            method="authenticate",
+        )
+        if isinstance(result, bool) or not isinstance(result, int) or result <= 0:
+            raise OdooAuthenticationError(
+                f"Odoo authentication failed for user {self.username!r} "
+                f"on database {self.db!r}",
+                operation="authenticate",
+                method="authenticate",
+            )
+        return result
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Execute one model method over Odoo's `execute_kw` XML-RPC API.

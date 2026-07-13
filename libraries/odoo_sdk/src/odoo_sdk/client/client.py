@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.state.config import OdooConnectionSettings
+from odoo_sdk.transport.errors import OdooAuthenticationError
 from odoo_sdk.transport.executor import OdooExecutor, guarded_execute
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
@@ -179,12 +180,17 @@ class OdooClient(OdooExecutor):
 
         This property is necessary because some consumers need a simple boolean check
         for authentication status without directly accessing the uid or handling
-        exceptions from failed authentication attempts.
+        exceptions from failed authentication attempts. A rejected login raises
+        :class:`OdooAuthenticationError` from the executor, which is translated here
+        into a plain ``False`` rather than propagating.
 
         :return: True if authenticated successfully, False otherwise.
         :rtype: bool
         """
-        return bool(self._executor.uid)
+        try:
+            return bool(self._executor.uid)
+        except OdooAuthenticationError:
+            return False
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate one model method call through the shared guarded seam.
