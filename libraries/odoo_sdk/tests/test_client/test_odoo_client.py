@@ -9,7 +9,7 @@ from hypothesis import given, strategies
 from odoo_sdk.client.client import OdooClient
 from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.records.recordset import OdooRecordset
-from odoo_sdk.transport.errors import OdooServerError
+from odoo_sdk.transport.errors import OdooAuthenticationError, OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
@@ -136,6 +136,49 @@ class TestOdooClientContract(unittest.TestCase):
         client = OdooClient(executor=executor)
 
         self.assertEqual(client.uid, 7)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_authenticated_true_on_successful_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 7
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        self.assertTrue(client.authenticated)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_authenticated_false_on_failed_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        self.assertFalse(client.authenticated)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_uid_raises_on_failed_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        with self.assertRaises(OdooAuthenticationError):
+            _ = client.uid
 
     @patch("odoo_sdk.client.client.OdooRpcExecutor")
     @patch("odoo_sdk.client.client.OdooConnectionSettings.from_sources")
