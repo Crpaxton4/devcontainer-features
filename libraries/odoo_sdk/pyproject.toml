@@ -91,10 +91,7 @@ show_mi = true
 
 [tool.complexipy]
 paths = ["src"]
-# TEMPORARY: raised from 15 because complexipy 6's new scoring flags
-# cmd_normalize (25) and OdooRecordset.sorted (21). Restore to 15 once
-# those functions are refactored (follow-up in flight).
-max-complexity-allowed = 25
+max-complexity-allowed = 15
 exclude = ["tests", "examples", "build", "htmlcov"]
 output-format = ["json"]
 output = "reports/complexipy/"

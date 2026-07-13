@@ -102,18 +102,54 @@ def cmd_report(db: TaskStateDB, args: argparse.Namespace) -> None:
         print(_fmt_row(r))
 
 
-def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
-    """Detect and optionally merge duplicate timesheet entries for same task+date."""
-    stopped = db.get_stopped_runs_with_timesheet()
+def _find_duplicate_timesheets(stopped: list) -> dict[tuple[int, str], list]:
+    """Group stopped runs by task and calendar date, keeping only duplicates.
 
-    # Group by (task_id, calendar_date)
+    :param stopped: Stopped runs that each carry a timesheet id.
+    :type stopped: list
+    :returns: Mapping of ``(task_id, day)`` to the runs sharing that key,
+        limited to keys with more than one run.
+    :rtype: dict[tuple[int, str], list]
+    """
     groups: dict[tuple[int, str], list] = {}
     for r in stopped:
         day = r.started_at.date().isoformat()
         key = (r.task_id, day)
         groups.setdefault(key, []).append(r)
+    return {k: v for k, v in groups.items() if len(v) > 1}
 
-    duplicates = {k: v for k, v in groups.items() if len(v) > 1}
+
+def _apply_timesheet_merge(
+    db: TaskStateDB,
+    client: OdooClient,
+    runs: list,
+    ids: list[int],
+) -> int:
+    """Merge duplicate timesheet entries into the lowest id and remap runs.
+
+    :param db: Local task-state database used to remap timesheet ids.
+    :type db: TaskStateDB
+    :param client: Odoo client used to merge the remote timesheets.
+    :type client: OdooClient
+    :param runs: Runs sharing the same task and calendar date.
+    :type runs: list
+    :param ids: Timesheet ids belonging to ``runs``.
+    :type ids: list[int]
+    :returns: The primary timesheet id the others were merged into.
+    :rtype: int
+    """
+    primary = min(ids)
+    others = [i for i in ids if i != primary]
+    merge_timesheets(client, primary, others)
+    for r in runs:
+        if r.timesheet_id in others:
+            db.remap_timesheet_id(r.timesheet_id, primary)
+    return primary
+
+
+def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
+    """Detect and optionally merge duplicate timesheet entries for same task+date."""
+    duplicates = _find_duplicate_timesheets(db.get_stopped_runs_with_timesheet())
 
     if not duplicates:
         print("No duplicate timesheet entries found.")
@@ -129,12 +165,7 @@ def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient)
             f"timesheet_ids={ids}"
         )
         if args.apply and len(ids) > 1:
-            primary = min(ids)
-            others = [i for i in ids if i != primary]
-            merge_timesheets(client, primary, others)
-            for r in runs:
-                if r.timesheet_id in others:
-                    db.remap_timesheet_id(r.timesheet_id, primary)
+            primary = _apply_timesheet_merge(db, client, runs, ids)
             print(f"  -> Merged into timesheet {primary}.")
 
     if not args.apply:
