@@ -2,12 +2,9 @@
 
 This module hosts two related concerns of the local state layer:
 
-* :class:`OdooConnectionSettings` — the resolved, validated connection value
-  object consumed by :class:`~odoo_sdk.client.client.OdooClient`. It resolves
-  from explicit args, environment variables, and INI files.
-* :class:`LocalConfig` — a first-class, read-only settings object promoted to a
-  peer dependency of commands (alongside ``OdooClient`` and
-  ``LocalStateClient``). It resolves each setting with the precedence
+* :class:`LocalConfig` — the single, first-class settings resolver. It discovers
+  one config file (see :data:`LOCAL_CONFIG_ENV_VAR` and the default locations
+  below) and resolves each setting with the precedence
 
       File  >  Environment Variable  >  Sensible Default
 
@@ -15,18 +12,50 @@ This module hosts two related concerns of the local state layer:
   behavior by editing a local config file without touching the host launch
   command. A ``[behavior]`` section is reserved for future behavioral flags
   (profiling, log level, ...) without further structural changes.
+* :class:`OdooConnectionSettings` — the resolved, validated connection value
+  object consumed by :class:`~odoo_sdk.client.client.OdooClient`. Its
+  :meth:`~OdooConnectionSettings.from_sources` factory is a thin validator fed by
+  :class:`LocalConfig`: it resolves file, environment, and default values through
+  the single resolver and then overlays any explicit constructor arguments.
+
+Config discovery consults, in order, the first location that yields an existing
+file:
+
+1. ``$ODOO_SDK_CONFIG`` — a config **file** or a **directory** that is probed for
+   ``config.toml`` then ``config.ini`` (so the devcontainer feature can point the
+   variable at its mounted config directory regardless of which file exists).
+2. ``./.odoo_sdk.toml`` / ``./.odoo_sdk.ini`` in the current working directory.
+3. ``~/.config/odoo_sdk/config.toml`` / ``~/.config/odoo_sdk/config.ini``.
+
+INI files accept ``[odoo]`` as an alias for ``[connection]`` so an already
+persisted ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
 """
 
 import configparser
 import math
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional
 
-DEFAULT_CONFIG_ENV_VAR = "odoo_sdk_CONFIG"
-DEFAULT_SECTION = "odoo"
+# The single environment variable that overrides config discovery. It may name a
+# config FILE or a DIRECTORY (the directory is probed for config.toml /
+# config.ini), so the devcontainer feature can point it at the mounted config
+# directory regardless of which file the user created.
+LOCAL_CONFIG_ENV_VAR = "ODOO_SDK_CONFIG"
+
+# INI section holding connection settings, plus the legacy ``[odoo]`` alias
+# accepted so an already-persisted ``~/.config/odoo_sdk/config.ini`` keeps
+# working, and the reserved ``[behavior]`` section.
+_CONNECTION_SECTION = "connection"
+_CONNECTION_SECTION_ALIAS = "odoo"
+_BEHAVIOR_SECTION = "behavior"
+
+# Default config discovery locations (see the module docstring for the full
+# precedence order). ``$ODOO_SDK_CONFIG`` overrides all of these.
+_CWD_CONFIG_BASENAMES = (".odoo_sdk.toml", ".odoo_sdk.ini")
+DEFAULT_CONFIG_DIR = "~/.config/odoo_sdk"
+_CONFIG_DIR_FILENAMES = ("config.toml", "config.ini")
 
 #: Default per-request transport timeout, in seconds. Shared as the fallback for
 #: garbage or absent ``ODOO_TIMEOUT`` values and as the dataclass field default so
@@ -42,15 +71,6 @@ CONNECTION_ENV_VARS = {
     "transport": "ODOO_TRANSPORT",
     "timeout": "ODOO_TIMEOUT",
 }
-DEFAULT_CONFIG_LOCATIONS = (
-    ".odoo_sdk.ini",
-    "~/.config/odoo_sdk/config.ini",
-)
-
-# LocalConfig discovery: default config file path and the env var that overrides
-# it. The file is the highest-precedence source (File > Env > Default).
-LOCAL_CONFIG_ENV_VAR = "ODOO_SDK_CONFIG"
-DEFAULT_LOCAL_CONFIG_PATH = "~/.config/odoo-sdk/config.toml"
 
 
 @dataclass(frozen=True)
@@ -96,10 +116,13 @@ class OdooConnectionSettings:
         timeout: Optional[float] = None,
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
-        """Resolve connection settings from explicit, environment, and file sources.
+        """Resolve connection settings via :class:`LocalConfig`, then validate.
 
-        This factory is necessary because the client supports multiple configuration
-        channels and must apply one predictable precedence order before validation.
+        This factory is a thin validator fed by the single resolver: it resolves
+        file, environment, and default values through :meth:`LocalConfig.load`
+        (precedence **File > Environment Variable > Default**) and then overlays
+        any explicit constructor arguments (which win over every resolved source),
+        so the client exposes one predictable precedence chain before validation.
 
         :param url: Explicit URL override, defaults to None.
         :type url: Optional[str]
@@ -109,20 +132,24 @@ class OdooConnectionSettings:
         :type username: Optional[str]
         :param password: Explicit password override, defaults to None.
         :type password: Optional[str]
-        :param timeout: Explicit per-request timeout override in seconds, defaults to
-            None. Non-numeric or non-positive values fall back to
+        :param api_key: Explicit API key override, defaults to None.
+        :type api_key: Optional[str]
+        :param transport: Explicit transport override, defaults to None.
+        :type transport: Optional[str]
+        :param timeout: Explicit per-request timeout override in seconds, defaults
+            to None. Non-numeric or non-positive values fall back to
             :data:`DEFAULT_TIMEOUT_SECONDS`.
         :type timeout: Optional[float]
-        :param config_path: Optional INI file path override, defaults to None.
+        :param config_path: Optional config file or directory override, defaults to
+            None.
         :type config_path: Optional[str]
         :raises ValueError: Raised when any required setting remains unresolved.
         :return: Fully resolved connection settings.
         :rtype: OdooConnectionSettings
         """
-        file_values = _load_file_values(config_path)
-        environment_values = _load_environment_values()
+        resolved: dict[str, Any] = dict(LocalConfig.load(config_path).connection)
         # Prefer explicit `None` checks so callers can pass empty strings
-        # deliberately (the INI loader still treats empty values as missing).
+        # deliberately; validation still treats empty values as missing.
         explicit_values = {
             "url": url,
             "db": db,
@@ -131,38 +158,50 @@ class OdooConnectionSettings:
             "api_key": api_key,
             "transport": transport,
         }
-        values: dict[str, Optional[str]] = {
-            key: _resolve_setting_value(
-                key, explicit_value, environment_values, file_values
-            )
-            for key, explicit_value in explicit_values.items()
-        }
-
-        resolved_transport = _resolve_transport(values)
-        _validate_required_settings(values, resolved_transport)
-        resolved_timeout = _resolve_timeout(
-            timeout, environment_values, file_values
-        )
-
-        return cls(
-            url=str(values["url"]),
-            db=str(values["db"]),
-            username=values.get("username") or None,
-            password=values.get("password") or None,
-            transport=resolved_transport,
-            timeout=resolved_timeout,
-            api_key=values.get("api_key") or None,
-        )
+        for key, explicit_value in explicit_values.items():
+            if explicit_value is not None:
+                resolved[key] = explicit_value
+        if timeout is not None:
+            resolved["timeout"] = timeout
+        return _build_connection_settings(resolved)
 
 
-def _resolve_transport(values: dict[str, Optional[str]]) -> Literal["xmlrpc", "json2"]:
+def _build_connection_settings(values: Mapping[str, Any]) -> OdooConnectionSettings:
+    """Validate a resolved connection mapping and build the value object.
+
+    This helper is the single place where transport selection, required-setting
+    validation, and timeout coercion happen, so both
+    :meth:`OdooConnectionSettings.from_sources` and
+    :meth:`LocalConfig.connection_settings` behave identically regardless of how
+    the values were resolved.
+
+    :param values: Resolved connection values keyed by setting name.
+    :type values: Mapping[str, Any]
+    :raises ValueError: When any required setting remains unresolved.
+    :return: Fully validated connection settings.
+    :rtype: OdooConnectionSettings
+    """
+    resolved_transport = _resolve_transport(values)
+    _validate_required_settings(values, resolved_transport)
+    return OdooConnectionSettings(
+        url=str(values["url"]),
+        db=str(values["db"]),
+        username=values.get("username") or None,
+        password=values.get("password") or None,
+        transport=resolved_transport,
+        timeout=_coerce_timeout(values.get("timeout")),
+        api_key=values.get("api_key") or None,
+    )
+
+
+def _resolve_transport(values: Mapping[str, Any]) -> Literal["xmlrpc", "json2"]:
     """Return the effective transport type from resolved values.
 
-    This helper is necessary so transport resolution is isolated from from_sources
+    This helper is necessary so transport resolution is isolated from the builder
     and keeps its cyclomatic complexity within acceptable bounds.
 
     :param values: Resolved setting values keyed by setting name.
-    :type values: dict[str, Optional[str]]
+    :type values: Mapping[str, Any]
     :return: Effective transport type.
     :rtype: Literal["xmlrpc", "json2"]
     """
@@ -170,16 +209,16 @@ def _resolve_transport(values: dict[str, Optional[str]]) -> Literal["xmlrpc", "j
 
 
 def _validate_required_settings(
-    values: dict[str, Optional[str]],
+    values: Mapping[str, Any],
     transport: Literal["xmlrpc", "json2"],
 ) -> None:
     """Raise ValueError when required settings are absent for the given transport.
 
-    This helper is necessary so transport-aware validation is isolated from
-    from_sources and keeps its cyclomatic complexity within acceptable bounds.
+    This helper is necessary so transport-aware validation is isolated from the
+    builder and keeps its cyclomatic complexity within acceptable bounds.
 
     :param values: Resolved setting values keyed by setting name.
-    :type values: dict[str, Optional[str]]
+    :type values: Mapping[str, Any]
     :param transport: Effective transport type.
     :type transport: Literal["xmlrpc", "json2"]
     :raises ValueError: When required keys are missing.
@@ -196,36 +235,8 @@ def _validate_required_settings(
         raise ValueError(
             "Missing Odoo connection settings: "
             f"{missing_names}. Configure them with environment variables, "
-            "the INI file, or override them with constructor arguments."
+            "the config file, or override them with constructor arguments."
         )
-
-
-def _resolve_timeout(
-    explicit: Optional[float],
-    env_vals: Mapping[str, Optional[str]],
-    file_vals: Mapping[str, str],
-) -> float:
-    """Resolve the per-request timeout with explicit > env > file > default order.
-
-    This helper is necessary because the timeout follows the same precedence chain
-    as the string connection settings but must be coerced to a concrete positive
-    float before it reaches the transports.
-
-    :param explicit: Explicit timeout override, or None when not provided.
-    :type explicit: Optional[float]
-    :param env_vals: Environment-derived values keyed by setting name.
-    :type env_vals: Mapping[str, Optional[str]]
-    :param file_vals: File-derived values keyed by setting name.
-    :type file_vals: Mapping[str, str]
-    :return: Validated positive timeout in seconds.
-    :rtype: float
-    """
-    if explicit is not None:
-        return _coerce_timeout(explicit)
-    env_value = env_vals.get("timeout")
-    if env_value is not None:
-        return _coerce_timeout(env_value)
-    return _coerce_timeout(file_vals.get("timeout"))
 
 
 def _coerce_timeout(value: Any) -> float:
@@ -254,134 +265,6 @@ def _coerce_timeout(value: Any) -> float:
     return DEFAULT_TIMEOUT_SECONDS
 
 
-def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
-    """Load connection settings from the selected INI file, if one exists.
-
-    This helper is necessary so file-based configuration stays isolated from source
-    precedence logic and can return an empty mapping when no valid file applies.
-
-    :param config_path: Explicit or environment-provided config path, defaults to
-        None.
-    :type config_path: Optional[str]
-    :return: Connection values loaded from the INI file.
-    :rtype: dict[str, str]
-    """
-    parser = configparser.ConfigParser()
-    selected_path = _resolve_config_path(
-        config_path or os.environ.get(DEFAULT_CONFIG_ENV_VAR)
-    )
-    if selected_path is None:
-        return {}
-
-    parser.read(selected_path)
-    if not parser.has_section(DEFAULT_SECTION):
-        return {}
-
-    return {
-        "url": parser.get(DEFAULT_SECTION, "url", fallback=""),
-        "db": parser.get(DEFAULT_SECTION, "db", fallback=""),
-        "username": parser.get(DEFAULT_SECTION, "username", fallback=""),
-        "password": parser.get(DEFAULT_SECTION, "password", fallback=""),
-        "api_key": parser.get(DEFAULT_SECTION, "api_key", fallback=""),
-        "transport": parser.get(DEFAULT_SECTION, "transport", fallback=""),
-        "timeout": parser.get(DEFAULT_SECTION, "timeout", fallback=""),
-    }
-
-
-def _load_environment_values() -> dict[str, Optional[str]]:
-    """Load connection settings from the configured environment variables.
-
-    This helper is necessary because environment values participate in the supported
-    configuration precedence order for client construction.
-
-    :return: Environment-derived connection values keyed by setting name.
-    :rtype: dict[str, Optional[str]]
-    """
-    return {
-        key: os.environ.get(environment_variable)
-        for key, environment_variable in CONNECTION_ENV_VARS.items()
-    }
-
-
-def _resolve_config_path(config_path: Optional[str]) -> Optional[str]:
-    """Resolve the effective INI file path from explicit and default locations.
-
-    This helper is necessary because callers may provide relative paths, absolute
-    paths, or rely on default search locations, and only existing files should be
-    returned to the loader.
-
-    :param config_path: Explicit config path to resolve, defaults to None.
-    :type config_path: Optional[str]
-    :return: Absolute path to an existing config file, or None when none applies.
-    :rtype: Optional[str]
-    """
-    if config_path:
-        expanded_path = Path(config_path).expanduser()
-        if expanded_path.is_absolute():
-            return str(expanded_path) if expanded_path.is_file() else None
-
-        return _resolve_relative_to_invoking_script(expanded_path) or (
-            str(expanded_path.resolve()) if expanded_path.is_file() else None
-        )
-
-    for candidate in DEFAULT_CONFIG_LOCATIONS:
-        expanded = Path(candidate).expanduser()
-        if expanded.is_file():
-            return str(expanded)
-    return None
-
-
-def _resolve_setting_value(
-    key: str,
-    explicit: Optional[str],
-    env_vals: dict[str, Optional[str]],
-    file_vals: dict[str, str],
-) -> Optional[str]:
-    """Resolve one connection setting from the three-tier precedence chain.
-
-    This helper is necessary because the precedence logic (explicit > env > file)
-    should be isolated, testable, and readable rather than embedded in a nested
-    ternary comprehension.
-
-    :param key: Setting name used to look up values in env and file dicts.
-    :type key: str
-    :param explicit: Explicit value override, or None when not provided.
-    :type explicit: Optional[str]
-    :param env_vals: Environment-derived values keyed by setting name.
-    :type env_vals: dict[str, Optional[str]]
-    :param file_vals: File-derived values keyed by setting name.
-    :type file_vals: dict[str, str]
-    :return: Resolved setting value, or None when all sources are absent.
-    :rtype: Optional[str]
-    """
-    if explicit is not None:
-        return explicit
-    if env_vals.get(key) is not None:
-        return env_vals.get(key)
-    return file_vals.get(key)
-
-
-def _resolve_relative_to_invoking_script(config_path: Path) -> Optional[str]:
-    """Resolve a relative config path against the invoking script directory.
-
-    This helper is necessary because consumers often run scripts from different
-    working directories, but still expect a relative config path beside the script to
-    resolve predictably.
-
-    :param config_path: Relative path provided by the caller.
-    :type config_path: Path
-    :return: Absolute path to an existing script-relative config file, or None.
-    :rtype: Optional[str]
-    """
-    main_module = sys.modules.get("__main__")
-    main_file = getattr(main_module, "__file__", None)
-    if not main_file:
-        return None
-
-    candidate = Path(main_file).resolve().parent / config_path
-    return str(candidate) if candidate.is_file() else None
-
-
 # ── LocalConfig ───────────────────────────────────────────────────────────────
 
 # Sensible defaults applied at the lowest precedence (File > Env > Default).
@@ -393,7 +276,7 @@ _CONNECTION_DEFAULTS: dict[str, Optional[str]] = {
     "api_key": None,
     "transport": "xmlrpc",
     # The concrete numeric default lives in ``DEFAULT_TIMEOUT_SECONDS``;
-    # ``from_sources`` coerces this absent value into it.
+    # ``_build_connection_settings`` coerces this absent value into it.
     "timeout": None,
 }
 
@@ -424,10 +307,10 @@ _BEHAVIOR_DEFAULTS: dict[str, Any] = {
 class LocalConfig:
     """Resolved, read-only SDK settings promoted to the local state layer.
 
-    ``LocalConfig`` is injected into commands as a peer dependency alongside
-    ``OdooClient`` and ``LocalStateClient``. Each setting is resolved with the
-    precedence **File > Environment Variable > Sensible Default**, so the local
-    config file always wins when present.
+    ``LocalConfig`` is the single settings resolver, injected into commands as a
+    peer dependency alongside ``OdooClient`` and ``LocalStateClient``. Each setting
+    is resolved with the precedence **File > Environment Variable > Sensible
+    Default**, so the local config file always wins when present.
 
     :param connection: Resolved connection settings keyed by setting name.
     :type connection: Mapping[str, Optional[str]]
@@ -453,8 +336,9 @@ class LocalConfig:
     def load(cls, config_path: Optional[str] = None) -> "LocalConfig":
         """Resolve settings from file, environment, and defaults.
 
-        :param config_path: Explicit config file path override; when omitted the
-            ``ODOO_SDK_CONFIG`` env var and default path are consulted.
+        :param config_path: Explicit config file or directory override; when
+            omitted the ``ODOO_SDK_CONFIG`` env var and the default discovery
+            locations are consulted.
         :type config_path: Optional[str]
         :return: A resolved, read-only ``LocalConfig``.
         :rtype: LocalConfig
@@ -535,40 +419,74 @@ class LocalConfig:
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.
 
+        The connection mapping has already been resolved (File > Env > Default) by
+        :meth:`load`, so this validates and coerces it directly rather than
+        re-resolving through :meth:`OdooConnectionSettings.from_sources`.
+
         :raises ValueError: When required connection settings are unresolved.
         :return: Validated connection settings for client construction.
         :rtype: OdooConnectionSettings
         """
-        conn = self._connection
-        return OdooConnectionSettings.from_sources(
-            url=conn.get("url"),
-            db=conn.get("db"),
-            username=conn.get("username"),
-            password=conn.get("password"),
-            api_key=conn.get("api_key"),
-            transport=conn.get("transport"),
-            timeout=conn.get("timeout"),  # type: ignore[arg-type]
-        )
+        return _build_connection_settings(self._connection)
 
 
 def _resolve_local_config_path(config_path: Optional[str]) -> Optional[Path]:
-    """Return the config file to read, honoring explicit path, env var, default.
+    """Return the config file to read, honoring the override, env var, defaults.
 
-    Only an existing file is returned; a missing file yields ``None`` so callers
-    fall back to environment variables and defaults.
+    The explicit override and the ``ODOO_SDK_CONFIG`` env var may name either a
+    config **file** or a **directory**; a directory is probed for ``config.toml``
+    then ``config.ini`` so the devcontainer feature can point ``ODOO_SDK_CONFIG``
+    at its mounted config directory regardless of which file the user created.
+    When no override applies, the current working directory and then the default
+    ``~/.config/odoo_sdk`` directory are searched. Only an existing file is
+    returned; otherwise ``None`` so callers fall back to environment variables and
+    defaults.
 
-    :param config_path: Explicit path override, defaults to None.
+    :param config_path: Explicit path or directory override, defaults to None.
     :type config_path: Optional[str]
     :return: Path to an existing config file, or None.
     :rtype: Optional[Path]
     """
-    candidate = (
-        config_path
-        or os.environ.get(LOCAL_CONFIG_ENV_VAR)
-        or DEFAULT_LOCAL_CONFIG_PATH
-    )
-    path = Path(candidate).expanduser()
+    candidate = config_path or os.environ.get(LOCAL_CONFIG_ENV_VAR)
+    if candidate:
+        return _resolve_config_candidate(Path(candidate).expanduser())
+    for basename in _CWD_CONFIG_BASENAMES:
+        cwd_path = Path(basename)
+        if cwd_path.is_file():
+            return cwd_path
+    return _probe_config_dir(Path(DEFAULT_CONFIG_DIR).expanduser())
+
+
+def _resolve_config_candidate(path: Path) -> Optional[Path]:
+    """Resolve an explicit or env-provided candidate to an existing config file.
+
+    A directory candidate is probed for the known config filenames; a file
+    candidate is returned when it exists; anything else yields ``None`` (and, per
+    the single-override contract, does not fall through to the default locations).
+
+    :param path: Expanded candidate path from the override or env var.
+    :type path: Path
+    :return: Path to an existing config file, or None.
+    :rtype: Optional[Path]
+    """
+    if path.is_dir():
+        return _probe_config_dir(path)
     return path if path.is_file() else None
+
+
+def _probe_config_dir(directory: Path) -> Optional[Path]:
+    """Return the first existing ``config.toml`` / ``config.ini`` in ``directory``.
+
+    :param directory: Directory to probe for the known config filenames.
+    :type directory: Path
+    :return: Path to the first existing config file, or None.
+    :rtype: Optional[Path]
+    """
+    for filename in _CONFIG_DIR_FILENAMES:
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _load_local_config_file(config_path: Optional[str]) -> dict[str, dict[str, Any]]:
@@ -577,7 +495,7 @@ def _load_local_config_file(config_path: Optional[str]) -> dict[str, dict[str, A
     Supports TOML (``.toml``) and INI files. Returns an empty mapping when no
     file applies.
 
-    :param config_path: Explicit path override, defaults to None.
+    :param config_path: Explicit path or directory override, defaults to None.
     :type config_path: Optional[str]
     :return: Parsed sections keyed by section name.
     :rtype: dict[str, dict[str, Any]]
@@ -603,13 +521,26 @@ def _load_toml_sections(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _load_ini_sections(path: Path) -> dict[str, dict[str, Any]]:
-    """Parse the ``connection`` and ``behavior`` sections from an INI file."""
+    """Parse the ``connection`` and ``behavior`` sections from an INI file.
+
+    ``[odoo]`` is accepted as an alias for ``[connection]`` (used only when no
+    explicit ``[connection]`` section is present) so an already-persisted
+    ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
+
+    :param path: Path to the INI file to parse.
+    :type path: Path
+    :return: Parsed sections keyed by section name.
+    :rtype: dict[str, dict[str, Any]]
+    """
     parser = configparser.ConfigParser()
     parser.read(path)
     sections: dict[str, dict[str, Any]] = {}
-    for name in ("connection", "behavior"):
-        if parser.has_section(name):
-            sections[name] = dict(parser.items(name))
+    if parser.has_section(_CONNECTION_SECTION):
+        sections["connection"] = dict(parser.items(_CONNECTION_SECTION))
+    elif parser.has_section(_CONNECTION_SECTION_ALIAS):
+        sections["connection"] = dict(parser.items(_CONNECTION_SECTION_ALIAS))
+    if parser.has_section(_BEHAVIOR_SECTION):
+        sections["behavior"] = dict(parser.items(_BEHAVIOR_SECTION))
     return sections
 
 
