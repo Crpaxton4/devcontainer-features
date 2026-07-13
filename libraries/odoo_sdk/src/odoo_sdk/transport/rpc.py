@@ -1,10 +1,60 @@
 import http.client
+import socket
 import threading
 import xmlrpc.client
-from typing import Any
+from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import urlsplit
 
+from ._fault_mapping import map_xmlrpc_fault
+from .errors import OdooTransportError
 from .executor import OdooExecutor
+
+_T = TypeVar("_T")
+
+
+def _mapped_call(
+    operation: Callable[[], _T],
+    *,
+    model: Optional[str],
+    method: Optional[str],
+) -> _T:
+    """Run ``operation`` translating XML-RPC failures into the SDK taxonomy.
+
+    This helper is necessary because both authentication and ``execute_kw`` cross the
+    XML-RPC boundary and must classify failures identically: a server-side
+    :class:`xmlrpc.client.Fault` becomes a mapped :class:`OdooError`, while client-side
+    protocol, timeout, and connectivity failures become an :class:`OdooTransportError`.
+    Sharing one wrapper keeps the two call sites composable.
+
+    :param operation: Zero-argument callable performing the XML-RPC request.
+    :type operation: Callable[[], _T]
+    :param model: Odoo model name involved in the call, or None when not applicable.
+    :type model: Optional[str]
+    :param method: Odoo method name involved in the call, or None when not applicable.
+    :type method: Optional[str]
+    :raises OdooError: When the server returns an XML-RPC fault, classified into the
+        appropriate subclass.
+    :raises OdooTransportError: When a protocol, timeout, or connectivity failure
+        occurs before a server fault could be produced.
+    :return: The value returned by ``operation``.
+    :rtype: _T
+    """
+    try:
+        return operation()
+    except xmlrpc.client.Fault as fault:
+        raise map_xmlrpc_fault(fault, model=model, method=method) from fault
+    except (
+        xmlrpc.client.ProtocolError,
+        socket.timeout,
+        http.client.HTTPException,
+        OSError,
+    ) as exc:
+        raise OdooTransportError(
+            "Transport error communicating with Odoo server",
+            model=model,
+            method=method,
+            detail=str(exc),
+        ) from exc
 
 #: Default per-request timeout, in seconds, applied to every XML-RPC call.
 #:
@@ -181,11 +231,15 @@ class OdooRpcExecutor(OdooExecutor):
 
         if self._uid is None:
             with self._lock:
-                self._uid = self._common.authenticate(
-                    self.db,
-                    self.username,
-                    self._password,
-                    {},
+                self._uid = _mapped_call(
+                    lambda: self._common.authenticate(
+                        self.db,
+                        self.username,
+                        self._password,
+                        {},
+                    ),
+                    model=None,
+                    method="authenticate",
                 )
         # Hack to make static type checking not complain. There is likely a better way
         return int(str(self._uid)) if self._uid else -1
@@ -204,15 +258,24 @@ class OdooRpcExecutor(OdooExecutor):
         :type args: Any
         :param kwargs: Keyword arguments forwarded to `execute_kw`.
         :type kwargs: Any
+        :raises OdooError: When the server returns an XML-RPC fault, classified into
+            the appropriate subclass of :class:`OdooError`.
+        :raises OdooTransportError: When a protocol, timeout, or connectivity failure
+            occurs while issuing the call.
         :return: Result returned by the XML-RPC endpoint.
         :rtype: Any
         """
-        return self._object.execute_kw(
-            self.db,
-            self.uid,
-            self._password,
-            model,
-            method,
-            list(args),
-            kwargs,
+        uid = self.uid
+        return _mapped_call(
+            lambda: self._object.execute_kw(
+                self.db,
+                uid,
+                self._password,
+                model,
+                method,
+                list(args),
+                kwargs,
+            ),
+            model=model,
+            method=method,
         )
