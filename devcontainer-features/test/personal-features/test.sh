@@ -26,8 +26,17 @@ source dev-container-features-test-lib
 check "claude wrapper is on PATH and executable" bash -c "test -x \"\$(command -v claude)\""
 check "claude reports a version" claude --version
 
-check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
-check "wrapper passes known subcommands through untouched" bash -c "grep -q 'mcp' \"\$(command -v claude)\""
+# The wrapper injects --ide ONLY for a bare interactive session (no args + TTY)
+# and passes everything else straight through, so a new Claude Code subcommand
+# can never be mangled into `claude --ide <subcommand>` (see NOTES.md). Assert
+# the guard (`$# -eq 0` + `[ -t 0 ]`) and the verbatim passthrough exec are
+# present, and that no stale subcommand allowlist (`case "$1" in`) survives.
+check "wrapper injects --ide only for a bare interactive session" bash -c \
+  "grep -qF -- '\$# -eq 0' \"\$(command -v claude)\" && grep -qF -- '[ -t 0 ]' \"\$(command -v claude)\" && grep -qF -- 'exec \"\$REAL\" --ide' \"\$(command -v claude)\""
+check "wrapper passes everything else (subcommands, flags, prompts) through untouched" bash -c \
+  "grep -qF -- 'exec \"\$REAL\" \"\$@\"' \"\$(command -v claude)\""
+check "wrapper has no hardcoded subcommand allowlist" bash -c \
+  "! grep -qF 'case \"\$1\" in' \"\$(command -v claude)\""
 
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
