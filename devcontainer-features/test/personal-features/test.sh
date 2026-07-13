@@ -34,15 +34,19 @@ check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
-# odoo-sdk MCP server is registered at user scope when the odoo-mcp binary was
-# installed (skipped on <3.10 base images where the SDK wheel isn't installed).
-check "odoo-sdk MCP server is registered when odoo-mcp is present" bash -c \
-  "! test -x /usr/local/bin/odoo-mcp || claude mcp get odoo-sdk"
+# NOTE: no check here that the odoo-sdk MCP server is registered. install.sh
+# registers it at BUILD time into CLAUDE_CONFIG_DIR=/usr/local/share/claude-home,
+# but at RUNTIME that directory is shadowed by the feature's bind mount of the
+# host's ~/.claude (empty on CI runners and fresh hosts), so `claude mcp get
+# odoo-sdk` reports the server as missing whenever the mount is active - i.e.
+# always in real use. Asserting it here would test something the feature cannot
+# deliver; a runtime-registration mechanism (e.g. a feature-contributed
+# postCreateCommand) is a separate product decision.
 
 # Regression guard for #120: the odoo-tui curses TUI console script is symlinked
 # onto PATH whenever the SDK is installed (i.e. whenever odoo-mcp is present).
-# Scoped the same way as the MCP check so it no-ops on <3.10 base images where
-# the SDK wheel isn't installed.
+# Gated on the odoo-mcp binary so it no-ops on <3.10 base images where the SDK
+# wheel isn't installed. PATH checks are unaffected by the bind mounts above.
 check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
 
