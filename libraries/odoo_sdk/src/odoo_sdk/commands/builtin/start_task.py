@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, Optional
 
 from ..command import Command
+from odoo_sdk.state import TaskAlreadyRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import (
     get_employee_id,
@@ -79,18 +80,18 @@ class StartTaskCommand(Command):
         :param branch_name: Optional git branch created for the task, echoed back.
         :param warning: Optional non-fatal warning to include in the result.
         :return: Session details including task name, project, and started_at.
+        :raises TaskAlreadyRunningError: When the task already has an active
+            session.
         """
         assert_odoo_devcontainer()
 
         db = self.state
         existing = db.get_active_run(task_id)
         if existing is not None:
-            return {
-                "error": (
-                    f"Task {task_name!r} already has an active session "
-                    f"(id={existing.id}, state={existing.state.value})."
-                )
-            }
+            raise TaskAlreadyRunningError(
+                f"Task {task_name!r} already has an active session "
+                f"(id={existing.id}, state={existing.state.value})."
+            )
 
         employee_id = _get_employee_id(self._client, db)
 
