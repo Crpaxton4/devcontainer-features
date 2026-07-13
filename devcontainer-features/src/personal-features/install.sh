@@ -155,14 +155,24 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
         run_installer https://astral.sh/uv/install.sh
         unset UV_INSTALL_DIR
     fi
-    for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
-        [ -f "$wheel" ] || continue
-        _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
-        uv venv "$_SDK_ENV"
-        uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+    # Install the bundled odoo_sdk wheel(s) into one shared uv venv. The glob
+    # stays literal (a single non-matching entry) when no wheel is bundled, so
+    # gate on the first entry actually being a file before doing any work.
+    _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
+    _sdk_wheels=("$FEATURE_DIR"/odoo_sdk-*.whl)
+    if [ -f "${_sdk_wheels[0]}" ]; then
+        # venv creation is hoisted out of the per-wheel loop: with a second
+        # bundled wheel the old in-loop `uv venv` would re-run on the same path
+        # and error. The `[ -d ]` guard also makes a re-provision over a
+        # persisted venv a no-op. `uv pip install` still runs per wheel.
+        [ -d "$_SDK_ENV" ] || uv venv "$_SDK_ENV"
+        for wheel in "${_sdk_wheels[@]}"; do
+            uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+        done
+        # Link the entry points once, after all wheels are installed.
         ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
         ln -sf "$_SDK_ENV/bin/odoo-tui" /usr/local/bin/odoo-tui
-    done
+    fi
 
     # mempalace: global cross-project memory palace, auto-mined via Claude Code
     # hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
