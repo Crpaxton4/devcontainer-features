@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.18.1...personal-features-v2.0.0) (2026-07-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** targeted seams + config consolidation (Epic G) ([#308](https://github.com/Crpaxton4/devcontainer-features/issues/308))
+* **sdk:** 
+
+### Features
+
+* **feature:** add delta and lazygit (Epic F) ([#306](https://github.com/Crpaxton4/devcontainer-features/issues/306)) ([5fb251d](https://github.com/Crpaxton4/devcontainer-features/commit/5fb251d857b5f25c89d74a8b25f07c5c87505fd1))
+* **feature:** add delta and lazygit (pinned) ([#305](https://github.com/Crpaxton4/devcontainer-features/issues/305)) ([5fb251d](https://github.com/Crpaxton4/devcontainer-features/commit/5fb251d857b5f25c89d74a8b25f07c5c87505fd1))
+* **feature:** baked-in Claude consulting skills (Epic I) ([#320](https://github.com/Crpaxton4/devcontainer-features/issues/320)) ([cb4da25](https://github.com/Crpaxton4/devcontainer-features/commit/cb4da25659f45a2b09545e8b99b739a5fca9ed7d))
+* **personal-features:** add delta and lazygit (pinned) ([5fb251d](https://github.com/Crpaxton4/devcontainer-features/commit/5fb251d857b5f25c89d74a8b25f07c5c87505fd1))
+* **personal-features:** author consulting skills (quote, design-doc, discovery, review, status) ([cb4da25](https://github.com/Crpaxton4/devcontainer-features/commit/cb4da25659f45a2b09545e8b99b739a5fca9ed7d))
+* **personal-features:** persisted-paths manifest as single source of truth ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** skill delivery via sync-claude-skills and postCreateCommand ([cb4da25](https://github.com/Crpaxton4/devcontainer-features/commit/cb4da25659f45a2b09545e8b99b739a5fca9ed7d))
+* **sdk:** configurable RPC timeout via ODOO_TIMEOUT ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** read-only reporting/billing and knowledge/discovery MCP tools (Epic H) ([#316](https://github.com/Crpaxton4/devcontainer-features/issues/316)) ([e5a2244](https://github.com/Crpaxton4/devcontainer-features/commit/e5a2244fb8caff2d5ce91ee9db2e4884cdb6b57b))
+
+
+### Bug Fixes
+
+* **devcontainer:** stop installing two versions of personal-features ([#256](https://github.com/Crpaxton4/devcontainer-features/issues/256)) ([5eaff6c](https://github.com/Crpaxton4/devcontainer-features/commit/5eaff6c41b783e121e5ec787a8ba5cfeeb60c705))
+* **feature:** install.sh hardening + data-driven persistence manifest (Epic E) ([#304](https://github.com/Crpaxton4/devcontainer-features/issues/304)) ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** chmod credential config dirs to 0700 ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** hoist uv venv creation out of the wheel loop ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** invert claude-wrapper to inject --ide only for bare interactive sessions ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** pin tool versions and drop releases/latest API calls ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **personal-features:** stop masking download failures in install.sh ([abfaa53](https://github.com/Crpaxton4/devcontainer-features/commit/abfaa53c12c354e46abfe632f763852f575491d8))
+* **sdk:** auth, error mapping, credential repr, and transport hardening (Epic B) ([#286](https://github.com/Crpaxton4/devcontainer-features/issues/286)) ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** bound MCP profiling artifacts under a pruned subdirectory ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** hide password from OdooConnectionSettings repr ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** map XML-RPC faults to the OdooError taxonomy ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** raise OdooAuthenticationError on failed authentication ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** raise typed exceptions from start_task and abort_task ([050cd64](https://github.com/Crpaxton4/devcontainer-features/commit/050cd6412ea9918d7f3b3ddfa321841182afb173))
+* **sdk:** send Authorization Bearer with standard casing ([8ca1db7](https://github.com/Crpaxton4/devcontainer-features/commit/8ca1db7821e5fde5018b68c34fb381a0d9f4d57b))
+* **sdk:** uniform command error contract — raise typed, format at MCP boundary (Epic C) ([#300](https://github.com/Crpaxton4/devcontainer-features/issues/300)) ([050cd64](https://github.com/Crpaxton4/devcontainer-features/commit/050cd6412ea9918d7f3b3ddfa321841182afb173))
+
+
+### Code Refactoring
+
+* **sdk:** decorator-based command and tool registration ([0f58def](https://github.com/Crpaxton4/devcontainer-features/commit/0f58def43889503e0bec0adc2ac081cd76100232))
+* **sdk:** targeted seams + config consolidation (Epic G) ([#308](https://github.com/Crpaxton4/devcontainer-features/issues/308)) ([0f58def](https://github.com/Crpaxton4/devcontainer-features/commit/0f58def43889503e0bec0adc2ac081cd76100232))
+
 ## [1.18.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.18.0...personal-features-v1.18.1) (2026-07-12)
 
 
