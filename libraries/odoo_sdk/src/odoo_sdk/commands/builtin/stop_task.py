@@ -1,6 +1,7 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.state import TaskNotRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.timesheet import emit_agent_event, reconcile
@@ -11,6 +12,7 @@ def _finalize_description(description: str) -> str:
     return description if description.startswith("[/]") else f"[/] {description}"
 
 
+@builtin_command
 class StopTaskCommand(Command):
     """Stop a task tracking session, finalize elapsed time, and update the timesheet.
 

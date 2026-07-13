@@ -1,7 +1,9 @@
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.attachments import get_task_attachments
 
 
+@builtin_command
 class GetTaskAttachmentsCommand(Command):
     _name = "get_task_attachments"
     _description = (

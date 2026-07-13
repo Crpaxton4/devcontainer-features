@@ -1,12 +1,14 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.utilities.timesheet import emit_agent_event
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
+@builtin_command
 class TaskNoteCommand(Command):
     """Post a note to a task's chatter and record it in the local session."""
 

@@ -1,7 +1,8 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from odoo_sdk.commands import Registry
+import odoo_sdk.commands.builtin as builtin_pkg
+from odoo_sdk.commands import Command, Registry
 from odoo_sdk.commands.builtin import (
     BUILTIN_COMMANDS,
     CreateTaskCommand,
@@ -11,6 +12,7 @@ from odoo_sdk.commands.builtin import (
     GetTasksCommand,
     GetTodoCommand,
     GetUidCommand,
+    builtin_command,
     register_builtins,
 )
 
@@ -129,6 +131,106 @@ class TestRegisterBuiltins(unittest.TestCase):
     def test_metadata_matches_registration_keys(self):
         for name, command in BUILTIN_COMMANDS.items():
             self.assertEqual(command(MagicMock()).name, name)
+
+
+#: The exact built-in command surface, pinned independently of the
+#: decorator-populated ``BUILTIN_COMMANDS`` so a dropped ``@builtin_command`` (or
+#: an unimported command module) fails loudly instead of silently shrinking the
+#: registry past the self-referential parity tests.
+EXPECTED_BUILTIN_NAMES = frozenset(
+    {
+        "get_uid",
+        "get_models",
+        "get_tasks",
+        "get_todo",
+        "get_task",
+        "get_task_chatter",
+        "get_task_attachments",
+        "create_task",
+        "search_projects",
+        "search_tasks",
+        "start_task",
+        "stop_task",
+        "abort_task",
+        "resume_task",
+        "task_status",
+        "task_note",
+        "task_list",
+        "task_question",
+        "optimize_sessions",
+        "ingest_sessions",
+        "query_sessions",
+    }
+)
+
+
+class TestBuiltinCommandsExactSet(unittest.TestCase):
+    """``BUILTIN_COMMANDS`` matches an explicit, hand-pinned name set."""
+
+    def test_exact_command_name_set(self):
+        self.assertEqual(set(BUILTIN_COMMANDS), set(EXPECTED_BUILTIN_NAMES))
+
+    def test_no_duplicate_or_missing_count(self):
+        self.assertEqual(len(BUILTIN_COMMANDS), len(EXPECTED_BUILTIN_NAMES))
+
+
+class TestBuiltinCommandDecorator(unittest.TestCase):
+    """The ``@builtin_command`` decorator populates ``BUILTIN_COMMANDS``."""
+
+    def test_registers_class_under_its_name(self):
+        class _Fresh(Command):
+            _name = "fresh_probe_cmd"
+            _description = "probe"
+
+            def execute(self):  # pragma: no cover - never invoked
+                return None
+
+        # patch.dict leaves BUILTIN_COMMANDS untouched after the block, so this
+        # probe registration does not leak into the real built-in surface.
+        with patch.dict(BUILTIN_COMMANDS, clear=False):
+            returned = builtin_command(_Fresh)
+            # The decorator is transparent (returns the class) and keys by ``_name``.
+            self.assertIs(returned, _Fresh)
+            self.assertIs(BUILTIN_COMMANDS["fresh_probe_cmd"], _Fresh)
+        self.assertNotIn("fresh_probe_cmd", BUILTIN_COMMANDS)
+
+    def test_duplicate_name_raises(self):
+        class _Dupe(Command):
+            _name = "get_uid"  # collides with the real GetUidCommand
+            _description = "dupe"
+
+            def execute(self):  # pragma: no cover - never invoked
+                return None
+
+        with self.assertRaises(ValueError) as ctx:
+            builtin_command(_Dupe)
+        self.assertIn("get_uid", str(ctx.exception))
+        # The collision left the genuine command in place (no silent overwrite).
+        self.assertIs(BUILTIN_COMMANDS["get_uid"], GetUidCommand)
+
+    def test_keys_equal_each_class_name_attribute(self):
+        # Determinism: every registration key is exactly the class's ``_name``.
+        for name, command in BUILTIN_COMMANDS.items():
+            self.assertEqual(command._name, name)
+
+
+class TestBuiltinExports(unittest.TestCase):
+    """``__all__`` is derived from the decorator-populated registry."""
+
+    def test_all_entries_are_real_attributes(self):
+        for name in builtin_pkg.__all__:
+            self.assertTrue(
+                hasattr(builtin_pkg, name), f"{name} in __all__ is not exported"
+            )
+
+    def test_all_covers_every_registered_command_class(self):
+        exported = set(builtin_pkg.__all__)
+        for command in BUILTIN_COMMANDS.values():
+            self.assertIn(command.__name__, exported)
+
+    def test_all_includes_registration_api(self):
+        for name in ("BUILTIN_COMMANDS", "builtin_command", "register_builtins"):
+            self.assertIn(name, builtin_pkg.__all__)
 
 
 if __name__ == "__main__":

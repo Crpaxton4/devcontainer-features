@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Tuple
 
 from odoo_sdk.commands import Registry
 
-from .atomic import ATOMIC_TOOL_FACTORIES
+from .atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
 from .start_task import make_start_task_tool
 from .stop_task import make_stop_task_tool
 
@@ -73,6 +73,7 @@ __all__ = [
     "TOOL_FACTORIES",
     "ATOMIC_TOOL_FACTORIES",
     "COMPOSITION_TOOL_FACTORIES",
+    "atomic_tool",
     "build_explicit_tools",
     "make_start_task_tool",
     "make_stop_task_tool",

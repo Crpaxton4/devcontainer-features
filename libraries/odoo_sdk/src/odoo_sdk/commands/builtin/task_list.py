@@ -1,10 +1,12 @@
 from typing import Any, Optional
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import name_search_projects
 
 
+@builtin_command
 class TaskListCommand(Command):
     """List project tasks assigned to the current user."""
 

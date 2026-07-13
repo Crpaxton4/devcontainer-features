@@ -1,8 +1,10 @@
 from typing import Any, Dict, List
 
 from ..command import Command
+from ._registration import builtin_command
 
 
+@builtin_command
 class GetModelsCommand(Command):
     """List the available Odoo models with their technical and display names."""
 

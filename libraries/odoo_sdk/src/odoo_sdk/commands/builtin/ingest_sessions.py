@@ -15,6 +15,7 @@ from typing import Any, Optional
 from odoo_sdk.adapters import ingest_events_incrementally
 
 from ..command import Command
+from ._registration import builtin_command
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -35,6 +36,7 @@ def _end_bound(value: Optional[date]) -> Optional[datetime]:
     return datetime(nxt.year, nxt.month, nxt.day)
 
 
+@builtin_command
 class IngestSessionsCommand(Command):
     """Ingest stored events into the incrementally-maintained global sessions.
 

@@ -15,6 +15,7 @@ from typing import Any, Optional
 from odoo_sdk.state import SessionWindow
 
 from ..command import Command
+from ._registration import builtin_command
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -40,6 +41,7 @@ def _range_bounds(
     return lo, datetime(nxt.year, nxt.month, nxt.day)
 
 
+@builtin_command
 class QuerySessionsCommand(Command):
     """Return global sessions overlapping a date range, with their events.
 
