@@ -5,9 +5,15 @@ container-create failure, so ``setup.sh`` / ``setup.ps1`` must create *every*
 mount source the Feature declares. That list used to be duplicated in four
 places (the Feature JSON, ``setup.sh``, and ``.github/workflows/test.yaml``
 twice) and predictably drifted: ``~/.config/odoo_sdk`` was a mount source that
-``setup.sh`` never created. CI now runs ``setup.sh`` itself, which covers the
-POSIX side - but there is no Windows runner, so ``setup.ps1`` can only be
-checked statically. That's what this does.
+``setup.sh`` never created.
+
+``persisted-paths.tsv`` is now the single source of truth: ``setup.sh`` reads it
+directly (so it cannot drift), and ``.github/scripts/check_persisted_paths.py``
+gates the Feature JSON against it. ``setup.ps1`` is the one consumer that is
+*hand-maintained* rather than derived - there is no Windows CI runner, so it
+can't read the manifest at container-build time - so this gate's job is to keep
+that hand-maintained list matching the manifest, plus confirm ``setup.sh`` still
+reads the manifest rather than a hardcoded copy.
 
 It also guards the two things issue #198 fixed, which are invisible to any
 Linux test:
@@ -24,10 +30,13 @@ Like the other helpers here this is CI-only and stdlib-only: no ``odoo_sdk``, no
 third-party YAML/JSON5 parser.
 """
 
+import importlib.util
 import json
 import re
 import unittest
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURE_JSON = (
@@ -44,6 +53,20 @@ LOCAL_ENV_PREFIX = "${localEnv:HOME}${localEnv:USERPROFILE}/"
 SHELL_HISTORY_TARGET = "/usr/local/share/shell-history"
 
 
+def _load_checker():
+    """Load ``check_persisted_paths`` by path, matching test_mutation_gate."""
+    spec = importlib.util.spec_from_file_location(
+        "check_persisted_paths", SCRIPT_DIR / "check_persisted_paths.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+checker = _load_checker()
+
+
 def _mounts():
     return json.loads(FEATURE_JSON.read_text())["mounts"]
 
@@ -57,9 +80,9 @@ def _mount_source_paths():
     }
 
 
-def _setup_sh_paths():
-    """Home-relative dirs created by setup.sh, from its ``"$HOME/..."`` args."""
-    return set(re.findall(r'"\$HOME/([^"]+)"', SETUP_SH.read_text()))
+def _manifest_source_paths():
+    """Home-relative source path of each manifest row - what setup.sh creates."""
+    return checker.host_source_paths(checker.load_manifest())
 
 
 def _setup_ps1_paths():
@@ -111,14 +134,17 @@ class TestHostSetupParity(unittest.TestCase):
         # ever changes and _mount_source_paths() comes back empty.
         self.assertTrue(_mount_source_paths(), "no mount sources were parsed")
 
-    def test_setup_sh_creates_every_mount_source(self):
-        created = _setup_sh_paths()
+    def test_manifest_covers_every_mount_source(self):
+        # setup.sh reads the manifest, so covering every mount source is really a
+        # property of the manifest. check_persisted_paths.py enforces exact
+        # equality; this is the belt-and-braces "no mount left uncreated" view.
+        created = _manifest_source_paths()
         for source in sorted(_mount_source_paths()):
             with self.subTest(source=source):
                 self.assertTrue(
                     _is_covered(source, created),
-                    f"setup.sh never creates ~/{source}, so the bind mount will "
-                    f"fail with 'bind source path does not exist'",
+                    f"the manifest never creates ~/{source}, so setup.sh leaves "
+                    f"the bind mount to fail with 'bind source path does not exist'",
                 )
 
     def test_setup_ps1_creates_every_mount_source(self):
@@ -131,10 +157,16 @@ class TestHostSetupParity(unittest.TestCase):
                     f"fail on Windows hosts",
                 )
 
-    def test_setup_scripts_agree(self):
-        # There is no Windows runner, so this static check is the only thing
-        # keeping the two scripts from drifting apart.
-        self.assertEqual(_setup_sh_paths(), _setup_ps1_paths())
+    def test_setup_ps1_matches_manifest(self):
+        # setup.ps1 is hand-maintained (no Windows CI runner reads the manifest
+        # at build time), so this static check is the only thing keeping it from
+        # drifting away from setup.sh's source of truth.
+        self.assertEqual(_manifest_source_paths(), _setup_ps1_paths())
+
+    def test_setup_sh_reads_the_manifest(self):
+        # Guard against setup.sh being reverted to a hardcoded path list, which
+        # would silently reintroduce the drift the manifest exists to prevent.
+        self.assertIn("persisted-paths.tsv", SETUP_SH.read_text())
 
     def test_setup_scripts_do_not_create_history_files(self):
         # Both scripts used to `touch ~/.bash_history` (now a directory mount)

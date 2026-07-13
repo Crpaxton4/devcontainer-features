@@ -49,6 +49,8 @@ bind source path does not exist: /home/you/.claude
 
 ## What persists, and where
 
+The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces).
+
 Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
@@ -137,7 +139,9 @@ github_templates:
 
 ## The `claude` command
 
-`claude` is wrapped so that a default session (bare `claude`, `claude "prompt"`, `-p`, `-c`, `-r`, etc.) automatically passes `--ide`, since this Feature is meant purely for use inside a VS Code dev container. Subcommands (`claude mcp`, `claude auth login`, `claude update`, etc.) are passed through unmodified.
+`claude` is wrapped so that a **bare interactive session** — plain `claude` with no arguments, run from a terminal — automatically passes `--ide`, since this Feature is meant purely for use inside a VS Code dev container. **Everything else is passed through unmodified**: subcommands (`claude mcp`, `claude auth login`, `claude update`, etc.), any flags or a prompt (`claude "prompt"`, `-p`, `-c`, `-r`), and non-interactive/piped invocations (`echo … | claude`).
+
+The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] && [ -t 0 ]`) rather than maintaining an allowlist of subcommands to *exclude*. The old allowlist had to be hand-edited for every new subcommand, and any subcommand it hadn't been taught about was silently turned into `claude --ide <subcommand>`; the inverted rule can never break a new Claude Code subcommand. **Accepted trade-off:** `claude -c`, `claude -r`, and `claude "prompt"` no longer auto-get `--ide` — pass it explicitly if you want it there.
 
 ## Additional tooling
 

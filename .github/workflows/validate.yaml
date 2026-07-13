@@ -14,3 +14,39 @@ jobs:
         with:
           validate-only: "true"
           base-path-to-features: "./devcontainer-features/src"
+
+  # Static shell-lint gate for every shell entry point the Feature ships and the
+  # host/test scripts around it. `sh -n` (test.sh) only catches syntax errors;
+  # shellcheck catches the pipefail-masking and quoting bug classes the install.sh
+  # hardening fixed (SC2312 et al.). Lives here rather than in its own workflow
+  # because it is another lightweight, Docker-free static validation gate on the
+  # same source, and validate.yaml runs on every PR with no paths filter - so an
+  # edit to any one shell file is always linted.
+  shellcheck:
+    runs-on: ubuntu-latest
+    # Pinned shellcheck version, downloaded deterministically from the official
+    # koalaman release - the same pinned-tool philosophy install.sh uses for its
+    # own GitHub-release binaries, rather than a third-party action with an opaque
+    # bundled version. Dependabot does not bump inline shell/workflow strings;
+    # refresh this by hand.
+    env:
+      SHELLCHECK_VERSION: "0.10.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install pinned shellcheck"
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+
+      - name: "Lint shell entry points"
+        run: |
+          shellcheck \
+            devcontainer-features/src/personal-features/install.sh \
+            devcontainer-features/src/personal-features/create-pr \
+            setup.sh \
+            devcontainer-features/test/personal-features/*.sh

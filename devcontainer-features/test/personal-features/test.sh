@@ -21,16 +21,27 @@
 
 set -e
 
+# shellcheck source=/dev/null  # dev-container-features-test-lib is injected by the test harness at runtime; not resolvable statically. check()/reportResults() come from it.
 source dev-container-features-test-lib
 
 check "claude wrapper is on PATH and executable" bash -c "test -x \"\$(command -v claude)\""
 check "claude reports a version" claude --version
 
-check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
-check "wrapper passes known subcommands through untouched" bash -c "grep -q 'mcp' \"\$(command -v claude)\""
+# The wrapper injects --ide ONLY for a bare interactive session (no args + TTY)
+# and passes everything else straight through, so a new Claude Code subcommand
+# can never be mangled into `claude --ide <subcommand>` (see NOTES.md). Assert
+# the guard (`$# -eq 0` + `[ -t 0 ]`) and the verbatim passthrough exec are
+# present, and that no stale subcommand allowlist (`case "$1" in`) survives.
+check "wrapper injects --ide only for a bare interactive session" bash -c \
+  "grep -qF -- '\$# -eq 0' \"\$(command -v claude)\" && grep -qF -- '[ -t 0 ]' \"\$(command -v claude)\" && grep -qF -- 'exec \"\$REAL\" --ide' \"\$(command -v claude)\""
+check "wrapper passes everything else (subcommands, flags, prompts) through untouched" bash -c \
+  "grep -qF -- 'exec \"\$REAL\" \"\$@\"' \"\$(command -v claude)\""
+check "wrapper has no hardcoded subcommand allowlist" bash -c \
+  "! grep -qF 'case \"\$1\" in' \"\$(command -v claude)\""
 
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
+check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
@@ -97,6 +108,7 @@ check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/g
 # shell enhancements
 check "starship is installed" starship --version
 check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
 check "~/.bash_history is linked to the bind-mounted history file" bash -c \
   "[ \"\$(readlink -f \"\$HOME/.bash_history\")\" = '/usr/local/share/shell-history/bash_history' ]"
 
@@ -136,5 +148,31 @@ check "history -a survives starship/zoxide clobbering PROMPT_COMMAND" bash -ic \
 
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
+
+# Regression guard for #233: the credential-holding config dirs must be 0700,
+# not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
+# gh's hosts.yml) live in a world-readable dir. The mode comes from
+# persisted-paths.tsv's `mode` column and is enforced by BOTH consumers that
+# create these dirs: install.sh chmods the container-side targets, and setup.sh
+# chmods the host-side sources. Both matter, and these assertions cover
+# whichever is visible: CI runs `sh ./setup.sh` before this test, so the
+# feature's bind mounts ARE active here and stat sees the HOST dirs' modes
+# through the mount; in a mountless run (e.g. `devcontainer features test`
+# without the host dirs) stat sees install.sh's chmod instead. Same manifest
+# column either way, so the expected values are identical.
+# The non-credential dirs (pr-automation, shell-history) deliberately stay 0755.
+# NOTE: stat -c '%a' prints octal WITHOUT a leading zero (700 / 755).
+check "claude-home is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/claude-home)\" = '700' ]"
+check "gh-cli-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/gh-cli-config)\" = '700' ]"
+check "odoo-sdk-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-sdk-config)\" = '700' ]"
+check "coderabbit-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/coderabbit-config)\" = '700' ]"
+check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
+check "shell-history dir stays 0755 (holds no credentials)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '755' ]"
 
 reportResults

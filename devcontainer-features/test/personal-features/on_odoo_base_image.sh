@@ -9,6 +9,7 @@
 
 set -e
 
+# shellcheck source=/dev/null  # dev-container-features-test-lib is injected by the test harness at runtime; not resolvable statically. check()/reportResults() come from it.
 source dev-container-features-test-lib
 
 # Claude Code: the primary feature output

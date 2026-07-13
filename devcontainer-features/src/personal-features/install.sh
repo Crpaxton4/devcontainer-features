@@ -1,5 +1,5 @@
-#!/bin/sh
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 echo "Activating feature 'personal-features'"
 
@@ -9,25 +9,69 @@ echo "Activating feature 'personal-features'"
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
 
-CLAUDE_HOME="/usr/local/share/claude-home"
-GH_CONFIG="/usr/local/share/gh-cli-config"
-ODOO_SDK_CONFIG="/usr/local/share/odoo-sdk-config"
-PR_AUTOMATION_CONFIG="/usr/local/share/pr-automation"
-CR_CONFIG="/usr/local/share/coderabbit-config"
+# --- Download helpers -------------------------------------------------------
+# The previous #!/bin/sh interpreter (dash on Debian) has no `set -o pipefail`,
+# so a `curl … | sh`/`curl … | tar` pipe reported only the last stage's exit
+# status - a failed download was silently masked and the `|| echo WARNING`
+# fallbacks could never fire. These helpers download to a file first so a
+# failure is caught directly instead of hidden behind a pipe (and give a single
+# place to add checksumming later).
 
-# Create the fixed container-side paths that CLAUDE_CONFIG_DIR/GH_CONFIG_DIR
-# point at and that the bind mounts overlay at runtime. Creating them here
-# means the feature still works in test containers where no bind mounts are
-# active (e.g. the devcontainer features test harness).
+# fetch(url, dest): download url to dest, retrying transient failures. Fails
+# loudly (non-zero exit) so callers can react.
+fetch() {
+    curl -fsSL --retry 3 --retry-delay 2 -o "$2" "$1"
+}
+
+# run_installer(url, args...): download an installer script to a temp file, then
+# execute it with the given args - the structural replacement for the masking
+# `curl … | sh -s -- args` pipe. Error handling is explicit (not via set -e)
+# because bash disables set -e inside a function called on the left of `||`,
+# which is exactly how the best-effort callers below invoke this; relying on
+# set -e there would let a failed download slip through and re-mask it.
+run_installer() {
+    local installer_url="$1"
+    shift
+    local installer_tmp
+    installer_tmp="$(mktemp)"
+    if ! fetch "$installer_url" "$installer_tmp"; then
+        rm -f "$installer_tmp"
+        return 1
+    fi
+    sh "$installer_tmp" "$@"
+    local rc=$?
+    rm -f "$installer_tmp"
+    return "$rc"
+}
+
+CLAUDE_HOME="/usr/local/share/claude-home"
+
+# Create the fixed container-side paths that the containerEnv vars point at and
+# that the bind mounts overlay at runtime. Creating them here means the feature
+# still works in test containers where no bind mounts are active (e.g. the
+# devcontainer features test harness).
 #
-# The odoo-sdk task-tracker state dir is deliberately NOT provisioned here.
-# chown'ing it to the build-time $_REMOTE_USER doesn't map to the runtime uid
-# (the MCP server runs as odoo/uid 1002), leaving it root/uid-100-owned and
-# unwritable at runtime (see #115). It has no bind mount, so nothing depends on
-# a fixed location; the SDK's default ($XDG_STATE_HOME or ~/.local/state) is
-# created lazily by and owned by the runtime user, so leave it to the SDK.
-mkdir -p "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
-chown "$_REMOTE_USER" "$CLAUDE_HOME" "$GH_CONFIG" "$ODOO_SDK_CONFIG" "$PR_AUTOMATION_CONFIG" "$CR_CONFIG"
+# The list of persisted paths lives in persisted-paths.tsv (shipped next to this
+# script), the single source of truth shared with setup.sh/setup.ps1 and the
+# Feature JSON; .github/scripts/check_persisted_paths.py fails CI if the JSON
+# drifts from it. Loop it here instead of hardcoding the paths so adding one is a
+# one-line manifest edit. A trailing slash marks a directory (mkdir -p); no
+# trailing slash marks a file (touch its parent, then the file). The odoo-sdk
+# task-tracker *state* dir is deliberately absent from the manifest: chown'ing it
+# to the build-time $_REMOTE_USER doesn't map to the runtime uid (the MCP server
+# runs as odoo/uid 1002), leaving it unwritable at runtime (#115); it has no bind
+# mount, so the SDK creates it lazily under the runtime user instead.
+_MANIFEST="$(dirname "$0")/persisted-paths.tsv"
+_TAB="$(printf '\t')"
+while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_value _mode; do
+    case "$_name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
+    case "$_container_target" in
+        */) mkdir -p "$_container_target" ;;
+        *)  mkdir -p "$(dirname "$_container_target")"; touch "$_container_target" ;;
+    esac
+    chown "$_REMOTE_USER" "$_container_target"
+    chmod "$_mode" "$_container_target"
+done < "$_MANIFEST"
 
 # create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
 # YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
@@ -66,23 +110,29 @@ WRAPPER_PATH="$(command -v claude)"
 REAL_CLAUDE_BIN="$(readlink -f "$WRAPPER_PATH")"
 rm "$WRAPPER_PATH"
 
-# Wrap the real binary so a plain session auto-connects to the IDE (`--ide`),
-# while subcommands like `claude mcp` or `claude auth login` are left
-# untouched since they don't all accept that flag.
+# Wrap the real binary so a *bare interactive* session auto-connects to the IDE
+# (`--ide`), while everything else passes through untouched. Injecting `--ide`
+# only for the zero-arg TTY case - rather than maintaining an allowlist of
+# subcommands to *exclude* from injection - means a new subcommand shipped by a
+# future Claude Code release can never be silently mangled into
+# `claude --ide <subcommand>` (the old allowlist would have needed a manual edit
+# for every new subcommand, and any it missed broke). Subcommands (`claude mcp`,
+# `claude auth login`), flags, prompts, and piped/non-interactive invocations
+# all fall through to the passthrough arm.
+#
+# Accepted trade-off: `claude -c`, `claude -r`, and `claude "prompt"` no longer
+# auto-get `--ide` (strict, predictable rule chosen over guessing intent).
 cat > "$WRAPPER_PATH" << EOF
 #!/bin/sh
 set -e
 
 REAL="$REAL_CLAUDE_BIN"
 
-case "\$1" in
-    update|install|auth|agents|attach|auto-mode|daemon|logs|mcp|plugin|plugins|project|remote-control|respawn|rm|setup-token|stop|kill|ultrareview)
-        exec "\$REAL" "\$@"
-        ;;
-    *)
-        exec "\$REAL" --ide "\$@"
-        ;;
-esac
+if [ \$# -eq 0 ] && [ -t 0 ]; then
+    exec "\$REAL" --ide
+else
+    exec "\$REAL" "\$@"
+fi
 EOF
 chmod +x "$WRAPPER_PATH"
 
@@ -99,17 +149,30 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
     if ! command -v uv >/dev/null 2>&1; then
         UV_INSTALL_DIR=/usr/local/bin
         export UV_INSTALL_DIR
-        curl -fsSL https://astral.sh/uv/install.sh | sh
+        # Deliberately not best-effort: uv is required downstream (`uv venv`),
+        # so a masked download failure here would surface later as a confusing
+        # error. run_installer fails loudly and aborts the build instead.
+        run_installer https://astral.sh/uv/install.sh
         unset UV_INSTALL_DIR
     fi
-    for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
-        [ -f "$wheel" ] || continue
-        _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
-        uv venv "$_SDK_ENV"
-        uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+    # Install the bundled odoo_sdk wheel(s) into one shared uv venv. The glob
+    # stays literal (a single non-matching entry) when no wheel is bundled, so
+    # gate on the first entry actually being a file before doing any work.
+    _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
+    _sdk_wheels=("$FEATURE_DIR"/odoo_sdk-*.whl)
+    if [ -f "${_sdk_wheels[0]}" ]; then
+        # venv creation is hoisted out of the per-wheel loop: with a second
+        # bundled wheel the old in-loop `uv venv` would re-run on the same path
+        # and error. The `[ -d ]` guard also makes a re-provision over a
+        # persisted venv a no-op. `uv pip install` still runs per wheel.
+        [ -d "$_SDK_ENV" ] || uv venv "$_SDK_ENV"
+        for wheel in "${_sdk_wheels[@]}"; do
+            uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+        done
+        # Link the entry points once, after all wheels are installed.
         ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
         ln -sf "$_SDK_ENV/bin/odoo-tui" /usr/local/bin/odoo-tui
-    done
+    fi
 
     # mempalace: global cross-project memory palace, auto-mined via Claude Code
     # hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
@@ -146,34 +209,53 @@ case "$DPKG_ARCH" in
     *) echo "ERROR: unsupported architecture: $DPKG_ARCH" >&2; exit 1 ;;
 esac
 
-# Looks up the first release asset URL matching a regex against the latest
-# GitHub release of $1.
-gh_latest_asset_url() {
-    curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
-        | grep -o '"browser_download_url": *"[^"]*"' \
-        | cut -d'"' -f4 \
-        | grep -E "$2" \
-        | head -1
-}
+# --- Pinned tool versions ---------------------------------------------------
+# Single source of truth for the GitHub-release tools installed below. These
+# replace the old unauthenticated api.github.com "/releases/latest" lookups,
+# which made builds non-reproducible and, worse, hit GitHub's anonymous rate
+# limit (60 req/hr per IP, shared across CI runners behind one NAT) causing
+# intermittent "failed to install, skipping" flakiness. Download URLs are now
+# built deterministically from these constants, so the install path makes zero
+# api.github.com calls. Dependabot does not track shell-script pins - bump them
+# here by hand. Store the bare semver (no leading "v"); the "v" is added at each
+# use site where the release tag / URL needs it (yq etc. tag as vX.Y.Z; gitleaks
+# and zoxide also embed the bare version in the asset filename).
+YQ_VERSION=4.53.3        # github.com/mikefarah/yq
+EZA_VERSION=0.23.5       # github.com/eza-community/eza
+TEALDEER_VERSION=1.8.1   # github.com/dbrgn/tealdeer
+GITLEAKS_VERSION=8.30.1  # github.com/gitleaks/gitleaks
+ZOXIDE_VERSION=0.10.0    # github.com/ajeetdsouza/zoxide
+STARSHIP_VERSION=1.26.0  # github.com/starship/starship
 
-# Installs a GitHub release asset. With $3, downloads a single binary to that
-# path; without $3, extracts a .tar.gz directly into /usr/local/bin.
+# Installs a pinned GitHub release asset from a deterministic download URL (no
+# api.github.com lookup). With a dest path ($3) it downloads a single binary
+# there and marks it executable; otherwise it extracts a .tar.gz into
+# /usr/local/bin - restricted to member $4 when given, so tarballs that also
+# ship docs/man/completions (e.g. zoxide) don't litter /usr/local/bin.
 # Best-effort: these are optional, non-Claude tools, so a failure here warns
 # and continues rather than failing the whole install.
 install_gh_release() {
-    URL="$(gh_latest_asset_url "$1" "$2")"
-    if [ -z "$URL" ]; then
-        echo "WARNING: failed to install $1, skipping" >&2
-        return
-    fi
-    if [ -n "${3-}" ]; then
-        if curl -fsSL "$URL" -o "$3"; then
-            chmod +x "$3"
+    local name="$1" url="$2" dest="${3-}" member="${4-}"
+    if [ -n "$dest" ]; then
+        if fetch "$url" "$dest"; then
+            chmod +x "$dest"
         else
-            echo "WARNING: failed to install $1, skipping" >&2
+            echo "WARNING: failed to install $name, skipping" >&2
         fi
     else
-        curl -fsSL "$URL" | tar -xz -C /usr/local/bin || echo "WARNING: failed to install $1, skipping" >&2
+        # Download to a temp file, then extract - piping curl into tar would
+        # (without pipefail) hide a failed download behind tar's exit status.
+        local tarball
+        tarball="$(mktemp)"
+        if fetch "$url" "$tarball"; then
+            # ${member:+...} adds the member argument only when set, so a bare
+            # (whole-tarball) extract stays argument-clean under set -u.
+            tar -xz -C /usr/local/bin -f "$tarball" ${member:+"$member"} \
+                || echo "WARNING: failed to install $name, skipping" >&2
+        else
+            echo "WARNING: failed to install $name, skipping" >&2
+        fi
+        rm -f "$tarball"
     fi
 }
 
@@ -186,26 +268,45 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
 [ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
 [ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
 
-# Run all binary downloads in parallel — they're independent and each blocks
-# on a GitHub API call + download, so sequential execution wastes wall time.
-install_gh_release mikefarah/yq "yq_linux_${ARCH_DEB}\$" /usr/local/bin/yq &
-install_gh_release eza-community/eza "eza_${ARCH_GNU}-unknown-linux-gnu\\.tar\\.gz\$" &
-install_gh_release dbrgn/tealdeer "tealdeer-linux-${ARCH_GNU}-musl\$" /usr/local/bin/tldr &
-( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
-    || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
-install_gh_release gitleaks/gitleaks "linux_${ARCH_SHORT}\\.tar\\.gz\$" &
+# Run all binary downloads in parallel — they're independent and each blocks on
+# a network download, so sequential execution wastes wall time. URLs are pinned
+# and deterministic (see the version block above); no api.github.com calls.
+# Collect their PIDs so we can wait on each individually (see the wait below).
+_download_pids=()
+install_gh_release yq \
+    "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${ARCH_DEB}" \
+    /usr/local/bin/yq &
+_download_pids+=("$!")
+install_gh_release eza \
+    "https://github.com/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${ARCH_GNU}-unknown-linux-gnu.tar.gz" &
+_download_pids+=("$!")
+install_gh_release tealdeer \
+    "https://github.com/dbrgn/tealdeer/releases/download/v${TEALDEER_VERSION}/tealdeer-linux-${ARCH_GNU}-musl" \
+    /usr/local/bin/tldr &
+_download_pids+=("$!")
+# zoxide's upstream install.sh only resolves versions via api.github.com (no
+# pin flag), so download the release tarball directly instead. It bundles man
+# pages/completions/README alongside the binary, so extract just `zoxide`.
+install_gh_release zoxide \
+    "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${ARCH_GNU}-unknown-linux-musl.tar.gz" \
+    "" zoxide &
+_download_pids+=("$!")
+install_gh_release gitleaks \
+    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_SHORT}.tar.gz" &
+_download_pids+=("$!")
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
 # installer (https://cli.coderabbit.ai/install.sh) pinned to /usr/local/bin.
 # CI=1 suppresses the interactive post-install login prompt; the installer's
 # own PATH/profile edits are harmless no-ops here since it lands on a dir
-# already on PATH. The vars must be exported (not just prefixed on curl) so the
-# piped `sh` — a separate process from curl — actually inherits them. Auth is
+# already on PATH. The vars must be exported (not just prefixed) so the
+# installer's `sh` — a separate child process — actually inherits them. Auth is
 # user-specific and persisted via the mount below, so it is deliberately not
 # baked in. Best-effort like the tools above.
 ( export CODERABBIT_INSTALL_DIR=/usr/local/bin CI=1
-    curl -fsSL https://cli.coderabbit.ai/install.sh | sh \
+    run_installer https://cli.coderabbit.ai/install.sh \
     || echo "WARNING: failed to install coderabbit, skipping" >&2 ) &
+_download_pids+=("$!")
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -250,11 +351,21 @@ chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-( curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+# --version pins the release; the installer then builds a direct
+# releases/download/<tag>/ URL (no api.github.com) and resolves the right
+# per-arch target itself (x86_64 gnu / aarch64 musl).
+( run_installer https://starship.rs/install.sh --version "v${STARSHIP_VERSION}" --bin-dir /usr/local/bin -y \
     || echo "WARNING: failed to install starship, skipping" >&2 ) &
+_download_pids+=("$!")
 
-# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
-wait
+# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks,
+# coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# wait on each PID and guard it so an unexpected non-zero exit degrades to a
+# warning instead of aborting the build under set -e. (A bare `wait` returns 0
+# regardless, which would instead silently mask such a failure.)
+for _pid in "${_download_pids[@]}"; do
+    wait "$_pid" || echo "WARNING: a background download job failed" >&2
+done
 
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
