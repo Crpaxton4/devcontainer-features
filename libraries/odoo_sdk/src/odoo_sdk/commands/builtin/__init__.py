@@ -39,6 +39,7 @@ from .task_note import TaskNoteCommand
 from .task_question import TaskQuestionCommand
 from .task_status import TaskStatusCommand
 from .timesheet_summary import TimesheetSummaryCommand
+from .unbilled_hours import UnbilledHoursCommand
 
 
 def register_builtins(registry: Registry) -> Registry:

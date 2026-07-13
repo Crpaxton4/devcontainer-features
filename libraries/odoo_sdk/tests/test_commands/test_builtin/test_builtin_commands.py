@@ -163,6 +163,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "ingest_sessions",
         "query_sessions",
         "timesheet_summary",
+        "unbilled_hours",
     }
 )
 

@@ -316,6 +316,42 @@ def make_ingest_sessions_tool(registry: Registry):
     return ingest_sessions
 
 
+@atomic_tool("unbilled_hours")
+def make_unbilled_hours_tool(registry: Registry):
+    def unbilled_hours(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        project_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Report logged-but-not-yet-invoiced timesheet hours (read-only).
+
+        Returns a summary envelope ``{mode, count, total_hours, lines}``.
+        ``total_hours`` and each line's ``hours`` are decimal hours; each line
+        carries ``id``, ``date``, ``employee``, ``project``, ``task``, ``hours``
+        and ``name``.
+
+        Semantics depend on a ``fields_get`` capability probe of
+        ``account.analytic.line`` and are reported in ``mode``:
+
+        * ``"full"`` — both ``timesheet_invoice_id`` and
+          ``timesheet_invoice_type`` exist: unbilled means not posted to any
+          customer invoice, and every line adds ``invoice_type`` (billable vs
+          non-billable).
+        * ``"fallback"`` — only one field exists: unbilled is approximated as
+          "not linked to a sale order line"; ``invoice_type`` is omitted.
+        * neither field exists: returns a structured error payload.
+
+        ``start_date``/``end_date`` are inclusive ``YYYY-MM-DD`` bounds (omit for
+        unbounded); ``project_id`` is a ``project.project`` id restricting the
+        report to one project.
+        """
+        return registry["unbilled_hours"].execute(
+            start_date=start_date, end_date=end_date, project_id=project_id
+        )
+
+    return unbilled_hours
+
+
 @atomic_tool("query_sessions")
 def make_query_sessions_tool(registry: Registry):
     def query_sessions(
