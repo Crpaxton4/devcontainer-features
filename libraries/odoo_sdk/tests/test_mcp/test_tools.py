@@ -761,6 +761,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "search_tasks": ("q", 1),
             "resume_task": (5,),
             "abort_task": (5,),
+            "search_chatter": ("q",),
             "task_status": (),
             "task_note": (5, "note"),
             "task_list": (),

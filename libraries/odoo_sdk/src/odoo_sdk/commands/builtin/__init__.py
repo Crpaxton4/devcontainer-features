@@ -28,6 +28,7 @@ from .ingest_sessions import IngestSessionsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
 from .resume_task import ResumeTaskCommand
+from .search_chatter import SearchChatterCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
