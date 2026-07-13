@@ -41,6 +41,13 @@ class TestServerConstruction(unittest.TestCase):
             "Odoo MCP Server", instructions=INSTRUCTIONS
         )
 
+    def test_custom_instructions_override(self):
+        with patch("odoo_sdk.mcp.server.FastMCP") as MockFastMCP:
+            OdooMCPServer(_registry(), instructions="Serves a widget registry")
+        MockFastMCP.assert_called_once_with(
+            "Odoo MCP Server", instructions="Serves a widget registry"
+        )
+
 
 class TestExplicitToolRegistration(unittest.TestCase):
     def test_no_explicit_tools_registers_no_tools(self):
