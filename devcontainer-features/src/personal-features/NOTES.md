@@ -135,28 +135,6 @@ github_templates:
   pull_request: PULL_REQUEST_TEMPLATE/default.md
 ```
 
-## Migrating from the old named-volume scheme
-
-If you were previously using this Feature before it switched to bind mounts, copy your existing data out of the old Docker volumes before rebuilding:
-
-```sh
-docker run --rm \
-    -v personal-features-claude-home:/src \
-    -v "$HOME/.claude:/dst" \
-    alpine sh -c "cp -a /src/. /dst/"
-
-docker run --rm \
-    -v personal-features-gh-config:/src \
-    -v "$HOME/.config/gh:/dst" \
-    alpine sh -c "cp -a /src/. /dst/"
-```
-
-Then remove the old volumes if you no longer need them:
-
-```sh
-docker volume rm personal-features-claude-home personal-features-gh-config personal-features-shell-history
-```
-
 ## The `claude` command
 
 `claude` is wrapped so that a default session (bare `claude`, `claude "prompt"`, `-p`, `-c`, `-r`, etc.) automatically passes `--ide`, since this Feature is meant purely for use inside a VS Code dev container. Subcommands (`claude mcp`, `claude auth login`, `claude update`, etc.) are passed through unmodified.
