@@ -1,0 +1,35 @@
+# Dependabot version updates.
+#
+# PRs are squash-merged using the PR title, and PR titles are linted by
+# amannn/action-semantic-pull-request (conventional-commit types required).
+# Dependabot's default titles ("Bump X from Y to Z") are NOT conventional, so
+# each block sets `commit-message.prefix` (and `include: scope` where a
+# deps/deps-dev scope is useful) to produce titles like
+# "ci: bump actions/checkout from 4 to 5" that pass the lint.
+version: 2
+updates:
+  # GitHub Actions used across .github/workflows ride floating major tags.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+
+  # Root npm devDependencies (husky, commitlint).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # uv-managed Python dependencies for the odoo_sdk library (uv.lock).
+  - package-ecosystem: "uv"
+    directory: "/libraries/odoo_sdk"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"

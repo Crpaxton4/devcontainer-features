@@ -11,7 +11,9 @@
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {}
   },
-  "updateContentCommand": "npm install -g @devcontainers/cli",
+  // Pinned to match DEVCONTAINERS_CLI_VERSION in .github/workflows/test.yaml.
+  // Refresh both together when bumping (no shared source across the two files).
+  "updateContentCommand": "npm install -g @devcontainers/cli@0.87.0",
   "postCreateCommand": "cd libraries/odoo_sdk && uv sync --group dev",
   "remoteEnv": {
     "UV_PROJECT_ENVIRONMENT": "${containerWorkspaceFolder}/.venv"

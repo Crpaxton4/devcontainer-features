@@ -72,7 +72,6 @@ jobs:
           cosmic-ray init cosmic-ray-ci.toml .cosmic-ray/session.sqlite
           cosmic-ray baseline cosmic-ray-ci.toml
           cosmic-ray exec cosmic-ray-ci.toml .cosmic-ray/session.sqlite
-          cr-report --surviving-only .cosmic-ray/session.sqlite | tee reports/mutation/surviving.txt
           cr-html .cosmic-ray/session.sqlite > reports/mutation/report.html
           # JSON export drives the kill-rate gate (.github/scripts/mutation_gate.py).
           cosmic-ray dump .cosmic-ray/session.sqlite | jq -sn '[inputs]' > reports/mutation/mutation.json
