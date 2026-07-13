@@ -771,6 +771,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "ingest_sessions": (),
             "query_sessions": (),
             "timesheet_summary": ("2026-07-01", "2026-07-31"),
+            "unbilled_hours": (),
         }
         # Pin the atomic tool set to this explicit map so a dropped or renamed
         # @atomic_tool decorator fails here instead of silently going untested.

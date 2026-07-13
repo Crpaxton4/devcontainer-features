@@ -437,6 +437,262 @@ def get_task_detail(
     return result
 
 
+# --- Unbilled-hours reporting (read-only) --------------------------------------
+#
+# The billing state of a timesheet line lives in two ``account.analytic.line``
+# fields contributed by Odoo's ``sale_timesheet`` module, so their presence is
+# *edition-dependent*. ``get_unbilled_hours`` probes for them with ``fields_get``
+# before querying and adapts its semantics to what the database actually exposes.
+
+#: ``account.analytic.line`` field holding the customer invoice a timesheet line
+#: was billed on. ``False`` means the line has not been invoiced yet.
+_UNBILLED_INVOICE_ID_FIELD = "timesheet_invoice_id"
+
+#: ``account.analytic.line`` field classifying a timesheet line's billability
+#: (e.g. ``billable_time``, ``non_billable``). Surfaced per line in full mode.
+_UNBILLED_INVOICE_TYPE_FIELD = "timesheet_invoice_type"
+
+#: Fields always projected for each returned timesheet line, in both probe modes.
+_UNBILLED_BASE_FIELDS = [
+    "id",
+    "date",
+    "employee_id",
+    "project_id",
+    "task_id",
+    "unit_amount",
+    "name",
+]
+
+#: Exact message raised when neither ``sale_timesheet`` billing field exists, so
+#: callers (and tests) get one stable, actionable string. Raised as a
+#: ``ValueError`` which the MCP error boundary renders as a structured payload.
+MISSING_UNBILLED_CAPABILITY_MESSAGE = (
+    "unbilled_hours is unavailable on this Odoo database: account.analytic.line "
+    "exposes neither 'timesheet_invoice_id' nor 'timesheet_invoice_type'. These "
+    "fields are contributed by the 'sale_timesheet' module; install/enable the "
+    "Sales-Timesheet integration to report unbilled hours."
+)
+
+
+def _probe_unbilled_fields(client: OdooClient) -> tuple[bool, bool]:
+    """Report which ``sale_timesheet`` billing fields exist on the timesheet model.
+
+    ``fields_get`` returns metadata only for the requested fields that actually
+    exist, so membership of each name in the response is a capability check.
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :return: ``(has_invoice_id, has_invoice_type)`` presence flags.
+    :rtype: tuple[bool, bool]
+    """
+    meta = client.execute(
+        "account.analytic.line",
+        "fields_get",
+        [_UNBILLED_INVOICE_ID_FIELD, _UNBILLED_INVOICE_TYPE_FIELD],
+    )
+    return (
+        _UNBILLED_INVOICE_ID_FIELD in meta,
+        _UNBILLED_INVOICE_TYPE_FIELD in meta,
+    )
+
+
+def _validate_iso_date(value: str | None, label: str) -> None:
+    """Reject a non-``YYYY-MM-DD`` date so filters never silently mis-compare.
+
+    ``None`` (the "unbounded" sentinel) passes through untouched.
+
+    :param value: Candidate ISO date string, or ``None``.
+    :type value: str | None
+    :param label: Parameter name used in the error message.
+    :type label: str
+    :raises ValueError: When ``value`` is not a valid ``YYYY-MM-DD`` string.
+    :return: None.
+    :rtype: None
+    """
+    if value is None:
+        return
+    try:
+        # Round-tripping through ``isoformat`` rejects basic-ISO inputs such as
+        # ``"20260701"`` that ``fromisoformat`` accepts but Odoo's canonical
+        # ``YYYY-MM-DD`` date strings would silently mis-compare against.
+        canonical: str | None = date.fromisoformat(value).isoformat()
+    except (ValueError, TypeError):
+        canonical = None
+    if canonical != value:
+        raise ValueError(
+            f"{label} must be an ISO date string 'YYYY-MM-DD', got {value!r}."
+        )
+
+
+def _unbilled_domain(
+    full: bool,
+    start_date: str | None,
+    end_date: str | None,
+    project_id: int | None,
+) -> list[tuple]:
+    """Build the ``search_read`` domain selecting unbilled timesheet lines.
+
+    ``project_id != False`` restricts the query to genuine timesheet lines
+    (excluding other analytic lines). The billing predicate depends on the probe
+    outcome: in full mode an *uninvoiced* line is ``timesheet_invoice_id = False``;
+    in fallback mode (only one billing field present) the proxy is
+    ``so_line = False`` — not yet attached to a sale order for invoicing.
+
+    :param full: True when both billing fields exist (full semantics).
+    :type full: bool
+    :param start_date: Inclusive lower ``date`` bound (``YYYY-MM-DD``) or None.
+    :type start_date: str | None
+    :param end_date: Inclusive upper ``date`` bound (``YYYY-MM-DD``) or None.
+    :type end_date: str | None
+    :param project_id: Restrict to this ``project.project`` id, or None.
+    :type project_id: int | None
+    :return: Odoo search domain as a list of triples.
+    :rtype: list[tuple]
+    """
+    domain: list[tuple] = [("project_id", "!=", False)]
+    if full:
+        domain.append((_UNBILLED_INVOICE_ID_FIELD, "=", False))
+    else:
+        domain.append(("so_line", "=", False))
+    if start_date is not None:
+        domain.append(("date", ">=", start_date))
+    if end_date is not None:
+        domain.append(("date", "<=", end_date))
+    if project_id is not None:
+        domain.append(("project_id", "=", project_id))
+    return domain
+
+
+def _unbilled_row(record: dict, full: bool) -> dict:
+    """Shape one raw ``account.analytic.line`` record into an output line.
+
+    Many2one values are flattened to their display name. ``invoice_type`` is
+    included only in full mode; its presence signals which semantics applied.
+
+    :param record: Raw ``search_read`` record.
+    :type record: dict
+    :param full: Whether full (both-field) semantics produced this row.
+    :type full: bool
+    :return: Output line dict with resolved names and decimal hours.
+    :rtype: dict
+    """
+    row = {
+        "id": record["id"],
+        "date": record.get("date"),
+        "employee": resolve_many2one(record.get("employee_id")),
+        "project": resolve_many2one(record.get("project_id")),
+        "task": resolve_many2one(record.get("task_id")),
+        "hours": record.get("unit_amount"),
+        "name": record.get("name"),
+    }
+    if full:
+        row["invoice_type"] = record.get(_UNBILLED_INVOICE_TYPE_FIELD)
+    return row
+
+
+def _resolve_unbilled_mode(client: OdooClient) -> bool:
+    """Probe billing capability, returning the *full-mode* flag or raising.
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :raises ValueError: When neither billing field exists.
+    :return: True when both fields exist (full mode); False for the fallback.
+    :rtype: bool
+    """
+    has_invoice_id, has_invoice_type = _probe_unbilled_fields(client)
+    if not has_invoice_id and not has_invoice_type:
+        raise ValueError(MISSING_UNBILLED_CAPABILITY_MESSAGE)
+    return has_invoice_id and has_invoice_type
+
+
+def _row_hours(record: dict) -> float:
+    """Return a line's ``unit_amount`` as hours, treating missing/empty as zero.
+
+    :param record: Raw ``account.analytic.line`` record.
+    :type record: dict
+    :return: Decimal hours logged on the line.
+    :rtype: float
+    """
+    return record.get("unit_amount") or 0.0
+
+
+def _unbilled_envelope(records: list[dict], full: bool) -> dict:
+    """Assemble the summary envelope from raw records under the given mode.
+
+    :param records: Raw ``search_read`` records.
+    :type records: list[dict]
+    :param full: Whether full (both-field) semantics were used.
+    :type full: bool
+    :return: ``{"mode", "count", "total_hours", "lines"}`` summary envelope.
+    :rtype: dict
+    """
+    lines = [_unbilled_row(record, full) for record in records]
+    total_hours = round(sum(_row_hours(record) for record in records), 2)
+    return {
+        "mode": "full" if full else "fallback",
+        "count": len(lines),
+        "total_hours": total_hours,
+        "lines": lines,
+    }
+
+
+def get_unbilled_hours(
+    client: OdooClient,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    project_id: int | None = None,
+) -> dict:
+    """Return timesheet hours logged but not yet invoiced, as a summary envelope.
+
+    A ``fields_get`` capability probe on ``account.analytic.line`` decides the
+    meaning of *unbilled*:
+
+    * **Full** (both ``timesheet_invoice_id`` and ``timesheet_invoice_type``
+      present): a line is unbilled when ``timesheet_invoice_id = False`` — it has
+      not been posted to any customer invoice. Each returned line also carries
+      ``invoice_type`` (its ``timesheet_invoice_type``) so callers can tell
+      billable time from non-billable.
+    * **Fallback** (only one of the two present): billing state cannot be read
+      directly, so unbilled is approximated as ``so_line = False`` — the line is
+      not linked to a sale order line for invoicing. Rows omit ``invoice_type``.
+    * **Neither present**: raises :class:`ValueError` with
+      :data:`MISSING_UNBILLED_CAPABILITY_MESSAGE`.
+
+    Only genuine timesheet lines are considered (``project_id != False``). Dates
+    are inclusive ``YYYY-MM-DD`` strings; ``hours`` and ``total_hours`` are
+    decimal hours (``unit_amount``).
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :param start_date: Inclusive lower ``date`` bound (``YYYY-MM-DD``) or None.
+    :type start_date: str | None
+    :param end_date: Inclusive upper ``date`` bound (``YYYY-MM-DD``) or None.
+    :type end_date: str | None
+    :param project_id: Restrict to this ``project.project`` id, or None for all.
+    :type project_id: int | None
+    :raises ValueError: On a malformed date or when no billing field exists.
+    :return: ``{"mode", "count", "total_hours", "lines"}`` summary envelope.
+    :rtype: dict
+    """
+    _validate_iso_date(start_date, "start_date")
+    _validate_iso_date(end_date, "end_date")
+
+    full = _resolve_unbilled_mode(client)
+
+    fields = list(_UNBILLED_BASE_FIELDS)
+    if full:
+        fields.append(_UNBILLED_INVOICE_TYPE_FIELD)
+
+    records = client.execute(
+        "account.analytic.line",
+        "search_read",
+        _unbilled_domain(full, start_date, end_date, project_id),
+        fields=fields,
+        order="date asc",
+    )
+    return _unbilled_envelope(records, full)
+
+
 def merge_timesheets(
     client: OdooClient, primary_id: int, ids_to_merge: list[int]
 ) -> None:
