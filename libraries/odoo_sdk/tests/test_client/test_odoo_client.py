@@ -9,7 +9,7 @@ from hypothesis import given, strategies
 from odoo_sdk.client.client import OdooClient
 from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.records.recordset import OdooRecordset
-from odoo_sdk.transport.errors import OdooServerError
+from odoo_sdk.transport.errors import OdooAuthenticationError, OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.json2 import OdooJson2Executor
 from odoo_sdk.transport.rpc import OdooRpcExecutor
@@ -137,6 +137,49 @@ class TestOdooClientContract(unittest.TestCase):
 
         self.assertEqual(client.uid, 7)
 
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_authenticated_true_on_successful_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 7
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        self.assertTrue(client.authenticated)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_authenticated_false_on_failed_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        self.assertFalse(client.authenticated)
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_client_uid_raises_on_failed_login(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+        client = OdooClient(
+            executor=OdooRpcExecutor("https://example.com", "db", "user", "pw")
+        )
+
+        with self.assertRaises(OdooAuthenticationError):
+            _ = client.uid
+
     @patch("odoo_sdk.client.client.OdooRpcExecutor")
     @patch("odoo_sdk.client.client.OdooConnectionSettings.from_sources")
     def test_client_builds_rpc_executor_from_resolved_settings(
@@ -175,6 +218,7 @@ class TestOdooClientContract(unittest.TestCase):
             settings.db,
             settings.username,
             settings.password,
+            timeout=settings.timeout,
         )
 
     def test_client_uses_ini_configuration_when_values_omitted(self) -> None:
@@ -424,6 +468,182 @@ class TestOdooConnectionSettings(unittest.TestCase):
                     OdooConnectionSettings.from_sources()
 
 
+class TestOdooConnectionSettingsTimeout(unittest.TestCase):
+    _REQUIRED_ENV = {
+        "ODOO_URL": "https://example.com",
+        "ODOO_DB": "db",
+        "ODOO_USERNAME": "user",
+        "ODOO_PASSWORD": "pw",
+    }
+
+    def test_timeout_defaults_to_thirty_seconds(self) -> None:
+        with patch.dict("os.environ", dict(self._REQUIRED_ENV), clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_explicit_timeout_overrides_environment(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "5"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources(timeout=45.0)
+
+        self.assertEqual(settings.timeout, 45.0)
+
+    def test_environment_timeout_parsed_as_float(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "12.5"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 12.5)
+
+    def test_file_timeout_used_when_environment_absent(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "odoo.ini"
+            config_path.write_text(
+                "[odoo]\n"
+                "url=https://from-file.example.com\n"
+                "db=file-db\n"
+                "username=file-user\n"
+                "password=file-password\n"
+                "timeout=20\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {}, clear=True):
+                settings = OdooConnectionSettings.from_sources(
+                    config_path=str(config_path)
+                )
+
+        self.assertEqual(settings.timeout, 20.0)
+
+    def test_environment_timeout_overrides_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "odoo.ini"
+            config_path.write_text(
+                "[odoo]\n"
+                "url=https://from-file.example.com\n"
+                "db=file-db\n"
+                "username=file-user\n"
+                "password=file-password\n"
+                "timeout=20\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"ODOO_TIMEOUT": "8"}, clear=True):
+                settings = OdooConnectionSettings.from_sources(
+                    config_path=str(config_path)
+                )
+
+        self.assertEqual(settings.timeout, 8.0)
+
+    def test_non_numeric_timeout_falls_back_to_default(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "not-a-number"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_zero_timeout_falls_back_to_default(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "0"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_negative_timeout_falls_back_to_default(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "-3"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_infinite_timeout_falls_back_to_default(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "inf"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_nan_timeout_falls_back_to_default(self) -> None:
+        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "nan"}
+        with patch.dict("os.environ", env, clear=True):
+            settings = OdooConnectionSettings.from_sources()
+
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_boolean_explicit_timeout_falls_back_to_default(self) -> None:
+        with patch.dict("os.environ", dict(self._REQUIRED_ENV), clear=True):
+            settings = OdooConnectionSettings.from_sources(
+                timeout=True,  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(settings.timeout, 30.0)
+
+
+class TestOdooClientTimeoutThreading(unittest.TestCase):
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_env_timeout_reaches_rpc_executor(self, mock_rpc: Mock) -> None:
+        mock_rpc.return_value = Mock(spec=OdooExecutor)
+        env = {
+            "ODOO_URL": "https://example.com",
+            "ODOO_DB": "db",
+            "ODOO_USERNAME": "user",
+            "ODOO_PASSWORD": "pw",
+            "ODOO_TIMEOUT": "45.5",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            OdooClient()
+
+        mock_rpc.assert_called_once_with(
+            "https://example.com",
+            "db",
+            "user",
+            "pw",
+            timeout=45.5,
+        )
+
+    @patch("odoo_sdk.client.client.OdooJson2Executor")
+    def test_env_timeout_reaches_json2_executor(self, mock_json2: Mock) -> None:
+        mock_json2.return_value = Mock(spec=OdooExecutor)
+        env = {
+            "ODOO_URL": "https://example.com",
+            "ODOO_DB": "db",
+            "ODOO_API_KEY": "key",
+            "ODOO_TRANSPORT": "json2",
+            "ODOO_TIMEOUT": "7",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            OdooClient()
+
+        mock_json2.assert_called_once_with(
+            "https://example.com",
+            "db",
+            "key",
+            timeout=7.0,
+        )
+
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_garbage_env_timeout_reaches_executor_as_default(
+        self, mock_rpc: Mock
+    ) -> None:
+        mock_rpc.return_value = Mock(spec=OdooExecutor)
+        env = {
+            "ODOO_URL": "https://example.com",
+            "ODOO_DB": "db",
+            "ODOO_USERNAME": "user",
+            "ODOO_PASSWORD": "pw",
+            "ODOO_TIMEOUT": "banana",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            OdooClient()
+
+        mock_rpc.assert_called_once_with(
+            "https://example.com",
+            "db",
+            "user",
+            "pw",
+            timeout=30.0,
+        )
+
+
 class TestOdooClientFactoryMethods(unittest.TestCase):
     @patch("odoo_sdk.client.client.OdooRpcExecutor")
     def test_from_xml_rpc_returns_odoo_client(self, mock_rpc: Mock) -> None:
@@ -471,6 +691,7 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
             settings.url,
             settings.db,
             settings.api_key,
+            timeout=settings.timeout,
         )
 
 
@@ -496,7 +717,11 @@ class TestOdooClientFromConfig(unittest.TestCase):
 
         self.assertIs(client._executor, built)
         mock_rpc.assert_called_once_with(
-            "https://cfg.example.com", "cfg-db", "cfg-user", "cfg-pass"
+            "https://cfg.example.com",
+            "cfg-db",
+            "cfg-user",
+            "cfg-pass",
+            timeout=30.0,
         )
 
     @patch("odoo_sdk.client.client.OdooJson2Executor")
@@ -518,7 +743,10 @@ class TestOdooClientFromConfig(unittest.TestCase):
 
         self.assertIs(client._executor, built)
         mock_json2.assert_called_once_with(
-            "https://cfg.example.com", "cfg-db", "cfg-key"
+            "https://cfg.example.com",
+            "cfg-db",
+            "cfg-key",
+            timeout=30.0,
         )
 
 
