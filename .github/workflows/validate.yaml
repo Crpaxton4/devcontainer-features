@@ -48,5 +48,6 @@ jobs:
           shellcheck \
             devcontainer-features/src/personal-features/install.sh \
             devcontainer-features/src/personal-features/create-pr \
+            devcontainer-features/src/personal-features/sync-claude-skills \
             setup.sh \
             devcontainer-features/test/personal-features/*.sh

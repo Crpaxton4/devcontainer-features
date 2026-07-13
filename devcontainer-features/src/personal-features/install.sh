@@ -78,6 +78,31 @@ done < "$_MANIFEST"
 # containers — the script tolerates missing config at every level).
 install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 
+# --- Claude consulting skills (feature-owned namespace) ---------------------
+# Stage the shipped Claude skills at a build-time location that is NOT under the
+# CLAUDE_CONFIG_DIR bind mount, then install sync-claude-skills to publish them
+# into the live (mounted) $CLAUDE_CONFIG_DIR/skills at container-create time
+# (wired up as a feature-contributed postCreateCommand in the Feature JSON).
+# Writing them straight into CLAUDE_CONFIG_DIR here would be pointless: the
+# host's ~/.claude bind mount shadows that directory at runtime. See
+# sync-claude-skills and skills/README.md.
+SKILLS_SRC="$(dirname "$0")/skills"
+SKILLS_STAGE="/usr/local/share/personal-features/skills"
+# Rebuild the staging dir from scratch so a re-provision can't leave a skill
+# removed upstream lingering here. `cp -R "$SKILLS_SRC/."` copies the directory
+# *contents*, so this stays correct - and non-fatal under set -e - whether the
+# source has no skills yet (just its README) or is fully populated.
+rm -rf "$SKILLS_STAGE"
+mkdir -p "$SKILLS_STAGE"
+if [ -d "$SKILLS_SRC" ]; then
+    cp -R "$SKILLS_SRC/." "$SKILLS_STAGE/"
+fi
+
+# sync-claude-skills: at runtime (postCreateCommand) copies each staged skill
+# into $CLAUDE_CONFIG_DIR/skills, replacing only the feature-owned names.
+# Installed like create-pr.
+install -m 0755 "$(dirname "$0")/sync-claude-skills" /usr/local/bin/sync-claude-skills
+
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
 # Feature install order/PATH propagation isn't reliably honored by every
