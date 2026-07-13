@@ -93,6 +93,10 @@ check "eza is installed" eza --version
 check "zoxide is installed" zoxide --version
 check "tldr is installed" tldr --version
 
+# git QoL tools
+check "delta is installed" bash -c "test -x \"\$(command -v delta)\" && delta --version"
+check "lazygit is installed" bash -c "test -x \"\$(command -v lazygit)\" && lazygit --version"
+
 # secret scanning
 check "gitleaks is installed" gitleaks version
 
@@ -112,6 +116,12 @@ check "CODERABBIT_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CODERABBIT
 check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
 check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"
 check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/git-hooks/pre-commit"
+
+# delta wired in as git's pager machine-wide (--system scope)
+check "git core.pager is set to delta" bash -c \
+  "[ \"\$(git config --system --get core.pager)\" = 'delta' ]"
+check "git interactive.diffFilter uses delta" bash -c \
+  "[ \"\$(git config --system --get interactive.diffFilter)\" = 'delta --color-only' ]"
 
 # shell enhancements
 check "starship is installed" starship --version
