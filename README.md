@@ -49,7 +49,7 @@ Run this before `devcontainer features test` too, or the test containers fail to
 | --- | --- | --- |
 | `~/.claude` | `/usr/local/share/claude-home` | `CLAUDE_CONFIG_DIR` — Claude Code's auth (`.credentials.json`) and settings. |
 | `~/.config/gh` | `/usr/local/share/gh-cli-config` | `GH_CONFIG_DIR` — so `gh auth login` happens once per machine. |
-| `~/.config/odoo_sdk` | `/usr/local/share/odoo-sdk-config` | `odoo_sdk_CONFIG` — Odoo connection settings. |
+| `~/.config/odoo_sdk` | `/usr/local/share/odoo-sdk-config` | `ODOO_SDK_CONFIG` — points at the dir; the SDK probes it for `config.toml`/`config.ini`. |
 | `~/.config/pr-automation` | `/usr/local/share/pr-automation` | `PR_AUTOMATION_CONFIG_DIR` — `create-pr`'s global and per-project config. |
 | `~/.config/coderabbit` | `/usr/local/share/coderabbit-config` | `CODERABBIT_CONFIG_DIR` — CodeRabbit CLI config/auth state. |
 | `~/.config/devcontainer/shell-history` | `/usr/local/share/shell-history` | Bash history, shared across containers and projects. |

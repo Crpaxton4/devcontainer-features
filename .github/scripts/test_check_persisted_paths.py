@@ -158,9 +158,9 @@ class TestCheck(unittest.TestCase):
         self.assertTrue(any("missing 'ALPHA_DIR'" in e for e in errors), errors)
 
     def test_env_mismatch_on_target_vs_env_value(self):
-        # Regression guard: env_value is stored verbatim and is *not* the mount
-        # target (odoo_sdk_CONFIG points at config.ini inside the target dir),
-        # so a check that confused the two would wrongly reject the real files.
+        # Regression guard: env_value is stored verbatim and need not equal the
+        # mount target (an env var may point at a specific file inside the target
+        # dir), so a check that confused the two would wrongly reject the files.
         data = json.loads(json.dumps(FEATURE_JSON))
         # Set BETA_CONFIG to the bare target dir instead of the config file.
         data["containerEnv"]["BETA_CONFIG"] = "/opt/beta"

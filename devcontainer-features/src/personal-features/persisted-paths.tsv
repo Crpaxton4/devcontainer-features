@@ -38,7 +38,7 @@
 # name	host_source	container_target	env_var	env_value	mode
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700
 gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh-cli-config	0700
-odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	odoo_sdk_CONFIG	/usr/local/share/odoo-sdk-config/config.ini	0700
+odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	ODOO_SDK_CONFIG	/usr/local/share/odoo-sdk-config	0700
 pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755
 coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700
 shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0755
