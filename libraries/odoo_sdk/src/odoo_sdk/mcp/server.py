@@ -27,6 +27,16 @@ ToolSpec = Union[Callable[..., Any], Tuple[Callable[..., Any], str]]
 #: substantial reduction in the tokens an LLM spends reading the result.
 TOON_OUTPUT_ENV = "ODOO_TOON_OUTPUT"
 
+#: Name of the subdirectory (under the system temp dir) that holds MCP profiling
+#: archives. Confining artifacts to a dedicated folder keeps pruning scoped to
+#: the SDK's own files and away from anything else living in the temp dir.
+PROFILE_SUBDIR = "odoo-sdk-profiles"
+
+#: Maximum number of profiling zips retained on disk. After every dump the
+#: oldest archives beyond this count are deleted, so an enabled profiler cannot
+#: grow the temp dir without bound over a container's lifetime.
+PROFILE_KEEP_LAST = 20
+
 
 def _toon_output_enabled() -> bool:
     """Return whether TOON output is enabled via the environment flag.
@@ -238,12 +248,52 @@ def _profiled(tool_fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]
     return wrapper
 
 
+def _profile_dir() -> Path:
+    """Return the profiling-archive directory, creating it if absent.
+
+    Archives live in a dedicated :data:`PROFILE_SUBDIR` under the system temp
+    dir so pruning only ever touches the SDK's own files. The system temp dir is
+    resolved on every call (rather than cached) so tests can redirect it.
+
+    :return: The existing archive directory.
+    :rtype: Path
+    """
+
+    directory = Path(tempfile.gettempdir()) / PROFILE_SUBDIR
+    directory.mkdir(exist_ok=True)
+    return directory
+
+
+def _prune_profiles(directory: Path) -> None:
+    """Delete the oldest archives, retaining at most :data:`PROFILE_KEEP_LAST`.
+
+    Archives are ordered oldest-first by modification time (with the filename as
+    a stable tiebreaker), and everything before the newest
+    :data:`PROFILE_KEEP_LAST` entries is removed. When the directory holds at
+    most that many archives nothing is deleted.
+
+    :param directory: Directory whose ``odoo_profile_*.zip`` archives to prune.
+    :type directory: Path
+    :return: None.
+    :rtype: None
+    """
+
+    archives = sorted(
+        directory.glob("odoo_profile_*.zip"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    for stale in archives[:-PROFILE_KEEP_LAST]:
+        stale.unlink(missing_ok=True)
+
+
 def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
-    """Write a profiler snapshot as a zipped ``.prof`` file to the temp dir.
+    """Write a profiler snapshot as a zipped ``.prof`` file, then prune old ones.
 
     This helper keeps the tool wrapper thin: it persists the captured stats to
-    disk, compresses the binary profile into a shareable zip, and logs the
-    absolute path so tooling can locate the artifact.
+    disk, compresses the binary profile into a shareable zip under
+    :data:`PROFILE_SUBDIR`, prunes the archive directory back to
+    :data:`PROFILE_KEEP_LAST` files, and logs the absolute path so tooling can
+    locate the artifact.
 
     :param profiler: Disabled profiler holding the captured call stats.
     :type profiler: cProfile.Profile
@@ -252,12 +302,14 @@ def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
     :return: Absolute path to the written zip archive.
     :rtype: str
     """
-    tempdir = Path(tempfile.gettempdir())
-    # Nanosecond suffix keeps each call's archive unique even when the same tool
-    # is dispatched multiple times within the same wall-clock second.
-    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000}"
-    prof_path = tempdir / f"{tool_name}_{timestamp}.prof"
-    zip_path = tempdir / f"odoo_profile_{tool_name}_{timestamp}.zip"
+    directory = _profile_dir()
+    # Zero-padded nanoseconds keep each call's archive unique, and make same-tool
+    # filenames sort in creation order even within one wall-clock second.
+    timestamp = (
+        f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
+    )
+    prof_path = directory / f"{tool_name}_{timestamp}.prof"
+    zip_path = directory / f"odoo_profile_{tool_name}_{timestamp}.zip"
 
     profiler.dump_stats(str(prof_path))
     try:
@@ -266,6 +318,7 @@ def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
     finally:
         prof_path.unlink(missing_ok=True)
 
+    _prune_profiles(directory)
     absolute = str(zip_path.resolve())
     log.info("Profile saved: %s", absolute)
     return absolute
