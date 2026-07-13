@@ -9,8 +9,10 @@ on:
     paths:
       - '.github/scripts/**'
       - '.github/workflows/scripts-tests.yaml'
-      # test_host_setup_parity.py gates these three against each other, so it has
-      # to run when any of them changes - not only when the scripts dir does.
+      # test_host_setup_parity.py and check_persisted_paths.py gate these against
+      # the manifest, so they have to run when any of them changes - not only
+      # when the scripts dir does.
+      - 'devcontainer-features/src/personal-features/persisted-paths.tsv'
       - 'devcontainer-features/src/personal-features/devcontainer-feature.json'
       - 'setup.sh'
       - 'setup.ps1'
@@ -40,7 +42,7 @@ jobs:
           scratch="$(mktemp -d)"
           HOME="$scratch" pwsh -NoProfile -File ./setup.ps1
           for dir in .claude .config/gh .config/odoo_sdk \
-                     .config/pr-automation/projects .config/coderabbit \
+                     .config/pr-automation .config/coderabbit \
                      .config/devcontainer/shell-history; do
               if [ ! -d "$scratch/$dir" ]; then
                   echo "setup.ps1 did not create $dir" >&2
