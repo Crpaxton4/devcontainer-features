@@ -161,5 +161,51 @@ class TestLocalConfigConnectionSettings(unittest.TestCase):
                     config.connection_settings()
 
 
+class TestOdooConnectionSettingsRepr(unittest.TestCase):
+    """Guard against secrets leaking through the dataclass repr/str."""
+
+    def _fully_populated(self) -> OdooConnectionSettings:
+        return OdooConnectionSettings(
+            url="https://odoo.example.com",
+            db="prod-db",
+            username="admin",
+            password="s3cr3t-pw",
+            transport="json2",
+            api_key="k3y-abc",
+        )
+
+    def test_repr_matches_exact_expected_string(self):
+        settings = self._fully_populated()
+        expected = (
+            "OdooConnectionSettings("
+            "url='https://odoo.example.com', "
+            "db='prod-db', "
+            "username='admin', "
+            "transport='json2')"
+        )
+        self.assertEqual(repr(settings), expected)
+
+    def test_str_matches_exact_expected_string(self):
+        settings = self._fully_populated()
+        expected = (
+            "OdooConnectionSettings("
+            "url='https://odoo.example.com', "
+            "db='prod-db', "
+            "username='admin', "
+            "transport='json2')"
+        )
+        self.assertEqual(str(settings), expected)
+
+    def test_password_value_absent_from_repr_and_str(self):
+        settings = self._fully_populated()
+        self.assertNotIn("s3cr3t-pw", repr(settings))
+        self.assertNotIn("s3cr3t-pw", str(settings))
+
+    def test_api_key_value_absent_from_repr_and_str(self):
+        settings = self._fully_populated()
+        self.assertNotIn("k3y-abc", repr(settings))
+        self.assertNotIn("k3y-abc", str(settings))
+
+
 if __name__ == "__main__":
     unittest.main()
