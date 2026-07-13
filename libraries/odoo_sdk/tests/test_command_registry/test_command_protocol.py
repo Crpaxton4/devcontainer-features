@@ -20,15 +20,11 @@ class TestCommandProtocolDefaultBodies(unittest.TestCase):
         cmd = ConcreteCommand(client=mock_client)
         self.assertIs(cmd._client, mock_client)
 
-    def test_init_without_client_creates_odoo_client(self):
-        mock_client_instance = Mock()
-        with patch(
-            "odoo_sdk.commands.command.OdooClient",
-            return_value=mock_client_instance,
-        ) as MockClient:
-            cmd = ConcreteCommand()
-            MockClient.assert_called_once()
-            self.assertIs(cmd._client, mock_client_instance)
+    def test_init_without_client_raises_type_error(self):
+        # The implicit ``OdooClient()`` default was removed: the client is a
+        # required dependency the Registry always injects.
+        with self.assertRaises(TypeError):
+            ConcreteCommand()
 
     def test_execute_returns_none_by_default(self):
         mock_client = Mock()
