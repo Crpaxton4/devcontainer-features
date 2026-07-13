@@ -32,7 +32,7 @@ set -eu
 : "${HOME:?HOME must be set}"
 
 # Locate the manifest relative to this script so it works from any CWD.
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 MANIFEST="$SCRIPT_DIR/devcontainer-features/src/personal-features/persisted-paths.tsv"
 [ -f "$MANIFEST" ] || {
     echo "ERROR: persisted-paths manifest not found at $MANIFEST" >&2
@@ -41,17 +41,17 @@ MANIFEST="$SCRIPT_DIR/devcontainer-features/src/personal-features/persisted-path
 }
 
 TAB="$(printf '\t')"
-while IFS="$TAB" read -r name host_source container_target env_var env_value mode; do
-    case "$name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
-    case "$host_source" in
-        */) mkdir -p "$HOME/$host_source" ;;
-        *)  mkdir -p "$(dirname "$HOME/$host_source")"; touch "$HOME/$host_source" ;;
+while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode; do
+    case "$_name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
+    case "$_host_source" in
+        */) mkdir -p "$HOME/$_host_source" ;;
+        *)  mkdir -p "$(dirname "$HOME/$_host_source")"; touch "$HOME/$_host_source" ;;
     esac
     # Enforce the manifest's mode on every run, not just on creation (#233).
     # These are the dirs the container bind-mounts, so with the mounts active
     # the HOST mode is what the container sees - the credential dirs (0700 in
     # the manifest) must not be world-readable here for the container-side
     # hardening to mean anything.
-    chmod "$mode" "$HOME/$host_source"
-    printf 'ok  %s\n' "$HOME/$host_source"
+    chmod "$_mode" "$HOME/$_host_source"
+    printf 'ok  %s\n' "$HOME/$_host_source"
 done < "$MANIFEST"
