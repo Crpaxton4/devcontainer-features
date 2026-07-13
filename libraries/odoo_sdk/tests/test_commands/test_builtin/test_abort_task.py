@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin.abort_task import AbortTaskCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import TaskState
+from odoo_sdk.state import TaskNotRunningError, TaskState
 
 _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
 
@@ -66,13 +66,13 @@ class TestAbortTaskCommand(unittest.TestCase):
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
 
-    def test_graceful_error_when_no_active_session(self):
+    def test_raises_when_no_active_session(self):
         client = _client()
         db = _tmp_db()
         with patch(_ABORT_GUARD):
-            result = _cmd_with_db(client, db).execute(999)
-        self.assertIn("error", result)
-        self.assertIn("No active session", result["error"])
+            with self.assertRaises(TaskNotRunningError) as ctx:
+                _cmd_with_db(client, db).execute(999)
+        self.assertEqual(str(ctx.exception), "No active session for task 999.")
         client.execute.assert_not_called()
 
     def test_does_not_write_hours(self):
