@@ -27,6 +27,7 @@ from .get_uid import GetUidCommand
 from .ingest_sessions import IngestSessionsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
+from .read_attachment import ReadAttachmentCommand
 from .resume_task import ResumeTaskCommand
 from .search_chatter import SearchChatterCommand
 from .search_knowledge_articles import SearchKnowledgeArticlesCommand

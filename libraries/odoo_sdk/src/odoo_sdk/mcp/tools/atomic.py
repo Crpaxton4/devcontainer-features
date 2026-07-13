@@ -132,6 +132,33 @@ def make_get_task_attachments_tool(registry: Registry):
     return get_task_attachments
 
 
+@atomic_tool("read_attachment")
+def make_read_attachment_tool(registry: Registry):
+    def read_attachment(attachment_id: int, mode: str = "text") -> Dict[str, Any]:
+        """Read one document already stored in Odoo (read-only).
+
+        Reads an existing ``ir.attachment``; it never uploads or attaches
+        anything. ``mode`` selects what is returned:
+
+        * ``metadata`` — identity only, no bytes: ``id``, ``name``, ``mimetype``,
+          ``file_size``, ``res_model``, ``res_id``, ``create_date``.
+        * ``text`` — decode the binary payload and convert it to Markdown via
+          markitdown (PDF / docx / xlsx / CSV / HTML → Markdown). The decoded
+          payload is capped at 10 MiB; a larger payload is truncated before
+          conversion and the result carries ``truncated: true``. An unsupported
+          or unconvertible format (or an empty payload) degrades to ``text=""``
+          plus an explanatory ``note`` — never a raised error.
+        * ``raw`` — the base64 ``datas`` payload, refusing anything over the
+          10 MiB cap with a ``ValueError`` naming the size and the cap.
+
+        A missing or inaccessible ``attachment_id`` raises the missing-record
+        error; an invalid ``mode`` raises ``ValueError``.
+        """
+        return registry["read_attachment"].execute(attachment_id, mode=mode)
+
+    return read_attachment
+
+
 @atomic_tool("create_task")
 def make_create_task_tool(registry: Registry):
     def create_task(name: str, project_id: int, description: str = "") -> int:
