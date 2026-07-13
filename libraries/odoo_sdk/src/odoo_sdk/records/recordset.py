@@ -2006,38 +2006,72 @@ class OdooRecordset:
             return self._derive(sorted_ids, prefetch_ids=self._prefetch_ids)
 
         if isinstance(key, str):
-            specs = _parse_sort_specs(key)
-            field_names = [spec[0] for spec in specs]
-            self._ensure_fields_cached(field_names)
-
-            record_ids = list(self._ids)
-            for field_spec_name, direction, nulls_first in reversed(specs):
-                spec_reverse = direction == "DESC"
-                effective_nulls_first = (
-                    nulls_first if not spec_reverse else not nulls_first
-                )
-
-                def make_key(
-                    rid: int,
-                    fn: str = field_spec_name,
-                    nf: bool = effective_nulls_first,
-                ) -> _SortKey:
-                    found, v = self.get_cached_field_value(self._model_name, rid, fn)
-                    from odoo_sdk.query.domain import _extract_comparison_value
-
-                    extracted = _extract_comparison_value(v if found else None)
-                    return _SortKey(extracted, nulls_first=nf)
-
-                record_ids = sorted(record_ids, key=make_key, reverse=spec_reverse)
-
-            if reverse:
-                record_ids = list(reversed(record_ids))
-            return self._derive(record_ids, prefetch_ids=self._prefetch_ids)
+            return self._sorted_by_field_specs(key, reverse)
 
         raise TypeError(
             f"sorted() key must be a callable, field spec string, or None;"
             f" got {type(key)!r}"
         )
+
+    def _sorted_by_field_specs(self, key: str, reverse: bool) -> OdooRecordset:
+        """Sort the recordset by a comma-separated field spec string.
+
+        Each spec is applied as a stable pass in reverse order so the leftmost
+        spec becomes the primary sort key, matching the semantics documented on
+        :meth:`sorted`.
+
+        :param key: Comma-separated field spec, e.g. ``'name DESC, id ASC'``.
+        :type key: str
+        :param reverse: When True, reverse the final sort order.
+        :type reverse: bool
+        :return: Sorted recordset sharing the original prefetch set.
+        :rtype: OdooRecordset
+        """
+        specs = _parse_sort_specs(key)
+        field_names = [spec[0] for spec in specs]
+        self._ensure_fields_cached(field_names)
+
+        record_ids = list(self._ids)
+        for field_spec_name, direction, nulls_first in reversed(specs):
+            spec_reverse = direction == "DESC"
+            effective_nulls_first = (
+                nulls_first if not spec_reverse else not nulls_first
+            )
+            key_fn = self._make_field_sort_key(field_spec_name, effective_nulls_first)
+            record_ids = sorted(record_ids, key=key_fn, reverse=spec_reverse)
+
+        if reverse:
+            record_ids = list(reversed(record_ids))
+        return self._derive(record_ids, prefetch_ids=self._prefetch_ids)
+
+    def _make_field_sort_key(
+        self,
+        field_name: str,
+        nulls_first: bool,
+    ) -> Any:
+        """Build a ``sorted`` key callable for one field spec.
+
+        The returned callable maps a record id to a :class:`_SortKey` that
+        orders missing values according to ``nulls_first``.
+
+        :param field_name: Field whose cached value drives the ordering.
+        :type field_name: str
+        :param nulls_first: When True, missing values sort before present ones.
+        :type nulls_first: bool
+        :return: Callable mapping a record id to a comparable sort key.
+        :rtype: Any
+        """
+
+        def make_key(rid: int) -> _SortKey:
+            found, v = self.get_cached_field_value(
+                self._model_name, rid, field_name
+            )
+            from odoo_sdk.query.domain import _extract_comparison_value
+
+            extracted = _extract_comparison_value(v if found else None)
+            return _SortKey(extracted, nulls_first=nulls_first)
+
+        return make_key
 
     def grouped(
         self,
