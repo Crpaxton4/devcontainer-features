@@ -7,7 +7,7 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 
 ```json
 "features": {
-    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:1": {}
+    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:2": {}
 }
 ```
 
@@ -67,6 +67,8 @@ bind source path does not exist: /home/you/.claude
 ```
 
 ## What persists, and where
+
+The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces).
 
 Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
@@ -154,37 +156,18 @@ github_templates:
   pull_request: PULL_REQUEST_TEMPLATE/default.md
 ```
 
-## Migrating from the old named-volume scheme
-
-If you were previously using this Feature before it switched to bind mounts, copy your existing data out of the old Docker volumes before rebuilding:
-
-```sh
-docker run --rm \
-    -v personal-features-claude-home:/src \
-    -v "$HOME/.claude:/dst" \
-    alpine sh -c "cp -a /src/. /dst/"
-
-docker run --rm \
-    -v personal-features-gh-config:/src \
-    -v "$HOME/.config/gh:/dst" \
-    alpine sh -c "cp -a /src/. /dst/"
-```
-
-Then remove the old volumes if you no longer need them:
-
-```sh
-docker volume rm personal-features-claude-home personal-features-gh-config personal-features-shell-history
-```
-
 ## The `claude` command
 
-`claude` is wrapped so that a default session (bare `claude`, `claude "prompt"`, `-p`, `-c`, `-r`, etc.) automatically passes `--ide`, since this Feature is meant purely for use inside a VS Code dev container. Subcommands (`claude mcp`, `claude auth login`, `claude update`, etc.) are passed through unmodified.
+`claude` is wrapped so that a **bare interactive session** — plain `claude` with no arguments, run from a terminal — automatically passes `--ide`, since this Feature is meant purely for use inside a VS Code dev container. **Everything else is passed through unmodified**: subcommands (`claude mcp`, `claude auth login`, `claude update`, etc.), any flags or a prompt (`claude "prompt"`, `-p`, `-c`, `-r`), and non-interactive/piped invocations (`echo … | claude`).
+
+The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] && [ -t 0 ]`) rather than maintaining an allowlist of subcommands to *exclude*. The old allowlist had to be hand-edited for every new subcommand, and any subcommand it hadn't been taught about was silently turned into `claude --ide <subcommand>`; the inverted rule can never break a new Claude Code subcommand. **Accepted trade-off:** `claude -c`, `claude -r`, and `claude "prompt"` no longer auto-get `--ide` — pass it explicitly if you want it there.
 
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
 
 - Language-agnostic productivity/navigation CLIs: `ripgrep`, `fd`, `fzf`, `bat`, `jq`, `yq`, `eza`, `zoxide`, `tldr` (tealdeer).
+- [`delta`](https://github.com/dandavison/delta) for syntax-highlighted git diffs, and [`lazygit`](https://github.com/jesseduffield/lazygit) as a terminal git UI. `delta` is wired in machine-wide via `git config --system core.pager delta` and `interactive.diffFilter "delta --color-only"`, so `git diff`/`git log -p`/`git show` render through it and `git add -p` hunks are highlighted, in every repo with no per-repo setup.
 - [`gitleaks`](https://github.com/gitleaks/gitleaks) for secret scanning. Usable manually, and invoked automatically by the global `pre-commit` hook below.
 - [`coderabbit`](https://docs.coderabbit.ai/cli) (CodeRabbit CLI) for AI code review, and to back the Claude Code CodeRabbit plugin — see the [CodeRabbit CLI](#coderabbit-cli) section above for auth and config-persistence details.
 - Standards enforced **machine-wide** rather than per-repo, since most of this owner's projects aren't mature enough to have their own hook config checked in. Sets `git config --system core.hooksPath` to a Feature-installed directory (`/usr/local/share/git-hooks`) containing:
