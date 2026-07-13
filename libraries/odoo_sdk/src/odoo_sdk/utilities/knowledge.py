@@ -32,6 +32,26 @@ KNOWLEDGE_UNAVAILABLE_MESSAGE = (
 #: snippet is right-stripped and suffixed with a single ellipsis (``"…"``).
 SNIPPET_CHAR_CAP = 500
 
+#: Maximum number of characters kept from a *full* article body returned by
+#: :func:`read_knowledge_article`. Far larger than :data:`SNIPPET_CHAR_CAP` (a
+#: search preview) because this is the whole article, but a defensive upper bound
+#: keeps a pathologically large body from overwhelming an LLM context window —
+#: the same "cap the payload, flag the truncation" philosophy as the attachment
+#: reader (#247). A body whose Markdown exceeds this is right-stripped, suffixed
+#: with a single ellipsis (``"…"``) and reported with ``truncated=True``.
+BODY_CHAR_CAP = 50_000
+
+
+def _article_not_found_message(article_id: int) -> str:
+    """Exact ``ValueError`` message for a missing/inaccessible article id.
+
+    :param article_id: The ``knowledge.article`` id that returned no record.
+    :type article_id: int
+    :return: A stable, id-naming message for the Epic C error boundary to format.
+    :rtype: str
+    """
+    return f"knowledge.article {article_id} not found"
+
 
 def assert_knowledge_available(client: OdooClient) -> None:
     """Raise ``ValueError`` when the ``knowledge.article`` model is unavailable.
@@ -113,3 +133,54 @@ def search_knowledge_articles(
         }
         for r in records
     ]
+
+
+def read_knowledge_article(client: OdooClient, article_id: int) -> dict[str, Any]:
+    """Read one knowledge-base article's full body, HTML converted to Markdown.
+
+    The Enterprise-only ``knowledge.article`` model is probed first (see
+    :func:`assert_knowledge_available`), then the single record for ``article_id``
+    is read. Its raw HTML ``body`` is converted to Markdown in full — the whole
+    article, *not* the capped search snippet — and returned alongside the same
+    identity fields the search tool surfaces (``id``, ``name``, ``write_date``)
+    for a consistent shape across the two knowledge tools.
+
+    As a defensive guard against a pathologically large article, the Markdown is
+    capped at :data:`BODY_CHAR_CAP` characters: an over-cap body is right-stripped
+    and suffixed with a single ellipsis (``"…"``), and ``truncated`` is set
+    ``True`` (it is ``False`` for any body at or under the cap).
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :param article_id: The ``knowledge.article`` id to read.
+    :type article_id: int
+    :return: A ``{"id", "name", "body", "write_date", "truncated"}`` dict, where
+        ``body`` is the HTML-stripped Markdown (capped at
+        :data:`BODY_CHAR_CAP` characters) and ``truncated`` flags whether that
+        cap was applied.
+    :rtype: dict[str, Any]
+    :raises ValueError: When ``knowledge.article`` is unavailable (the database
+        is Odoo Community, not Enterprise), or when no article exists with
+        ``article_id`` (``knowledge.article <id> not found``).
+    """
+    assert_knowledge_available(client)
+    records = client.execute(
+        "knowledge.article",
+        "read",
+        [article_id],
+        fields=["id", "name", "body", "write_date"],
+    )
+    if not records:
+        raise ValueError(_article_not_found_message(article_id))
+    record = records[0]
+    markdown = html_to_markdown(record.get("body") or "")
+    truncated = len(markdown) > BODY_CHAR_CAP
+    if truncated:
+        markdown = markdown[:BODY_CHAR_CAP].rstrip() + "…"
+    return {
+        "id": record["id"],
+        "name": record["name"],
+        "body": markdown,
+        "write_date": record.get("write_date"),
+        "truncated": truncated,
+    }
