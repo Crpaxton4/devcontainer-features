@@ -1,9 +1,9 @@
 {
   "features": {
     "ghcr.io/crpaxton4/devcontainer-features/personal-features:1": {
-      "version": "1.8.0",
-      "resolved": "ghcr.io/crpaxton4/devcontainer-features/personal-features@sha256:02334b2d63725956b7f14941aba45372d57981a0882dac9f59ee5c540ebf8053",
-      "integrity": "sha256:02334b2d63725956b7f14941aba45372d57981a0882dac9f59ee5c540ebf8053",
+      "version": "1.18.1",
+      "resolved": "ghcr.io/crpaxton4/devcontainer-features/personal-features@sha256:ce5097d4f3309785afdb574446031791ce636537b87052e7a5470d39c20aeea7",
+      "integrity": "sha256:ce5097d4f3309785afdb574446031791ce636537b87052e7a5470d39c20aeea7",
       "dependsOn": [
         "ghcr.io/devcontainers/features/node:1"
       ]
