@@ -154,30 +154,118 @@ def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     )
 
 
+# Odoo ``mail.message`` fields fetched to shape a chatter entry. Shared by the
+# per-task chatter fetch and the cross-record chatter search so both apply the
+# identical presentation (display-name extraction + HTML-to-Markdown body).
+_CHATTER_MESSAGE_FIELDS = [
+    "id",
+    "date",
+    "author_id",
+    "message_type",
+    "subtype_id",
+    "body",
+]
+
+
+def shape_chatter_message(message: dict) -> dict:
+    """Normalise one raw ``mail.message`` record into a chatter entry.
+
+    This is the single shaping helper reused by every chatter reader so the
+    presentation stays consistent: the ``author_id`` and ``subtype_id`` many2one
+    pairs are reduced to their display names, and the HTML ``body`` is converted
+    to trimmed Markdown via :func:`html_to_markdown`.
+
+    :param message: Raw ``mail.message`` record carrying at least the fields in
+        :data:`_CHATTER_MESSAGE_FIELDS`.
+    :type message: dict
+    :return: Dict with ``id``, ``date``, ``author``, ``type``, ``subtype`` and a
+        Markdown ``body``.
+    :rtype: dict
+    """
+    return {
+        "id": message["id"],
+        "date": message["date"],
+        "author": resolve_many2one(message["author_id"]) or "",
+        "type": message["message_type"],
+        "subtype": resolve_many2one(message["subtype_id"]) or "",
+        "body": html_to_markdown(message.get("body", "")),
+    }
+
+
 def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list[dict]:
     """Fetch chatter messages for a task, sorted oldest-first."""
     messages = client.execute(
         "mail.message",
         "search_read",
         [("model", "=", "project.task"), ("res_id", "=", task_id)],
-        fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
+        fields=_CHATTER_MESSAGE_FIELDS,
         order="date asc",
+        limit=limit,
+    )
+    return [shape_chatter_message(m) for m in messages]
+
+
+def search_chatter(
+    client: OdooClient,
+    query: str,
+    model: str | None = None,
+    record_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Full-text search ``mail.message`` bodies, newest-first.
+
+    Builds a ``body ilike <query>`` domain and appends the optional filters that
+    were supplied, then reuses :func:`shape_chatter_message` for presentation and
+    adds the originating ``res_model`` / ``res_id`` so callers can navigate to the
+    source record. Read-only: issues a single ``search_read``.
+
+    :param client: The Odoo API client.
+    :type client: OdooClient
+    :param query: Substring matched case-insensitively against message bodies.
+    :type query: str
+    :param model: Optional Odoo model name (e.g. ``project.task``) to restrict
+        the search to messages on that model.
+    :type model: str | None
+    :param record_id: Optional record id to restrict the search to one record's
+        conversation; usually paired with ``model``.
+    :type record_id: int | None
+    :param date_from: Optional inclusive lower bound (``YYYY-MM-DD``) on the
+        message timestamp.
+    :type date_from: str | None
+    :param date_to: Optional inclusive upper bound (``YYYY-MM-DD``) on the message
+        timestamp; compared against the start of that day.
+    :type date_to: str | None
+    :param limit: Maximum number of messages to return, newest first.
+    :type limit: int
+    :return: Shaped chatter entries, each carrying ``res_model`` and ``res_id``.
+    :rtype: list[dict]
+    """
+    domain: list[tuple[str, str, Any]] = [("body", "ilike", query)]
+    if model is not None:
+        domain.append(("model", "=", model))
+    if record_id is not None:
+        domain.append(("res_id", "=", record_id))
+    if date_from is not None:
+        domain.append(("date", ">=", date_from))
+    if date_to is not None:
+        domain.append(("date", "<=", date_to))
+
+    messages = client.execute(
+        "mail.message",
+        "search_read",
+        domain,
+        fields=[*_CHATTER_MESSAGE_FIELDS, "model", "res_id"],
+        order="date desc",
         limit=limit,
     )
     result = []
     for m in messages:
-        author = resolve_many2one(m["author_id"]) or ""
-        subtype = resolve_many2one(m["subtype_id"]) or ""
-        result.append(
-            {
-                "id": m["id"],
-                "date": m["date"],
-                "author": author,
-                "type": m["message_type"],
-                "subtype": subtype,
-                "body": html_to_markdown(m.get("body", "")),
-            }
-        )
+        shaped = shape_chatter_message(m)
+        shaped["res_model"] = m.get("model")
+        shaped["res_id"] = m.get("res_id")
+        result.append(shaped)
     return result
 
 

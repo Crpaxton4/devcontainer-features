@@ -141,6 +141,48 @@ def make_create_task_tool(registry: Registry):
     return create_task
 
 
+@atomic_tool("search_chatter")
+def make_search_chatter_tool(registry: Registry):
+    def search_chatter(
+        query: str,
+        model: Optional[str] = None,
+        record_id: Optional[int] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Full-text search across Odoo chatter (``mail.message``) bodies.
+
+        Matches ``query`` case-insensitively against message bodies
+        (``body ilike``) and returns the newest matches first, capped at
+        ``limit``. Read-only.
+
+        Optional filters (all combinable):
+
+        * ``model`` — restrict to messages on one Odoo model, e.g.
+          ``"project.task"``.
+        * ``record_id`` — restrict to one record's conversation; pair with
+          ``model`` to target a specific record.
+        * ``date_from`` / ``date_to`` — inclusive message-timestamp bounds as
+          ``YYYY-MM-DD`` strings (``date_to`` compares against the start of that
+          day).
+
+        Each result carries ``id``, ``date``, ``author``, ``type``, ``subtype``,
+        an HTML-stripped Markdown ``body``, and the originating ``res_model`` /
+        ``res_id`` so the source record can be located.
+        """
+        return registry["search_chatter"].execute(
+            query,
+            model=model,
+            record_id=record_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+
+    return search_chatter
+
+
 @atomic_tool("search_projects")
 def make_search_projects_tool(registry: Registry):
     def search_projects(query: str, limit: int = 10) -> List[Dict[str, Any]]:
