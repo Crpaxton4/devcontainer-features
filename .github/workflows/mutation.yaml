@@ -57,7 +57,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.sha }}
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           enable-cache: true
