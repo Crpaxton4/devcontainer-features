@@ -117,7 +117,7 @@ class OdooJson2Executor(OdooExecutor):
         encoded = json.dumps(body).encode("utf-8")
 
         headers = {
-            "Authorization": f"bearer {self._api_key}",
+            "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json; charset=utf-8",
         }
         if self._db is not None:

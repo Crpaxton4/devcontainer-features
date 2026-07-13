@@ -14,6 +14,9 @@ from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.state.models import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.transport.errors import OdooError
+from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +29,16 @@ ToolSpec = Union[Callable[..., Any], Tuple[Callable[..., Any], str]]
 #: being returned as native objects, trading a marginal encoding cost for a
 #: substantial reduction in the tokens an LLM spends reading the result.
 TOON_OUTPUT_ENV = "ODOO_TOON_OUTPUT"
+
+#: Name of the subdirectory (under the system temp dir) that holds MCP profiling
+#: archives. Confining artifacts to a dedicated folder keeps pruning scoped to
+#: the SDK's own files and away from anything else living in the temp dir.
+PROFILE_SUBDIR = "odoo-sdk-profiles"
+
+#: Maximum number of profiling zips retained on disk. After every dump the
+#: oldest archives beyond this count are deleted, so an enabled profiler cannot
+#: grow the temp dir without bound over a container's lifetime.
+PROFILE_KEEP_LAST = 20
 
 
 def _toon_output_enabled() -> bool:
@@ -102,6 +115,75 @@ def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+#: Exceptions the MCP error boundary renders as a structured payload. Every
+#: entry is a caller-actionable failure — a classified Odoo fault
+#: (:class:`~odoo_sdk.transport.errors.OdooError` and its subclasses), a
+#: session-state violation, the devcontainer environment guard, or invalid
+#: input (``ValueError``) — a shape an LLM can reason about and retry. Anything
+#: not listed (``KeyError``, ``AttributeError``, ...) is a programming error and
+#: is deliberately left to propagate as an unhandled traceback.
+_BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
+    OdooError,
+    TaskNotRunningError,
+    TaskAlreadyRunningError,
+    OdooDevcontainerRequiredError,
+    ValueError,
+)
+
+
+def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
+    """Render a caught exception as the uniform structured-error payload.
+
+    The concrete class name is used (rather than the caught base) so a mapped
+    subclass such as ``OdooValidationError`` remains distinguishable to callers.
+
+    :param exc: The caught, caller-actionable exception.
+    :type exc: BaseException
+    :return: ``{"error": {"type": <class name>, "message": <str(exc)>}}``.
+    :rtype: dict
+    """
+
+    return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+
+
+def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool callable so caller-actionable failures return a payload.
+
+    Exceptions listed in :data:`_BOUNDARY_ERRORS` are converted into one
+    predictable ``{"error": {"type", "message"}}`` shape so LLM callers always
+    see structured data instead of a stack trace; programming errors propagate
+    unchanged. Applied inside :func:`_toon_encoded` so the error payload is TOON
+    encoded like any other result. Sync and async tools are handled separately,
+    and the original typed signature is preserved so FastMCP builds the same
+    wire schema (including any ``ctx`` parameter).
+
+    :param tool_fn: The tool callable to wrap.
+    :type tool_fn: Callable[..., Any]
+    :return: A signature-preserving wrapper that formats caught errors.
+    :rtype: Callable[..., Any]
+    """
+    if asyncio.iscoroutinefunction(tool_fn):
+
+        @functools.wraps(tool_fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await tool_fn(*args, **kwargs)
+            except _BOUNDARY_ERRORS as exc:
+                return _error_payload(exc)
+
+    else:
+
+        @functools.wraps(tool_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return tool_fn(*args, **kwargs)
+            except _BOUNDARY_ERRORS as exc:
+                return _error_payload(exc)
+
+    wrapper.__signature__ = inspect.signature(tool_fn)
+    return wrapper
+
+
 class OdooMCPServer:
     """Expose a set of explicit MCP tools built from a command :class:`Registry`.
 
@@ -149,11 +231,14 @@ class OdooMCPServer:
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.
 
-        Each tool callable is wrapped so its result is routed through
-        :func:`_to_toon` (a no-op unless ``ODOO_TOON_OUTPUT`` is set) and, when
-        profiling is enabled, wrapped again so every dispatch is profiled. Both
-        wrappers preserve the original typed signature so the wire schema
-        (including any FastMCP ``ctx`` parameter) is unchanged.
+        Each tool callable is wrapped in three layers, innermost first: an
+        :func:`_error_boundary` that turns caller-actionable exceptions into a
+        uniform ``{"error": {...}}`` payload, then :func:`_to_toon` (a no-op
+        unless ``ODOO_TOON_OUTPUT`` is set) so that payload TOON-encodes like any
+        other result, and — when profiling is enabled — a :func:`_profiled`
+        wrapper so every dispatch is captured. All wrappers preserve the original
+        typed signature so the wire schema (including any FastMCP ``ctx``
+        parameter) is unchanged.
 
         :return: None.
         :rtype: None
@@ -161,6 +246,7 @@ class OdooMCPServer:
 
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
+            tool_fn = _error_boundary(tool_fn)
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
                 tool_fn = _profiled(tool_fn, name)
@@ -238,12 +324,52 @@ def _profiled(tool_fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]
     return wrapper
 
 
+def _profile_dir() -> Path:
+    """Return the profiling-archive directory, creating it if absent.
+
+    Archives live in a dedicated :data:`PROFILE_SUBDIR` under the system temp
+    dir so pruning only ever touches the SDK's own files. The system temp dir is
+    resolved on every call (rather than cached) so tests can redirect it.
+
+    :return: The existing archive directory.
+    :rtype: Path
+    """
+
+    directory = Path(tempfile.gettempdir()) / PROFILE_SUBDIR
+    directory.mkdir(exist_ok=True)
+    return directory
+
+
+def _prune_profiles(directory: Path) -> None:
+    """Delete the oldest archives, retaining at most :data:`PROFILE_KEEP_LAST`.
+
+    Archives are ordered oldest-first by modification time (with the filename as
+    a stable tiebreaker), and everything before the newest
+    :data:`PROFILE_KEEP_LAST` entries is removed. When the directory holds at
+    most that many archives nothing is deleted.
+
+    :param directory: Directory whose ``odoo_profile_*.zip`` archives to prune.
+    :type directory: Path
+    :return: None.
+    :rtype: None
+    """
+
+    archives = sorted(
+        directory.glob("odoo_profile_*.zip"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    for stale in archives[:-PROFILE_KEEP_LAST]:
+        stale.unlink(missing_ok=True)
+
+
 def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
-    """Write a profiler snapshot as a zipped ``.prof`` file to the temp dir.
+    """Write a profiler snapshot as a zipped ``.prof`` file, then prune old ones.
 
     This helper keeps the tool wrapper thin: it persists the captured stats to
-    disk, compresses the binary profile into a shareable zip, and logs the
-    absolute path so tooling can locate the artifact.
+    disk, compresses the binary profile into a shareable zip under
+    :data:`PROFILE_SUBDIR`, prunes the archive directory back to
+    :data:`PROFILE_KEEP_LAST` files, and logs the absolute path so tooling can
+    locate the artifact.
 
     :param profiler: Disabled profiler holding the captured call stats.
     :type profiler: cProfile.Profile
@@ -252,12 +378,14 @@ def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
     :return: Absolute path to the written zip archive.
     :rtype: str
     """
-    tempdir = Path(tempfile.gettempdir())
-    # Nanosecond suffix keeps each call's archive unique even when the same tool
-    # is dispatched multiple times within the same wall-clock second.
-    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000}"
-    prof_path = tempdir / f"{tool_name}_{timestamp}.prof"
-    zip_path = tempdir / f"odoo_profile_{tool_name}_{timestamp}.zip"
+    directory = _profile_dir()
+    # Zero-padded nanoseconds keep each call's archive unique, and make same-tool
+    # filenames sort in creation order even within one wall-clock second.
+    timestamp = (
+        f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
+    )
+    prof_path = directory / f"{tool_name}_{timestamp}.prof"
+    zip_path = directory / f"odoo_profile_{tool_name}_{timestamp}.zip"
 
     profiler.dump_stats(str(prof_path))
     try:
@@ -266,6 +394,7 @@ def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
     finally:
         prof_path.unlink(missing_ok=True)
 
+    _prune_profiles(directory)
     absolute = str(zip_path.resolve())
     log.info("Profile saved: %s", absolute)
     return absolute

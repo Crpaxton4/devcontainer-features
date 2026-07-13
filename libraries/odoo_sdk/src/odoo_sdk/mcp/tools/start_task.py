@@ -376,8 +376,13 @@ def make_start_task_tool(registry: Registry):
                 warning=warning,
             )
         except Exception:
-            # Roll back only a branch freshly created this run (#164); re-raise
-            # so the caller still sees the original failure.
+            # Raise-based error contract (#223): the start command raises on
+            # failure (e.g. an active session -> ``TaskAlreadyRunningError``, or
+            # an Odoo fault -> ``OdooError``). This flow needs cleanup before the
+            # failure surfaces, so it catches to roll back only a branch freshly
+            # created this run (#164), then re-raises the *original typed*
+            # exception unchanged for the MCP ``_error_boundary`` (#222) to format
+            # — it is not swallowed into an ``{"error": ...}`` dict here.
             if branch_created and branch_name is not None:
                 _rollback_task_branch(branch_name, original_branch)
             raise

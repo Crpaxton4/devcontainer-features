@@ -7,9 +7,9 @@ input schema (and marks it required), so it is never auto-injected.
 
 These tests reproduce the exact way :class:`OdooMCPServer` builds tools — the
 explicit-tools path through ``Tool.from_function`` with the same
-``_toon_encoded``/``_profiled`` wrappers — and assert ``ctx`` is absent from
-both ``properties`` and ``required`` of the generated schema. They fail on the
-old ``ctx: Any`` and pass with ``ctx: Context``.
+``_error_boundary``/``_toon_encoded``/``_profiled`` wrappers — and assert
+``ctx`` is absent from both ``properties`` and ``required`` of the generated
+schema. They fail on the old ``ctx: Any`` and pass with ``ctx: Context``.
 """
 
 import unittest
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 from fastmcp.tools.tool import Tool
 
-from odoo_sdk.mcp.server import _profiled, _toon_encoded
+from odoo_sdk.mcp.server import _error_boundary, _profiled, _toon_encoded
 from odoo_sdk.mcp.tools.start_task import make_start_task_tool
 from odoo_sdk.mcp.tools.stop_task import make_stop_task_tool
 
@@ -25,9 +25,10 @@ from odoo_sdk.mcp.tools.stop_task import make_stop_task_tool
 def _build_tool(tool_fn, name):
     """Build a Tool exactly as ``OdooMCPServer._register_tools`` does.
 
-    Applies both server wrappers (profiling on, to exercise the deepest wrapper
-    stack) before constructing the Tool via ``Tool.from_function``.
+    Applies all three server wrappers (profiling on, to exercise the deepest
+    wrapper stack) before constructing the Tool via ``Tool.from_function``.
     """
+    tool_fn = _error_boundary(tool_fn)
     tool_fn = _toon_encoded(tool_fn)
     tool_fn = _profiled(tool_fn, name)
     return Tool.from_function(tool_fn, name=name)

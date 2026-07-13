@@ -161,5 +161,122 @@ class TestLocalConfigConnectionSettings(unittest.TestCase):
                     config.connection_settings()
 
 
+class TestOdooConnectionSettingsRepr(unittest.TestCase):
+    """Guard against secrets leaking through the dataclass repr/str."""
+
+    def _fully_populated(self) -> OdooConnectionSettings:
+        return OdooConnectionSettings(
+            url="https://odoo.example.com",
+            db="prod-db",
+            username="admin",
+            password="s3cr3t-pw",
+            transport="json2",
+            api_key="k3y-abc",
+        )
+
+    def test_repr_matches_exact_expected_string(self):
+        settings = self._fully_populated()
+        expected = (
+            "OdooConnectionSettings("
+            "url='https://odoo.example.com', "
+            "db='prod-db', "
+            "username='admin', "
+            "transport='json2', "
+            "timeout=30.0)"
+        )
+        self.assertEqual(repr(settings), expected)
+
+    def test_str_matches_exact_expected_string(self):
+        settings = self._fully_populated()
+        expected = (
+            "OdooConnectionSettings("
+            "url='https://odoo.example.com', "
+            "db='prod-db', "
+            "username='admin', "
+            "transport='json2', "
+            "timeout=30.0)"
+        )
+        self.assertEqual(str(settings), expected)
+
+    def test_password_value_absent_from_repr_and_str(self):
+        settings = self._fully_populated()
+        self.assertNotIn("s3cr3t-pw", repr(settings))
+        self.assertNotIn("s3cr3t-pw", str(settings))
+
+    def test_api_key_value_absent_from_repr_and_str(self):
+        settings = self._fully_populated()
+        self.assertNotIn("k3y-abc", repr(settings))
+        self.assertNotIn("k3y-abc", str(settings))
+
+
+class TestLocalConfigTimeout(unittest.TestCase):
+    def test_timeout_absent_by_default(self):
+        with patch.dict("os.environ", {}, clear=True):
+            config = LocalConfig.load(config_path=None)
+        self.assertIsNone(config.connection["timeout"])
+
+    def test_env_timeout_resolved_into_connection_mapping(self):
+        with patch.dict("os.environ", {"ODOO_TIMEOUT": "15"}, clear=True):
+            config = LocalConfig.load(config_path="/nonexistent/config.toml")
+        self.assertEqual(config.connection["timeout"], "15")
+
+    def test_file_timeout_wins_over_env(self):
+        toml = (
+            "[connection]\n"
+            'url = "https://f.example.com"\n'
+            'db = "file-db"\n'
+            "timeout = 20\n"
+        )
+        with TemporaryDirectory() as tmp:
+            path = _write(tmp, "config.toml", toml)
+            with patch.dict("os.environ", {"ODOO_TIMEOUT": "8"}, clear=True):
+                config = LocalConfig.load(config_path=path)
+        self.assertEqual(config.connection["timeout"], 20)
+
+    def test_connection_settings_coerces_string_timeout_to_float(self):
+        config = LocalConfig(
+            connection={
+                "url": "https://x.example.com",
+                "db": "db",
+                "username": "user",
+                "password": "pw",
+                "timeout": "18",
+            }
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            settings = config.connection_settings()
+        self.assertEqual(settings.timeout, 18.0)
+
+    def test_connection_settings_defaults_timeout_when_absent(self):
+        config = LocalConfig(
+            connection={
+                "url": "https://x.example.com",
+                "db": "db",
+                "username": "user",
+                "password": "pw",
+            }
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            settings = config.connection_settings()
+        self.assertEqual(settings.timeout, 30.0)
+
+    def test_boolean_file_timeout_falls_back_to_default(self):
+        toml = (
+            "[connection]\n"
+            'url = "https://f.example.com"\n'
+            'db = "file-db"\n'
+            'username = "file-user"\n'
+            'password = "file-pass"\n'
+            "timeout = true\n"
+        )
+        with TemporaryDirectory() as tmp:
+            path = _write(tmp, "config.toml", toml)
+            with patch.dict("os.environ", {}, clear=True):
+                config = LocalConfig.load(config_path=path)
+                settings = config.connection_settings()
+        self.assertIs(config.connection["timeout"], True)
+        self.assertEqual(settings.timeout, 30.0)
+
+
 if __name__ == "__main__":
     unittest.main()

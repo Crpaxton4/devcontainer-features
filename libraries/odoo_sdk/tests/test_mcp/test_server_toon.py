@@ -155,7 +155,9 @@ class TestToonComposesWithProfiling(unittest.TestCase):
                 registry, explicit_tools={"dict_tool": _dict_tool}, profiling=True
             )
             result = added[0].fn()
-            profiles = sorted(Path(tmp).glob("odoo_profile_*.zip"))
+            profiles = sorted(
+                (Path(tmp) / server.PROFILE_SUBDIR).glob("odoo_profile_*.zip")
+            )
         self.assertIsInstance(result, str)  # TOON-encoded
         self.assertIn("ok: true", result)
         self.assertEqual(len(profiles), 1)  # profile written

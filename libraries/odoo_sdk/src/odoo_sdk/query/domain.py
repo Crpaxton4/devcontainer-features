@@ -14,6 +14,30 @@ DomainInput: TypeAlias = Union[DomainCondition, Sequence[Any]]
 
 _BOOLEAN_OPERATORS: Final[set[str]] = {"&", "|", "!"}
 
+_VALID_LEAF_OPERATORS: Final[frozenset[str]] = frozenset(
+    {
+        "=",
+        "!=",
+        ">",
+        ">=",
+        "<",
+        "<=",
+        "=?",
+        "like",
+        "not like",
+        "ilike",
+        "not ilike",
+        "=like",
+        "=ilike",
+        "in",
+        "not in",
+        "child_of",
+        "parent_of",
+        "any",
+        "not any",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Condition:
@@ -395,10 +419,13 @@ def _build_condition(condition: Sequence[Any]) -> Condition:
 
     :param condition: Raw field, operator, and value triple.
     :type condition: Sequence[Any]
+    :raises ValueError: Raised when the operator is not a supported leaf operator.
     :return: Normalized condition node.
     :rtype: _Condition
     """
     field, operator, value = condition
+    if operator not in _VALID_LEAF_OPERATORS:
+        raise ValueError(f"Unsupported domain operator: {operator!r}")
     return Condition(field, operator, deepcopy(value))
 
 

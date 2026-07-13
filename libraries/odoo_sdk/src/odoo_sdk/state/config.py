@@ -18,6 +18,7 @@ This module hosts two related concerns of the local state layer:
 """
 
 import configparser
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -26,6 +27,12 @@ from typing import Any, Literal, Mapping, Optional
 
 DEFAULT_CONFIG_ENV_VAR = "odoo_sdk_CONFIG"
 DEFAULT_SECTION = "odoo"
+
+#: Default per-request transport timeout, in seconds. Shared as the fallback for
+#: garbage or absent ``ODOO_TIMEOUT`` values and as the dataclass field default so
+#: the settings layer and the transports agree on one number.
+DEFAULT_TIMEOUT_SECONDS: float = 30.0
+
 CONNECTION_ENV_VARS = {
     "url": "ODOO_URL",
     "db": "ODOO_DB",
@@ -33,6 +40,7 @@ CONNECTION_ENV_VARS = {
     "password": "ODOO_PASSWORD",
     "api_key": "ODOO_API_KEY",
     "transport": "ODOO_TRANSPORT",
+    "timeout": "ODOO_TIMEOUT",
 }
 DEFAULT_CONFIG_LOCATIONS = (
     ".odoo_sdk.ini",
@@ -61,13 +69,18 @@ class OdooConnectionSettings:
     :type username: str
     :param password: Password or API key used for authentication.
     :type password: str
+    :param transport: Transport backend used to reach the server.
+    :type transport: Literal["xmlrpc", "json2"]
+    :param timeout: Per-request transport timeout in seconds.
+    :type timeout: float
     """
 
     url: str
     db: str
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = field(default=None, repr=False)
     transport: Literal["xmlrpc", "json2"] = "xmlrpc"
+    timeout: float = DEFAULT_TIMEOUT_SECONDS
     api_key: Optional[str] = field(default=None, repr=False)
 
     @classmethod
@@ -80,6 +93,7 @@ class OdooConnectionSettings:
         password: Optional[str] = None,
         api_key: Optional[str] = None,
         transport: Optional[str] = None,
+        timeout: Optional[float] = None,
         config_path: Optional[str] = None,
     ) -> "OdooConnectionSettings":
         """Resolve connection settings from explicit, environment, and file sources.
@@ -95,6 +109,10 @@ class OdooConnectionSettings:
         :type username: Optional[str]
         :param password: Explicit password override, defaults to None.
         :type password: Optional[str]
+        :param timeout: Explicit per-request timeout override in seconds, defaults to
+            None. Non-numeric or non-positive values fall back to
+            :data:`DEFAULT_TIMEOUT_SECONDS`.
+        :type timeout: Optional[float]
         :param config_path: Optional INI file path override, defaults to None.
         :type config_path: Optional[str]
         :raises ValueError: Raised when any required setting remains unresolved.
@@ -122,6 +140,9 @@ class OdooConnectionSettings:
 
         resolved_transport = _resolve_transport(values)
         _validate_required_settings(values, resolved_transport)
+        resolved_timeout = _resolve_timeout(
+            timeout, environment_values, file_values
+        )
 
         return cls(
             url=str(values["url"]),
@@ -129,6 +150,7 @@ class OdooConnectionSettings:
             username=values.get("username") or None,
             password=values.get("password") or None,
             transport=resolved_transport,
+            timeout=resolved_timeout,
             api_key=values.get("api_key") or None,
         )
 
@@ -178,6 +200,60 @@ def _validate_required_settings(
         )
 
 
+def _resolve_timeout(
+    explicit: Optional[float],
+    env_vals: Mapping[str, Optional[str]],
+    file_vals: Mapping[str, str],
+) -> float:
+    """Resolve the per-request timeout with explicit > env > file > default order.
+
+    This helper is necessary because the timeout follows the same precedence chain
+    as the string connection settings but must be coerced to a concrete positive
+    float before it reaches the transports.
+
+    :param explicit: Explicit timeout override, or None when not provided.
+    :type explicit: Optional[float]
+    :param env_vals: Environment-derived values keyed by setting name.
+    :type env_vals: Mapping[str, Optional[str]]
+    :param file_vals: File-derived values keyed by setting name.
+    :type file_vals: Mapping[str, str]
+    :return: Validated positive timeout in seconds.
+    :rtype: float
+    """
+    if explicit is not None:
+        return _coerce_timeout(explicit)
+    env_value = env_vals.get("timeout")
+    if env_value is not None:
+        return _coerce_timeout(env_value)
+    return _coerce_timeout(file_vals.get("timeout"))
+
+
+def _coerce_timeout(value: Any) -> float:
+    """Coerce a raw timeout value to a positive float, falling back to the default.
+
+    This helper is necessary because timeout values arrive from environment
+    variables and files as strings, may be missing entirely, or may be garbage;
+    any value that is not a positive finite number must degrade to
+    :data:`DEFAULT_TIMEOUT_SECONDS` rather than raise. Booleans are rejected
+    explicitly because ``float(True)`` is ``1.0``, which would silently turn a
+    TOML ``timeout = true`` into a one-second timeout.
+
+    :param value: Raw timeout value from an explicit, environment, or file source.
+    :type value: Any
+    :return: A positive finite timeout in seconds, or the default on invalid input.
+    :rtype: float
+    """
+    if isinstance(value, bool):
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_TIMEOUT_SECONDS
+    if math.isfinite(timeout) and timeout > 0:
+        return timeout
+    return DEFAULT_TIMEOUT_SECONDS
+
+
 def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
     """Load connection settings from the selected INI file, if one exists.
 
@@ -208,6 +284,7 @@ def _load_file_values(config_path: Optional[str]) -> dict[str, str]:
         "password": parser.get(DEFAULT_SECTION, "password", fallback=""),
         "api_key": parser.get(DEFAULT_SECTION, "api_key", fallback=""),
         "transport": parser.get(DEFAULT_SECTION, "transport", fallback=""),
+        "timeout": parser.get(DEFAULT_SECTION, "timeout", fallback=""),
     }
 
 
@@ -315,6 +392,9 @@ _CONNECTION_DEFAULTS: dict[str, Optional[str]] = {
     "password": None,
     "api_key": None,
     "transport": "xmlrpc",
+    # The concrete numeric default lives in ``DEFAULT_TIMEOUT_SECONDS``;
+    # ``from_sources`` coerces this absent value into it.
+    "timeout": None,
 }
 
 # String tokens interpreted as an enabled boolean flag. INI and environment
@@ -467,6 +547,7 @@ class LocalConfig:
             password=conn.get("password"),
             api_key=conn.get("api_key"),
             transport=conn.get("transport"),
+            timeout=conn.get("timeout"),  # type: ignore[arg-type]
         )
 
 
