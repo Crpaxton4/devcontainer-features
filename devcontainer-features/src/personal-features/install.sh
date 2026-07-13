@@ -203,9 +203,12 @@ fi
 # static binaries, no dependency on Node being present.
 
 DPKG_ARCH="$(dpkg --print-architecture)" # amd64 | arm64
+# lazygit's linux assets are named x86_64 / arm64 - the x86_64 half matches
+# ARCH_GNU but the arm64 half doesn't (that would be aarch64), so it needs its
+# own column rather than reusing an existing one.
 case "$DPKG_ARCH" in
-    amd64) ARCH_DEB=amd64; ARCH_GNU=x86_64; ARCH_SHORT=x64 ;;
-    arm64) ARCH_DEB=arm64; ARCH_GNU=aarch64; ARCH_SHORT=arm64 ;;
+    amd64) ARCH_DEB=amd64; ARCH_GNU=x86_64;  ARCH_SHORT=x64;   ARCH_LAZYGIT=x86_64 ;;
+    arm64) ARCH_DEB=arm64; ARCH_GNU=aarch64; ARCH_SHORT=arm64; ARCH_LAZYGIT=arm64  ;;
     *) echo "ERROR: unsupported architecture: $DPKG_ARCH" >&2; exit 1 ;;
 esac
 
@@ -226,16 +229,23 @@ TEALDEER_VERSION=1.8.1   # github.com/dbrgn/tealdeer
 GITLEAKS_VERSION=8.30.1  # github.com/gitleaks/gitleaks
 ZOXIDE_VERSION=0.10.0    # github.com/ajeetdsouza/zoxide
 STARSHIP_VERSION=1.26.0  # github.com/starship/starship
+# delta tags its releases WITHOUT a leading "v" (e.g. 0.19.2, not v0.19.2), so
+# unlike the tools above its download URL uses the bare version verbatim.
+DELTA_VERSION=0.19.2     # github.com/dandavison/delta
+LAZYGIT_VERSION=0.63.0   # github.com/jesseduffield/lazygit
 
 # Installs a pinned GitHub release asset from a deterministic download URL (no
 # api.github.com lookup). With a dest path ($3) it downloads a single binary
 # there and marks it executable; otherwise it extracts a .tar.gz into
 # /usr/local/bin - restricted to member $4 when given, so tarballs that also
-# ship docs/man/completions (e.g. zoxide) don't litter /usr/local/bin.
-# Best-effort: these are optional, non-Claude tools, so a failure here warns
-# and continues rather than failing the whole install.
+# ship docs/man/completions (e.g. zoxide) don't litter /usr/local/bin. $5 sets
+# tar's --strip-components, for tarballs that nest the binary under a top-level
+# directory (e.g. delta's delta-<ver>-<arch>/delta) so it still lands directly
+# on /usr/local/bin rather than in a subdir. Best-effort: these are optional,
+# non-Claude tools, so a failure here warns and continues rather than failing
+# the whole install.
 install_gh_release() {
-    local name="$1" url="$2" dest="${3-}" member="${4-}"
+    local name="$1" url="$2" dest="${3-}" member="${4-}" strip="${5-}"
     if [ -n "$dest" ]; then
         if fetch "$url" "$dest"; then
             chmod +x "$dest"
@@ -248,9 +258,10 @@ install_gh_release() {
         local tarball
         tarball="$(mktemp)"
         if fetch "$url" "$tarball"; then
-            # ${member:+...} adds the member argument only when set, so a bare
-            # (whole-tarball) extract stays argument-clean under set -u.
-            tar -xz -C /usr/local/bin -f "$tarball" ${member:+"$member"} \
+            # ${member:+...}/${strip:+...} add their arguments only when set, so
+            # a bare (whole-tarball) extract stays argument-clean under set -u.
+            tar -xz -C /usr/local/bin ${strip:+--strip-components="$strip"} \
+                -f "$tarball" ${member:+"$member"} \
                 || echo "WARNING: failed to install $name, skipping" >&2
         else
             echo "WARNING: failed to install $name, skipping" >&2
@@ -293,6 +304,21 @@ install_gh_release zoxide \
 _download_pids+=("$!")
 install_gh_release gitleaks \
     "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_SHORT}.tar.gz" &
+_download_pids+=("$!")
+# delta (better git diffs) - its tarball nests LICENSE/README/delta under a
+# top-level delta-<ver>-<arch> dir, so extract just the binary and strip that
+# leading component (strip=1) to land it directly on /usr/local/bin. No aarch64
+# musl asset is published, so use the gnu tarball for both arches. Wired up as
+# git's pager via `git config --system` below.
+install_gh_release delta \
+    "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/delta-${DELTA_VERSION}-${ARCH_GNU}-unknown-linux-gnu.tar.gz" \
+    "" "delta-${DELTA_VERSION}-${ARCH_GNU}-unknown-linux-gnu/delta" 1 &
+_download_pids+=("$!")
+# lazygit (TUI git client) - ships the bare binary at the tarball root alongside
+# LICENSE/README, so extract just `lazygit` (like zoxide).
+install_gh_release lazygit \
+    "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_linux_${ARCH_LAZYGIT}.tar.gz" \
+    "" lazygit &
 _download_pids+=("$!")
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
@@ -350,6 +376,15 @@ EOF
 chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
+# Wire delta in as git's pager machine-wide (same --system scope as the hooks
+# above), so `git diff`/`git log -p`/`git show` render through it and `git add
+# -p` gets syntax-highlighted hunks. Set unconditionally rather than gated on
+# delta's presence: delta's download is best-effort (it may be skipped on a
+# network failure), but the feature's philosophy is that these tools are always
+# installed, and the feature test asserts these exact config values.
+git config --system core.pager delta
+git config --system interactive.diffFilter "delta --color-only"
+
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
 # --version pins the release; the installer then builds a direct
 # releases/download/<tag>/ URL (no api.github.com) and resolves the right
@@ -358,8 +393,8 @@ echo "Installing shell enhancements (Starship prompt, aliases, persisted history
     || echo "WARNING: failed to install starship, skipping" >&2 ) &
 _download_pids+=("$!")
 
-# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks,
-# coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
+# lazygit, coderabbit, starship). Each job already warns and exits 0 on its own failure;
 # wait on each PID and guard it so an unexpected non-zero exit degrades to a
 # warning instead of aborting the build under set -e. (A bare `wait` returns 0
 # regardless, which would instead silently mask such a failure.)
