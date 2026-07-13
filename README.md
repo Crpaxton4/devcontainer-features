@@ -67,8 +67,8 @@ A Python SDK for Odoo ERP access via XML-RPC and JSON-RPC, with a built-in [MCP]
 | `OdooClient` | Entry point — connects to an Odoo server and returns model proxies via `client["model.name"]`. Reads connection settings from keyword args or a `.odoo_sdk.ini` config file. |
 | `OdooRecordset` | Represents an ordered set of records on a model. Supports `search`, `read`, `write`, `create`, `unlink`, and x2many field commands. |
 | `DomainExpression` | Builder for Odoo search domains — composes `Condition` nodes with `&`, `\|`, `!` operators and serializes to the wire format. |
-| `Command` / `Registry` | Protocol + registry for wrapping Odoo operations as named, typed commands. Each command's `execute` signature drives both programmatic use and MCP tool generation. |
-| `OdooMCPServer` | FastMCP server that introspects a `Registry` at startup and exposes every registered command as an MCP tool with a fully typed input schema. |
+| `Command` / `Registry` | Base class + registry for wrapping Odoo operations as named, dependency-injected commands. The `Registry` owns each command's shared dependencies (client, state, config); explicit MCP tools compose those commands. |
+| `OdooMCPServer` | FastMCP server that exposes an explicit, hand-written set of MCP tools (built via `build_explicit_tools`) over a `Registry`. Each tool is a real, typed function that delegates to a command — the server performs no auto-reflection of command signatures, so the wire schema is an intentional surface. |
 
 ### Quickstart
 
@@ -91,17 +91,19 @@ password = ...
 
 ### MCP server
 
-Register commands in a `Registry` and serve them as MCP tools:
+Build a `Registry`, turn its commands into an explicit tool set, and serve them:
 
 ```python
-from odoo_sdk import OdooClient, Registry
-from odoo_sdk.mcp.server import OdooMCPServer
+from odoo_sdk import OdooClient, OdooMCPServer, Registry
+from odoo_sdk.commands.builtin import register_builtins
+from odoo_sdk.mcp.tools import build_explicit_tools
 
-registry = Registry(OdooClient())
-registry.register("get_tasks", GetTasksCommand)
-
-server = OdooMCPServer(registry)
-server.mcp.run()
+# Register the SDK's built-in commands, then build the explicit, typed tool
+# set that wraps them. The server exposes exactly these tools — it does not
+# auto-reflect command signatures.
+registry = register_builtins(Registry(OdooClient()))
+server = OdooMCPServer(registry, explicit_tools=build_explicit_tools(registry))
+server.run()
 ```
 
 Or run the packaged entry point directly:
