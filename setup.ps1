@@ -84,6 +84,12 @@ To fix, either:
 # Home-relative mount sources; keep in sync with persisted-paths.tsv (and hence
 # setup.sh) row-for-row. All are directories today; a future file source would
 # need New-Item -ItemType File instead.
+#
+# Unlike setup.sh, this script does NOT apply the manifest's mode column (#233):
+# NTFS has no POSIX modes to chmod, dirs under the user profile are already
+# private to the user by default ACL, and Docker Desktop on Windows synthesizes
+# the in-container permission bits for shared paths regardless of anything set
+# here - so there is nothing meaningful to enforce host-side on Windows.
 $paths = @(
     '.claude'
     '.config/gh'
