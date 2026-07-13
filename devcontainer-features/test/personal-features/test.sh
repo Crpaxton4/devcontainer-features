@@ -21,6 +21,7 @@
 
 set -e
 
+# shellcheck source=/dev/null  # dev-container-features-test-lib is injected by the test harness at runtime; not resolvable statically. check()/reportResults() come from it.
 source dev-container-features-test-lib
 
 check "claude wrapper is on PATH and executable" bash -c "test -x \"\$(command -v claude)\""
@@ -107,6 +108,7 @@ check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/g
 # shell enhancements
 check "starship is installed" starship --version
 check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
 check "~/.bash_history is linked to the bind-mounted history file" bash -c \
   "[ \"\$(readlink -f \"\$HOME/.bash_history\")\" = '/usr/local/share/shell-history/bash_history' ]"
 
