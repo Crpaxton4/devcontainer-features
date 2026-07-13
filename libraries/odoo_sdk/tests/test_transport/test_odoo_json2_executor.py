@@ -105,7 +105,7 @@ class TestOdooJson2ExecutorRequest(unittest.TestCase):
         ex = OdooJson2Executor("https://example.com", "mydb", "mykey")
         ex.execute("res.partner", "search", [])
         request = mock_urlopen.call_args[0][0]
-        self.assertEqual(request.get_header("Authorization"), "bearer mykey")
+        self.assertEqual(request.get_header("Authorization"), "Bearer mykey")
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
     def test_search_sends_content_type_header(self, mock_urlopen: Mock) -> None:
