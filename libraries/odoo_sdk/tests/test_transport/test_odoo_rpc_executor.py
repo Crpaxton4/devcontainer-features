@@ -1,7 +1,15 @@
+import http.client
+import socket
 import unittest
 import xmlrpc.client
 from unittest.mock import Mock, patch
 
+from odoo_sdk.transport.errors import (
+    OdooAuthenticationError,
+    OdooServerError,
+    OdooTransportError,
+    OdooValidationError,
+)
 from odoo_sdk.transport.rpc import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     OdooRpcExecutor,
@@ -52,9 +60,7 @@ class TestOdooRpcExecutor(unittest.TestCase):
         self.assertEqual(executor.uid, 7)
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_passes_through_authentication_fault(
-        self, mock_server_proxy: Mock
-    ) -> None:
+    def test_execute_maps_authentication_fault(self, mock_server_proxy: Mock) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         fault = xmlrpc.client.Fault(
@@ -66,69 +72,144 @@ class TestOdooRpcExecutor(unittest.TestCase):
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        with self.assertRaises(xmlrpc.client.Fault) as caught:
+        with self.assertRaises(OdooAuthenticationError) as caught:
             executor.execute("res.partner", "search", [])
 
-        self.assertIs(caught.exception, fault)
+        exc = caught.exception
+        self.assertEqual(str(exc), "bad login or password")
+        self.assertEqual(exc.fault_code, 1)
+        self.assertEqual(
+            exc.fault_string, "odoo.exceptions.AccessDenied: bad login or password"
+        )
+        self.assertIsNone(exc.model)
+        self.assertEqual(exc.method, "authenticate")
         object_proxy.execute_kw.assert_not_called()
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_passes_through_execute_fault(
+    def test_execute_maps_unmarked_execute_fault_to_server_error(
         self, mock_server_proxy: Mock
     ) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         common_proxy.authenticate.return_value = 12
-        fault = xmlrpc.client.Fault(2, "Boom")
-        object_proxy.execute_kw.side_effect = fault
+        object_proxy.execute_kw.side_effect = xmlrpc.client.Fault(2, "Boom")
         mock_server_proxy.side_effect = [common_proxy, object_proxy]
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        with self.assertRaises(xmlrpc.client.Fault) as caught:
+        with self.assertRaises(OdooServerError) as caught:
             executor.execute("res.partner", "search", [])
 
-        self.assertIs(caught.exception, fault)
+        exc = caught.exception
+        self.assertEqual(str(exc), "Boom")
+        self.assertEqual(exc.fault_code, 2)
+        self.assertEqual(exc.fault_string, "Boom")
+        self.assertEqual(exc.model, "res.partner")
+        self.assertEqual(exc.method, "search")
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_passes_through_transport_errors(
+    def test_execute_maps_marked_execute_fault_to_validation_error(
         self, mock_server_proxy: Mock
     ) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         common_proxy.authenticate.return_value = 12
-        error = xmlrpc.client.ProtocolError(
+        object_proxy.execute_kw.side_effect = xmlrpc.client.Fault(
+            3,
+            "odoo.exceptions.ValidationError: Name is required",
+        )
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooValidationError) as caught:
+            executor.execute("res.partner", "create", {})
+
+        exc = caught.exception
+        self.assertEqual(str(exc), "Name is required")
+        self.assertEqual(exc.fault_code, 3)
+        self.assertEqual(exc.model, "res.partner")
+        self.assertEqual(exc.method, "create")
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_maps_protocol_error_to_transport_error(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 12
+        object_proxy.execute_kw.side_effect = xmlrpc.client.ProtocolError(
             "https://example.com/xmlrpc/2/object",
             502,
             "Bad Gateway",
             {},
         )
-        object_proxy.execute_kw.side_effect = error
         mock_server_proxy.side_effect = [common_proxy, object_proxy]
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        with self.assertRaises(xmlrpc.client.ProtocolError) as caught:
+        with self.assertRaises(OdooTransportError) as caught:
             executor.execute("res.partner", "search", [])
 
-        self.assertIs(caught.exception, error)
+        exc = caught.exception
+        self.assertEqual(str(exc), "Transport error communicating with Odoo server")
+        self.assertEqual(exc.model, "res.partner")
+        self.assertEqual(exc.method, "search")
+        self.assertNotIsInstance(exc, xmlrpc.client.ProtocolError)
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_execute_passes_through_auth_transport_errors(
+    def test_execute_maps_socket_timeout_to_transport_error(
         self, mock_server_proxy: Mock
     ) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
-        error = OSError("network down")
-        common_proxy.authenticate.side_effect = error
+        common_proxy.authenticate.return_value = 12
+        object_proxy.execute_kw.side_effect = socket.timeout("timed out")
         mock_server_proxy.side_effect = [common_proxy, object_proxy]
 
         executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
 
-        with self.assertRaises(OSError) as caught:
+        with self.assertRaises(OdooTransportError) as caught:
             executor.execute("res.partner", "search", [])
 
-        self.assertIs(caught.exception, error)
+        self.assertEqual(caught.exception.detail, "timed out")
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_maps_http_exception_to_transport_error(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 12
+        object_proxy.execute_kw.side_effect = http.client.HTTPException("broken")
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooTransportError) as caught:
+            executor.execute("res.partner", "search", [])
+
+        self.assertEqual(caught.exception.detail, "broken")
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_maps_auth_os_error_to_transport_error(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.side_effect = OSError("network down")
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooTransportError) as caught:
+            executor.execute("res.partner", "search", [])
+
+        exc = caught.exception
+        self.assertEqual(str(exc), "Transport error communicating with Odoo server")
+        self.assertEqual(exc.detail, "network down")
+        self.assertIsNone(exc.model)
+        self.assertEqual(exc.method, "authenticate")
         object_proxy.execute_kw.assert_not_called()
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
