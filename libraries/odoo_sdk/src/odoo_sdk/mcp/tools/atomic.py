@@ -236,6 +236,31 @@ def make_search_knowledge_articles_tool(registry: Registry):
     return search_knowledge_articles
 
 
+@atomic_tool("read_knowledge_article")
+def make_read_knowledge_article_tool(registry: Registry):
+    def read_knowledge_article(article_id: int) -> Dict[str, Any]:
+        """Read one Odoo Knowledge article (``knowledge.article``) by id.
+
+        Returns the article's **full** body converted from HTML to Markdown
+        (not the capped search snippet). Read-only: nothing is created or
+        modified.
+
+        The result carries ``id``, ``name``, ``body`` (the full Markdown, capped
+        at 50000 characters), ``write_date`` (``YYYY-MM-DD HH:MM:SS``), and a
+        ``truncated`` boolean that is ``True`` only when the body exceeded that
+        cap and was shortened.
+
+        An unknown ``article_id`` raises "knowledge.article <id> not found".
+        ``knowledge.article`` is an Odoo **Enterprise** model: on a Community
+        database (or when the Knowledge app is not installed) this raises
+        "knowledge.article model not available (Odoo Enterprise required)"
+        rather than returning content.
+        """
+        return registry["read_knowledge_article"].execute(article_id)
+
+    return read_knowledge_article
+
+
 @atomic_tool("search_projects")
 def make_search_projects_tool(registry: Registry):
     def search_projects(query: str, limit: int = 10) -> List[Dict[str, Any]]:
