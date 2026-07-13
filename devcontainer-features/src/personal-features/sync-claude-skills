@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# sync-claude-skills — publish the feature-shipped Claude skills into the
+# user-scope skills directory ($CLAUDE_CONFIG_DIR/skills).
+#
+# WHY THIS EXISTS: personal-features bind-mounts the host's ~/.claude over
+# $CLAUDE_CONFIG_DIR (=/usr/local/share/claude-home) at runtime, so anything
+# install.sh writes under that directory at BUILD time is shadowed by the mount.
+# install.sh instead stages the skills at a build-time location that is NOT
+# under the mount (/usr/local/share/personal-features/skills). This script — run
+# via the feature-contributed postCreateCommand, AFTER the mount is active —
+# copies them into the live, mounted skills directory. Claude Code discovers
+# user-scope skills at $CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md (verified
+# against current docs; CLAUDE_CONFIG_DIR overrides the default ~/.claude root),
+# and the copy persists to the host's ~/.claude/skills through the bind mount.
+#
+# COPY, not symlink (Epic I decision): a symlink into the bind mount would
+# dangle on the host and in containers built without this feature; copying
+# deliberately propagates the skills everywhere via the persisted mount.
+#
+# FEATURE-OWNED NAMESPACE: only the shipped skill names are replaced (delete-
+# then-copy, for a clean overwrite that also drops files removed upstream).
+# User-authored skills living alongside them are never touched. Idempotent and
+# safe to run on every container create; no-ops cleanly (exit 0) when there is
+# nothing to sync.
+set -euo pipefail
+
+# Build-time staging dir install.sh copies the shipped skills into. Overridable
+# so tests can point it at a fixture without provisioning a whole container.
+SHIPPED_SKILLS_DIR="${PERSONAL_FEATURES_SKILLS_DIR:-/usr/local/share/personal-features/skills}"
+
+note() { echo "sync-claude-skills: $1" >&2; }
+
+# CLAUDE_CONFIG_DIR is the user-scope Claude config root (it overrides ~/.claude).
+# Without it we don't know where skills should land, so there is nothing to do.
+if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
+    note "CLAUDE_CONFIG_DIR is unset; nothing to sync (skipping)."
+    exit 0
+fi
+
+# Absent only if install.sh never ran (e.g. this script was copied elsewhere).
+if [ ! -d "$SHIPPED_SKILLS_DIR" ]; then
+    note "no shipped skills dir at $SHIPPED_SKILLS_DIR; nothing to sync (skipping)."
+    exit 0
+fi
+
+DEST_DIR="$CLAUDE_CONFIG_DIR/skills"
+
+synced=0
+# Iterate the immediate subdirectories of the staging dir. Each one that holds a
+# SKILL.md is a shipped skill; anything else (e.g. the shipped README) is left
+# alone. With no subdirectories the glob stays literal ("…/*/"), which is not a
+# directory, so the guard below makes the empty case a clean no-op under set -u.
+for skill_path in "$SHIPPED_SKILLS_DIR"/*/; do
+    [ -d "$skill_path" ] || continue
+    src_skill="${skill_path%/}"
+    [ -f "$src_skill/SKILL.md" ] || continue
+
+    skill_name="$(basename "$src_skill")"
+    dest_skill="$DEST_DIR/$skill_name"
+
+    # Delete-then-copy for a clean replace: a stale file dropped upstream must
+    # not linger in the destination. Only this feature-owned name is touched.
+    mkdir -p "$DEST_DIR"
+    rm -rf "$dest_skill"
+    cp -R "$src_skill" "$dest_skill"
+    synced=$((synced + 1))
+done
+
+if [ "$synced" -eq 0 ]; then
+    note "no shipped skills found under $SHIPPED_SKILLS_DIR; nothing to sync."
+    exit 0
+fi
+
+note "synced $synced skill(s) into $DEST_DIR."

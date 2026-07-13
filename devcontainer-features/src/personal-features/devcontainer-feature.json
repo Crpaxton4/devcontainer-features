@@ -52,5 +52,6 @@
             "target": "/usr/local/share/shell-history",
             "type": "bind"
         }
-    ]
+    ],
+    "postCreateCommand": "sync-claude-skills"
 }

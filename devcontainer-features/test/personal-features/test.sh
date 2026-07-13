@@ -167,6 +167,18 @@ check "history -a survives starship/zoxide clobbering PROMPT_COMMAND" bash -ic \
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
 
+# Claude consulting skills delivery (feature-owned namespace). install.sh stages
+# the shipped skills at a build-time location OUTSIDE the CLAUDE_CONFIG_DIR bind
+# mount; sync-claude-skills (feature-contributed postCreateCommand) publishes
+# them into $CLAUDE_CONFIG_DIR/skills once the mount is active. Smoke assertions
+# ONLY - the staging dir exists and the sync script is installed, executable, and
+# syntactically valid. Full sync behaviour (temp CLAUDE_CONFIG_DIR, decoy-skill
+# survival, idempotency) is covered by a separate test sub-issue; the sync itself
+# doesn't run under `devcontainer features test` (no postCreateCommand there).
+check "personal-features skills share dir exists" bash -c "test -d /usr/local/share/personal-features/skills"
+check "sync-claude-skills is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-skills"
+check "sync-claude-skills passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-skills"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from
