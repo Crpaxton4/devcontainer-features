@@ -1,5 +1,5 @@
-#!/bin/sh
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 echo "Activating feature 'personal-features'"
 
@@ -8,6 +8,41 @@ echo "Activating feature 'personal-features'"
 # as root without setting them (e.g. this repo's own --remote-user root tests).
 : "${_REMOTE_USER:=root}"
 : "${_REMOTE_USER_HOME:=/root}"
+
+# --- Download helpers -------------------------------------------------------
+# The previous #!/bin/sh interpreter (dash on Debian) has no `set -o pipefail`,
+# so a `curl … | sh`/`curl … | tar` pipe reported only the last stage's exit
+# status - a failed download was silently masked and the `|| echo WARNING`
+# fallbacks could never fire. These helpers download to a file first so a
+# failure is caught directly instead of hidden behind a pipe (and give a single
+# place to add checksumming later).
+
+# fetch(url, dest): download url to dest, retrying transient failures. Fails
+# loudly (non-zero exit) so callers can react.
+fetch() {
+    curl -fsSL --retry 3 --retry-delay 2 -o "$2" "$1"
+}
+
+# run_installer(url, args...): download an installer script to a temp file, then
+# execute it with the given args - the structural replacement for the masking
+# `curl … | sh -s -- args` pipe. Error handling is explicit (not via set -e)
+# because bash disables set -e inside a function called on the left of `||`,
+# which is exactly how the best-effort callers below invoke this; relying on
+# set -e there would let a failed download slip through and re-mask it.
+run_installer() {
+    local installer_url="$1"
+    shift
+    local installer_tmp
+    installer_tmp="$(mktemp)"
+    if ! fetch "$installer_url" "$installer_tmp"; then
+        rm -f "$installer_tmp"
+        return 1
+    fi
+    sh "$installer_tmp" "$@"
+    local rc=$?
+    rm -f "$installer_tmp"
+    return "$rc"
+}
 
 CLAUDE_HOME="/usr/local/share/claude-home"
 GH_CONFIG="/usr/local/share/gh-cli-config"
@@ -99,7 +134,10 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
     if ! command -v uv >/dev/null 2>&1; then
         UV_INSTALL_DIR=/usr/local/bin
         export UV_INSTALL_DIR
-        curl -fsSL https://astral.sh/uv/install.sh | sh
+        # Deliberately not best-effort: uv is required downstream (`uv venv`),
+        # so a masked download failure here would surface later as a confusing
+        # error. run_installer fails loudly and aborts the build instead.
+        run_installer https://astral.sh/uv/install.sh
         unset UV_INSTALL_DIR
     fi
     for wheel in "$FEATURE_DIR"/odoo_sdk-*.whl; do
@@ -161,19 +199,30 @@ gh_latest_asset_url() {
 # Best-effort: these are optional, non-Claude tools, so a failure here warns
 # and continues rather than failing the whole install.
 install_gh_release() {
-    URL="$(gh_latest_asset_url "$1" "$2")"
+    # `|| true`: the pipeline ends in `head -1`, which closes its input early
+    # and can SIGPIPE the upstream commands; under pipefail that non-zero exit
+    # would otherwise abort this (best-effort) install via set -e.
+    URL="$(gh_latest_asset_url "$1" "$2" || true)"
     if [ -z "$URL" ]; then
         echo "WARNING: failed to install $1, skipping" >&2
         return
     fi
     if [ -n "${3-}" ]; then
-        if curl -fsSL "$URL" -o "$3"; then
+        if fetch "$URL" "$3"; then
             chmod +x "$3"
         else
             echo "WARNING: failed to install $1, skipping" >&2
         fi
     else
-        curl -fsSL "$URL" | tar -xz -C /usr/local/bin || echo "WARNING: failed to install $1, skipping" >&2
+        # Download to a temp file, then extract - piping curl into tar would
+        # (without pipefail) hide a failed download behind tar's exit status.
+        TARBALL="$(mktemp)"
+        if fetch "$URL" "$TARBALL"; then
+            tar -xz -C /usr/local/bin -f "$TARBALL" || echo "WARNING: failed to install $1, skipping" >&2
+        else
+            echo "WARNING: failed to install $1, skipping" >&2
+        fi
+        rm -f "$TARBALL"
     fi
 }
 
@@ -188,24 +237,32 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
 
 # Run all binary downloads in parallel — they're independent and each blocks
 # on a GitHub API call + download, so sequential execution wastes wall time.
+# Collect their PIDs so we can wait on each individually (see the wait below).
+_download_pids=()
 install_gh_release mikefarah/yq "yq_linux_${ARCH_DEB}\$" /usr/local/bin/yq &
+_download_pids+=("$!")
 install_gh_release eza-community/eza "eza_${ARCH_GNU}-unknown-linux-gnu\\.tar\\.gz\$" &
+_download_pids+=("$!")
 install_gh_release dbrgn/tealdeer "tealdeer-linux-${ARCH_GNU}-musl\$" /usr/local/bin/tldr &
-( curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir /usr/local/bin \
+_download_pids+=("$!")
+( run_installer https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh --bin-dir /usr/local/bin \
     || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
+_download_pids+=("$!")
 install_gh_release gitleaks/gitleaks "linux_${ARCH_SHORT}\\.tar\\.gz\$" &
+_download_pids+=("$!")
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
 # installer (https://cli.coderabbit.ai/install.sh) pinned to /usr/local/bin.
 # CI=1 suppresses the interactive post-install login prompt; the installer's
 # own PATH/profile edits are harmless no-ops here since it lands on a dir
-# already on PATH. The vars must be exported (not just prefixed on curl) so the
-# piped `sh` — a separate process from curl — actually inherits them. Auth is
+# already on PATH. The vars must be exported (not just prefixed) so the
+# installer's `sh` — a separate child process — actually inherits them. Auth is
 # user-specific and persisted via the mount below, so it is deliberately not
 # baked in. Best-effort like the tools above.
 ( export CODERABBIT_INSTALL_DIR=/usr/local/bin CI=1
-    curl -fsSL https://cli.coderabbit.ai/install.sh | sh \
+    run_installer https://cli.coderabbit.ai/install.sh \
     || echo "WARNING: failed to install coderabbit, skipping" >&2 ) &
+_download_pids+=("$!")
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -250,11 +307,18 @@ chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-( curl -fsSL https://starship.rs/install.sh | sh -s -- --bin-dir /usr/local/bin -y \
+( run_installer https://starship.rs/install.sh --bin-dir /usr/local/bin -y \
     || echo "WARNING: failed to install starship, skipping" >&2 ) &
+_download_pids+=("$!")
 
-# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, starship)
-wait
+# Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks,
+# coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# wait on each PID and guard it so an unexpected non-zero exit degrades to a
+# warning instead of aborting the build under set -e. (A bare `wait` returns 0
+# regardless, which would instead silently mask such a failure.)
+for _pid in "${_download_pids[@]}"; do
+    wait "$_pid" || echo "WARNING: a background download job failed" >&2
+done
 
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
