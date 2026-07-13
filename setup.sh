@@ -22,7 +22,10 @@
 # as a directory, which then fails the mount, so a file source must exist as a
 # file before the container starts. (All six sources are directories today.)
 #
-# Safe to re-run: mkdir -p / touch are no-ops when the targets already exist.
+# Safe to re-run: mkdir -p / touch are no-ops when the targets already exist,
+# and chmod just re-asserts the manifest's mode column (0700 for the
+# credential-holding dirs - they hold e.g. ~/.claude/.credentials.json and
+# gh's hosts.yml, and the container sees the host mode through the mount).
 
 set -eu
 
@@ -44,5 +47,11 @@ while IFS="$TAB" read -r name host_source container_target env_var env_value mod
         */) mkdir -p "$HOME/$host_source" ;;
         *)  mkdir -p "$(dirname "$HOME/$host_source")"; touch "$HOME/$host_source" ;;
     esac
+    # Enforce the manifest's mode on every run, not just on creation (#233).
+    # These are the dirs the container bind-mounts, so with the mounts active
+    # the HOST mode is what the container sees - the credential dirs (0700 in
+    # the manifest) must not be world-readable here for the container-side
+    # hardening to mean anything.
+    chmod "$mode" "$HOME/$host_source"
     printf 'ok  %s\n' "$HOME/$host_source"
 done < "$MANIFEST"

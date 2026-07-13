@@ -40,6 +40,7 @@ check "wrapper has no hardcoded subcommand allowlist" bash -c \
 
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
+check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
@@ -145,5 +146,31 @@ check "history -a survives starship/zoxide clobbering PROMPT_COMMAND" bash -ic \
 
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
+
+# Regression guard for #233: the credential-holding config dirs must be 0700,
+# not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
+# gh's hosts.yml) live in a world-readable dir. The mode comes from
+# persisted-paths.tsv's `mode` column and is enforced by BOTH consumers that
+# create these dirs: install.sh chmods the container-side targets, and setup.sh
+# chmods the host-side sources. Both matter, and these assertions cover
+# whichever is visible: CI runs `sh ./setup.sh` before this test, so the
+# feature's bind mounts ARE active here and stat sees the HOST dirs' modes
+# through the mount; in a mountless run (e.g. `devcontainer features test`
+# without the host dirs) stat sees install.sh's chmod instead. Same manifest
+# column either way, so the expected values are identical.
+# The non-credential dirs (pr-automation, shell-history) deliberately stay 0755.
+# NOTE: stat -c '%a' prints octal WITHOUT a leading zero (700 / 755).
+check "claude-home is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/claude-home)\" = '700' ]"
+check "gh-cli-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/gh-cli-config)\" = '700' ]"
+check "odoo-sdk-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-sdk-config)\" = '700' ]"
+check "coderabbit-config is chmod 0700 (credentials not world-readable)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/coderabbit-config)\" = '700' ]"
+check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
+check "shell-history dir stays 0755 (holds no credentials)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '755' ]"
 
 reportResults
