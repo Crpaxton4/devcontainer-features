@@ -14,6 +14,9 @@ from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.state.models import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.transport.errors import OdooError
+from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +120,75 @@ def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+#: Exceptions the MCP error boundary renders as a structured payload. Every
+#: entry is a caller-actionable failure — a classified Odoo fault
+#: (:class:`~odoo_sdk.transport.errors.OdooError` and its subclasses), a
+#: session-state violation, the devcontainer environment guard, or invalid
+#: input (``ValueError``) — a shape an LLM can reason about and retry. Anything
+#: not listed (``KeyError``, ``AttributeError``, ...) is a programming error and
+#: is deliberately left to propagate as an unhandled traceback.
+_BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
+    OdooError,
+    TaskNotRunningError,
+    TaskAlreadyRunningError,
+    OdooDevcontainerRequiredError,
+    ValueError,
+)
+
+
+def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
+    """Render a caught exception as the uniform structured-error payload.
+
+    The concrete class name is used (rather than the caught base) so a mapped
+    subclass such as ``OdooValidationError`` remains distinguishable to callers.
+
+    :param exc: The caught, caller-actionable exception.
+    :type exc: BaseException
+    :return: ``{"error": {"type": <class name>, "message": <str(exc)>}}``.
+    :rtype: dict
+    """
+
+    return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+
+
+def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool callable so caller-actionable failures return a payload.
+
+    Exceptions listed in :data:`_BOUNDARY_ERRORS` are converted into one
+    predictable ``{"error": {"type", "message"}}`` shape so LLM callers always
+    see structured data instead of a stack trace; programming errors propagate
+    unchanged. Applied inside :func:`_toon_encoded` so the error payload is TOON
+    encoded like any other result. Sync and async tools are handled separately,
+    and the original typed signature is preserved so FastMCP builds the same
+    wire schema (including any ``ctx`` parameter).
+
+    :param tool_fn: The tool callable to wrap.
+    :type tool_fn: Callable[..., Any]
+    :return: A signature-preserving wrapper that formats caught errors.
+    :rtype: Callable[..., Any]
+    """
+    if asyncio.iscoroutinefunction(tool_fn):
+
+        @functools.wraps(tool_fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await tool_fn(*args, **kwargs)
+            except _BOUNDARY_ERRORS as exc:
+                return _error_payload(exc)
+
+    else:
+
+        @functools.wraps(tool_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return tool_fn(*args, **kwargs)
+            except _BOUNDARY_ERRORS as exc:
+                return _error_payload(exc)
+
+    wrapper.__signature__ = inspect.signature(tool_fn)
+    return wrapper
+
+
 class OdooMCPServer:
     """Expose a set of explicit MCP tools built from a command :class:`Registry`.
 
@@ -168,11 +240,14 @@ class OdooMCPServer:
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.
 
-        Each tool callable is wrapped so its result is routed through
-        :func:`_to_toon` (a no-op unless ``ODOO_TOON_OUTPUT`` is set) and, when
-        profiling is enabled, wrapped again so every dispatch is profiled. Both
-        wrappers preserve the original typed signature so the wire schema
-        (including any FastMCP ``ctx`` parameter) is unchanged.
+        Each tool callable is wrapped in three layers, innermost first: an
+        :func:`_error_boundary` that turns caller-actionable exceptions into a
+        uniform ``{"error": {...}}`` payload, then :func:`_to_toon` (a no-op
+        unless ``ODOO_TOON_OUTPUT`` is set) so that payload TOON-encodes like any
+        other result, and — when profiling is enabled — a :func:`_profiled`
+        wrapper so every dispatch is captured. All wrappers preserve the original
+        typed signature so the wire schema (including any FastMCP ``ctx``
+        parameter) is unchanged.
 
         :return: None.
         :rtype: None
@@ -180,6 +255,7 @@ class OdooMCPServer:
 
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
+            tool_fn = _error_boundary(tool_fn)
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
                 tool_fn = _profiled(tool_fn, name)

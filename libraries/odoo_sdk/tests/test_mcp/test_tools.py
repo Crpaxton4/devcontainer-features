@@ -466,6 +466,35 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertIn(["git", "checkout", "main"], called)
         self.assertIn(["git", "branch", "-D", "10#fix"], called)
 
+    def test_rolls_back_and_reraises_typed_already_running(self):
+        # Raise-based error contract (#223): the epic-C start command raises the
+        # typed ``TaskAlreadyRunningError`` when the task is already tracked. The
+        # composition tool must roll back the branch created this run AND let the
+        # *typed* exception propagate unchanged (for the #222 boundary to format)
+        # — it must not be caught and swallowed into a passthrough error dict.
+        from odoo_sdk.state import TaskAlreadyRunningError
+
+        def _boom(**kw):
+            raise TaskAlreadyRunningError(
+                "Task 'Fix' already has an active session (id=1, state=running)."
+            )
+
+        reg = _FakeRegistry(
+            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
+            start_task=_boom,
+        )
+        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
+        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        sp = _make_sp(current_branch="main")
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            with self.assertRaises(TaskAlreadyRunningError):
+                _run(tool("Fix", ctx))
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertIn(["git", "checkout", "main"], called)
+        self.assertIn(["git", "branch", "-D", "10#fix"], called)
+
     def test_no_rollback_when_no_branch_created(self):
         # #164: when already on the task branch, no branch is created this run,
         # so a failing start command must not delete anything.
@@ -678,6 +707,25 @@ class TestStopTaskTool(unittest.TestCase):
         ctx.elicit = AsyncMock(return_value=_cancelled())
         result = _run(make_stop_task_tool(reg)(1, "x", ctx))
         self.assertEqual(result, {"error": "Stop task cancelled."})
+
+    def test_command_failure_propagates_to_boundary(self):
+        # Raise-based error contract (#223): after the description review is
+        # accepted, a stop command failure (no active session) raises the typed
+        # ``TaskNotRunningError``. This flow does no cleanup, so the exception is
+        # deliberately left to propagate to the #222 boundary rather than being
+        # caught and re-wrapped into an ``{"error": ...}`` dict.
+        from odoo_sdk.state import TaskNotRunningError
+
+        def _boom(task_id, desc):
+            raise TaskNotRunningError(f"No active session for task {task_id}.")
+
+        reg = _FakeRegistry(stop_task=_boom)
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock(
+            return_value=_accepted(MagicMock(description="done"))
+        )
+        with self.assertRaises(TaskNotRunningError):
+            _run(make_stop_task_tool(reg)(1, "orig", ctx))
 
 
 if __name__ == "__main__":

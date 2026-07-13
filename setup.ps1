@@ -16,10 +16,12 @@
     If you open the repo through Remote-WSL, the container's mounts resolve
     against the WSL home directory, so run setup.sh inside WSL instead.
 
-    The path list below must match the `mounts` in
-    devcontainer-features/src/personal-features/devcontainer-feature.json, which
-    is the source of truth. .github/scripts/test_host_setup_parity.py enforces
-    that this script, setup.sh and that file agree.
+    The path list below must match persisted-paths.tsv (next to the Feature's
+    install.sh), the single source of truth shared with setup.sh and
+    devcontainer-feature.json. This list is hand-maintained rather than read from
+    the manifest so that .github/scripts/test_host_setup_parity.py can still catch
+    it drifting from the manifest - there is no Windows CI runner to catch it at
+    runtime. Keep it in sync with the manifest row-for-row when adding a path.
 
     Safe to re-run: New-Item -Force is a no-op when the targets already exist.
 
@@ -79,12 +81,20 @@ To fix, either:
     }
 }
 
-# Relative to the home directory; keep in sync with setup.sh.
+# Home-relative mount sources; keep in sync with persisted-paths.tsv (and hence
+# setup.sh) row-for-row. All are directories today; a future file source would
+# need New-Item -ItemType File instead.
+#
+# Unlike setup.sh, this script does NOT apply the manifest's mode column (#233):
+# NTFS has no POSIX modes to chmod, dirs under the user profile are already
+# private to the user by default ACL, and Docker Desktop on Windows synthesizes
+# the in-container permission bits for shared paths regardless of anything set
+# here - so there is nothing meaningful to enforce host-side on Windows.
 $paths = @(
     '.claude'
     '.config/gh'
     '.config/odoo_sdk'
-    '.config/pr-automation/projects'
+    '.config/pr-automation'
     '.config/coderabbit'
     '.config/devcontainer/shell-history'
 )

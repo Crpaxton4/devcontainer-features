@@ -18,7 +18,7 @@ from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import TaskNotRunningError
+from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError
 
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
@@ -467,13 +467,18 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertNotIn("branch_name", result)
         self.assertNotIn("warning", result)
 
-    def test_error_when_already_active(self):
+    def test_raises_when_already_active(self):
         client = _client()
         db = _tmp_db()
         db.create_run(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
-        result, _ = self._start(client, db, **self._base_kwargs())
-        self.assertIn("error", result)
-        self.assertIn("active session", result["error"])
+        existing = db.get_active_run(10)
+        with self.assertRaises(TaskAlreadyRunningError) as ctx:
+            self._start(client, db, **self._base_kwargs())
+        self.assertEqual(
+            str(ctx.exception),
+            f"Task 'Fix VAT' already has an active session "
+            f"(id={existing.id}, state={existing.state.value}).",
+        )
 
     def test_uses_cached_employee_id(self):
         client = _client()

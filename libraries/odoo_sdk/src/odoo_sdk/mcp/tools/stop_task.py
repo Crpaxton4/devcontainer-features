@@ -44,6 +44,11 @@ def make_stop_task_tool(registry: Registry):
             return {"error": "Stop task cancelled."}
 
         confirmed_description = review.data.description or description
+        # Raise-based error contract (#223): a command failure (e.g. no active
+        # session -> ``TaskNotRunningError``) is deliberately left to propagate.
+        # This flow does no cleanup, so the typed exception is handed straight to
+        # the MCP ``_error_boundary`` (#222) rather than being caught and
+        # re-wrapped into an ``{"error": ...}`` dict here.
         return registry["stop_task"].execute(task_id, confirmed_description)
 
     return stop_task
