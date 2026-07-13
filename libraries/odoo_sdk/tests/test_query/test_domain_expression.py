@@ -10,6 +10,31 @@ from odoo_sdk.query.domain import (
     _normalize_domain_nodes,
     _parse_expression,
     _serialize_boolean,
+    _VALID_LEAF_OPERATORS,
+)
+
+# Independent copy of the operator whitelist so a mutant that drops an operator
+# from ``_VALID_LEAF_OPERATORS`` in the source is still exercised (and killed) here.
+_EXPECTED_LEAF_OPERATORS = (
+    "=",
+    "!=",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "=?",
+    "like",
+    "not like",
+    "ilike",
+    "not ilike",
+    "=like",
+    "=ilike",
+    "in",
+    "not in",
+    "child_of",
+    "parent_of",
+    "any",
+    "not any",
 )
 
 
@@ -229,7 +254,7 @@ class TestDomainExpression(unittest.TestCase):
 
     @given(
         strategies.text().filter(lambda text: text not in {"&", "|", "!"}),
-        strategies.text(),
+        strategies.sampled_from(_EXPECTED_LEAF_OPERATORS),
         strategies.integers(),
     )
     def test_single_condition_tuple_round_trips(
@@ -240,3 +265,57 @@ class TestDomainExpression(unittest.TestCase):
         expression = DomainExpression.normalize(condition)
 
         self.assertEqual(expression.serialize(), [condition])
+
+
+class TestLeafOperatorWhitelist(unittest.TestCase):
+    def test_valid_leaf_operators_frozenset_matches_expected_set(self) -> None:
+        self.assertEqual(_VALID_LEAF_OPERATORS, frozenset(_EXPECTED_LEAF_OPERATORS))
+
+    def test_every_valid_operator_is_accepted(self) -> None:
+        for operator in _EXPECTED_LEAF_OPERATORS:
+            with self.subTest(operator=operator):
+                condition = ("field", operator, "value")
+
+                expression = DomainExpression.normalize([condition])
+
+                self.assertEqual(expression.serialize(), [condition])
+
+    def test_valid_operator_accepted_as_nested_condition(self) -> None:
+        expression = DomainExpression.normalize(
+            ["|", ("id", "in", [1, 2]), ("name", "=like", "Acme%")]
+        )
+
+        self.assertEqual(
+            expression.serialize(),
+            ["|", ("id", "in", [1, 2]), ("name", "=like", "Acme%")],
+        )
+
+    def test_invalid_operator_double_equals_raises_named_error(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            DomainExpression.normalize([("age", "==", 30)])
+
+        self.assertEqual(str(ctx.exception), "Unsupported domain operator: '=='")
+
+    def test_invalid_operator_contains_raises_named_error(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            DomainExpression.normalize([("name", "contains", "Acme")])
+
+        self.assertEqual(str(ctx.exception), "Unsupported domain operator: 'contains'")
+
+    def test_invalid_operator_uppercase_like_raises_named_error(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            DomainExpression.normalize([("name", "LIKE", "Acme")])
+
+        self.assertEqual(str(ctx.exception), "Unsupported domain operator: 'LIKE'")
+
+    def test_invalid_operator_empty_string_raises_named_error(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            DomainExpression.normalize([("name", "", "Acme")])
+
+        self.assertEqual(str(ctx.exception), "Unsupported domain operator: ''")
+
+    def test_invalid_operator_in_nested_group_raises_named_error(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            DomainExpression.normalize(["&", ("active", "=", True), ("age", "=<", 30)])
+
+        self.assertEqual(str(ctx.exception), "Unsupported domain operator: '=<'")
