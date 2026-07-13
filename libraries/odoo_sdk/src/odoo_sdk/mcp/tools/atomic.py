@@ -183,6 +183,32 @@ def make_search_chatter_tool(registry: Registry):
     return search_chatter
 
 
+@atomic_tool("search_knowledge_articles")
+def make_search_knowledge_articles_tool(registry: Registry):
+    def search_knowledge_articles(
+        query: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Search the Odoo Knowledge base (``knowledge.article``) by text.
+
+        Matches ``query`` case-insensitively against each article's ``name``
+        **or** its ``body`` (an OR ``ilike`` domain) and returns the most
+        recently updated articles first (``write_date desc``, then ``id desc``),
+        capped at ``limit``. Read-only: no article is created or modified.
+
+        Each result carries ``id``, ``name``, a ``snippet`` (the article body
+        converted from HTML to Markdown and capped at 500 characters), and
+        ``write_date`` (``YYYY-MM-DD HH:MM:SS``).
+
+        ``knowledge.article`` is an Odoo **Enterprise** model. On a Community
+        database (or when the Knowledge app is not installed) this raises an
+        error — "knowledge.article model not available (Odoo Enterprise
+        required)" — rather than returning results.
+        """
+        return registry["search_knowledge_articles"].execute(query, limit=limit)
+
+    return search_knowledge_articles
+
+
 @atomic_tool("search_projects")
 def make_search_projects_tool(registry: Registry):
     def search_projects(query: str, limit: int = 10) -> List[Dict[str, Any]]:
