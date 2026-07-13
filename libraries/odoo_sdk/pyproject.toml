@@ -16,7 +16,7 @@ dependencies = [
 
 [dependency-groups]
 static-analysis = [
-    "black>=24.10.0",
+    "black>=26.5.1",
     "complexipy>=5.5.0",
     "pygount>=3.2.0",
     "radon>=6.0.1",
