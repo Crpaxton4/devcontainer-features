@@ -184,45 +184,53 @@ case "$DPKG_ARCH" in
     *) echo "ERROR: unsupported architecture: $DPKG_ARCH" >&2; exit 1 ;;
 esac
 
-# Looks up the first release asset URL matching a regex against the latest
-# GitHub release of $1.
-gh_latest_asset_url() {
-    curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
-        | grep -o '"browser_download_url": *"[^"]*"' \
-        | cut -d'"' -f4 \
-        | grep -E "$2" \
-        | head -1
-}
+# --- Pinned tool versions ---------------------------------------------------
+# Single source of truth for the GitHub-release tools installed below. These
+# replace the old unauthenticated api.github.com "/releases/latest" lookups,
+# which made builds non-reproducible and, worse, hit GitHub's anonymous rate
+# limit (60 req/hr per IP, shared across CI runners behind one NAT) causing
+# intermittent "failed to install, skipping" flakiness. Download URLs are now
+# built deterministically from these constants, so the install path makes zero
+# api.github.com calls. Dependabot does not track shell-script pins - bump them
+# here by hand. Store the bare semver (no leading "v"); the "v" is added at each
+# use site where the release tag / URL needs it (yq etc. tag as vX.Y.Z; gitleaks
+# and zoxide also embed the bare version in the asset filename).
+YQ_VERSION=4.53.3        # github.com/mikefarah/yq
+EZA_VERSION=0.23.5       # github.com/eza-community/eza
+TEALDEER_VERSION=1.8.1   # github.com/dbrgn/tealdeer
+GITLEAKS_VERSION=8.30.1  # github.com/gitleaks/gitleaks
+ZOXIDE_VERSION=0.10.0    # github.com/ajeetdsouza/zoxide
+STARSHIP_VERSION=1.26.0  # github.com/starship/starship
 
-# Installs a GitHub release asset. With $3, downloads a single binary to that
-# path; without $3, extracts a .tar.gz directly into /usr/local/bin.
+# Installs a pinned GitHub release asset from a deterministic download URL (no
+# api.github.com lookup). With a dest path ($3) it downloads a single binary
+# there and marks it executable; otherwise it extracts a .tar.gz into
+# /usr/local/bin - restricted to member $4 when given, so tarballs that also
+# ship docs/man/completions (e.g. zoxide) don't litter /usr/local/bin.
 # Best-effort: these are optional, non-Claude tools, so a failure here warns
 # and continues rather than failing the whole install.
 install_gh_release() {
-    # `|| true`: the pipeline ends in `head -1`, which closes its input early
-    # and can SIGPIPE the upstream commands; under pipefail that non-zero exit
-    # would otherwise abort this (best-effort) install via set -e.
-    URL="$(gh_latest_asset_url "$1" "$2" || true)"
-    if [ -z "$URL" ]; then
-        echo "WARNING: failed to install $1, skipping" >&2
-        return
-    fi
-    if [ -n "${3-}" ]; then
-        if fetch "$URL" "$3"; then
-            chmod +x "$3"
+    local name="$1" url="$2" dest="${3-}" member="${4-}"
+    if [ -n "$dest" ]; then
+        if fetch "$url" "$dest"; then
+            chmod +x "$dest"
         else
-            echo "WARNING: failed to install $1, skipping" >&2
+            echo "WARNING: failed to install $name, skipping" >&2
         fi
     else
         # Download to a temp file, then extract - piping curl into tar would
         # (without pipefail) hide a failed download behind tar's exit status.
-        TARBALL="$(mktemp)"
-        if fetch "$URL" "$TARBALL"; then
-            tar -xz -C /usr/local/bin -f "$TARBALL" || echo "WARNING: failed to install $1, skipping" >&2
+        local tarball
+        tarball="$(mktemp)"
+        if fetch "$url" "$tarball"; then
+            # ${member:+...} adds the member argument only when set, so a bare
+            # (whole-tarball) extract stays argument-clean under set -u.
+            tar -xz -C /usr/local/bin -f "$tarball" ${member:+"$member"} \
+                || echo "WARNING: failed to install $name, skipping" >&2
         else
-            echo "WARNING: failed to install $1, skipping" >&2
+            echo "WARNING: failed to install $name, skipping" >&2
         fi
-        rm -f "$TARBALL"
+        rm -f "$tarball"
     fi
 }
 
@@ -235,20 +243,31 @@ apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
 [ -x /usr/local/bin/fd ] || ln -s "$(command -v fdfind)" /usr/local/bin/fd
 [ -x /usr/local/bin/bat ] || ln -s "$(command -v batcat)" /usr/local/bin/bat
 
-# Run all binary downloads in parallel — they're independent and each blocks
-# on a GitHub API call + download, so sequential execution wastes wall time.
+# Run all binary downloads in parallel — they're independent and each blocks on
+# a network download, so sequential execution wastes wall time. URLs are pinned
+# and deterministic (see the version block above); no api.github.com calls.
 # Collect their PIDs so we can wait on each individually (see the wait below).
 _download_pids=()
-install_gh_release mikefarah/yq "yq_linux_${ARCH_DEB}\$" /usr/local/bin/yq &
+install_gh_release yq \
+    "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${ARCH_DEB}" \
+    /usr/local/bin/yq &
 _download_pids+=("$!")
-install_gh_release eza-community/eza "eza_${ARCH_GNU}-unknown-linux-gnu\\.tar\\.gz\$" &
+install_gh_release eza \
+    "https://github.com/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${ARCH_GNU}-unknown-linux-gnu.tar.gz" &
 _download_pids+=("$!")
-install_gh_release dbrgn/tealdeer "tealdeer-linux-${ARCH_GNU}-musl\$" /usr/local/bin/tldr &
+install_gh_release tealdeer \
+    "https://github.com/dbrgn/tealdeer/releases/download/v${TEALDEER_VERSION}/tealdeer-linux-${ARCH_GNU}-musl" \
+    /usr/local/bin/tldr &
 _download_pids+=("$!")
-( run_installer https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh --bin-dir /usr/local/bin \
-    || echo "WARNING: failed to install zoxide, skipping" >&2 ) &
+# zoxide's upstream install.sh only resolves versions via api.github.com (no
+# pin flag), so download the release tarball directly instead. It bundles man
+# pages/completions/README alongside the binary, so extract just `zoxide`.
+install_gh_release zoxide \
+    "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${ARCH_GNU}-unknown-linux-musl.tar.gz" \
+    "" zoxide &
 _download_pids+=("$!")
-install_gh_release gitleaks/gitleaks "linux_${ARCH_SHORT}\\.tar\\.gz\$" &
+install_gh_release gitleaks \
+    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_SHORT}.tar.gz" &
 _download_pids+=("$!")
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
@@ -307,7 +326,10 @@ chmod +x "$GIT_HOOKS_DIR/commit-msg" "$GIT_HOOKS_DIR/pre-commit"
 git config --system core.hooksPath "$GIT_HOOKS_DIR"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
-( run_installer https://starship.rs/install.sh --bin-dir /usr/local/bin -y \
+# --version pins the release; the installer then builds a direct
+# releases/download/<tag>/ URL (no api.github.com) and resolves the right
+# per-arch target itself (x86_64 gnu / aarch64 musl).
+( run_installer https://starship.rs/install.sh --version "v${STARSHIP_VERSION}" --bin-dir /usr/local/bin -y \
     || echo "WARNING: failed to install starship, skipping" >&2 ) &
 _download_pids+=("$!")
 
