@@ -17,6 +17,7 @@ from odoo_sdk.adapters import load_raw_events
 from odoo_sdk.sessionization import SessionizationConfig, transform
 
 from ..command import Command
+from ._registration import builtin_command
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -62,6 +63,7 @@ def _build_config(
     return SessionizationConfig(**values)
 
 
+@builtin_command
 class OptimizeSessionsCommand(Command):
     """Run the read-only gap-sweep utilisation analysis over stored events.
 

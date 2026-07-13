@@ -1,7 +1,9 @@
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.odoo_helpers import get_task_chatter
 
 
+@builtin_command
 class GetTaskChatterCommand(Command):
     _name = "get_task_chatter"
     _description = (

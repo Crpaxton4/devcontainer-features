@@ -1,8 +1,10 @@
 from typing import Any, Dict, Optional
 
 from ..command import Command
+from ._registration import builtin_command
 
 
+@builtin_command
 class GetTodoCommand(Command):
     """Fetch a single project task by id."""
 

@@ -1,12 +1,13 @@
 """Tests for LocalConfig resolution precedence (File > Env > Default)."""
 
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from odoo_sdk.state.config import (
-    DEFAULT_LOCAL_CONFIG_PATH,
+    DEFAULT_CONFIG_DIR,
     LOCAL_CONFIG_ENV_VAR,
     LocalConfig,
     OdooConnectionSettings,
@@ -33,8 +34,11 @@ _TOML = (
 
 class TestLocalConfigDefaults(unittest.TestCase):
     def test_defaults_applied_when_no_file_and_no_env(self):
+        # Force discovery to find no file so the test is independent of any real
+        # config on the host (e.g. the owner's ~/.config/odoo_sdk/config.ini).
         with patch.dict("os.environ", {}, clear=True):
-            config = LocalConfig.load(config_path=None)
+            with patch("odoo_sdk.state.config.Path.is_file", return_value=False):
+                config = LocalConfig.load(config_path=None)
         self.assertEqual(config.connection["transport"], "xmlrpc")
         self.assertIsNone(config.connection["url"])
         self.assertIsNone(config.connection["db"])
@@ -123,14 +127,92 @@ class TestLocalConfigDiscovery(unittest.TestCase):
                 config = LocalConfig.load()
         self.assertEqual(config.connection["url"], "https://from-file.example.com")
 
+    def test_default_dir_uses_underscore_form_matching_the_mount(self):
+        # The default discovery directory must be the underscore form that
+        # matches the feature's bind mount (~/.config/odoo_sdk), not the old
+        # hyphenated ~/.config/odoo-sdk.
+        self.assertEqual(DEFAULT_CONFIG_DIR, "~/.config/odoo_sdk")
+
     def test_default_path_used_when_no_override(self):
-        self.assertEqual(DEFAULT_LOCAL_CONFIG_PATH, "~/.config/odoo-sdk/config.toml")
         with patch.dict("os.environ", {}, clear=True):
             with patch(
                 "odoo_sdk.state.config.Path.is_file", return_value=False
             ):
                 config = LocalConfig.load()
         self.assertEqual(config.connection["transport"], "xmlrpc")
+
+    def test_env_var_directory_probed_for_config_file(self):
+        # ODOO_SDK_CONFIG may point at a DIRECTORY; discovery probes it for
+        # config.toml then config.ini so the feature can point the var at the
+        # mounted config dir regardless of which file the user created.
+        with TemporaryDirectory() as tmp:
+            _write(tmp, "config.toml", _TOML)
+            with patch.dict("os.environ", {LOCAL_CONFIG_ENV_VAR: tmp}, clear=True):
+                config = LocalConfig.load()
+        self.assertEqual(config.connection["url"], "https://from-file.example.com")
+
+    def test_config_toml_wins_over_config_ini_in_probed_directory(self):
+        # When a directory holds both files, config.toml is probed first.
+        ini = "[connection]\nurl = https://from-ini.example.com\ndb = ini-db\n"
+        with TemporaryDirectory() as tmp:
+            _write(tmp, "config.toml", _TOML)
+            _write(tmp, "config.ini", ini)
+            with patch.dict("os.environ", {LOCAL_CONFIG_ENV_VAR: tmp}, clear=True):
+                config = LocalConfig.load()
+        self.assertEqual(config.connection["url"], "https://from-file.example.com")
+
+    def test_cwd_config_file_discovered_when_no_override(self):
+        # ./.odoo_sdk.toml in the current working directory is discovered ahead
+        # of the ~/.config/odoo_sdk default.
+        with TemporaryDirectory() as tmp:
+            _write(tmp, ".odoo_sdk.toml", _TOML)
+            original = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with patch.dict("os.environ", {}, clear=True):
+                    config = LocalConfig.load()
+            finally:
+                os.chdir(original)
+        self.assertEqual(config.connection["url"], "https://from-file.example.com")
+
+    def test_legacy_odoo_section_ini_in_directory_still_resolves(self):
+        # Compatibility guard: an already-persisted config.ini using the legacy
+        # [odoo] section, with ODOO_SDK_CONFIG pointing at its DIRECTORY, keeps
+        # authenticating unchanged.
+        ini = (
+            "[odoo]\n"
+            "url = https://persisted.example.com\n"
+            "db = persisted-db\n"
+            "username = persisted-user\n"
+            "password = persisted-pass\n"
+        )
+        with TemporaryDirectory() as tmp:
+            _write(tmp, "config.ini", ini)
+            with patch.dict("os.environ", {LOCAL_CONFIG_ENV_VAR: tmp}, clear=True):
+                config = LocalConfig.load()
+                settings = config.connection_settings()
+        self.assertEqual(settings.url, "https://persisted.example.com")
+        self.assertEqual(settings.db, "persisted-db")
+        self.assertEqual(settings.username, "persisted-user")
+        self.assertEqual(settings.password, "persisted-pass")
+
+    def test_explicit_connection_section_wins_over_odoo_alias(self):
+        # When both [connection] and the [odoo] alias are present, the canonical
+        # [connection] section is used.
+        ini = (
+            "[connection]\n"
+            "url = https://canonical.example.com\n"
+            "db = canonical-db\n"
+            "[odoo]\n"
+            "url = https://alias.example.com\n"
+            "db = alias-db\n"
+        )
+        with TemporaryDirectory() as tmp:
+            path = _write(tmp, "config.ini", ini)
+            with patch.dict("os.environ", {}, clear=True):
+                config = LocalConfig.load(config_path=path)
+        self.assertEqual(config.connection["url"], "https://canonical.example.com")
+        self.assertEqual(config.connection["db"], "canonical-db")
 
 
 class TestLocalConfigConnectionSettings(unittest.TestCase):
@@ -150,15 +232,12 @@ class TestLocalConfigConnectionSettings(unittest.TestCase):
         self.assertEqual(settings.api_key, "key")
 
     def test_raises_when_required_settings_missing(self):
+        # An empty connection mapping resolves to all-default (all None) values,
+        # which fail validation. connection_settings validates the already
+        # resolved mapping directly, so no file/env access is involved.
         config = LocalConfig(connection={})
-        with patch.dict("os.environ", {}, clear=True):
-            with patch(
-                "odoo_sdk.state.config._resolve_config_path", return_value=None
-            ):
-                with self.assertRaisesRegex(
-                    ValueError, "Missing Odoo connection settings"
-                ):
-                    config.connection_settings()
+        with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+            config.connection_settings()
 
 
 class TestOdooConnectionSettingsRepr(unittest.TestCase):
@@ -212,7 +291,8 @@ class TestOdooConnectionSettingsRepr(unittest.TestCase):
 class TestLocalConfigTimeout(unittest.TestCase):
     def test_timeout_absent_by_default(self):
         with patch.dict("os.environ", {}, clear=True):
-            config = LocalConfig.load(config_path=None)
+            with patch("odoo_sdk.state.config.Path.is_file", return_value=False):
+                config = LocalConfig.load(config_path=None)
         self.assertIsNone(config.connection["timeout"])
 
     def test_env_timeout_resolved_into_connection_mapping(self):

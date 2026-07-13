@@ -1,6 +1,8 @@
 from ..command import Command
+from ._registration import builtin_command
 
 
+@builtin_command
 class CreateTaskCommand(Command):
     """Create a project task with a standard name prefix."""
 

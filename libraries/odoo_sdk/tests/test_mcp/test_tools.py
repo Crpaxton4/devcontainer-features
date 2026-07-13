@@ -137,6 +137,10 @@ class TestBuildExplicitTools(unittest.TestCase):
         registry = register_builtins(Registry(MagicMock()))
         tools = build_explicit_tools(registry)
         self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
+        # Every tool carries a non-empty description sourced from its command,
+        # so no tool ships to the MCP wire schema without documentation.
+        for name, (_, description) in tools.items():
+            self.assertNotEqual(description, "", f"{name} has an empty description")
         # Each entry is a (callable, description) pair.
         start_fn, start_desc = tools["start_task"]
         stop_fn, _ = tools["stop_task"]
@@ -765,6 +769,9 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "ingest_sessions": (),
             "query_sessions": (),
         }
+        # Pin the atomic tool set to this explicit map so a dropped or renamed
+        # @atomic_tool decorator fails here instead of silently going untested.
+        self.assertEqual(set(ATOMIC_TOOL_FACTORIES), set(calls))
         for name, factory in ATOMIC_TOOL_FACTORIES.items():
             tool = factory(self._registry())
             result = tool(*calls[name])
@@ -818,3 +825,47 @@ def make_get_task_tool_reg():
             return cmd
 
     return make_get_task_tool(_Reg())
+
+
+class TestAtomicToolDecorator(unittest.TestCase):
+    """``@atomic_tool("name")`` populates ``ATOMIC_TOOL_FACTORIES``."""
+
+    def test_registers_factory_under_explicit_name(self):
+        from odoo_sdk.mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
+
+        def _factory(registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        # patch.dict restores ATOMIC_TOOL_FACTORIES after the block so the probe
+        # registration never leaks into the real atomic tool surface.
+        with patch.dict(ATOMIC_TOOL_FACTORIES, clear=False):
+            returned = atomic_tool("probe_tool")(_factory)
+            # The decorator is transparent and keys by the explicit name.
+            self.assertIs(returned, _factory)
+            self.assertIs(ATOMIC_TOOL_FACTORIES["probe_tool"], _factory)
+        self.assertNotIn("probe_tool", ATOMIC_TOOL_FACTORIES)
+
+    def test_name_decouples_from_command_name(self):
+        # The explicit tool name may differ from the command the body looks up.
+        from odoo_sdk.mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
+
+        def _factory(registry):  # pragma: no cover - never invoked
+            return lambda: registry["backing_command"].execute()
+
+        with patch.dict(ATOMIC_TOOL_FACTORIES, clear=False):
+            atomic_tool("public_alias")(_factory)
+            self.assertIn("public_alias", ATOMIC_TOOL_FACTORIES)
+            self.assertNotIn("backing_command", ATOMIC_TOOL_FACTORIES)
+
+    def test_duplicate_name_raises(self):
+        from odoo_sdk.mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
+
+        def _factory(registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        original = ATOMIC_TOOL_FACTORIES["get_uid"]
+        with self.assertRaises(ValueError) as ctx:
+            atomic_tool("get_uid")(_factory)
+        self.assertIn("get_uid", str(ctx.exception))
+        # The collision left the genuine factory in place (no silent overwrite).
+        self.assertIs(ATOMIC_TOOL_FACTORIES["get_uid"], original)

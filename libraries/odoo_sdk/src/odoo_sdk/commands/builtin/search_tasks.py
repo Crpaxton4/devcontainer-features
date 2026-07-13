@@ -1,9 +1,11 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.odoo_helpers import name_search_tasks
 
 
+@builtin_command
 class SearchTasksCommand(Command):
     """Search tasks within a project by name, returning candidate id/name dicts.
 

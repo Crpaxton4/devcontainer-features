@@ -45,6 +45,14 @@ check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-co
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
+# mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
+# lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
+# gone - a case-sensitive stale name would leave the SDK reading nothing.
+check "ODOO_SDK_CONFIG points at the bind mount dir" bash -c \
+  "[ \"\$ODOO_SDK_CONFIG\" = '/usr/local/share/odoo-sdk-config' ]"
+check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_CONFIG\" ]"
+
 # NOTE: no check here that the odoo-sdk MCP server is registered. install.sh
 # registers it at BUILD time into CLAUDE_CONFIG_DIR=/usr/local/share/claude-home,
 # but at RUNTIME that directory is shadowed by the feature's bind mount of the

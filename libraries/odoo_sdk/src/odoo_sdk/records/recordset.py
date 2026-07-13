@@ -427,18 +427,7 @@ class OdooRecordset:
         :return: Recordset bound to the requested model and ids.
         :rtype: OdooRecordset
         """
-        # TODO This can almost certainly be consolidated with `_derive`
-        #      the only difference is that `recordset` accepts a new model name
-        #      Unify into one with optional `model_name` defaulting to current model.
-        return OdooRecordset(
-            executor=self._executor,
-            model_name=model_name,
-            ids=ids,
-            context=deepcopy(self._context),
-            metadata_cache=self._metadata_cache,
-            record_value_cache=self._record_value_cache,
-            record_value_lock=self._record_value_lock,
-        )
+        return self._build_recordset(model_name=model_name, ids=ids)
 
     def _derive(
         self,
@@ -457,15 +446,46 @@ class OdooRecordset:
         :return: Derived recordset sharing the model identity and runtime.
         :rtype: OdooRecordset
         """
+        return self._build_recordset(
+            ids=ids,
+            prefetch_ids=(self._prefetch_ids if prefetch_ids is None else prefetch_ids),
+        )
+
+    def _build_recordset(
+        self,
+        model_name: Optional[str] = None,
+        ids: Union[int, Sequence[int]] = (),
+        prefetch_ids: Union[int, Sequence[int], None] = None,
+    ) -> OdooRecordset:
+        """Construct a recordset that shares this runtime, defaulting to the current model.
+
+        This single factory is necessary because both the public :meth:`recordset`
+        entry point (which rebinds a new model) and the internal :meth:`_derive`
+        helper (which stays on the current model and threads prefetch ids) must bind
+        ids and shared runtime state identically. Consolidating the construction here
+        keeps the shared executor, context copy, metadata cache, record-value cache,
+        and lock wiring defined exactly once.
+
+        :param model_name: Model to bind, or None to reuse the current model,
+            defaults to None.
+        :type model_name: Optional[str]
+        :param ids: Record id or ordered ids to bind, defaults to an empty recordset.
+        :type ids: Union[int, Sequence[int]]
+        :param prefetch_ids: Prefetch ids to bind, or None to let the recordset
+            default to its own ids, defaults to None.
+        :type prefetch_ids: Union[int, Sequence[int], None]
+        :return: Recordset bound to the resolved model and ids sharing this runtime.
+        :rtype: OdooRecordset
+        """
         return OdooRecordset(
             executor=self._executor,
-            model_name=self._model_name,
+            model_name=self._model_name if model_name is None else model_name,
             ids=ids,
             context=deepcopy(self._context),
             metadata_cache=self._metadata_cache,
             record_value_cache=self._record_value_cache,
             record_value_lock=self._record_value_lock,
-            prefetch_ids=self._prefetch_ids if prefetch_ids is None else prefetch_ids,
+            prefetch_ids=prefetch_ids,
         )
 
     def __bool__(self) -> bool:

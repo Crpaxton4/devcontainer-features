@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
+
+from .protocols import RpcClient
 
 
 class Command(ABC):
@@ -14,26 +15,28 @@ class Command(ABC):
 
     Commands receive three peer dependencies, injected by the :class:`Registry`:
 
-    * ``client`` — the :class:`OdooClient` (Odoo API abstraction).
+    * ``client`` — any :class:`RpcClient` (the :class:`OdooClient` in
+      production; a structural fake in tests).
     * ``state`` — the :class:`LocalStateClient` (SQLite session FSM).
     * ``config`` — the :class:`LocalConfig` (resolved SDK settings).
 
-    The state and config dependencies are created lazily on first access so that
+    The client is required; the :class:`Registry` always injects it. The state
+    and config dependencies are created lazily on first access so that
     lightweight commands (and unit tests) that only need the client are not
     forced to construct SQLite state or read a config file.
     """
 
     _name: str
     _description: str
-    _client: OdooClient
+    _client: RpcClient
 
     def __init__(
         self,
-        client: Optional[OdooClient] = None,
+        client: RpcClient,
         state: Optional[LocalStateClient] = None,
         config: Optional[LocalConfig] = None,
     ):
-        self._client = client if client is not None else OdooClient()
+        self._client = client
         self._injected_state = state
         self._injected_config = config
 

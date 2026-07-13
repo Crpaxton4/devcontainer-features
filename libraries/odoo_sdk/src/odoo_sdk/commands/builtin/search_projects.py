@@ -1,9 +1,11 @@
 from typing import Any
 
 from ..command import Command
+from ._registration import builtin_command
 from odoo_sdk.utilities.odoo_helpers import name_search_projects
 
 
+@builtin_command
 class SearchProjectsCommand(Command):
     """Search Odoo projects by name, returning candidate id/name dicts.
 

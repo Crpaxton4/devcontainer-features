@@ -6,11 +6,47 @@ rather than reflecting ``command.execute`` via ``inspect.signature`` — keeps t
 MCP wire schema an intentional, reviewable part of the interaction surface.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from odoo_sdk.commands import Registry
 
+#: Public MCP tool name -> factory ``(registry) -> tool callable`` for the atomic
+#: (non-``ctx``) commands. Populated at import time by :func:`atomic_tool`,
+#: replacing the formerly hand-maintained dict literal.
+ATOMIC_TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {}
 
+_Factory = Callable[[Registry], Callable[..., Any]]
+
+
+def atomic_tool(name: str) -> Callable[[_Factory], _Factory]:
+    """Register the decorated factory in :data:`ATOMIC_TOOL_FACTORIES`.
+
+    Apply this to every atomic tool factory. ``name`` is the *public MCP tool
+    name*; it is a separate argument from the command name the factory body
+    looks up (``registry["..."]``), so a tool may be exposed under a name that
+    differs from its backing command. The factory itself is returned unchanged.
+
+    :param name: Public tool name under which to register the factory.
+    :type name: str
+    :raises ValueError: If ``name`` is already registered to another factory,
+        which would silently drop one tool from the atomic surface.
+    :return: A decorator that registers and returns the factory.
+    :rtype: Callable[[_Factory], _Factory]
+    """
+
+    def register(factory: _Factory) -> _Factory:
+        if name in ATOMIC_TOOL_FACTORIES:
+            raise ValueError(
+                f"Duplicate atomic tool name {name!r}: "
+                f"{ATOMIC_TOOL_FACTORIES[name].__name__} is already registered."
+            )
+        ATOMIC_TOOL_FACTORIES[name] = factory
+        return factory
+
+    return register
+
+
+@atomic_tool("get_uid")
 def make_get_uid_tool(registry: Registry):
     def get_uid() -> int:
         """Get the UID of the current user."""
@@ -19,6 +55,7 @@ def make_get_uid_tool(registry: Registry):
     return get_uid
 
 
+@atomic_tool("get_models")
 def make_get_models_tool(registry: Registry):
     def get_models() -> List[Dict[str, Any]]:
         """Get a list of all models with their names."""
@@ -27,6 +64,7 @@ def make_get_models_tool(registry: Registry):
     return get_models
 
 
+@atomic_tool("get_tasks")
 def make_get_tasks_tool(registry: Registry):
     def get_tasks(
         domain: Optional[List[Tuple[str, str, Any]]] = None,
@@ -38,6 +76,7 @@ def make_get_tasks_tool(registry: Registry):
     return get_tasks
 
 
+@atomic_tool("get_todo")
 def make_get_todo_tool(registry: Registry):
     def get_todo(task_id: int) -> Optional[Dict[str, Any]]:
         """Return one project task by id, or None if not found."""
@@ -46,6 +85,7 @@ def make_get_todo_tool(registry: Registry):
     return get_todo
 
 
+@atomic_tool("get_task")
 def make_get_task_tool(registry: Registry):
     def get_task(
         task_id: int, include: Optional[List[str]] = None
@@ -63,6 +103,7 @@ def make_get_task_tool(registry: Registry):
     return get_task
 
 
+@atomic_tool("get_task_chatter")
 def make_get_task_chatter_tool(registry: Registry):
     def get_task_chatter(task_id: int, limit: int = 100) -> List[dict]:
         """Fetch all chatter messages for a task, sorted oldest-first."""
@@ -71,6 +112,7 @@ def make_get_task_chatter_tool(registry: Registry):
     return get_task_chatter
 
 
+@atomic_tool("get_task_attachments")
 def make_get_task_attachments_tool(registry: Registry):
     def get_task_attachments(
         task_id: int, include_content: bool = False
@@ -90,6 +132,7 @@ def make_get_task_attachments_tool(registry: Registry):
     return get_task_attachments
 
 
+@atomic_tool("create_task")
 def make_create_task_tool(registry: Registry):
     def create_task(name: str, project_id: int, description: str = "") -> int:
         """Create a project task with standard default values."""
@@ -98,6 +141,7 @@ def make_create_task_tool(registry: Registry):
     return create_task
 
 
+@atomic_tool("search_projects")
 def make_search_projects_tool(registry: Registry):
     def search_projects(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search Odoo projects by name substring; returns id/name candidates."""
@@ -106,6 +150,7 @@ def make_search_projects_tool(registry: Registry):
     return search_projects
 
 
+@atomic_tool("search_tasks")
 def make_search_tasks_tool(registry: Registry):
     def search_tasks(
         query: str, project_id: int, limit: int = 10
@@ -116,6 +161,7 @@ def make_search_tasks_tool(registry: Registry):
     return search_tasks
 
 
+@atomic_tool("resume_task")
 def make_resume_task_tool(registry: Registry):
     def resume_task(task_id: int) -> Dict[str, Any]:
         """Resume an AWAITING_ANSWERS session, transitioning it back to RUNNING."""
@@ -124,6 +170,7 @@ def make_resume_task_tool(registry: Registry):
     return resume_task
 
 
+@atomic_tool("abort_task")
 def make_abort_task_tool(registry: Registry):
     def abort_task(task_id: int) -> Dict[str, Any]:
         """Force-close a wedged session without logging hours; drop its timesheet."""
@@ -132,6 +179,7 @@ def make_abort_task_tool(registry: Registry):
     return abort_task
 
 
+@atomic_tool("task_status")
 def make_task_status_tool(registry: Registry):
     def task_status() -> List[Dict[str, Any]]:
         """Show all actively tracked tasks with elapsed time."""
@@ -140,6 +188,7 @@ def make_task_status_tool(registry: Registry):
     return task_status
 
 
+@atomic_tool("task_note")
 def make_task_note_tool(registry: Registry):
     def task_note(task_id: int, note: str) -> Dict[str, Any]:
         """Post a free-form note to the task chatter and the local session log."""
@@ -148,6 +197,7 @@ def make_task_note_tool(registry: Registry):
     return task_note
 
 
+@atomic_tool("task_list")
 def make_task_list_tool(registry: Registry):
     def task_list(
         project_name_query: Optional[str] = None,
@@ -162,6 +212,7 @@ def make_task_list_tool(registry: Registry):
     return task_list
 
 
+@atomic_tool("task_question")
 def make_task_question_tool(registry: Registry):
     def task_question(task_id: int, question: str) -> Dict[str, Any]:
         """Post a question to the task chatter; transitions to AWAITING_ANSWERS."""
@@ -170,6 +221,7 @@ def make_task_question_tool(registry: Registry):
     return task_question
 
 
+@atomic_tool("optimize_sessions")
 def make_optimize_sessions_tool(registry: Registry):
     def optimize_sessions(
         start_date: Optional[str] = None,
@@ -193,6 +245,7 @@ def make_optimize_sessions_tool(registry: Registry):
     return optimize_sessions
 
 
+@atomic_tool("ingest_sessions")
 def make_ingest_sessions_tool(registry: Registry):
     def ingest_sessions(
         start_date: Optional[str] = None,
@@ -206,6 +259,7 @@ def make_ingest_sessions_tool(registry: Registry):
     return ingest_sessions
 
 
+@atomic_tool("query_sessions")
 def make_query_sessions_tool(registry: Registry):
     def query_sessions(
         start_date: Optional[str] = None,
@@ -227,26 +281,3 @@ def make_query_sessions_tool(registry: Registry):
 
     return query_sessions
 
-
-# Tool name -> factory(registry) -> tool callable, for the atomic commands.
-ATOMIC_TOOL_FACTORIES = {
-    "get_uid": make_get_uid_tool,
-    "get_models": make_get_models_tool,
-    "get_tasks": make_get_tasks_tool,
-    "get_todo": make_get_todo_tool,
-    "get_task": make_get_task_tool,
-    "get_task_chatter": make_get_task_chatter_tool,
-    "get_task_attachments": make_get_task_attachments_tool,
-    "create_task": make_create_task_tool,
-    "search_projects": make_search_projects_tool,
-    "search_tasks": make_search_tasks_tool,
-    "resume_task": make_resume_task_tool,
-    "abort_task": make_abort_task_tool,
-    "task_status": make_task_status_tool,
-    "task_note": make_task_note_tool,
-    "task_list": make_task_list_tool,
-    "task_question": make_task_question_tool,
-    "optimize_sessions": make_optimize_sessions_tool,
-    "ingest_sessions": make_ingest_sessions_tool,
-    "query_sessions": make_query_sessions_tool,
-}

@@ -285,7 +285,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
     def test_raises_for_missing_configuration(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             with patch(
-                "odoo_sdk.state.config._resolve_config_path",
+                "odoo_sdk.state.config._resolve_local_config_path",
                 return_value=None,
             ):
                 with self.assertRaisesRegex(
@@ -305,7 +305,9 @@ class TestOdooConnectionSettings(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict("os.environ", {"odoo_sdk_CONFIG": str(config_path)}):
+            with patch.dict(
+                "os.environ", {"ODOO_SDK_CONFIG": str(config_path)}, clear=True
+            ):
                 settings = OdooConnectionSettings.from_sources()
 
         self.assertEqual(settings.url, "https://from-file.example.com")
@@ -317,6 +319,8 @@ class TestOdooConnectionSettings(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
+                # Point discovery at a nonexistent file so only env applies.
+                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
                 "ODOO_URL": "https://from-environment.example.com",
                 "ODOO_DB": "environment-db",
                 "ODOO_USERNAME": "environment-user",
@@ -331,7 +335,9 @@ class TestOdooConnectionSettings(unittest.TestCase):
         self.assertEqual(settings.username, "environment-user")
         self.assertEqual(settings.password, "environment-password")
 
-    def test_environment_values_override_file_values(self) -> None:
+    def test_file_values_override_environment_values(self) -> None:
+        # Consolidated precedence is File > Environment > Default (the single
+        # LocalConfig resolver), so a file value wins over the matching env var.
         with TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "odoo.ini"
             config_path.write_text(
@@ -355,17 +361,19 @@ class TestOdooConnectionSettings(unittest.TestCase):
                     config_path=str(config_path)
                 )
 
-        self.assertEqual(settings.url, "https://from-environment.example.com")
+        # File wins over env for keys present in the file; env fills only the
+        # keys the file omits (none here).
+        self.assertEqual(settings.url, "https://from-file.example.com")
         self.assertEqual(settings.db, "file-db")
         self.assertEqual(settings.username, "file-user")
-        self.assertEqual(settings.password, "environment-password")
+        self.assertEqual(settings.password, "file-password")
 
-    @patch("odoo_sdk.state.config._resolve_relative_to_invoking_script")
-    def test_relative_config_path_resolves_from_invoking_script_directory(
-        self, mock_resolve_relative_to_invoking_script: Mock
-    ) -> None:
+    def test_directory_config_path_probed_for_config_file(self) -> None:
+        # A config_path naming a DIRECTORY is probed for config.toml / config.ini
+        # so the feature's directory-form ODOO_SDK_CONFIG resolves through
+        # from_sources regardless of which file the user created.
         with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
+            config_path = Path(temp_dir) / "config.ini"
             config_path.write_text(
                 "[odoo]\n"
                 "url=https://from-file.example.com\n"
@@ -375,8 +383,8 @@ class TestOdooConnectionSettings(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mock_resolve_relative_to_invoking_script.return_value = str(config_path)
-            settings = OdooConnectionSettings.from_sources(config_path="odoo.ini")
+            with patch.dict("os.environ", {}, clear=True):
+                settings = OdooConnectionSettings.from_sources(config_path=temp_dir)
 
         self.assertEqual(settings.url, "https://from-file.example.com")
 
@@ -384,6 +392,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
+                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
                 "ODOO_URL": "https://example.com",
                 "ODOO_DB": "mydb",
                 "ODOO_API_KEY": "secret-key",
@@ -399,6 +408,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
+                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
                 "ODOO_URL": "https://example.com",
                 "ODOO_DB": "mydb",
                 "ODOO_API_KEY": "secret-key",
@@ -440,6 +450,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
+                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
                 "ODOO_URL": "https://example.com",
                 "ODOO_DB": "mydb",
                 "ODOO_TRANSPORT": "json2",
@@ -459,7 +470,7 @@ class TestOdooConnectionSettings(unittest.TestCase):
             clear=True,
         ):
             with patch(
-                "odoo_sdk.state.config._resolve_config_path",
+                "odoo_sdk.state.config._resolve_local_config_path",
                 return_value=None,
             ):
                 with self.assertRaisesRegex(
@@ -470,6 +481,9 @@ class TestOdooConnectionSettings(unittest.TestCase):
 
 class TestOdooConnectionSettingsTimeout(unittest.TestCase):
     _REQUIRED_ENV = {
+        # Point discovery at a nonexistent file so these env-only timeout cases
+        # are independent of any real config on the host.
+        "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
         "ODOO_URL": "https://example.com",
         "ODOO_DB": "db",
         "ODOO_USERNAME": "user",
@@ -515,7 +529,9 @@ class TestOdooConnectionSettingsTimeout(unittest.TestCase):
 
         self.assertEqual(settings.timeout, 20.0)
 
-    def test_environment_timeout_overrides_file(self) -> None:
+    def test_file_timeout_overrides_environment(self) -> None:
+        # Consolidated precedence is File > Environment > Default, so a file
+        # timeout wins over ODOO_TIMEOUT.
         with TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "odoo.ini"
             config_path.write_text(
@@ -532,7 +548,7 @@ class TestOdooConnectionSettingsTimeout(unittest.TestCase):
                     config_path=str(config_path)
                 )
 
-        self.assertEqual(settings.timeout, 8.0)
+        self.assertEqual(settings.timeout, 20.0)
 
     def test_non_numeric_timeout_falls_back_to_default(self) -> None:
         env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "not-a-number"}
@@ -583,6 +599,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
     def test_env_timeout_reaches_rpc_executor(self, mock_rpc: Mock) -> None:
         mock_rpc.return_value = Mock(spec=OdooExecutor)
         env = {
+            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
             "ODOO_URL": "https://example.com",
             "ODOO_DB": "db",
             "ODOO_USERNAME": "user",
@@ -604,6 +621,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
     def test_env_timeout_reaches_json2_executor(self, mock_json2: Mock) -> None:
         mock_json2.return_value = Mock(spec=OdooExecutor)
         env = {
+            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
             "ODOO_URL": "https://example.com",
             "ODOO_DB": "db",
             "ODOO_API_KEY": "key",
@@ -626,6 +644,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
     ) -> None:
         mock_rpc.return_value = Mock(spec=OdooExecutor)
         env = {
+            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
             "ODOO_URL": "https://example.com",
             "ODOO_DB": "db",
             "ODOO_USERNAME": "user",

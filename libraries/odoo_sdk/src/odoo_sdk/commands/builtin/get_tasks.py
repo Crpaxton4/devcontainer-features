@@ -1,8 +1,10 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..command import Command
+from ._registration import builtin_command
 
 
+@builtin_command
 class GetTasksCommand(Command):
     """List project tasks, optionally narrowed by an Odoo domain filter."""
 

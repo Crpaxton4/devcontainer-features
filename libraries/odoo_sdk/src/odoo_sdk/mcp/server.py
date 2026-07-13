@@ -40,6 +40,11 @@ PROFILE_SUBDIR = "odoo-sdk-profiles"
 #: grow the temp dir without bound over a container's lifetime.
 PROFILE_KEEP_LAST = 20
 
+#: Default server identity advertised to MCP clients. The server class is
+#: otherwise registry-generic, so this is the one Odoo-specific string; a
+#: non-Odoo registry passes its own text via the ``instructions`` parameter.
+DEFAULT_INSTRUCTIONS = "Provides tools for interacting with Odoo ERP"
+
 
 def _toon_output_enabled() -> bool:
     """Return whether TOON output is enabled via the environment flag.
@@ -207,6 +212,9 @@ class OdooMCPServer:
     :param profiling: When True, wrap every tool dispatch in :mod:`cProfile` and
         dump a zipped profile per call. Defaults to False (zero overhead).
     :type profiling: bool
+    :param instructions: Server identity advertised to MCP clients. Defaults to
+        :data:`DEFAULT_INSTRUCTIONS`; a non-Odoo registry passes its own text.
+    :type instructions: str
     """
 
     def __init__(
@@ -215,6 +223,7 @@ class OdooMCPServer:
         server_name: str = "Odoo MCP Server",
         explicit_tools: Optional[dict[str, ToolSpec]] = None,
         profiling: bool = False,
+        instructions: str = DEFAULT_INSTRUCTIONS,
     ):
         from odoo_sdk.mcp.prompts import register_builtin_prompts
 
@@ -223,7 +232,7 @@ class OdooMCPServer:
         self.profiling: bool = profiling
         self.mcp: FastMCP = FastMCP(
             server_name,
-            instructions="Provides tools for interacting with Odoo ERP",
+            instructions=instructions,
         )
         self._register_tools()
         register_builtin_prompts(self.mcp, self.registry)
