@@ -49,7 +49,7 @@ jobs:
           git checkout -b $branch
           message='chore(main): automated documentation update'
           # Add / update and commit
-          git add */**/README.md
+          git add devcontainer-features/src/personal-features/README.md
           # Skip when there is nothing staged; otherwise a failed commit aborts under `set -e`.
           if git diff --cached --quiet; then
               echo "No documentation updates to commit."
