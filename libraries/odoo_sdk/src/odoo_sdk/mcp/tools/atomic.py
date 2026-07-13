@@ -281,3 +281,42 @@ def make_query_sessions_tool(registry: Registry):
 
     return query_sessions
 
+
+@atomic_tool("timesheet_summary")
+def make_timesheet_summary_tool(registry: Registry):
+    def timesheet_summary(
+        start_date: str,
+        end_date: str,
+        group_by: str = "project",
+        only_mine: bool = True,
+    ) -> Dict[str, Any]:
+        """Summarize logged timesheet hours over a date range, grouped one way.
+
+        Dates are ``YYYY-MM-DD`` and inclusive on both ends. Hours are the unit —
+        Odoo's ``unit_amount`` on ``account.analytic.line`` — summed per group.
+        ``group_by`` selects the single axis to collapse onto:
+
+        * ``project`` — total hours per task's project.
+        * ``client`` — total hours per project's partner (the customer); a
+          project with no partner is grouped under a ``null`` label.
+        * ``task`` — total hours per individual task.
+        * ``day`` — total hours per calendar day, with ``YYYY-MM-DD`` labels.
+
+        ``only_mine=True`` (default) restricts the summary to the authenticated
+        user's own employee timesheets; ``False`` includes every timesheet the
+        user can see. An invalid ``group_by`` or a malformed date raises
+        ``ValueError``.
+
+        Returns a dict with ``group_by``, the echoed ``start_date``/``end_date``,
+        ``only_mine``, ``unit`` (always ``"hours"``), a ``groups`` list of
+        ``{label, hours, entries}`` objects, and a grand ``total_hours``.
+        """
+        return registry["timesheet_summary"].execute(
+            start_date,
+            end_date,
+            group_by=group_by,
+            only_mine=only_mine,
+        )
+
+    return timesheet_summary
+

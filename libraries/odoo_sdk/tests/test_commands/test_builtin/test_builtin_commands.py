@@ -160,6 +160,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "optimize_sessions",
         "ingest_sessions",
         "query_sessions",
+        "timesheet_summary",
     }
 )
 
