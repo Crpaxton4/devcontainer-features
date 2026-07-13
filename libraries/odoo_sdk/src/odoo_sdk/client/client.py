@@ -90,6 +90,7 @@ class OdooClient(OdooExecutor):
                     settings.url,
                     settings.db,
                     settings.api_key,  # type: ignore[arg-type]
+                    timeout=settings.timeout,
                 )
             else:
                 self._executor = OdooRpcExecutor(
@@ -97,6 +98,7 @@ class OdooClient(OdooExecutor):
                     settings.db,
                     settings.username,  # type: ignore[arg-type]
                     settings.password,  # type: ignore[arg-type]
+                    timeout=settings.timeout,
                 )
         self._root_recordset = OdooRecordset(
             executor=self._executor,
