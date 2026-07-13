@@ -24,7 +24,7 @@ jobs:
   check-persisted-paths:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -45,7 +45,7 @@ jobs:
           - mcr.microsoft.com/devcontainers/javascript-node:latest
           - node:lts-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache npm global store
         uses: actions/cache@v4
@@ -89,7 +89,7 @@ jobs:
           - on_odoo17_base_image
           - on_odoo16_base_image
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache npm global store
         uses: actions/cache@v4
