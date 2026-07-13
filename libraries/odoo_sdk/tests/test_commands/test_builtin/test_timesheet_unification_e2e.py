@@ -24,7 +24,7 @@ from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
-from odoo_sdk.state import LocalStateClient
+from odoo_sdk.state import LocalStateClient, TaskAlreadyRunningError
 
 _START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
 _STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
@@ -116,8 +116,9 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # even if it reached ensure_anchor it would adopt the first row.
         first = self._start(client, db, **self._kwargs())
         self.assertIn("run_id", first)
-        second = self._start(client, db, **self._kwargs())
-        self.assertIn("error", second)  # already active; no duplicate anchor
+        # already active; raises before any duplicate anchor is created
+        with self.assertRaises(TaskAlreadyRunningError):
+            self._start(client, db, **self._kwargs())
 
         with patch(_NOTE_GUARD), patch(
             "odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db
