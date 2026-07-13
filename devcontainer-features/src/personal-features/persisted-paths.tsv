@@ -1,0 +1,37 @@
+# persisted-paths.tsv - single source of truth for personal-features' persisted
+# bind-mount paths. Adding, removing, or renaming a persisted path means editing
+# THIS file; every consumer below derives from it, and CI fails if any of them
+# drifts out of sync.
+#
+# Consumers:
+#   install.sh               creates each container_target (mkdir -p / chown / chmod mode)
+#   setup.sh                 creates each host_source under the host home directory
+#   setup.ps1                mirrors setup.sh row-for-row (hand-kept in sync; no pwsh CI
+#                            for the container build, so parity is checked statically by
+#                            .github/scripts/test_host_setup_parity.py)
+#   check_persisted_paths.py asserts devcontainer-feature.json's mounts + containerEnv
+#                            match these rows. The JSON cannot be generated from this
+#                            file: release-please patches $.version into the checked-in
+#                            JSON in place, so it must stay hand-authored and be checked.
+#
+# Tab-separated. Columns:
+#   name             stable identifier for the path (docs / error messages only)
+#   host_source      bind-mount source, relative to the host home dir ($HOME / %USERPROFILE%)
+#   container_target bind-mount target (absolute path inside the container)
+#   env_var          containerEnv variable that points at the target, or - if none
+#   env_value        exact value of env_var in the JSON, or - when env_var is -
+#   mode             octal permissions install.sh applies to container_target
+#
+# A trailing slash marks a DIRECTORY (created with mkdir -p); no trailing slash
+# marks a FILE (created with touch, after mkdir -p of its parent). Docker
+# materialises a *missing* single-file mount source as a directory, which then
+# fails the mount, so file sources must be touched into existence - hence the
+# distinction. All six paths are directories today.
+#
+# name	host_source	container_target	env_var	env_value	mode
+claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0755
+gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh-cli-config	0755
+odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	odoo_sdk_CONFIG	/usr/local/share/odoo-sdk-config/config.ini	0755
+pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755
+coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0755
+shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0755
