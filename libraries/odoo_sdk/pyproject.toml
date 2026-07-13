@@ -24,14 +24,14 @@ static-analysis = [
 docs = [
     "furo>=2024.8.6",
     "ipykernel>=6.29.0",
-    "jupyterlab>=4.4.0",
+    "jupyterlab>=4.6.1",
     "myst-parser>=3.0,<5",
     "nbsphinx>=0.9.0",
     "sphinx>=7.0,<9",
     "sphinx-autodoc-typehints>=2.0,<3.11",
 ]
 test = [
-    "coverage[toml]>=7.6.0",
+    "coverage[toml]>=7.15.1",
     "hypothesis>=6.0.0",
     "cosmic-ray>=8.4.6",
     "pyte>=0.8.2",
