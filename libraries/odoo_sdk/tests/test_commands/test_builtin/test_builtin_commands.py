@@ -146,7 +146,11 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "get_task",
         "get_task_chatter",
         "get_task_attachments",
+        "read_attachment",
         "create_task",
+        "search_chatter",
+        "search_knowledge_articles",
+        "read_knowledge_article",
         "search_projects",
         "search_tasks",
         "start_task",
@@ -156,10 +160,13 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "task_status",
         "task_note",
         "task_list",
+        "task_aging",
         "task_question",
         "optimize_sessions",
         "ingest_sessions",
         "query_sessions",
+        "timesheet_summary",
+        "unbilled_hours",
     }
 )
 

@@ -132,6 +132,33 @@ def make_get_task_attachments_tool(registry: Registry):
     return get_task_attachments
 
 
+@atomic_tool("read_attachment")
+def make_read_attachment_tool(registry: Registry):
+    def read_attachment(attachment_id: int, mode: str = "text") -> Dict[str, Any]:
+        """Read one document already stored in Odoo (read-only).
+
+        Reads an existing ``ir.attachment``; it never uploads or attaches
+        anything. ``mode`` selects what is returned:
+
+        * ``metadata`` — identity only, no bytes: ``id``, ``name``, ``mimetype``,
+          ``file_size``, ``res_model``, ``res_id``, ``create_date``.
+        * ``text`` — decode the binary payload and convert it to Markdown via
+          markitdown (PDF / docx / xlsx / CSV / HTML → Markdown). The decoded
+          payload is capped at 10 MiB; a larger payload is truncated before
+          conversion and the result carries ``truncated: true``. An unsupported
+          or unconvertible format (or an empty payload) degrades to ``text=""``
+          plus an explanatory ``note`` — never a raised error.
+        * ``raw`` — the base64 ``datas`` payload, refusing anything over the
+          10 MiB cap with a ``ValueError`` naming the size and the cap.
+
+        A missing or inaccessible ``attachment_id`` raises the missing-record
+        error; an invalid ``mode`` raises ``ValueError``.
+        """
+        return registry["read_attachment"].execute(attachment_id, mode=mode)
+
+    return read_attachment
+
+
 @atomic_tool("create_task")
 def make_create_task_tool(registry: Registry):
     def create_task(name: str, project_id: int, description: str = "") -> int:
@@ -139,6 +166,99 @@ def make_create_task_tool(registry: Registry):
         return registry["create_task"].execute(name, project_id, description)
 
     return create_task
+
+
+@atomic_tool("search_chatter")
+def make_search_chatter_tool(registry: Registry):
+    def search_chatter(
+        query: str,
+        model: Optional[str] = None,
+        record_id: Optional[int] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Full-text search across Odoo chatter (``mail.message``) bodies.
+
+        Matches ``query`` case-insensitively against message bodies
+        (``body ilike``) and returns the newest matches first, capped at
+        ``limit``. Read-only.
+
+        Optional filters (all combinable):
+
+        * ``model`` — restrict to messages on one Odoo model, e.g.
+          ``"project.task"``.
+        * ``record_id`` — restrict to one record's conversation; pair with
+          ``model`` to target a specific record.
+        * ``date_from`` / ``date_to`` — inclusive message-timestamp bounds as
+          ``YYYY-MM-DD`` strings (``date_to`` compares against the start of that
+          day).
+
+        Each result carries ``id``, ``date``, ``author``, ``type``, ``subtype``,
+        an HTML-stripped Markdown ``body``, and the originating ``res_model`` /
+        ``res_id`` so the source record can be located.
+        """
+        return registry["search_chatter"].execute(
+            query,
+            model=model,
+            record_id=record_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+
+    return search_chatter
+
+
+@atomic_tool("search_knowledge_articles")
+def make_search_knowledge_articles_tool(registry: Registry):
+    def search_knowledge_articles(
+        query: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Search the Odoo Knowledge base (``knowledge.article``) by text.
+
+        Matches ``query`` case-insensitively against each article's ``name``
+        **or** its ``body`` (an OR ``ilike`` domain) and returns the most
+        recently updated articles first (``write_date desc``, then ``id desc``),
+        capped at ``limit``. Read-only: no article is created or modified.
+
+        Each result carries ``id``, ``name``, a ``snippet`` (the article body
+        converted from HTML to Markdown and capped at 500 characters), and
+        ``write_date`` (``YYYY-MM-DD HH:MM:SS``).
+
+        ``knowledge.article`` is an Odoo **Enterprise** model. On a Community
+        database (or when the Knowledge app is not installed) this raises an
+        error — "knowledge.article model not available (Odoo Enterprise
+        required)" — rather than returning results.
+        """
+        return registry["search_knowledge_articles"].execute(query, limit=limit)
+
+    return search_knowledge_articles
+
+
+@atomic_tool("read_knowledge_article")
+def make_read_knowledge_article_tool(registry: Registry):
+    def read_knowledge_article(article_id: int) -> Dict[str, Any]:
+        """Read one Odoo Knowledge article (``knowledge.article``) by id.
+
+        Returns the article's **full** body converted from HTML to Markdown
+        (not the capped search snippet). Read-only: nothing is created or
+        modified.
+
+        The result carries ``id``, ``name``, ``body`` (the full Markdown, capped
+        at 50000 characters), ``write_date`` (``YYYY-MM-DD HH:MM:SS``), and a
+        ``truncated`` boolean that is ``True`` only when the body exceeded that
+        cap and was shortened.
+
+        An unknown ``article_id`` raises "knowledge.article <id> not found".
+        ``knowledge.article`` is an Odoo **Enterprise** model: on a Community
+        database (or when the Knowledge app is not installed) this raises
+        "knowledge.article model not available (Odoo Enterprise required)"
+        rather than returning content.
+        """
+        return registry["read_knowledge_article"].execute(article_id)
+
+    return read_knowledge_article
 
 
 @atomic_tool("search_projects")
@@ -212,6 +332,21 @@ def make_task_list_tool(registry: Registry):
     return task_list
 
 
+@atomic_tool("task_aging")
+def make_task_aging_tool(registry: Registry):
+    def task_aging(
+        project_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """List open project tasks going stale, sorted stalest-first (read-only)."""
+        return registry["task_aging"].execute(
+            project_id=project_id, stage=stage, limit=limit
+        )
+
+    return task_aging
+
+
 @atomic_tool("task_question")
 def make_task_question_tool(registry: Registry):
     def task_question(task_id: int, question: str) -> Dict[str, Any]:
@@ -259,6 +394,42 @@ def make_ingest_sessions_tool(registry: Registry):
     return ingest_sessions
 
 
+@atomic_tool("unbilled_hours")
+def make_unbilled_hours_tool(registry: Registry):
+    def unbilled_hours(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        project_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Report logged-but-not-yet-invoiced timesheet hours (read-only).
+
+        Returns a summary envelope ``{mode, count, total_hours, lines}``.
+        ``total_hours`` and each line's ``hours`` are decimal hours; each line
+        carries ``id``, ``date``, ``employee``, ``project``, ``task``, ``hours``
+        and ``name``.
+
+        Semantics depend on a ``fields_get`` capability probe of
+        ``account.analytic.line`` and are reported in ``mode``:
+
+        * ``"full"`` — both ``timesheet_invoice_id`` and
+          ``timesheet_invoice_type`` exist: unbilled means not posted to any
+          customer invoice, and every line adds ``invoice_type`` (billable vs
+          non-billable).
+        * ``"fallback"`` — only one field exists: unbilled is approximated as
+          "not linked to a sale order line"; ``invoice_type`` is omitted.
+        * neither field exists: returns a structured error payload.
+
+        ``start_date``/``end_date`` are inclusive ``YYYY-MM-DD`` bounds (omit for
+        unbounded); ``project_id`` is a ``project.project`` id restricting the
+        report to one project.
+        """
+        return registry["unbilled_hours"].execute(
+            start_date=start_date, end_date=end_date, project_id=project_id
+        )
+
+    return unbilled_hours
+
+
 @atomic_tool("query_sessions")
 def make_query_sessions_tool(registry: Registry):
     def query_sessions(
@@ -280,4 +451,43 @@ def make_query_sessions_tool(registry: Registry):
         )
 
     return query_sessions
+
+
+@atomic_tool("timesheet_summary")
+def make_timesheet_summary_tool(registry: Registry):
+    def timesheet_summary(
+        start_date: str,
+        end_date: str,
+        group_by: str = "project",
+        only_mine: bool = True,
+    ) -> Dict[str, Any]:
+        """Summarize logged timesheet hours over a date range, grouped one way.
+
+        Dates are ``YYYY-MM-DD`` and inclusive on both ends. Hours are the unit —
+        Odoo's ``unit_amount`` on ``account.analytic.line`` — summed per group.
+        ``group_by`` selects the single axis to collapse onto:
+
+        * ``project`` — total hours per task's project.
+        * ``client`` — total hours per project's partner (the customer); a
+          project with no partner is grouped under a ``null`` label.
+        * ``task`` — total hours per individual task.
+        * ``day`` — total hours per calendar day, with ``YYYY-MM-DD`` labels.
+
+        ``only_mine=True`` (default) restricts the summary to the authenticated
+        user's own employee timesheets; ``False`` includes every timesheet the
+        user can see. An invalid ``group_by`` or a malformed date raises
+        ``ValueError``.
+
+        Returns a dict with ``group_by``, the echoed ``start_date``/``end_date``,
+        ``only_mine``, ``unit`` (always ``"hours"``), a ``groups`` list of
+        ``{label, hours, entries}`` objects, and a grand ``total_hours``.
+        """
+        return registry["timesheet_summary"].execute(
+            start_date,
+            end_date,
+            group_by=group_by,
+            only_mine=only_mine,
+        )
+
+    return timesheet_summary
 

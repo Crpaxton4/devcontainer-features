@@ -27,15 +27,22 @@ from .get_uid import GetUidCommand
 from .ingest_sessions import IngestSessionsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
+from .read_attachment import ReadAttachmentCommand
+from .read_knowledge_article import ReadKnowledgeArticleCommand
 from .resume_task import ResumeTaskCommand
+from .search_chatter import SearchChatterCommand
+from .search_knowledge_articles import SearchKnowledgeArticlesCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
 from .stop_task import StopTaskCommand
+from .task_aging import TaskAgingCommand
 from .task_list import TaskListCommand
 from .task_note import TaskNoteCommand
 from .task_question import TaskQuestionCommand
 from .task_status import TaskStatusCommand
+from .timesheet_summary import TimesheetSummaryCommand
+from .unbilled_hours import UnbilledHoursCommand
 
 
 def register_builtins(registry: Registry) -> Registry:
