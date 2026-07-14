@@ -15,8 +15,10 @@ attribute.
 
 from ..command_registry import Registry
 from ._registration import BUILTIN_COMMANDS, builtin_command
+from .abort_run import AbortRunCommand
 from .abort_task import AbortTaskCommand
 from .create_task import CreateTaskCommand
+from .discover_runs import DiscoverRunsCommand
 from .get_models import GetModelsCommand
 from .get_task import GetTaskCommand
 from .get_task_attachments import GetTaskAttachmentsCommand

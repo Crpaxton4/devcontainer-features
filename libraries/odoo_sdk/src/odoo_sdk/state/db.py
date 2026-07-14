@@ -86,9 +86,48 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
 """
 
 
-def _get_project_dir() -> Path:
+def _resolve_state_root() -> Path:
+    """Resolve the tracker state root, honoring the same env overrides.
+
+    Precedence: ``ODOO_TASK_TRACKER_DIR`` (highest) then the XDG-aware
+    :func:`_default_root`. This is the single resolver both self-resolved
+    ``LocalStateClient`` construction and cross-project discovery share, so the
+    directory a DB is written under is exactly the one discovery scans.
+    """
     override = os.environ.get("ODOO_TASK_TRACKER_DIR")
-    root = Path(override) if override else _default_root()
+    return Path(override) if override else _default_root()
+
+
+def _derive_repo_label(remote_url: str) -> str:
+    """Return the ``owner/repo`` label for a git remote URL.
+
+    Strips a trailing ``.git`` and keeps the last two path segments so both ssh
+    (``git@github.com:owner/repo.git``) and https
+    (``https://github.com/owner/repo.git``) forms collapse to ``owner/repo``.
+    Falls back to the cleaned URL when it has fewer than two segments.
+    """
+    cleaned = remote_url.strip()
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    # Treat ``:`` (scp-like ssh separator, scheme ``://``) as a path separator so
+    # both URL shapes split into the same segment list.
+    segments = [seg for seg in cleaned.replace(":", "/").split("/") if seg]
+    if len(segments) >= 2:
+        return "/".join(segments[-2:])
+    return cleaned or "(unknown)"
+
+
+def _resolve_project_identity() -> tuple[Path, str]:
+    """Return the ``(project_dir, remote_url)`` for the current git working tree.
+
+    The project dir is ``<state-root>/<sha256(remote)[:16]>`` (created if
+    absent); the remote URL is returned alongside so callers can persist the
+    repo identity into the DB itself, curing the "orphaned DB keyed by an opaque
+    hash" problem (#331).
+
+    :raises ProjectIdError: When no git remote ``origin`` can be resolved.
+    """
+    root = _resolve_state_root()
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -105,6 +144,12 @@ def _get_project_dir() -> Path:
     project_hash = hashlib.sha256(remote_url.encode()).hexdigest()[:16]
     project_dir = root / project_hash
     project_dir.mkdir(parents=True, exist_ok=True)
+    return project_dir, remote_url
+
+
+def _get_project_dir() -> Path:
+    """Return only the resolved project dir (identity discarded)."""
+    project_dir, _ = _resolve_project_identity()
     return project_dir
 
 
@@ -225,10 +270,30 @@ class LocalStateClient:
     """SQLite-backed state store for task tracking sessions."""
 
     def __init__(self, db_path: Optional[Path] = None):
+        remote_url: Optional[str] = None
         if db_path is None:
-            db_path = _get_project_dir() / "tasks.db"
+            project_dir, remote_url = _resolve_project_identity()
+            db_path = project_dir / "tasks.db"
         self._db_path = db_path
         self._init_schema()
+        # Only stamp identity when we resolved the project ourselves; an injected
+        # db_path (tests, discovery, cross-DB abort) must never be mutated with a
+        # remote it did not come from.
+        if remote_url is not None:
+            self._persist_identity(remote_url)
+
+    def _persist_identity(self, remote_url: str) -> None:
+        """Record ``repo_remote_url``/``repo_label`` once; never overwrite.
+
+        Written exactly once per DB on the first self-resolved construction so a
+        DB carries the human-readable identity of the repo it belongs to. Existing
+        values are left untouched, so re-opening a project never clobbers an
+        identity already on record.
+        """
+        if self.get_setting("repo_remote_url") is None:
+            self.set_setting("repo_remote_url", remote_url)
+        if self.get_setting("repo_label") is None:
+            self.set_setting("repo_label", _derive_repo_label(remote_url))
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
