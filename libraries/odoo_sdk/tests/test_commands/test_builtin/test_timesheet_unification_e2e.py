@@ -10,8 +10,9 @@ is verified through the whole producer path with no live Odoo:
   producer for the MCP tool surface is the ``_event_emitting`` wrapper in
   :mod:`odoo_sdk.mcp.server` (covered by ``tests/test_mcp/test_server_events``),
   so driving the commands directly writes no event rows.
-* (d) the only ``account.analytic.line`` write is the unified module's
-  reconcile, and no record deletion is ever attempted.
+* (d) stop_task writes NO ``account.analytic.line`` row (#325): hours are the
+  exclusive job of the TUI/ETL upload path, which reconciles the anchor via the
+  unified module; no record deletion is ever attempted.
 """
 
 import tempfile
@@ -129,9 +130,10 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
 
         # (a) exactly one create for the anchor across the whole flow.
         self.assertEqual(len(client.analytic_calls("create")), 1)
-        # (d) the only account.analytic.line write is the reconcile write; no
-        # deletion happens (the recording client would crash loudly on unlink).
-        self.assertEqual(len(client.analytic_calls("write")), 1)
+        # (d) stop_task writes NO analytic line (#325): the anchor is left for
+        # the upload path to reconcile, so this FSM-only flow issues zero writes;
+        # no deletion happens (the recording client would crash loudly on unlink).
+        self.assertEqual(len(client.analytic_calls("write")), 0)
 
         # (b) command bodies no longer emit agent events (#326): emission moved
         # to the MCP dispatch wrapper, which this direct-command flow bypasses.
@@ -158,11 +160,16 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # Once a placeholder is reconciled (real description written) it is no
         # longer an open anchor, so a genuinely new work session on the same
         # task creates a fresh anchor rather than reusing the billed row.
+        # stop_task no longer reconciles (#325), so the upload path's reconcile
+        # is invoked directly here to close out the anchor before the next start.
+        from odoo_sdk.utilities.timesheet import reconcile
+
         client = _RecordingClient()
         db = _tmp_db()
         self._start(client, db, **self._kwargs())
         with patch(_STOP_GUARD):
             StopTaskCommand(client, state=db).execute(24648, "done")
+        reconcile(client, db, task_id=24648, description="[/] done", elapsed_hours=1.5)
         self._start(client, db, **self._kwargs())
         self.assertEqual(len(client.analytic_calls("create")), 2)
 

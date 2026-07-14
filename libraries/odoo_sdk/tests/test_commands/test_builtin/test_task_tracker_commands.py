@@ -561,25 +561,20 @@ class TestStartTaskCommand(unittest.TestCase):
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
 class TestStopTaskCommand(unittest.TestCase):
-    def test_stops_run_and_reconciles_timesheet(self):
+    def test_stops_run_and_writes_no_timesheet(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
-        ):
+        with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "Fixed the bug")
-        # reconcile is the sole writer of the anchor row; it is called with the
-        # (client, state, task_id, description, elapsed_hours) contract *before*
-        # the session is stopped (so it can resolve the still-active anchor id).
-        mock_reconcile.assert_called_once()
-        args = mock_reconcile.call_args.args
-        self.assertEqual(args[0], client)
-        self.assertEqual(args[1], db)
-        self.assertEqual(args[2], 1)
-        self.assertTrue(args[3].startswith("[/]"))
+        # stop_task no longer writes hours to Odoo (#325): the anchor is left for
+        # the TUI/ETL upload path to close out, so the command touches no
+        # account.analytic.line row at all.
+        client.execute.assert_not_called()
+        # The result shape is unchanged: elapsed hours are still computed and
+        # returned for callers/tests to display.
         self.assertIn("elapsed", result)
+        self.assertIn("elapsed_hours", result)
         self.assertIn("[/]", result["description"])
         from odoo_sdk.state import TaskState
         run = db.get_run_by_id(result["run_id"])
@@ -589,10 +584,7 @@ class TestStopTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
-        ):
+        with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "[/] Already prefixed")
         self.assertTrue(result["description"].startswith("[/]"))
         self.assertFalse(result["description"].startswith("[/] [/]"))
@@ -608,28 +600,21 @@ class TestStopTaskCommand(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         db.transition_to_awaiting(1)
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
-        ):
+        with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
         from odoo_sdk.state import TaskState
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
 
-    def test_reconcile_called_even_without_timesheet_id(self):
-        # The unified module owns the None-anchor decision (it no-ops), so
-        # stop_task always routes its write through reconcile rather than
-        # gating on the session's timesheet_id.
+    def test_no_timesheet_write_even_without_timesheet_id(self):
+        # With or without a known anchor id, stop_task writes nothing to Odoo:
+        # hours are the exclusive job of the TUI/ETL upload path (#325).
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.reconcile") as mock_reconcile,
-        ):
+        with patch(_STOP_GUARD):
             _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
-        mock_reconcile.assert_called_once()
+        client.execute.assert_not_called()
 
 
 # ── AGENT event production moved to the MCP wrapper (issue #326) ───────────────
@@ -667,10 +652,7 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
-        with (
-            patch(_STOP_GUARD),
-            patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
-        ):
+        with patch(_STOP_GUARD):
             _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
         self._assert_no_agent_event(db)
 

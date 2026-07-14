@@ -185,7 +185,7 @@ class TestReconcile(unittest.TestCase):
         self.assertEqual(executor.creates(), [])  # never creates
 
     def test_write_ids_are_flat_scalars_not_nested_lists(self):
-        # Regression for #193 (resurfaced #176/#167): ``stop_task`` -> reconcile
+        # Regression for #193 (resurfaced #176/#167): the upload path's reconcile
         # -> ``account.analytic.line.write`` must pass the ids as a FLAT list of
         # scalar ints. A double-wrapped ``[[id]]`` makes Odoo ``browse([[id]])``,
         # so ``record._ids[0]`` is itself a list; the stock timesheet write hashes
