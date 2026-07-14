@@ -27,6 +27,7 @@ class TestSingleStrategyOwnership(unittest.TestCase):
         self.assertEqual(owner[EventType.AGENT], "development")
         self.assertEqual(owner[EventType.MERGE], "merge")
         self.assertEqual(owner[EventType.REVIEW], "review")
+        self.assertEqual(owner[EventType.CLAUDE_HOOK], "development")
 
     def test_duplicate_ownership_raises(self):
         rows = (
@@ -76,6 +77,13 @@ class TestContextConstruction(unittest.TestCase):
     def test_default_context_builds(self):
         ctx = make_sessionization_context()
         self.assertIsInstance(ctx, SessionizationContext)
+
+    def test_coverage_validation_passes_with_claude_hook_member(self):
+        # Building the default context runs _validate_strategy_coverage over
+        # every EventType member, including the newly added CLAUDE_HOOK; a
+        # missing owner would raise, so a successful build proves coverage.
+        ctx = make_sessionization_context()
+        self.assertIn(EventType.CLAUDE_HOOK, ctx.by_event_type)
 
     def test_missing_strategy_coverage_raises(self):
         only_commit = (DEFAULT_SESSION_STRATEGY_CONFIGS[0],)

@@ -62,7 +62,11 @@ class TestEventConversion(unittest.TestCase):
         self.assertTrue(event.is_release)  # two tasks
         self.assertEqual(event.pr_title, "t")
 
-    def test_unknown_source_defaults_to_commit(self):
+    def test_unknown_source_raises(self):
+        # Unknown sources must fail loudly rather than silently masquerading as
+        # commits, which would corrupt sessionization.
+        from odoo_sdk.adapters import UnknownEventSourceError
+
         rec = EventRecord(
             id=1,
             source="mystery",
@@ -70,9 +74,8 @@ class TestEventConversion(unittest.TestCase):
             task_ids=["1"],
             repo="o/r",
         )
-        self.assertEqual(
-            event_record_to_raw_event(rec).event_type, EventType.COMMIT
-        )
+        with self.assertRaises(UnknownEventSourceError):
+            event_record_to_raw_event(rec)
 
     def test_raw_event_to_record_roundtrip(self):
         event = RawEvent(

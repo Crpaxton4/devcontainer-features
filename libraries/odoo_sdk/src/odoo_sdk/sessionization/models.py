@@ -29,6 +29,7 @@ class EventType(Enum):
     MERGE = auto()
     REVIEW = auto()
     AGENT = auto()
+    CLAUDE_HOOK = auto()  # Claude Code hook activity (source ``claude:<HookName>``)
 
 
 @dataclass

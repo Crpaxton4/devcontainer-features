@@ -9,12 +9,19 @@ Subcommands:
     stop-all                Force-stop all active runs
     report [--all]          Formatted table of runs
     normalize [--apply]     Detect and merge duplicate timesheet entries
+    log-event               Record a Claude Code hook event into local state
 """
 
 import argparse
+import json
 import sys
+from datetime import datetime, timezone
+from typing import Optional
 
+from odoo_sdk.adapters import UnknownEventSourceError, source_to_event_type
 from odoo_sdk.client import OdooClient
+from odoo_sdk.sessionization import EventType
+from odoo_sdk.state import EventRecord, ProjectIdError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
 from odoo_sdk.utilities.env import (
@@ -22,6 +29,10 @@ from odoo_sdk.utilities.env import (
     assert_odoo_devcontainer,
 )
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
+
+# Subcommands that operate purely on local state: they need no Odoo devcontainer
+# and construct no OdooClient. Claude Code hooks call these from arbitrary cwds.
+_LOCAL_ONLY = {"log-event"}
 
 
 def _assert_env() -> None:
@@ -172,6 +183,78 @@ def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient)
         print("\nDry run — pass --apply to execute the merge.")
 
 
+def _parse_timestamp(value: str) -> datetime:
+    """Parse an ISO-8601 ``--timestamp`` value (argparse type function).
+
+    :raises argparse.ArgumentTypeError: When ``value`` is not ISO-8601, so
+        argparse reports the error and exits with status 2.
+    """
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid ISO-8601 timestamp: {value!r}"
+        ) from exc
+
+
+def _resolve_source(source: str) -> EventType:
+    """Validate ``--source`` via the strict resolver; exit 2 if unknown."""
+    try:
+        return source_to_event_type(source)
+    except UnknownEventSourceError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _parse_payload(raw: Optional[str]) -> Optional[dict]:
+    """Parse the optional ``--payload`` JSON object; exit 2 if malformed."""
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid --payload JSON: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(parsed, dict):
+        print("Error: --payload must be a JSON object.", file=sys.stderr)
+        sys.exit(2)
+    return parsed
+
+
+def _open_local_db() -> TaskStateDB:
+    """Open the cwd-resolved local state DB, or exit 0 when not a git repo.
+
+    Hooks run in arbitrary working directories; a non-git cwd is expected, not
+    an error. A nonzero exit would degrade the Claude Code session, so we emit a
+    one-line notice and exit 0 without writing an event.
+    """
+    try:
+        return TaskStateDB()
+    except ProjectIdError as exc:
+        print(f"Notice: {exc} Skipping event log.", file=sys.stderr)
+        sys.exit(0)
+
+
+def cmd_log_event(args: argparse.Namespace) -> None:
+    """Record a single Claude Code hook event into the local ``events`` table."""
+    event_type = _resolve_source(args.source)
+    payload = _parse_payload(args.payload)
+    timestamp = args.timestamp or datetime.now(timezone.utc)
+    db = _open_local_db()
+    db.add_event(
+        EventRecord(
+            id=None,
+            source=args.source,
+            timestamp=timestamp,
+            task_ids=[str(task_id) for task_id in args.task_id],
+            repo="",
+            subject=args.subject,
+            payload=payload,
+        )
+    )
+    print(f"Logged event {args.source!r} ({event_type.name}).")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands declared.
 
@@ -197,6 +280,31 @@ def _build_parser() -> argparse.ArgumentParser:
     normalize_p = subparsers.add_parser("normalize", help="Merge duplicate timesheets")
     normalize_p.add_argument(
         "--apply", action="store_true", help="Execute merge (default: dry run)"
+    )
+
+    log_p = subparsers.add_parser(
+        "log-event", help="Record a Claude Code hook event into local state"
+    )
+    log_p.add_argument(
+        "--source", required=True, help="Event source, e.g. claude:SessionStart"
+    )
+    log_p.add_argument("--subject", default="", help="Human-readable event subject")
+    log_p.add_argument(
+        "--task-id",
+        action="append",
+        type=int,
+        default=[],
+        dest="task_id",
+        help="Task id to attribute the event to (repeatable)",
+    )
+    log_p.add_argument(
+        "--payload", default=None, help="Optional JSON object string of extra fields"
+    )
+    log_p.add_argument(
+        "--timestamp",
+        type=_parse_timestamp,
+        default=None,
+        help="ISO-8601 event time (default: now, UTC)",
     )
     return parser
 
@@ -231,11 +339,14 @@ def _dispatch(
 
 
 def main() -> None:
-    _assert_env()
     parser = _build_parser()
     args = parser.parse_args()
     if args.command is None:
         args.command = "list"
+    if args.command in _LOCAL_ONLY:
+        cmd_log_event(args)
+        return
+    _assert_env()
     _dispatch(parser, TaskStateDB(), args)
 
 
