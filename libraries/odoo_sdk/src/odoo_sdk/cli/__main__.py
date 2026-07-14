@@ -10,6 +10,8 @@ Subcommands:
     report [--all]          Formatted table of runs
     normalize [--apply]     Detect and merge duplicate timesheet entries
     log-event               Record a Claude Code hook event into local state
+    discover                List all tracker projects and their active runs
+    abort <hash> <run_id>   Abort a stale run in another project's DB
 """
 
 import argparse
@@ -20,10 +22,12 @@ from typing import Optional
 
 from odoo_sdk.adapters import UnknownEventSourceError, source_to_event_type
 from odoo_sdk.client import OdooClient
+from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import EventRecord, ProjectIdError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
+from odoo_sdk.state.discovery import discover_projects
 from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
@@ -31,8 +35,9 @@ from odoo_sdk.utilities.env import (
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
 
 # Subcommands that operate purely on local state: they need no Odoo devcontainer
-# and construct no OdooClient. Claude Code hooks call these from arbitrary cwds.
-_LOCAL_ONLY = {"log-event"}
+# and construct no OdooClient. Claude Code hooks call these from arbitrary cwds,
+# and ``discover`` only reads local tracker DBs.
+_LOCAL_ONLY = {"log-event", "discover"}
 
 
 def _assert_env() -> None:
@@ -272,6 +277,64 @@ def cmd_log_event(args: argparse.Namespace) -> None:
     print(f"Logged event {args.source!r} ({event_type.name}).")
 
 
+def _discover_run_line(project: dict, run: dict) -> str:
+    """Format one active run row for the ``discover`` table."""
+    flag = "STALE" if run["stale"] else ""
+    return "  ".join(
+        [
+            f"{project['project_hash']:<16}",
+            f"{project['repo_label'][:25]:<25}",
+            f"[{run['run_id']}]",
+            f"{run['task_name'][:30]:<30}",
+            f"{run['state']:<18}",
+            f"{run['started_at'][:19]:<19}",
+            f"{flag:<5}",
+        ]
+    )
+
+
+def cmd_discover(args: argparse.Namespace) -> None:
+    """List every tracker project and its active runs across all local DBs."""
+    projects = discover_projects(stale_after_hours=args.stale_after_hours)
+    if not projects:
+        print("No task-tracker projects found.")
+        return
+    header = (
+        f"{'Project Hash':<16}  {'Repo':<25}  {'[ID]':<5}  {'Task':<30}  "
+        f"{'State':<18}  {'Started':<19}  Flag"
+    )
+    print(header)
+    print("-" * len(header))
+    for project in projects:
+        if project.get("note"):
+            print(f"{project['project_hash']:<16}  {project['note']}")
+            continue
+        if not project["active_runs"]:
+            print(
+                f"{project['project_hash']:<16}  {project['repo_label'][:25]:<25}  "
+                "(no active runs)"
+            )
+            continue
+        for run in project["active_runs"]:
+            print(_discover_run_line(project, run))
+
+
+def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
+    """Abort a stale run in another project's DB and close its Odoo anchor."""
+    result = AbortRunCommand(client).execute(args.project_hash, args.run_id)
+    if result["already_stopped"]:
+        print(
+            f"Run {result['run_id']} in {result['project_hash']} is already "
+            "stopped; nothing to abort."
+        )
+        return
+    anchor = "closed" if result["anchor_closed"] else "left untouched"
+    print(
+        f"Aborted run {result['run_id']} ({result['task_name']!r}) in "
+        f"{result['project_hash']}; anchor {anchor}."
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands declared.
 
@@ -330,6 +393,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ISO-8601 event time (default: now, UTC)",
     )
+
+    discover_p = subparsers.add_parser(
+        "discover", help="List all tracker projects and their active runs"
+    )
+    discover_p.add_argument(
+        "--stale-after-hours",
+        type=float,
+        default=12.0,
+        dest="stale_after_hours",
+        help="Flag active runs started before this many hours ago (default: 12)",
+    )
+
+    abort_p = subparsers.add_parser(
+        "abort", help="Abort a stale run in another project's DB"
+    )
+    abort_p.add_argument("project_hash", help="Project hash from 'discover'")
+    abort_p.add_argument("run_id", type=int, help="Run id (or task id) to abort")
     return parser
 
 
@@ -357,9 +437,23 @@ def _dispatch(
         cmd_report(db, args)
     elif args.command == "normalize":
         cmd_normalize(db, args, OdooClient())
+    elif args.command == "abort":
+        cmd_abort(args, OdooClient())
     else:
         parser.print_help()
         sys.exit(1)
+
+
+def _dispatch_local_only(args: argparse.Namespace) -> None:
+    """Route a local-only command that constructs no OdooClient.
+
+    These subcommands read (and, for ``log-event``, write) only local tracker
+    state, so they skip the devcontainer assert and never build an OdooClient.
+    """
+    if args.command == "discover":
+        cmd_discover(args)
+    else:
+        cmd_log_event(args)
 
 
 def main() -> None:
@@ -368,7 +462,7 @@ def main() -> None:
     if args.command is None:
         args.command = "list"
     if args.command in _LOCAL_ONLY:
-        cmd_log_event(args)
+        _dispatch_local_only(args)
         return
     _assert_env()
     _dispatch(parser, TaskStateDB(), args)

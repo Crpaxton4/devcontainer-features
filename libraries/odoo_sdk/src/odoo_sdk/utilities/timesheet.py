@@ -32,6 +32,11 @@ from odoo_sdk.state import EventRecord, LocalStateClient
 # repeated ``ensure_anchor`` adopt the existing row rather than duplicate it.
 ANCHOR_NAME = "[/] Work in progress"
 
+# The name written onto an anchor when a stale orphaned run is aborted across
+# DBs (#331). Distinct from ``ANCHOR_NAME`` so a closed-out orphan is never
+# re-adopted by a later ``ensure_anchor``.
+ABORTED_ANCHOR_NAME = "[/] aborted stale run"
+
 
 def emit_agent_event(
     state: LocalStateClient,
@@ -177,6 +182,37 @@ def reconcile(
         {"unit_amount": elapsed_hours, "name": description},
     )
     return timesheet_id
+
+
+def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
+    """Close out an orphaned anchor timesheet row after a stale-run abort (#331).
+
+    Reads the ``account.analytic.line`` row and rewrites it to
+    ``{"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0}`` **only** when its name
+    is still the unreconciled :data:`ANCHOR_NAME` marker — a row a human has
+    since edited (any other name) is left untouched, never clobbered. The SDK
+    never deletes records, so the row is retired in place rather than removed.
+
+    :param client: The Odoo API client (the only writer of the timesheet row).
+    :param timesheet_id: The anchor row id to close, or ``None`` for a run that
+        never had one.
+    :return: ``True`` when the row was closed; ``False`` when there is no id, no
+        such row, or the row was already edited/closed.
+    """
+    if timesheet_id is None:
+        return False
+    rows = client.execute(
+        "account.analytic.line", "read", [timesheet_id], fields=["name"]
+    )
+    if not rows or rows[0].get("name") != ANCHOR_NAME:
+        return False
+    client.execute(
+        "account.analytic.line",
+        "write",
+        [timesheet_id],
+        {"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0},
+    )
+    return True
 
 
 def _resolve_anchor_id(
