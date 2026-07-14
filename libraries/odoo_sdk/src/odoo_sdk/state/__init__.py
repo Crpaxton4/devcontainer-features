@@ -16,6 +16,7 @@ from .models import (
     TaskNotRunningError,
     TaskRun,
     TaskState,
+    session_key,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "TaskRun",
     "EventRecord",
     "SessionWindow",
+    "session_key",
     "TaskAlreadyRunningError",
     "TaskNotRunningError",
     "InvalidStateTransitionError",

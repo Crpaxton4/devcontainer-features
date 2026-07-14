@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from odoo_sdk.sessionization.incremental import AGENTLESS_REPO_SENTINEL
+
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
@@ -83,6 +85,71 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
+
+-- Idempotency ledger for the SQL-derived per-session timesheet uploads. Each
+-- derived session's stable key maps to the single account.analytic.line row it
+-- was reconciled onto, so a re-upload rewrites that row rather than duplicating.
+CREATE TABLE IF NOT EXISTS session_uploads (
+    session_key  TEXT PRIMARY KEY,
+    timesheet_id INTEGER NOT NULL,
+    hours        REAL NOT NULL,
+    uploaded_at  TEXT NOT NULL
+);
+"""
+
+
+# Sources whose events participate in gap-based sessionization. Matches the
+# development-strategy sources: ``commit``, ``agent``, future ``chatter`` resync
+# events, plus the open-ended ``claude:<HookName>`` family (EventType.CLAUDE_HOOK).
+# ``merge`` / ``review`` are fixed-strategy sources and never form sessions here.
+_SESSION_SOURCE_PREDICATE = (
+    "(source IN ('commit', 'agent', 'chatter') OR source LIKE 'claude:%')"
+)
+
+
+# CTE that reproduces the legacy gap-based sessionization directly over ``events``
+# at query time. The inactivity gap is bound at execution (SQLite views cannot
+# take a parameter), so zero materialization/staleness exists for any producer.
+# The consecutive-event delta is ``ROUND``ed to whole seconds before the gap
+# comparison: ``julianday`` arithmetic carries a float epsilon that would
+# otherwise make two events *exactly* ``gap_secs`` apart read as > the gap and
+# spuriously split. Event timestamps are second-resolution for sessionization, so
+# rounding is exact at the boundary and matches the legacy ``total_seconds()`` cut.
+_DERIVE_SESSIONS_SQL = f"""
+WITH base AS (
+    SELECT id, timestamp, pr_num,
+           julianday(timestamp) AS jd,
+           COALESCE(NULLIF(json_extract(task_ids, '$[0]'), ''), 'UNKNOWN') AS task_key,
+           CASE WHEN repo = '' THEN :sentinel ELSE repo END AS repo_key
+    FROM events
+    WHERE {_SESSION_SOURCE_PREDICATE}
+      AND json_array_length(task_ids) > 0
+),
+marked AS (
+    SELECT *,
+           CASE WHEN LAG(jd) OVER w IS NULL
+                  OR ROUND((jd - LAG(jd) OVER w) * 86400.0) > :gap_secs
+                THEN 1 ELSE 0 END AS is_start
+    FROM base
+    WINDOW w AS (PARTITION BY task_key, repo_key ORDER BY jd, id)
+),
+numbered AS (
+    SELECT *,
+           SUM(is_start) OVER (PARTITION BY task_key, repo_key
+                               ORDER BY jd, id ROWS UNBOUNDED PRECEDING) AS session_num
+    FROM marked
+)
+SELECT task_key, repo_key,
+       MIN(id)            AS session_key_id,
+       MIN(timestamp)     AS started_at,
+       MAX(timestamp)     AS ended_at,
+       MAX(pr_num)        AS pr_num,
+       json_group_array(id) AS event_ids
+FROM numbered
+GROUP BY task_key, repo_key, session_num
+HAVING started_at <= :end AND ended_at >= :start
+{{extra}}
+ORDER BY started_at
 """
 
 
@@ -230,6 +297,29 @@ _EVENT_COLUMNS = (
 )
 
 
+def _normalize_utc_isoformat(ts: datetime) -> str:
+    """Return ``ts`` as a uniform UTC isoformat string.
+
+    The SQL-derived read path compares ``MIN/MAX(timestamp)`` as *strings*, which
+    is only correct when every stored timestamp shares one UTC offset. An aware
+    timestamp is converted to UTC; a naive one is treated as already-UTC and
+    stamped with ``+00:00`` so all rows sort and compare uniformly.
+    """
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc).isoformat()
+    return ts.astimezone(timezone.utc).isoformat()
+
+
+def _bound_isoformat(ts: datetime) -> str:
+    """Return a query bound as an isoformat string comparable to stored rows.
+
+    Aware bounds are normalized to UTC to match the uniform-UTC stored strings;
+    naive bounds (``datetime.min``/``datetime.max`` sentinels from the query
+    layer) are passed through unchanged so open-ended ranges keep working.
+    """
+    return _normalize_utc_isoformat(ts) if ts.tzinfo else ts.isoformat()
+
+
 def _parse_event(row: tuple) -> EventRecord:
     (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload, session_id) = row
     return EventRecord(
@@ -263,6 +353,33 @@ def _parse_session_window(row: tuple) -> SessionWindow:
         strategy_name=strategy,
         category=category,
         pr_num=pr_num,
+    )
+
+
+def _parse_derived_window(row: tuple) -> SessionWindow:
+    """Build a :class:`SessionWindow` from a ``derive_sessions_overlapping`` row.
+
+    The derived row carries ``(task_key, repo_key, session_key_id, started_at,
+    ended_at, pr_num, event_ids)`` where ``event_ids`` is a JSON array. Derived
+    windows are always the ``development`` strategy; ``id`` is the session's
+    minimum event id (stable under append-only tail writes).
+
+    ``event_ids`` is sorted ascending in Python: ``json_group_array`` has no
+    order guarantee (SQLite < 3.44 rejects an aggregate ``ORDER BY``), so sorting
+    by id — which is monotonic with insertion — gives a deterministic order for
+    the bulk event fetch instead of relying on the group-scan order.
+    """
+    (task_key, repo_key, session_key_id, started, ended, pr_num, event_ids_json) = row
+    return SessionWindow(
+        id=session_key_id,
+        task_id=task_key,
+        repo=repo_key,
+        started_at=datetime.fromisoformat(started),
+        ended_at=datetime.fromisoformat(ended),
+        strategy_name="development",
+        category="Development",
+        pr_num=pr_num,
+        event_ids=tuple(sorted(json.loads(event_ids_json))),
     )
 
 
@@ -465,7 +582,7 @@ class LocalStateClient:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event.source,
-                    event.timestamp.isoformat(),
+                    _normalize_utc_isoformat(event.timestamp),
                     json.dumps(event.task_ids),
                     event.repo,
                     event.pr_num,
@@ -648,6 +765,141 @@ class LocalStateClient:
                 tuple(params),
             ).fetchall()
         return [_parse_session_window(tuple(r)) for r in rows]
+
+    def derive_sessions_overlapping(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        gap_secs: int,
+        task_id: Optional[str] = None,
+        repo: Optional[str] = None,
+    ) -> list[SessionWindow]:
+        """Derive whole sessions overlapping ``[start, end]`` directly from events.
+
+        Gap-based sessionization is computed in one CTE over the ``events`` table
+        at query time — the inactivity gap is bound at execution — so there is no
+        materialized ``sessions`` table to go stale for any producer. A session is
+        a maximal run of a ``(task, repo)`` group's events where every consecutive
+        pair is at most ``gap_secs`` apart; it is returned whole (its true global
+        bounds), never clipped, so cross-day and cross-range sessions read
+        identically through any overlapping window.
+
+        Only development-strategy sources participate (``commit``/``agent``/
+        ``chatter`` and the ``claude:<HookName>`` family); ``merge``/``review`` are
+        excluded. Every derived window is ``strategy_name='development'`` /
+        ``category='Development'``.
+
+        **Intentional behavior delta:** events carrying *no* task ids (e.g. most
+        MCP-wrapper dispatch events) are stored as diagnostics but NEVER form a
+        session — they are filtered out (``json_array_length(task_ids) > 0``).
+
+        :param start: Inclusive lower bound of the overlap window.
+        :param end: Inclusive upper bound of the overlap window.
+        :param gap_secs: The fixed inactivity gap in seconds.
+        :param task_id: Restrict to one task id (the group's first task id), or None.
+        :param repo: Restrict to one repo key, or None. Repo-less events group
+            under :data:`AGENTLESS_REPO_SENTINEL`; pass it to select those.
+        :return: Overlapping derived windows ordered by start time.
+        """
+        params: dict[str, object] = {
+            "sentinel": AGENTLESS_REPO_SENTINEL,
+            "gap_secs": gap_secs,
+            "start": _bound_isoformat(start),
+            "end": _bound_isoformat(end),
+        }
+        extra = ""
+        if task_id is not None:
+            extra += " AND task_key = :task_id"
+            params["task_id"] = task_id
+        if repo is not None:
+            extra += " AND repo_key = :repo"
+            params["repo"] = repo
+        sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_parse_derived_window(tuple(r)) for r in rows]
+
+    def get_events_by_ids(self, ids: list[int]) -> list[EventRecord]:
+        """Return the events with the given ids, in the order requested.
+
+        A bulk fetch used by the derived read path to embed a session's events.
+        Ids with no matching row are silently skipped; the returned order mirrors
+        ``ids`` (not the table order) so a session's events stay in derivation
+        order.
+        """
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM events WHERE id IN ({placeholders})",
+                tuple(ids),
+            ).fetchall()
+        by_id = {row[0]: _parse_event(tuple(row)) for row in rows}
+        return [by_id[i] for i in ids if i in by_id]
+
+    def count_events(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> int:
+        """Return the number of events, optionally bounded by ``[start, end)``."""
+        clauses: list[str] = []
+        params: list[str] = []
+        if start is not None:
+            clauses.append("timestamp >= ?")
+            params.append(_bound_isoformat(start))
+        if end is not None:
+            clauses.append("timestamp < ?")
+            params.append(_bound_isoformat(end))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM events{where}", tuple(params)
+            ).fetchone()
+        return int(row[0])
+
+    def get_session_upload(self, session_key: str) -> Optional[dict]:
+        """Return the recorded upload for a derived session key, or None.
+
+        The mapping is the idempotency record for per-session timesheet uploads:
+        it ties a session's stable key to the single ``account.analytic.line`` id
+        it was reconciled onto.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT session_key, timesheet_id, hours, uploaded_at "
+                "FROM session_uploads WHERE session_key = ?",
+                (session_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "session_key": row[0],
+            "timesheet_id": row[1],
+            "hours": row[2],
+            "uploaded_at": row[3],
+        }
+
+    def record_session_upload(
+        self, session_key: str, timesheet_id: int, hours: float
+    ) -> None:
+        """Upsert the upload mapping for a derived session key.
+
+        Idempotent: re-recording the same key overwrites the mapped timesheet id,
+        hours, and timestamp rather than inserting a second row.
+        """
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO session_uploads (session_key, timesheet_id, hours, uploaded_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(session_key) DO UPDATE SET "
+                "timesheet_id = excluded.timesheet_id, hours = excluded.hours, "
+                "uploaded_at = excluded.uploaded_at",
+                (session_key, timesheet_id, hours, uploaded_at),
+            )
 
     def clear_session_windows(self) -> None:
         """Delete all computed session windows (a fresh materialization).

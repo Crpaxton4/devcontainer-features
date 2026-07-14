@@ -31,6 +31,7 @@ def _sessions(n=2):
     return [
         {
             "session_id": i,
+            "session_key": f"{100 + i}|acme/web|{i}",
             "task_id": str(100 + i),
             "repo": "acme/web",
             "strategy_name": "development",
@@ -184,7 +185,7 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
             resolved = confirm_upload(state, registry, confirmed=False)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("cancelled", resolved.status)
@@ -195,11 +196,11 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
             resolved = confirm_upload(state, registry, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
-        # One reconcile (the sole timesheet writer) per queried session.
+        # One reconcile_session (the sole hours-writer) per derived session.
         self.assertEqual(mock_reconcile.call_count, 2)
 
 
@@ -214,28 +215,38 @@ class TestUploadSessions(unittest.TestCase):
         registry = _registry()
         sessions = _sessions(1)
         sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 99})
-        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
             count = _upload_sessions(registry, sessions)
         self.assertEqual(count, 1)  # only the numeric one is billed
         self.assertEqual(mock_reconcile.call_count, 1)
 
     def test_upload_reconciles_once_per_session(self):
-        # Each session drives exactly one reconcile (idempotent single-writer).
+        # Each session drives exactly one reconcile_session (idempotent per key).
         registry = _registry()
-        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
             _upload_sessions(registry, _sessions(3))
         self.assertEqual(mock_reconcile.call_count, 3)
 
-    def test_reconcile_receives_task_id_and_elapsed_hours(self):
+    def test_reconcile_receives_identity_hours_and_day(self):
         registry = _registry()
         sessions = [
-            {"session_id": 5, "task_id": "100", "duration_secs": 7200, "events": []}
+            {
+                "session_id": 5,
+                "session_key": "100|acme/web|5",
+                "task_id": "100",
+                "duration_secs": 7200,
+                "started_at": "2026-06-01T09:00:00",
+                "events": [],
+            }
         ]
-        with patch("odoo_sdk.tui.app.reconcile") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
             _upload_sessions(registry, sessions)
         args = mock_reconcile.call_args.args
         self.assertEqual(args[2], 100)  # numeric task id
-        self.assertEqual(args[4], 2.0)  # 7200s -> 2.0h
+        self.assertEqual(args[3], "100|acme/web|5")  # stable session key
+        self.assertEqual(args[4], "[/] session 100|acme/web|5")  # description
+        self.assertEqual(args[5], 2.0)  # 7200s -> 2.0h
+        self.assertEqual(args[6], date(2026, 6, 1))  # started_at date
 
 
 class TestHandleKey(unittest.TestCase):

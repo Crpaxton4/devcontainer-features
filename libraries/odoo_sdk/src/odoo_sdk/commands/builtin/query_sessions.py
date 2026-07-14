@@ -12,10 +12,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from odoo_sdk.state import SessionWindow
+from odoo_sdk.state import SessionWindow, session_key
 
 from ..command import Command
 from ._registration import builtin_command
+
+# Derived sessions are all the development strategy; any other requested strategy
+# name matches nothing (kept as a filter parameter for API compatibility).
+_DERIVED_STRATEGY = "development"
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -76,13 +80,15 @@ class QuerySessionsCommand(Command):
         :param include_events: When True, embed each session's linked events.
         :return: A list of session dicts ordered by start time.
         """
+        if strategy_name is not None and strategy_name != _DERIVED_STRATEGY:
+            return []
         lo, hi = _range_bounds(start_date, end_date)
-        sessions = self.state.get_sessions_overlapping(
+        sessions = self.state.derive_sessions_overlapping(
             lo,
             hi,
+            gap_secs=self.config.session_gap_secs,
             task_id=task_id,
             repo=repo,
-            strategy_name=strategy_name,
         )
         return [self._render(session, include_events) for session in sessions]
 
@@ -90,6 +96,7 @@ class QuerySessionsCommand(Command):
         """Render one session (and optionally its events) as a summary dict."""
         summary: dict[str, Any] = {
             "session_id": session.id,
+            "session_key": session_key(session),
             "task_id": session.task_id,
             "repo": session.repo,
             "strategy_name": session.strategy_name,
@@ -99,13 +106,11 @@ class QuerySessionsCommand(Command):
             "duration_secs": session.duration_seconds,
         }
         if include_events:
-            summary["events"] = self._events_for(session.id)
+            summary["events"] = self._events_for(session.event_ids)
         return summary
 
-    def _events_for(self, session_id: Optional[int]) -> list[dict[str, Any]]:
-        """Return the linked events for one session as summary dicts."""
-        if session_id is None:
-            return []
+    def _events_for(self, event_ids: tuple[int, ...]) -> list[dict[str, Any]]:
+        """Return the derived session's events as summary dicts, in order."""
         return [
             {
                 "event_id": record.id,
@@ -114,5 +119,5 @@ class QuerySessionsCommand(Command):
                 "task_ids": record.task_ids,
                 "repo": record.repo,
             }
-            for record in self.state.get_events_for_session(session_id)
+            for record in self.state.get_events_by_ids(list(event_ids))
         ]

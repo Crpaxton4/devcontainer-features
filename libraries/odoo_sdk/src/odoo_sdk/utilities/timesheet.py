@@ -28,6 +28,8 @@ from typing import Any, Optional
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
 
+from .odoo_helpers import get_employee_id
+
 # The marker name every anchor row carries. Reusing the marker is what lets a
 # repeated ``ensure_anchor`` adopt the existing row rather than duplicate it.
 ANCHOR_NAME = "[/] Work in progress"
@@ -36,6 +38,22 @@ ANCHOR_NAME = "[/] Work in progress"
 # DBs (#331). Distinct from ``ANCHOR_NAME`` so a closed-out orphan is never
 # re-adopted by a later ``ensure_anchor``.
 ABORTED_ANCHOR_NAME = "[/] aborted stale run"
+
+
+def resolve_employee_id(client: OdooClient, state: LocalStateClient) -> int:
+    """Return the ``hr.employee`` id for the authenticated user, caching it.
+
+    Moved out of ``start_task`` so the timesheet module (the sole
+    ``account.analytic.line`` writer) can create a fresh session line without
+    reaching back into a command. The id is cached in the local settings on first
+    fetch so subsequent calls avoid the Odoo round-trip.
+    """
+    cached = state.get_setting("employee_id")
+    if cached is not None:
+        return int(cached)
+    employee_id = get_employee_id(client, client.uid)
+    state.set_setting("employee_id", str(employee_id))
+    return employee_id
 
 
 def emit_agent_event(
@@ -228,3 +246,84 @@ def _resolve_anchor_id(
     if run is not None and run.timesheet_id is not None:
         return run.timesheet_id
     return _find_anchor(client, task_id)
+
+
+def _write_line(client: OdooClient, timesheet_id: int, vals: dict) -> None:
+    """Write ``vals`` onto one ``account.analytic.line`` row (scalar-id safe)."""
+    client.execute("account.analytic.line", "write", [timesheet_id], vals)
+
+
+def _project_id_for(client: OdooClient, task_id: int) -> int:
+    """Return the ``project.project`` id owning a ``project.task``."""
+    rows = client.execute("project.task", "read", [task_id], fields=["project_id"])
+    project = rows[0]["project_id"]
+    return project[0] if isinstance(project, (list, tuple)) else project
+
+
+def _create_session_line(
+    client: OdooClient,
+    state: LocalStateClient,
+    task_id: int,
+    description: str,
+    hours: float,
+    day: date,
+) -> int:
+    """Create a fresh billed ``account.analytic.line`` for a derived session."""
+    vals = {
+        "name": description,
+        "unit_amount": hours,
+        "project_id": _project_id_for(client, task_id),
+        "task_id": task_id,
+        "date": day.isoformat(),
+        "employee_id": resolve_employee_id(client, state),
+    }
+    return _scalar_id(client.execute("account.analytic.line", "create", vals))
+
+
+def reconcile_session(
+    client: OdooClient,
+    state: LocalStateClient,
+    task_id: int,
+    session_key: str,
+    description: str,
+    hours: float,
+    day: date,
+) -> int:
+    """Idempotently write one derived session's hours onto a single timesheet row.
+
+    This is the sole hours-writer for the SQL-derived upload path (#330). It
+    resolves the one ``account.analytic.line`` a session maps to and writes the
+    hours/description onto it, in three precedence tiers:
+
+    1. **Mapped** — a prior upload for ``session_key`` is recorded; its timesheet
+       row is rewritten (hours/description) and the mapping's hours updated.
+    2. **Adopt** — no mapping yet, but an unreconciled ``[/] Work in progress``
+       anchor exists for the task (the 0-hour row ``start_task`` created); it is
+       adopted (hours/description/date written) and the mapping recorded.
+    3. **Create** — otherwise a fresh billed line is created (project resolved
+       from the task, employee via :func:`resolve_employee_id`) and mapped.
+
+    Re-running with the same ``session_key`` always rewrites the same row, so the
+    upload is idempotent and never double-bills.
+
+    :return: The ``account.analytic.line`` id the session was reconciled onto.
+    """
+    mapped = state.get_session_upload(session_key)
+    if mapped is not None:
+        timesheet_id = mapped["timesheet_id"]
+        _write_line(client, timesheet_id, {"unit_amount": hours, "name": description})
+    else:
+        anchor = _find_anchor(client, task_id)
+        if anchor is not None:
+            timesheet_id = anchor
+            _write_line(
+                client,
+                timesheet_id,
+                {"unit_amount": hours, "name": description, "date": day.isoformat()},
+            )
+        else:
+            timesheet_id = _create_session_line(
+                client, state, task_id, description, hours, day
+            )
+    state.record_session_upload(session_key, timesheet_id, hours)
+    return timesheet_id

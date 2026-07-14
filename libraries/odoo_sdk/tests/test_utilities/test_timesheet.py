@@ -22,6 +22,8 @@ from odoo_sdk.utilities.timesheet import (
     emit_agent_event,
     ensure_anchor,
     reconcile,
+    reconcile_session,
+    resolve_employee_id,
 )
 
 
@@ -236,6 +238,138 @@ class _StrictBrowseHashExecutor(OdooExecutor):
             {rec_id: None for rec_id in ids}
             return True
         raise AssertionError(f"unexpected call: {model}.{method}")
+
+
+class _SessionExecutor(OdooExecutor):
+    """Fake executor for the ``reconcile_session`` create/adopt/write flow.
+
+    ``search_read`` on ``account.analytic.line`` returns the seeded anchor rows;
+    ``search_read`` on ``hr.employee`` resolves an employee id; ``read`` on
+    ``project.task`` resolves the owning project; ``create`` mimics the scalar-id
+    semantics. Every call is recorded so branch selection can be asserted.
+    """
+
+    def __init__(self, anchors: list[dict] | None = None, new_id: int = 500):
+        self._anchors = anchors or []
+        self._new_id = new_id
+        self.calls: list[tuple] = []
+        self.uid = 1
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((model, method, args, kwargs))
+        if model == "hr.employee" and method == "search_read":
+            return [{"id": 7}]
+        if model == "project.task" and method == "read":
+            return [{"id": args[0][0], "project_id": [9, "Proj"]}]
+        if method == "search_read":
+            return list(self._anchors)
+        if method == "create":
+            return self._new_id
+        if method == "write":
+            return True
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+    def by_method(self, method: str) -> list[tuple]:
+        return [c for c in self.calls if c[1] == method]
+
+
+class TestResolveEmployeeId(unittest.TestCase):
+    def test_fetches_and_caches(self):
+        executor = _SessionExecutor()
+        client = OdooClient(executor=executor)
+        db = _tmp_db()
+        first = resolve_employee_id(client, db)
+        self.assertEqual(first, 7)
+        self.assertEqual(db.get_setting("employee_id"), "7")
+        # Second call is served from cache: no further hr.employee lookup.
+        second = resolve_employee_id(client, db)
+        self.assertEqual(second, 7)
+        lookups = [c for c in executor.calls if c[0] == "hr.employee"]
+        self.assertEqual(len(lookups), 1)
+
+    def test_uses_cached_value(self):
+        executor = _SessionExecutor()
+        client = OdooClient(executor=executor)
+        db = _tmp_db()
+        db.set_setting("employee_id", "42")
+        self.assertEqual(resolve_employee_id(client, db), 42)
+        self.assertEqual([c for c in executor.calls if c[0] == "hr.employee"], [])
+
+
+class TestReconcileSession(unittest.TestCase):
+    def _client(self, **kw):
+        executor = _SessionExecutor(**kw)
+        return OdooClient(executor=executor), executor
+
+    def test_creates_fresh_line_when_no_mapping_or_anchor(self):
+        client, executor = self._client(anchors=[], new_id=500)
+        db = _tmp_db()
+        tid = reconcile_session(
+            client, db, task_id=10, session_key="10|r|1",
+            description="[/] session 10|r|1", hours=1.5, day=date(2026, 7, 1),
+        )
+        self.assertEqual(tid, 500)
+        creates = executor.by_method("create")
+        self.assertEqual(len(creates), 1)
+        vals = creates[0][2][0]
+        self.assertEqual(vals["project_id"], 9)
+        self.assertEqual(vals["task_id"], 10)
+        self.assertEqual(vals["employee_id"], 7)
+        self.assertEqual(vals["unit_amount"], 1.5)
+        self.assertEqual(vals["date"], "2026-07-01")
+        # Mapping recorded for idempotent re-runs.
+        self.assertEqual(db.get_session_upload("10|r|1")["timesheet_id"], 500)
+
+    def test_adopts_existing_anchor(self):
+        client, executor = self._client(anchors=[{"id": 88}])
+        db = _tmp_db()
+        tid = reconcile_session(
+            client, db, task_id=10, session_key="10|r|1",
+            description="[/] done", hours=2.0, day=date(2026, 7, 2),
+        )
+        self.assertEqual(tid, 88)
+        self.assertEqual(executor.by_method("create"), [])  # adopts, never creates
+        writes = executor.by_method("write")
+        self.assertEqual(len(writes), 1)
+        ids_arg, vals_arg = writes[0][2]
+        self.assertEqual(ids_arg, [88])
+        self.assertEqual(vals_arg["unit_amount"], 2.0)
+        self.assertEqual(vals_arg["name"], "[/] done")
+        self.assertEqual(vals_arg["date"], "2026-07-02")
+        self.assertEqual(db.get_session_upload("10|r|1")["timesheet_id"], 88)
+
+    def test_rewrites_mapped_row_ignoring_anchor(self):
+        # A recorded mapping wins over any anchor: the mapped row is rewritten.
+        client, executor = self._client(anchors=[{"id": 88}])
+        db = _tmp_db()
+        db.record_session_upload("10|r|1", 200, 1.0)
+        tid = reconcile_session(
+            client, db, task_id=10, session_key="10|r|1",
+            description="[/] x", hours=3.0, day=date(2026, 7, 3),
+        )
+        self.assertEqual(tid, 200)  # mapped id, not the anchor's 88
+        writes = executor.by_method("write")
+        self.assertEqual(writes[0][2][0], [200])
+        self.assertEqual(executor.by_method("create"), [])
+
+    def test_idempotent_rerun_rewrites_same_row(self):
+        client, executor = self._client(anchors=[], new_id=500)
+        db = _tmp_db()
+        first = reconcile_session(
+            client, db, task_id=10, session_key="10|r|1",
+            description="[/] a", hours=1.0, day=date(2026, 7, 1),
+        )
+        second = reconcile_session(
+            client, db, task_id=10, session_key="10|r|1",
+            description="[/] b", hours=2.5, day=date(2026, 7, 1),
+        )
+        self.assertEqual(first, second)  # same timesheet id
+        self.assertEqual(len(executor.by_method("create")), 1)  # created only once
+        # Second run rewrote the same row with updated hours.
+        self.assertEqual(db.get_session_upload("10|r|1")["hours"], 2.5)
+        last_write = executor.by_method("write")[-1]
+        self.assertEqual(last_write[2][0], [500])
+        self.assertEqual(last_write[2][1]["unit_amount"], 2.5)
 
 
 class TestEmitAgentEvent(unittest.TestCase):
