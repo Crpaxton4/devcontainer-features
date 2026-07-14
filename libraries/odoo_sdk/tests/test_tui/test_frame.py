@@ -99,6 +99,29 @@ class TestCompose(unittest.TestCase):
         frame = compose_frame(SESSIONS, WINDOW, 100, 24, stats=stats)
         self.assertIn("2 sessions", frame.rows[0])
 
+    def test_offset_aware_sessions_render_without_crash(self):
+        # Issue #333: sessions with +00:00 offsets are subtracted from the
+        # date-window bounds while rendering; this must not raise TypeError and
+        # must draw the session bar in the timeline panel.
+        aware = [
+            _session(
+                1,
+                "101",
+                "2026-06-01T09:00:00+00:00",
+                "2026-06-01T11:00:00+00:00",
+                7200,
+            )
+        ]
+        frame = compose_frame(aware, WINDOW, 100, 24)
+        body = "\n".join(frame.rows)
+        self.assertIn("█", body)
+        self.assertEqual(len(frame.rows), 24)
+
+    def test_naive_sessions_still_render(self):
+        # Naive stored timestamps (no offset) still render through the guard.
+        frame = compose_frame(SESSIONS, WINDOW, 100, 24)
+        self.assertIn("█", "\n".join(frame.rows))
+
     def test_many_lanes_do_not_overflow_panel(self):
         many = [
             _session(

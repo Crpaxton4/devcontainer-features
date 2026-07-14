@@ -101,8 +101,11 @@ def _timeline_lines(
     """Return the hero timeline body: one ``label | bar`` line per lane."""
     from datetime import datetime, time
 
-    start = datetime.combine(window.start, time.min)
-    end = datetime.combine(window.end, time.max)
+    # Bind the naive date window to the local timezone so the axis bounds are
+    # tz-aware; stored session timestamps carry offsets, and subtracting a naive
+    # bound from an aware timestamp raises TypeError (issue #333).
+    start = datetime.combine(window.start, time.min).astimezone()
+    end = datetime.combine(window.end, time.max).astimezone()
     label_width = min(22, max(8, inner_width // 3))
     bar_width = max(1, inner_width - label_width - 1)
     grid = build_timeline(sessions, start, end, bar_width)

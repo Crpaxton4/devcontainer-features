@@ -1,9 +1,9 @@
 """Tests for the pure timeline lane layout."""
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
-from odoo_sdk.tui.timeline import build_timeline
+from odoo_sdk.tui.timeline import _parse, build_timeline
 
 
 def _session(task, start, end, *, repo="acme/web", strategy="development", events=None):
@@ -116,6 +116,43 @@ class TestBuildTimeline(unittest.TestCase):
         ]
         grid = build_timeline(sessions, START, END, 40)
         self.assertEqual(grid.lanes[0].session_count, 2)
+
+    def test_aware_session_against_aware_bounds_paints_bar(self):
+        # Offset-carrying stored timestamps (issue #333) render against a
+        # tz-aware window without raising and land in a filled column.
+        aware_start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+        aware_end = datetime(2026, 6, 1, 23, 59, 59, tzinfo=timezone.utc)
+        sessions = [
+            _session(
+                "1", "2026-06-01T09:00:00+00:00", "2026-06-01T12:00:00+00:00"
+            )
+        ]
+        grid = build_timeline(
+            sessions, aware_start, aware_end, 48, show_ticks=False
+        )
+        self.assertIn("█", grid.rows[0])
+
+    def test_naive_session_coerced_against_aware_bounds(self):
+        # The _parse guard coerces naive stored timestamps to UTC so they can be
+        # subtracted from tz-aware bounds without a TypeError.
+        aware_start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+        aware_end = datetime(2026, 6, 1, 23, 59, 59, tzinfo=timezone.utc)
+        sessions = [_session("1", "2026-06-01T09:00:00", "2026-06-01T12:00:00")]
+        grid = build_timeline(
+            sessions, aware_start, aware_end, 48, show_ticks=False
+        )
+        self.assertIn("█", grid.rows[0])
+
+
+class TestParse(unittest.TestCase):
+    def test_naive_timestamp_coerced_to_utc(self):
+        parsed = _parse("2026-06-01T09:00:00")
+        self.assertEqual(parsed.tzinfo, timezone.utc)
+
+    def test_aware_timestamp_offset_preserved(self):
+        parsed = _parse("2026-06-01T09:00:00+00:00")
+        self.assertEqual(parsed.utcoffset().total_seconds(), 0.0)
+        self.assertIsNotNone(parsed.tzinfo)
 
 
 if __name__ == "__main__":

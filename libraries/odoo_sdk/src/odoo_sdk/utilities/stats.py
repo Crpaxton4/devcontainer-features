@@ -16,7 +16,7 @@ carry ``source`` and ``timestamp``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 Session = Mapping[str, Any]
@@ -48,8 +48,16 @@ class SessionStats:
 
 
 def _parse(ts: str) -> datetime:
-    """Parse an ISO-8601 timestamp string into a :class:`datetime`."""
-    return datetime.fromisoformat(ts)
+    """Parse an ISO-8601 timestamp string into a tz-aware :class:`datetime`.
+
+    Naive timestamps are coerced to UTC so mixing naive and offset-carrying
+    stored timestamps can never raise when the bounds/overlap math subtracts
+    them (#333).
+    """
+    parsed = datetime.fromisoformat(ts)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _bounds(sessions: Sequence[Session]) -> tuple[datetime, datetime] | None:

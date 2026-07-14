@@ -15,7 +15,7 @@ terminal.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 Session = Mapping[str, Any]
@@ -52,8 +52,24 @@ class TimelineGrid:
 
 
 def _parse(ts: str) -> datetime:
-    """Parse an ISO-8601 timestamp string into a :class:`datetime`."""
-    return datetime.fromisoformat(ts)
+    """Parse an ISO-8601 timestamp string into a tz-aware :class:`datetime`.
+
+    Naive timestamps are coerced to UTC so mixing naive and offset-carrying
+    stored timestamps can never raise on subtraction while rendering (#333).
+    """
+    parsed = datetime.fromisoformat(ts)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """Return ``dt`` unchanged if aware, else bound to UTC.
+
+    Parsed session timestamps are always tz-aware (see :func:`_parse`), so the
+    axis bounds must be aware too or subtracting them raises TypeError (#333).
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _to_column(ts: datetime, start: datetime, span_secs: float, width: int) -> int:
@@ -162,6 +178,8 @@ def build_timeline(
     """
     if width < 1:
         raise ValueError("build_timeline requires width >= 1")
+    start = _ensure_aware(start)
+    end = _ensure_aware(end)
     span_secs = (end - start).total_seconds()
     groups = _group_sessions(sessions)
     lanes: list[Lane] = []
