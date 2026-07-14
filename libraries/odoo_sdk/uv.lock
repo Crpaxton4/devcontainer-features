@@ -2918,10 +2918,11 @@ wheels = [
 
 [[package]]
 name = "odoo-sdk"
-version = "1.18.1"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "markdown-it-py" },
     { name = "markitdown", extra = ["docx", "pdf"] },
     { name = "pydantic" },
     { name = "toon-format" },
@@ -2975,6 +2976,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.2" },
+    { name = "markdown-it-py", specifier = ">=3.0.0" },
     { name = "markitdown", extras = ["docx", "pdf"], specifier = ">=0.1.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "toon-format", specifier = ">=0.9.0b1" },

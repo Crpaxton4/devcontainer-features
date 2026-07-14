@@ -277,11 +277,12 @@ class TestPostChatterNote(unittest.TestCase):
         client = _client()
         client.execute.return_value = 777
         result = post_chatter_note(client, task_id=5, body="Hello")
+        # Body is rendered from Markdown to HTML before posting (issue #324).
         client.execute.assert_called_once_with(
             "project.task",
             "message_post",
             [5],
-            body="Hello",
+            body="<p>Hello</p>",
             message_type="comment",
             subtype_xmlid="mail.mt_note",
         )
@@ -304,11 +305,25 @@ class TestPostChatterNote(unittest.TestCase):
             executor.recorded,
             {
                 "ids": [5],
-                "body": "Hello",
+                "body": "<p>Hello</p>",
                 "message_type": "comment",
                 "subtype_xmlid": "mail.mt_note",
             },
         )
+
+    def test_markdown_body_is_rendered_to_html(self):
+        # Regression for #324: a Markdown body must reach ``message_post`` as
+        # HTML so it renders formatted in the chatter instead of as literal
+        # Markdown text with collapsed newlines.
+        client = _client()
+        client.execute.return_value = 1
+        post_chatter_note(
+            client, task_id=5, body="**Summary**\n\n- one\n- two"
+        )
+        body = client.execute.call_args.kwargs["body"]
+        self.assertIn("<strong>Summary</strong>", body)
+        self.assertIn("<ul>", body)
+        self.assertIn("<li>one</li>", body)
 
 
 class _RecordingExecutor(OdooExecutor):

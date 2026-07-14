@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from odoo_sdk.client import OdooClient
 
-from .html import html_to_markdown
+from .html import html_to_markdown, markdown_to_html
 
 # Backwards-compatible private alias kept so existing tests that patch
 # ``_html_to_markdown`` on this module continue to resolve.
@@ -138,6 +138,11 @@ def update_timesheet(
 def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     """Post a chatter note on project.task and return the message id.
 
+    ``mail.message.body`` is an HTML field, so the caller-supplied Markdown
+    ``body`` is rendered to HTML via :func:`markdown_to_html` before posting;
+    otherwise Markdown syntax shows up literally and newlines collapse (issue
+    #324).
+
     Odoo's ``mail.thread.message_post`` is keyword-only
     (``def message_post(self, *, body='', ...)``). The message options must
     therefore be forwarded as ``execute_kw`` keyword arguments; passing them as
@@ -148,7 +153,7 @@ def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
         "project.task",
         "message_post",
         [task_id],
-        body=body,
+        body=markdown_to_html(body),
         message_type="comment",
         subtype_xmlid="mail.mt_note",
     )
