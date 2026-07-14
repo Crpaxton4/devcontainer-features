@@ -774,6 +774,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "task_question": (5, "q?"),
             "optimize_sessions": (),
             "query_sessions": (),
+            "resync": (),
             "timesheet_summary": ("2026-07-01", "2026-07-31"),
             "unbilled_hours": (),
         }

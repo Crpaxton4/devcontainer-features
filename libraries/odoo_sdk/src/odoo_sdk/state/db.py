@@ -65,15 +65,16 @@ CREATE TABLE IF NOT EXISTS settings (
 # no materialized ``sessions`` table, so nothing here can go stale.
 _SESSIONIZATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    source     TEXT    NOT NULL,
-    timestamp  TEXT    NOT NULL,
-    task_ids   TEXT    NOT NULL DEFAULT '[]',
-    repo       TEXT    NOT NULL DEFAULT '',
-    pr_num     INTEGER NOT NULL DEFAULT 0,
-    branch     TEXT    NOT NULL DEFAULT '',
-    subject    TEXT    NOT NULL DEFAULT '',
-    payload    TEXT
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT    NOT NULL,
+    timestamp   TEXT    NOT NULL,
+    task_ids    TEXT    NOT NULL DEFAULT '[]',
+    repo        TEXT    NOT NULL DEFAULT '',
+    pr_num      INTEGER NOT NULL DEFAULT 0,
+    branch      TEXT    NOT NULL DEFAULT '',
+    subject     TEXT    NOT NULL DEFAULT '',
+    payload     TEXT,
+    external_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
@@ -233,6 +234,29 @@ def _migrate_drop_materialized_sessions(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS sessions")
 
 
+def _migrate_events_external_id(conn: sqlite3.Connection) -> None:
+    """Add the ``events.external_id`` dedupe column and its partial unique index.
+
+    The resync pullers key each ingested event on a stable external identity
+    (``git:<sha>``, ``gh:pr:<n>``, ``odoo:mail:<id>``) so a re-run never
+    duplicates. Databases created before resync lack the column; this adds it via
+    ``ALTER TABLE`` (guarded by a ``PRAGMA table_info`` probe, since SQLite has no
+    ``ADD COLUMN IF NOT EXISTS``) and creates the ``WHERE external_id IS NOT NULL``
+    partial unique index that enforces the ``INSERT OR IGNORE`` dedupe.
+
+    Idempotent: the column is added only when absent, and the index uses
+    ``IF NOT EXISTS``. New DBs already carry the column from
+    :data:`_SESSIONIZATION_SCHEMA`, so the ``ALTER`` is skipped for them.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+    if "external_id" not in columns:
+        conn.execute("ALTER TABLE events ADD COLUMN external_id TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external_id "
+        "ON events(external_id) WHERE external_id IS NOT NULL"
+    )
+
+
 def _migrate_task_sessions_to_task_runs(conn: sqlite3.Connection) -> None:
     """Rename a legacy ``task_sessions`` FSM table to ``task_runs`` in place.
 
@@ -288,7 +312,8 @@ def _parse_run(row: tuple) -> TaskRun:
 
 # Columns selected for every event read, in EventRecord field order.
 _EVENT_COLUMNS = (
-    "id, source, timestamp, task_ids, repo, pr_num, branch, subject, payload"
+    "id, source, timestamp, task_ids, repo, pr_num, branch, subject, payload, "
+    "external_id"
 )
 
 
@@ -316,7 +341,7 @@ def _bound_isoformat(ts: datetime) -> str:
 
 
 def _parse_event(row: tuple) -> EventRecord:
-    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload) = row
+    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload, ext_id) = row
     return EventRecord(
         id=id_,
         source=source,
@@ -327,6 +352,7 @@ def _parse_event(row: tuple) -> EventRecord:
         branch=branch,
         subject=subject,
         payload=json.loads(payload) if payload else None,
+        external_id=ext_id,
     )
 
 
@@ -402,6 +428,7 @@ class LocalStateClient:
             conn.executescript(_SCHEMA)
             conn.executescript(_SESSIONIZATION_SCHEMA)
             _migrate_drop_materialized_sessions(conn)
+            _migrate_events_external_id(conn)
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
         with self._connect() as conn:
@@ -437,6 +464,19 @@ class LocalStateClient:
                 "FROM task_runs ORDER BY started_at"
             ).fetchall()
         return [_parse_run(tuple(r)) for r in rows]
+
+    def distinct_task_ids(self) -> list[int]:
+        """Return the distinct task ids on record in ``task_runs``, ascending.
+
+        The set of Odoo tasks this project has ever tracked. The chatter resync
+        puller uses it to scope its ``mail.message`` search to only the tasks the
+        SDK actually knows about, rather than scanning every task in Odoo.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT task_id FROM task_runs ORDER BY task_id"
+            ).fetchall()
+        return [int(row[0]) for row in rows]
 
     def get_stopped_runs_with_timesheet(self) -> list[TaskRun]:
         with self._connect() as conn:
@@ -549,26 +589,64 @@ class LocalStateClient:
 
     # ── Unified event/session model (additive; alongside the FSM store) ──────
 
+    def _insert_event_row(
+        self, conn: sqlite3.Connection, event: EventRecord
+    ) -> sqlite3.Cursor:
+        """Insert one ``events`` row, deduping when ``external_id`` is set.
+
+        Externally-keyed events use ``INSERT OR IGNORE`` so a re-ingested id is a
+        no-op against the ``events(external_id)`` partial unique index; events
+        with no external id use a plain ``INSERT`` so a genuine constraint
+        violation still surfaces rather than being silently swallowed.
+        """
+        verb = "INSERT OR IGNORE" if event.external_id is not None else "INSERT"
+        return conn.execute(
+            f"{verb} INTO events (source, timestamp, task_ids, repo, pr_num, "
+            "branch, subject, payload, external_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event.source,
+                _normalize_utc_isoformat(event.timestamp),
+                json.dumps(event.task_ids),
+                event.repo,
+                event.pr_num,
+                event.branch,
+                event.subject,
+                json.dumps(event.payload) if event.payload is not None else None,
+                event.external_id,
+            ),
+        )
+
     def add_event(self, event: EventRecord) -> EventRecord:
-        """Insert one event into the unified ``events`` timeseries table."""
+        """Insert one event and return the stored row.
+
+        Idempotent for externally-keyed events: when ``event.external_id`` is
+        already present the insert is ignored and the existing row is returned, so
+        callers never see a duplicate. Use :meth:`add_event_dedup` when you need
+        to know whether a new row was actually written (e.g. to count inserts).
+        """
         with self._connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO events (source, timestamp, task_ids, repo, pr_num, "
-                "branch, subject, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event.source,
-                    _normalize_utc_isoformat(event.timestamp),
-                    json.dumps(event.task_ids),
-                    event.repo,
-                    event.pr_num,
-                    event.branch,
-                    event.subject,
-                    json.dumps(event.payload) if event.payload is not None else None,
-                ),
-            )
-            event_id = cursor.lastrowid
+            cursor = self._insert_event_row(conn, event)
+            if cursor.rowcount == 1:
+                event_id = cursor.lastrowid
+            else:
+                event_id = conn.execute(
+                    "SELECT id FROM events WHERE external_id = ?",
+                    (event.external_id,),
+                ).fetchone()[0]
         return self.get_event(event_id)  # type: ignore[return-value]
+
+    def add_event_dedup(self, event: EventRecord) -> bool:
+        """Insert an externally-keyed event; return True iff a new row was written.
+
+        The idempotency primitive the resync pullers count on: a first ingest of
+        an ``external_id`` returns ``True`` (row inserted); any re-ingest of the
+        same id returns ``False`` (``INSERT OR IGNORE`` matched the partial unique
+        index and did nothing), so a puller can report exactly how many events it
+        added.
+        """
+        with self._connect() as conn:
+            return self._insert_event_row(conn, event).rowcount == 1
 
     def get_event(self, event_id: int) -> Optional[EventRecord]:
         """Return one event by id, or None."""

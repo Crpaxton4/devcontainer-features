@@ -6,6 +6,7 @@ adapters translate between its data structures and the SDK's stateful edges
 lives here, never in the pure core.
 """
 
+from .external_sync import sync_git_log, sync_github, sync_odoo_chatter
 from .state_persistence import (
     UnknownEventSourceError,
     event_record_to_raw_event,
@@ -20,4 +21,7 @@ __all__ = [
     "source_to_event_type",
     "UnknownEventSourceError",
     "load_raw_events",
+    "sync_git_log",
+    "sync_github",
+    "sync_odoo_chatter",
 ]

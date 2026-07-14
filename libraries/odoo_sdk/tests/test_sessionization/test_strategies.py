@@ -28,6 +28,13 @@ class TestSingleStrategyOwnership(unittest.TestCase):
         self.assertEqual(owner[EventType.MERGE], "merge")
         self.assertEqual(owner[EventType.REVIEW], "review")
         self.assertEqual(owner[EventType.CLAUDE_HOOK], "development")
+        self.assertEqual(owner[EventType.CHATTER], "development")
+
+    def test_default_configs_cover_every_event_type(self):
+        # Coverage validation: the context builder rejects any uncovered type, so
+        # a newly added EventType (e.g. CHATTER) must be owned by a strategy.
+        owner = validate_single_strategy_ownership(DEFAULT_SESSION_STRATEGY_CONFIGS)
+        self.assertEqual(set(owner), set(EventType))
 
     def test_duplicate_ownership_raises(self):
         rows = (

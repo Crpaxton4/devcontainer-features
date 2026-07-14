@@ -77,6 +77,14 @@ class EventRecord:
     branch: str = ""
     subject: str = ""
     payload: Optional[dict] = None
+    external_id: Optional[str] = None
+    """Stable external identity for idempotent resync ingestion.
+
+    Set by the external-sync pullers (``git:<sha>``, ``gh:pr:<n>``,
+    ``gh:review:<id>``, ``odoo:mail:<id>``) so a re-run dedupes against the
+    partial unique index on ``events(external_id)``. ``None`` for events with no
+    external origin (hook / agent / FSM-driven writes), which never dedupe.
+    """
 
 
 @dataclass

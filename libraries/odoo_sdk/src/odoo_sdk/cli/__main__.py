@@ -12,6 +12,7 @@ Subcommands:
     log-event               Record a Claude Code hook event into local state
     discover                List all tracker projects and their active runs
     abort <hash> <run_id>   Abort a stale run in another project's DB
+    resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
 """
 
 import argparse
@@ -20,7 +21,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional
 
-from odoo_sdk.adapters import UnknownEventSourceError, source_to_event_type
+from odoo_sdk.adapters import (
+    UnknownEventSourceError,
+    source_to_event_type,
+    sync_git_log,
+    sync_github,
+    sync_odoo_chatter,
+)
 from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
 from odoo_sdk.sessionization import EventType
@@ -34,10 +41,12 @@ from odoo_sdk.utilities.env import (
 )
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
 
-# Subcommands that operate purely on local state: they need no Odoo devcontainer
-# and construct no OdooClient. Claude Code hooks call these from arbitrary cwds,
-# and ``discover`` only reads local tracker DBs.
-_LOCAL_ONLY = {"log-event", "discover"}
+# Subcommands that skip the global Odoo devcontainer assert and build no
+# OdooClient up front. ``log-event`` / ``discover`` are purely local; ``resync``
+# is local-first — its git/github pullers never touch Odoo, and it constructs an
+# OdooClient lazily (behind its own env assert) only when ``odoo`` is requested,
+# so the global assert must not gate it.
+_LOCAL_ONLY = {"log-event", "discover", "resync"}
 
 
 def _assert_env() -> None:
@@ -319,6 +328,52 @@ def cmd_discover(args: argparse.Namespace) -> None:
             print(_discover_run_line(project, run))
 
 
+_RESYNC_SOURCES = ("git", "github", "odoo")
+
+
+def _parse_resync_sources(raw: str) -> list[str]:
+    """Return the requested resync pullers in stable order, ignoring unknowns."""
+    requested = {token.strip() for token in raw.split(",") if token.strip()}
+    return [source for source in _RESYNC_SOURCES if source in requested]
+
+
+def _resync_odoo(db: TaskStateDB) -> dict:
+    """Run the Odoo chatter puller, or skip cleanly when the env assert fails.
+
+    The git/github pullers never need Odoo, so a resync that also requests
+    ``odoo`` outside a configured devcontainer must degrade to a skip notice
+    rather than aborting the whole command. The :class:`OdooClient` is built only
+    after the assert passes, honoring the lazy-client contract.
+    """
+    try:
+        assert_odoo_devcontainer()
+    except OdooDevcontainerRequiredError:
+        return {"skipped": "odoo devcontainer not configured"}
+    return sync_odoo_chatter(OdooClient(), db)
+
+
+def _format_resync_line(source: str, result: dict) -> str:
+    """Format one per-source resync result line for the CLI."""
+    if "skipped" in result:
+        return f"{source}: skipped ({result['skipped']})"
+    return f"{source}: inserted {result['inserted']}"
+
+
+def cmd_resync(args: argparse.Namespace) -> None:
+    """Reconcile local event state against git/GitHub/Odoo for the current repo.
+
+    Local-first: the git and github pullers read only the local repo/CLI, while
+    the odoo puller is guarded and constructed lazily. Each puller is idempotent
+    and prints a per-source inserted count or skip reason.
+    """
+    sources = _parse_resync_sources(args.sources)
+    db = _open_local_db()
+    runners = {"git": sync_git_log, "github": sync_github, "odoo": _resync_odoo}
+    for source in sources:
+        result = runners[source](db)
+        print(_format_resync_line(source, result))
+
+
 def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
     """Abort a stale run in another project's DB and close its Odoo anchor."""
     result = AbortRunCommand(client).execute(args.project_hash, args.run_id)
@@ -410,6 +465,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     abort_p.add_argument("project_hash", help="Project hash from 'discover'")
     abort_p.add_argument("run_id", type=int, help="Run id (or task id) to abort")
+
+    resync_p = subparsers.add_parser(
+        "resync", help="Reconcile local events against git/GitHub/Odoo chatter"
+    )
+    resync_p.add_argument(
+        "--sources",
+        default="git,github,odoo",
+        help="Comma-separated subset of git,github,odoo (default: all three)",
+    )
     return parser
 
 
@@ -452,6 +516,8 @@ def _dispatch_local_only(args: argparse.Namespace) -> None:
     """
     if args.command == "discover":
         cmd_discover(args)
+    elif args.command == "resync":
+        cmd_resync(args)
     else:
         cmd_log_event(args)
 

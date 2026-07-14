@@ -15,6 +15,7 @@ from odoo_sdk.tui.app import (
     confirm_upload,
     default_window,
     do_export,
+    do_resync,
     handle_key,
     move_window,
     query_sessions,
@@ -22,6 +23,7 @@ from odoo_sdk.tui.app import (
     request_upload,
     run,
     _numeric_task_id,
+    _resync_status,
     _upload_sessions,
 )
 from odoo_sdk.tui.window import DateWindow
@@ -398,6 +400,60 @@ class TestHandleKey(unittest.TestCase):
         state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
         result, _ = handle_key(registry, state, ord("c"), writer=self._writer())
         self.assertIn("exported csv", result.status)
+
+
+class TestResync(unittest.TestCase):
+    """The ``r`` keybind runs resync, refreshes, and reports per-source counts."""
+
+    def _registry(self, resync_result, query_result=None):
+        return FakeRegistry(
+            {
+                "resync": FakeCommand(result=resync_result),
+                "query_sessions": FakeCommand(result=query_result or _sessions()),
+            }
+        )
+
+    def test_resync_status_summarizes_inserts_and_skips(self):
+        status = _resync_status(
+            {
+                "git": {"inserted": 2},
+                "github": {"skipped": "no gh"},
+                "odoo": {"inserted": 0},
+            }
+        )
+        self.assertEqual(
+            status, "resync — git: +2, github: skipped (no gh), odoo: +0"
+        )
+
+    def test_resync_status_handles_empty(self):
+        self.assertEqual(_resync_status({}), "resync — nothing to do")
+
+    def test_do_resync_runs_command_refreshes_and_sets_status(self):
+        registry = self._registry(
+            {"git": {"inserted": 3}, "github": {"skipped": "no gh"}},
+            query_result=_sessions(2),
+        )
+        state = AppState(window=default_window(today=date(2026, 6, 5)), sessions=[])
+        result = do_resync(registry, state)
+        # The resync command ran with the default (all) sources.
+        self.assertEqual(registry["resync"].calls, [{}])
+        # Sessions were re-queried and the status shows per-source counts.
+        self.assertEqual(len(result.sessions), 2)
+        self.assertIn("git: +3", result.status)
+        self.assertIn("github: skipped (no gh)", result.status)
+        self.assertFalse(result.pending_upload)
+
+    def test_resync_key_dispatches(self):
+        registry = self._registry({"git": {"inserted": 1}})
+        state = AppState(
+            window=DateWindow(date(2026, 6, 3), date(2026, 6, 5)), sessions=[]
+        )
+        result, should_quit = handle_key(
+            registry, state, ord("r"), writer=lambda c, n: n
+        )
+        self.assertFalse(should_quit)
+        self.assertIn("resync", result.status)
+        self.assertEqual(len(registry["resync"].calls), 1)
 
 
 class TestRunHandlesKeyboardInterrupt(unittest.TestCase):

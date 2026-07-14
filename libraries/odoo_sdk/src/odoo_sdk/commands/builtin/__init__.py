@@ -31,6 +31,7 @@ from .query_sessions import QuerySessionsCommand
 from .read_attachment import ReadAttachmentCommand
 from .read_knowledge_article import ReadKnowledgeArticleCommand
 from .resume_task import ResumeTaskCommand
+from .resync import ResyncCommand
 from .search_chatter import SearchChatterCommand
 from .search_knowledge_articles import SearchKnowledgeArticlesCommand
 from .search_projects import SearchProjectsCommand
