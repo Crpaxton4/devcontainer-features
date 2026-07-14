@@ -79,7 +79,7 @@ Config and history are bind-mounted from your host home directory into fixed con
 - `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
 - `~/.config/devcontainer/shell-history` (host) → `/usr/local/share/shell-history` (container) — `HISTFILE` points at `bash_history` inside it, and `~/.bash_history` is symlinked to it, so bash history follows you across rebuilds and is shared across containers. Bash is the only supported shell.
 
-A caveat on the history mount: bash silently drops history if it can't write `HISTFILE`. That's fine by default — Docker Desktop bind mounts are world-writable, and on Linux the dev container CLI remaps the container user to your host uid. But if you set `"updateRemoteUserUID": false` with a non-root `remoteUser` whose uid doesn't match yours on the host, history writes fail without an error.
+A note on the history mount: bash writes `HISTFILE` after every command, and the container user's uid need not match the owner of the host directory the mount exposes (e.g. with `"updateRemoteUserUID": false` and a non-root `remoteUser`, or from a root shell). To keep history writable regardless of uid, `setup.sh` makes the host `shell-history` directory world-writable (mode `0777`); the container inherits that mode through the bind mount, so any user can create and append `bash_history`. Without it, `history -a` fails on every command with `bash: history: .../bash_history: cannot create: Permission denied` (#323).
 
 ## Windows and WSL
 

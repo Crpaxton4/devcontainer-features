@@ -271,8 +271,12 @@ rm -rf "$SKILLS_TEST_ROOT"
 # through the mount; in a mountless run (e.g. `devcontainer features test`
 # without the host dirs) stat sees install.sh's chmod instead. Same manifest
 # column either way, so the expected values are identical.
-# The non-credential dirs (pr-automation, shell-history) deliberately stay 0755.
-# NOTE: stat -c '%a' prints octal WITHOUT a leading zero (700 / 755).
+# pr-automation holds no credentials and deliberately stays 0755. shell-history
+# is 0777 (world-writable): its host dir is bind-mounted over the container dir,
+# so a container user whose uid differs from the host owner could not otherwise
+# create/append bash_history and every command printed a "cannot create:
+# Permission denied" error (#323); world-writable lets any uid write it.
+# NOTE: stat -c '%a' prints octal WITHOUT a leading zero (700 / 755 / 777).
 check "claude-home is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/claude-home)\" = '700' ]"
 check "gh-cli-config is chmod 0700 (credentials not world-readable)" bash -c \
@@ -283,7 +287,7 @@ check "coderabbit-config is chmod 0700 (credentials not world-readable)" bash -c
   "[ \"\$(stat -c '%a' /usr/local/share/coderabbit-config)\" = '700' ]"
 check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
-check "shell-history dir stays 0755 (holds no credentials)" bash -c \
-  "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '755' ]"
+check "shell-history dir is 0777 (any uid can create/append bash_history, #323)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '777' ]"
 
 reportResults
