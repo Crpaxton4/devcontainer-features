@@ -32,7 +32,7 @@ Each `project.task` has its own independent FSM, keyed by task ID in the local S
 |--------------------|---------------------------------------------------------------------|
 | `RUNNING`          | Actively working — timer accumulating                               |
 | `AWAITING_ANSWERS` | Questions posted to chatter; blocked pending stakeholder input       |
-| `STOPPED`          | Session ended; time logged to Odoo timesheet                         |
+| `STOPPED`          | Session ended; hours are written later by the TUI upload, not here    |
 
 Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the database has no session.
 
