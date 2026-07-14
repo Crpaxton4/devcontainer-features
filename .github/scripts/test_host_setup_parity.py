@@ -169,14 +169,21 @@ class TestHostSetupParity(unittest.TestCase):
         self.assertIn("persisted-paths.tsv", SETUP_SH.read_text())
 
     def test_setup_scripts_do_not_create_history_files(self):
-        # Both scripts used to `touch ~/.bash_history` (now a directory mount)
-        # and `~/.zsh_history` (never mounted by anything). Creating a *file*
-        # where the Feature expects a directory is exactly the #198 failure.
+        # Both scripts used to `touch ~/.bash_history` (now a directory mount).
+        # Creating a *file* where the Feature expects a directory is exactly the
+        # #198 failure. Guard generically: no setup script may reference any
+        # shell-history *file* path (one ending in `_history`), regardless of
+        # which shell it belongs to.
         for script in (SETUP_SH, SETUP_PS1):
             with self.subTest(script=script.name):
                 body = script.read_text()
-                self.assertNotIn(".bash_history", body)
-                self.assertNotIn(".zsh_history", body)
+                offenders = re.findall(r"\S*_history\b", body)
+                self.assertEqual(
+                    offenders,
+                    [],
+                    f"{script.name} references shell-history files {offenders}; "
+                    f"history persistence is directory-based (see #198)",
+                )
 
 
 if __name__ == "__main__":
