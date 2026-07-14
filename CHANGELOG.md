@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v2.0.0...personal-features-v2.1.0) (2026-07-14)
+
+
+### Features
+
+* **mcp:** emit an agent event from every tool dispatch via a generic wrapper ([#340](https://github.com/Crpaxton4/devcontainer-features/issues/340)) ([2280468](https://github.com/Crpaxton4/devcontainer-features/commit/2280468f1a4e0605276e81b35af8a0e3ca9b9451)), closes [#326](https://github.com/Crpaxton4/devcontainer-features/issues/326)
+* **personal-features:** Claude Code lifecycle hooks into odoo-sdk state ([#327](https://github.com/Crpaxton4/devcontainer-features/issues/327)) ([#344](https://github.com/Crpaxton4/devcontainer-features/issues/344)) ([4c28118](https://github.com/Crpaxton4/devcontainer-features/commit/4c28118f6c630ac1aba94e85bc592c843394d5b1))
+* **personal-features:** install the qsv CSV toolkit ([#341](https://github.com/Crpaxton4/devcontainer-features/issues/341)) ([52f7034](https://github.com/Crpaxton4/devcontainer-features/commit/52f70346ffe5e4376afa47ebca0d5ca9ac84ee90)), closes [#285](https://github.com/Crpaxton4/devcontainer-features/issues/285)
+* **personal-features:** provision Claude Code lifecycle hooks into odoo-sdk state ([4c28118](https://github.com/Crpaxton4/devcontainer-features/commit/4c28118f6c630ac1aba94e85bc592c843394d5b1)), closes [#327](https://github.com/Crpaxton4/devcontainer-features/issues/327)
+* **sdk:** add manual resync utility reconciling events with git/GitHub/Odoo ([5751644](https://github.com/Crpaxton4/devcontainer-features/commit/5751644275282ac4d22e870b338ea5264e728039)), closes [#328](https://github.com/Crpaxton4/devcontainer-features/issues/328)
+* **sdk:** add odoo-sdk log-event CLI and strict event-source mapping ([#339](https://github.com/Crpaxton4/devcontainer-features/issues/339)) ([fe88e28](https://github.com/Crpaxton4/devcontainer-features/commit/fe88e2872ffb3b52b47c410acbbd7951d1f3bfa2)), closes [#327](https://github.com/Crpaxton4/devcontainer-features/issues/327)
+* **sdk:** derive sessions from events in SQL (read path) ([f00687b](https://github.com/Crpaxton4/devcontainer-features/commit/f00687bc3a983a9928a952ec10e0e92d251b8a67)), closes [#330](https://github.com/Crpaxton4/devcontainer-features/issues/330)
+* **sdk:** manual resync utility reconciling events with git/GitHub/Odoo ([#328](https://github.com/Crpaxton4/devcontainer-features/issues/328)) ([#349](https://github.com/Crpaxton4/devcontainer-features/issues/349)) ([5751644](https://github.com/Crpaxton4/devcontainer-features/commit/5751644275282ac4d22e870b338ea5264e728039))
+* **sdk:** record repo identity in tracker DBs + cross-DB run discovery/abort ([2863b1f](https://github.com/Crpaxton4/devcontainer-features/commit/2863b1f64824ab83959708f76c2d2a6a17f42a39)), closes [#331](https://github.com/Crpaxton4/devcontainer-features/issues/331)
+* **sdk:** render chatter notes from Markdown to HTML ([#338](https://github.com/Crpaxton4/devcontainer-features/issues/338)) ([7220472](https://github.com/Crpaxton4/devcontainer-features/commit/7220472d92e79e719e686e3b81cd9ae907476232)), closes [#324](https://github.com/Crpaxton4/devcontainer-features/issues/324)
+* **sdk:** repo-identity in tracker DBs + cross-DB run discovery/abort ([#331](https://github.com/Crpaxton4/devcontainer-features/issues/331)) ([#345](https://github.com/Crpaxton4/devcontainer-features/issues/345)) ([2863b1f](https://github.com/Crpaxton4/devcontainer-features/commit/2863b1f64824ab83959708f76c2d2a6a17f42a39))
+* **sdk:** SQL-derived sessions read path ([#330](https://github.com/Crpaxton4/devcontainer-features/issues/330) part 1) ([#346](https://github.com/Crpaxton4/devcontainer-features/issues/346)) ([f00687b](https://github.com/Crpaxton4/devcontainer-features/commit/f00687bc3a983a9928a952ec10e0e92d251b8a67))
+* **tui:** show diagnostic counts in the empty-session state ([#347](https://github.com/Crpaxton4/devcontainer-features/issues/347)) ([e5001b2](https://github.com/Crpaxton4/devcontainer-features/commit/e5001b270cc202d0ce29368bdb48e892b3ff72f0)), closes [#332](https://github.com/Crpaxton4/devcontainer-features/issues/332)
+
+
+### Bug Fixes
+
+* **personal-features:** make shell-history dir world-writable so history writes ([#336](https://github.com/Crpaxton4/devcontainer-features/issues/336)) ([f24505d](https://github.com/Crpaxton4/devcontainer-features/commit/f24505d3c65fc2e51e5b8094468d5dc7f6b09ca7)), closes [#323](https://github.com/Crpaxton4/devcontainer-features/issues/323)
+* **tui:** render offset-aware session timestamps without crashing ([#337](https://github.com/Crpaxton4/devcontainer-features/issues/337)) ([e5fbbef](https://github.com/Crpaxton4/devcontainer-features/commit/e5fbbefcb6c15dacbca24926d02e45c80f6dd774)), closes [#333](https://github.com/Crpaxton4/devcontainer-features/issues/333)
+
 ## [2.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v1.18.1...personal-features-v2.0.0) (2026-07-13)
 
 
