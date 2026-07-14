@@ -231,9 +231,15 @@ DPKG_ARCH="$(dpkg --print-architecture)" # amd64 | arm64
 # lazygit's linux assets are named x86_64 / arm64 - the x86_64 half matches
 # ARCH_GNU but the arm64 half doesn't (that would be aarch64), so it needs its
 # own column rather than reusing an existing one.
+#
+# qsv needs its own column too: it publishes a fully-static *musl* build only
+# for x86_64 (no aarch64 musl asset), so amd64 uses that - it runs on any glibc
+# and pulls in no shared libs - while arm64 falls back to the dynamically-linked
+# gnu build (its only aarch64 option), which needs a recent glibc plus a runtime
+# lib (see the qsv install below).
 case "$DPKG_ARCH" in
-    amd64) ARCH_DEB=amd64; ARCH_GNU=x86_64;  ARCH_SHORT=x64;   ARCH_LAZYGIT=x86_64 ;;
-    arm64) ARCH_DEB=arm64; ARCH_GNU=aarch64; ARCH_SHORT=arm64; ARCH_LAZYGIT=arm64  ;;
+    amd64) ARCH_DEB=amd64; ARCH_GNU=x86_64;  ARCH_SHORT=x64;   ARCH_LAZYGIT=x86_64; ARCH_QSV=x86_64-unknown-linux-musl  ;;
+    arm64) ARCH_DEB=arm64; ARCH_GNU=aarch64; ARCH_SHORT=arm64; ARCH_LAZYGIT=arm64;  ARCH_QSV=aarch64-unknown-linux-gnu ;;
     *) echo "ERROR: unsupported architecture: $DPKG_ARCH" >&2; exit 1 ;;
 esac
 
@@ -258,6 +264,11 @@ STARSHIP_VERSION=1.26.0  # github.com/starship/starship
 # unlike the tools above its download URL uses the bare version verbatim.
 DELTA_VERSION=0.19.2     # github.com/dandavison/delta
 LAZYGIT_VERSION=0.63.0   # github.com/jesseduffield/lazygit
+# qsv tags its releases WITHOUT a leading "v" (e.g. 21.1.0). Unlike every tool
+# above it ships a .zip (not a raw binary or .tar.gz) bundling ~13 binaries, so
+# it needs its own installer (install_qsv) rather than install_gh_release. The
+# per-arch target (musl on amd64, gnu on arm64) is ARCH_QSV, set above.
+QSV_VERSION=21.1.0       # github.com/dathere/qsv
 
 # Installs a pinned GitHub release asset from a deterministic download URL (no
 # api.github.com lookup). With a dest path ($3) it downloads a single binary
@@ -295,9 +306,42 @@ install_gh_release() {
     fi
 }
 
+# qsv (high-performance CSV data-wrangling toolkit) ships a .zip that bundles
+# several binaries (qsv, qsvlite, qsvdp, portable variants, README) rather than
+# a raw binary or a .tar.gz, so neither of install_gh_release's paths fit.
+# Handle it with a scoped unzip that lands ONLY the `qsv` binary directly on
+# /usr/local/bin (unzip -j junks the archive paths). Best-effort like the tools
+# above: any failure warns and skips rather than failing the build. The arm64
+# (gnu) build additionally needs a runtime lib, installed separately below.
+install_qsv() {
+    local url="$1" zip
+    zip="$(mktemp)"
+    if fetch "$url" "$zip" \
+        && unzip -q -o -j "$zip" qsv -d /usr/local/bin \
+        && [ -f /usr/local/bin/qsv ]; then
+        chmod +x /usr/local/bin/qsv
+    else
+        echo "WARNING: failed to install qsv, skipping" >&2
+    fi
+    rm -f "$zip"
+}
+
 echo "Installing productivity/navigation CLI tools"
 apt-get update -y
 apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
+
+# On arm64, qsv only ships the dynamically-linked gnu build, whose full binary
+# links libwayland-client.so.0 (via its clipboard feature) - absent on the
+# minimal base images, so `qsv --version` would fail to even load without it.
+# (amd64 uses the fully-static musl build, which needs none of this.) Installed
+# here, best-effort and synchronously before the parallel download jobs below:
+# best-effort so a base image that lacks the package (or is too old to run qsv
+# at all) just skips qsv instead of failing the whole build, and synchronous so
+# it can't collide with the backgrounded installers over dpkg's lock.
+if [ "$DPKG_ARCH" = arm64 ]; then
+    apt-get install -y --no-install-recommends libwayland-client0 \
+        || echo "WARNING: could not install libwayland-client0 (qsv runtime dep); qsv may not run" >&2
+fi
 
 # Debian/Ubuntu's apt packages ship these under different binary names to
 # avoid clashing with existing system commands.
@@ -344,6 +388,12 @@ _download_pids+=("$!")
 install_gh_release lazygit \
     "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_linux_${ARCH_LAZYGIT}.tar.gz" \
     "" lazygit &
+_download_pids+=("$!")
+# qsv (CSV data toolkit) - ships a .zip bundling many binaries, so it uses its
+# own installer (see install_qsv above) which extracts only the `qsv` binary.
+# ARCH_QSV selects the per-arch target (static musl on amd64, gnu on arm64).
+install_qsv \
+    "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip" &
 _download_pids+=("$!")
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
@@ -419,7 +469,7 @@ echo "Installing shell enhancements (Starship prompt, aliases, persisted history
 _download_pids+=("$!")
 
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
-# lazygit, coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# lazygit, qsv, coderabbit, starship). Each job already warns and exits 0 on its own failure;
 # wait on each PID and guard it so an unexpected non-zero exit degrades to a
 # warning instead of aborting the build under set -e. (A bare `wait` returns 0
 # regardless, which would instead silently mask such a failure.)

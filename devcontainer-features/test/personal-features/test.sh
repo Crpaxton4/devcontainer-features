@@ -92,6 +92,7 @@ check "yq is installed" yq --version
 check "eza is installed" eza --version
 check "zoxide is installed" zoxide --version
 check "tldr is installed" tldr --version
+check "qsv is installed" qsv --version
 
 # git QoL tools
 check "delta is installed" bash -c "test -x \"\$(command -v delta)\" && delta --version"
