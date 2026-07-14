@@ -30,6 +30,9 @@ _MIN_HEIGHT = 8
 
 _FOOTER = " ←/→ start  ↑/↓ end  e:export  u:upload  q:quit "
 
+# Shown under the empty-state hint so a blank window always names a next step.
+_EMPTY_GUIDANCE = "log events via start_task / odoo-sdk log-event, or widen the window"
+
 
 @dataclass(frozen=True)
 class Frame:
@@ -92,11 +95,24 @@ def _fill_panel(
     return filled
 
 
+def _empty_lines(empty_hint: str, inner_width: int) -> list[str]:
+    """Return the empty-window body: the diagnostic hint plus a guidance line.
+
+    ``empty_hint`` distinguishes "no data at all" from "data exists but isn't
+    derivable in this window"; when absent (e.g. a direct render), the bare
+    placeholder stands in. Both lines are truncated to the interior width so they
+    never overflow the panel at narrow terminal sizes.
+    """
+    hint = empty_hint or "(no sessions in window)"
+    return [line[:inner_width] for line in (hint, _EMPTY_GUIDANCE)]
+
+
 def _timeline_lines(
     sessions: Sequence[Session],
     window: DateWindow,
     inner_width: int,
     inner_height: int,
+    empty_hint: str = "",
 ) -> list[str]:
     """Return the hero timeline body: one ``label | bar`` line per lane."""
     from datetime import datetime, time
@@ -114,7 +130,7 @@ def _timeline_lines(
         label = _fit(lane.label, label_width)
         lines.append(f"{label} {lane.row}")
     if not lines:
-        lines.append("(no sessions in window)")
+        lines.extend(_empty_lines(empty_hint, inner_width))
     return lines
 
 
@@ -124,6 +140,7 @@ def _compose_panels(
     window: DateWindow,
     width: int,
     body_height: int,
+    empty_hint: str = "",
 ) -> list[str]:
     """Compose the timeline and stats panels side by side into body rows.
 
@@ -137,7 +154,9 @@ def _compose_panels(
     stats_box = draw_box(stats_width, body_height, "stats", chars=ROUNDED)
     timeline = _fill_panel(
         timeline,
-        _timeline_lines(sessions, window, timeline_width - 2, body_height - 2),
+        _timeline_lines(
+            sessions, window, timeline_width - 2, body_height - 2, empty_hint
+        ),
     )
     stats_box = _fill_panel(stats_box, _stat_lines(stats, stats_width - 2))
     return [t + s for t, s in zip(timeline, stats_box)]
@@ -151,6 +170,7 @@ def compose_frame(
     *,
     target_hours_per_day: float = 8.0,
     stats: SessionStats | None = None,
+    empty_hint: str = "",
 ) -> Frame:
     """Compose the full screen for ``sessions`` over ``window`` at ``width x height``.
 
@@ -160,6 +180,8 @@ def compose_frame(
     :param height: Terminal row count.
     :param target_hours_per_day: Billable target for the utilization meter.
     :param stats: Precomputed stats; computed from ``sessions`` when omitted.
+    :param empty_hint: Diagnostic shown in place of the bare placeholder when the
+        window derived no sessions; ignored when sessions are present.
     :return: A :class:`Frame` of exactly ``height`` rows each ``width`` wide.
     """
     if width < _MIN_WIDTH or height < _MIN_HEIGHT:
@@ -176,6 +198,8 @@ def compose_frame(
     header = _header(window, resolved, width)
     footer = _fit(_FOOTER, width)
     body_height = height - 2
-    body = _compose_panels(sessions, resolved, window, width, body_height)
+    body = _compose_panels(
+        sessions, resolved, window, width, body_height, empty_hint
+    )
     rows = [header] + [_fit(row, width) for row in body] + [footer]
     return Frame(rows=rows[:height], width=width, height=height)
