@@ -47,6 +47,7 @@ dev = [
 [project.scripts]
 odoo-mcp = "odoo_sdk.mcp.__main__:main"
 odoo-tui = "odoo_sdk.tui.__main__:main"
+odoo-sdk = "odoo_sdk.cli.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,183 @@
+"""Tests for the ``odoo-sdk log-event`` subcommand.
+
+These exercise the real cwd-based project resolution in
+:func:`odoo_sdk.state.db._get_project_dir`: a temporary git repo with an
+``origin`` remote plus a temporary state root pointed at by
+``ODOO_TASK_TRACKER_DIR``.
+"""
+
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
+
+import odoo_sdk.cli.__main__ as cli
+from odoo_sdk.state import LocalStateClient as TaskStateDB
+
+ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
+
+
+def _run(argv: list[str]) -> StringIO:
+    """Invoke ``cli.main`` with ``argv``; return captured stderr."""
+    stderr = StringIO()
+    with (
+        patch("sys.argv", ["odoo-sdk", *argv]),
+        patch("sys.stderr", stderr),
+        patch("sys.stdout", StringIO()),
+    ):
+        cli.main()
+    return stderr
+
+
+class TestLogEvent(unittest.TestCase):
+    def setUp(self) -> None:
+        self._cwd = os.getcwd()
+        self._state = tempfile.mkdtemp()
+        self._repo = tempfile.mkdtemp()
+        subprocess.run(
+            ["git", "init"], cwd=self._repo, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.com/o/r.git"],
+            cwd=self._repo,
+            check=True,
+            capture_output=True,
+        )
+        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
+        os.chdir(self._repo)
+
+    def tearDown(self) -> None:
+        os.chdir(self._cwd)
+        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        shutil.rmtree(self._state, ignore_errors=True)
+        shutil.rmtree(self._repo, ignore_errors=True)
+
+    def test_happy_path_writes_event_row(self) -> None:
+        _run(["log-event", "--source", "claude:SessionStart", "--subject", "hi"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].source, "claude:SessionStart")
+        self.assertEqual(events[0].subject, "hi")
+
+    def test_repeatable_task_id(self) -> None:
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PostToolUse",
+                "--subject",
+                "work",
+                "--task-id",
+                "1",
+                "--task-id",
+                "2",
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, ["1", "2"])
+
+    def test_payload_persisted(self) -> None:
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:Stop",
+                "--payload",
+                '{"tool": "Bash"}',
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].payload, {"tool": "Bash"})
+
+    def test_bad_payload_exits_2(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            _run(["log-event", "--source", "claude:Stop", "--payload", "not json"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertEqual(TaskStateDB().get_events(), [])
+
+    def test_non_object_payload_exits_2(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            _run(["log-event", "--source", "claude:Stop", "--payload", "[1, 2]"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_bad_source_exits_2(self) -> None:
+        stderr = StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
+                with patch("sys.argv", ["odoo-sdk", "log-event", "--source", "bogus"]):
+                    cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("unknown event source 'bogus'", stderr.getvalue())
+
+    def test_known_non_claude_source_allowed(self) -> None:
+        _run(["log-event", "--source", "commit", "--subject", "c"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].source, "commit")
+
+    def test_bad_timestamp_exits_2(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            _run(
+                [
+                    "log-event",
+                    "--source",
+                    "claude:Stop",
+                    "--timestamp",
+                    "not-a-time",
+                ]
+            )
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_explicit_timestamp_used(self) -> None:
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:Stop",
+                "--timestamp",
+                "2026-01-02T03:04:05+00:00",
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].timestamp.isoformat(), "2026-01-02T03:04:05+00:00")
+
+    def test_local_only_skips_devcontainer_assert(self) -> None:
+        with patch(ASSERT_GUARD) as mock_assert:
+            _run(["log-event", "--source", "claude:SessionStart"])
+        mock_assert.assert_not_called()
+
+
+class TestLogEventNonGitRepo(unittest.TestCase):
+    def setUp(self) -> None:
+        self._cwd = os.getcwd()
+        self._state = tempfile.mkdtemp()
+        self._nongit = tempfile.mkdtemp()
+        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
+        os.chdir(self._nongit)
+
+    def tearDown(self) -> None:
+        os.chdir(self._cwd)
+        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        shutil.rmtree(self._state, ignore_errors=True)
+        shutil.rmtree(self._nongit, ignore_errors=True)
+
+    def test_non_git_cwd_exits_0_with_notice(self) -> None:
+        stderr = StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
+                with patch(
+                    "sys.argv",
+                    ["odoo-sdk", "log-event", "--source", "claude:SessionStart"],
+                ):
+                    cli.main()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("Skipping event log", stderr.getvalue())
+        # No DB was created under the state root.
+        self.assertEqual(list(Path(self._state).rglob("tasks.db")), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
