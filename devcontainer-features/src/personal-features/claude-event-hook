@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# claude-event-hook — Claude Code lifecycle hook shim that records one event
+# into odoo-sdk local state via `odoo-sdk log-event`.
+#
+# Invoked by every feature-owned hook entry in $CLAUDE_CONFIG_DIR/settings.json
+# with the hook event name as its single argument, e.g.
+#
+#     claude-event-hook PreToolUse
+#
+# Claude Code passes the hook's JSON payload on stdin (see the hooks reference:
+# every event carries `hook_event_name`, `session_id`, `cwd`; PreToolUse/
+# PostToolUse also carry `tool_name` and `tool_input`; Subagent* carry
+# `agent_type`/`agent_id`). This shim extracts a compact subject and forwards a
+# trimmed payload to the SDK, which resolves the current project's local state
+# DB from cwd and appends one row to its `events` table.
+#
+# CONTRACT — this must never disrupt a Claude Code session:
+#   * ALWAYS exit 0 (a nonzero exit, or exit 2 with stderr, is interpreted by
+#     the hooks contract as blocking/denying the action — forbidden here).
+#   * Never write to stdout: for PreToolUse a JSON object on stdout can carry a
+#     permission decision, and even plain text is surfaced to the session.
+#     Diagnostics go to stderr only.
+#   * No-op cleanly when `odoo-sdk` is not installed (e.g. Python <3.10 images).
+#   * Bounded runtime so a slow/hung DB can't stall the agent.
+#
+# PreToolUse for `mcp__odoo__*` tools is skipped: the odoo-sdk MCP server
+# already logs those dispatches server-side (#326/#340), so logging them here
+# too would double-count them.
+
+# Deliberately NOT `set -e`/`set -o pipefail`: a failure anywhere in this shim
+# must degrade to "no event logged", never to a nonzero exit that the hook
+# contract would read as a block. Errors are handled explicitly instead.
+set -u
+
+HOOK_NAME="${1:-Unknown}"
+
+# Read the hook JSON payload from stdin. `cat` with no controlling input would
+# hang, but Claude Code always provides stdin for hooks; guard with a short
+# read timeout anyway so a misconfigured manual invocation can't wedge.
+STDIN_JSON=""
+if [ ! -t 0 ]; then
+    STDIN_JSON="$(timeout 5 cat 2>/dev/null || true)"
+fi
+
+# Nothing to do if the SDK CLI isn't on PATH (e.g. base image with Python <3.10
+# where the wheel was skipped). Silent, successful no-op.
+command -v odoo-sdk >/dev/null 2>&1 || exit 0
+
+# jq drives payload extraction; without it, fall back to logging the bare event
+# with no subject rather than failing.
+HAVE_JQ=0
+command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+
+# tool_name is only meaningful for the tool-call events; pull it out once so we
+# can both build the subject and enforce the mcp__odoo__* exclusion.
+TOOL_NAME=""
+if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
+    TOOL_NAME="$(printf '%s' "$STDIN_JSON" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+fi
+
+# The odoo-sdk MCP server logs its own tool dispatches server-side (#326/#340).
+# Skipping PreToolUse for those tools here avoids double-logging. Matched on the
+# `mcp__odoo__` prefix (belt-and-braces alongside the settings.json matcher).
+case "$HOOK_NAME" in
+    PreToolUse|PostToolUse)
+        case "$TOOL_NAME" in
+            mcp__odoo__*) exit 0 ;;
+        esac
+        ;;
+esac
+
+# Build a compact, human-readable subject per event kind.
+SUBJECT=""
+if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
+    case "$HOOK_NAME" in
+        PreToolUse|PostToolUse)
+            SUBJECT="$TOOL_NAME"
+            ;;
+        SubagentStart|SubagentStop)
+            SUBJECT="$(printf '%s' "$STDIN_JSON" | jq -r '.agent_type // empty' 2>/dev/null || true)"
+            ;;
+        SessionStart)
+            SUBJECT="$(printf '%s' "$STDIN_JSON" | jq -r '.source // empty' 2>/dev/null || true)"
+            ;;
+    esac
+fi
+
+# Forward a trimmed payload: the session id plus the tool/agent identifiers,
+# keeping the row small and free of prompt/tool_input contents (which can be
+# large or sensitive). Any jq failure degrades to no payload.
+PAYLOAD=""
+if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
+    PAYLOAD="$(printf '%s' "$STDIN_JSON" \
+        | jq -c '{session_id, tool_name, agent_type, agent_id, source} | with_entries(select(.value != null))' \
+        2>/dev/null || true)"
+fi
+
+# Assemble args. `--attach-active-run` associates the event with the active FSM
+# run's task id when one exists in this project (issue #327 open question 1),
+# falling back to untargeted otherwise.
+set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
+[ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
+[ -n "$PAYLOAD" ] && set -- "$@" --payload "$PAYLOAD"
+
+# Bounded, fully detached from the session: never block, never surface output,
+# always succeed. `odoo-sdk` itself exits 0 in a non-git cwd (prints a stderr
+# notice), so the timeout is the only remaining way it could return nonzero.
+timeout 10 odoo-sdk "$@" >/dev/null 2>&1 || true
+
+exit 0

@@ -235,6 +235,23 @@ def _open_local_db() -> TaskStateDB:
         sys.exit(0)
 
 
+def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
+    """Resolve which task ids a logged event attributes to.
+
+    An explicit ``--task-id`` (repeatable) always wins. Otherwise, when
+    ``--attach-active-run`` is passed, attach every active (RUNNING /
+    AWAITING_ANSWERS) run in the cwd-resolved project DB — the natural
+    association for a hook firing while an FSM run is in progress. With no
+    active run (or the flag absent) this yields ``[]``, i.e. untargeted
+    session-level activity, matching the pre-flag default.
+    """
+    if args.task_id:
+        return [str(task_id) for task_id in args.task_id]
+    if args.attach_active_run:
+        return [str(run.task_id) for run in db.get_all_active_runs()]
+    return []
+
+
 def cmd_log_event(args: argparse.Namespace) -> None:
     """Record a single Claude Code hook event into the local ``events`` table."""
     event_type = _resolve_source(args.source)
@@ -246,7 +263,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
             id=None,
             source=args.source,
             timestamp=timestamp,
-            task_ids=[str(task_id) for task_id in args.task_id],
+            task_ids=_resolve_task_ids(db, args),
             repo="",
             subject=args.subject,
             payload=payload,
@@ -296,6 +313,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         dest="task_id",
         help="Task id to attribute the event to (repeatable)",
+    )
+    log_p.add_argument(
+        "--attach-active-run",
+        action="store_true",
+        dest="attach_active_run",
+        help="Attach the event to any active run's task id when no explicit "
+        "--task-id is given (default: leave untargeted)",
     )
     log_p.add_argument(
         "--payload", default=None, help="Optional JSON object string of extra fields"
