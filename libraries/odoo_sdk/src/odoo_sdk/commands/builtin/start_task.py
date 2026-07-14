@@ -55,6 +55,10 @@ class StartTaskCommand(Command):
     project identity (the MCP tool performs any name-search disambiguation, user
     confirmation, and git branch setup) and creates the timesheet entry, chatter
     note, and local session.
+
+    The timesheet entry is a lightweight 0-hour ``[/] Work in progress`` anchor
+    for task-board visibility only. It is later closed out (real hours and final
+    description written) by the TUI/ETL upload path, not by ``stop_task``.
     """
 
     _name = "start_task"

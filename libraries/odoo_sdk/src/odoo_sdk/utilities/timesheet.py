@@ -81,9 +81,9 @@ def _scalar_id(result: Any) -> int:
 
     Odoo's ORM ``create`` answers a *batch* (list-of-dicts) call with ``[id]``
     and a *single* (dict) call with a scalar ``id``. A list id breaks the
-    SQLite bind in ``create_run`` and, one hop later, the timesheet write in
-    ``stop_task`` (``TypeError: unhashable type: list`` — #176). Unwrapping here
-    guarantees the stored id is always a scalar int.
+    SQLite bind in ``create_run`` and, one hop later, the reconcile timesheet
+    write on the upload path (``TypeError: unhashable type: list`` — #176).
+    Unwrapping here guarantees the stored id is always a scalar int.
     """
     if isinstance(result, (list, tuple)):
         return int(result[0])
@@ -154,9 +154,11 @@ def reconcile(
     """Upsert the real hours / description onto a task's anchor timesheet row.
 
     Idempotent: it writes the single anchor row and nothing else, so re-running
-    it (e.g. from ``stop_task`` and again from a TUI upload) only overwrites the
-    same row rather than accumulating duplicates. The anchor id is resolved from
-    the local session store; when no anchor is known the call is a no-op.
+    it (e.g. a re-triggered TUI/ETL upload) only overwrites the same row rather
+    than accumulating duplicates. It is the TUI/ETL upload path — **not**
+    ``stop_task`` — that calls this to write hours; ``stop_task`` only transitions
+    the local session. The anchor id is resolved from the local session store;
+    when no anchor is known the call is a no-op.
 
     :param client: The Odoo API client (the only writer of the timesheet row).
     :param state: The local state store the anchor id is resolved through.
