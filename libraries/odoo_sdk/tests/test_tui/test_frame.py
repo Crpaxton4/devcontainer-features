@@ -54,6 +54,7 @@ class TestCompose(unittest.TestCase):
         frame = compose_frame(SESSIONS, WINDOW, 100, 24)
         self.assertIn("export", frame.rows[-1])
         self.assertIn("quit", frame.rows[-1])
+        self.assertIn("r:resync", frame.rows[-1])
 
     def test_timeline_panel_titled(self):
         frame = compose_frame(SESSIONS, WINDOW, 100, 24)

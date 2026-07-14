@@ -37,6 +37,7 @@ _KEY_ACTIONS = {
 _EXPORT_MD_KEY = ord("e")
 _EXPORT_CSV_KEY = ord("c")
 _UPLOAD_KEY = ord("u")
+_RESYNC_KEY = ord("r")
 _QUIT_KEYS = (ord("q"), 27)  # q or ESC
 _CONFIRM_KEYS = (ord("y"), ord("Y"))
 
@@ -238,6 +239,34 @@ def _numeric_task_id(value: Any) -> Optional[int]:
         return None
 
 
+def _source_summary(outcome: dict[str, Any]) -> str:
+    """Render one puller's outcome: an inserted count or its skip reason."""
+    if "skipped" in outcome:
+        return f"skipped ({outcome['skipped']})"
+    return f"+{outcome['inserted']}"
+
+
+def _resync_status(result: dict[str, Any]) -> str:
+    """Render the resync status line: per-source inserted counts / skip reasons."""
+    if not result:
+        return "resync — nothing to do"
+    parts = [f"{source}: {_source_summary(outcome)}" for source, outcome in result.items()]
+    return "resync — " + ", ".join(parts)
+
+
+def do_resync(registry: Registry, state: AppState) -> AppState:
+    """Run the manual resync, re-query the window, and report per-source counts.
+
+    Reconciles the current repo's events (git commits, GitHub PRs/reviews, Odoo
+    chatter) into local state, then refreshes so any newly derivable sessions
+    appear immediately, and surfaces each source's inserted count (or skip
+    reason) on the status line.
+    """
+    result = registry["resync"].execute()
+    refreshed = refresh(registry, state)
+    return replace(refreshed, status=_resync_status(result), pending_upload=False)
+
+
 def handle_key(
     registry: Registry,
     state: AppState,
@@ -269,6 +298,8 @@ def handle_key(
         return do_export(state, registry, "csv", writer), False
     if key == _UPLOAD_KEY:
         return request_upload(state), False
+    if key == _RESYNC_KEY:
+        return do_resync(registry, state), False
     return state, False
 
 

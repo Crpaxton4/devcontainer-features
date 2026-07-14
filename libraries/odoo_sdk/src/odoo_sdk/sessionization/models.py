@@ -29,6 +29,7 @@ class EventType(Enum):
     MERGE = auto()
     REVIEW = auto()
     AGENT = auto()
+    CHATTER = auto()  # Odoo task chatter authored by the tracked user (resync)
     CLAUDE_HOOK = auto()  # Claude Code hook activity (source ``claude:<HookName>``)
 
 

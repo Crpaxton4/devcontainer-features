@@ -24,6 +24,7 @@ _SOURCE_TO_EVENT_TYPE = {
     "merge": EventType.MERGE,
     "review": EventType.REVIEW,
     "agent": EventType.AGENT,
+    "chatter": EventType.CHATTER,
 }
 # Reverse map. ``CLAUDE_HOOK`` has no single canonical source string (its
 # sources are the open-ended ``claude:<HookName>`` family), so it is given the
@@ -47,10 +48,10 @@ class UnknownEventSourceError(ValueError):
 def source_to_event_type(source: str) -> EventType:
     """Resolve an :class:`EventRecord` source string to its :class:`EventType`.
 
-    Known sources (``commit``/``merge``/``review``/``agent``) map directly. Any
-    ``claude:<HookName>`` source resolves to :class:`EventType.CLAUDE_HOOK`.
-    Anything else raises :class:`UnknownEventSourceError` rather than silently
-    defaulting to a commit.
+    Known sources (``commit``/``merge``/``review``/``agent``/``chatter``) map
+    directly. Any ``claude:<HookName>`` source resolves to
+    :class:`EventType.CLAUDE_HOOK`. Anything else raises
+    :class:`UnknownEventSourceError` rather than silently defaulting to a commit.
     """
     known = _SOURCE_TO_EVENT_TYPE.get(source)
     if known is not None:

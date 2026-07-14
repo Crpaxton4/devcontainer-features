@@ -327,6 +327,24 @@ def make_abort_run_tool(registry: Registry):
     return abort_run
 
 
+@atomic_tool("resync")
+def make_resync_tool(registry: Registry):
+    def resync(sources: str = "git,github,odoo") -> Dict[str, Any]:
+        """Reconcile local event state against git, GitHub, and Odoo chatter.
+
+        Manual, current-repo-scoped, idempotent reconciliation: pulls authored
+        git commits, merged GitHub PRs and reviews, and the authenticated user's
+        Odoo task chatter into the local events table, deduped by external id so a
+        re-run inserts nothing. Any source whose tool is absent or unauthenticated
+        is skipped (never fatal). ``sources`` is a comma-separated subset of
+        ``git,github,odoo`` (default: all three). Returns a per-source summary
+        dict of ``{"inserted": n}`` / ``{"skipped": reason}``.
+        """
+        return registry["resync"].execute(sources=sources)
+
+    return resync
+
+
 @atomic_tool("task_status")
 def make_task_status_tool(registry: Registry):
     def task_status() -> List[Dict[str, Any]]:
