@@ -261,6 +261,82 @@ check "a skill removed from staging is orphaned, not deleted, on re-sync" bash -
 
 rm -rf "$SKILLS_TEST_ROOT"
 
+# --- Claude Code lifecycle hooks delivery (#327) ------------------------------
+# install.sh installs the hook shim (claude-event-hook) and the settings merge
+# script (sync-claude-hooks) to /usr/local/bin (outside the CLAUDE_CONFIG_DIR
+# bind mount). sync-claude-hooks (feature-contributed postCreateCommand, after
+# sync-claude-skills) merges the feature-owned hooks block into the live
+# $CLAUDE_CONFIG_DIR/settings.json once the mount is active. Smoke assertions
+# first: both scripts exist, are executable, and are syntactically valid. The
+# merge itself doesn't run under `devcontainer features test` (no
+# postCreateCommand there), so the behavioural checks below drive it by hand
+# against a THROWAWAY config dir - never the real $CLAUDE_CONFIG_DIR.
+check "claude-event-hook is installed and executable" bash -c "test -x /usr/local/bin/claude-event-hook"
+check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/claude-event-hook"
+check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
+check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
+
+# The hook shim must skip PreToolUse for mcp__odoo__* tools (the odoo-sdk MCP
+# server already logs those server-side, #326/#340). Assert the guard is present
+# rather than relying on a live odoo-sdk being installed.
+check "claude-event-hook excludes mcp__odoo__* tools" bash -c \
+  "grep -q 'mcp__odoo__\\*' /usr/local/bin/claude-event-hook"
+# The shim must always exit 0 and pass --attach-active-run to odoo-sdk.
+check "claude-event-hook attaches the active run" bash -c \
+  "grep -q -- '--attach-active-run' /usr/local/bin/claude-event-hook"
+
+# The shim must no-op (exit 0) when odoo-sdk is absent from PATH. Run it with a
+# stripped PATH (coreutils only) so `odoo-sdk` cannot be found and pipe it an
+# empty payload; a nonzero exit here would block a real Claude session.
+check "claude-event-hook no-ops with exit 0 when odoo-sdk is absent" bash -c \
+  "printf '{}' | PATH=/usr/bin:/bin /usr/local/bin/claude-event-hook PreToolUse; test \$? -eq 0"
+
+# Behavioural checks for sync-claude-hooks against a throwaway CLAUDE_CONFIG_DIR.
+HOOKS_TEST_ROOT="$(mktemp -d)"
+
+# (a) No settings.json → created, valid JSON, contains all feature hook entries.
+HK_A="$HOOKS_TEST_ROOT/a"
+mkdir -p "$HK_A"
+check "sync-claude-hooks creates settings.json when absent" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && test -f \"$HK_A/settings.json\""
+check "created settings.json is valid JSON" bash -c "jq . \"$HK_A/settings.json\" >/dev/null"
+check "settings.json contains the feature PreToolUse hook (match-all matcher)" bash -c \
+  "[ \"\$(jq -r '.hooks.PreToolUse[0].matcher' \"$HK_A/settings.json\")\" = '*' ] && jq -e '.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook PreToolUse\"))' \"$HK_A/settings.json\" >/dev/null"
+check "settings.json contains all seven feature hook events" bash -c \
+  "for ev in SessionStart UserPromptSubmit PreToolUse SubagentStart SubagentStop Stop SessionEnd; do jq -e --arg e \"\$ev\" '.hooks[\$e][] | select(.hooks[].command | contains(\"claude-event-hook\"))' \"$HK_A/settings.json\" >/dev/null || exit 1; done"
+
+# (b) Running the sync TWICE yields no duplicate feature entries.
+check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+
+# (c) A pre-seeded user setting AND a user-authored hook survive the merge.
+HK_B="$HOOKS_TEST_ROOT/b"
+mkdir -p "$HK_B"
+cat > "$HK_B/settings.json" <<'JSON'
+{ "model": "opus", "env": {"FOO": "bar"},
+  "hooks": {
+    "PreToolUse": [ {"matcher": "Bash", "hooks": [{"type":"command","command":"/home/me/my-own-hook.sh"}]} ]
+  } }
+JSON
+check "sync-claude-hooks merges into a user-populated settings.json" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_B\" /usr/local/bin/sync-claude-hooks"
+check "a pre-seeded user setting survives the merge" bash -c \
+  "[ \"\$(jq -r '.model' \"$HK_B/settings.json\")\" = 'opus' ] && [ \"\$(jq -r '.env.FOO' \"$HK_B/settings.json\")\" = 'bar' ]"
+check "a user-authored hook survives the merge" bash -c \
+  "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
+check "the feature hook is added alongside the user's (two PreToolUse groups)" bash -c \
+  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '2' ]"
+
+# (d) A corrupt/unparseable settings.json is left strictly alone (never destroy
+# the user's real config).
+HK_C="$HOOKS_TEST_ROOT/c"
+mkdir -p "$HK_C"
+printf '{ this is : not json ' > "$HK_C/settings.json"
+check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" bash -c \
+  "before=\$(cat \"$HK_C/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_C\" /usr/local/bin/sync-claude-hooks; rc=\$?; [ \$rc -eq 0 ] && [ \"\$before\" = \"\$(cat \"$HK_C/settings.json\")\" ]"
+
+rm -rf "$HOOKS_TEST_ROOT"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from

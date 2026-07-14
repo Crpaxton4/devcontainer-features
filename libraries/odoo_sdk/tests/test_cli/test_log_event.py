@@ -149,6 +149,42 @@ class TestLogEvent(unittest.TestCase):
             _run(["log-event", "--source", "claude:SessionStart"])
         mock_assert.assert_not_called()
 
+    def test_attach_active_run_attaches_active_task_ids(self) -> None:
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        db.create_run(202, "Task B", 1, "Proj")
+        _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(sorted(events[0].task_ids), ["101", "202"])
+
+    def test_attach_active_run_no_active_runs_yields_empty(self) -> None:
+        _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, [])
+
+    def test_explicit_task_id_overrides_attach_active_run(self) -> None:
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PreToolUse",
+                "--attach-active-run",
+                "--task-id",
+                "999",
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, ["999"])
+
+    def test_no_attach_flag_leaves_task_ids_empty(self) -> None:
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        _run(["log-event", "--source", "claude:PreToolUse"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, [])
+
 
 class TestLogEventNonGitRepo(unittest.TestCase):
     def setUp(self) -> None:

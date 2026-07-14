@@ -103,6 +103,17 @@ fi
 # Installed like create-pr.
 install -m 0755 "$(dirname "$0")/sync-claude-skills" /usr/local/bin/sync-claude-skills
 
+# --- Claude Code lifecycle hooks (#327) -------------------------------------
+# claude-event-hook: the hook shim invoked by every feature-owned hook entry; it
+# forwards each Claude Code lifecycle event to `odoo-sdk log-event`. Installed to
+# /usr/local/bin (outside the CLAUDE_CONFIG_DIR bind mount) so it is always on
+# PATH at runtime. sync-claude-hooks: at runtime (postCreateCommand) merges the
+# feature-owned hooks block into the live, mounted $CLAUDE_CONFIG_DIR/
+# settings.json — the build-time directory is shadowed by the ~/.claude mount,
+# same reason as the skills sync above.
+install -m 0755 "$(dirname "$0")/claude-event-hook" /usr/local/bin/claude-event-hook
+install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-hooks
+
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
 # Feature install order/PATH propagation isn't reliably honored by every

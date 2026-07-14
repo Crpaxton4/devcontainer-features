@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# sync-claude-hooks — idempotently merge the feature-owned Claude Code lifecycle
+# hooks into $CLAUDE_CONFIG_DIR/settings.json.
+#
+# WHY THIS EXISTS: personal-features bind-mounts the host's ~/.claude over
+# $CLAUDE_CONFIG_DIR at runtime, so anything install.sh writes under that
+# directory at BUILD time is shadowed by the mount. Like sync-claude-skills,
+# this runs via the feature-contributed postCreateCommand — AFTER the mount is
+# active — so its edits land in the user's REAL host ~/.claude/settings.json and
+# persist across rebuilds and across projects.
+#
+# The hooks call `claude-event-hook <EventName>`, which forwards each event to
+# `odoo-sdk log-event` (see that script). PreToolUse fires on every tool call;
+# the shim excludes `mcp__odoo__*` tools (the odoo-sdk MCP server logs those
+# server-side, #326/#340), so we register PreToolUse with a match-all matcher
+# and let the shim enforce the exclusion.
+#
+# CARE WITH THE USER'S CONFIG: settings.json is the user's real file and may
+# hold their own settings AND their own hooks. This merge therefore:
+#   * creates the file (as {}) if absent;
+#   * replaces ONLY feature-owned hook entries — identified by the
+#     `claude-event-hook` command marker — on re-run, so it is idempotent and
+#     never accumulates duplicates;
+#   * preserves every user-owned setting and every user-authored hook untouched;
+#   * writes only after producing valid JSON (atomic temp-file swap);
+#   * leaves a corrupt/unparseable settings.json ALONE and warns, never
+#     destroying user config.
+set -euo pipefail
+
+# Absolute command path baked into the hook entries: robust regardless of the
+# PATH the hook runtime sees, and the stable marker used to find our own entries
+# on re-merge. Overridable so tests can point the entries at a fixture binary.
+HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
+# Substring that uniquely identifies a feature-owned hook command. Kept separate
+# from HOOK_CMD so an override of the path in tests doesn't weaken the marker.
+HOOK_MARKER="claude-event-hook"
+
+note() { echo "sync-claude-hooks: $1" >&2; }
+
+# CLAUDE_CONFIG_DIR is the user-scope Claude config root (it overrides ~/.claude).
+# Without it we don't know where settings.json lives, so there is nothing to do.
+if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
+    note "CLAUDE_CONFIG_DIR is unset; nothing to sync (skipping)."
+    exit 0
+fi
+
+# jq drives the merge; without it we cannot safely edit JSON, so no-op rather
+# than risk corrupting the user's config with text munging.
+if ! command -v jq >/dev/null 2>&1; then
+    note "jq not found; cannot merge hooks safely (skipping)."
+    exit 0
+fi
+
+SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
+
+# Ensure the config dir exists so temp files can be created INSIDE it (below):
+# keeping temps on the same filesystem as $SETTINGS makes the final `mv` a true
+# atomic rename rather than a cross-device copy+unlink (the bind-mounted config
+# dir is on a different filesystem from /tmp, so the default mktemp location
+# would defeat the atomicity this relies on).
+mkdir -p "$CLAUDE_CONFIG_DIR"
+
+# The feature-owned hooks block. Each event maps to a dedicated group carrying
+# only our command, so the marker-based removal below can strip exactly our
+# entries without touching user groups. All seven event names are verified
+# against the current Claude Code hooks reference; PreToolUse uses a match-all
+# matcher (the shim excludes mcp__odoo__* itself).
+OURS="$(jq -n --arg cmd "$HOOK_CMD" '
+  {
+    "SessionStart":     [ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ],
+    "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
+    "PreToolUse":       [ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ],
+    "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],
+    "SubagentStop":     [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStop")} ] } ],
+    "Stop":             [ { "hooks": [ {"type":"command","command":($cmd+" Stop")} ] } ],
+    "SessionEnd":       [ { "hooks": [ {"type":"command","command":($cmd+" SessionEnd")} ] } ]
+  }
+')"
+
+# Resolve the JSON we merge into. An absent file starts from {}. An existing but
+# UNPARSEABLE file is left strictly alone — clobbering the user's real settings
+# would be far worse than skipping the hook wiring.
+if [ -f "$SETTINGS" ]; then
+    if ! jq -e . "$SETTINGS" >/dev/null 2>&1; then
+        note "$SETTINGS is not valid JSON; leaving it untouched (hooks not merged)."
+        exit 0
+    fi
+    BASE_FILE="$SETTINGS"
+else
+    BASE_FILE="$(mktemp -p "$CLAUDE_CONFIG_DIR")"
+    printf '{}\n' > "$BASE_FILE"
+fi
+
+# Merge: for each event we own, drop any pre-existing group whose hooks include
+# our marker command (removing a prior run's entries — this is what makes the
+# merge idempotent), then append our fresh group. Groups without our marker —
+# i.e. every user-authored hook — are preserved verbatim, as is every other
+# top-level setting. `.hooks[$ev]` is coerced to [] only when it is absent or
+# not an array, so a user's own array is respected and a malformed scalar can't
+# crash the reduce.
+TMP_OUT="$(mktemp -p "$CLAUDE_CONFIG_DIR")"
+if jq \
+    --argjson ours "$OURS" \
+    --arg marker "$HOOK_MARKER" '
+    .hooks = (.hooks // {})
+    | reduce ($ours | keys_unsorted[]) as $ev (.;
+        .hooks[$ev] = (
+            ( (.hooks[$ev] // []) | if type == "array" then . else [] end )
+            | map(select(
+                ( [ (.hooks // [])[]? | .command? // "" ]
+                  | any(contains($marker)) ) | not
+              ))
+        ) + $ours[$ev]
+      )
+  ' "$BASE_FILE" > "$TMP_OUT" 2>/dev/null && jq -e . "$TMP_OUT" >/dev/null 2>&1; then
+    # Only now, with a validated result in hand, replace the real file. TMP_OUT
+    # lives in the same directory (hence same filesystem) as $SETTINGS, so this
+    # mv is a true atomic rename — a reader never sees a half-written file.
+    mv "$TMP_OUT" "$SETTINGS"
+    note "merged feature hooks into $SETTINGS."
+else
+    rm -f "$TMP_OUT"
+    note "failed to build a valid merged settings.json; leaving $SETTINGS untouched."
+    [ "$BASE_FILE" != "$SETTINGS" ] && rm -f "$BASE_FILE"
+    exit 0
+fi
+
+[ "$BASE_FILE" != "$SETTINGS" ] && rm -f "$BASE_FILE"
+exit 0
