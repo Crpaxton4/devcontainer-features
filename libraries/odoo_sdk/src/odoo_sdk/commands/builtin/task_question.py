@@ -4,7 +4,6 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.utilities.timesheet import emit_agent_event
 from odoo_sdk.state import TaskNotRunningError, TaskState
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
@@ -38,8 +37,6 @@ class TaskQuestionCommand(Command):
 
         if run.state == TaskState.RUNNING:
             run = db.transition_to_awaiting(task_id)
-
-        emit_agent_event(db, task_id, f"task_question: {question}")
 
         return {
             "task_name": run.task_name,

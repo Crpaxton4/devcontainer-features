@@ -6,9 +6,10 @@ is verified through the whole producer path with no live Odoo:
 
 * (a) exactly ONE ``account.analytic.line`` create per task even when
   ``start_task`` runs twice (idempotent anchor adoption — kills #177).
-* (b) ``AGENT`` rows appear in ``db.get_events()`` (producer side — #180).
-* (c) the incremental sessionizer derives a non-empty set of session windows
-  from those agent events, and ``query_sessions`` returns them.
+* (b) command bodies emit NO ``agent`` events themselves — as of #326 the sole
+  producer for the MCP tool surface is the ``_event_emitting`` wrapper in
+  :mod:`odoo_sdk.mcp.server` (covered by ``tests/test_mcp/test_server_events``),
+  so driving the commands directly writes no event rows.
 * (d) the only ``account.analytic.line`` write is the unified module's
   reconcile, and no record deletion is ever attempted.
 """
@@ -19,8 +20,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from odoo_sdk.adapters import ingest_events_incrementally
-from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
@@ -108,7 +107,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
             "project_name": "Accounting",
         }
 
-    def test_single_create_two_agent_events_and_sessions(self):
+    def test_single_create_single_write_and_no_command_body_events(self):
         client = _RecordingClient()
         db = _tmp_db()
 
@@ -134,20 +133,10 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # deletion happens (the recording client would crash loudly on unlink).
         self.assertEqual(len(client.analytic_calls("write")), 1)
 
-        # (b) AGENT rows landed for start + note + stop.
+        # (b) command bodies no longer emit agent events (#326): emission moved
+        # to the MCP dispatch wrapper, which this direct-command flow bypasses.
         agent = [e for e in db.get_events() if e.source == "agent"]
-        self.assertEqual(len(agent), 3)
-        self.assertTrue(all(e.task_ids == ["24648"] for e in agent))
-
-        # (c) the incremental sessionizer derives a non-empty window set the
-        # query command then returns.
-        created = ingest_events_incrementally(db, db.get_events(), gap_secs=3600)
-        self.assertGreaterEqual(created, 1)
-        windows = db.get_session_windows()
-        self.assertTrue(windows)
-        sessions = QuerySessionsCommand(client, state=db).execute()
-        self.assertTrue(sessions)
-        self.assertEqual(sessions[0]["task_id"], "24648")
+        self.assertEqual(agent, [])
 
     def test_repeated_start_before_reconcile_adopts_open_anchor(self):
         # Two starts on the same task while the first placeholder is still open

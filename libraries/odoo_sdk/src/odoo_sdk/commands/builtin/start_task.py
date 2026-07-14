@@ -9,7 +9,7 @@ from odoo_sdk.utilities.odoo_helpers import (
     get_employee_id,
     post_chatter_note,
 )
-from odoo_sdk.utilities.timesheet import emit_agent_event, ensure_anchor
+from odoo_sdk.utilities.timesheet import ensure_anchor
 
 
 def _get_employee_id(client: Any, db: Any) -> int:
@@ -111,7 +111,6 @@ class StartTaskCommand(Command):
             timesheet_id=timesheet_id,
         )
         post_chatter_note(self._client, task_id, "Work started on this task.")
-        emit_agent_event(db, task_id, f"start_task: {task_name}")
 
         return _build_run_result(
             run, task_id, task_name, project_name, timesheet_id,

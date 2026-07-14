@@ -52,6 +52,26 @@ class Registry:
         self._config = config
         self._commands: Dict[str, Type[Command]] = {}
 
+    @property
+    def state_client(self) -> LocalStateClient:
+        """Return the shared local state client, creating one on first access.
+
+        The client is resolved lazily and cached so merely building a registry
+        (or an MCP server around it) never forces the SQLite database into
+        existence; the store is only created the first time something actually
+        needs it — most notably the MCP dispatch event wrapper, which reads this
+        property at call time. Because resolution is deferred to first access,
+        a test (or any caller) may inject a fake by passing ``state_client`` to
+        the constructor, and this property returns that instance unchanged.
+
+        :return: The shared local state client.
+        :rtype: LocalStateClient
+        """
+
+        if self._state_client is None:
+            self._state_client = LocalStateClient()
+        return self._state_client
+
     def register(
         self,
         command_name: str,
