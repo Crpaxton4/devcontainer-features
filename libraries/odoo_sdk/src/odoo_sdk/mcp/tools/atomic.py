@@ -408,20 +408,6 @@ def make_optimize_sessions_tool(registry: Registry):
     return optimize_sessions
 
 
-@atomic_tool("ingest_sessions")
-def make_ingest_sessions_tool(registry: Registry):
-    def ingest_sessions(
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Ingest stored events into global cross-day sessions incrementally."""
-        return registry["ingest_sessions"].execute(
-            start_date=start_date, end_date=end_date
-        )
-
-    return ingest_sessions
-
-
 @atomic_tool("unbilled_hours")
 def make_unbilled_hours_tool(registry: Registry):
     def unbilled_hours(

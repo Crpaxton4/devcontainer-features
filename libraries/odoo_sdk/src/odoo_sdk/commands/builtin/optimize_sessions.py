@@ -1,11 +1,12 @@
 """Builtin command exposing the gap-sweep utilisation analysis (read-only).
 
-Session identity is now fixed by the configured gap and maintained incrementally
-(see :mod:`odoo_sdk.commands.builtin.ingest_sessions`). The gap sweep here is a
-decoupled, analysis-only reporting concern: it explores what utilisation *would*
-result at each candidate gap to recommend one, but it never materializes or
-mutates the ``sessions`` table, so it cannot shift the identity of detected
-sessions. It reports; it does not write.
+Session identity is fixed by the configured gap and sessions are derived from the
+``events`` timeseries at query time (see
+:meth:`odoo_sdk.state.LocalStateClient.derive_sessions_overlapping`). The gap
+sweep here is a decoupled, analysis-only reporting concern: it explores what
+utilisation *would* result at each candidate gap to recommend one, but it never
+materializes or mutates any session state, so it cannot shift the identity of
+detected sessions. It reports; it does not write.
 """
 
 from __future__ import annotations
@@ -69,8 +70,8 @@ class OptimizeSessionsCommand(Command):
 
     Reads raw events from the local ``events`` table and runs the gap sweep and
     utilisation optimizer purely to *report* the best-utilisation gap. It never
-    writes to the ``sessions`` table: session identity is owned by the fixed
-    configured gap and the incremental ingester, so this analysis is decoupled
+    writes any session state: session identity is owned by the fixed configured
+    gap and derived from events at query time, so this analysis is decoupled
     from it and cannot mutate it. All manual knobs (date range, sweep bounds,
     scoring coefficients) are keyword arguments so every manual interaction is a
     command argument rather than an in-script flag.

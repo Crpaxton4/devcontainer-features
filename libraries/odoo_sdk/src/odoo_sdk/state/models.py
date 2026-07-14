@@ -77,21 +77,16 @@ class EventRecord:
     branch: str = ""
     subject: str = ""
     payload: Optional[dict] = None
-    session_id: Optional[int] = None
-    """The ``sessions`` row this event is linked to, or ``None`` when unlinked.
-
-    Every non-excluded event is linked to exactly one session by the incremental
-    sessionizer; this column is the persisted event to session edge that lets
-    ingestion be maintained incrementally rather than rebuilt from scratch.
-    """
 
 
 @dataclass
 class SessionWindow:
-    """A per-task computed time window in the unified ``sessions`` table.
+    """A per-task computed time window derived from the ``events`` timeseries.
 
-    Rows are produced by the sessionization ETL and are queryable by date range.
-    They live alongside the ``task_runs`` FSM store rather than replacing it.
+    Windows are not stored: they are computed at query time by the SQL-derived
+    read path (:meth:`~odoo_sdk.state.LocalStateClient.derive_sessions_overlapping`)
+    and returned to callers. They live alongside the ``task_runs`` FSM store
+    rather than replacing it.
     """
 
     id: Optional[int]

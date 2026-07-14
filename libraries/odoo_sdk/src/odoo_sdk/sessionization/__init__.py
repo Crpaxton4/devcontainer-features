@@ -28,18 +28,6 @@ from .models import (
     TimeEntry,
     TransformResult,
 )
-from .incremental import (
-    AGENTLESS_REPO_SENTINEL,
-    IncrementalResult,
-    LinkDelta,
-    SessionEvent,
-    SessionState,
-    group_key,
-    rebuild_group,
-    resolve_repo,
-    sessionize_group,
-    with_resolved_repo,
-)
 from .render_csv import CSV_COLUMNS, default_description, render_odoo_csv
 from .render_markdown import render_markdown
 from .scoring import score_day, score_gap
@@ -81,16 +69,6 @@ __all__ = [
     "make_sessionization_context",
     "validate_single_strategy_ownership",
     "DuplicateStrategyOwnershipError",
-    "AGENTLESS_REPO_SENTINEL",
-    "SessionEvent",
-    "SessionState",
-    "LinkDelta",
-    "IncrementalResult",
-    "sessionize_group",
-    "rebuild_group",
-    "group_key",
-    "resolve_repo",
-    "with_resolved_repo",
     "compute_windows",
     "ceil_to_billing_step",
     "score_gap",

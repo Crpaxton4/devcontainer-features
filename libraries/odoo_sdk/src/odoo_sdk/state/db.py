@@ -9,8 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from odoo_sdk.sessionization.incremental import AGENTLESS_REPO_SENTINEL
-
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
@@ -21,6 +19,12 @@ from .models import (
     TaskRun,
     TaskState,
 )
+
+# Repo-less agent events cannot key on a real repository, so they are grouped
+# under this reserved sentinel. It is a valid, stable group key (never a real
+# ``owner/repo``) so such events still sessionize deterministically in the
+# SQL-derived read path (:meth:`LocalStateClient.derive_sessions_overlapping`).
+AGENTLESS_REPO_SENTINEL = "\x00agent"
 
 
 def _default_root() -> Path:
@@ -55,8 +59,10 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
-# Unified event/session model for the sessionization ETL. This is additive and
-# lives alongside the ``task_runs`` FSM above; it never modifies it.
+# Unified event timeseries for the sessionization ETL. This is additive and
+# lives alongside the ``task_runs`` FSM above; it never modifies it. Sessions are
+# derived from these events at query time (see ``_DERIVE_SESSIONS_SQL``); there is
+# no materialized ``sessions`` table, so nothing here can go stale.
 _SESSIONIZATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,24 +73,10 @@ CREATE TABLE IF NOT EXISTS events (
     pr_num     INTEGER NOT NULL DEFAULT 0,
     branch     TEXT    NOT NULL DEFAULT '',
     subject    TEXT    NOT NULL DEFAULT '',
-    payload    TEXT,
-    session_id INTEGER REFERENCES sessions (id) ON DELETE SET NULL
+    payload    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
-
-CREATE TABLE IF NOT EXISTS sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id       TEXT    NOT NULL,
-    repo          TEXT    NOT NULL DEFAULT '',
-    started_at    TEXT    NOT NULL,
-    ended_at      TEXT    NOT NULL,
-    strategy_name TEXT    NOT NULL DEFAULT 'development',
-    category      TEXT    NOT NULL DEFAULT 'Development',
-    pr_num        INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
 
 -- Idempotency ledger for the SQL-derived per-session timesheet uploads. Each
 -- derived session's stable key maps to the single account.analytic.line row it
@@ -220,21 +212,25 @@ def _get_project_dir() -> Path:
     return project_dir
 
 
-def _migrate_events_session_id(conn: sqlite3.Connection) -> None:
-    """Ensure ``events.session_id`` and its index exist on any DB.
+def _migrate_drop_materialized_sessions(conn: sqlite3.Connection) -> None:
+    """Drop the legacy materialized ``sessions`` table if present.
 
-    New databases get the column from the CREATE TABLE above; this guarded
-    ``ALTER TABLE`` adds it to databases created before the event to session
-    link existed. Both steps are idempotent. The index is created here (not in
-    the schema script) so it is only built after the column is guaranteed to
-    exist, whether the DB is new or migrated.
+    Sessions are now derived from ``events`` at query time, so the materialized
+    ``sessions`` table (and the event → session link that fed it) is dead. This
+    drops the table on any DB created before the change. Idempotent:
+    ``DROP TABLE IF EXISTS`` is a no-op once the table is gone.
+
+    The orphaned ``events.session_id`` column is deliberately left in place on
+    old DBs: dropping it needs ``ALTER TABLE DROP COLUMN`` (SQLite ≥ 3.35) and
+    the column is never written nor selected. Crucially it also carries a legacy
+    ``REFERENCES sessions`` foreign key baked into the ``events`` CREATE
+    statement; enforcing that FK after the parent table is gone would make every
+    ``events`` INSERT fail. Foreign-key enforcement is therefore left off (see
+    :meth:`LocalStateClient._connect`) — the current schema declares no foreign
+    keys at all — so the stale column and its dangling reference are wholly
+    inert.
     """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
-    if "session_id" not in columns:
-        conn.execute("ALTER TABLE events ADD COLUMN session_id INTEGER")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_events_session_id ON events (session_id)"
-    )
+    conn.execute("DROP TABLE IF EXISTS sessions")
 
 
 def _migrate_task_sessions_to_task_runs(conn: sqlite3.Connection) -> None:
@@ -292,8 +288,7 @@ def _parse_run(row: tuple) -> TaskRun:
 
 # Columns selected for every event read, in EventRecord field order.
 _EVENT_COLUMNS = (
-    "id, source, timestamp, task_ids, repo, pr_num, branch, subject, "
-    "payload, session_id"
+    "id, source, timestamp, task_ids, repo, pr_num, branch, subject, payload"
 )
 
 
@@ -321,7 +316,7 @@ def _bound_isoformat(ts: datetime) -> str:
 
 
 def _parse_event(row: tuple) -> EventRecord:
-    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload, session_id) = row
+    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload) = row
     return EventRecord(
         id=id_,
         source=source,
@@ -332,27 +327,6 @@ def _parse_event(row: tuple) -> EventRecord:
         branch=branch,
         subject=subject,
         payload=json.loads(payload) if payload else None,
-        session_id=session_id,
-    )
-
-
-# Columns selected for every session-window read, in SessionWindow field order.
-_SESSION_COLUMNS = (
-    "id, task_id, repo, started_at, ended_at, strategy_name, category, pr_num"
-)
-
-
-def _parse_session_window(row: tuple) -> SessionWindow:
-    (id_, task_id, repo, started, ended, strategy, category, pr_num) = row
-    return SessionWindow(
-        id=id_,
-        task_id=task_id,
-        repo=repo,
-        started_at=datetime.fromisoformat(started),
-        ended_at=datetime.fromisoformat(ended),
-        strategy_name=strategy,
-        category=category,
-        pr_num=pr_num,
     )
 
 
@@ -415,9 +389,11 @@ class LocalStateClient:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
-        # Enforce the events.session_id -> sessions.id FK (ON DELETE SET NULL)
-        # so deleting a session nulls its links rather than leaving orphans.
-        conn.execute("PRAGMA foreign_keys = ON")
+        # Foreign-key enforcement is intentionally left at SQLite's default (off).
+        # The current schema declares no foreign keys, and legacy DBs still carry
+        # an orphaned ``events.session_id REFERENCES sessions`` column; enforcing
+        # that dangling FK after the migration drops ``sessions`` would break
+        # every ``events`` INSERT (see _migrate_drop_materialized_sessions).
         return conn
 
     def _init_schema(self) -> None:
@@ -425,7 +401,7 @@ class LocalStateClient:
             _migrate_task_sessions_to_task_runs(conn)
             conn.executescript(_SCHEMA)
             conn.executescript(_SESSIONIZATION_SCHEMA)
-            _migrate_events_session_id(conn)
+            _migrate_drop_materialized_sessions(conn)
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
         with self._connect() as conn:
@@ -578,8 +554,8 @@ class LocalStateClient:
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO events (source, timestamp, task_ids, repo, pr_num, "
-                "branch, subject, payload, session_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "branch, subject, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event.source,
                     _normalize_utc_isoformat(event.timestamp),
@@ -589,7 +565,6 @@ class LocalStateClient:
                     event.branch,
                     event.subject,
                     json.dumps(event.payload) if event.payload is not None else None,
-                    event.session_id,
                 ),
             )
             event_id = cursor.lastrowid
@@ -625,146 +600,6 @@ class LocalStateClient:
                 tuple(params),
             ).fetchall()
         return [_parse_event(tuple(r)) for r in rows]
-
-    def set_event_session(self, event_id: int, session_id: Optional[int]) -> None:
-        """Set (or clear) the ``session_id`` link for one event.
-
-        Passing ``None`` unlinks the event. This is the primitive the
-        incremental sessionizer's link deltas are applied through.
-        """
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE events SET session_id = ? WHERE id = ?",
-                (session_id, event_id),
-            )
-
-    def get_events_for_session(self, session_id: int) -> list[EventRecord]:
-        """Return the events linked to one session, ordered by timestamp."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_EVENT_COLUMNS} FROM events WHERE session_id = ? "
-                "ORDER BY timestamp",
-                (session_id,),
-            ).fetchall()
-        return [_parse_event(tuple(r)) for r in rows]
-
-    def add_session_window(self, window: SessionWindow) -> SessionWindow:
-        """Insert one computed session window into the ``sessions`` table."""
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO sessions (task_id, repo, started_at, ended_at, "
-                "strategy_name, category, pr_num) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    window.task_id,
-                    window.repo,
-                    window.started_at.isoformat(),
-                    window.ended_at.isoformat(),
-                    window.strategy_name,
-                    window.category,
-                    window.pr_num,
-                ),
-            )
-            window_id = cursor.lastrowid
-        return self.get_session_window(window_id)  # type: ignore[return-value]
-
-    def get_session_window(self, window_id: int) -> Optional[SessionWindow]:
-        """Return one session window by id, or None."""
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT {_SESSION_COLUMNS} FROM sessions WHERE id = ?",
-                (window_id,),
-            ).fetchone()
-        return _parse_session_window(tuple(row)) if row else None
-
-    def get_session_windows(
-        self,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
-    ) -> list[SessionWindow]:
-        """Return session windows ordered by start, optionally range-bounded."""
-        clauses: list[str] = []
-        params: list[str] = []
-        if start is not None:
-            clauses.append("started_at >= ?")
-            params.append(start.isoformat())
-        if end is not None:
-            clauses.append("started_at < ?")
-            params.append(end.isoformat())
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_SESSION_COLUMNS} FROM sessions{where} "
-                "ORDER BY started_at",
-                tuple(params),
-            ).fetchall()
-        return [_parse_session_window(tuple(r)) for r in rows]
-
-    def update_session_window(self, window: SessionWindow) -> SessionWindow:
-        """Update the mutable fields of an existing session window in place.
-
-        Used by the incremental sessionizer when an ingest extends or shrinks a
-        session's bounds without changing its identity (row id preserved).
-        """
-        if window.id is None:
-            raise ValueError("update_session_window requires a persisted window id")
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET task_id = ?, repo = ?, started_at = ?, "
-                "ended_at = ?, strategy_name = ?, category = ?, pr_num = ? "
-                "WHERE id = ?",
-                (
-                    window.task_id,
-                    window.repo,
-                    window.started_at.isoformat(),
-                    window.ended_at.isoformat(),
-                    window.strategy_name,
-                    window.category,
-                    window.pr_num,
-                    window.id,
-                ),
-            )
-        return self.get_session_window(window.id)  # type: ignore[return-value]
-
-    def delete_session_window(self, window_id: int) -> None:
-        """Delete one session window; the FK nulls any lingering event links."""
-        with self._connect() as conn:
-            conn.execute("DELETE FROM sessions WHERE id = ?", (window_id,))
-
-    def get_sessions_overlapping(
-        self,
-        start: datetime,
-        end: datetime,
-        *,
-        task_id: Optional[str] = None,
-        repo: Optional[str] = None,
-        strategy_name: Optional[str] = None,
-    ) -> list[SessionWindow]:
-        """Return whole sessions that overlap ``[start, end]``.
-
-        A session overlaps when ``started_at <= end AND ended_at >= start``. The
-        session is returned whole (its true global boundaries), never clipped to
-        the query range, so cross-day and cross-range sessions read identically
-        regardless of the window they are queried through. Optional ``task_id``,
-        ``repo``, and ``strategy_name`` filters narrow the result.
-        """
-        clauses = ["started_at <= ?", "ended_at >= ?"]
-        params: list[str] = [end.isoformat(), start.isoformat()]
-        for column, value in (
-            ("task_id", task_id),
-            ("repo", repo),
-            ("strategy_name", strategy_name),
-        ):
-            if value is not None:
-                clauses.append(f"{column} = ?")
-                params.append(value)
-        where = " AND ".join(clauses)
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_SESSION_COLUMNS} FROM sessions WHERE {where} "
-                "ORDER BY started_at",
-                tuple(params),
-            ).fetchall()
-        return [_parse_session_window(tuple(r)) for r in rows]
 
     def derive_sessions_overlapping(
         self,
@@ -900,15 +735,6 @@ class LocalStateClient:
                 "uploaded_at = excluded.uploaded_at",
                 (session_key, timesheet_id, hours, uploaded_at),
             )
-
-    def clear_session_windows(self) -> None:
-        """Delete all computed session windows (a fresh materialization).
-
-        The events.session_id FK (ON DELETE SET NULL) unlinks every event so no
-        dangling link survives a full re-materialization.
-        """
-        with self._connect() as conn:
-            conn.execute("DELETE FROM sessions")
 
     def get_setting(self, key: str) -> Optional[str]:
         with self._connect() as conn:

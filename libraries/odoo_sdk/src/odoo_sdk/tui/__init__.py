@@ -2,8 +2,9 @@
 
 This package is a third interaction surface, peer to :mod:`odoo_sdk.cli` and
 :mod:`odoo_sdk.mcp`. It visually explores the global, date-queryable sessions
-produced by the incremental sessionizer over a date window, with the hero view a
-timeline of session bars per lane so parallel work is visible at a glance.
+derived from the ``events`` timeseries at query time over a date window, with the
+hero view a timeline of session bars per lane so parallel work is visible at a
+glance.
 
 The surface composes commands only — it holds no business logic. Every pure
 building block (color quantization, the braille/block graph canvas, box-panel

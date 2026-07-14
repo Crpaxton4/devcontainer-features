@@ -288,7 +288,7 @@ _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 # The fixed sessionization inactivity gap, in minutes. Seeded from the pure
 # core's historical default (``DEFAULT_WINDOW_GAP_SECS`` = 3600s = 60 min). This
 # gap is a stable session-identity constant, not a per-run tuning knob: it is
-# what the incremental sessionizer uses to decide session boundaries.
+# what the SQL-derived read path uses to decide session boundaries.
 _DEFAULT_SESSION_GAP_MINS = 60
 
 # Environment variables that override behavior settings when no file value is set.

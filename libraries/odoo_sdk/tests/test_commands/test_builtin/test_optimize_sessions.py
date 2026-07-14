@@ -59,14 +59,14 @@ class TestOptimizeSessionsCommand(unittest.TestCase):
         self.assertGreaterEqual(result["best_gap_mins"], 30)
 
     def test_analysis_never_mutates_sessions(self):
-        # The optimizer is decoupled/read-only: it must not write session rows,
+        # The optimizer is decoupled/read-only: it must not mutate stored state,
         # and it no longer exposes a persistence knob or count.
         state = _tmp_state()
         _seed(state)
         result = self._command(state).execute(
             start_date="2026-06-01", end_date="2026-06-01"
         )
-        self.assertEqual(state.get_session_windows(), [])
+        self.assertEqual(len(state.get_events()), 3)  # events untouched
         self.assertNotIn("persisted_windows", result)
 
     def test_metadata(self):
