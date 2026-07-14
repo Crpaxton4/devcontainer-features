@@ -773,7 +773,6 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "task_aging": (),
             "task_question": (5, "q?"),
             "optimize_sessions": (),
-            "ingest_sessions": (),
             "query_sessions": (),
             "timesheet_summary": ("2026-07-01", "2026-07-31"),
             "unbilled_hours": (),

@@ -1,4 +1,4 @@
-"""Tests for the ingest_sessions and query_sessions builtin commands."""
+"""Tests for the query_sessions builtin command."""
 
 import tempfile
 import unittest
@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from odoo_sdk.commands.builtin import IngestSessionsCommand, QuerySessionsCommand
+from odoo_sdk.commands.builtin import QuerySessionsCommand
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
 
 UTC = timezone.utc
@@ -32,54 +32,6 @@ def _commit(state, minute, hour=9, day=1, task="101", repo="o/r"):
             repo=repo,
         )
     )
-
-
-class TestIngestSessionsCommand(unittest.TestCase):
-    def _cmd(self, state, config=None):
-        return IngestSessionsCommand(
-            client=MagicMock(), state=state, config=config or _config()
-        )
-
-    def test_ingests_and_links(self):
-        state = _tmp_state()
-        _commit(state, 0)
-        _commit(state, 20)
-        _commit(state, 40)
-        result = self._cmd(state).execute()
-        self.assertEqual(result["events_considered"], 3)
-        self.assertEqual(result["gap_mins"], 60)
-        self.assertEqual(len(state.get_session_windows()), 1)
-        self.assertTrue(all(e.session_id for e in state.get_events()))
-
-    def test_date_range_filters_events(self):
-        state = _tmp_state()
-        _commit(state, 0, day=1)
-        _commit(state, 0, day=5)
-        result = self._cmd(state).execute(
-            start_date="2026-06-01", end_date="2026-06-01"
-        )
-        self.assertEqual(result["events_considered"], 1)
-
-    def test_uses_configured_gap(self):
-        state = _tmp_state()
-        _commit(state, 0, hour=9)
-        _commit(state, 0, hour=11)  # 2h apart
-        # With a 180-min gap, the two events fall into one session.
-        self._cmd(state, config=_config(180)).execute()
-        self.assertEqual(len(state.get_session_windows()), 1)
-
-    def test_idempotent(self):
-        state = _tmp_state()
-        _commit(state, 0)
-        _commit(state, 20)
-        self._cmd(state).execute()
-        self._cmd(state).execute()
-        self.assertEqual(len(state.get_session_windows()), 1)
-
-    def test_metadata(self):
-        cmd = self._cmd(_tmp_state())
-        self.assertEqual(cmd.name, "ingest_sessions")
-        self.assertTrue(cmd.description)
 
 
 class TestQuerySessionsCommand(unittest.TestCase):

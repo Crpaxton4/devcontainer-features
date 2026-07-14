@@ -12,8 +12,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from odoo_sdk.sessionization.incremental import AGENTLESS_REPO_SENTINEL
 from odoo_sdk.state import EventRecord, LocalStateClient, session_key
+from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
 
 UTC = timezone.utc
 GAP = 3600  # one hour

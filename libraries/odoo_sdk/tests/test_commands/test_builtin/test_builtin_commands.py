@@ -165,7 +165,6 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "task_aging",
         "task_question",
         "optimize_sessions",
-        "ingest_sessions",
         "query_sessions",
         "timesheet_summary",
         "unbilled_hours",
