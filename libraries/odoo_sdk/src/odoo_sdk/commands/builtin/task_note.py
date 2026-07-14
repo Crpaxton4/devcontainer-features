@@ -4,7 +4,6 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.utilities.timesheet import emit_agent_event
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
@@ -37,7 +36,6 @@ class TaskNoteCommand(Command):
 
         message_id = post_chatter_note(self._client, task_id, note)
         db.append_note(task_id, note)
-        emit_agent_event(db, task_id, f"task_note: {note}")
         return {
             "task_name": run.task_name,
             "message_id": message_id,

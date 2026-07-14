@@ -5,7 +5,6 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.utilities.timesheet import emit_agent_event
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
@@ -33,7 +32,6 @@ class ResumeTaskCommand(Command):
             task_id,
             "Resuming implementation with received answers.",
         )
-        emit_agent_event(db, task_id, f"resume_task: {run.task_name}")
         resumed_at = datetime.now(timezone.utc).isoformat()
         return {
             "task_name": run.task_name,

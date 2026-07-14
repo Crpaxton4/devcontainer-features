@@ -632,23 +632,24 @@ class TestStopTaskCommand(unittest.TestCase):
         mock_reconcile.assert_called_once()
 
 
-# ── AGENT event production (issue #180) ───────────────────────────────────────
+# ── AGENT event production moved to the MCP wrapper (issue #326) ───────────────
 
-class TestAgentEventProduction(unittest.TestCase):
-    """Every task-scoped FSM tool must emit exactly one AGENT event.
+class TestNoAgentEventFromCommandBody(unittest.TestCase):
+    """FSM command bodies no longer emit AGENT events themselves (#326).
 
-    The sessionization ETL is fully wired to *consume* ``EventType.AGENT``; these
-    tests assert the previously-missing *producer* side so agent work reaches
-    ``events -> sessions -> billing``.
+    Emission was consolidated into the generic ``_event_emitting`` wrapper in
+    :mod:`odoo_sdk.mcp.server`, which became the *sole* producer for the MCP tool
+    surface. Executing a command directly (bypassing the server) must therefore
+    write no ``agent`` event; these tests pin that the internal
+    ``emit_agent_event`` calls were removed from the command bodies.
     """
 
-    def _assert_one_agent_event(self, db, task_id):
+    def _assert_no_agent_event(self, db):
         events = db.get_events()
         agent = [e for e in events if e.source == "agent"]
-        self.assertEqual(len(agent), 1)
-        self.assertEqual(agent[0].task_ids, [str(task_id)])
+        self.assertEqual(agent, [])
 
-    def test_start_task_emits_agent_event(self):
+    def test_start_task_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
         with (
@@ -660,9 +661,9 @@ class TestAgentEventProduction(unittest.TestCase):
             _cmd_with_db(StartTaskCommand, client, db).execute(
                 task_id=10, task_name="Fix", project_id=5, project_name="Acct"
             )
-        self._assert_one_agent_event(db, 10)
+        self._assert_no_agent_event(db)
 
-    def test_stop_task_emits_agent_event(self):
+    def test_stop_task_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
@@ -671,9 +672,9 @@ class TestAgentEventProduction(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.stop_task.reconcile"),
         ):
             _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
-        self._assert_one_agent_event(db, 1)
+        self._assert_no_agent_event(db)
 
-    def test_task_note_emits_agent_event(self):
+    def test_task_note_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
@@ -683,9 +684,9 @@ class TestAgentEventProduction(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.task_note.post_chatter_note", return_value=1),
         ):
             TaskNoteCommand(client).execute(1, "progress note")
-        self._assert_one_agent_event(db, 1)
+        self._assert_no_agent_event(db)
 
-    def test_task_question_emits_agent_event(self):
+    def test_task_question_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
@@ -695,9 +696,9 @@ class TestAgentEventProduction(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.task_question.post_chatter_note", return_value=1),
         ):
             TaskQuestionCommand(client).execute(1, "which approach?")
-        self._assert_one_agent_event(db, 1)
+        self._assert_no_agent_event(db)
 
-    def test_resume_task_emits_agent_event(self):
+    def test_resume_task_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
@@ -708,7 +709,7 @@ class TestAgentEventProduction(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.resume_task.post_chatter_note", return_value=1),
         ):
             ResumeTaskCommand(client).execute(1)
-        self._assert_one_agent_event(db, 1)
+        self._assert_no_agent_event(db)
 
 
 if __name__ == "__main__":

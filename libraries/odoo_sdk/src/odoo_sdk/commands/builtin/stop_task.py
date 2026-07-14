@@ -4,7 +4,7 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskNotRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.utilities.timesheet import emit_agent_event, reconcile
+from odoo_sdk.utilities.timesheet import reconcile
 
 
 def _finalize_description(description: str) -> str:
@@ -50,7 +50,6 @@ class StopTaskCommand(Command):
         # reconcile is idempotent (upserts the one anchor) and resolves the id
         # from the active run before it is stopped below.
         reconcile(self._client, db, task_id, final_description, elapsed_hours)
-        emit_agent_event(db, task_id, f"stop_task: {run.task_name}")
 
         stopped = db.stop_run(task_id)
 

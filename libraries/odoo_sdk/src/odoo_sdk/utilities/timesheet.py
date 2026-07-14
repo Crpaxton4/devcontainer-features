@@ -44,9 +44,15 @@ def emit_agent_event(
 
     The FSM tools do measurable work but historically emitted no sessionization
     events, so agent activity never reached ``events -> sessions -> billing``.
-    This is the missing producer: every task-scoped tool call logs an ``agent``
-    event that the persistence adapter maps to ``EventType.AGENT`` and the
-    ``development`` session-kind strategy then derives session windows from.
+    This helper is the single-task-scoped producer that logs an ``agent`` event
+    the persistence adapter maps to ``EventType.AGENT`` and the ``development``
+    session-kind strategy then derives session windows from.
+
+    As of #326, MCP tool dispatch events are **not** emitted through here: the
+    generic ``_event_emitting`` wrapper in :mod:`odoo_sdk.mcp.server` is the sole
+    producer for the MCP tool surface (it builds the ``EventRecord`` directly so
+    non-task-scoped tools can log with an empty task scope). This helper remains
+    for other callers that record a single-task event.
 
     Agent events are repo-less; the sessionizer groups them under its reserved
     repo-less sentinel, so no repo is threaded here.

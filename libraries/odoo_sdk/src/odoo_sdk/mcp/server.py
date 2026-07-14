@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Union
 
@@ -14,7 +15,11 @@ from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.state.models import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.state.models import (
+    EventRecord,
+    TaskAlreadyRunningError,
+    TaskNotRunningError,
+)
 from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
@@ -189,6 +194,190 @@ def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+#: Bound-argument names, in priority order, whose value supplies the human
+#: readable detail appended to an event subject. The first one present on a
+#: dispatch wins; when none is present the subject is just the tool name.
+_EVENT_DETAIL_KEYS: Tuple[str, ...] = ("task_name", "note", "question", "description")
+
+#: Maximum length of the detail suffix in an event subject.
+_EVENT_DETAIL_LIMIT = 120
+
+#: Maximum stringified length of each scalar argument stored in a payload.
+_EVENT_ARG_LIMIT = 80
+
+#: Argument types recorded verbatim (stringified) in an event payload. Complex
+#: values (lists, dicts, the FastMCP ``ctx``, ...) are omitted so the payload
+#: stays a flat, JSON-serializable map of the call's scalar inputs.
+_EVENT_SCALAR_TYPES: Tuple[type, ...] = (str, int, float, bool)
+
+
+def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
+    """Return the task-scope for an event from a call's bound arguments.
+
+    A tool that takes an int-coercible ``task_id`` attributes its event to that
+    task; every other tool (non-task-scoped) logs with an empty task scope so the
+    event still lands in the timeseries without a spurious attribution.
+
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: ``[str(task_id)]`` when present and int-coercible, else ``[]``.
+    :rtype: list[str]
+    """
+
+    task_id = arguments.get("task_id")
+    if task_id is None:
+        return []
+    try:
+        int(task_id)
+    except (TypeError, ValueError):
+        return []
+    return [str(task_id)]
+
+
+def _event_subject(name: str, arguments: dict[str, Any]) -> str:
+    """Compose the event subject from the tool name and one detail argument.
+
+    :param name: Public tool name.
+    :type name: str
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: ``"{name}: {detail}"`` for the first present detail arg (truncated
+        to :data:`_EVENT_DETAIL_LIMIT`), else the bare tool name.
+    :rtype: str
+    """
+
+    for key in _EVENT_DETAIL_KEYS:
+        if key in arguments:
+            detail = str(arguments[key])[:_EVENT_DETAIL_LIMIT]
+            return f"{name}: {detail}"
+    return name
+
+
+def _event_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Build the structured event payload for a dispatch.
+
+    :param name: Public tool name.
+    :type name: str
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: ``{"tool": name, "args": {<scalar arg>: str(value)[:80]}}``.
+    :rtype: dict[str, Any]
+    """
+
+    args = {
+        key: str(value)[:_EVENT_ARG_LIMIT]
+        for key, value in arguments.items()
+        if isinstance(value, _EVENT_SCALAR_TYPES)
+    }
+    return {"tool": name, "args": args}
+
+
+def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
+    """Append one ``source="agent"`` event describing a successful dispatch.
+
+    The record is built directly (rather than via
+    :func:`odoo_sdk.utilities.timesheet.emit_agent_event`, which requires a
+    single task id) so non-task-scoped tools can log with an empty task scope.
+
+    :param state: The local state store the event is appended to.
+    :type state: Any
+    :param name: Public tool name.
+    :type name: str
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: None.
+    :rtype: None
+    """
+
+    state.add_event(
+        EventRecord(
+            id=None,
+            source="agent",
+            timestamp=datetime.now(timezone.utc),
+            task_ids=_event_task_ids(arguments),
+            repo="",
+            subject=_event_subject(name, arguments),
+            payload=_event_payload(name, arguments),
+        )
+    )
+
+
+def _bound_arguments(
+    signature: inspect.Signature, args: tuple, kwargs: dict
+) -> dict[str, Any]:
+    """Bind a call's positional/keyword args to names, dropping any ``ctx``.
+
+    :param signature: The wrapped tool's signature.
+    :type signature: inspect.Signature
+    :param args: Positional arguments the tool was called with.
+    :type args: tuple
+    :param kwargs: Keyword arguments the tool was called with.
+    :type kwargs: dict
+    :return: A name to value map of the bound arguments, without ``ctx``.
+    :rtype: dict[str, Any]
+    """
+
+    bound = dict(signature.bind_partial(*args, **kwargs).arguments)
+    bound.pop("ctx", None)
+    return bound
+
+
+def _event_emitting(
+    tool_fn: Callable[..., Any], name: str, registry: Registry
+) -> Callable[..., Any]:
+    """Wrap a tool callable so a *successful* dispatch emits one agent event.
+
+    This is the sole event producer for the MCP tool surface: it is applied
+    innermost (closest to the real tool), so the event is written only after the
+    tool returns — an exception propagates outward, past the emit, and no event
+    is recorded. The state store is resolved from ``registry.state_client`` at
+    call time (never at registration), so building a server never forces the
+    SQLite database into existence and a test can inject a fake. The whole
+    emission is guarded by ``try/except`` because telemetry must never break a
+    tool call. Sync and async tools are handled separately, and the original
+    typed signature is preserved so FastMCP builds the same wire schema.
+
+    :param tool_fn: The tool callable to wrap.
+    :type tool_fn: Callable[..., Any]
+    :param name: Public tool name recorded on the event.
+    :type name: str
+    :param registry: Registry whose ``state_client`` receives the event.
+    :type registry: Registry
+    :return: A signature-preserving wrapper that emits one event on success.
+    :rtype: Callable[..., Any]
+    """
+    signature = inspect.signature(tool_fn)
+
+    def emit(args: tuple, kwargs: dict) -> None:
+        try:
+            _emit_tool_event(
+                registry.state_client, name, _bound_arguments(signature, args, kwargs)
+            )
+        except Exception:
+            # Telemetry is best-effort: a failing state store (or any hiccup
+            # binding/serializing arguments) must never break the tool call.
+            pass
+
+    if asyncio.iscoroutinefunction(tool_fn):
+
+        @functools.wraps(tool_fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            result = await tool_fn(*args, **kwargs)
+            emit(args, kwargs)
+            return result
+
+    else:
+
+        @functools.wraps(tool_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            result = tool_fn(*args, **kwargs)
+            emit(args, kwargs)
+            return result
+
+    wrapper.__signature__ = signature
+    return wrapper
+
+
 class OdooMCPServer:
     """Expose a set of explicit MCP tools built from a command :class:`Registry`.
 
@@ -240,14 +429,18 @@ class OdooMCPServer:
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.
 
-        Each tool callable is wrapped in three layers, innermost first: an
-        :func:`_error_boundary` that turns caller-actionable exceptions into a
-        uniform ``{"error": {...}}`` payload, then :func:`_to_toon` (a no-op
-        unless ``ODOO_TOON_OUTPUT`` is set) so that payload TOON-encodes like any
-        other result, and — when profiling is enabled — a :func:`_profiled`
-        wrapper so every dispatch is captured. All wrappers preserve the original
-        typed signature so the wire schema (including any FastMCP ``ctx``
-        parameter) is unchanged.
+        Each tool callable is wrapped in layers, innermost first: an
+        :func:`_event_emitting` wrapper that records exactly one ``agent`` event
+        per successful dispatch (the sole event producer for the tool surface),
+        then an :func:`_error_boundary` that turns caller-actionable exceptions
+        into a uniform ``{"error": {...}}`` payload, then :func:`_to_toon` (a
+        no-op unless ``ODOO_TOON_OUTPUT`` is set) so that payload TOON-encodes
+        like any other result, and — when profiling is enabled — a
+        :func:`_profiled` wrapper so every dispatch is captured. Because the
+        event wrapper is innermost, a tool that raises propagates its exception
+        past the emit (no event) and out to the boundary. All wrappers preserve
+        the original typed signature so the wire schema (including any FastMCP
+        ``ctx`` parameter) is unchanged.
 
         :return: None.
         :rtype: None
@@ -255,6 +448,7 @@ class OdooMCPServer:
 
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
+            tool_fn = _event_emitting(tool_fn, name, self.registry)
             tool_fn = _error_boundary(tool_fn)
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
