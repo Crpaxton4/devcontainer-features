@@ -1,7 +1,7 @@
 
 # Personal Features (personal-features)
 
-Installs the owner's personal dev container tooling: Claude Code (wrapped to auto-connect to the IDE), productivity/navigation CLIs, gitleaks secret scanning, machine-wide Conventional Commits + secret-scanning git hooks, and shell enhancements (Starship, aliases, persisted history) - and persists Claude's, the gh CLI's, and shell history config across container rebuilds and across projects. This is the owner's personal, opinionated setup, not a configurable toolkit, so it has no options: tools are added or removed outright rather than gated behind flags.
+Installs the owner's personal dev container tooling: Claude Code (wrapped to auto-connect to the IDE), productivity/navigation CLIs, the qsv CSV toolkit, gitleaks secret scanning, machine-wide Conventional Commits + secret-scanning git hooks, Claude Code lifecycle hooks that record session/tool-call activity into the odoo-sdk local state DB, and shell enhancements (Starship, aliases, persisted history) - and persists Claude's, the gh CLI's, and shell history config across container rebuilds and across projects. This is the owner's personal, opinionated setup, not a configurable toolkit, so it has no options: tools are added or removed outright rather than gated behind flags.
 
 ## Example Usage
 
@@ -162,12 +162,62 @@ github_templates:
 
 The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] && [ -t 0 ]`) rather than maintaining an allowlist of subcommands to *exclude*. The old allowlist had to be hand-edited for every new subcommand, and any subcommand it hadn't been taught about was silently turned into `claude --ide <subcommand>`; the inverted rule can never break a new Claude Code subcommand. **Accepted trade-off:** `claude -c`, `claude -r`, and `claude "prompt"` no longer auto-get `--ide` — pass it explicitly if you want it there.
 
+## Claude Code lifecycle hooks (odoo-sdk event capture)
+
+This Feature provisions a set of Claude Code lifecycle hooks that record session
+and tool-call activity into the odoo-sdk local state DB, so time/activity
+sessionization has an automatic event stream to work from. This is
+infrastructure-level capture: the agent never has to think about logging its own
+activity — the hooks fire automatically around every session transition and tool
+call.
+
+The hooks are wired into `$CLAUDE_CONFIG_DIR/settings.json` at container-create
+time by the feature-contributed `postCreateCommand` (which runs
+`sync-claude-skills && sync-claude-hooks`). Build-time writes under
+`CLAUDE_CONFIG_DIR` are shadowed by the `~/.claude` bind mount, so the merge has
+to happen at runtime — the same pattern the skills sync uses.
+
+**What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
+forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
+following events are wired (verified against the current Claude Code hooks
+reference):
+
+- `SessionStart`, `SessionEnd` — session boundaries.
+- `UserPromptSubmit` — a prompt was submitted.
+- `PreToolUse` — a tool is about to run (subject = the tool name).
+- `SubagentStart`, `SubagentStop` — subagent boundaries (subject = agent type).
+- `Stop` — the assistant finished responding.
+
+Only a small, non-sensitive payload is forwarded (`session_id`, plus
+`tool_name`/`agent_type`/`agent_id`/`source` where present) — never prompt text
+or `tool_input` contents. Events are attributed to the active odoo-sdk run's
+task id when one exists in the current project (via `--attach-active-run`), and
+are left untargeted (session-level) otherwise.
+
+**`PreToolUse` excludes `mcp__odoo__*` tools.** The odoo-sdk MCP server already
+logs its own tool dispatches server-side, so `claude-event-hook` skips those to
+avoid double-counting.
+
+**Never blocks a session.** `claude-event-hook` always exits 0, never writes to
+stdout (which the hooks contract could interpret as a permission decision),
+runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
+installed (e.g. Python <3.10 base images) or the cwd isn't a git repo.
+
+**Opting out.** The merge only ever replaces its own entries (identified by the
+`claude-event-hook` command) and preserves all your other settings and hooks. To
+disable the capture, remove the `claude-event-hook` entries from
+`~/.claude/settings.json` (they will be re-added on the next container create) —
+or, to disable it permanently, drop the `sync-claude-hooks` step from the
+Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
+untouched (and a warning printed) rather than overwritten.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
 
 - Language-agnostic productivity/navigation CLIs: `ripgrep`, `fd`, `fzf`, `bat`, `jq`, `yq`, `eza`, `zoxide`, `tldr` (tealdeer).
 - [`delta`](https://github.com/dandavison/delta) for syntax-highlighted git diffs, and [`lazygit`](https://github.com/jesseduffield/lazygit) as a terminal git UI. `delta` is wired in machine-wide via `git config --system core.pager delta` and `interactive.diffFilter "delta --color-only"`, so `git diff`/`git log -p`/`git show` render through it and `git add -p` hunks are highlighted, in every repo with no per-repo setup.
+- [`qsv`](https://github.com/dathere/qsv) — a fast CSV data-wrangling toolkit for slicing, filtering, joining, and profiling the CSV exports that Odoo work throws off. Ships as a bundle of binaries; only the `qsv` binary is put on `PATH` (the static musl build on x86_64, the gnu build on arm64).
 - [`gitleaks`](https://github.com/gitleaks/gitleaks) for secret scanning. Usable manually, and invoked automatically by the global `pre-commit` hook below.
 - [`coderabbit`](https://docs.coderabbit.ai/cli) (CodeRabbit CLI) for AI code review, and to back the Claude Code CodeRabbit plugin — see the [CodeRabbit CLI](#coderabbit-cli) section above for auth and config-persistence details.
 - Standards enforced **machine-wide** rather than per-repo, since most of this owner's projects aren't mature enough to have their own hook config checked in. Sets `git config --system core.hooksPath` to a Feature-installed directory (`/usr/local/share/git-hooks`) containing:
