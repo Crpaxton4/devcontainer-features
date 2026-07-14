@@ -66,6 +66,37 @@ class TestCompose(unittest.TestCase):
         body = "\n".join(frame.rows)
         self.assertIn("no sessions", body)
 
+    def test_empty_hint_rendered_with_guidance(self):
+        # Issue #332: the diagnostic hint replaces the bare placeholder and a
+        # static guidance line names a next step.
+        hint = "no sessions derivable — 7 events in window, 2 runs recorded, gap=30m"
+        frame = compose_frame([], WINDOW, 160, 24, empty_hint=hint)
+        body = "\n".join(frame.rows)
+        self.assertIn("7 events in window", body)
+        self.assertIn("widen the window", body)
+
+    def test_empty_hint_distinguishes_no_data_from_not_derivable(self):
+        no_data = compose_frame(
+            [], WINDOW, 100, 24, empty_hint="no sessions derivable — 0 events in window"
+        )
+        has_data = compose_frame(
+            [], WINDOW, 100, 24, empty_hint="no sessions derivable — 9 events in window"
+        )
+        self.assertIn("0 events in window", "\n".join(no_data.rows))
+        self.assertIn("9 events in window", "\n".join(has_data.rows))
+
+    def test_empty_hint_truncated_at_narrow_width(self):
+        # A long hint must not overflow the panel; every row stays exact width.
+        hint = "no sessions derivable — 123 events in window, 45 runs recorded, gap=30m"
+        frame = compose_frame([], WINDOW, 40, 8, empty_hint=hint)
+        self.assertEqual(len(frame.rows), 8)
+        self.assertTrue(all(len(row) == 40 for row in frame.rows))
+
+    def test_empty_hint_ignored_when_sessions_present(self):
+        # A stale hint never leaks onto a populated window.
+        frame = compose_frame(SESSIONS, WINDOW, 100, 24, empty_hint="should not show")
+        self.assertNotIn("should not show", "\n".join(frame.rows))
+
     def test_reflow_to_smaller_size(self):
         # KEY_RESIZE path: recomposing at a new size stays exact and does not crash.
         small = compose_frame(SESSIONS, WINDOW, 60, 12)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import curses
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
@@ -49,12 +49,15 @@ class AppState:
     :param sessions: The sessions last returned by ``query_sessions``.
     :param status: A transient status line (export path, upload result, errors).
     :param pending_upload: True while the confirm gate awaits a keypress.
+    :param empty_hint: Diagnostic line explaining an empty window; set only when
+        the last query returned no sessions, otherwise ``""``.
     """
 
     window: DateWindow
     sessions: list[dict[str, Any]]
     status: str = ""
     pending_upload: bool = False
+    empty_hint: str = ""
 
 
 def default_window(today: Optional[date] = None, span_days: int = 7) -> DateWindow:
@@ -79,8 +82,48 @@ def query_sessions(registry: Registry, window: DateWindow) -> list[dict[str, Any
 
 
 def refresh(registry: Registry, state: AppState) -> AppState:
-    """Return ``state`` with its sessions re-queried for the current window."""
-    return replace(state, sessions=query_sessions(registry, state.window))
+    """Return ``state`` with its sessions re-queried for the current window.
+
+    When the query returns no sessions the empty window is ambiguous: nothing may
+    have happened, or events exist but do not sessionize in this window (wrong
+    window, taskless events, or the gap config). ``empty_hint`` surfaces the raw
+    counts so the two cases are distinguishable; it is cleared whenever sessions
+    are present.
+    """
+    sessions = query_sessions(registry, state.window)
+    hint = _empty_hint(registry, state.window) if not sessions else ""
+    return replace(state, sessions=sessions, empty_hint=hint)
+
+
+def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
+    """Return the ``[lo, hi)`` datetime bounds the session query covers.
+
+    Matches the ``query_sessions`` command's inclusive-date semantics: ``lo`` is
+    midnight of the start day and ``hi`` is midnight of the day after the end, so
+    the whole end day is counted.
+    """
+    lo = datetime.combine(window.start, time.min)
+    hi = datetime.combine(window.end + timedelta(days=1), time.min)
+    return lo, hi
+
+
+def _empty_hint(registry: Registry, window: DateWindow) -> str:
+    """Return a diagnostic line for a window that derived no sessions.
+
+    Reports how many events fall inside the queried window (``0`` means nothing
+    happened; ``N>0`` means data exists but does not sessionize here), how many
+    task runs are on record overall, and the session gap the deriver uses.
+    """
+    command = registry["query_sessions"]
+    store = command.state
+    lo, hi = _window_bounds(window)
+    events = store.count_events(lo, hi)
+    runs = len(store.get_all_runs())
+    gap = command.config.session_gap_mins
+    return (
+        f"no sessions derivable — {events} events in window, "
+        f"{runs} runs recorded, gap={gap}m"
+    )
 
 
 def move_window(registry: Registry, state: AppState, action: str) -> AppState:
@@ -241,7 +284,13 @@ def _file_writer(content: str, name: str) -> str:  # pragma: no cover
 def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     """Blit the composed frame for ``state`` onto the curses screen."""
     height, width = stdscr.getmaxyx()
-    frame = compose_frame(state.sessions, state.window, width, max(height - 1, 0))
+    frame = compose_frame(
+        state.sessions,
+        state.window,
+        width,
+        max(height - 1, 0),
+        empty_hint=state.empty_hint,
+    )
     stdscr.erase()
     for row_index, line in enumerate(frame.rows):
         try:
