@@ -102,8 +102,26 @@ class SessionWindow:
     strategy_name: str = "development"
     category: str = "Development"
     pr_num: int = 0
+    event_ids: tuple[int, ...] = ()
+    """Ids of the events that compose this window, in ascending order.
+
+    Populated by the SQL-derived read path (``derive_sessions_overlapping``); the
+    window's ``id`` is the *minimum* of these, so it is stable under append-only
+    tail writes (a closed session's earliest event never changes).
+    """
 
     @property
     def duration_seconds(self) -> float:
         """Return the window duration in seconds."""
         return (self.ended_at - self.started_at).total_seconds()
+
+
+def session_key(window: SessionWindow) -> str:
+    """Return a stable identity string for a derived session window.
+
+    The key is ``"{task_id}|{repo}|{id}"`` where ``id`` is the window's minimum
+    event id. Because a closed session's earliest event id is immutable under
+    append-only tail writes, the key stays stable across re-derivations and can
+    be used as the idempotency key for per-session timesheet uploads.
+    """
+    return f"{window.task_id}|{window.repo}|{window.id}"

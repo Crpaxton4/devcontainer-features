@@ -5,21 +5,8 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskAlreadyRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.utilities.odoo_helpers import (
-    get_employee_id,
-    post_chatter_note,
-)
-from odoo_sdk.utilities.timesheet import ensure_anchor
-
-
-def _get_employee_id(client: Any, db: Any) -> int:
-    """Return employee_id from cache or Odoo, caching on first fetch."""
-    cached = db.get_setting("employee_id")
-    if cached is not None:
-        return int(cached)
-    employee_id = get_employee_id(client, client.uid)
-    db.set_setting("employee_id", str(employee_id))
-    return employee_id
+from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+from odoo_sdk.utilities.timesheet import ensure_anchor, resolve_employee_id
 
 
 def _build_run_result(
@@ -99,7 +86,7 @@ class StartTaskCommand(Command):
                 f"(id={existing.id}, state={existing.state.value})."
             )
 
-        employee_id = _get_employee_id(self._client, db)
+        employee_id = resolve_employee_id(self._client, db)
 
         timesheet_id = ensure_anchor(
             self._client, task_id, project_id, employee_id, date.today()

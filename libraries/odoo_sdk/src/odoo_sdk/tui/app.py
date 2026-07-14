@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import curses
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.utilities.timesheet import reconcile
+from odoo_sdk.utilities.timesheet import reconcile_session
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
@@ -142,14 +142,14 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
 
 
 def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
-    """Reconcile each queried session's hours onto its Odoo anchor timesheet row.
+    """Upload each derived session's hours onto its own idempotent timesheet row.
 
     The unified timesheet module (issue #181) is the sole writer of
-    ``account.analytic.line``: this delegates to its idempotent ``reconcile``,
-    which upserts the one anchor row per task rather than re-calling
-    ``start_task`` + ``stop_task`` (which duplicated placeholder rows, #177).
-    A re-run overwrites the same anchor, so it never double-bills. Sessions
-    lacking a numeric task id are skipped (they have no Odoo task to bill).
+    ``account.analytic.line``: this delegates to its idempotent
+    :func:`reconcile_session`, which resolves the one row a derived session maps
+    to (by its stable ``session_key``) and rewrites it, so a re-run never
+    double-bills. Sessions lacking a numeric task id are skipped (they have no
+    Odoo task to bill).
     """
     stop_cmd = registry["stop_task"]
     client, state = stop_cmd._client, stop_cmd.state
@@ -158,25 +158,33 @@ def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
         task_id = _numeric_task_id(session.get("task_id"))
         if task_id is None:
             continue
-        _reconcile_one(client, state, task_id, session)
+        _upload_one(client, state, task_id, session)
         uploaded += 1
     return uploaded
 
 
-def _reconcile_one(
+def _upload_one(
     client: Any, state: Any, task_id: int, session: dict[str, Any]
 ) -> None:
-    """Reconcile one queried session's hours onto its task's anchor row.
+    """Upload one derived session's hours onto its own timesheet row.
 
-    Delegation only: the surface passes the identity the queried session carries
-    (its numeric ``task_id`` and derived ``duration_secs``) straight to the
-    unified module's ``reconcile``, which resolves the anchor id (local session
-    store then Odoo) and upserts the single row. When the task has no anchor the
-    module treats it as a no-op, so the loop is never interrupted.
+    Delegation only: the surface passes the identity the derived session carries
+    (its numeric ``task_id``, stable ``session_key``, ``duration_secs`` and start
+    date) to :func:`reconcile_session`, which resolves and rewrites the single
+    row the session maps to. Idempotent per session key.
     """
-    elapsed_hours = float(session.get("duration_secs", 0)) / 3600
-    description = f"[/] session {session.get('session_id')}"
-    reconcile(client, state, task_id, description, elapsed_hours)
+    hours = float(session.get("duration_secs", 0)) / 3600
+    key = session.get("session_key", "")
+    day = datetime.fromisoformat(session["started_at"]).date()
+    reconcile_session(
+        client,
+        state,
+        task_id,
+        key,
+        f"[/] session {key}",
+        hours,
+        day,
+    )
 
 
 def _numeric_task_id(value: Any) -> Optional[int]:
