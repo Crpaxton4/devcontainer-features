@@ -184,6 +184,13 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("task_note(42", msgs[1])
         self.assertIn("stop_task(42", msgs[1])
 
+    def test_second_message_gives_note_style_guidance(self):
+        msgs = _build_messages(_make_task())
+        content = msgs[1]
+        self.assertIn("Note Style", content)
+        self.assertIn("2-4 short bullets", content)
+        self.assertIn("one-line summary", content)
+
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])
         msgs = _build_messages(task)

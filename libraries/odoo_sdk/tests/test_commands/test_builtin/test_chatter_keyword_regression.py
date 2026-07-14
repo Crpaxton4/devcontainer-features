@@ -130,8 +130,9 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
                 project_id=5,
                 project_name="Accounting",
             )
+        # Markdown is rendered to HTML before posting (issue #324).
         self._assert_recorded_keyword(
-            executor, task_id=10, body="Work started on this task."
+            executor, task_id=10, body="<p>Work started on this task.</p>"
         )
 
     def test_resume_task_drives_keyword_only_message_post(self):
@@ -150,7 +151,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         self._assert_recorded_keyword(
             executor,
             task_id=1,
-            body="Resuming implementation with received answers.",
+            body="<p>Resuming implementation with received answers.</p>",
         )
 
     def test_task_note_drives_keyword_only_message_post(self):
@@ -165,7 +166,9 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
             ),
         ):
             TaskNoteCommand(client).execute(1, "Note text")
-        self._assert_recorded_keyword(executor, task_id=1, body="Note text")
+        self._assert_recorded_keyword(
+            executor, task_id=1, body="<p>Note text</p>"
+        )
 
     def test_task_question_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
@@ -180,7 +183,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         ):
             TaskQuestionCommand(client).execute(1, "Which approach?")
         self._assert_recorded_keyword(
-            executor, task_id=1, body="[?] Which approach?"
+            executor, task_id=1, body="<p>[?] Which approach?</p>"
         )
 
 

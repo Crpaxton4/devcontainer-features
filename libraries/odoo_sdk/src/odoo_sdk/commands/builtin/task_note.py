@@ -14,8 +14,11 @@ class TaskNoteCommand(Command):
 
     _name = "task_note"
     _description = (
-        "Post a free-form note to the Odoo task chatter and append it to "
-        "the local session log. Requires an active tracking session."
+        "Post a progress note to the Odoo task chatter and append it to the "
+        "local session log. The note is written in Markdown and rendered to "
+        "HTML for the chatter, so keep it short and scannable: a one-line "
+        "summary followed by 2-4 short bullets, not long free-form prose. "
+        "Requires an active tracking session."
     )
 
     def execute(self, task_id: int, note: str) -> dict[str, Any]:
