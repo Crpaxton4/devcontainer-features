@@ -58,6 +58,8 @@ with `odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
 :maxdepth: 2
 :caption: Contents
 
+quickstart_mcp
+quickstart_tui
 walkthrough
 api/modules
 design/index
