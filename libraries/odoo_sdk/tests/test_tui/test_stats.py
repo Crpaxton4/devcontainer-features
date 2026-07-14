@@ -145,5 +145,21 @@ class TestParallelization(unittest.TestCase):
         self.assertEqual(stats.peak_concurrency, 3)
 
 
+class TestMixedTimezones(unittest.TestCase):
+    def test_mixed_naive_and_aware_timestamps_do_not_crash(self):
+        # Issue #333: the _parse guard coerces naive timestamps to UTC so a
+        # mix of offset-carrying and naive stored timestamps can be subtracted
+        # in the bounds/overlap/concurrency math without a TypeError.
+        sessions = [
+            _session(
+                1, "1", "2026-06-01T09:00:00+00:00", "2026-06-01T11:00:00+00:00", 7200
+            ),
+            _session(2, "2", "2026-06-01T10:00:00", "2026-06-01T12:00:00", 7200),
+        ]
+        stats = compute_stats(sessions)
+        self.assertEqual(stats.session_count, 2)
+        self.assertEqual(stats.peak_concurrency, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
