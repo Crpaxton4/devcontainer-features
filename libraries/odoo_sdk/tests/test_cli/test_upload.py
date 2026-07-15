@@ -83,6 +83,11 @@ class _RecordingOdooClient:
 def _config() -> MagicMock:
     config = MagicMock()
     config.session_gap_secs = GAP
+    # Real billing-policy floats so the shared upload path's minimum/rounding
+    # (issue #355) can do arithmetic; the seeded 1h session is unaffected by the
+    # defaults (1.0h rounds to 1.0h and clears the 0.25h floor).
+    config.min_session_hours = 0.25
+    config.round_session_hours = 0.05
     return config
 
 

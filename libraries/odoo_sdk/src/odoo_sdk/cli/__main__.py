@@ -421,9 +421,10 @@ def cmd_upload(args: argparse.Namespace, db: TaskStateDB, client: OdooClient) ->
     non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI would.
     ``--dry-run`` previews the billable set without writing to Odoo.
     """
-    sessions = QuerySessionsCommand(
-        client, state=db, config=LocalConfig.load()
-    ).execute(start_date=args.start, end_date=args.end, include_events=False)
+    config = LocalConfig.load()
+    sessions = QuerySessionsCommand(client, state=db, config=config).execute(
+        start_date=args.start, end_date=args.end, include_events=False
+    )
     result = upload_sessions(
         client,
         db,
@@ -431,6 +432,7 @@ def cmd_upload(args: argparse.Namespace, db: TaskStateDB, client: OdooClient) ->
         start_date=args.start,
         end_date=args.end,
         dry_run=args.dry_run,
+        config=config,
     )
     _print_upload_summary(result, args.dry_run)
 
