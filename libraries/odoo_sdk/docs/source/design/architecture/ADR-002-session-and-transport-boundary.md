@@ -1,8 +1,107 @@
 # ADR-002 - Introduce a Session and Transport Policy Boundary
 
-Status: Proposed
+Status: Rejected
 
 Date: 2026-05-21
+
+Resolved: 2026-07-15
+
+## Resolution
+
+This ADR was left in `Proposed` limbo for over a year. It is now resolved as
+**Rejected**: the proposed `OdooSession` policy layer was never built, and the
+codebase deliberately settled into the alternative this ADR had listed as
+rejected — transport policy lives inside the transport implementations. That
+alternative has proven adequate, so the proposal is closed rather than carried
+forward. The original 2026-05-21 proposal is preserved verbatim below the line
+for historical context.
+
+### Settled state (verified 2026-07-15)
+
+- **No session type exists.** There is no `OdooSession` (or equivalent) anywhere
+  in `src/odoo_sdk`. The only `session`-named code is the unrelated
+  `sessionization` ETL package, which has nothing to do with transport.
+- **Transport is the pluggable seam, and it owns policy.** `OdooExecutor` (an
+  `ABC` in `transport/executor.py`) is the pluggable transport contract. Two
+  concrete transports subclass it and each carry their own policy:
+  - `OdooRpcExecutor` (`transport/rpc.py`) — the default synchronous XML-RPC
+    transport.
+  - `OdooJson2Executor` (`transport/json2.py`) — the JSON-2 HTTP transport.
+- **Auth policy lives in transport.** `OdooRpcExecutor._authenticate`
+  (`transport/rpc.py`) performs lazy `uid` login; `OdooJson2Executor`
+  (`transport/json2.py`) sends an `Authorization: Bearer` header. There is no
+  shared auth policy above them.
+- **Timeout policy lives in transport.** Each transport defines its own
+  `DEFAULT_REQUEST_TIMEOUT_SECONDS` (`transport/rpc.py`, `transport/json2.py`);
+  the XML-RPC side additionally implements `_TimeoutTransport` /
+  `_SafeTimeoutTransport` (`transport/rpc.py`) to bound socket waits.
+- **Error mapping lives in transport.** XML-RPC faults are mapped by
+  `_mapped_call` (`transport/rpc.py`) via `transport/_fault_mapping.py`; JSON-2
+  HTTP errors are mapped by `map_http_error` via
+  `transport/_http_error_mapping.py`.
+- **The error taxonomy the proposal predicted was actually built — inside
+  transport.** `transport/errors.py` defines `OdooError(RuntimeError)` and a
+  small taxonomy of subtypes (`OdooAuthenticationError`, `OdooAccessError`,
+  `OdooValidationError`, `OdooMissingRecordError`, `OdooTransportError`,
+  `OdooServerError`). The proposal listed "error handling will need a small
+  taxonomy instead of generic `RuntimeError`" as a *negative consequence of
+  adopting a session*; that taxonomy exists today, proving transport can own the
+  concern adequately without a session layer above it.
+
+### Why the session layer is rejected
+
+- Two transports each owning their own policy has proven adequate for the
+  current public surface. The concerns the session layer was meant to unify
+  (auth, timeout, error mapping) are genuinely transport-specific: XML-RPC `uid`
+  login and JSON-2 bearer auth do not share meaningful policy, and each
+  transport's timeout and fault-to-exception mapping is protocol-shaped.
+- The observability motivations (logging, tracing, secret redaction) never
+  materialized as real requirements, so the "single integration point" argument
+  never had to be paid for.
+- Introducing the layer now would be speculative abstraction against no live
+  requirement. The honest position is to keep transport as the policy owner and
+  reopen the question only when a concrete need lands (see the retry decision
+  and reopening trigger below).
+
+### Explicit decision on retry policy
+
+Retry / backoff policy is **deliberately not implemented** and is a non-goal at
+the current scope. Confirmed 2026-07-15: no retry, backoff, or attempt-loop
+logic exists anywhere in `src/odoo_sdk`. Every mention of "retry" in the package
+is prose, not mechanism — the load-bearing ones are transport docstrings that
+point retry responsibility *outward* to the caller: `transport/errors.py` notes
+that `OdooTransportError` callers "often want retry or connectivity handling",
+and `transport/rpc.py` notes that a failed login is not cached so callers "may
+retry after correcting their credentials". Both describe *caller-level* retry,
+not SDK-owned retry.
+
+This is a decision, not an oversight: callers that need resilience wrap their own
+calls, and the transport error taxonomy (`OdooTransportError` distinct from
+server-side faults) is specifically designed to let a caller tell transient
+connectivity failures apart from business faults for exactly that purpose.
+
+### Reopening trigger
+
+If a first-class retry requirement lands — the obvious candidate being
+XML-RPC over flaky networks, where per-call backoff would materially improve
+reliability — that is the moment to reconsider a thin policy boundary rather than
+bolting a retry loop into one transport by default. At that point:
+
+- Prefer introducing the boundary as a fresh, superseding ADR rather than
+  reviving this one, so the concrete requirement is recorded alongside the
+  design.
+- Keep any such layer thin: it should own cross-transport *policy* (retry,
+  backoff, redaction) while transports stay mechanism-only. It should not absorb
+  the protocol-shaped auth, timeout, and error-mapping mechanics that correctly
+  live in each transport today.
+- Note the related seam smell to clean up first: `OdooClient` subclasses
+  `OdooExecutor` (`client/client.py`), which blurs the facade/transport
+  boundary a policy layer would otherwise formalize.
+
+---
+
+*Everything below is the original 2026-05-21 proposal, retained unchanged for
+historical context. It was not adopted; see the Resolution above.*
 
 ## Context
 
