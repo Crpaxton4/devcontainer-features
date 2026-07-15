@@ -415,6 +415,15 @@ class LocalStateClient:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
+        # WAL lets a writer and readers proceed concurrently, and a 2s busy
+        # timeout makes a second writer wait for the lock instead of failing
+        # instantly with "database is locked". Without these, concurrent writers
+        # (the claude-event-hook shim, MCP _emit_tool_event, the TUI) hit an
+        # immediate lock and silently drop the event (hook `|| true`, MCP
+        # try/except pass). WAL is a persistent property of the DB file; the
+        # busy timeout is per-connection and so must be set on every connect.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=2000")
         # Foreign-key enforcement is intentionally left at SQLite's default (off).
         # The current schema declares no foreign keys, and legacy DBs still carry
         # an orphaned ``events.session_id REFERENCES sessions`` column; enforcing
