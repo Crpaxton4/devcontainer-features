@@ -12,6 +12,7 @@ from odoo_sdk.tui.export import (
     export_csv,
     export_markdown,
 )
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -19,7 +20,7 @@ UTC = timezone.utc
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _commit(db, hour, minute, *, day=1, task="101", repo="acme/web"):

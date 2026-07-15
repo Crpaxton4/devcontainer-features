@@ -23,6 +23,7 @@ from odoo_sdk.utilities.prune import (
     plan_prune,
     resolve_horizon,
 )
+from tests.support import make_state_db
 
 UTC = timezone.utc
 GAP = 3600  # one hour, matching the default session gap
@@ -32,7 +33,7 @@ NOW = datetime(2026, 7, 1, tzinfo=UTC)
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _event(state, *, ts, task_ids=("101",), source="agent"):

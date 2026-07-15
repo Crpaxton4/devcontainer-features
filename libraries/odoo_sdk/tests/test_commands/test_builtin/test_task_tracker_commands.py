@@ -19,6 +19,7 @@ from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError, TaskState
+from tests.support import make_state_db
 
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
@@ -32,7 +33,7 @@ _STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
 def _tmp_db() -> TaskStateDB:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _client(uid: int = 7) -> MagicMock:

@@ -19,6 +19,7 @@ from odoo_sdk.state.models import (
     EventRecord,
     TaskAlreadyRunningError,
     TaskNotRunningError,
+    TrackerStateMissingError,
 )
 from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
@@ -136,6 +137,7 @@ _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     OdooError,
     TaskNotRunningError,
     TaskAlreadyRunningError,
+    TrackerStateMissingError,
     OdooDevcontainerRequiredError,
     ValueError,
 )

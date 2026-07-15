@@ -48,6 +48,13 @@ FEATURE_JSON = (
 )
 SETUP_SH = REPO_ROOT / "setup.sh"
 SETUP_PS1 = REPO_ROOT / "setup.ps1"
+INSTALL_SH = (
+    REPO_ROOT
+    / "devcontainer-features"
+    / "src"
+    / "personal-features"
+    / "install.sh"
+)
 
 LOCAL_ENV_PREFIX = "${localEnv:HOME}${localEnv:USERPROFILE}/"
 SHELL_HISTORY_TARGET = "/usr/local/share/shell-history"
@@ -167,6 +174,36 @@ class TestHostSetupParity(unittest.TestCase):
         # Guard against setup.sh being reverted to a hardcoded path list, which
         # would silently reintroduce the drift the manifest exists to prevent.
         self.assertIn("persisted-paths.tsv", SETUP_SH.read_text())
+
+    def test_host_provisioned_rows_are_not_created_by_install_sh(self):
+        # A `provision=host` row is host-provisioned and ONLY ever a bind mount
+        # (#369); install.sh must skip it, or a missing mount would be masked by
+        # an empty container-created dir. The loop can't statically be executed
+        # here, so assert install.sh's loop consumes the provision column and
+        # short-circuits host rows.
+        rows = checker.load_manifest()
+        host_rows = [r for r in rows if r["provision"] == "host"]
+        self.assertTrue(host_rows, "expected at least one host-provisioned row")
+        body = INSTALL_SH.read_text()
+        self.assertIn("_provision", body)
+        self.assertRegex(
+            body,
+            r"host\)\s*continue",
+            "install.sh must skip provision=host rows so the container never "
+            "creates the host-provisioned target",
+        )
+
+    def test_setup_scripts_initialize_the_host_provisioned_database(self):
+        # The host-provisioned tracker DB schema is created by the init script,
+        # not the container (#369); both host setup scripts must invoke it.
+        for script in (SETUP_SH, SETUP_PS1):
+            with self.subTest(script=script.name):
+                self.assertIn(
+                    "init_tracker_db.py",
+                    script.read_text(),
+                    f"{script.name} must initialize the host-provisioned tracker "
+                    f"database via scripts/init_tracker_db.py",
+                )
 
     def test_setup_scripts_do_not_create_history_files(self):
         # Both scripts used to `touch ~/.bash_history` (now a directory mount).

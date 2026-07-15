@@ -17,6 +17,7 @@ from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.state.db import _bound_isoformat, _normalize_utc_isoformat
+from tests.support import make_state_db
 
 UTC = timezone.utc
 GAP = 3600  # one hour
@@ -25,7 +26,7 @@ GAP = 3600  # one hour
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _event(state, *, ts, task_ids=("101",), repo=""):

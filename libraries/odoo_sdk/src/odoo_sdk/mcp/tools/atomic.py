@@ -302,10 +302,10 @@ def make_abort_task_tool(registry: Registry):
 @atomic_tool("discover_runs")
 def make_discover_runs_tool(registry: Registry):
     def discover_runs(stale_after_hours: float = 12.0) -> List[Dict[str, Any]]:
-        """Discover every task-tracker project and its active runs across DBs.
+        """Discover active runs in the central tracker DB.
 
-        Read-only local scan: lists each project's repo identity and active
-        RUNNING/AWAITING_ANSWERS runs, flagging any started before
+        Read-only local query: lists the active RUNNING/AWAITING_ANSWERS runs in
+        the one host-provisioned central DB, flagging any started before
         ``stale_after_hours`` ago as stale so orphaned runs can be found.
         """
         return registry["discover_runs"].execute(stale_after_hours=stale_after_hours)
@@ -315,14 +315,14 @@ def make_discover_runs_tool(registry: Registry):
 
 @atomic_tool("abort_run")
 def make_abort_run_tool(registry: Registry):
-    def abort_run(project_hash: str, run_id_or_task_id: int) -> Dict[str, Any]:
-        """Abort a stale run in another project's DB and close its Odoo anchor.
+    def abort_run(run_id_or_task_id: int) -> Dict[str, Any]:
+        """Abort a stale run in the central tracker DB and close its Odoo anchor.
 
-        Opens the target project's DB by ``project_hash`` under the state root
-        (regardless of cwd), force-closes the run without logging hours, and
-        retires its orphaned anchor timesheet (only when still unreconciled).
+        Addresses the run by SQLite run id or Odoo task id in the one central DB
+        (regardless of cwd), force-closes it without logging hours, and retires
+        its orphaned anchor timesheet (only when still unreconciled).
         """
-        return registry["abort_run"].execute(project_hash, run_id_or_task_id)
+        return registry["abort_run"].execute(run_id_or_task_id)
 
     return abort_run
 

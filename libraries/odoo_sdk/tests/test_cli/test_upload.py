@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db
 
 _MOD = "odoo_sdk.cli.__main__"
 UTC = timezone.utc
@@ -30,7 +31,7 @@ def _seed_db() -> LocalStateClient:
     """Return a temp state DB seeded with two events forming one task session."""
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    db = LocalStateClient(db_path=Path(tmp.name))
+    db = make_state_db(Path(tmp.name))
     base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
     for offset in (0, GAP):  # exactly one gap apart -> a single derived session
         db.add_event(

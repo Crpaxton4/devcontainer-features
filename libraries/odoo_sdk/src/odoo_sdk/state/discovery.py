@@ -1,40 +1,23 @@
-"""Cross-project discovery over the task-tracker state root (issue #331).
+"""Active-run discovery over the single central tracker DB (issues #331, #369).
 
-The task-tracker keys each project's SQLite DB by ``sha256(git remote)[:16]``,
-so a DB whose repo is gone — or that holds a wedged ``RUNNING`` run started from
-a since-deleted checkout — becomes unreachable from any single working tree. This
-module scans the whole state root, reads the repo identity each DB now records
-(see :meth:`odoo_sdk.state.db.LocalStateClient._persist_identity`), and surfaces
-every project's active runs together with a staleness flag so an operator can
-find and abort the orphans.
+Before #369 the tracker kept one SQLite DB per git remote, so a run started from
+a since-deleted checkout became unreachable from any other working tree and this
+module had to glob ``<state-root>/*/tasks.db`` to find it. There is now exactly
+one host-provisioned, bind-mounted central DB shared across every project's
+container, so discovery collapses to an ordinary query of that one DB: list the
+active (``RUNNING``/``AWAITING_ANSWERS``) runs and flag the stale ones so an
+operator can abort the orphans with ``abort_run``.
 
-Nothing here raises on a bad DB: an unreadable or corrupt file is reported as a
-skipped note entry rather than aborting the whole scan.
+The DB is host-provisioned and never self-created: when it is absent,
+:meth:`LocalStateClient._connect` raises :class:`TrackerStateMissingError`, and
+that single actionable error propagates to the caller rather than being masked.
 """
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import LocalStateClient, _resolve_state_root
-
-#: Run states that count as "active" for discovery — a run in any of these is
-#: still holding an open Odoo anchor and may be the orphan an operator hunts.
-_ACTIVE_STATES = ("RUNNING", "AWAITING_ANSWERS")
-
-#: Label used when a DB predates identity stamping (no ``repo_label`` setting).
-UNKNOWN_LABEL = "(unknown)"
-
-
-def _state_root(root: Optional[Path]) -> Path:
-    """Return the explicit ``root`` or the shared env-aware default."""
-    return Path(root) if root is not None else _resolve_state_root()
-
-
-def project_db_path(project_hash: str, root: Optional[Path] = None) -> Path:
-    """Return the ``tasks.db`` path for one project hash under the state root."""
-    return _state_root(root) / project_hash / "tasks.db"
+from .db import LocalStateClient, tracker_db_path
 
 
 def _is_stale(started_at: datetime, threshold: datetime) -> bool:
@@ -50,6 +33,7 @@ def _run_entry(run: Any, threshold: datetime) -> dict:
         "run_id": run.id,
         "task_id": run.task_id,
         "task_name": run.task_name,
+        "project_name": run.project_name,
         "state": run.state.value,
         "started_at": run.started_at.isoformat(),
         "timesheet_id": run.timesheet_id,
@@ -57,65 +41,24 @@ def _run_entry(run: Any, threshold: datetime) -> dict:
     }
 
 
-def _note_entry(project_hash: str, message: str) -> dict:
-    """Return the entry for a DB that could not be read; the scan continues."""
-    return {
-        "project_hash": project_hash,
-        "repo_label": UNKNOWN_LABEL,
-        "repo_remote_url": None,
-        "active_runs": [],
-        "stale": False,
-        "note": message,
-    }
-
-
-def _inspect_project(
-    db_file: Path, project_hash: str, stale_after_hours: float
-) -> dict:
-    """Open one project DB and collect its identity and active runs."""
-    client = LocalStateClient(db_path=db_file)
-    threshold = datetime.now(timezone.utc) - timedelta(hours=stale_after_hours)
-    runs = [_run_entry(run, threshold) for run in client.get_all_active_runs()]
-    return {
-        "project_hash": project_hash,
-        "repo_label": client.get_setting("repo_label") or UNKNOWN_LABEL,
-        "repo_remote_url": client.get_setting("repo_remote_url"),
-        "active_runs": runs,
-        "stale": any(run["stale"] for run in runs),
-        "note": None,
-    }
-
-
-def discover_projects(
+def discover_runs(
     root: Optional[Path] = None, stale_after_hours: float = 12.0
 ) -> list[dict]:
-    """Scan the state root and describe every task-tracker project it holds.
+    """Return every active run in the central tracker DB, oldest first.
 
-    Globs ``<state-root>/*/tasks.db`` (``root`` defaulting to the same env-aware
-    resolution the DB layer uses) and, for each, records the project hash, the
-    ``repo_label``/``repo_remote_url`` identity settings (``"(unknown)"`` /
-    ``None`` for DBs predating identity stamping), and every active
-    (``RUNNING``/``AWAITING_ANSWERS``) run with its ``run_id``, ``task_id``,
-    ``task_name``, ``state``, ``started_at``, ``timesheet_id`` and a per-run
-    ``stale`` flag (started before ``stale_after_hours`` ago). A DB that cannot
-    be opened or read is reported as a note entry and never aborts the scan.
+    Opens the one central DB (``root`` defaulting to the env-aware resolution the
+    DB layer uses) and reports each active (``RUNNING``/``AWAITING_ANSWERS``) run
+    with its ``run_id``, ``task_id``, ``task_name``, ``project_name``, ``state``,
+    ``started_at``, ``timesheet_id`` and a per-run ``stale`` flag (started before
+    ``stale_after_hours`` ago).
 
-    :param root: State root to scan; defaults to the env-aware resolution.
+    :param root: State root holding ``tracker.db``; defaults to the env-aware
+        resolution.
     :param stale_after_hours: Age past which an active run is flagged stale.
-    :return: One dict per project, sorted by project hash.
+    :return: One dict per active run, ordered by start time.
+    :raises TrackerStateMissingError: When the central DB has not been
+        host-provisioned at its expected path.
     """
-    state_root = _state_root(root)
-    results: list[dict] = []
-    if not state_root.exists():
-        return results
-    for db_file in sorted(state_root.glob("*/tasks.db")):
-        project_hash = db_file.parent.name
-        try:
-            results.append(
-                _inspect_project(db_file, project_hash, stale_after_hours)
-            )
-        except sqlite3.Error as exc:
-            results.append(
-                _note_entry(project_hash, f"skipped (unreadable): {exc}")
-            )
-    return results
+    client = LocalStateClient(db_path=tracker_db_path(root))
+    threshold = datetime.now(timezone.utc) - timedelta(hours=stale_after_hours)
+    return [_run_entry(run, threshold) for run in client.get_all_active_runs()]

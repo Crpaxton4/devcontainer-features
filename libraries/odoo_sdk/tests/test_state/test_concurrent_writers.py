@@ -9,13 +9,13 @@ that the DB file is actually in WAL mode.
 """
 
 import sqlite3
-import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db_path
 
 UTC = timezone.utc
 
@@ -24,9 +24,9 @@ EVENTS_PER_WRITER = 50
 
 
 def _tmp_path() -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return Path(tmp.name)
+    # A schema-provisioned central DB (#369): the SDK no longer creates schema on
+    # open, so writers must start from a host-provisioned, ready DB.
+    return make_state_db_path()
 
 
 def _event(writer: int, seq: int) -> EventRecord:
@@ -48,9 +48,7 @@ class TestConcurrentWriters(unittest.TestCase):
         of ``add_event`` calls, proving the busy timeout waited out the lock
         instead of dropping the loser's event.
         """
-        db_path = _tmp_path()
-        # Materialize the schema up front so both writers start from a ready DB.
-        LocalStateClient(db_path=db_path)
+        db_path = _tmp_path()  # host-provisioned, schema-ready central DB
 
         barrier = threading.Barrier(WRITERS)
         errors: list[Exception] = []

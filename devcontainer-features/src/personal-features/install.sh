@@ -56,15 +56,29 @@ CLAUDE_HOME="/usr/local/share/claude-home"
 # Feature JSON; .github/scripts/check_persisted_paths.py fails CI if the JSON
 # drifts from it. Loop it here instead of hardcoding the paths so adding one is a
 # one-line manifest edit. A trailing slash marks a directory (mkdir -p); no
-# trailing slash marks a file (touch its parent, then the file). The odoo-sdk
-# task-tracker *state* dir is deliberately absent from the manifest: chown'ing it
-# to the build-time $_REMOTE_USER doesn't map to the runtime uid (the MCP server
-# runs as odoo/uid 1002), leaving it unwritable at runtime (#115); it has no bind
-# mount, so the SDK creates it lazily under the runtime user instead.
+# trailing slash marks a file (touch its parent, then the file).
+#
+# The `provision` column decides whether the container creates the target.
+# `container` rows are created/chowned/chmod'ed here (they double as the empty
+# fallback dirs the containerEnv vars point at when no bind mount is active, e.g.
+# in the features-test harness). `host` rows (the odoo-sdk task-tracker DB, #369)
+# are the deliberate exception: the host provisions that directory + database and
+# it is ONLY ever a bind mount, so the container must NOT pre-create it. This
+# reverses the #115 conclusion, which was wrong: #115 correctly diagnosed that a
+# build-time `chown` to $_REMOTE_USER bakes in the PRE-remap uid (updateRemoteUserUID
+# moves the user at container-create precisely so bind mounts line up), but drew
+# the wrong lesson - "therefore don't mount it". A mounted path never needs that
+# build-time chown (the mount shadows the image dir), which is exactly why the six
+# credential mounts already work. Pre-creating the tracker target here would be
+# actively harmful: a missing/misconfigured mount would then be indistinguishable
+# from a working one - the container would find an empty dir and silently build a
+# fresh, container-local database that is discarded on rebuild. Not creating it is
+# what makes a broken mount fail loudly (TrackerStateMissingError) instead.
 _MANIFEST="$(dirname "$0")/persisted-paths.tsv"
 _TAB="$(printf '\t')"
-while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_value _mode; do
+while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
     case "$_name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
+    case "$_provision" in host) continue ;; esac  # host-provisioned: never create in-container (#369)
     case "$_container_target" in
         */) mkdir -p "$_container_target" ;;
         *)  mkdir -p "$(dirname "$_container_target")"; touch "$_container_target" ;;

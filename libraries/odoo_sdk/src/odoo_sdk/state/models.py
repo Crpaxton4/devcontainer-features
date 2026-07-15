@@ -16,6 +16,18 @@ class ProjectIdError(RuntimeError):
     """Raised when the git remote origin URL cannot be determined."""
 
 
+class TrackerStateMissingError(RuntimeError):
+    """Raised when the central tracker database does not exist at its path.
+
+    The tracker database is host-provisioned state (issue #369): it is created
+    on the host by ``setup.sh`` / ``setup.ps1`` and bind-mounted into every
+    container. The SDK deliberately never creates it — a self-created DB would be
+    container-local and discarded on rebuild, silently splitting one person's
+    timeline. So every state-touching entry point raises this single, actionable
+    error naming the expected path rather than materializing an empty DB.
+    """
+
+
 class TaskAlreadyRunningError(RuntimeError):
     """Raised when start_task is called for a task that already has an active session."""
 

@@ -10,8 +10,8 @@ Subcommands:
     report [--all]          Formatted table of runs
     normalize [--apply]     Detect and merge duplicate timesheet entries
     log-event               Record a Claude Code hook event into local state
-    discover                List all tracker projects and their active runs
-    abort <hash> <run_id>   Abort a stale run in another project's DB
+    discover                List active runs in the central tracker DB
+    abort <run_id>          Abort a stale run in the central tracker DB
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
     upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
     prune [--older-than N]  Delete aged hook events past a retention horizon
@@ -34,10 +34,11 @@ from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.sessionization import EventType
-from odoo_sdk.state import EventRecord, LocalConfig, ProjectIdError
+from odoo_sdk.state import EventRecord, LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
-from odoo_sdk.state.discovery import discover_projects
+from odoo_sdk.state.db import current_repo_label
+from odoo_sdk.state.discovery import discover_runs
 from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
@@ -243,17 +244,16 @@ def _parse_payload(raw: Optional[str]) -> Optional[dict]:
 
 
 def _open_local_db() -> TaskStateDB:
-    """Open the cwd-resolved local state DB, or exit 0 when not a git repo.
+    """Bind to the central tracker DB (construction is inert; no I/O yet).
 
-    Hooks run in arbitrary working directories; a non-git cwd is expected, not
-    an error. A nonzero exit would degrade the Claude Code session, so we emit a
-    one-line notice and exit 0 without writing an event.
+    The central DB is host-provisioned and bind-mounted (#369): binding never
+    touches the filesystem, so a missing DB is not surfaced here but on the first
+    query/write as a :class:`TrackerStateMissingError`, which :func:`main`
+    renders as one clean, actionable error. Unlike the pre-#369 behavior there is
+    no silent exit-0 for a non-git cwd — repo identity no longer selects the DB,
+    so events log fine with ``repo=""`` from anywhere.
     """
-    try:
-        return TaskStateDB()
-    except ProjectIdError as exc:
-        print(f"Notice: {exc} Skipping event log.", file=sys.stderr)
-        sys.exit(0)
+    return TaskStateDB()
 
 
 def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
@@ -261,10 +261,10 @@ def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
 
     An explicit ``--task-id`` (repeatable) always wins. Otherwise, when
     ``--attach-active-run`` is passed, attach every active (RUNNING /
-    AWAITING_ANSWERS) run in the cwd-resolved project DB — the natural
-    association for a hook firing while an FSM run is in progress. With no
-    active run (or the flag absent) this yields ``[]``, i.e. untargeted
-    session-level activity, matching the pre-flag default.
+    AWAITING_ANSWERS) run in the central tracker DB — the natural association for
+    a hook firing while an FSM run is in progress. With no active run (or the
+    flag absent) this yields ``[]``, i.e. untargeted session-level activity,
+    matching the pre-flag default.
     """
     if args.task_id:
         return [str(task_id) for task_id in args.task_id]
@@ -285,7 +285,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
             source=args.source,
             timestamp=timestamp,
             task_ids=_resolve_task_ids(db, args),
-            repo="",
+            repo=current_repo_label(),
             subject=args.subject,
             payload=payload,
         )
@@ -293,15 +293,14 @@ def cmd_log_event(args: argparse.Namespace) -> None:
     print(f"Logged event {args.source!r} ({event_type.name}).")
 
 
-def _discover_run_line(project: dict, run: dict) -> str:
+def _discover_run_line(run: dict) -> str:
     """Format one active run row for the ``discover`` table."""
     flag = "STALE" if run["stale"] else ""
     return "  ".join(
         [
-            f"{project['project_hash']:<16}",
-            f"{project['repo_label'][:25]:<25}",
             f"[{run['run_id']}]",
             f"{run['task_name'][:30]:<30}",
+            f"{run['project_name'][:25]:<25}",
             f"{run['state']:<18}",
             f"{run['started_at'][:19]:<19}",
             f"{flag:<5}",
@@ -310,29 +309,19 @@ def _discover_run_line(project: dict, run: dict) -> str:
 
 
 def cmd_discover(args: argparse.Namespace) -> None:
-    """List every tracker project and its active runs across all local DBs."""
-    projects = discover_projects(stale_after_hours=args.stale_after_hours)
-    if not projects:
-        print("No task-tracker projects found.")
+    """List every active run in the central tracker DB."""
+    runs = discover_runs(stale_after_hours=args.stale_after_hours)
+    if not runs:
+        print("No active runs.")
         return
     header = (
-        f"{'Project Hash':<16}  {'Repo':<25}  {'[ID]':<5}  {'Task':<30}  "
-        f"{'State':<18}  {'Started':<19}  Flag"
+        f"{'[ID]':<5}  {'Task':<30}  {'Project':<25}  {'State':<18}  "
+        f"{'Started':<19}  Flag"
     )
     print(header)
     print("-" * len(header))
-    for project in projects:
-        if project.get("note"):
-            print(f"{project['project_hash']:<16}  {project['note']}")
-            continue
-        if not project["active_runs"]:
-            print(
-                f"{project['project_hash']:<16}  {project['repo_label'][:25]:<25}  "
-                "(no active runs)"
-            )
-            continue
-        for run in project["active_runs"]:
-            print(_discover_run_line(project, run))
+    for run in runs:
+        print(_discover_run_line(run))
 
 
 _RESYNC_SOURCES = ("git", "github", "odoo")
@@ -515,18 +504,17 @@ def cmd_prune(args: argparse.Namespace) -> None:
 
 
 def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
-    """Abort a stale run in another project's DB and close its Odoo anchor."""
-    result = AbortRunCommand(client).execute(args.project_hash, args.run_id)
+    """Abort a stale run in the central tracker DB and close its Odoo anchor."""
+    result = AbortRunCommand(client).execute(args.run_id)
     if result["already_stopped"]:
         print(
-            f"Run {result['run_id']} in {result['project_hash']} is already "
-            "stopped; nothing to abort."
+            f"Run {result['run_id']} is already stopped; nothing to abort."
         )
         return
     anchor = "closed" if result["anchor_closed"] else "left untouched"
     print(
-        f"Aborted run {result['run_id']} ({result['task_name']!r}) in "
-        f"{result['project_hash']}; anchor {anchor}."
+        f"Aborted run {result['run_id']} ({result['task_name']!r}); "
+        f"anchor {anchor}."
     )
 
 
@@ -590,7 +578,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     discover_p = subparsers.add_parser(
-        "discover", help="List all tracker projects and their active runs"
+        "discover", help="List active runs in the central tracker DB"
     )
     discover_p.add_argument(
         "--stale-after-hours",
@@ -601,10 +589,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     abort_p = subparsers.add_parser(
-        "abort", help="Abort a stale run in another project's DB"
+        "abort", help="Abort a stale run in the central tracker DB"
     )
-    abort_p.add_argument("project_hash", help="Project hash from 'discover'")
-    abort_p.add_argument("run_id", type=int, help="Run id (or task id) to abort")
+    abort_p.add_argument(
+        "run_id", type=int, help="Run id (or task id) from 'discover' to abort"
+    )
 
     resync_p = subparsers.add_parser(
         "resync", help="Reconcile local events against git/GitHub/Odoo chatter"
@@ -711,11 +700,20 @@ def main() -> None:
     args = parser.parse_args()
     if args.command is None:
         args.command = "list"
-    if args.command in _LOCAL_ONLY:
-        _dispatch_local_only(args)
-        return
-    _assert_env()
-    _dispatch(parser, TaskStateDB(), args)
+    try:
+        if args.command in _LOCAL_ONLY:
+            _dispatch_local_only(args)
+            return
+        _assert_env()
+        _dispatch(parser, TaskStateDB(), args)
+    except TrackerStateMissingError as exc:
+        # The central DB is host-provisioned and bind-mounted; the SDK never
+        # creates it (#369). Surface the single actionable error and fail hard
+        # (exit 1) rather than exiting 0 silently. The claude-event-hook
+        # backgrounds this CLI and swallows output by contract, so this loud
+        # failure is for interactive invocations.
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Aborted runs never bill: the #356 exclusion across abort, state, and upload.
 
-Covers the whole seam: the additive ``task_runs.aborted_at`` column (stamped by
-:meth:`LocalStateClient.abort_run`, migrated onto pre-#356 databases), the
+Covers the whole seam: the ``task_runs.aborted_at`` column (part of the canonical
+schema, stamped by :meth:`LocalStateClient.abort_run`), the
 upload path's session-selection filter (a derived session lying wholly within an
 aborted run's ``[started_at, aborted_at]`` window — upper bound widened by the
 dispatch grace — is excluded from billing), and the end-to-end acceptance
@@ -14,7 +14,6 @@ returned) is exercised specifically: it must not push the aborted session out of
 the exclusion window.
 """
 
-import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -36,6 +35,7 @@ from odoo_sdk.utilities.upload import (
     _within_aborted_window,
     upload_sessions,
 )
+from tests.support import make_state_db
 
 UTC = timezone.utc
 GAP = 3600
@@ -52,7 +52,7 @@ T_RESTART = datetime(2026, 6, 1, 11, 0, tzinfo=UTC)
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _config() -> MagicMock:
@@ -185,37 +185,15 @@ class TestAbortRunStateMethod(unittest.TestCase):
         )
 
 
-_LEGACY_TASK_RUNS_DDL = """
-CREATE TABLE task_runs (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id      INTEGER NOT NULL,
-    task_name    TEXT    NOT NULL,
-    project_id   INTEGER NOT NULL,
-    project_name TEXT    NOT NULL,
-    state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')),
-    started_at   TEXT    NOT NULL,
-    stopped_at   TEXT,
-    timesheet_id INTEGER,
-    notes        TEXT    NOT NULL DEFAULT '[]'
-);
-"""
-
-
-class TestAbortedAtMigration(unittest.TestCase):
-    def test_legacy_db_gains_nullable_aborted_at_column(self):
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        with sqlite3.connect(tmp.name) as conn:
-            conn.executescript(_LEGACY_TASK_RUNS_DDL)
-            conn.execute(
-                "INSERT INTO task_runs (task_id, task_name, project_id, "
-                "project_name, state, started_at) "
-                "VALUES (101, 'Old', 9, 'Proj', 'RUNNING', '2026-06-01T09:00:00+00:00')"
-            )
-        db = LocalStateClient(db_path=Path(tmp.name))  # ALTER runs on open
+class TestAbortedAtColumn(unittest.TestCase):
+    def test_provisioned_db_carries_nullable_aborted_at(self):
+        # The canonical schema (#369) already carries ``aborted_at``, so a fresh
+        # run reads NULL (still billable) and abort stamps it — no migration.
+        db = make_state_db()
+        db.create_run(101, "Old", 9, "Proj", timesheet_id=1)
         run = db.get_active_run(101)
         self.assertIsNotNone(run)
-        self.assertIsNone(run.aborted_at)  # pre-#356 row: NULL, still billable
+        self.assertIsNone(run.aborted_at)
         with _db_clock(T_ABORT):
             aborted = db.abort_run(101)
         self.assertEqual(aborted.aborted_at, T_ABORT)

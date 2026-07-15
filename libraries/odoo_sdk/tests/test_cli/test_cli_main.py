@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import LocalStateClient as TaskStateDB
+from tests.support import make_state_db
 
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
@@ -17,7 +18,7 @@ ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
 def _tmp_db() -> TaskStateDB:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _client() -> MagicMock:
