@@ -76,6 +76,37 @@ Because uploads are recorded in an idempotent `session_uploads` ledger keyed by
 double-billing.** Sessions with no numeric task id are skipped (they have no
 Odoo task to bill).
 
+#### Billed hours: minimum and rounding
+
+A session bills its **wall-clock span** — the time from its first event to its
+last. Raw span alone under-bills at the small end: a single-event session (one
+commit, one log call) spans *zero* time, and a 30-second session rounds toward
+nothing. To keep short-but-real work from billing `0`, the upload path applies
+two policies to every session's span, at the one point that feeds both the `u`
+key and `odoo-sdk upload`:
+
+- **Minimum** (`min_session_hours`, default `0.25`) — a session is floored *up*
+  to this many hours. A below-minimum session is never dropped; it bills the
+  minimum. A single-event (zero-span) session therefore bills exactly `0.25h`.
+- **Rounding** (`round_session_hours`, default `0.05`) — the span is rounded to
+  the nearest multiple of this step (half-up), then held at or above the
+  minimum. A `1.87h` session bills `1.85h`. Setting the step to `0` disables
+  rounding and bills the raw span (still subject to the minimum).
+
+There is **no cap** — a long session bills its full span. Both knobs live in the
+`[behavior]` section of the SDK config file, or as the `ODOO_MIN_SESSION_HOURS`
+and `ODOO_ROUND_SESSION_HOURS` environment variables, resolved with the usual
+**file > environment > default** precedence:
+
+```toml
+[behavior]
+min_session_hours = 0.25
+round_session_hours = 0.05
+```
+
+A negative, non-numeric, or otherwise invalid value for either knob falls back
+to its default rather than failing the upload.
+
 ### Resync (`r`) — three pullers, current-repo and manual only
 
 Resync reconciles the local `events` table against external activity, then

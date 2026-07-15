@@ -265,6 +265,36 @@ def _coerce_timeout(value: Any) -> float:
     return DEFAULT_TIMEOUT_SECONDS
 
 
+def _coerce_non_negative_float(value: Any, default: float) -> float:
+    """Coerce a raw value to a non-negative finite float, else the default.
+
+    Shared by the billing-policy behavior settings (``min_session_hours`` /
+    ``round_session_hours``, issue #355), whose values arrive from environment
+    variables and INI files as strings, may be absent, or may be garbage. Any
+    value that is not a finite number ``>= 0`` degrades to ``default`` rather
+    than raising, so a mistyped config never crashes an upload. Booleans are
+    rejected explicitly because ``float(True)`` is ``1.0``, which would silently
+    turn a TOML ``min_session_hours = true`` into a one-hour floor.
+
+    :param value: Raw value from a file, environment, or default source.
+    :type value: Any
+    :param default: Fallback returned when ``value`` is not a valid non-negative
+        finite number.
+    :type default: float
+    :return: A non-negative finite float, or ``default`` on invalid input.
+    :rtype: float
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isfinite(number) and number >= 0:
+        return number
+    return default
+
+
 # ── LocalConfig ───────────────────────────────────────────────────────────────
 
 # Sensible defaults applied at the lowest precedence (File > Env > Default).
@@ -291,16 +321,29 @@ _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 # what the SQL-derived read path uses to decide session boundaries.
 _DEFAULT_SESSION_GAP_MINS = 60
 
+# Billing policy defaults for the derived-session upload path (issue #355).
+# A derived session bills its wall-clock span, but a single-event session spans
+# zero seconds and a very short session rounds toward nothing, so raw span
+# silently under-bills. ``min_session_hours`` is the floor every billable
+# session is raised to; ``round_session_hours`` is the multiple the span is
+# rounded to (nearest, half-up). A rounding step of ``0`` disables rounding.
+_DEFAULT_MIN_SESSION_HOURS = 0.25
+_DEFAULT_ROUND_SESSION_HOURS = 0.05
+
 # Environment variables that override behavior settings when no file value is set.
 _BEHAVIOR_ENV_VARS: dict[str, str] = {
     "profiling": "ODOO_PROFILING",
     "session_gap_mins": "ODOO_SESSION_GAP_MINS",
+    "min_session_hours": "ODOO_MIN_SESSION_HOURS",
+    "round_session_hours": "ODOO_ROUND_SESSION_HOURS",
 }
 
 # Sensible defaults for the reserved [behavior] section.
 _BEHAVIOR_DEFAULTS: dict[str, Any] = {
     "profiling": False,
     "session_gap_mins": _DEFAULT_SESSION_GAP_MINS,
+    "min_session_hours": _DEFAULT_MIN_SESSION_HOURS,
+    "round_session_hours": _DEFAULT_ROUND_SESSION_HOURS,
 }
 
 
@@ -415,6 +458,46 @@ class LocalConfig:
     def session_gap_secs(self) -> int:
         """Return the fixed sessionization inactivity gap in whole seconds."""
         return self.session_gap_mins * 60
+
+    @property
+    def min_session_hours(self) -> float:
+        """Return the per-session billing floor in hours (issue #355).
+
+        Every billable derived session is raised to at least this many hours, so
+        a single-event session (zero wall-clock span) bills the minimum rather
+        than nothing. Resolved from the ``[behavior] min_session_hours`` file
+        setting, the ``ODOO_MIN_SESSION_HOURS`` environment variable, or the
+        default (``0.25``), with the standard File > Environment Variable >
+        Default precedence. String sources are coerced to ``float``; a negative,
+        non-finite, or non-numeric value falls back to the default rather than
+        raising. ``0`` is honoured (no floor).
+
+        :return: The per-session minimum in hours (non-negative).
+        :rtype: float
+        """
+        return _coerce_non_negative_float(
+            self._behavior.get("min_session_hours"), _DEFAULT_MIN_SESSION_HOURS
+        )
+
+    @property
+    def round_session_hours(self) -> float:
+        """Return the per-session rounding step in hours (issue #355).
+
+        A billable session's wall-clock span is rounded to the nearest multiple
+        of this step (half-up). Resolved from the ``[behavior]
+        round_session_hours`` file setting, the ``ODOO_ROUND_SESSION_HOURS``
+        environment variable, or the default (``0.05``), with the standard File
+        > Environment Variable > Default precedence. String sources are coerced
+        to ``float``; a negative, non-finite, or non-numeric value falls back to
+        the default rather than raising. ``0`` is honoured and disables rounding
+        (the raw span is billed, subject to the minimum).
+
+        :return: The rounding step in hours (non-negative; ``0`` disables it).
+        :rtype: float
+        """
+        return _coerce_non_negative_float(
+            self._behavior.get("round_session_hours"), _DEFAULT_ROUND_SESSION_HOURS
+        )
 
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.
