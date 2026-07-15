@@ -28,7 +28,7 @@ _MIN_PANEL_WIDTH = 20
 _MIN_WIDTH = 2 * _MIN_PANEL_WIDTH
 _MIN_HEIGHT = 8
 
-_FOOTER = " ←/→ start  ↑/↓ end  e:export  u:upload  r:resync  q:quit "
+_FOOTER = " ←/→ start  ↑/↓ end  e:export  u:upload  r:resync  t:triage  q:quit "
 
 # Shown under the empty-state hint so a blank window always names a next step.
 _EMPTY_GUIDANCE = "log events via start_task / odoo-sdk log-event, or widen the window"

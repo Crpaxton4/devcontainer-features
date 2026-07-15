@@ -1,18 +1,14 @@
-import sqlite3
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
 
 def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db()
 
 
 def _event(minute: int, task="101", source="commit") -> EventRecord:
@@ -68,109 +64,52 @@ class TestEventStore(unittest.TestCase):
         self.assertEqual(len(db.get_events()), 1)
 
 
-# The OLD schema, as it existed before #330 removed the materialized sessions
-# read path: a ``sessions`` table plus an ``events`` table whose ``session_id``
-# links each event to a session (declared ON DELETE SET NULL).
-_LEGACY_SCHEMA = """
-CREATE TABLE events (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    source     TEXT    NOT NULL,
-    timestamp  TEXT    NOT NULL,
-    task_ids   TEXT    NOT NULL DEFAULT '[]',
-    repo       TEXT    NOT NULL DEFAULT '',
-    pr_num     INTEGER NOT NULL DEFAULT 0,
-    branch     TEXT    NOT NULL DEFAULT '',
-    subject    TEXT    NOT NULL DEFAULT '',
-    payload    TEXT,
-    session_id INTEGER REFERENCES sessions (id) ON DELETE SET NULL
-);
-CREATE TABLE sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id       TEXT    NOT NULL,
-    repo          TEXT    NOT NULL DEFAULT '',
-    started_at    TEXT    NOT NULL,
-    ended_at      TEXT    NOT NULL,
-    strategy_name TEXT    NOT NULL DEFAULT 'development',
-    category      TEXT    NOT NULL DEFAULT 'Development',
-    pr_num        INTEGER NOT NULL DEFAULT 0
-);
-"""
+def _note_event(minute: int, task="101") -> EventRecord:
+    return EventRecord(
+        id=None,
+        source="agent",
+        timestamp=datetime(2026, 6, 1, 9, minute, tzinfo=UTC),
+        task_ids=[task],
+        repo="",
+        subject="task_note",
+        payload={"tool": "task_note"},
+    )
 
 
-class TestDropMaterializedSessionsMigration(unittest.TestCase):
-    def _legacy_db_path(self) -> Path:
-        """Build a pre-#330 DB by hand: a sessions row + linked events."""
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        conn = sqlite3.connect(tmp.name)
-        conn.executescript(_LEGACY_SCHEMA)
-        conn.execute(
-            "INSERT INTO sessions (id, task_id, repo, started_at, ended_at) "
-            "VALUES (1, '101', 'owner/repo', "
-            "'2026-06-01T09:00:00+00:00', '2026-06-01T09:40:00+00:00')"
+class TestLastNoteAt(unittest.TestCase):
+    def test_returns_none_when_no_note_event(self):
+        db = _tmp_db()
+        db.add_event(_event(0))  # a commit event, not a task_note
+        self.assertIsNone(db.last_note_at(101))
+
+    def test_returns_most_recent_note_timestamp(self):
+        db = _tmp_db()
+        db.add_event(_note_event(5, task="101"))
+        db.add_event(_note_event(30, task="101"))
+        self.assertEqual(
+            db.last_note_at(101), datetime(2026, 6, 1, 9, 30, tzinfo=UTC)
         )
-        # Two events 20m apart, both linked to session 1.
-        for minute in (0, 20):
-            conn.execute(
-                "INSERT INTO events (source, timestamp, task_ids, repo, pr_num, "
-                "branch, subject, payload, session_id) VALUES "
-                "('commit', ?, '[\"101\"]', 'owner/repo', 0, 'main', 's', NULL, 1)",
-                (f"2026-06-01T09:{minute:02d}:00+00:00",),
-            )
-        conn.commit()
-        conn.close()
-        return Path(tmp.name)
 
-    def test_open_drops_sessions_table_and_keeps_events(self):
-        path = self._legacy_db_path()
-        db = LocalStateClient(db_path=path)
+    def test_ignores_notes_for_other_tasks(self):
+        db = _tmp_db()
+        db.add_event(_note_event(30, task="999"))
+        self.assertIsNone(db.last_note_at(101))
 
-        # The materialized sessions table is gone.
-        with sqlite3.connect(str(path)) as raw:
-            tables = {
-                row[0]
-                for row in raw.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-        self.assertNotIn("sessions", tables)
-
-        # Events survive the migration and are queryable.
-        events = db.get_events()
-        self.assertEqual(len(events), 2)
-        self.assertEqual([e.timestamp.minute for e in events], [0, 20])
-        self.assertEqual(events[0].task_ids, ["101"])
-
-    def test_derive_still_works_over_migrated_events(self):
-        path = self._legacy_db_path()
-        db = LocalStateClient(db_path=path)
-        # The two events are 20m apart; a 60m gap keeps them one whole session.
-        windows = db.derive_sessions_overlapping(
-            datetime(2026, 6, 1, 0, tzinfo=UTC),
-            datetime(2026, 6, 2, 0, tzinfo=UTC),
-            gap_secs=3600,
+    def test_matches_multi_task_note_event(self):
+        db = _tmp_db()
+        rec = _note_event(12, task="101")
+        rec.task_ids = ["101", "202"]
+        db.add_event(rec)
+        self.assertEqual(
+            db.last_note_at(202), datetime(2026, 6, 1, 9, 12, tzinfo=UTC)
         )
-        self.assertEqual(len(windows), 1)
-        self.assertEqual(windows[0].task_id, "101")
-        self.assertEqual(windows[0].started_at.minute, 0)
-        self.assertEqual(windows[0].ended_at.minute, 20)
 
-    def test_can_write_events_after_migration(self):
-        # The legacy ``events`` table carries an orphaned
-        # ``session_id REFERENCES sessions`` FK. Once the parent table is
-        # dropped, inserts must still succeed (FK enforcement is off), or the
-        # tracker could never append another event to a migrated DB.
-        path = self._legacy_db_path()
-        db = LocalStateClient(db_path=path)
-        stored = db.add_event(_event(45))
-        self.assertIsNotNone(stored.id)
-        self.assertEqual(len(db.get_events()), 3)
-
-    def test_migration_is_idempotent(self):
-        path = self._legacy_db_path()
-        LocalStateClient(db_path=path)
-        # A second open (sessions already dropped) must not fail.
-        LocalStateClient(db_path=path)
+    def test_ignores_non_note_agent_events(self):
+        db = _tmp_db()
+        rec = _note_event(20, task="101")
+        rec.subject = "start_task"
+        db.add_event(rec)
+        self.assertIsNone(db.last_note_at(101))
 
 
 if __name__ == "__main__":

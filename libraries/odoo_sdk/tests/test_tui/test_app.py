@@ -22,7 +22,6 @@ from odoo_sdk.tui.app import (
     refresh,
     request_upload,
     run,
-    _numeric_task_id,
     _resync_status,
     _upload_sessions,
 )
@@ -33,7 +32,7 @@ def _sessions(n=2):
     return [
         {
             "session_id": i,
-            "session_key": f"{100 + i}|acme/web|{i}",
+            "session_key": f"{100 + i}|{i}",
             "task_id": str(100 + i),
             "repo": "acme/web",
             "strategy_name": "development",
@@ -71,9 +70,13 @@ class FakeRegistry:
 
 
 def _registry(query_result=None, store=None):
-    # ``_upload_sessions`` resolves its (client, state) pair off the stop_task
-    # command, so the fake carries both. A MagicMock stands in for the Odoo
-    # client the unified ``reconcile`` writes through.
+    # The TUI's ``_upload_sessions`` delegates to the shared upload loop (#354),
+    # resolving its (client, state) pair off the stop_task command, so the fake
+    # carries both. The state's ``list_session_uploads`` returns an empty ledger
+    # so an unpatched upload's orphan sweep is a no-op (the loop's behavior is
+    # tested in ``tests/test_utilities/test_upload.py``).
+    stop_state = MagicMock()
+    stop_state.list_session_uploads.return_value = []
     return FakeRegistry(
         {
             "query_sessions": FakeCommand(
@@ -82,7 +85,7 @@ def _registry(query_result=None, store=None):
             "start_task": FakeCommand(result={"run_id": 1}),
             "stop_task": FakeCommand(
                 result={"elapsed_hours": 1.0},
-                state=MagicMock(),
+                state=stop_state,
                 client=MagicMock(),
             ),
         }
@@ -259,68 +262,66 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
+        with patch("odoo_sdk.tui.app.upload_sessions") as mock_upload:
             resolved = confirm_upload(state, registry, confirmed=False)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("cancelled", resolved.status)
-        mock_reconcile.assert_not_called()
+        # The shared upload loop is never invoked on a cancel.
+        mock_upload.assert_not_called()
 
     def test_confirm_runs_upload(self):
         registry = _registry()
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={"uploaded": 2, "retired": 0},
+        ) as mock_upload:
             resolved = confirm_upload(state, registry, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
-        # One reconcile_session (the sole hours-writer) per derived session.
-        self.assertEqual(mock_reconcile.call_count, 2)
+        self.assertNotIn("retired", resolved.status)  # 0 orphans stays quiet
+        mock_upload.assert_called_once()
+
+    def test_confirm_reports_retired_orphans(self):
+        registry = _registry()
+        state = AppState(
+            window=default_window(), sessions=_sessions(1), pending_upload=True
+        )
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={"uploaded": 1, "retired": 2},
+        ):
+            resolved = confirm_upload(state, registry, confirmed=True)
+        self.assertIn("uploaded 1", resolved.status)
+        self.assertIn("retired 2 orphaned upload(s)", resolved.status)
 
 
 class TestUploadSessions(unittest.TestCase):
-    def test_numeric_task_id_parsing(self):
-        self.assertEqual(_numeric_task_id("42"), 42)
-        self.assertEqual(_numeric_task_id(7), 7)
-        self.assertIsNone(_numeric_task_id("UNKNOWN"))
-        self.assertIsNone(_numeric_task_id(None))
-
-    def test_non_numeric_task_skipped(self):
+    def test_delegates_to_shared_loop_with_sessions_and_window(self):
+        # The TUI upload path is a thin delegation to the shared upload loop
+        # (#354): it forwards the stop_task command's (client, state) pair, the
+        # derived sessions, and the window's inclusive dates (the loop resolves
+        # the sweep bounds itself so the query and sweep windows cannot drift),
+        # and returns the (uploaded, retired) counts for the status line.
         registry = _registry()
-        sessions = _sessions(1)
-        sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 99})
-        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            count = _upload_sessions(registry, sessions)
-        self.assertEqual(count, 1)  # only the numeric one is billed
-        self.assertEqual(mock_reconcile.call_count, 1)
-
-    def test_upload_reconciles_once_per_session(self):
-        # Each session drives exactly one reconcile_session (idempotent per key).
-        registry = _registry()
-        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            _upload_sessions(registry, _sessions(3))
-        self.assertEqual(mock_reconcile.call_count, 3)
-
-    def test_reconcile_receives_identity_hours_and_day(self):
-        registry = _registry()
-        sessions = [
-            {
-                "session_id": 5,
-                "session_key": "100|acme/web|5",
-                "task_id": "100",
-                "duration_secs": 7200,
-                "started_at": "2026-06-01T09:00:00",
-                "events": [],
-            }
-        ]
-        with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            _upload_sessions(registry, sessions)
-        args = mock_reconcile.call_args.args
-        self.assertEqual(args[2], 100)  # numeric task id
-        self.assertEqual(args[3], "100|acme/web|5")  # stable session key
-        self.assertEqual(args[4], "[/] session 100|acme/web|5")  # description
-        self.assertEqual(args[5], 2.0)  # 7200s -> 2.0h
-        self.assertEqual(args[6], date(2026, 6, 1))  # started_at date
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
+        sessions = _sessions(3)
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={"uploaded": 3, "retired": 1},
+        ) as mock_upload:
+            uploaded, retired = _upload_sessions(registry, sessions, window)
+        self.assertEqual((uploaded, retired), (3, 1))
+        stop_cmd = registry["stop_task"]
+        mock_upload.assert_called_once_with(
+            stop_cmd._client,
+            stop_cmd.state,
+            sessions,
+            start_date="2026-06-01",
+            end_date="2026-06-03",
+        )
 
 
 class TestHandleKey(unittest.TestCase):

@@ -20,7 +20,11 @@
 # marks a FILE source, which is created with touch after its parent dir. That
 # distinction matters: Docker materialises a *missing* single-file mount source
 # as a directory, which then fails the mount, so a file source must exist as a
-# file before the container starts. (All six sources are directories today.)
+# file before the container starts. (All seven sources are directories today.)
+#
+# One row is host-provisioned (provision=host): the odoo-sdk tracker database
+# directory. For it this script also initializes the SQLite schema via
+# scripts/init_tracker_db.py, because the container never creates that DB (#369).
 #
 # Safe to re-run: mkdir -p / touch are no-ops when the targets already exist,
 # and chmod just re-asserts the manifest's mode column (0700 for the
@@ -40,8 +44,13 @@ MANIFEST="$SCRIPT_DIR/devcontainer-features/src/personal-features/persisted-path
     exit 1
 }
 
+# Host-provisioned state directory (provision=host in the manifest), captured
+# during the loop so the tracker-database schema init below is manifest-derived
+# rather than a hardcoded path. Empty when no host row is present.
+TRACKER_DIR=""
+
 TAB="$(printf '\t')"
-while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode; do
+while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
     case "$_name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
     case "$_host_source" in
         */) mkdir -p "$HOME/$_host_source" ;;
@@ -54,4 +63,21 @@ while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_valu
     # hardening to mean anything.
     chmod "$_mode" "$HOME/$_host_source"
     printf 'ok  %s\n' "$HOME/$_host_source"
+    case "$_provision" in host) TRACKER_DIR="$HOME/$_host_source" ;; esac
 done < "$MANIFEST"
+
+# Initialize the host-provisioned tracker database schema (#369). The odoo-sdk
+# tracker DB is a single per-user SQLite file that is bind-mounted into every
+# container; the SDK inside the container deliberately never creates it (a
+# self-created DB would be container-local and discarded on rebuild), so the
+# schema must exist on the host before the first container starts. The init
+# script is stdlib-only Python - idempotent, safe to re-run.
+if [ -n "$TRACKER_DIR" ]; then
+    INIT_SCRIPT="$SCRIPT_DIR/scripts/init_tracker_db.py"
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 is required to initialize the tracker database" >&2
+        echo "schema at ${TRACKER_DIR}tracker.db. Install Python 3 and re-run." >&2
+        exit 1
+    fi
+    python3 "$INIT_SCRIPT" "${TRACKER_DIR}tracker.db"
+fi

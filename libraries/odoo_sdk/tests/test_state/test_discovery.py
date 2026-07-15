@@ -1,8 +1,9 @@
-"""Tests for cross-project discovery and DB-recorded repo identity (issue #331).
+"""Tests for single-DB active-run discovery (issues #331, #369).
 
-These build temporary state-root trees of ``<hash>/tasks.db`` files directly
-(via injected ``db_path``) so no git remote is needed, and cover the identity
-settings written on self-resolved construction.
+Discovery now queries the one host-provisioned central tracker DB
+(``<state-root>/tracker.db``) rather than globbing per-repo ``tasks.db`` files.
+These build a temporary central DB (via the shared schema-provisioning helper),
+create runs in it, and assert the flat active-run report and stale flags.
 """
 
 import sqlite3
@@ -10,10 +11,11 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
 
-from odoo_sdk.state.db import LocalStateClient, _derive_repo_label
-from odoo_sdk.state.discovery import _is_stale, discover_projects
+from odoo_sdk.state.db import LocalStateClient, _derive_repo_label, tracker_db_path
+from odoo_sdk.state.discovery import _is_stale, discover_runs
+from odoo_sdk.state.models import TrackerStateMissingError
+from tests.support import provision_schema
 
 
 def _backdate(db_path: Path, task_id: int, hours: float) -> None:
@@ -27,24 +29,15 @@ def _backdate(db_path: Path, task_id: int, hours: float) -> None:
     conn.close()
 
 
-def _make_db(
-    root: Path,
-    project_hash: str,
-    *,
-    remote: str = None,
-    runs=(),
-) -> Path:
-    """Create ``<root>/<hash>/tasks.db`` with optional identity and runs.
+def _central_db(root: Path, *, runs=()) -> Path:
+    """Provision ``<root>/tracker.db`` and populate it with ``runs``.
 
-    ``runs`` is an iterable of ``(task_id, task_name, backdate_hours)`` tuples;
-    a non-zero ``backdate_hours`` ages the run so discovery flags it stale.
+    ``runs`` is an iterable of ``(task_id, task_name, backdate_hours)`` tuples; a
+    non-zero ``backdate_hours`` ages the run so discovery flags it stale.
     """
-    db_path = root / project_hash / "tasks.db"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path = tracker_db_path(root)
+    provision_schema(db_path)
     db = LocalStateClient(db_path=db_path)
-    if remote is not None:
-        db.set_setting("repo_remote_url", remote)
-        db.set_setting("repo_label", _derive_repo_label(remote))
     for task_id, task_name, backdate_hours in runs:
         db.create_run(task_id, task_name, 10, "Proj", timesheet_id=task_id * 10)
         if backdate_hours:
@@ -64,9 +57,7 @@ class TestDeriveRepoLabel(unittest.TestCase):
         )
 
     def test_https_without_git_suffix(self):
-        self.assertEqual(
-            _derive_repo_label("https://example.com/o/r"), "o/r"
-        )
+        self.assertEqual(_derive_repo_label("https://example.com/o/r"), "o/r")
 
 
 class TestIsStale(unittest.TestCase):
@@ -80,7 +71,7 @@ class TestIsStale(unittest.TestCase):
         self.assertFalse(_is_stale(now, now - timedelta(hours=1)))
 
 
-class TestDiscoverProjects(unittest.TestCase):
+class TestDiscoverRuns(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -88,157 +79,72 @@ class TestDiscoverProjects(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def test_empty_root_returns_empty_list(self):
-        self.assertEqual(discover_projects(root=self.root), [])
+    def test_provisioned_db_with_no_runs_returns_empty_list(self):
+        _central_db(self.root)
+        self.assertEqual(discover_runs(root=self.root), [])
 
-    def test_missing_root_returns_empty_list(self):
-        self.assertEqual(discover_projects(root=self.root / "nope"), [])
+    def test_missing_db_raises_named_error(self):
+        # The central DB is host-provisioned; discovery must not create one.
+        with self.assertRaises(TrackerStateMissingError):
+            discover_runs(root=self.root / "nope")
 
-    def test_lists_multiple_projects_sorted_by_hash(self):
-        _make_db(self.root, "aaa", remote="git@github.com:o/a.git")
-        _make_db(self.root, "bbb", remote="git@github.com:o/b.git")
-        hashes = [p["project_hash"] for p in discover_projects(root=self.root)]
-        self.assertEqual(hashes, ["aaa", "bbb"])
+    def test_lists_active_runs_sorted_by_start(self):
+        _central_db(
+            self.root, runs=[(1, "First", 3), (2, "Second", 1)]
+        )
+        runs = discover_runs(root=self.root)
+        # Oldest start first (task 1 backdated 3h, task 2 backdated 1h).
+        self.assertEqual([r["task_id"] for r in runs], [1, 2])
 
     def test_stale_running_run_flagged(self):
-        _make_db(
-            self.root,
-            "orphan",
-            remote="git@github.com:o/orphan.git",
-            runs=[(1, "Wedged", 48)],
-        )
-        [project] = discover_projects(root=self.root)
-        self.assertTrue(project["stale"])
-        run = project["active_runs"][0]
+        _central_db(self.root, runs=[(1, "Wedged", 48)])
+        [run] = discover_runs(root=self.root)
         self.assertTrue(run["stale"])
         self.assertEqual(run["run_id"], 1)
         self.assertEqual(run["task_name"], "Wedged")
+        self.assertEqual(run["project_name"], "Proj")
         self.assertEqual(run["timesheet_id"], 10)
         self.assertEqual(run["state"], "RUNNING")
 
     def test_fresh_run_not_flagged(self):
-        _make_db(
-            self.root,
-            "fresh",
-            remote="git@github.com:o/fresh.git",
-            runs=[(1, "Recent", 0)],
-        )
-        [project] = discover_projects(root=self.root)
-        self.assertFalse(project["stale"])
-        self.assertFalse(project["active_runs"][0]["stale"])
-
-    def test_missing_identity_settings_report_unknown(self):
-        _make_db(self.root, "legacy", runs=[(1, "Old", 1)])
-        [project] = discover_projects(root=self.root)
-        self.assertEqual(project["repo_label"], "(unknown)")
-        self.assertIsNone(project["repo_remote_url"])
-
-    def test_identity_settings_surface_when_present(self):
-        _make_db(self.root, "known", remote="git@github.com:o/repo.git")
-        [project] = discover_projects(root=self.root)
-        self.assertEqual(project["repo_label"], "o/repo")
-        self.assertEqual(project["repo_remote_url"], "git@github.com:o/repo.git")
-
-    def test_corrupt_db_skipped_with_note(self):
-        _make_db(self.root, "good", remote="git@github.com:o/g.git")
-        bad = self.root / "corrupt" / "tasks.db"
-        bad.parent.mkdir(parents=True)
-        bad.write_bytes(b"this is not a sqlite database")
-        projects = {p["project_hash"]: p for p in discover_projects(root=self.root)}
-        self.assertIsNone(projects["good"]["note"])
-        self.assertIn("skipped (unreadable)", projects["corrupt"]["note"])
-        self.assertEqual(projects["corrupt"]["repo_label"], "(unknown)")
-        self.assertEqual(projects["corrupt"]["active_runs"], [])
+        _central_db(self.root, runs=[(1, "Recent", 0)])
+        [run] = discover_runs(root=self.root)
+        self.assertFalse(run["stale"])
 
     def test_stopped_run_is_not_active(self):
-        db_path = _make_db(
-            self.root,
-            "done",
-            remote="git@github.com:o/d.git",
-            runs=[(1, "Finished", 0)],
-        )
+        db_path = _central_db(self.root, runs=[(1, "Finished", 0)])
         LocalStateClient(db_path=db_path).stop_run(1)
-        [project] = discover_projects(root=self.root)
-        self.assertEqual(project["active_runs"], [])
+        self.assertEqual(discover_runs(root=self.root), [])
+
+    def test_runs_for_two_repos_all_surface_in_one_db(self):
+        # The whole point of the central DB: runs that used to live in separate
+        # per-repo DBs now all appear together.
+        _central_db(self.root, runs=[(1, "RepoA work", 1), (2, "RepoB work", 1)])
+        task_ids = {r["task_id"] for r in discover_runs(root=self.root)}
+        self.assertEqual(task_ids, {1, 2})
 
     def test_custom_threshold_respected(self):
-        _make_db(
-            self.root,
-            "edge",
-            remote="git@github.com:o/e.git",
-            runs=[(1, "Aging", 5)],
-        )
-        # 5h old is stale under a 1h threshold but fresh under the 12h default.
-        fresh = discover_projects(root=self.root)[0]
-        self.assertFalse(fresh["active_runs"][0]["stale"])
-        stale = discover_projects(root=self.root, stale_after_hours=1.0)[0]
-        self.assertTrue(stale["active_runs"][0]["stale"])
+        _central_db(self.root, runs=[(1, "Aging", 5)])
+        # 5h old is fresh under the 12h default but stale under a 1h threshold.
+        self.assertFalse(discover_runs(root=self.root)[0]["stale"])
+        self.assertTrue(discover_runs(root=self.root, stale_after_hours=1.0)[0]["stale"])
 
 
 class TestDiscoverRunsCommand(unittest.TestCase):
-    """The builtin command wraps discover_projects for registry/MCP exposure."""
+    """The builtin command wraps ``discover_runs`` for registry/MCP exposure."""
 
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
-
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
-    def test_execute_delegates_to_discover_projects(self):
-        from unittest.mock import MagicMock
+    def test_execute_delegates_to_discover_runs(self):
+        from unittest.mock import MagicMock, patch
 
         from odoo_sdk.commands.builtin.discover_runs import DiscoverRunsCommand
 
-        _make_db(self.root, "hash", remote="git@github.com:o/r.git")
         with patch(
-            "odoo_sdk.commands.builtin.discover_runs.discover_projects",
-            return_value=[{"project_hash": "hash"}],
+            "odoo_sdk.commands.builtin.discover_runs.discover_runs",
+            return_value=[{"run_id": 7}],
         ) as mock_discover:
             result = DiscoverRunsCommand(MagicMock()).execute(stale_after_hours=6.0)
         mock_discover.assert_called_once_with(stale_after_hours=6.0)
-        self.assertEqual(result, [{"project_hash": "hash"}])
-
-
-class TestSelfResolvedIdentity(unittest.TestCase):
-    """Identity settings are written once on self-resolved init, never else."""
-
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.project_dir = Path(self._tmp.name) / "hash"
-        self.project_dir.mkdir(parents=True)
-
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
-    def _self_resolved(self, remote: str) -> LocalStateClient:
-        with patch(
-            "odoo_sdk.state.db._resolve_project_identity",
-            return_value=(self.project_dir, remote),
-        ):
-            return LocalStateClient()
-
-    def test_identity_written_on_self_resolved_init(self):
-        client = self._self_resolved("git@github.com:owner/repo.git")
-        self.assertEqual(
-            client.get_setting("repo_remote_url"), "git@github.com:owner/repo.git"
-        )
-        self.assertEqual(client.get_setting("repo_label"), "owner/repo")
-
-    def test_identity_never_overwritten(self):
-        self._self_resolved("git@github.com:owner/repo.git")
-        # A second self-resolved open with a different remote must not clobber it.
-        self._self_resolved("git@github.com:someone/else.git")
-        reopened = LocalStateClient(db_path=self.project_dir / "tasks.db")
-        self.assertEqual(reopened.get_setting("repo_label"), "owner/repo")
-        self.assertEqual(
-            reopened.get_setting("repo_remote_url"), "git@github.com:owner/repo.git"
-        )
-
-    def test_identity_not_written_for_injected_db_path(self):
-        client = LocalStateClient(db_path=self.project_dir / "tasks.db")
-        self.assertIsNone(client.get_setting("repo_remote_url"))
-        self.assertIsNone(client.get_setting("repo_label"))
+        self.assertEqual(result, [{"run_id": 7}])
 
 
 if __name__ == "__main__":

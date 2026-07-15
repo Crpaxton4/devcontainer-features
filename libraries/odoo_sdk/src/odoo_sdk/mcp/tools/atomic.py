@@ -112,6 +112,27 @@ def make_get_task_chatter_tool(registry: Registry):
     return get_task_chatter
 
 
+@atomic_tool("get_mail_status")
+def make_get_mail_status_tool(registry: Registry):
+    def get_mail_status(res_model: str, res_id: int) -> List[dict]:
+        """Report outgoing-mail (``mail.mail``) delivery status for a record.
+
+        Read-only. Joins the record's chatter messages to their linked outbound
+        mails and returns, per mail: ``mail_id``, ``message_id``, ``subject``, a
+        ``recipients`` summary, the delivery ``state`` (``outgoing`` / ``sent`` /
+        ``exception`` / ``cancel``), the message ``date``, and — only when
+        populated — ``failure_reason`` / ``failure_type``. Use it to verify
+        "send an email" acceptance criteria: pass ``res_model="project.task"``
+        with the task id to check a task's outbound mail. Records with only
+        chatter notes return an empty list. Never retries or requeues mail.
+        ``mail.mail`` is often admin-restricted; a denied read returns a clear
+        access error.
+        """
+        return registry["get_mail_status"].execute(res_model, res_id)
+
+    return get_mail_status
+
+
 @atomic_tool("get_task_attachments")
 def make_get_task_attachments_tool(registry: Registry):
     def get_task_attachments(
@@ -293,7 +314,7 @@ def make_resume_task_tool(registry: Registry):
 @atomic_tool("abort_task")
 def make_abort_task_tool(registry: Registry):
     def abort_task(task_id: int) -> Dict[str, Any]:
-        """Force-close a wedged session without logging hours; drop its timesheet."""
+        """Force-close a wedged session without logging hours; retire its anchor."""
         return registry["abort_task"].execute(task_id)
 
     return abort_task
@@ -302,10 +323,10 @@ def make_abort_task_tool(registry: Registry):
 @atomic_tool("discover_runs")
 def make_discover_runs_tool(registry: Registry):
     def discover_runs(stale_after_hours: float = 12.0) -> List[Dict[str, Any]]:
-        """Discover every task-tracker project and its active runs across DBs.
+        """Discover active runs in the central tracker DB.
 
-        Read-only local scan: lists each project's repo identity and active
-        RUNNING/AWAITING_ANSWERS runs, flagging any started before
+        Read-only local query: lists the active RUNNING/AWAITING_ANSWERS runs in
+        the one host-provisioned central DB, flagging any started before
         ``stale_after_hours`` ago as stale so orphaned runs can be found.
         """
         return registry["discover_runs"].execute(stale_after_hours=stale_after_hours)
@@ -315,14 +336,14 @@ def make_discover_runs_tool(registry: Registry):
 
 @atomic_tool("abort_run")
 def make_abort_run_tool(registry: Registry):
-    def abort_run(project_hash: str, run_id_or_task_id: int) -> Dict[str, Any]:
-        """Abort a stale run in another project's DB and close its Odoo anchor.
+    def abort_run(run_id_or_task_id: int) -> Dict[str, Any]:
+        """Abort a stale run in the central tracker DB and close its Odoo anchor.
 
-        Opens the target project's DB by ``project_hash`` under the state root
-        (regardless of cwd), force-closes the run without logging hours, and
-        retires its orphaned anchor timesheet (only when still unreconciled).
+        Addresses the run by SQLite run id or Odoo task id in the one central DB
+        (regardless of cwd), force-closes it without logging hours, and retires
+        its orphaned anchor timesheet (only when still unreconciled).
         """
-        return registry["abort_run"].execute(project_hash, run_id_or_task_id)
+        return registry["abort_run"].execute(run_id_or_task_id)
 
     return abort_run
 

@@ -16,6 +16,18 @@ class ProjectIdError(RuntimeError):
     """Raised when the git remote origin URL cannot be determined."""
 
 
+class TrackerStateMissingError(RuntimeError):
+    """Raised when the central tracker database does not exist at its path.
+
+    The tracker database is host-provisioned state (issue #369): it is created
+    on the host by ``setup.sh`` / ``setup.ps1`` and bind-mounted into every
+    container. The SDK deliberately never creates it — a self-created DB would be
+    container-local and discarded on rebuild, silently splitting one person's
+    timeline. So every state-touching entry point raises this single, actionable
+    error naming the expected path rather than materializing an empty DB.
+    """
+
+
 class TaskAlreadyRunningError(RuntimeError):
     """Raised when start_task is called for a task that already has an active session."""
 
@@ -40,6 +52,14 @@ class TaskRun:
     stopped_at: Optional[datetime]
     timesheet_id: Optional[int]
     notes: list[str]
+    aborted_at: Optional[datetime] = None
+    """When the run was force-aborted (never billed), else ``None`` (#356).
+
+    An additive, nullable stamp set by :meth:`LocalStateClient.abort_run`. The
+    upload path excludes any derived session lying wholly within the aborted
+    run's ``[started_at, aborted_at]`` window for the same task, so an aborted
+    run's leftover events never bill. A normally stopped run leaves this ``None``.
+    """
 
     @property
     def elapsed_seconds(self) -> float:
@@ -122,9 +142,13 @@ class SessionWindow:
 def session_key(window: SessionWindow) -> str:
     """Return a stable identity string for a derived session window.
 
-    The key is ``"{task_id}|{repo}|{id}"`` where ``id`` is the window's minimum
-    event id. Because a closed session's earliest event id is immutable under
-    append-only tail writes, the key stays stable across re-derivations and can
-    be used as the idempotency key for per-session timesheet uploads.
+    The key is ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
+    id. As of #352 sessions partition by task only (the repo is display-only
+    metadata, no longer part of the identity), so a task's agent events
+    (``repo=""``) and its resync'd commits (``repo="owner/repo"``) share one key
+    rather than splitting into two parallel lanes. Because a closed session's
+    earliest event id is immutable under append-only tail writes, the key stays
+    stable across re-derivations and is the idempotency key for per-session
+    timesheet uploads.
     """
-    return f"{window.task_id}|{window.repo}|{window.id}"
+    return f"{window.task_id}|{window.id}"

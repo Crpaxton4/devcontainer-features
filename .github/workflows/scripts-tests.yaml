@@ -43,9 +43,16 @@ jobs:
           HOME="$scratch" pwsh -NoProfile -File ./setup.ps1
           for dir in .claude .config/gh .config/odoo_sdk \
                      .config/pr-automation .config/coderabbit \
-                     .config/devcontainer/shell-history; do
+                     .config/devcontainer/shell-history \
+                     .config/odoo-task-tracker; do
               if [ ! -d "$scratch/$dir" ]; then
                   echo "setup.ps1 did not create $dir" >&2
                   exit 1
               fi
           done
+          # setup.ps1 host-provisions the tracker DB schema (#369): assert the
+          # SQLite file exists so a broken init step can't pass silently.
+          if [ ! -f "$scratch/.config/odoo-task-tracker/tracker.db" ]; then
+              echo "setup.ps1 did not initialize the tracker database" >&2
+              exit 1
+          fi

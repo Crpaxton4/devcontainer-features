@@ -1,4 +1,5 @@
-"""Tests for the user-writable default state root (issue #106).
+"""Tests for the user-writable default state root (issue #106) and the single
+central tracker DB path resolution (issue #369).
 
 The tracker state root must never fall back to a system path such as
 ``/usr/local/share`` that a non-root MCP user cannot write to. It resolves via:
@@ -6,8 +7,15 @@ The tracker state root must never fall back to a system path such as
 1. ``ODOO_TASK_TRACKER_DIR`` env var (highest precedence).
 2. ``$XDG_STATE_HOME/odoo-task-tracker`` when ``XDG_STATE_HOME`` is set.
 3. ``~/.local/state/odoo-task-tracker`` otherwise.
+
+The central DB is ``<state-root>/tracker.db`` — no git remote is consulted and no
+directory is a per-repo hash, so ssh and https clones converge on one DB. The SDK
+never creates that DB (it is host-provisioned and bind-mounted): a missing DB
+raises :class:`TrackerStateMissingError` rather than being materialized empty.
 """
 
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,8 +23,10 @@ from unittest.mock import patch
 from odoo_sdk.state.db import (
     LocalStateClient,
     _default_root,
-    _get_project_dir,
+    tracker_db_path,
 )
+from odoo_sdk.state.models import TrackerStateMissingError
+from tests.support import provision_schema
 
 
 class TestDefaultRoot(unittest.TestCase):
@@ -33,131 +43,71 @@ class TestDefaultRoot(unittest.TestCase):
             patch.dict("os.environ", {}, clear=False),
             patch("odoo_sdk.state.db.Path.home", return_value=Path("/home/user")),
         ):
-            # Ensure XDG_STATE_HOME is unset for this branch.
-            import os
-
             os.environ.pop("XDG_STATE_HOME", None)
             root = _default_root()
         self.assertEqual(root, Path("/home/user/.local/state/odoo-task-tracker"))
         self.assertNotIn("/usr/local/share", str(root))
 
 
-class TestGetProjectDirDefaultRoot(unittest.TestCase):
-    def _mock_git(self):
-        return type("R", (), {"stdout": "git@github.com:org/repo.git\n"})()
-
+class TestTrackerDbPathDefaultRoot(unittest.TestCase):
     def test_env_override_takes_precedence(self):
-        with (
-            patch("odoo_sdk.state.db.subprocess.run", return_value=self._mock_git()),
-            patch.dict(
-                "os.environ",
-                {
-                    "ODOO_TASK_TRACKER_DIR": "/tmp/tt-override",
-                    "XDG_STATE_HOME": "/home/user/.state",
-                },
-                clear=False,
-            ),
-            patch("odoo_sdk.state.db.Path.mkdir"),
+        with patch.dict(
+            "os.environ",
+            {
+                "ODOO_TASK_TRACKER_DIR": "/tmp/tt-override",
+                "XDG_STATE_HOME": "/home/user/.state",
+            },
+            clear=False,
         ):
-            project_dir = _get_project_dir()
-        self.assertTrue(str(project_dir).startswith("/tmp/tt-override"))
+            path = tracker_db_path()
+        self.assertEqual(path, Path("/tmp/tt-override/tracker.db"))
 
     def test_resolves_under_xdg_when_no_override(self):
-        with (
-            patch("odoo_sdk.state.db.subprocess.run", return_value=self._mock_git()),
-            patch.dict(
-                "os.environ", {"XDG_STATE_HOME": "/home/user/.state"}, clear=False
-            ),
-            patch("odoo_sdk.state.db.Path.mkdir"),
+        with patch.dict(
+            "os.environ", {"XDG_STATE_HOME": "/home/user/.state"}, clear=False
         ):
-            import os
-
             os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
-            project_dir = _get_project_dir()
-        self.assertTrue(
-            str(project_dir).startswith("/home/user/.state/odoo-task-tracker")
-        )
-        self.assertNotIn("/usr/local/share", str(project_dir))
+            path = tracker_db_path()
+        self.assertEqual(path, Path("/home/user/.state/odoo-task-tracker/tracker.db"))
+        self.assertNotIn("/usr/local/share", str(path))
 
     def test_resolves_under_home_when_no_override_or_xdg(self):
         with (
-            patch("odoo_sdk.state.db.subprocess.run", return_value=self._mock_git()),
             patch.dict("os.environ", {}, clear=False),
             patch("odoo_sdk.state.db.Path.home", return_value=Path("/home/user")),
-            patch("odoo_sdk.state.db.Path.mkdir"),
         ):
-            import os
-
             os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
             os.environ.pop("XDG_STATE_HOME", None)
-            project_dir = _get_project_dir()
-        self.assertTrue(
-            str(project_dir).startswith("/home/user/.local/state/odoo-task-tracker")
+            path = tracker_db_path()
+        self.assertEqual(
+            path, Path("/home/user/.local/state/odoo-task-tracker/tracker.db")
         )
-        self.assertNotIn("/usr/local/share", str(project_dir))
+        self.assertNotIn("/usr/local/share", str(path))
 
 
-class TestLocalStateClientCreatesDir(unittest.TestCase):
-    def test_creates_dir_and_db_in_tmp_home(self):
-        import os
-
-        with (
-            patch(
-                "odoo_sdk.state.db.subprocess.run",
-                return_value=type(
-                    "R", (), {"stdout": "git@github.com:org/repo.git\n"}
-                )(),
-            ),
-            patch.dict("os.environ", {}, clear=False),
+class TestLocalStateClientNeverCreates(unittest.TestCase):
+    def test_default_client_targets_central_db_without_creating_it(self):
+        """``LocalStateClient()`` binds to ``<state-root>/tracker.db`` and, when
+        the host has not provisioned it, raises rather than creating one."""
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            "os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False
         ):
-            with tempfile_home() as home:
-                os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
-                os.environ.pop("XDG_STATE_HOME", None)
-                os.environ["HOME"] = str(home)
-                client = LocalStateClient()
-                # The db file and its parent project dir must have been created
-                # under the tmp HOME, not under a system path.
-                self.assertTrue(client._db_path.exists())
-                self.assertTrue(
-                    str(client._db_path).startswith(
-                        str(home / ".local" / "state" / "odoo-task-tracker")
-                    )
-                )
+            client = LocalStateClient()
+            expected = Path(root) / "tracker.db"
+            self.assertEqual(client._db_path, expected)
+            with self.assertRaises(TrackerStateMissingError):
+                client.get_all_active_runs()
+            self.assertFalse(expected.exists())  # nothing was created
 
-    def test_creates_dir_and_db_under_xdg_state_home(self):
-        import os
-
-        with (
-            patch(
-                "odoo_sdk.state.db.subprocess.run",
-                return_value=type(
-                    "R", (), {"stdout": "git@github.com:org/repo.git\n"}
-                )(),
-            ),
-            patch.dict("os.environ", {}, clear=False),
+    def test_default_client_reads_a_host_provisioned_central_db(self):
+        """Once the host has provisioned ``tracker.db``, the default client uses
+        it directly (no per-repo hash directory)."""
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            "os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False
         ):
-            with tempfile_home() as home:
-                xdg = home / "xdg-state"
-                os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
-                os.environ["XDG_STATE_HOME"] = str(xdg)
-                client = LocalStateClient()
-                self.assertTrue(client._db_path.exists())
-                self.assertTrue(
-                    str(client._db_path).startswith(str(xdg / "odoo-task-tracker"))
-                )
-
-
-class tempfile_home:
-    """Context manager yielding a temporary directory usable as ``HOME``."""
-
-    def __enter__(self) -> Path:
-        import tempfile
-
-        self._tmp = tempfile.TemporaryDirectory()
-        return Path(self._tmp.name)
-
-    def __exit__(self, *exc) -> None:
-        self._tmp.cleanup()
+            provision_schema(Path(root) / "tracker.db")
+            client = LocalStateClient()
+            self.assertEqual(client.get_all_active_runs(), [])
 
 
 if __name__ == "__main__":

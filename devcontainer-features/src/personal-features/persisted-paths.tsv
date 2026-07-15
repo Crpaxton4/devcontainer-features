@@ -5,10 +5,13 @@
 #
 # Consumers:
 #   install.sh               creates each container_target (mkdir -p / chown / chmod mode)
+#                            EXCEPT host-provisioned rows (provision=host): those the
+#                            container must NOT create - see the provision column below
 #   setup.sh                 creates each host_source under the host home directory
 #                            (mkdir -p / chmod mode - the container sees the HOST
 #                            mode through an active bind mount, so the mode column
-#                            must be enforced on both sides)
+#                            must be enforced on both sides), and initializes the
+#                            host-provisioned tracker database schema
 #   setup.ps1                mirrors setup.sh row-for-row (hand-kept in sync; no pwsh CI
 #                            for the container build, so parity is checked statically by
 #                            .github/scripts/test_host_setup_parity.py)
@@ -27,21 +30,30 @@
 #                    container_target, setup.sh chmods host_source (setup.ps1
 #                    does not - NTFS has no POSIX modes, and Docker Desktop
 #                    synthesizes in-container bits for shared paths). 0700 for
-#                    the credential-holding dirs (#233); 0777 for shell-history so
-#                    any container uid can create/append bash_history through the
-#                    bind mount even when it does not own the host dir (#323);
-#                    0755 otherwise.
+#                    the credential-holding dirs (#233) and the billing DB (#369);
+#                    0777 for shell-history so any container uid can create/append
+#                    bash_history through the bind mount even when it does not own
+#                    the host dir (#323); 0755 otherwise.
+#   provision        who creates the container_target: `container` = install.sh
+#                    mkdir/chown/chmods it at build time (the common case);
+#                    `host` = the host provisions it (setup.sh/setup.ps1) and it is
+#                    ONLY ever a bind mount, so install.sh must NOT pre-create it
+#                    (#369). Pre-creating a host-provisioned target would make a
+#                    missing/misconfigured mount indistinguishable from a working
+#                    one - the container would find an empty dir and silently build
+#                    a fresh, container-local, rebuild-discarded database.
 #
 # A trailing slash marks a DIRECTORY (created with mkdir -p); no trailing slash
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All six paths are directories today.
+# distinction. All seven paths are directories today.
 #
-# name	host_source	container_target	env_var	env_value	mode
-claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700
-gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh-cli-config	0700
-odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	ODOO_SDK_CONFIG	/usr/local/share/odoo-sdk-config	0700
-pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755
-coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700
-shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777
+# name	host_source	container_target	env_var	env_value	mode	provision
+claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
+gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh-cli-config	0700	container
+odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	ODOO_SDK_CONFIG	/usr/local/share/odoo-sdk-config	0700	container
+pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755	container
+coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700	container
+shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777	container
+odoo-tracker	.config/odoo-task-tracker/	/usr/local/share/odoo-task-tracker/	ODOO_TASK_TRACKER_DIR	/usr/local/share/odoo-task-tracker	0700	host

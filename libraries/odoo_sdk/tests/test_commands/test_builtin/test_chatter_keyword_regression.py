@@ -29,6 +29,7 @@ from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.transport.executor import OdooExecutor
+from tests.support import make_state_db
 
 _NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
 _QUESTION_GUARD = "odoo_sdk.commands.builtin.task_question.assert_odoo_devcontainer"
@@ -79,7 +80,7 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
 def _tmp_db() -> TaskStateDB:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _keyword_client() -> tuple[OdooClient, _KeywordOnlyMessagePostExecutor]:

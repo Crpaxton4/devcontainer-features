@@ -6,7 +6,13 @@ injected into commands alongside :class:`~odoo_sdk.client.client.OdooClient`.
 """
 
 from .config import LocalConfig, OdooConnectionSettings
-from .db import LocalStateClient, TaskStateDB
+from .db import (
+    LocalStateClient,
+    SCHEMA_DDL,
+    TaskStateDB,
+    create_schema,
+    tracker_db_path,
+)
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
@@ -16,6 +22,7 @@ from .models import (
     TaskNotRunningError,
     TaskRun,
     TaskState,
+    TrackerStateMissingError,
     session_key,
 )
 
@@ -29,8 +36,12 @@ __all__ = [
     "EventRecord",
     "SessionWindow",
     "session_key",
+    "SCHEMA_DDL",
+    "create_schema",
+    "tracker_db_path",
     "TaskAlreadyRunningError",
     "TaskNotRunningError",
     "InvalidStateTransitionError",
     "ProjectIdError",
+    "TrackerStateMissingError",
 ]

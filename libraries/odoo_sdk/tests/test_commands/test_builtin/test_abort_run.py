@@ -1,14 +1,19 @@
-"""Tests for the cross-DB AbortRunCommand and the close_anchor utility (#331)."""
+"""Tests for AbortRunCommand over the central tracker DB and close_anchor (#331, #369)."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
-from odoo_sdk.state import LocalStateClient, TaskNotRunningError, TaskState
+from odoo_sdk.state import (
+    LocalStateClient,
+    TaskNotRunningError,
+    TaskState,
+    TrackerStateMissingError,
+)
 from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME, close_anchor
+from tests.support import make_state_db
 
 _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_run.assert_odoo_devcontainer"
 
@@ -58,31 +63,19 @@ class TestCloseAnchor(unittest.TestCase):
 
 
 class TestAbortRunCommand(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
-        self._prev = os.environ.get("ODOO_TASK_TRACKER_DIR")
-        os.environ["ODOO_TASK_TRACKER_DIR"] = str(self.root)
-
-    def tearDown(self) -> None:
-        if self._prev is None:
-            os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
-        else:
-            os.environ["ODOO_TASK_TRACKER_DIR"] = self._prev
-        self._tmp.cleanup()
-
-    def _make_run(self, project_hash="orphan", timesheet_id=50):
-        db_path = self.root / project_hash / "tasks.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = LocalStateClient(db_path=db_path)
+    def _make_run(self, timesheet_id=50):
+        db = make_state_db()
         db.create_run(1, "Wedged", 10, "Proj", timesheet_id=timesheet_id)
         return db, db.get_active_run(1).id
+
+    def _command(self, client, db):
+        return AbortRunCommand(client, state=db)
 
     def test_aborts_active_run_and_closes_anchor(self):
         db, run_id = self._make_run()
         client = _client_with_anchor(ANCHOR_NAME)
         with patch(_ABORT_GUARD):
-            result = AbortRunCommand(client).execute("orphan", run_id)
+            result = self._command(client, db).execute(run_id)
         self.assertTrue(result["aborted"])
         self.assertTrue(result["anchor_closed"])
         self.assertFalse(result["already_stopped"])
@@ -93,7 +86,7 @@ class TestAbortRunCommand(unittest.TestCase):
         db, run_id = self._make_run()
         client = _client_with_anchor("Human notes")
         with patch(_ABORT_GUARD):
-            result = AbortRunCommand(client).execute("orphan", run_id)
+            result = self._command(client, db).execute(run_id)
         self.assertTrue(result["aborted"])
         self.assertFalse(result["anchor_closed"])
         self.assertEqual(db.get_run_by_id(run_id).state, TaskState.STOPPED)
@@ -102,9 +95,7 @@ class TestAbortRunCommand(unittest.TestCase):
     def test_resolves_by_task_id(self):
         # A prior stopped run bumps the autoincrement so the active run's SQLite
         # id (2) differs from its task id (5), proving the task-id fallback.
-        db_path = self.root / "orphan" / "tasks.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = LocalStateClient(db_path=db_path)
+        db = make_state_db()
         db.create_run(9, "Old", 10, "Proj", timesheet_id=1)
         db.stop_run(9)
         db.create_run(5, "Active", 10, "Proj", timesheet_id=50)
@@ -112,7 +103,7 @@ class TestAbortRunCommand(unittest.TestCase):
         self.assertNotEqual(run_id, 5)
         client = _client_with_anchor(ANCHOR_NAME)
         with patch(_ABORT_GUARD):
-            result = AbortRunCommand(client).execute("orphan", 5)
+            result = self._command(client, db).execute(5)
         self.assertTrue(result["aborted"])
         self.assertEqual(result["task_id"], 5)
         self.assertEqual(result["run_id"], run_id)
@@ -122,24 +113,26 @@ class TestAbortRunCommand(unittest.TestCase):
         db.stop_run(1)
         client = _client_with_anchor(ANCHOR_NAME)
         with patch(_ABORT_GUARD):
-            result = AbortRunCommand(client).execute("orphan", run_id)
+            result = self._command(client, db).execute(run_id)
         self.assertTrue(result["already_stopped"])
         self.assertFalse(result["aborted"])
         client.execute.assert_not_called()
 
-    def test_missing_db_raises_value_error(self):
+    def test_missing_db_raises_tracker_state_missing(self):
+        # The central DB is host-provisioned; abort must not create one (#369).
+        missing = Path(tempfile.mkdtemp()) / "absent" / "tracker.db"
+        db = LocalStateClient(db_path=missing)
         client = MagicMock()
         with patch(_ABORT_GUARD):
-            with self.assertRaises(ValueError) as ctx:
-                AbortRunCommand(client).execute("nosuchhash", 1)
-        self.assertIn("nosuchhash", str(ctx.exception))
+            with self.assertRaises(TrackerStateMissingError):
+                self._command(client, db).execute(1)
 
     def test_missing_run_raises_task_not_running(self):
-        self._make_run()
+        db, _ = self._make_run()
         client = MagicMock()
         with patch(_ABORT_GUARD):
             with self.assertRaises(TaskNotRunningError):
-                AbortRunCommand(client).execute("orphan", 9999)
+                self._command(client, db).execute(9999)
 
 
 if __name__ == "__main__":

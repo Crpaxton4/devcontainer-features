@@ -30,6 +30,8 @@ class EventType(Enum):
     REVIEW = auto()
     AGENT = auto()
     CHATTER = auto()  # Odoo task chatter authored by the tracked user (resync)
+    CALENDAR = auto()  # Google Calendar meeting tick (synthetic; resync, #370)
+    EMAIL = auto()  # Sent Gmail message, a point event (resync, #370)
     CLAUDE_HOOK = auto()  # Claude Code hook activity (source ``claude:<HookName>``)
 
 
@@ -43,7 +45,7 @@ class RawEvent:
     pr_num: int  # 0 for local-git commits or agent events with no PR
     event_type: EventType
     branch: str = ""
-    is_release: bool = False  # True when len(task_ids) > 1
+    is_release: bool = False  # multi-task on a release-bearing source (not agent/claude hooks)
     subject: str = ""
     pr_title: str = ""
     pr_body: str = ""

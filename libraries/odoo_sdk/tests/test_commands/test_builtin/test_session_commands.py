@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 from odoo_sdk.commands.builtin import QuerySessionsCommand
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -15,7 +16,7 @@ UTC = timezone.utc
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _config(gap_mins: int = 60) -> LocalConfig:
@@ -57,7 +58,7 @@ class TestQuerySessionsCommand(unittest.TestCase):
         self.assertEqual(session["started_at"][11:16], "09:00")
         self.assertEqual(session["ended_at"][11:16], "12:00")
         self.assertEqual(len(session["events"]), 4)
-        self.assertEqual(session["session_key"], "101|o/r|1")
+        self.assertEqual(session["session_key"], "101|1")  # task|min_event_id
         self.assertEqual(session["strategy_name"], "development")
 
     def test_include_events_toggle(self):

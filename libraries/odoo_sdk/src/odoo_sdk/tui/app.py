@@ -15,15 +15,16 @@ without a terminal.
 from __future__ import annotations
 
 import curses
-from dataclasses import dataclass, replace
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.utilities.timesheet import reconcile_session
+from odoo_sdk.utilities.upload import range_bounds, upload_sessions
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
+from .triage import TriageRow, build_triage_rows, compose_triage_frame
 from .window import DateWindow, apply_action
 
 # Real curses key codes mapped to the window controller's action names.
@@ -38,8 +39,15 @@ _EXPORT_MD_KEY = ord("e")
 _EXPORT_CSV_KEY = ord("c")
 _UPLOAD_KEY = ord("u")
 _RESYNC_KEY = ord("r")
+_TRIAGE_KEY = ord("t")
+_SKIP_KEY = ord("s")
 _QUIT_KEYS = (ord("q"), 27)  # q or ESC
 _CONFIRM_KEYS = (ord("y"), ord("Y"))
+_ENTER_KEYS = (ord("\n"), ord("\r"), curses.KEY_ENTER)
+_BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
+
+_MODE_MAIN = "main"
+_MODE_TRIAGE = "triage"
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,12 @@ class AppState:
     :param pending_upload: True while the confirm gate awaits a keypress.
     :param empty_hint: Diagnostic line explaining an empty window; set only when
         the last query returned no sessions, otherwise ``""``.
+    :param mode: ``"main"`` (timeline) or ``"triage"`` (the unattributed-event
+        queue). The triage fields below are only meaningful in triage mode.
+    :param triage_rows: The unattributed rows currently listed for triage — one
+        per calendar series or lone event.
+    :param triage_selected: Index of the highlighted triage row.
+    :param triage_input: The task id being typed for the selected row (digits).
     """
 
     window: DateWindow
@@ -59,6 +73,10 @@ class AppState:
     status: str = ""
     pending_upload: bool = False
     empty_hint: str = ""
+    mode: str = _MODE_MAIN
+    triage_rows: list[TriageRow] = field(default_factory=list)
+    triage_selected: int = 0
+    triage_input: str = ""
 
 
 def default_window(today: Optional[date] = None, span_days: int = 7) -> DateWindow:
@@ -99,13 +117,12 @@ def refresh(registry: Registry, state: AppState) -> AppState:
 def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
     """Return the ``[lo, hi)`` datetime bounds the session query covers.
 
-    Matches the ``query_sessions`` command's inclusive-date semantics: ``lo`` is
-    midnight of the start day and ``hi`` is midnight of the day after the end, so
-    the whole end day is counted.
+    Delegates to the shared :func:`~odoo_sdk.utilities.upload.range_bounds` so
+    the TUI, the ``query_sessions`` command, and the upload sweep all resolve
+    one inclusive-date semantic: ``lo`` is midnight of the start day and ``hi``
+    is midnight of the day after the end, so the whole end day is counted.
     """
-    lo = datetime.combine(window.start, time.min)
-    hi = datetime.combine(window.end + timedelta(days=1), time.min)
-    return lo, hi
+    return range_bounds(window.start_iso(), window.end_iso())
 
 
 def _empty_hint(registry: Registry, window: DateWindow) -> str:
@@ -177,66 +194,39 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
     """Resolve the confirm gate: on ``confirmed`` run the upload, else cancel."""
     if not confirmed:
         return replace(state, pending_upload=False, status="upload cancelled")
-    count = _upload_sessions(registry, state.sessions)
-    return replace(
-        state,
-        pending_upload=False,
-        status=f"uploaded {count} session(s)",
-    )
+    uploaded, retired = _upload_sessions(registry, state.sessions, state.window)
+    status = f"uploaded {uploaded} session(s)"
+    if retired:
+        status += f", retired {retired} orphaned upload(s)"
+    return replace(state, pending_upload=False, status=status)
 
 
-def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
-    """Upload each derived session's hours onto its own idempotent timesheet row.
+def _upload_sessions(
+    registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
+) -> tuple[int, int]:
+    """Bill the derived sessions through the shared upload loop (#354).
 
-    The unified timesheet module (issue #181) is the sole writer of
-    ``account.analytic.line``: this delegates to its idempotent
-    :func:`reconcile_session`, which resolves the one row a derived session maps
-    to (by its stable ``session_key``) and rewrites it, so a re-run never
-    double-bills. Sessions lacking a numeric task id are skipped (they have no
-    Odoo task to bill).
+    The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
+    :func:`~odoo_sdk.utilities.upload.upload_sessions` path: it reconciles each
+    session through the sole ``account.analytic.line`` hours-writer (idempotent
+    per ``session_key``, so a re-run never double-bills) and then runs the
+    window-scoped orphan sweep (#353) that zeroes and retires mappings that no
+    longer derive. The window's inclusive dates are forwarded (bounds resolved
+    inside the shared loop) so the sweep is scoped exactly to what was queried.
+    The shared (client, state) pair is resolved off the ``stop_task`` command,
+    the same dependencies every registry command shares.
+
+    :return: ``(uploaded, retired)`` counts for the status line.
     """
     stop_cmd = registry["stop_task"]
-    client, state = stop_cmd._client, stop_cmd.state
-    uploaded = 0
-    for session in sessions:
-        task_id = _numeric_task_id(session.get("task_id"))
-        if task_id is None:
-            continue
-        _upload_one(client, state, task_id, session)
-        uploaded += 1
-    return uploaded
-
-
-def _upload_one(
-    client: Any, state: Any, task_id: int, session: dict[str, Any]
-) -> None:
-    """Upload one derived session's hours onto its own timesheet row.
-
-    Delegation only: the surface passes the identity the derived session carries
-    (its numeric ``task_id``, stable ``session_key``, ``duration_secs`` and start
-    date) to :func:`reconcile_session`, which resolves and rewrites the single
-    row the session maps to. Idempotent per session key.
-    """
-    hours = float(session.get("duration_secs", 0)) / 3600
-    key = session.get("session_key", "")
-    day = datetime.fromisoformat(session["started_at"]).date()
-    reconcile_session(
-        client,
-        state,
-        task_id,
-        key,
-        f"[/] session {key}",
-        hours,
-        day,
+    result = upload_sessions(
+        stop_cmd._client,
+        stop_cmd.state,
+        sessions,
+        start_date=window.start_iso(),
+        end_date=window.end_iso(),
     )
-
-
-def _numeric_task_id(value: Any) -> Optional[int]:
-    """Return ``value`` as an int when it is a numeric task id, else None."""
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
+    return int(result["uploaded"]), int(result["retired"])
 
 
 def _source_summary(outcome: dict[str, Any]) -> str:
@@ -267,6 +257,106 @@ def do_resync(registry: Registry, state: AppState) -> AppState:
     return replace(refreshed, status=_resync_status(result), pending_upload=False)
 
 
+def _load_triage_rows(registry: Registry, window: DateWindow) -> list[TriageRow]:
+    """Query the window's unattributed events and collapse them into triage rows.
+
+    Uses the same inclusive-date ``[midnight start, midnight day-after-end)``
+    bounds the session query and empty hint use, so triage and the timeline agree
+    on what "this window" means.
+    """
+    store = registry["query_sessions"].state
+    lo, hi = _window_bounds(window)
+    return build_triage_rows(store.get_unattributed_events(lo, hi))
+
+
+def enter_triage(registry: Registry, state: AppState) -> AppState:
+    """Open the triage queue: load the window's unattributed events and select row 0.
+
+    Surfaces every event ingested with ``task_ids=[]`` in the current window so a
+    meeting or email that could not be confidently attributed is triaged rather
+    than silently never billing (#370, acceptance item 9).
+    """
+    rows = _load_triage_rows(registry, state.window)
+    return replace(
+        state,
+        mode=_MODE_TRIAGE,
+        triage_rows=rows,
+        triage_selected=0,
+        triage_input="",
+        status=f"triage — {len(rows)} unattributed item(s)",
+    )
+
+
+def _exit_triage(state: AppState) -> AppState:
+    """Leave the triage queue and return to the timeline view."""
+    return replace(state, mode=_MODE_MAIN, triage_input="", status="")
+
+
+def _move_triage_selection(state: AppState, delta: int) -> AppState:
+    """Move the triage highlight by ``delta``, clamped, discarding a typed id."""
+    if not state.triage_rows:
+        return state
+    target = max(0, min(state.triage_selected + delta, len(state.triage_rows) - 1))
+    return replace(state, triage_selected=target, triage_input="")
+
+
+def _parse_task_id(text: str) -> Optional[int]:
+    """Return the positive int a triage input holds, or None if it is not one."""
+    if not text.isdigit():
+        return None
+    value = int(text)
+    return value if value > 0 else None
+
+
+def assign_triage(registry: Registry, state: AppState) -> AppState:
+    """Attribute the selected series/event to the typed task id, then reload rows.
+
+    Validates the typed id is a positive integer, writes ``task_ids`` on every
+    event of the selected row in one transaction (series-granularity), and
+    re-queries so the now-attributed row drops out of the queue. The confirmation
+    names the series and the number of events updated; the events are immediately
+    derivable and therefore billable.
+    """
+    if not state.triage_rows:
+        return replace(state, status="nothing to triage")
+    task_id = _parse_task_id(state.triage_input)
+    if task_id is None:
+        return replace(state, status="invalid task id — type a positive integer")
+    row = state.triage_rows[state.triage_selected]
+    store = registry["query_sessions"].state
+    updated = store.assign_event_task_ids(list(row.event_ids), task_id)
+    rows = _load_triage_rows(registry, state.window)
+    selected = min(state.triage_selected, max(0, len(rows) - 1))
+    return replace(
+        state,
+        triage_rows=rows,
+        triage_selected=selected,
+        triage_input="",
+        status=f"assigned {updated} events of series {row.display_key} to task {task_id}",
+    )
+
+
+def handle_triage_key(registry: Registry, state: AppState, key: int) -> AppState:
+    """Advance triage-mode state for one keypress (never quits the app).
+
+    ``q``/ESC returns to the timeline; up/down move the highlight; ``s`` skips to
+    the next row; digits build the task id; backspace edits it; Enter assigns.
+    """
+    if key in _QUIT_KEYS:
+        return _exit_triage(state)
+    if key == curses.KEY_UP:
+        return _move_triage_selection(state, -1)
+    if key == curses.KEY_DOWN or key == _SKIP_KEY:
+        return _move_triage_selection(state, 1)
+    if key in _BACKSPACE_KEYS:
+        return replace(state, triage_input=state.triage_input[:-1])
+    if key in _ENTER_KEYS:
+        return assign_triage(registry, state)
+    if ord("0") <= key <= ord("9"):
+        return replace(state, triage_input=state.triage_input + chr(key))
+    return state
+
+
 def handle_key(
     registry: Registry,
     state: AppState,
@@ -277,9 +367,12 @@ def handle_key(
     """Advance the app state for one keypress; return ``(state, should_quit)``.
 
     Pure w.r.t. the terminal: it only calls commands (through ``registry``) and
-    the injected ``writer``. The confirm gate takes precedence so an armed upload
-    consumes the next key as its yes/no answer.
+    the injected ``writer``. In triage mode every key is routed to the triage
+    handler (which never quits the app). Otherwise the confirm gate takes
+    precedence so an armed upload consumes the next key as its yes/no answer.
     """
+    if state.mode == _MODE_TRIAGE:
+        return handle_triage_key(registry, state, key), False
     if state.pending_upload:
         return (
             confirm_upload(
@@ -300,6 +393,8 @@ def handle_key(
         return request_upload(state), False
     if key == _RESYNC_KEY:
         return do_resync(registry, state), False
+    if key == _TRIAGE_KEY:
+        return enter_triage(registry, state), False
     return state, False
 
 
@@ -312,16 +407,25 @@ def _file_writer(content: str, name: str) -> str:  # pragma: no cover
     return str(path)
 
 
+def _compose(state: AppState, width: int, height: int) -> Any:  # pragma: no cover
+    """Compose the frame for ``state`` — the triage queue or the timeline."""
+    if state.mode == _MODE_TRIAGE:
+        return compose_triage_frame(
+            state.triage_rows,
+            state.triage_selected,
+            state.triage_input,
+            width,
+            height,
+        )
+    return compose_frame(
+        state.sessions, state.window, width, height, empty_hint=state.empty_hint
+    )
+
+
 def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     """Blit the composed frame for ``state`` onto the curses screen."""
     height, width = stdscr.getmaxyx()
-    frame = compose_frame(
-        state.sessions,
-        state.window,
-        width,
-        max(height - 1, 0),
-        empty_hint=state.empty_hint,
-    )
+    frame = _compose(state, width, max(height - 1, 0))
     stdscr.erase()
     for row_index, line in enumerate(frame.rows):
         try:

@@ -265,6 +265,36 @@ def _coerce_timeout(value: Any) -> float:
     return DEFAULT_TIMEOUT_SECONDS
 
 
+def _coerce_non_negative_float(value: Any, default: float) -> float:
+    """Coerce a raw value to a non-negative finite float, else the default.
+
+    Shared by the billing-policy behavior settings (``min_session_hours`` /
+    ``round_session_hours``, issue #355), whose values arrive from environment
+    variables and INI files as strings, may be absent, or may be garbage. Any
+    value that is not a finite number ``>= 0`` degrades to ``default`` rather
+    than raising, so a mistyped config never crashes an upload. Booleans are
+    rejected explicitly because ``float(True)`` is ``1.0``, which would silently
+    turn a TOML ``min_session_hours = true`` into a one-hour floor.
+
+    :param value: Raw value from a file, environment, or default source.
+    :type value: Any
+    :param default: Fallback returned when ``value`` is not a valid non-negative
+        finite number.
+    :type default: float
+    :return: A non-negative finite float, or ``default`` on invalid input.
+    :rtype: float
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isfinite(number) and number >= 0:
+        return number
+    return default
+
+
 # ── LocalConfig ───────────────────────────────────────────────────────────────
 
 # Sensible defaults applied at the lowest precedence (File > Env > Default).
@@ -291,16 +321,48 @@ _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 # what the SQL-derived read path uses to decide session boundaries.
 _DEFAULT_SESSION_GAP_MINS = 60
 
+# Billing policy defaults for the derived-session upload path (issue #355).
+# A derived session bills its wall-clock span, but a single-event session spans
+# zero seconds and a very short session rounds toward nothing, so raw span
+# silently under-bills. ``min_session_hours`` is the floor every billable
+# session is raised to; ``round_session_hours`` is the multiple the span is
+# rounded to (nearest, half-up). A rounding step of ``0`` disables rounding.
+_DEFAULT_MIN_SESSION_HOURS = 0.25
+_DEFAULT_ROUND_SESSION_HOURS = 0.05
+
+# Google Calendar / Gmail ingestion defaults (issue #370). ``calendar_tick_mins``
+# is the constant interval at which a meeting is expanded into synthetic point
+# events so the existing gap derivation reconstructs it as one session; it MUST
+# stay strictly below the session gap and the sweep floor (validated at resync,
+# acceptance #11). ``ingest_subjects`` controls whether an ingested meeting/email
+# subject is stored. ``google_sync_window_days`` is the backward/forward reconcile
+# window (calendar mutates retroactively, so the window looks both ways).
+_DEFAULT_CALENDAR_TICK_MINS = 5
+_DEFAULT_INGEST_SUBJECTS = True
+_DEFAULT_GOOGLE_SYNC_WINDOW_DAYS = 30
+
 # Environment variables that override behavior settings when no file value is set.
 _BEHAVIOR_ENV_VARS: dict[str, str] = {
     "profiling": "ODOO_PROFILING",
     "session_gap_mins": "ODOO_SESSION_GAP_MINS",
+    "min_session_hours": "ODOO_MIN_SESSION_HOURS",
+    "round_session_hours": "ODOO_ROUND_SESSION_HOURS",
+    "calendar_tick_mins": "ODOO_CALENDAR_TICK_MINS",
+    "ingest_subjects": "ODOO_INGEST_SUBJECTS",
+    "google_sync_window_days": "ODOO_GOOGLE_SYNC_WINDOW_DAYS",
+    "google_token_path": "ODOO_GOOGLE_TOKEN_PATH",
 }
 
 # Sensible defaults for the reserved [behavior] section.
 _BEHAVIOR_DEFAULTS: dict[str, Any] = {
     "profiling": False,
     "session_gap_mins": _DEFAULT_SESSION_GAP_MINS,
+    "min_session_hours": _DEFAULT_MIN_SESSION_HOURS,
+    "round_session_hours": _DEFAULT_ROUND_SESSION_HOURS,
+    "calendar_tick_mins": _DEFAULT_CALENDAR_TICK_MINS,
+    "ingest_subjects": _DEFAULT_INGEST_SUBJECTS,
+    "google_sync_window_days": _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS,
+    "google_token_path": None,
 }
 
 
@@ -415,6 +477,129 @@ class LocalConfig:
     def session_gap_secs(self) -> int:
         """Return the fixed sessionization inactivity gap in whole seconds."""
         return self.session_gap_mins * 60
+
+    @property
+    def min_session_hours(self) -> float:
+        """Return the per-session billing floor in hours (issue #355).
+
+        Every billable derived session is raised to at least this many hours, so
+        a single-event session (zero wall-clock span) bills the minimum rather
+        than nothing. Resolved from the ``[behavior] min_session_hours`` file
+        setting, the ``ODOO_MIN_SESSION_HOURS`` environment variable, or the
+        default (``0.25``), with the standard File > Environment Variable >
+        Default precedence. String sources are coerced to ``float``; a negative,
+        non-finite, or non-numeric value falls back to the default rather than
+        raising. ``0`` is honoured (no floor).
+
+        :return: The per-session minimum in hours (non-negative).
+        :rtype: float
+        """
+        return _coerce_non_negative_float(
+            self._behavior.get("min_session_hours"), _DEFAULT_MIN_SESSION_HOURS
+        )
+
+    @property
+    def round_session_hours(self) -> float:
+        """Return the per-session rounding step in hours (issue #355).
+
+        A billable session's wall-clock span is rounded to the nearest multiple
+        of this step (half-up). Resolved from the ``[behavior]
+        round_session_hours`` file setting, the ``ODOO_ROUND_SESSION_HOURS``
+        environment variable, or the default (``0.05``), with the standard File
+        > Environment Variable > Default precedence. String sources are coerced
+        to ``float``; a negative, non-finite, or non-numeric value falls back to
+        the default rather than raising. ``0`` is honoured and disables rounding
+        (the raw span is billed, subject to the minimum).
+
+        :return: The rounding step in hours (non-negative; ``0`` disables it).
+        :rtype: float
+        """
+        return _coerce_non_negative_float(
+            self._behavior.get("round_session_hours"), _DEFAULT_ROUND_SESSION_HOURS
+        )
+
+    @property
+    def calendar_tick_mins(self) -> int:
+        """Return the meeting-expansion tick interval in minutes (issue #370).
+
+        A meeting is expanded into synthetic point events this many minutes apart
+        (with a terminal tick on the exact end) so the unchanged gap derivation
+        reconstructs it as a single session. Resolved from the ``[behavior]
+        calendar_tick_mins`` file setting, the ``ODOO_CALENDAR_TICK_MINS``
+        environment variable, or the default (``5``), with the standard File >
+        Environment Variable > Default precedence. String sources are coerced to
+        ``int``; a non-positive or invalid value falls back to the default.
+
+        The invariant that this stay strictly below both the session gap and the
+        sweep floor is enforced at resync (see the calendar puller), not here, so
+        a merely-read config never raises.
+
+        :return: The tick interval in whole minutes (positive).
+        :rtype: int
+        """
+        value = self._behavior.get("calendar_tick_mins", _DEFAULT_CALENDAR_TICK_MINS)
+        try:
+            tick = int(value)
+        except (TypeError, ValueError):
+            return _DEFAULT_CALENDAR_TICK_MINS
+        return tick if tick > 0 else _DEFAULT_CALENDAR_TICK_MINS
+
+    @property
+    def ingest_subjects(self) -> bool:
+        """Return whether ingested meeting/email subjects are stored (issue #370).
+
+        Resolved from the ``[behavior] ingest_subjects`` file setting, the
+        ``ODOO_INGEST_SUBJECTS`` environment variable, or the default (enabled),
+        with the standard File > Environment Variable > Default precedence. String
+        sources (``"1"``/``"true"``/``"yes"``/``"on"``) are treated as truthy; any
+        other string disables subject capture so a client's correspondence titles
+        can be kept out of the central DB.
+
+        :return: True when subjects should be stored, False otherwise.
+        :rtype: bool
+        """
+        value = self._behavior.get("ingest_subjects", _DEFAULT_INGEST_SUBJECTS)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in _TRUTHY_VALUES
+
+    @property
+    def google_sync_window_days(self) -> int:
+        """Return the Google reconcile window radius in days (issue #370).
+
+        Calendar mutates retroactively (reschedules, cancellations) and the sent
+        window is backward-looking, so a resync reconciles events within this many
+        days each side of now. Resolved from the ``[behavior]
+        google_sync_window_days`` file setting, the
+        ``ODOO_GOOGLE_SYNC_WINDOW_DAYS`` environment variable, or the default
+        (``30``); an invalid or non-positive value falls back to the default.
+
+        :return: The reconcile window radius in whole days (positive).
+        :rtype: int
+        """
+        value = self._behavior.get(
+            "google_sync_window_days", _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS
+        )
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            return _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS
+        return days if days > 0 else _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS
+
+    @property
+    def google_token_path(self) -> Optional[str]:
+        """Return an explicit Google token file path override, or None (#370).
+
+        Resolved from the ``[behavior] google_token_path`` file setting or the
+        ``ODOO_GOOGLE_TOKEN_PATH`` environment variable. When unset the puller
+        derives the path from the existing ``ODOO_SDK_CONFIG`` mount, so the token
+        lives beside the other host-provisioned SDK config.
+
+        :return: The configured token path, or None to use the default location.
+        :rtype: Optional[str]
+        """
+        value = self._behavior.get("google_token_path")
+        return str(value) if value else None
 
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.

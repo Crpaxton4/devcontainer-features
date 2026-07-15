@@ -10,6 +10,7 @@ from odoo_sdk.adapters import (
 )
 from odoo_sdk.sessionization import EventType, RawEvent
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -17,7 +18,7 @@ UTC = timezone.utc
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 class TestEventConversion(unittest.TestCase):
@@ -32,8 +33,47 @@ class TestEventConversion(unittest.TestCase):
         )
         event = event_record_to_raw_event(rec)
         self.assertEqual(event.event_type, EventType.AGENT)
-        self.assertTrue(event.is_release)  # two tasks
+        # An ``agent`` event with several task ids is multi-active-run, not a
+        # release: --attach-active-run stamps every active run's id onto it.
+        self.assertFalse(event.is_release)
         self.assertEqual(event.pr_title, "t")
+
+    def test_claude_hook_multi_task_is_not_release(self):
+        # A routine hook fired with two tracked runs carries task_ids=[t1, t2];
+        # that must not be misflagged as a release.
+        rec = EventRecord(
+            id=1,
+            source="claude:PostToolUse",
+            timestamp=datetime(2026, 6, 1, 9, tzinfo=UTC),
+            task_ids=["1", "2"],
+            repo="o/r",
+        )
+        event = event_record_to_raw_event(rec)
+        self.assertEqual(event.event_type, EventType.CLAUDE_HOOK)
+        self.assertFalse(event.is_release)
+
+    def test_commit_multi_task_remains_release(self):
+        # Release-bearing sources keep the historical multi-task heuristic.
+        rec = EventRecord(
+            id=1,
+            source="commit",
+            timestamp=datetime(2026, 6, 1, 9, tzinfo=UTC),
+            task_ids=["1", "2"],
+            repo="o/r",
+        )
+        event = event_record_to_raw_event(rec)
+        self.assertEqual(event.event_type, EventType.COMMIT)
+        self.assertTrue(event.is_release)
+
+    def test_single_task_never_release(self):
+        rec = EventRecord(
+            id=1,
+            source="commit",
+            timestamp=datetime(2026, 6, 1, 9, tzinfo=UTC),
+            task_ids=["1"],
+            repo="o/r",
+        )
+        self.assertFalse(event_record_to_raw_event(rec).is_release)
 
     def test_unknown_source_raises(self):
         # Unknown sources must fail loudly rather than silently masquerading as

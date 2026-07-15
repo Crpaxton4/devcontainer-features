@@ -18,7 +18,8 @@ from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError, TaskState
+from tests.support import make_state_db
 
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
@@ -32,7 +33,7 @@ _STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
 def _tmp_db() -> TaskStateDB:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _client(uid: int = 7) -> MagicMock:
@@ -282,6 +283,54 @@ class TestTaskNoteCommand(unittest.TestCase):
             with self.assertRaises(TaskNotRunningError):
                 TaskNoteCommand(_client()).execute(999, "note")
 
+    def test_response_carries_checkpoint_hint(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=55,
+            ),
+        ):
+            result = TaskNoteCommand(client).execute(1, "Note text")
+        self.assertIn("minutes_since_last_note", result)
+        self.assertIn("suggest_checkpoint", result)
+        self.assertFalse(result["suggest_checkpoint"])
+
+    def test_hint_suggests_checkpoint_after_stale_note(self):
+        from datetime import datetime, timedelta, timezone
+
+        from odoo_sdk.state import EventRecord
+
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=datetime.now(timezone.utc) - timedelta(minutes=25),
+                task_ids=["1"],
+                repo="",
+                subject="task_note",
+                payload={"tool": "task_note"},
+            )
+        )
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=55,
+            ),
+        ):
+            result = TaskNoteCommand(client).execute(1, "Note text")
+        self.assertEqual(result["minutes_since_last_note"], 25)
+        self.assertTrue(result["suggest_checkpoint"])
+
 
 # ── TaskQuestionCommand ───────────────────────────────────────────────────────
 
@@ -451,6 +500,13 @@ class TestStartTaskCommand(unittest.TestCase):
         mock_note.assert_called_once_with(client, 10, "Work started on this task.")
         self.assertIsNotNone(db.get_active_run(10))
 
+    def test_response_carries_checkpoint_hint_at_zero(self):
+        client = _client()
+        db = _tmp_db()
+        result, _ = self._start(client, db, **self._base_kwargs())
+        self.assertEqual(result["minutes_since_last_note"], 0)
+        self.assertFalse(result["suggest_checkpoint"])
+
     def test_echoes_branch_name_and_warning(self):
         client = _client()
         db = _tmp_db()
@@ -556,6 +612,62 @@ class TestStartTaskCommand(unittest.TestCase):
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
         self.assertEqual(order, ["timesheet", "run", "note"])
+
+    def test_chatter_failure_is_best_effort_and_leaves_one_running_run(self):
+        # The chatter note is a best-effort announcement (issue #361): if the
+        # post raises after the run is already created, start_task must still
+        # return success and leave exactly one RUNNING run. A bare failure would
+        # error out with the run RUNNING, so a retry would hit
+        # TaskAlreadyRunningError and wedge the caller.
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
+                side_effect=RuntimeError("Odoo unreachable"),
+            ) as mock_note,
+        ):
+            result = _cmd_with_db(StartTaskCommand, client, db).execute(
+                **self._base_kwargs()
+            )
+        mock_note.assert_called_once_with(client, 10, "Work started on this task.")
+        # The command reports success with the full run result.
+        self.assertEqual(result["task_id"], 10)
+        self.assertEqual(result["timesheet_id"], 99)
+        self.assertIn("run_id", result)
+        # Exactly one run exists and it is RUNNING — a retry-safe end state.
+        runs = db.get_all_runs()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].state, TaskState.RUNNING)
+        active = db.get_active_run(10)
+        self.assertIsNotNone(active)
+        self.assertEqual(active.id, result["run_id"])
+
+    def test_chatter_failure_does_not_block_retry_safety(self):
+        # After a swallowed chatter failure the run is RUNNING, so a naive retry
+        # of the same task must raise TaskAlreadyRunningError rather than create
+        # a second run — proving the swallow keeps the invariant the guard
+        # depends on.
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
+                side_effect=RuntimeError("Odoo unreachable"),
+            ),
+        ):
+            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+            with self.assertRaises(TaskAlreadyRunningError):
+                _cmd_with_db(StartTaskCommand, client, db).execute(
+                    **self._base_kwargs()
+                )
+        self.assertEqual(len(db.get_all_runs()), 1)
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────

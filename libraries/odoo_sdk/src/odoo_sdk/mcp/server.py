@@ -19,6 +19,7 @@ from odoo_sdk.state.models import (
     EventRecord,
     TaskAlreadyRunningError,
     TaskNotRunningError,
+    TrackerStateMissingError,
 )
 from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
@@ -136,6 +137,7 @@ _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     OdooError,
     TaskNotRunningError,
     TaskAlreadyRunningError,
+    TrackerStateMissingError,
     OdooDevcontainerRequiredError,
     ValueError,
 )
@@ -194,23 +196,6 @@ def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-#: Bound-argument names, in priority order, whose value supplies the human
-#: readable detail appended to an event subject. The first one present on a
-#: dispatch wins; when none is present the subject is just the tool name.
-_EVENT_DETAIL_KEYS: Tuple[str, ...] = ("task_name", "note", "question", "description")
-
-#: Maximum length of the detail suffix in an event subject.
-_EVENT_DETAIL_LIMIT = 120
-
-#: Maximum stringified length of each scalar argument stored in a payload.
-_EVENT_ARG_LIMIT = 80
-
-#: Argument types recorded verbatim (stringified) in an event payload. Complex
-#: values (lists, dicts, the FastMCP ``ctx``, ...) are omitted so the payload
-#: stays a flat, JSON-serializable map of the call's scalar inputs.
-_EVENT_SCALAR_TYPES: Tuple[type, ...] = (str, int, float, bool)
-
-
 def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
     """Return the task-scope for an event from a call's bound arguments.
 
@@ -234,46 +219,16 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
     return [str(task_id)]
 
 
-def _event_subject(name: str, arguments: dict[str, Any]) -> str:
-    """Compose the event subject from the tool name and one detail argument.
-
-    :param name: Public tool name.
-    :type name: str
-    :param arguments: Bound tool arguments (``ctx`` already excluded).
-    :type arguments: dict[str, Any]
-    :return: ``"{name}: {detail}"`` for the first present detail arg (truncated
-        to :data:`_EVENT_DETAIL_LIMIT`), else the bare tool name.
-    :rtype: str
-    """
-
-    for key in _EVENT_DETAIL_KEYS:
-        if key in arguments:
-            detail = str(arguments[key])[:_EVENT_DETAIL_LIMIT]
-            return f"{name}: {detail}"
-    return name
-
-
-def _event_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Build the structured event payload for a dispatch.
-
-    :param name: Public tool name.
-    :type name: str
-    :param arguments: Bound tool arguments (``ctx`` already excluded).
-    :type arguments: dict[str, Any]
-    :return: ``{"tool": name, "args": {<scalar arg>: str(value)[:80]}}``.
-    :rtype: dict[str, Any]
-    """
-
-    args = {
-        key: str(value)[:_EVENT_ARG_LIMIT]
-        for key, value in arguments.items()
-        if isinstance(value, _EVENT_SCALAR_TYPES)
-    }
-    return {"tool": name, "args": args}
-
-
 def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     """Append one ``source="agent"`` event describing a successful dispatch.
+
+    The persisted record carries only the tool name (as both subject and
+    payload) and the task scope derived from ``task_id`` — never any argument
+    *values*. Chatter note bodies, stakeholder questions, search queries, and
+    other free-text inputs are deliberately not written to the local events
+    store, matching the ``claude-event-hook`` shim's stance of recording tool
+    identifiers without prompt/``tool_input`` contents. What is *sent to Odoo*
+    is unaffected; this concerns only local persistence.
 
     The record is built directly (rather than via
     :func:`odoo_sdk.utilities.timesheet.emit_agent_event`, which requires a
@@ -283,7 +238,8 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     :type state: Any
     :param name: Public tool name.
     :type name: str
-    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :param arguments: Bound tool arguments (``ctx`` already excluded); used only
+        to derive the task scope, never persisted as values.
     :type arguments: dict[str, Any]
     :return: None.
     :rtype: None
@@ -296,8 +252,8 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
             timestamp=datetime.now(timezone.utc),
             task_ids=_event_task_ids(arguments),
             repo="",
-            subject=_event_subject(name, arguments),
-            payload=_event_payload(name, arguments),
+            subject=name,
+            payload={"tool": name},
         )
     )
 

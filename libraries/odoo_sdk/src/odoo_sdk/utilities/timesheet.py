@@ -2,7 +2,7 @@
 
 This module is the **sole owner** of every ``account.analytic.line``
 create / write in the SDK (issue #181). No command, TUI surface, or other
-utility writes Odoo timesheets directly — they route through the two idempotent
+utility writes Odoo timesheets directly — they route through the idempotent
 operations here. Record deletion (``unlink``) is purposefully not implemented
 anywhere in the SDK (see :func:`odoo_sdk.transport.errors.forbid_unlink`), so
 this module never deletes a timesheet row.
@@ -13,8 +13,11 @@ The operations:
   for a task, keyed by the task and the ``[/] Work in progress`` marker so a
   second ``start_task`` reuses the first row instead of duplicating it
   (kills #177).
-* :func:`reconcile` — upsert the real elapsed hours / description onto the
-  anchor row. Idempotent: safe to re-run, it only ever writes the one anchor.
+* :func:`reconcile_session` — upsert one derived session's real hours /
+  description onto the single ``account.analytic.line`` it maps to (by its
+  stable ``session_key``). Idempotent: safe to re-run, it only ever rewrites
+  the one row a session is mapped to, so an upload never double-bills. This is
+  the sole hours-writer for the derived-session upload path (#330/#354).
 
 Both operations send **scalar** ids to Odoo (never a one-element list), which
 preserves the #170/#176 fix: a batch ``create`` returns ``[id]`` (a list) that
@@ -167,41 +170,6 @@ def ensure_anchor(
     return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
-def reconcile(
-    client: OdooClient,
-    state: LocalStateClient,
-    task_id: int,
-    description: str,
-    elapsed_hours: float,
-) -> Optional[int]:
-    """Upsert the real hours / description onto a task's anchor timesheet row.
-
-    Idempotent: it writes the single anchor row and nothing else, so re-running
-    it (e.g. a re-triggered TUI/ETL upload) only overwrites the same row rather
-    than accumulating duplicates. It is the TUI/ETL upload path — **not**
-    ``stop_task`` — that calls this to write hours; ``stop_task`` only transitions
-    the local session. The anchor id is resolved from the local session store;
-    when no anchor is known the call is a no-op.
-
-    :param client: The Odoo API client (the only writer of the timesheet row).
-    :param state: The local state store the anchor id is resolved through.
-    :param task_id: The ``project.task`` id whose anchor is reconciled.
-    :param description: The final work summary to store on the row.
-    :param elapsed_hours: The billable hours to store on the row.
-    :return: The reconciled anchor id, or ``None`` when the task has no anchor.
-    """
-    timesheet_id = _resolve_anchor_id(client, state, task_id)
-    if timesheet_id is None:
-        return None
-    client.execute(
-        "account.analytic.line",
-        "write",
-        [timesheet_id],
-        {"unit_amount": elapsed_hours, "name": description},
-    )
-    return timesheet_id
-
-
 def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
     """Close out an orphaned anchor timesheet row after a stale-run abort (#331).
 
@@ -231,21 +199,6 @@ def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
         {"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0},
     )
     return True
-
-
-def _resolve_anchor_id(
-    client: OdooClient, state: LocalStateClient, task_id: int
-) -> Optional[int]:
-    """Return the anchor id for a task from the run store, else from Odoo.
-
-    Prefers the active run's ``timesheet_id`` (the anchor created at start);
-    falls back to an Odoo lookup so a reconcile still lands when the local
-    run has already been stopped or is otherwise unavailable.
-    """
-    run = state.get_active_run(task_id)
-    if run is not None and run.timesheet_id is not None:
-        return run.timesheet_id
-    return _find_anchor(client, task_id)
 
 
 def _write_line(client: OdooClient, timesheet_id: int, vals: dict) -> None:
@@ -280,6 +233,12 @@ def _create_session_line(
     return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
+# Marker written onto an orphaned upload row the sweep zeroes (#353). Distinct
+# from every other anchor marker so a superseded row is unmistakable in Odoo and
+# is never re-adopted by a later ``ensure_anchor``.
+ORPHANED_UPLOAD_NAME = "[x] session superseded (merged into another session)"
+
+
 def reconcile_session(
     client: OdooClient,
     state: LocalStateClient,
@@ -287,7 +246,8 @@ def reconcile_session(
     session_key: str,
     description: str,
     hours: float,
-    day: date,
+    started_at: datetime,
+    ended_at: datetime,
 ) -> int:
     """Idempotently write one derived session's hours onto a single timesheet row.
 
@@ -304,10 +264,13 @@ def reconcile_session(
        from the task, employee via :func:`resolve_employee_id`) and mapped.
 
     Re-running with the same ``session_key`` always rewrites the same row, so the
-    upload is idempotent and never double-bills.
+    upload is idempotent and never double-bills. The session's ``started_at`` /
+    ``ended_at`` bounds are recorded on the mapping so the orphan sweep
+    (:func:`sweep_orphaned_uploads`) can window-scope it (#353).
 
     :return: The ``account.analytic.line`` id the session was reconciled onto.
     """
+    day = started_at.date()
     mapped = state.get_session_upload(session_key)
     if mapped is not None:
         timesheet_id = mapped["timesheet_id"]
@@ -325,5 +288,84 @@ def reconcile_session(
             timesheet_id = _create_session_line(
                 client, state, task_id, description, hours, day
             )
-    state.record_session_upload(session_key, timesheet_id, hours)
+    state.record_session_upload(
+        session_key,
+        timesheet_id,
+        hours,
+        task_id=str(task_id),
+        started_at=started_at,
+        ended_at=ended_at,
+    )
     return timesheet_id
+
+
+def _as_utc(ts: datetime) -> datetime:
+    """Return ``ts`` as an aware UTC datetime (naive bounds are assumed UTC)."""
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def _mapping_is_window_orphan(
+    entry: dict,
+    derived_task_ids: set[str],
+    window_lo: datetime,
+    window_hi: datetime,
+) -> bool:
+    """Return True when a stale ledger ``entry`` should be retired for this window.
+
+    An entry not in the currently-derived key set is only an orphan when it
+    belongs to *this* window — otherwise a later window's upload would wrongly
+    zero a session it simply did not re-derive (it was out of range).
+
+    * **New-format rows** (``started_at``/``ended_at`` present): orphaned when the
+      recorded session window overlaps the queried ``[window_lo, window_hi]``.
+    * **Legacy rows** (NULL bounds — written before #353, and/or a pre-#352
+      ``task|repo|id`` key that can never re-derive under the task-only format):
+      retired deliberately when the key's task prefix appears in this window's
+      derived set, so they are cleaned up rather than lingering as double-counts.
+    """
+    started, ended = entry.get("started_at"), entry.get("ended_at")
+    if started is not None and ended is not None:
+        lo, hi = _as_utc(window_lo), _as_utc(window_hi)
+        return (
+            datetime.fromisoformat(ended) >= lo
+            and datetime.fromisoformat(started) <= hi
+        )
+    return entry["session_key"].split("|")[0] in derived_task_ids
+
+
+def sweep_orphaned_uploads(
+    client: OdooClient,
+    state: LocalStateClient,
+    *,
+    derived_keys: set[str],
+    derived_task_ids: set[str],
+    window_lo: datetime,
+    window_hi: datetime,
+) -> int:
+    """Zero and retire upload mappings that no longer derive for this window (#353).
+
+    Run once per upload invocation. A mapping whose key is still in
+    ``derived_keys`` is left untouched. Any other mapping that belongs to this
+    window (see :func:`_mapping_is_window_orphan`) has been merged into an
+    adjacent session — a backfilled event bridged the gap — so its Odoo row would
+    keep double-counted hours forever. The SDK never unlinks, so the row is zeroed
+    (``unit_amount=0`` + :data:`ORPHANED_UPLOAD_NAME`) and the mapping deleted.
+
+    :return: The number of mappings retired.
+    """
+    retired = 0
+    for entry in state.list_session_uploads():
+        if entry["session_key"] in derived_keys:
+            continue
+        if not _mapping_is_window_orphan(
+            entry, derived_task_ids, window_lo, window_hi
+        ):
+            continue
+        _write_line(
+            client,
+            entry["timesheet_id"],
+            {"unit_amount": 0.0, "name": ORPHANED_UPLOAD_NAME},
+        )
+        state.delete_session_upload(entry["session_key"])
+        retired += 1
+    return retired

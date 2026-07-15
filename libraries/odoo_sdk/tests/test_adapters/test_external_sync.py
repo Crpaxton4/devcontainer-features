@@ -15,6 +15,7 @@ from unittest.mock import patch
 from odoo_sdk.adapters import external_sync as ex
 from odoo_sdk.state import LocalStateClient
 from odoo_sdk.transport.errors import OdooError
+from tests.support import make_state_db
 
 _SEP = "\x1f"
 
@@ -22,7 +23,7 @@ _SEP = "\x1f"
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 class _FakeProc:

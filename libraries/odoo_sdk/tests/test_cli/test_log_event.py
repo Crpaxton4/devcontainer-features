@@ -1,9 +1,10 @@
 """Tests for the ``odoo-sdk log-event`` subcommand.
 
-These exercise the real cwd-based project resolution in
-:func:`odoo_sdk.state.db._get_project_dir`: a temporary git repo with an
-``origin`` remote plus a temporary state root pointed at by
-``ODOO_TASK_TRACKER_DIR``.
+Events land in the one host-provisioned central tracker DB
+(``$ODOO_TASK_TRACKER_DIR/tracker.db``, #369) regardless of the cwd's repo. The
+cwd's git remote only supplies the event's display ``repo`` label; a non-git cwd
+logs fine with ``repo=""``. A missing central DB is a hard error, never a silent
+skip or an auto-created empty DB.
 """
 
 import os
@@ -17,6 +18,8 @@ from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import LocalStateClient as TaskStateDB
+from odoo_sdk.state.db import tracker_db_path
+from tests.support import provision_schema
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
 
@@ -48,6 +51,8 @@ class TestLogEvent(unittest.TestCase):
             capture_output=True,
         )
         os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
+        # The central DB is host-provisioned; the SDK never creates it.
+        provision_schema(tracker_db_path(self._state))
         os.chdir(self._repo)
 
     def tearDown(self) -> None:
@@ -62,6 +67,11 @@ class TestLogEvent(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].source, "claude:SessionStart")
         self.assertEqual(events[0].subject, "hi")
+
+    def test_repo_label_derived_from_cwd_remote(self) -> None:
+        _run(["log-event", "--source", "claude:SessionStart"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].repo, "o/r")
 
     def test_repeatable_task_id(self) -> None:
         _run(
@@ -187,9 +197,36 @@ class TestLogEvent(unittest.TestCase):
 
 
 class TestLogEventNonGitRepo(unittest.TestCase):
+    """A non-git cwd is no longer an error: the repo no longer selects the DB, so
+    the event logs fine into the central DB with an empty ``repo`` label (#369)."""
+
     def setUp(self) -> None:
         self._cwd = os.getcwd()
         self._state = tempfile.mkdtemp()
+        self._nongit = tempfile.mkdtemp()
+        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
+        provision_schema(tracker_db_path(self._state))
+        os.chdir(self._nongit)
+
+    def tearDown(self) -> None:
+        os.chdir(self._cwd)
+        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        shutil.rmtree(self._state, ignore_errors=True)
+        shutil.rmtree(self._nongit, ignore_errors=True)
+
+    def test_non_git_cwd_logs_event_with_empty_repo(self) -> None:
+        _run(["log-event", "--source", "claude:SessionStart"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].repo, "")
+
+
+class TestLogEventMissingDb(unittest.TestCase):
+    """With no host-provisioned central DB, log-event fails hard (#369, accept. 4)."""
+
+    def setUp(self) -> None:
+        self._cwd = os.getcwd()
+        self._state = tempfile.mkdtemp()  # empty: no tracker.db provisioned
         self._nongit = tempfile.mkdtemp()
         os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
         os.chdir(self._nongit)
@@ -200,7 +237,7 @@ class TestLogEventNonGitRepo(unittest.TestCase):
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._nongit, ignore_errors=True)
 
-    def test_non_git_cwd_exits_0_with_notice(self) -> None:
+    def test_missing_db_exits_1_and_names_path(self) -> None:
         stderr = StringIO()
         with self.assertRaises(SystemExit) as ctx:
             with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
@@ -209,10 +246,11 @@ class TestLogEventNonGitRepo(unittest.TestCase):
                     ["odoo-sdk", "log-event", "--source", "claude:SessionStart"],
                 ):
                     cli.main()
-        self.assertEqual(ctx.exception.code, 0)
-        self.assertIn("Skipping event log", stderr.getvalue())
-        # No DB was created under the state root.
-        self.assertEqual(list(Path(self._state).rglob("tasks.db")), [])
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn(str(tracker_db_path(self._state)), stderr.getvalue())
+        # The SDK must NOT have created a DB as a side effect.
+        self.assertFalse(tracker_db_path(self._state).exists())
+        self.assertEqual(list(Path(self._state).rglob("*.db")), [])
 
 
 if __name__ == "__main__":

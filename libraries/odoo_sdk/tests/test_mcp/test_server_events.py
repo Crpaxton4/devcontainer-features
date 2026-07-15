@@ -18,12 +18,13 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.mcp import server as server_mod
 from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.state import LocalStateClient
+from tests.support import make_state_db
 
 
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _build_tools(registry, explicit_tools):
@@ -53,12 +54,12 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event.source, "agent")
-        self.assertEqual(event.subject, "do_thing: Fix VAT")
+        # Only the tool name is persisted as subject; no argument values.
+        self.assertEqual(event.subject, "do_thing")
         self.assertEqual(event.task_ids, ["42"])
-        self.assertEqual(
-            event.payload,
-            {"tool": "do_thing", "args": {"task_id": "42", "task_name": "Fix VAT"}},
-        )
+        # Payload is the tool name alone -- the task_name ("Fix VAT") and every
+        # other argument value is deliberately withheld from local persistence.
+        self.assertEqual(event.payload, {"tool": "do_thing"})
 
     def test_tool_without_task_id_has_empty_task_ids(self):
         db = _tmp_db()
@@ -74,8 +75,33 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         events = db.get_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].task_ids, [])
-        # No detail key present -> subject is the bare tool name.
+        # Subject is the bare tool name; the "message" arg is not persisted.
         self.assertEqual(events[0].subject, "ping")
+        self.assertEqual(events[0].payload, {"tool": "ping"})
+
+    def test_free_text_arg_values_are_not_persisted(self):
+        # Regression for #365: chatter note bodies, questions, and search
+        # queries must never reach the local events store -- only the tool name
+        # (+ task scope) is recorded.
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+        secret = "expired coupons leak PII to the checkout log"
+
+        def task_question(task_id: int, question: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"task_question": task_question})
+        tools["task_question"].fn(task_id=1234, question=secret)
+
+        events = db.get_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.subject, "task_question")
+        self.assertEqual(event.payload, {"tool": "task_question"})
+        self.assertEqual(event.task_ids, ["1234"])
+        self.assertNotIn(secret, event.subject)
+        self.assertNotIn(secret, repr(event.payload))
 
     def test_raising_tool_emits_no_event(self):
         db = _tmp_db()
@@ -110,7 +136,9 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         events = db.get_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].task_ids, ["7"])
-        self.assertEqual(events[0].subject, "do_async: working")
+        # The note body ("working") is not persisted -- subject is the tool name.
+        self.assertEqual(events[0].subject, "do_async")
+        self.assertEqual(events[0].payload, {"tool": "do_async"})
 
     def test_emit_failure_does_not_break_tool(self):
         class BoomState:
@@ -173,26 +201,6 @@ class TestEventHelpers(unittest.TestCase):
 
     def test_task_ids_non_coercible(self):
         self.assertEqual(server_mod._event_task_ids({"task_id": "abc"}), [])
-
-    def test_subject_uses_first_present_detail(self):
-        self.assertEqual(
-            server_mod._event_subject("t", {"note": "n", "question": "q"}), "t: n"
-        )
-
-    def test_subject_truncates_detail_to_120(self):
-        subject = server_mod._event_subject("t", {"description": "x" * 200})
-        self.assertEqual(subject, "t: " + "x" * 120)
-
-    def test_subject_bare_name_when_no_detail(self):
-        self.assertEqual(server_mod._event_subject("t", {"foo": "bar"}), "t")
-
-    def test_payload_filters_non_scalars_and_truncates(self):
-        payload = server_mod._event_payload(
-            "t", {"a": 1, "b": [1, 2], "c": "y" * 200}
-        )
-        self.assertEqual(
-            payload, {"tool": "t", "args": {"a": "1", "c": "y" * 80}}
-        )
 
     def test_bound_arguments_excludes_ctx(self):
         def sample(task_id, ctx=None):

@@ -1,12 +1,16 @@
+import logging
 from datetime import date
 from typing import Any, Optional
 
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskAlreadyRunningError
+from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.utilities.timesheet import ensure_anchor, resolve_employee_id
+
+log = logging.getLogger(__name__)
 
 
 def _build_run_result(
@@ -101,10 +105,28 @@ class StartTaskCommand(Command):
             project_name=project_name,
             timesheet_id=timesheet_id,
         )
-        post_chatter_note(self._client, task_id, "Work started on this task.")
+        # The chatter note is a best-effort announcement, not tracking state:
+        # the run is already RUNNING above. If the post fails (network/Odoo
+        # hiccup), swallowing it keeps start_task idempotent — a bare failure
+        # would return an error while leaving the run RUNNING, so a retry would
+        # hit TaskAlreadyRunningError and wedge the caller (issue #361). This
+        # mirrors how telemetry emission is swallowed in mcp/server.py.
+        try:
+            post_chatter_note(self._client, task_id, "Work started on this task.")
+        except Exception:
+            log.warning(
+                "start_task chatter note failed for task %s; run is RUNNING "
+                "and start succeeded regardless.",
+                task_id,
+                exc_info=True,
+            )
 
-        return _build_run_result(
+        result = _build_run_result(
             run, task_id, task_name, project_name, timesheet_id,
             branch_name=branch_name,
             warning=warning,
         )
+        # Prime the checkpoint-cadence signal (#387) on the very first response:
+        # a fresh run has no note yet, so this reports ~0 minutes and no nudge.
+        result.update(checkpoint_hint(db, task_id, run.started_at))
+        return result

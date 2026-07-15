@@ -1,0 +1,353 @@
+"""Tests for the TUI triage queue (issue #370, acceptance item 9).
+
+Covers the pure series-grouping and frame composition, and drives the real
+``handle_key`` path end to end: a fixture central DB holding a 13-tick calendar
+series (one row) plus a lone unattributed event, opened via triage, assigned to a
+task in one transaction, and then re-derived as a billable session.
+"""
+
+import curses
+import tempfile
+import unittest
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+from odoo_sdk.state import EventRecord, LocalStateClient
+from odoo_sdk.tui.app import (
+    AppState,
+    assign_triage,
+    enter_triage,
+    handle_key,
+    handle_triage_key,
+)
+from odoo_sdk.tui.triage import (
+    TriageRow,
+    build_triage_rows,
+    compose_triage_frame,
+    series_key,
+)
+from odoo_sdk.tui.window import DateWindow
+from tests.support import make_state_db
+
+UTC = timezone.utc
+
+
+def _rec(event_id, *, source="chatter", ts=None, subject="", external_id=None):
+    return EventRecord(
+        id=event_id,
+        source=source,
+        timestamp=ts or datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
+        task_ids=[],
+        repo="",
+        subject=subject,
+        external_id=external_id,
+    )
+
+
+class FakeCommand:
+    def __init__(self, result=None, state=None):
+        self._result = result
+        self.state = state
+        self.calls = []
+
+    def execute(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._result
+
+
+class FakeRegistry:
+    def __init__(self, commands):
+        self._commands = commands
+
+    def __getitem__(self, name):
+        return self._commands[name]
+
+
+def _registry(store):
+    return FakeRegistry({"query_sessions": FakeCommand(state=store)})
+
+
+# ── Series recognition ──────────────────────────────────────────────────────
+
+
+class TestSeriesKey(unittest.TestCase):
+    def test_tick_member_yields_shared_prefix(self):
+        self.assertEqual(series_key("gcal:evt-9:tick:7"), "gcal:evt-9:tick:")
+
+    def test_every_tick_of_one_event_shares_a_key(self):
+        keys = {series_key(f"gcal:evt-9:tick:{n}") for n in range(13)}
+        self.assertEqual(keys, {"gcal:evt-9:tick:"})
+
+    def test_non_tick_external_id_is_not_a_series(self):
+        self.assertIsNone(series_key("gcal:evt-9"))
+        self.assertIsNone(series_key("gh:pr:42"))
+
+    def test_none_is_not_a_series(self):
+        self.assertIsNone(series_key(None))
+        self.assertIsNone(series_key(""))
+
+
+# ── Row building ────────────────────────────────────────────────────────────
+
+
+class TestBuildTriageRows(unittest.TestCase):
+    def test_series_collapses_to_one_row_covering_every_tick(self):
+        events = [
+            _rec(i + 1, external_id=f"gcal:m:tick:{i}", subject="Standup")
+            for i in range(13)
+        ]
+        rows = build_triage_rows(events)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].display_key, "gcal:m:tick:")
+        self.assertEqual(rows[0].count, 13)
+        self.assertEqual(rows[0].event_ids, tuple(range(1, 14)))
+
+    def test_lone_events_stay_separate(self):
+        events = [
+            _rec(1, external_id="gcal:solo", subject="1:1"),
+            _rec(2, external_id=None, subject="hook"),
+        ]
+        rows = build_triage_rows(events)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].display_key, "gcal:solo")
+        self.assertEqual(rows[1].display_key, "event#2")
+
+    def test_series_and_lone_together(self):
+        events = [_rec(1, external_id="gcal:m:tick:0")]
+        events += [_rec(2, external_id="gcal:m:tick:1")]
+        events += [_rec(3, external_id=None, subject="lone")]
+        rows = build_triage_rows(events)
+        self.assertEqual([r.count for r in rows], [2, 1])
+
+    def test_representative_is_earliest_member(self):
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        events = [
+            _rec(1, external_id="gcal:m:tick:0", ts=base, subject="first"),
+            _rec(2, external_id="gcal:m:tick:1", ts=base + timedelta(minutes=5)),
+        ]
+        rows = build_triage_rows(events)
+        self.assertEqual(rows[0].subject, "first")
+        self.assertEqual(rows[0].timestamp, base.isoformat())
+
+
+# ── Frame composition ───────────────────────────────────────────────────────
+
+
+class TestComposeTriageFrame(unittest.TestCase):
+    def _rows(self):
+        return [
+            TriageRow("gcal:m:tick:", (1, 2, 3), "chatter", "2026-06-01T09:00:00", "Standup"),
+            TriageRow("gcal:solo", (4,), "chatter", "2026-06-01T10:00:00", "1:1"),
+        ]
+
+    def test_frame_is_exactly_sized(self):
+        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
+        self.assertEqual(len(frame.rows), 20)
+        self.assertTrue(all(len(r) == 80 for r in frame.rows))
+
+    def test_header_counts_rows(self):
+        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
+        self.assertIn("2 unattributed", frame.rows[0])
+
+    def test_selected_row_marked(self):
+        frame = compose_triage_frame(self._rows(), 1, "", 80, 20)
+        body = "\n".join(frame.rows)
+        self.assertIn("> chatter", body)  # the marker sits on the selected row
+        self.assertIn("Standup", body)
+
+    def test_series_count_shown(self):
+        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
+        self.assertIn("x3", "\n".join(frame.rows))
+
+    def test_typed_task_id_echoed(self):
+        frame = compose_triage_frame(self._rows(), 0, "24648", 80, 20)
+        self.assertIn("task id > 24648", "\n".join(frame.rows))
+
+    def test_footer_shows_keys(self):
+        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
+        self.assertIn("assign", frame.rows[-1])
+
+    def test_empty_queue_message(self):
+        frame = compose_triage_frame([], 0, "", 80, 20)
+        self.assertIn("nothing to triage", "\n".join(frame.rows))
+
+
+# ── Key handling (pure, over a fixture DB) ──────────────────────────────────
+
+
+def _fixture_store():
+    """A DB with a 13-tick series and one lone unattributed event on 2026-06-01."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    store = make_state_db(Path(tmp.name))
+    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    for n in range(13):
+        store.add_event(
+            EventRecord(
+                id=None,
+                source="chatter",
+                timestamp=base + timedelta(minutes=5 * n),
+                task_ids=[],
+                repo="",
+                subject="Standup",
+                external_id=f"gcal:evt-9:tick:{n}",
+            )
+        )
+    store.add_event(
+        EventRecord(
+            id=None,
+            source="chatter",
+            timestamp=base + timedelta(hours=3),
+            task_ids=[],
+            repo="",
+            subject="1:1 with Sam",
+            external_id="gcal:solo-1",
+        )
+    )
+    return store
+
+
+class TestTriageKeyHandling(unittest.TestCase):
+    def _state(self):
+        return AppState(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[])
+
+    def test_enter_triage_lists_series_and_lone_rows(self):
+        registry = _registry(_fixture_store())
+        opened = enter_triage(registry, self._state())
+        self.assertEqual(opened.mode, "triage")
+        # One row for the whole 13-tick series + one for the lone event.
+        self.assertEqual(len(opened.triage_rows), 2)
+        series = opened.triage_rows[0]
+        self.assertEqual(series.count, 13)
+        self.assertEqual(series.display_key, "gcal:evt-9:tick:")
+
+    def test_t_key_from_main_opens_triage(self):
+        registry = _registry(_fixture_store())
+        state, quit_ = handle_key(
+            registry, self._state(), ord("t"), writer=lambda c, n: n
+        )
+        self.assertFalse(quit_)
+        self.assertEqual(state.mode, "triage")
+
+    def test_digits_build_input_and_backspace_edits(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        for ch in "2464":
+            state = handle_triage_key(registry, state, ord(ch))
+        self.assertEqual(state.triage_input, "2464")
+        state = handle_triage_key(registry, state, curses.KEY_BACKSPACE)
+        self.assertEqual(state.triage_input, "246")
+
+    def test_down_moves_selection_and_clears_input(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        state = handle_triage_key(registry, state, ord("9"))
+        state = handle_triage_key(registry, state, curses.KEY_DOWN)
+        self.assertEqual(state.triage_selected, 1)
+        self.assertEqual(state.triage_input, "")
+
+    def test_skip_key_moves_selection(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        state = handle_triage_key(registry, state, ord("s"))
+        self.assertEqual(state.triage_selected, 1)
+
+    def test_up_clamps_at_top(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        state = handle_triage_key(registry, state, curses.KEY_UP)
+        self.assertEqual(state.triage_selected, 0)
+
+    def test_quit_returns_to_main(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        state = handle_triage_key(registry, state, ord("q"))
+        self.assertEqual(state.mode, "main")
+
+    def test_unknown_key_is_noop(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        result = handle_triage_key(registry, state, ord("Z"))
+        self.assertEqual(result, state)
+
+    def test_move_on_empty_queue_is_noop(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        empty = make_state_db(Path(tmp.name))
+        registry = _registry(empty)
+        state = enter_triage(registry, self._state())
+        result = handle_triage_key(registry, state, curses.KEY_DOWN)
+        self.assertEqual(result, state)
+
+    def test_invalid_task_id_reports_and_does_not_assign(self):
+        store = _fixture_store()
+        registry = _registry(store)
+        state = enter_triage(registry, self._state())
+        # No digits typed → Enter is rejected.
+        state = handle_triage_key(registry, state, ord("\n"))
+        self.assertIn("invalid task id", state.status)
+        self.assertEqual(len(state.triage_rows), 2)  # nothing dropped out
+
+    def test_zero_is_not_a_valid_task_id(self):
+        registry = _registry(_fixture_store())
+        state = enter_triage(registry, self._state())
+        state = handle_triage_key(registry, state, ord("0"))
+        state = handle_triage_key(registry, state, curses.KEY_ENTER)
+        self.assertIn("invalid task id", state.status)
+
+    def test_assign_on_empty_queue_is_guarded(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        empty = make_state_db(Path(tmp.name))
+        registry = _registry(empty)
+        state = enter_triage(registry, self._state())
+        state = replace_input(state, "24648")
+        state = assign_triage(registry, state)
+        self.assertIn("nothing to triage", state.status)
+
+
+def replace_input(state, text):
+    from dataclasses import replace
+
+    return replace(state, triage_input=text)
+
+
+class TestTriageEndToEnd(unittest.TestCase):
+    """The full recipe: open → assign the 13-tick series → it derives a session."""
+
+    def test_series_assignment_updates_all_ticks_and_derives_a_session(self):
+        store = _fixture_store()
+        registry = _registry(store)
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 1))
+        state = AppState(window=window, sessions=[])
+
+        # Open triage: one row for the series, one for the lone event.
+        state, _ = handle_key(registry, state, ord("t"), writer=lambda c, n: n)
+        self.assertEqual(len(state.triage_rows), 2)
+        series_ids = list(state.triage_rows[0].event_ids)
+        self.assertEqual(len(series_ids), 13)
+
+        # Type the task id and assign the whole series in one transaction.
+        for ch in "24648":
+            state, _ = handle_key(registry, state, ord(ch), writer=lambda c, n: n)
+        state, _ = handle_key(registry, state, ord("\n"), writer=lambda c, n: n)
+
+        self.assertIn("assigned 13 events of series gcal:evt-9:tick: to task 24648", state.status)
+        # All 13 ticks now carry the task id.
+        for event_id in series_ids:
+            self.assertEqual(store.get_event(event_id).task_ids, ["24648"])
+        # The assigned series dropped out; only the lone event remains to triage.
+        self.assertEqual(len(state.triage_rows), 1)
+        self.assertEqual(state.triage_rows[0].display_key, "gcal:solo-1")
+
+        # The events are now derivable — the meeting bills instead of vanishing.
+        lo = datetime(2026, 6, 1, tzinfo=UTC)
+        hi = datetime(2026, 6, 2, tzinfo=UTC)
+        sessions = store.derive_sessions_overlapping(lo, hi, gap_secs=3600)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].task_id, "24648")
+        self.assertEqual(sessions[0].event_ids, tuple(series_ids))
+
+
+if __name__ == "__main__":
+    unittest.main()
