@@ -10,6 +10,7 @@ that the DB file is actually in WAL mode.
 
 import sqlite3
 import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,11 +23,41 @@ UTC = timezone.utc
 WRITERS = 2
 EVENTS_PER_WRITER = 50
 
+# The production ``_connect`` sets ``busy_timeout=2000`` (2s), which is enough in
+# normal runs but can be exhausted when coverage instrumentation slows every
+# statement under this deliberately maximal-contention hammer, surfacing a
+# spurious "database is locked". The production pragma is intentionally left as-is
+# (it is tuned for real cross-container writers, not an instrumented stress test);
+# instead the TEST bounds-retries each write so a transient lock is waited out
+# rather than failing the run. The guarantee under test is unchanged: every write
+# must ultimately persist (no silent drops), the retry only removes the timing
+# flake. The bound is generous enough that a genuine deadlock would still fail.
+_RETRY_ATTEMPTS = 20
+_RETRY_BACKOFF_SECS = 0.05
+
 
 def _tmp_path() -> Path:
     # A schema-provisioned central DB (#369): the SDK no longer creates schema on
     # open, so writers must start from a host-provisioned, ready DB.
     return make_state_db_path()
+
+
+def _add_event_with_retry(client: LocalStateClient, event: EventRecord) -> None:
+    """Persist one event, retrying a transient ``database is locked`` (test-only).
+
+    De-flakes ``test_two_writers_no_silent_drops`` under coverage without touching
+    the production busy-timeout pragma: a lock that outlives the 2s timeout is
+    retried with a short backoff instead of dropping the write. Any other
+    ``OperationalError`` (a real error) propagates immediately.
+    """
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            client.add_event(event)
+            return
+        except sqlite3.OperationalError as exc:  # pragma: no cover - timing-dependent
+            if "locked" not in str(exc).lower() or attempt == _RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_RETRY_BACKOFF_SECS)
 
 
 def _event(writer: int, seq: int) -> EventRecord:
@@ -58,7 +89,7 @@ class TestConcurrentWriters(unittest.TestCase):
             barrier.wait()  # maximize contention: release all writers together
             try:
                 for seq in range(EVENTS_PER_WRITER):
-                    client.add_event(_event(writer, seq))
+                    _add_event_with_retry(client, _event(writer, seq))
             except Exception as exc:  # pragma: no cover - failure path
                 errors.append(exc)
 

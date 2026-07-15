@@ -136,17 +136,33 @@ def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_DDL)
 
 
-# Sources whose events participate in gap-based sessionization. Matches the
-# development-strategy sources: ``commit``, ``agent``, ``chatter`` resync events,
+# Development-family sources: ``commit``, ``agent``, ``chatter`` resync events,
 # the ``calendar`` meeting ticks and ``email`` sent-mail point events (#370), plus
-# the open-ended ``claude:<HookName>`` family (EventType.CLAUDE_HOOK). ``merge`` /
-# ``review`` are fixed-strategy sources and never form sessions here. Calendar
+# the open-ended ``claude:<HookName>`` family (EventType.CLAUDE_HOOK). Calendar
 # ticks are synthetic point events emitted 5 min apart across a meeting so the
 # UNCHANGED gap derivation reconstructs the meeting as one session (#370); a sent
-# email is a lone point event that picks up the #355 minimum like a commit.
-_SESSION_SOURCE_PREDICATE = (
+# email is a lone point event that picks up the #355 minimum like a commit. A
+# derived group containing ANY development-family event is labeled "Development".
+_DEVELOPMENT_SOURCE_PREDICATE = (
     "(source IN ('commit', 'agent', 'chatter', 'calendar', 'email') "
     "OR source LIKE 'claude:%')"
+)
+
+# Review-family sources (#378 item 6): submitted PR ``review`` passes and authored
+# PR/issue ``comment`` events (``gh:comment:<id>``). Review activity is *bursty* —
+# e.g. one pass of 33 inline comments — which the Python ETL's ``FixedDurationStrategy``
+# over-bills (15 min × 33 = 8.25 h) and a lone long pass under-bills; gap-windowing
+# models both correctly (the 33-comment burst becomes one ~2 h session, a lone
+# review a single-event session that floors to the #355 minimum). A group with ONLY
+# review-family events is labeled "Review" (development wins a mixed group). ``merge``
+# stays deliberately OUT of the windowed derivation — it is a point-in-time release
+# marker billed by the fixed/audit strategy, not a work span.
+_REVIEW_SOURCE_PREDICATE = "source IN ('review', 'comment')"
+
+# Sources whose events participate in gap-based sessionization: the union of the
+# development and review families. ``merge`` is the only ingested source excluded.
+_SESSION_SOURCE_PREDICATE = (
+    f"({_DEVELOPMENT_SOURCE_PREDICATE} OR {_REVIEW_SOURCE_PREDICATE})"
 )
 
 
@@ -184,12 +200,22 @@ _SESSION_SOURCE_PREDICATE = (
 # id can never double-count an event within its own session. One event id can now
 # anchor two tasks' sessions; keys stay distinct because the session key is
 # ``task|min_event_id`` (task-scoped).
+#
+# Category (#378 item 6): review-family sources (``review``/``comment``) now form
+# WINDOWED sessions alongside the development family, so the derivation must label
+# each session so the TUI can distinguish "Review" from "Development". Each ``base``
+# row carries an ``is_dev`` flag (1 for a development-family source, 0 for a
+# review-family one); ``MAX(is_dev)`` per group is the label decision — a group with
+# ANY development-family event is "Development" (development wins a mixed task's
+# label), a group of purely review-family events is "Review". The flag is derived
+# from ``source`` alone, so it does not perturb the ``DISTINCT`` (one id → one row).
 _DERIVE_SESSIONS_SQL = f"""
 WITH base AS (
     SELECT DISTINCT
            events.id AS id, events.timestamp AS timestamp,
            events.pr_num AS pr_num, events.repo AS repo,
            julianday(events.timestamp) AS jd,
+           CASE WHEN {_DEVELOPMENT_SOURCE_PREDICATE} THEN 1 ELSE 0 END AS is_dev,
            COALESCE(NULLIF(task_each.value, ''), 'UNKNOWN') AS task_key
     FROM events, json_each(events.task_ids) AS task_each
     WHERE {_SESSION_SOURCE_PREDICATE}
@@ -217,6 +243,7 @@ SELECT task_key,
        MIN(timestamp)     AS started_at,
        MAX(timestamp)     AS ended_at,
        MAX(pr_num)        AS pr_num,
+       MAX(is_dev)        AS has_dev,
        json_group_array(id) AS event_ids
 FROM numbered
 GROUP BY task_key, session_num
@@ -448,26 +475,34 @@ def _parse_derived_window(row: tuple) -> SessionWindow:
     """Build a :class:`SessionWindow` from a ``derive_sessions_overlapping`` row.
 
     The derived row carries ``(task_key, repo_display, session_key_id,
-    started_at, ended_at, pr_num, event_ids)`` where ``event_ids`` is a JSON
-    array. ``repo_display`` is display-only metadata (#352): the group's real
+    started_at, ended_at, pr_num, has_dev, event_ids)`` where ``event_ids`` is a
+    JSON array. ``repo_display`` is display-only metadata (#352): the group's real
     ``owner/repo`` label when any event carried one, else the repo-less sentinel.
-    Derived windows are always the ``development`` strategy; ``id`` is the
-    session's minimum event id (stable under append-only tail writes).
+    ``id`` is the session's minimum event id (stable under append-only tail writes).
+
+    ``has_dev`` labels the window (#378 item 6): ``1`` when the group holds any
+    development-family event → ``development`` / ``Development`` (development wins
+    a mixed task's label); ``0`` when the group is purely review-family
+    (``review``/``comment``) → ``review`` / ``Review`` so the TUI can badge it.
 
     ``event_ids`` is sorted ascending in Python: ``json_group_array`` has no
     order guarantee (SQLite < 3.44 rejects an aggregate ``ORDER BY``), so sorting
     by id — which is monotonic with insertion — gives a deterministic order for
     the bulk event fetch instead of relying on the group-scan order.
     """
-    (task_key, repo_display, session_key_id, started, ended, pr_num, event_ids_json) = row
+    (task_key, repo_display, session_key_id, started, ended, pr_num, has_dev,
+     event_ids_json) = row
+    strategy_name, category = ("development", "Development") if has_dev else (
+        "review", "Review"
+    )
     return SessionWindow(
         id=session_key_id,
         task_id=task_key,
         repo=repo_display,
         started_at=datetime.fromisoformat(started),
         ended_at=datetime.fromisoformat(ended),
-        strategy_name="development",
-        category="Development",
+        strategy_name=strategy_name,
+        category=category,
         pr_num=pr_num,
         event_ids=tuple(sorted(json.loads(event_ids_json))),
     )
@@ -955,10 +990,14 @@ class LocalStateClient:
         therefore anchor two different tasks' sessions, but the
         ``task|min_event_id`` session key stays distinct per task.
 
-        Only development-strategy sources participate (``commit``/``agent``/
-        ``chatter`` and the ``claude:<HookName>`` family); ``merge``/``review`` are
-        excluded. Every derived window is ``strategy_name='development'`` /
-        ``category='Development'``.
+        Development-family sources (``commit``/``agent``/``chatter``/``calendar``/
+        ``email`` and the ``claude:<HookName>`` family) and review-family sources
+        (``review``/``comment``, #378 item 6) both participate; ``merge`` is
+        excluded (fixed/audit-only). A window is ``strategy_name='development'`` /
+        ``category='Development'`` when it holds any development-family event, else
+        ``strategy_name='review'`` / ``category='Review'`` — so a task mixing
+        development and review activity in one gap-chain takes the development
+        label, and a purely review/comment burst is labeled "Review".
 
         **Intentional behavior delta:** events carrying *no* task ids (e.g. most
         MCP-wrapper dispatch events) are stored as diagnostics but NEVER form a

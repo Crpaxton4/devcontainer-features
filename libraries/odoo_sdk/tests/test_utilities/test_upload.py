@@ -11,14 +11,18 @@ path runs against a mocked transport in ``tests/test_cli/test_upload.py``.
 """
 
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
+from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
+from odoo_sdk.state import EventRecord
+from odoo_sdk.state.config import LocalConfig
 from odoo_sdk.utilities.upload import (
     range_bounds,
     upload_sessions,
     _numeric_task_id,
 )
+from tests.support import make_state_db
 
 _MOD = "odoo_sdk.utilities.upload"
 _RECONCILE = f"{_MOD}.reconcile_session"
@@ -184,6 +188,49 @@ class TestSharedPathWithTui(unittest.TestCase):
         self.assertEqual((uploaded, retired), (3, 0))
         self.assertEqual(tui_calls, cli_calls)  # identical set of billed rows
         self.assertEqual(tui_sweep, cli_sweep)  # identically scoped sweep
+
+
+class TestReviewSessionBillsThroughSharedPath(unittest.TestCase):
+    """#378 item 6: a review-derived session bills like any other session.
+
+    Review-family sessions carry ``category='Review'`` but are otherwise ordinary
+    derived windows, so they must flow through the SAME min/rounding upload path
+    with no special-casing — a lone review event (zero-span) picks up the #355
+    per-session minimum exactly as a lone commit would.
+    """
+
+    def test_lone_review_session_floors_to_minimum(self):
+        state = make_state_db()
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="review",
+                timestamp=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+                task_ids=["100"],
+                repo="owner/repo",
+                pr_num=7,
+            )
+        )
+        # Derive through the real query path so the session dict is exactly what
+        # the TUI/CLI would hand the uploader.
+        query = QuerySessionsCommand(
+            client=MagicMock(), state=state, config=LocalConfig.load()
+        )
+        sessions = query.execute(start_date="2026-06-01", end_date="2026-06-01")
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["category"], "Review")
+        self.assertEqual(sessions[0]["duration_secs"], 0)  # zero-span lone event
+
+        with patch(_RECONCILE, return_value=42) as reconcile, patch(
+            _SWEEP, return_value=0
+        ):
+            result = upload_sessions(
+                MagicMock(), state, sessions, config=LocalConfig.load()
+            )
+        # The review session bills the default 0.25h floor via the shared path.
+        self.assertEqual(result["uploaded"], 1)
+        self.assertEqual(result["rows"][0]["hours"], 0.25)
+        self.assertEqual(reconcile.call_args.args[5], 0.25)
 
 
 if __name__ == "__main__":
