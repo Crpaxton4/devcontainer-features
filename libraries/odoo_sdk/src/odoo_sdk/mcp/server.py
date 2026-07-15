@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional, Tuple, Union
 from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool
 
+from odoo_sdk import OdooError
 from odoo_sdk.commands import Registry
 from odoo_sdk.state.models import (
     EventRecord,
@@ -21,7 +22,6 @@ from odoo_sdk.state.models import (
     TaskNotRunningError,
     TrackerStateMissingError,
 )
-from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
 log = logging.getLogger(__name__)

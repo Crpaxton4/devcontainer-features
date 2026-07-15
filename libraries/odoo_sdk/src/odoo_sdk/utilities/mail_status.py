@@ -23,8 +23,8 @@ message rather than an opaque access traceback.
 
 from typing import Any
 
+from odoo_sdk import OdooAccessError, OdooError
 from odoo_sdk.client import OdooClient
-from odoo_sdk.transport.errors import OdooAccessError, OdooError
 
 from .odoo_helpers import resolve_many2one
 

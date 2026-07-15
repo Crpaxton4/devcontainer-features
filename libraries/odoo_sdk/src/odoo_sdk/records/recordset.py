@@ -10,8 +10,9 @@ from typing import Any, Dict, Iterator, Optional, Sequence, TypeAlias, Union
 from odoo_sdk._utils import _dedup_field_names
 from odoo_sdk.env.metadata_cache import MetadataCache
 from odoo_sdk.fields import adapt_field_value, adapt_record_values
-from odoo_sdk.fields.commands import Command, normalize_x2many_commands
+from odoo_sdk.fields.commands import X2ManyCommand, normalize_x2many_commands
 from odoo_sdk.fields.values import RelationCollection, RelationValue
+from odoo_sdk.query import extract_comparison_value
 from odoo_sdk.query.domain import DomainExpression, DomainInput
 from odoo_sdk.transport.executor import OdooExecutor, guarded_execute
 
@@ -2066,9 +2067,7 @@ class OdooRecordset:
             found, v = self.get_cached_field_value(
                 self._model_name, rid, field_name
             )
-            from odoo_sdk.query.domain import _extract_comparison_value
-
-            extracted = _extract_comparison_value(v if found else None)
+            extracted = extract_comparison_value(v if found else None)
             return _SortKey(extracted, nulls_first=nulls_first)
 
         return make_key
@@ -2127,7 +2126,7 @@ def _needs_write_field_metadata(value: Any) -> bool:
     :return: True when metadata lookup may be required to normalize the value.
     :rtype: bool
     """
-    if isinstance(value, Command):
+    if isinstance(value, X2ManyCommand):
         return True
     return isinstance(value, SequenceABC) and not isinstance(
         value,

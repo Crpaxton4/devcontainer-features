@@ -20,6 +20,14 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
             "Domain",
             "DomainExpression",
             "Record",
+            "OdooError",
+            "OdooAuthenticationError",
+            "OdooAccessError",
+            "OdooValidationError",
+            "OdooMissingRecordError",
+            "OdooTransportError",
+            "OdooServerError",
+            "DeletionNotSupportedError",
         }
 
         self.assertEqual(set(package.__all__), expected_exports)
@@ -53,14 +61,23 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
         with self.assertRaises(AttributeError):
             package.NotAPublicSymbol
 
-    def test_top_level_all_excludes_error_taxonomy(self) -> None:
+    def test_top_level_all_exposes_error_taxonomy(self) -> None:
         package = importlib.import_module("odoo_sdk")
+        errors = importlib.import_module("odoo_sdk.transport.errors")
 
-        self.assertNotIn("OdooError", package.__all__)
-        self.assertNotIn("OdooAuthenticationError", package.__all__)
-        self.assertNotIn("OdooAccessError", package.__all__)
-        self.assertNotIn("OdooValidationError", package.__all__)
-        self.assertNotIn("OdooMissingRecordError", package.__all__)
-        self.assertNotIn("OdooTransportError", package.__all__)
-        self.assertNotIn("OdooServerError", package.__all__)
-        self.assertFalse(hasattr(package, "OdooError"))
+        taxonomy = [
+            "OdooError",
+            "OdooAuthenticationError",
+            "OdooAccessError",
+            "OdooValidationError",
+            "OdooMissingRecordError",
+            "OdooTransportError",
+            "OdooServerError",
+            "DeletionNotSupportedError",
+        ]
+        for name in taxonomy:
+            self.assertIn(name, package.__all__)
+            self.assertTrue(hasattr(package, name))
+            # The top-level re-export is the same object as the canonical
+            # transport.errors definition, not a shadowing duplicate.
+            self.assertIs(getattr(package, name), getattr(errors, name))

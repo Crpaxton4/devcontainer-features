@@ -524,7 +524,7 @@ def _serialize_tokens(node: DomainNode) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_comparison_value(value: Any) -> Any:
+def extract_comparison_value(value: Any) -> Any:
     """Normalize an adapted field value to a primitive suitable for comparison.
 
     Duck-types relational objects that expose an ``ids`` attribute (e.g.
@@ -573,7 +573,7 @@ def _sql_like_to_regex(pattern: str, *, case_sensitive: bool) -> re.Pattern[str]
 def _match_equality(cmp: Any, domain_value: Any, *, negate: bool) -> bool:
     """Evaluate an ``=`` or ``!=`` condition against a normalized field value.
 
-    :param cmp: Normalized comparison value (from ``_extract_comparison_value``).
+    :param cmp: Normalized comparison value (from ``extract_comparison_value``).
     :type cmp: Any
     :param domain_value: Operand from the domain condition.
     :type domain_value: Any
@@ -654,7 +654,7 @@ def _match_condition(field_value: Any, operator: str, domain_value: Any) -> bool
     :return: True when the condition is satisfied.
     :rtype: bool
     """
-    cmp = _extract_comparison_value(field_value)
+    cmp = extract_comparison_value(field_value)
 
     if operator == "=":
         return _match_equality(cmp, domain_value, negate=False)
