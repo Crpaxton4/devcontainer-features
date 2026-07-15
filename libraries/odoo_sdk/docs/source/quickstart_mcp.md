@@ -23,7 +23,12 @@ double-counts):
   store on a *successful* call. A tool that raises emits no event. The event is
   attributed to the task when the call carries a `task_id`, and left
   session-level otherwise. You never call an "emit event" or "log" tool — there
-  isn't one, and the FSM commands no longer self-log.
+  isn't one, and the FSM commands no longer self-log. The persisted event
+  records only the **tool name** (as its subject and `{"tool": <name>}` payload)
+  and the task id — never argument *values*. Chatter note bodies, stakeholder
+  questions, and search queries are deliberately not written to the local
+  events store, matching the `claude-event-hook` shim's stance. (What is *sent
+  to Odoo* is unaffected — this is only about local persistence.)
 - **Sessions are derived, not ingested.** There is no `ingest_sessions` step and
   no materialized sessions table. Sessions are computed from the `events`
   timeseries in SQL at query time, so `query_sessions` (and the `odoo-tui`
