@@ -183,10 +183,10 @@ class TestSourceAndTaskFiltering(unittest.TestCase):
         lo, hi = _whole_range()
         self.assertEqual(len(state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)), 1)
 
-    def test_merge_and_review_sources_excluded(self):
+    def test_merge_source_excluded(self):
+        # ``merge`` stays fixed/audit-only: a merge marker never forms a session.
         state = _tmp_state()
         _event(state, ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC), source="merge")
-        _event(state, ts=datetime(2026, 6, 1, 9, 5, tzinfo=UTC), source="review")
         lo, hi = _whole_range()
         self.assertEqual(state.derive_sessions_overlapping(lo, hi, gap_secs=GAP), [])
 
@@ -198,6 +198,92 @@ class TestSourceAndTaskFiltering(unittest.TestCase):
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP, task_id="202")
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0].task_id, "202")
+
+
+class TestReviewFamilyWindowed(unittest.TestCase):
+    """#378 item 6: ``review``/``comment`` events form WINDOWED sessions.
+
+    Review activity is bursty; gap-windowing bills it correctly (one span) where
+    the Python ETL's fixed 15-min-per-event strategy would over/under-bill. A
+    purely review-family group is labeled ``Review``; a group mixing development
+    and review activity on one task takes the ``Development`` label.
+    """
+
+    def test_comment_burst_derives_one_windowed_session(self):
+        # 33 inline comments over 2h on one task = ONE ~2h session, NOT 33 fixed
+        # 15-min blocks (which the Python ETL would sum to 8.25h).
+        state = _tmp_state()
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        for i in range(33):
+            # Spread 33 comments evenly across 120 minutes (< GAP apart each).
+            _event(
+                state,
+                ts=base + timedelta(minutes=i * 120 // 32),
+                source="comment",
+                task_ids=["101"],
+                repo="owner/repo",
+            )
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0].event_ids), 33)
+        # The span is the first-to-last comment (~2h), not 33 × 15min.
+        self.assertEqual(windows[0].duration_seconds, 120 * 60)
+        self.assertEqual(windows[0].strategy_name, "review")
+        self.assertEqual(windows[0].category, "Review")
+
+    def test_lone_review_derives_single_event_review_session(self):
+        state = _tmp_state()
+        window = state.add_event(
+            EventRecord(
+                id=None,
+                source="review",
+                timestamp=datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
+                task_ids=["101"],
+                repo="owner/repo",
+                pr_num=7,
+            )
+        )
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].event_ids, (window.id,))
+        self.assertEqual(windows[0].duration_seconds, 0)  # picks up the min at upload
+        self.assertEqual(windows[0].category, "Review")
+
+    def test_mixed_development_and_review_takes_development_label(self):
+        # A commit and a review on the same task within one gap-chain collapse
+        # into one session; development wins the label.
+        state = _tmp_state()
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        _event(state, ts=base, source="commit", task_ids=["101"], repo="owner/repo")
+        _event(state, ts=base + timedelta(minutes=5), source="review",
+               task_ids=["101"], repo="owner/repo")
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0].event_ids), 2)
+        self.assertEqual(windows[0].strategy_name, "development")
+        self.assertEqual(windows[0].category, "Development")
+
+    def test_review_and_development_split_by_gap_keep_distinct_labels(self):
+        # When review and development activity fall in SEPARATE gap-chains they
+        # form separate sessions, each with its own label.
+        state = _tmp_state()
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        _event(state, ts=base, source="commit", task_ids=["101"], repo="owner/repo")
+        # A review burst hours later (> GAP after the commit) is its own session.
+        _event(state, ts=base + timedelta(hours=6), source="comment",
+               task_ids=["101"], repo="owner/repo")
+        _event(state, ts=base + timedelta(hours=6, minutes=10), source="review",
+               task_ids=["101"], repo="owner/repo")
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 2)
+        by_cat = {w.category: w for w in windows}
+        self.assertEqual(set(by_cat), {"Development", "Review"})
+        self.assertEqual(len(by_cat["Development"].event_ids), 1)
+        self.assertEqual(len(by_cat["Review"].event_ids), 2)
 
 
 class TestMultiActiveRunFanOut(unittest.TestCase):

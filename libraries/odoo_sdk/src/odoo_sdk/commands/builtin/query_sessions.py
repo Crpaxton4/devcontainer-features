@@ -17,10 +17,6 @@ from odoo_sdk.utilities.upload import range_bounds
 from ..command import Command
 from ._registration import builtin_command
 
-# Derived sessions are all the development strategy; any other requested strategy
-# name matches nothing (kept as a filter parameter for API compatibility).
-_DERIVED_STRATEGY = "development"
-
 
 @builtin_command
 class QuerySessionsCommand(Command):
@@ -53,12 +49,11 @@ class QuerySessionsCommand(Command):
         :param end_date: Inclusive ISO end date (``YYYY-MM-DD``), or None.
         :param task_id: Restrict to one task id, or None for all.
         :param repo: Restrict to one repo, or None for all.
-        :param strategy_name: Restrict to one strategy, or None for all.
+        :param strategy_name: Restrict to one strategy (``development`` or
+            ``review``, #378 item 6), or None for all.
         :param include_events: When True, embed each session's linked events.
         :return: A list of session dicts ordered by start time.
         """
-        if strategy_name is not None and strategy_name != _DERIVED_STRATEGY:
-            return []
         # The shared range_bounds keeps the query window and the upload path's
         # orphan-sweep window on one inclusive-date semantic (see #354).
         lo, hi = range_bounds(start_date, end_date)
@@ -69,7 +64,14 @@ class QuerySessionsCommand(Command):
             task_id=task_id,
             repo=repo,
         )
-        return [self._render(session, include_events) for session in sessions]
+        # A session's strategy is a per-group label the derivation now computes
+        # (development-family vs review-family), so the strategy filter is applied
+        # over the derived windows rather than short-circuiting the whole query.
+        return [
+            self._render(session, include_events)
+            for session in sessions
+            if strategy_name is None or session.strategy_name == strategy_name
+        ]
 
     def _render(self, session: SessionWindow, include_events: bool) -> dict[str, Any]:
         """Render one session (and optionally its events) as a summary dict."""
