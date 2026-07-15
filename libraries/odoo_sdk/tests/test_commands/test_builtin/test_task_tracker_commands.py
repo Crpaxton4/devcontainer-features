@@ -18,7 +18,7 @@ from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError, TaskState
 
 _LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
 _STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
@@ -556,6 +556,62 @@ class TestStartTaskCommand(unittest.TestCase):
         ):
             _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
         self.assertEqual(order, ["timesheet", "run", "note"])
+
+    def test_chatter_failure_is_best_effort_and_leaves_one_running_run(self):
+        # The chatter note is a best-effort announcement (issue #361): if the
+        # post raises after the run is already created, start_task must still
+        # return success and leave exactly one RUNNING run. A bare failure would
+        # error out with the run RUNNING, so a retry would hit
+        # TaskAlreadyRunningError and wedge the caller.
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
+                side_effect=RuntimeError("Odoo unreachable"),
+            ) as mock_note,
+        ):
+            result = _cmd_with_db(StartTaskCommand, client, db).execute(
+                **self._base_kwargs()
+            )
+        mock_note.assert_called_once_with(client, 10, "Work started on this task.")
+        # The command reports success with the full run result.
+        self.assertEqual(result["task_id"], 10)
+        self.assertEqual(result["timesheet_id"], 99)
+        self.assertIn("run_id", result)
+        # Exactly one run exists and it is RUNNING — a retry-safe end state.
+        runs = db.get_all_runs()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].state, TaskState.RUNNING)
+        active = db.get_active_run(10)
+        self.assertIsNotNone(active)
+        self.assertEqual(active.id, result["run_id"])
+
+    def test_chatter_failure_does_not_block_retry_safety(self):
+        # After a swallowed chatter failure the run is RUNNING, so a naive retry
+        # of the same task must raise TaskAlreadyRunningError rather than create
+        # a second run — proving the swallow keeps the invariant the guard
+        # depends on.
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_START_GUARD),
+            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
+            patch(
+                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
+                side_effect=RuntimeError("Odoo unreachable"),
+            ),
+        ):
+            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+            with self.assertRaises(TaskAlreadyRunningError):
+                _cmd_with_db(StartTaskCommand, client, db).execute(
+                    **self._base_kwargs()
+                )
+        self.assertEqual(len(db.get_all_runs()), 1)
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
