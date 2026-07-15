@@ -1,5 +1,45 @@
 # Changelog
 
+## [3.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v2.1.0...personal-features-v3.0.0) (2026-07-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** central host-persisted tracker database ([#388](https://github.com/Crpaxton4/devcontainer-features/issues/388))
+
+### Features
+
+* **mcp:** add read-only get_mail_status tool for outgoing mail verification ([#391](https://github.com/Crpaxton4/devcontainer-features/issues/391)) ([3de95bd](https://github.com/Crpaxton4/devcontainer-features/commit/3de95bd4b052e247e616b92c7c7e0f8036e95860)), closes [#389](https://github.com/Crpaxton4/devcontainer-features/issues/389)
+* **mcp:** read-only unlogged-time gap report ([#397](https://github.com/Crpaxton4/devcontainer-features/issues/397)) ([769a4d3](https://github.com/Crpaxton4/devcontainer-features/commit/769a4d36d28465e709bb80b438e883ba85050044))
+* **mcp:** require tests and nudge note cadence in implement_task workflow ([#390](https://github.com/Crpaxton4/devcontainer-features/issues/390)) ([57c3f72](https://github.com/Crpaxton4/devcontainer-features/commit/57c3f72d9567e535ffec8219ea2fbb6bf03f1e22)), closes [#386](https://github.com/Crpaxton4/devcontainer-features/issues/386) [#387](https://github.com/Crpaxton4/devcontainer-features/issues/387)
+* **sdk:** add headless odoo-sdk upload sharing the TUI reconcile path ([#382](https://github.com/Crpaxton4/devcontainer-features/issues/382)) ([0829097](https://github.com/Crpaxton4/devcontainer-features/commit/0829097623164a6142ce6a6a773dfb06e90963f6)), closes [#354](https://github.com/Crpaxton4/devcontainer-features/issues/354)
+* **sdk:** add odoo-sdk prune with an un-uploaded-session guard ([#384](https://github.com/Crpaxton4/devcontainer-features/issues/384)) ([f3f5a2f](https://github.com/Crpaxton4/devcontainer-features/commit/f3f5a2f62293b076c1879849aabddeec4ca1f226)), closes [#363](https://github.com/Crpaxton4/devcontainer-features/issues/363)
+* **sdk:** apply configurable per-session minimum and rounding at upload ([#383](https://github.com/Crpaxton4/devcontainer-features/issues/383)) ([0a98e6d](https://github.com/Crpaxton4/devcontainer-features/commit/0a98e6d4f19e446d69c32840abeeea8aa8db2f2b)), closes [#355](https://github.com/Crpaxton4/devcontainer-features/issues/355)
+* **sdk:** central host-persisted tracker database ([#388](https://github.com/Crpaxton4/devcontainer-features/issues/388)) ([b8094ec](https://github.com/Crpaxton4/devcontainer-features/commit/b8094ec12e12eed5a437684f03be82e85d2111f4))
+* **sdk:** derive review-family events as windowed sessions ([#396](https://github.com/Crpaxton4/devcontainer-features/issues/396)) ([c356390](https://github.com/Crpaxton4/devcontainer-features/commit/c356390a3773990ffcaa170dc1c26b1e37f9d994))
+* **sdk:** ingest Google Calendar and sent mail as resync event sources ([#395](https://github.com/Crpaxton4/devcontainer-features/issues/395)) ([cc278d2](https://github.com/Crpaxton4/devcontainer-features/commit/cc278d22e14237b9b63ae7cc676e849f9460c373))
+* **sdk:** reap stale runs and stop attaching events to them ([#394](https://github.com/Crpaxton4/devcontainer-features/issues/394)) ([a6ba0dd](https://github.com/Crpaxton4/devcontainer-features/commit/a6ba0ddf3be7ab152ea809c27625755e56ae42c3))
+* **sdk:** widen resync capture and fix task-id extraction accuracy ([#399](https://github.com/Crpaxton4/devcontainer-features/issues/399)) ([6c418cc](https://github.com/Crpaxton4/devcontainer-features/commit/6c418cc8ef7e551bf2e9a40b3bbfdca714216f16))
+* **tui:** review surface with Odoo-line overlap, cross-task badges, and evidence ([#398](https://github.com/Crpaxton4/devcontainer-features/issues/398)) ([363beab](https://github.com/Crpaxton4/devcontainer-features/commit/363beabc66478f0b8c2957288ee8cfd94ad7a6bc))
+* **tui:** triage queue assigning unattributed events to tasks ([#392](https://github.com/Crpaxton4/devcontainer-features/issues/392)) ([0c60bea](https://github.com/Crpaxton4/devcontainer-features/commit/0c60bea89e532696d4406dcea9bfea2fa9670c3a)), closes [#370](https://github.com/Crpaxton4/devcontainer-features/issues/370)
+
+
+### Bug Fixes
+
+* **mcp:** persist only tool name and task id in dispatch events ([#374](https://github.com/Crpaxton4/devcontainer-features/issues/374)) ([04e8ba1](https://github.com/Crpaxton4/devcontainer-features/commit/04e8ba100292e8903875a3104816d2ae67403f4f)), closes [#365](https://github.com/Crpaxton4/devcontainer-features/issues/365)
+* **sdk:** abort_task closes the Odoo anchor and aborted runs never bill ([#385](https://github.com/Crpaxton4/devcontainer-features/issues/385)) ([a41348c](https://github.com/Crpaxton4/devcontainer-features/commit/a41348c8bd82cb31c15f7d218c827af2bf745c49)), closes [#356](https://github.com/Crpaxton4/devcontainer-features/issues/356)
+* **sdk:** enable SQLite WAL and busy_timeout to stop silent event drops ([#373](https://github.com/Crpaxton4/devcontainer-features/issues/373)) ([b6b0d7c](https://github.com/Crpaxton4/devcontainer-features/commit/b6b0d7cffc874859961f297828320622276a2818)), closes [#357](https://github.com/Crpaxton4/devcontainer-features/issues/357)
+* **sdk:** fan multi-task events into every task's session and stop misflagging releases ([#381](https://github.com/Crpaxton4/devcontainer-features/issues/381)) ([bf0835b](https://github.com/Crpaxton4/devcontainer-features/commit/bf0835bd6930363076474c30ac57885c41c1c071)), closes [#362](https://github.com/Crpaxton4/devcontainer-features/issues/362)
+* **sdk:** make start_task chatter post best-effort so failures cannot wedge a run ([#375](https://github.com/Crpaxton4/devcontainer-features/issues/375)) ([1a51545](https://github.com/Crpaxton4/devcontainer-features/commit/1a515458753e86b5d5f407285c857135691d9601)), closes [#361](https://github.com/Crpaxton4/devcontainer-features/issues/361)
+* **sdk:** normalize query window bounds to stored +00:00 timestamp form ([#376](https://github.com/Crpaxton4/devcontainer-features/issues/376)) ([7d47527](https://github.com/Crpaxton4/devcontainer-features/commit/7d475272b6b96dd580d489f0a30009101eca2229)), closes [#360](https://github.com/Crpaxton4/devcontainer-features/issues/360)
+* **sdk:** partition sessions by task only, sweep orphaned uploads, prefilter derivation window ([#380](https://github.com/Crpaxton4/devcontainer-features/issues/380)) ([87fbbaa](https://github.com/Crpaxton4/devcontainer-features/commit/87fbbaac6aeb4cb0650104183b527da63a9eddc4)), closes [#352](https://github.com/Crpaxton4/devcontainer-features/issues/352) [#353](https://github.com/Crpaxton4/devcontainer-features/issues/353) [#359](https://github.com/Crpaxton4/devcontainer-features/issues/359)
+* **test:** align odoo scenario tracker checks with the host-provisioned central DB ([#393](https://github.com/Crpaxton4/devcontainer-features/issues/393)) ([f563b0d](https://github.com/Crpaxton4/devcontainer-features/commit/f563b0d298d68e6084c74f9ea524c20b01e1445f))
+
+
+### Performance Improvements
+
+* **personal-features:** background claude-event-hook logging so tool calls never wait ([#372](https://github.com/Crpaxton4/devcontainer-features/issues/372)) ([333c5dd](https://github.com/Crpaxton4/devcontainer-features/commit/333c5dd8c7518b8bf25cf76401516d3e4ecd4c0a)), closes [#358](https://github.com/Crpaxton4/devcontainer-features/issues/358)
+
 ## [2.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v2.0.0...personal-features-v2.1.0) (2026-07-14)
 
 
