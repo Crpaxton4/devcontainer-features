@@ -27,6 +27,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -34,30 +35,56 @@ from typing import Any, Callable, Optional
 from odoo_sdk.adapters.state_persistence import _SYNTHETIC_PAYLOAD_KEY
 from odoo_sdk.sessionization.config import SessionizationConfig
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
+from odoo_sdk.state.config import _DEFAULT_RESYNC_WINDOW_DAYS
 from odoo_sdk.state.db import _derive_repo_label, _normalize_utc_isoformat
 from odoo_sdk.transport.errors import OdooError
 
+# Minimum task-id magnitude. Real Odoo task ids are 4-5 digits; requiring at
+# least this many digits kills the July false-positives where a short client-side
+# number (``#31 - Hardcode…``) or a PR cross-reference (``(#189)``) minted a
+# phantom task lane (issue #378 item 1).
+_MIN_TASK_ID_DIGITS = 4
+
 # Task-id extractors applied to a commit/PR subject and its branch/ref context.
-# Documented, ordered forms: ``#<id>`` (GitHub-style), ``odoo-<id>`` (branch
-# convention, case-insensitive), and ``[<id>]`` (bracketed). Numeric ids only.
+# Documented, ordered forms (all require >= ``_MIN_TASK_ID_DIGITS`` digits):
+#   ``#<id>``          GitHub-style reference
+#   ``odoo-<id>``      branch convention (case-insensitive)
+#   ``[<id>]``         bracketed
+#   ``<id>#slug``      branch-prefix convention used on client branches (id BEFORE
+#                      the ``#``); anchored to a token start so ``#189`` never
+#                      reads its digits as an id
+#   ``task <id>``      PR-title form ``(task NNNNN)`` (optional space/hyphen)
+#   ``(<id>)``         trailing ``(NNNNN)`` in a PR title (NOT ``(#NNNNN)``)
 _TASK_ID_PATTERNS = (
-    re.compile(r"#(\d+)"),
-    re.compile(r"odoo-(\d+)", re.IGNORECASE),
-    re.compile(r"\[(\d+)\]"),
+    re.compile(rf"#(\d{{{_MIN_TASK_ID_DIGITS},}})"),
+    re.compile(rf"odoo-(\d{{{_MIN_TASK_ID_DIGITS},}})", re.IGNORECASE),
+    re.compile(rf"\[(\d{{{_MIN_TASK_ID_DIGITS},}})\]"),
+    re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})#"),
+    re.compile(rf"\btask[ -]?(\d{{{_MIN_TASK_ID_DIGITS},}})\b", re.IGNORECASE),
+    re.compile(rf"\((\d{{{_MIN_TASK_ID_DIGITS},}})\)"),
 )
 
 # ASCII unit separator used to delimit git-log fields (never appears in text).
 _GIT_FIELD_SEP = "\x1f"
 
+# Payload key flagging extracted task ids that FAILED the ``project.task``
+# existence check at resync time (issue #378 item 1). Such ids are kept OUT of the
+# event's ``task_ids`` so the event never joins a derived session (no phantom
+# lane); they are recorded here so the TUI triage surface can present the event as
+# a WEAK candidate for manual attribution. Payload shape (read by the TUI sibling):
+# ``{"unvalidated_task_ids": ["99999", ...]}`` — a non-empty list means "weak".
+_UNVALIDATED_TASK_IDS_KEY = "unvalidated_task_ids"
+
 
 def _extract_task_ids(subject: str, branch: str) -> list[str]:
     """Return the distinct task ids referenced in a subject/branch, in order.
 
-    Scans ``"{subject} {branch}"`` for each documented form (``#<id>``,
-    ``odoo-<id>``, ``[<id>]``) and returns the numeric ids as strings, de-duped
-    with first-seen order preserved. Returns ``[]`` when nothing matches; such
-    events are still stored for audit but are excluded from derived sessions by
-    the ``json_array_length(task_ids) > 0`` filter.
+    Scans ``"{subject} {branch}"`` for each documented form and returns the
+    numeric ids as strings, de-duped with first-seen order preserved. Every form
+    requires at least :data:`_MIN_TASK_ID_DIGITS` digits, so a short client-side
+    number or a PR cross-reference is never mistaken for a task id. Returns ``[]``
+    when nothing matches; such events are still stored for audit but are excluded
+    from derived sessions by the ``json_array_length(task_ids) > 0`` filter.
     """
     text = f"{subject} {branch}"
     ids: list[str] = []
@@ -66,6 +93,82 @@ def _extract_task_ids(subject: str, branch: str) -> list[str]:
             if match not in ids:
                 ids.append(match)
     return ids
+
+
+def _validate_task_ids(client: Any, ids: set[str]) -> Optional[set[str]]:
+    """Return the subset of ``ids`` that name a real ``project.task`` (issue #378).
+
+    ONE batched ``search_read`` over the whole id set per call — the existence
+    check that stops a well-formed but nonexistent id (e.g. a 4-digit PR
+    cross-reference that survived the magnitude filter) from minting a phantom
+    session lane. Returns ``None`` when validation cannot run — no client, or Odoo
+    unreachable — so the caller trusts the extracted ids as-is (best-effort
+    offline) rather than dropping attribution; returns ``set()`` (nothing valid)
+    only when the client is present but the id set holds no numeric candidates.
+    """
+    if client is None:
+        return None
+    numeric = sorted({int(i) for i in ids if i.isdigit()})
+    if not numeric:
+        return set()
+    try:
+        rows = client.execute(
+            "project.task", "search_read", [("id", "in", numeric)], fields=["id"]
+        )
+    except OdooError:
+        return None
+    return {str(row["id"]) for row in rows}
+
+
+def _partition_task_ids(
+    ids: list[str], valid: Optional[set[str]]
+) -> tuple[list[str], list[str]]:
+    """Split extracted ids into ``(validated, unvalidated)`` against ``valid``.
+
+    ``valid=None`` means validation did not run, so every id is trusted as-is
+    (returned as validated, nothing flagged). Order is preserved in both lists.
+    """
+    if valid is None:
+        return ids, []
+    known = [i for i in ids if i in valid]
+    unknown = [i for i in ids if i not in valid]
+    return known, unknown
+
+
+def _finalize_task_attribution(event: EventRecord, valid: Optional[set[str]]) -> None:
+    """Move an event's unvalidated ids out of ``task_ids`` into the weak flag.
+
+    Mutates ``event`` in place: validated ids stay in ``task_ids`` (they bill
+    normally); unvalidated ids are dropped from ``task_ids`` (so the event never
+    joins a session) and recorded under :data:`_UNVALIDATED_TASK_IDS_KEY` in the
+    payload so triage surfaces the event as weak.
+    """
+    known, unknown = _partition_task_ids(event.task_ids, valid)
+    event.task_ids = known
+    if unknown:
+        payload = dict(event.payload) if event.payload else {}
+        payload[_UNVALIDATED_TASK_IDS_KEY] = unknown
+        event.payload = payload
+
+
+def _store_pending(
+    state: LocalStateClient, pending: list[EventRecord], client: Any
+) -> int:
+    """Validate every pending event's ids in ONE batch, then store them.
+
+    Collects the distinct extracted ids across all ``pending`` events, runs a
+    single :func:`_validate_task_ids` check, finalizes each event's attribution
+    (validated ids kept, unvalidated flagged), and inserts it deduped by external
+    id. Returns the number of newly-written rows.
+    """
+    all_ids = {i for event in pending for i in event.task_ids}
+    valid = _validate_task_ids(client, all_ids)
+    inserted = 0
+    for event in pending:
+        _finalize_task_attribution(event, valid)
+        if state.add_event_dedup(event):
+            inserted += 1
+    return inserted
 
 
 def _run_capture(cmd: list[str]) -> Optional[str]:
@@ -124,26 +227,59 @@ def _git_config_email() -> Optional[str]:
     return _run_capture(["git", "config", "user.email"]) or None
 
 
-def _git_log(email: str) -> Optional[str]:
-    """Return this repo's commit log authored by ``email``, one line per commit."""
+def _window_start(config: Optional[LocalConfig], now: Optional[datetime]) -> datetime:
+    """Return the inclusive lower bound of the resync capture window (issue #378).
+
+    ``now - resync_window_days`` in UTC; ``now`` defaults to the current UTC time
+    and is injectable so tests pin a deterministic window.
+    """
+    days = config.resync_window_days if config else _DEFAULT_RESYNC_WINDOW_DAYS
+    moment = now or datetime.now(timezone.utc)
+    return moment - timedelta(days=days)
+
+
+def _git_author_emails(config: Optional[LocalConfig]) -> list[str]:
+    """Return the git author emails to filter commits by (issue #378 item 4).
+
+    The configured identities that look like emails (contain ``@``); when none are
+    configured, falls back to the single ``git user.email``. Multiple emails are
+    OR-ed by ``git log`` via repeated ``--author`` flags.
+    """
+    configured = [a for a in (config.resync_authors if config else []) if "@" in a]
+    if configured:
+        return configured
+    email = _git_config_email()
+    return [email] if email else []
+
+
+def _git_log(emails: list[str], since: datetime) -> Optional[str]:
+    """Return commits by ``emails`` across ALL branches since ``since``.
+
+    ``--all`` (issue #378 item 2) makes unmerged branch work visible — exactly the
+    work most likely to be unlogged — while ``--since`` bounds the scan so re-runs
+    stay cheap; ``git:<sha>`` external ids dedupe the overlap ``--all`` introduces
+    between branches. Multiple ``--author`` flags are OR-ed by git.
+    """
     pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%D"))
-    return _run_capture(["git", "log", f"--author={email}", f"--pretty={pretty}"])
+    cmd = ["git", "log", "--all", f"--pretty={pretty}", f"--since={since.date().isoformat()}"]
+    cmd.extend(f"--author={email}" for email in emails)
+    return _run_capture(cmd)
 
 
-def _store_commit(state: LocalStateClient, line: str, label: str) -> int:
-    """Store one parsed git-log line as a ``commit`` event; return 1 if inserted.
+def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
+    """Build one ``commit`` event from a git-log line, or None when malformed.
 
     The trailing ``%D`` (ref decorations) field is optional: git omits the final
     separator when a commit carries no decoration, so the line has three fields
-    (sha, date, subject) rather than four. Anything shorter is malformed and
-    skipped.
+    (sha, date, subject) rather than four. Anything shorter is malformed. Task
+    ids are left unvalidated here; :func:`_store_pending` validates the batch.
     """
     parts = line.split(_GIT_FIELD_SEP)
     if len(parts) < 3:
-        return 0
+        return None
     sha, authored, subject = parts[0], parts[1], parts[2]
     decorations = parts[3] if len(parts) > 3 else ""
-    event = EventRecord(
+    return EventRecord(
         id=None,
         source="commit",
         timestamp=_parse_iso_utc(authored),
@@ -153,29 +289,55 @@ def _store_commit(state: LocalStateClient, line: str, label: str) -> int:
         subject=subject,
         external_id=f"git:{sha}",
     )
-    return 1 if state.add_event_dedup(event) else 0
 
 
-def sync_git_log(state: LocalStateClient) -> dict[str, Any]:
-    """Reconcile this repo's authored commits into the ``events`` table.
+def sync_git_log(
+    state: LocalStateClient,
+    config: Optional[LocalConfig] = None,
+    client: Any = None,
+    *,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Reconcile authored commits across all branches into the ``events`` table.
 
-    Reads ``git log`` filtered to the configured ``user.email`` and stores each
-    commit as a ``commit`` event keyed ``git:<sha>``. Idempotent: a re-run adds
-    nothing. Returns ``{"inserted": n}``, or ``{"skipped": reason}`` when git is
-    absent, the email is unset, or the log cannot be read.
+    Reads ``git log --all --since=<window>`` filtered to the configured author
+    emails (issue #378 items 2 & 4) and stores each commit as a ``commit`` event
+    keyed ``git:<sha>``. Extracted task ids are validated in one batched
+    ``project.task`` check when ``client`` is supplied (item 1); unknown ids are
+    flagged weak rather than billed. Idempotent. Returns ``{"inserted": n}``, or
+    ``{"skipped": reason}`` when git is absent, no author email resolves, or the
+    log cannot be read.
     """
-    email = _git_config_email()
-    if email is None:
+    emails = _git_author_emails(config)
+    if not emails:
         return {"skipped": "git unavailable or user.email unset"}
-    log = _git_log(email)
+    log = _git_log(emails, _window_start(config, now))
     if log is None:
         return {"skipped": "git log failed"}
     label = _current_repo_label(state)
-    inserted = sum(_store_commit(state, line, label) for line in log.splitlines() if line)
-    return {"inserted": inserted}
+    pending = [
+        event
+        for line in log.splitlines()
+        if line
+        if (event := _build_commit_event(line, label)) is not None
+    ]
+    return {"inserted": _store_pending(state, pending, client)}
 
 
 # ── GitHub merged PRs and authored reviews ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class _GithubCtx:
+    """Per-resync GitHub context shared by the identity collectors.
+
+    Bundles the current repo's label and gh-api slug with the window lower bound
+    so the collector helpers stay short (issue #378 items 3 & 4).
+    """
+
+    label: str
+    slug: Optional[str]
+    since: datetime
 
 
 def _gh_login() -> Optional[str]:
@@ -194,16 +356,6 @@ def _gh_json(cmd: list[str]) -> Optional[Any]:
         return None
 
 
-def _gh_merged_prs() -> Optional[list[dict]]:
-    """Return this repo's merged PRs authored by the current user, or None."""
-    return _gh_json(
-        [
-            "gh", "pr", "list", "--author", "@me", "--state", "merged",
-            "--json", "number,title,mergedAt,headRefName",
-        ]
-    )
-
-
 def _gh_repo_slug() -> Optional[str]:
     """Return the current repo's ``owner/repo`` slug for gh api paths, or None.
 
@@ -215,102 +367,265 @@ def _gh_repo_slug() -> Optional[str]:
     ) or None
 
 
-def _store_pr(state: LocalStateClient, pr: dict, label: str) -> int:
-    """Store one merged PR as a ``merge`` event; return 1 if a row was inserted."""
-    merged_at = pr.get("mergedAt")
-    if not merged_at:
-        return 0
+def _github_logins(config: Optional[LocalConfig], active: str) -> list[str]:
+    """Return the GitHub logins to capture for (issue #378 item 4).
+
+    The configured identities that are NOT emails (no ``@``); when none are
+    configured, falls back to the single authenticated ``active`` login, so a
+    single-account user needs no config.
+    """
+    configured = [a for a in (config.resync_authors if config else []) if "@" not in a]
+    return configured or [active]
+
+
+def _review_login(actor: dict) -> str:
+    """Return the login of a review/comment's author, or empty when absent."""
+    return (actor.get("user") or {}).get("login", "")
+
+
+def _repo_of(item: dict) -> str:
+    """Return a gh-search result's ``owner/repo`` slug, or empty string."""
+    return (item.get("repository") or {}).get("nameWithOwner", "")
+
+
+def _within_window(ts_str: Optional[str], since: datetime) -> bool:
+    """Whether an ISO timestamp string falls at or after the window start."""
+    if not ts_str:
+        return False
+    try:
+        return _parse_iso_utc(ts_str) >= since
+    except (ValueError, TypeError):
+        return False
+
+
+def _gh_authored_prs(login: str) -> Optional[list[dict]]:
+    """Return ALL PRs authored by ``login`` in the current repo (issue #378 #3).
+
+    ``--state all`` captures opened/closed PRs, not just merged ones — the 145
+    opened PRs of the July window were invisible when only ``merged`` was listed.
+    """
+    return _gh_json(
+        [
+            "gh", "pr", "list", "--author", login, "--state", "all", "--limit", "200",
+            "--json", "number,title,state,mergedAt,createdAt,headRefName",
+        ]
+    )
+
+
+def _pr_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
+    """Build a ``merge`` (audit) event for one authored PR, or None.
+
+    Timestamped at ``mergedAt`` when merged, else ``createdAt`` (the open PR's
+    authoring moment). Skipped when neither timestamp exists or it falls outside
+    the window. ``merge`` stays a fixed/audit-only source (never a session).
+    """
+    ts = pr.get("mergedAt") or pr.get("createdAt")
+    if not _within_window(ts, ctx.since):
+        return None
     number = pr["number"]
     title = pr.get("title", "")
     branch = pr.get("headRefName", "")
-    event = EventRecord(
+    return EventRecord(
         id=None,
         source="merge",
-        timestamp=_parse_iso_utc(merged_at),
+        timestamp=_parse_iso_utc(ts),
         task_ids=_extract_task_ids(title, branch),
-        repo=label,
+        repo=ctx.label,
         pr_num=number,
         branch=branch,
         subject=title,
         external_id=f"gh:pr:{number}",
     )
-    return 1 if state.add_event_dedup(event) else 0
 
 
-def _review_login(review: dict) -> str:
-    """Return the login of a review's author, or empty string when absent."""
-    return (review.get("user") or {}).get("login", "")
+def _review_event(
+    review: dict, pr: dict, repo: str, since: datetime
+) -> Optional[EventRecord]:
+    """Build a ``review`` event for one submitted review, or None.
 
-
-def _store_review(
-    state: LocalStateClient, pr: dict, review: dict, label: str
-) -> int:
-    """Store one authored review as a ``review`` event; return 1 if inserted."""
+    Skipped when the review carries no ``submitted_at`` or it falls outside the
+    window. ``pr`` supplies title/branch/number for attribution and may be either
+    a full PR object or a gh-search result (branch then absent).
+    """
     submitted = review.get("submitted_at")
-    if not submitted:
-        return 0
-    event = EventRecord(
+    if not _within_window(submitted, since):
+        return None
+    branch = pr.get("headRefName", "")
+    title = pr.get("title", "")
+    return EventRecord(
         id=None,
         source="review",
         timestamp=_parse_iso_utc(submitted),
-        task_ids=_extract_task_ids(pr.get("title", ""), pr.get("headRefName", "")),
-        repo=label,
-        pr_num=pr["number"],
-        branch=pr.get("headRefName", ""),
-        subject=pr.get("title", ""),
+        task_ids=_extract_task_ids(title, branch),
+        repo=repo,
+        pr_num=pr.get("number", 0),
+        branch=branch,
+        subject=title,
         external_id=f"gh:review:{review['id']}",
     )
-    return 1 if state.add_event_dedup(event) else 0
 
 
-def _store_reviews(
-    state: LocalStateClient,
-    pr: dict,
-    slug: Optional[str],
-    login: str,
-    label: str,
-) -> int:
-    """Store the current user's reviews on one PR; return the count inserted.
+def _own_review_events(
+    ctx: _GithubCtx, login: str, prs: list[dict]
+) -> list[EventRecord]:
+    """Return ``login``'s reviews on their OWN current-repo PRs (existing #3 path).
 
-    No-op (returns 0) when the repo slug could not be resolved. Reviews are
-    filtered to those authored by the authenticated ``login`` so a PR's other
-    reviewers are never attributed to this user.
+    No-op when the current repo's slug is unresolved. Filtered to reviews authored
+    by ``login`` so a PR's other reviewers are never attributed to this user.
     """
-    if slug is None:
-        return 0
-    reviews = _gh_json(["gh", "api", f"repos/{slug}/pulls/{pr['number']}/reviews"])
-    if not reviews:
-        return 0
-    return sum(
-        _store_review(state, pr, review, label)
-        for review in reviews
-        if _review_login(review) == login
+    if ctx.slug is None:
+        return []
+    events: list[EventRecord] = []
+    for pr in prs:
+        reviews = _gh_json(["gh", "api", f"repos/{ctx.slug}/pulls/{pr['number']}/reviews"]) or []
+        events.extend(
+            event
+            for review in reviews
+            if _review_login(review) == login
+            if (event := _review_event(review, pr, ctx.label, ctx.since)) is not None
+        )
+    return events
+
+
+def _gh_reviewed_prs(login: str) -> list[dict]:
+    """Return PRs (on ANY repo) that ``login`` submitted a review on (issue #378 #3)."""
+    return _gh_json(
+        [
+            "gh", "search", "prs", "--reviewed-by", login, "--limit", "100",
+            "--json", "number,title,repository",
+        ]
+    ) or []
+
+
+def _others_review_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
+    """Return ``login``'s reviews on OTHER people's PRs across repos (issue #378 #3).
+
+    The dominant July review workload was on others' PRs; a ``reviewed-by:`` search
+    finds those PRs, and each one's reviews are fetched and filtered to ``login``.
+    Each review is stored against the reviewed PR's own repo, not the current one.
+    """
+    events: list[EventRecord] = []
+    for item in _gh_reviewed_prs(login):
+        repo = _repo_of(item)
+        if not repo:
+            continue
+        reviews = _gh_json(["gh", "api", f"repos/{repo}/pulls/{item['number']}/reviews"]) or []
+        events.extend(
+            event
+            for review in reviews
+            if _review_login(review) == login
+            if (event := _review_event(review, item, repo, ctx.since)) is not None
+        )
+    return events
+
+
+def _comment_event(
+    comment: dict, item: dict, repo: str, since: datetime
+) -> Optional[EventRecord]:
+    """Build a ``comment`` event for one authored issue/PR comment, or None.
+
+    ``comment`` is a new resync event source (issue #378 item 3) keyed
+    ``gh:comment:<id>``; a sibling worker (item 6) makes the ``comment`` family
+    derive as windowed sessions. Skipped outside the window.
+    """
+    created = comment.get("created_at")
+    if not _within_window(created, since):
+        return None
+    title = item.get("title", "")
+    return EventRecord(
+        id=None,
+        source="comment",
+        timestamp=_parse_iso_utc(created),
+        task_ids=_extract_task_ids(title, ""),
+        repo=repo,
+        pr_num=item.get("number", 0),
+        subject=title,
+        external_id=f"gh:comment:{comment['id']}",
     )
 
 
-def sync_github(state: LocalStateClient) -> dict[str, Any]:
-    """Reconcile merged PRs and the current user's reviews into ``events``.
+def _gh_commented_issues(login: str) -> list[dict]:
+    """Return issues/PRs (on ANY repo) that ``login`` authored a comment on."""
+    return _gh_json(
+        [
+            "gh", "search", "issues", "--commenter", login, "--limit", "100",
+            "--json", "number,title,repository",
+        ]
+    ) or []
 
-    Stores each merged PR authored by the user as a ``merge`` event
-    (``gh:pr:<n>``) and each review the user authored on those PRs as a
-    ``review`` event (``gh:review:<id>``). Both are fixed-strategy sources, so —
-    by design — they are stored for audit but never appear in derived development
-    sessions. Idempotent. Returns ``{"inserted": n}``, or ``{"skipped": reason}``
-    when gh is absent/unauthenticated or the PR list cannot be read.
+
+def _comment_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
+    """Return ``login``'s authored issue/PR comments across repos (issue #378 #3)."""
+    events: list[EventRecord] = []
+    for item in _gh_commented_issues(login):
+        repo = _repo_of(item)
+        if not repo:
+            continue
+        comments = _gh_json(["gh", "api", f"repos/{repo}/issues/{item['number']}/comments"]) or []
+        events.extend(
+            event
+            for comment in comments
+            if _review_login(comment) == login
+            if (event := _comment_event(comment, item, repo, ctx.since)) is not None
+        )
+    return events
+
+
+def _github_identity_events(
+    ctx: _GithubCtx, login: str
+) -> Optional[list[EventRecord]]:
+    """Collect every captured event for one author identity, or None on hard fail.
+
+    Returns None only when the authored-PR list itself cannot be read (the one
+    condition that skips the whole puller); the search-backed collectors degrade
+    to empty lists so one unreachable search never drops the other sources.
+    """
+    prs = _gh_authored_prs(login)
+    if prs is None:
+        return None
+    events: list[EventRecord] = [
+        event for pr in prs if (event := _pr_event(pr, ctx)) is not None
+    ]
+    events.extend(_own_review_events(ctx, login, prs))
+    events.extend(_others_review_events(ctx, login))
+    events.extend(_comment_events(ctx, login))
+    return events
+
+
+def sync_github(
+    state: LocalStateClient,
+    config: Optional[LocalConfig] = None,
+    client: Any = None,
+    *,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Reconcile authored GitHub activity into the ``events`` table (issue #378).
+
+    For every configured author identity (item 4; default the active login) and
+    bounded by the resync window, stores: all authored PRs — opened as well as
+    merged — as ``merge`` audit events (``gh:pr:<n>``); the user's reviews on both
+    their own and OTHERS' PRs as ``review`` events (``gh:review:<id>``); and the
+    user's authored issue/PR comments as a new ``comment`` source
+    (``gh:comment:<id>``) (item 3). Extracted task ids are validated in one batched
+    ``project.task`` check when ``client`` is supplied (item 1). Idempotent.
+    Returns ``{"inserted": n}``, or ``{"skipped": reason}`` when gh is
+    absent/unauthenticated or the authored-PR list cannot be read.
     """
     login = _gh_login()
     if login is None:
         return {"skipped": "gh unavailable or not authenticated"}
-    prs = _gh_merged_prs()
-    if prs is None:
-        return {"skipped": "gh pr list failed"}
-    label = _current_repo_label(state)
-    slug = _gh_repo_slug()
-    inserted = 0
-    for pr in prs:
-        inserted += _store_pr(state, pr, label)
-        inserted += _store_reviews(state, pr, slug, login, label)
-    return {"inserted": inserted}
+    ctx = _GithubCtx(
+        label=_current_repo_label(state),
+        slug=_gh_repo_slug(),
+        since=_window_start(config, now),
+    )
+    pending: list[EventRecord] = []
+    for identity in _github_logins(config, login):
+        identity_events = _github_identity_events(ctx, identity)
+        if identity_events is None:
+            return {"skipped": "gh pr list failed"}
+        pending.extend(identity_events)
+    return {"inserted": _store_pending(state, pending, client)}
 
 
 # ── Odoo task chatter ───────────────────────────────────────────────────────
@@ -329,15 +644,30 @@ def _current_partner_id(client: Any) -> int:
     return partner[0] if isinstance(partner, (list, tuple)) else partner
 
 
-def _search_chatter(client: Any, task_ids: list[int], partner_id: int) -> list[dict]:
-    """Return the user's chatter messages on the tracked project tasks."""
+def _odoo_dt_str(moment: datetime) -> str:
+    """Format a UTC datetime as Odoo's naive ``YYYY-MM-DD HH:MM:SS`` string."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _search_chatter(
+    client: Any, partner_id: int, since: datetime, until: datetime
+) -> list[dict]:
+    """Return the user's authored task chatter over a date window (issue #378 #5).
+
+    Author-wide: scoped by ``author_id`` and the ``[since, until]`` ``date`` range
+    over ALL ``project.task`` messages, NOT to already-tracked tasks — the biggest
+    manual finding was unlogged work on tasks never started locally (diagnoses,
+    quote revisions, consulting replies). ``odoo:mail:<id>`` dedupe keeps the wider
+    search idempotent.
+    """
     return client.execute(
         "mail.message",
         "search_read",
         [
             ("model", "=", "project.task"),
-            ("res_id", "in", task_ids),
             ("author_id", "=", partner_id),
+            ("date", ">=", _odoo_dt_str(since)),
+            ("date", "<=", _odoo_dt_str(until)),
         ],
         fields=["id", "res_id", "date", "subject"],
     )
@@ -347,7 +677,9 @@ def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
     """Store one chatter message as a ``chatter`` event; return 1 if inserted.
 
     A message with no timestamp (Odoo returns ``False`` for an empty datetime)
-    cannot be sessionized, so it is skipped rather than crashing the puller.
+    cannot be sessionized, so it is skipped rather than crashing the puller. The
+    task id is the message's ``res_id`` — the task the message is ON — so it is an
+    existing task by construction and needs no separate existence check.
     """
     date = message.get("date")
     if not date:
@@ -365,23 +697,27 @@ def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
     return 1 if state.add_event_dedup(event) else 0
 
 
-def sync_odoo_chatter(client: Any, state: LocalStateClient) -> dict[str, Any]:
-    """Reconcile the user's Odoo task chatter into the ``events`` table.
+def sync_odoo_chatter(
+    client: Any,
+    state: LocalStateClient,
+    config: Optional[LocalConfig] = None,
+    *,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Reconcile the user's Odoo task chatter into the ``events`` table (issue #378).
 
-    Scopes the ``mail.message`` search to the distinct task ids on record in
-    ``task_runs`` and to messages authored by the authenticated uid's partner,
-    storing each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent.
-    Returns ``{"inserted": n}``, ``{"inserted": 0, "skipped": "no tracked
-    tasks"}`` when nothing is tracked yet, or ``{"skipped": reason}`` when Odoo is
-    unreachable.
+    Searches ``mail.message`` AUTHOR-WIDE over the resync date window — every
+    ``project.task`` message authored by the authenticated uid's partner within
+    the window (item 5), superseding the old tracked-task-only scope — and stores
+    each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent. Returns
+    ``{"inserted": n}``, or ``{"skipped": reason}`` when Odoo is unreachable.
     """
-    task_ids = state.distinct_task_ids()
-    if not task_ids:
-        return {"inserted": 0, "skipped": "no tracked tasks"}
+    now = now or datetime.now(timezone.utc)
+    since = _window_start(config, now)
     label = _current_repo_label(state)
     try:
         partner_id = _current_partner_id(client)
-        messages = _search_chatter(client, task_ids, partner_id)
+        messages = _search_chatter(client, partner_id, since, now)
     except OdooError:
         return {"skipped": "odoo unavailable"}
     inserted = sum(_store_message(state, message, label) for message in messages)

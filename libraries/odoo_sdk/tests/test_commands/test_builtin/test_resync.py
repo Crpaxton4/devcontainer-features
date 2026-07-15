@@ -51,9 +51,11 @@ class TestResyncCommand(unittest.TestCase):
                 "odoo": {"inserted": 3},
             },
         )
-        git.assert_called_once_with(state)
-        gh.assert_called_once_with(state)
-        odoo.assert_called_once_with(client, state)  # odoo puller needs the client
+        # git/github now receive config (window/authors) and the client (task-id
+        # validation); the odoo puller keeps client-first, then state and config.
+        git.assert_called_once_with(state, cmd.config, client)
+        gh.assert_called_once_with(state, cmd.config, client)
+        odoo.assert_called_once_with(client, state, cmd.config)
 
     def test_subset_runs_only_requested_pullers(self) -> None:
         cmd, _client, _state = self._command()

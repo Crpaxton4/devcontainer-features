@@ -9,8 +9,13 @@ from .models import ET
 
 
 def fmt_et(ts: datetime) -> str:
-    """Format a tz-aware timestamp as ``YYYY-MM-DD HH:MM ET``."""
-    return ts.astimezone(ET).strftime("%Y-%m-%d %H:%M ET")
+    """Format a tz-aware timestamp in the day-bucketing zone (issue #378 item 11).
+
+    The trailing token is the resolved zone's abbreviation (``%Z``, e.g. ``CDT``)
+    rather than a hardcoded ``ET`` — the zone is config-driven and no longer
+    necessarily Eastern, so a fixed label would misreport the clock.
+    """
+    return ts.astimezone(ET).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def fmt_duration(secs: int) -> str:

@@ -34,9 +34,11 @@ persisted ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
 import configparser
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # The single environment variable that overrides config discovery. It may name a
 # config FILE or a DIRECTORY (the directory is probed for config.toml /
@@ -341,6 +343,16 @@ _DEFAULT_CALENDAR_TICK_MINS = 5
 _DEFAULT_INGEST_SUBJECTS = True
 _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS = 30
 
+# Resync-capture defaults (issue #378). ``day_bucket_tz`` is the IANA timezone the
+# scoring/rendering day-bucketing uses; it was a hardcoded EDT offset that
+# mis-bucketed the US-Central user's midnight-crossing evening sessions, so it is
+# now config-driven and defaults to US Central. ``resync_window_days`` bounds the
+# git ``--since`` / GitHub / chatter resync queries so re-runs stay cheap.
+# ``resync_authors`` is the list of author identities (GitHub logins and/or git
+# emails) the pullers capture for; empty means "the active login / git email".
+_DEFAULT_DAY_BUCKET_TZ = "America/Chicago"
+_DEFAULT_RESYNC_WINDOW_DAYS = 30
+
 # Environment variables that override behavior settings when no file value is set.
 _BEHAVIOR_ENV_VARS: dict[str, str] = {
     "profiling": "ODOO_PROFILING",
@@ -351,6 +363,9 @@ _BEHAVIOR_ENV_VARS: dict[str, str] = {
     "ingest_subjects": "ODOO_INGEST_SUBJECTS",
     "google_sync_window_days": "ODOO_GOOGLE_SYNC_WINDOW_DAYS",
     "google_token_path": "ODOO_GOOGLE_TOKEN_PATH",
+    "day_bucket_tz": "ODOO_DAY_BUCKET_TZ",
+    "resync_window_days": "ODOO_RESYNC_WINDOW_DAYS",
+    "resync_authors": "ODOO_RESYNC_AUTHORS",
 }
 
 # Sensible defaults for the reserved [behavior] section.
@@ -363,6 +378,9 @@ _BEHAVIOR_DEFAULTS: dict[str, Any] = {
     "ingest_subjects": _DEFAULT_INGEST_SUBJECTS,
     "google_sync_window_days": _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS,
     "google_token_path": None,
+    "day_bucket_tz": _DEFAULT_DAY_BUCKET_TZ,
+    "resync_window_days": _DEFAULT_RESYNC_WINDOW_DAYS,
+    "resync_authors": None,
 }
 
 
@@ -600,6 +618,75 @@ class LocalConfig:
         """
         value = self._behavior.get("google_token_path")
         return str(value) if value else None
+
+    @property
+    def day_bucket_tz(self) -> ZoneInfo:
+        """Return the day-bucketing timezone as a :class:`zoneinfo.ZoneInfo` (#378).
+
+        Scoring and rendering bucket a session's wall-clock span onto a calendar
+        day in this zone; a wrong zone mis-buckets evening sessions that cross
+        local midnight, corrupting per-day utilisation. Resolved from the
+        ``[behavior] day_bucket_tz`` file setting, the ``ODOO_DAY_BUCKET_TZ``
+        environment variable, or the default (``America/Chicago``, US Central),
+        with the standard File > Environment Variable > Default precedence. An
+        unknown or malformed IANA key falls back to the default rather than
+        raising, so a mistyped config never crashes a report.
+
+        :return: The resolved IANA timezone.
+        :rtype: zoneinfo.ZoneInfo
+        """
+        value = self._behavior.get("day_bucket_tz") or _DEFAULT_DAY_BUCKET_TZ
+        try:
+            return ZoneInfo(str(value))
+        except (ZoneInfoNotFoundError, ValueError):
+            return ZoneInfo(_DEFAULT_DAY_BUCKET_TZ)
+
+    @property
+    def resync_window_days(self) -> int:
+        """Return the resync-capture window radius in days (issue #378).
+
+        Bounds the git ``--since``, GitHub, and Odoo-chatter resync queries so a
+        re-run scans only recent history. Resolved from the ``[behavior]
+        resync_window_days`` file setting, the ``ODOO_RESYNC_WINDOW_DAYS``
+        environment variable, or the default (``30``); a non-positive or invalid
+        value falls back to the default.
+
+        :return: The resync window radius in whole days (positive).
+        :rtype: int
+        """
+        value = self._behavior.get("resync_window_days", _DEFAULT_RESYNC_WINDOW_DAYS)
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            return _DEFAULT_RESYNC_WINDOW_DAYS
+        return days if days > 0 else _DEFAULT_RESYNC_WINDOW_DAYS
+
+    @property
+    def resync_authors(self) -> list[str]:
+        """Return the configured resync author identities (issue #378 item 4).
+
+        The list of author identities the GitHub/git pullers capture work for —
+        GitHub logins and/or git commit emails (an entry containing ``@`` is
+        treated as an email, matched against ``git log``; one without is treated
+        as a GitHub login). Resolved from the ``[behavior] resync_authors`` file
+        setting (a TOML list or a comma/whitespace-separated string), the
+        ``ODOO_RESYNC_AUTHORS`` environment variable, or empty. When empty, each
+        puller falls back to its active identity (the authenticated ``gh`` login /
+        the configured ``git user.email``), so single-account users need no config.
+
+        :return: The distinct configured identities in first-seen order.
+        :rtype: list[str]
+        """
+        value = self._behavior.get("resync_authors")
+        if value in (None, ""):
+            return []
+        raw = value if isinstance(value, (list, tuple)) else re.split(r"[,\s]+", str(value))
+        seen: list[str] = []
+        for item in raw:
+            identity = str(item).strip()
+            if identity and identity not in seen:
+                seen.append(identity)
+        return seen
 
     def connection_settings(self) -> OdooConnectionSettings:
         """Build validated :class:`OdooConnectionSettings` from resolved values.

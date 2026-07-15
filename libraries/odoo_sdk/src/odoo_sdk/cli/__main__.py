@@ -390,7 +390,7 @@ def _resync_odoo(db: TaskStateDB) -> dict:
         assert_odoo_devcontainer()
     except OdooDevcontainerRequiredError:
         return {"skipped": "odoo devcontainer not configured"}
-    return sync_odoo_chatter(OdooClient(), db)
+    return sync_odoo_chatter(OdooClient(), db, LocalConfig.load())
 
 
 def _format_resync_line(source: str, result: dict) -> str:
@@ -409,9 +409,12 @@ def cmd_resync(args: argparse.Namespace) -> None:
     """
     sources = _parse_resync_sources(args.sources)
     db = _open_local_db()
+    config = LocalConfig.load()
     runners = {
-        "git": sync_git_log,
-        "github": sync_github,
+        # git/github stay local-only in the CLI (no Odoo client, so task-id
+        # validation is skipped); config supplies the resync window/authors.
+        "git": lambda db: sync_git_log(db, config),
+        "github": lambda db: sync_github(db, config),
         "odoo": _resync_odoo,
         "gcal": lambda db: _resync_google(sync_google_calendar, db),
         "gmail": lambda db: _resync_google(sync_gmail, db),

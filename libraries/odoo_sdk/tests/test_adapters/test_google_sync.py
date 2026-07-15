@@ -174,7 +174,7 @@ class TestCalendarDerivation(unittest.TestCase):
         # Acceptance #2: off-grid terminal tick lands on the true end.
         token = _token_file()
         items = [_meeting("m2", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T10:12:00+00:00", summary="Chat #777")]
+                          "2026-07-15T10:12:00+00:00", summary="Chat #77777")]
         state, result = self._run(items, _config(token))
         self.assertEqual(result, {"inserted": 4})  # 0, 5, 10, 12
         sessions = self._sessions(state)
@@ -202,7 +202,7 @@ class TestCalendarDerivation(unittest.TestCase):
         token = _token_file()
         items = [_meeting("org", "2026-07-15T10:00:00+00:00",
                           "2026-07-15T10:30:00+00:00", response="needsAction",
-                          organized_self=True, summary="I called this #42")]
+                          organized_self=True, summary="I called this #44444")]
         state, result = self._run(items, _config(token))
         self.assertEqual(result["inserted"], 7)  # 0,5,10,15,20,25,30
         self.assertEqual(len(self._sessions(state)), 1)
@@ -236,13 +236,13 @@ class TestCalendarDerivation(unittest.TestCase):
         # Acceptance #8: distinct tasks stay two concurrent lanes.
         token = _token_file()
         items = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Call #100")]
+                          "2026-07-15T11:00:00+00:00", summary="Call #10000")]
         state, _ = self._run(items, _config(token))
         state.add_event(EventRecord(
             id=None, source="agent", timestamp=datetime(2026, 7, 15, 10, 30, tzinfo=UTC),
-            task_ids=["200"], repo=""))
+            task_ids=["20000"], repo=""))
         sessions = self._sessions(state)
-        self.assertEqual({s.task_id for s in sessions}, {"100", "200"})
+        self.assertEqual({s.task_id for s in sessions}, {"10000", "20000"})
 
 
 # ── acceptance: reconcile (delete-series-and-re-expand) ──────────────────────
@@ -271,9 +271,9 @@ class TestCalendarReconcile(unittest.TestCase):
         # Acceptance #4: a shortened meeting bills only its new span.
         state, token = _tmp_state(), _token_file()
         long = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                         "2026-07-15T11:00:00+00:00", summary="Sync #9")]
+                         "2026-07-15T11:00:00+00:00", summary="Sync #99999")]
         short = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T10:30:00+00:00", summary="Sync #9")]
+                          "2026-07-15T10:30:00+00:00", summary="Sync #99999")]
         self._ingest(state, long, token)
         self._ingest(state, short, token)
         ticks = [e for e in state.get_events() if e.source == "calendar"]
@@ -349,13 +349,13 @@ class TestGmailSync(unittest.TestCase):
         transport = _FakeTransport(
             gmail_ids=["s1"],
             gmail_messages={"s1": _sent_message(
-                "s1", "2026-07-15T09:00:00+00:00", subject="Update #333")},
+                "s1", "2026-07-15T09:00:00+00:00", subject="Update #33333")},
         )
         result = sync_gmail(state, _config(token), transport=transport, now=NOW)
         self.assertEqual(result, {"inserted": 1})
         events = [e for e in state.get_events() if e.source == "email"]
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].task_ids, ["333"])
+        self.assertEqual(events[0].task_ids, ["33333"])
         self.assertEqual(events[0].external_id, "gmail:s1")
         self.assertEqual(events[0].payload["direction"], "sent")
         self.assertNotIn("body", events[0].payload)
@@ -387,14 +387,14 @@ class TestGmailSync(unittest.TestCase):
         transport = _FakeTransport(
             gmail_ids=["s1"],
             gmail_messages={"s1": _sent_message(
-                "s1", "2026-07-15T09:00:00+00:00", subject="Secret client #9")},
+                "s1", "2026-07-15T09:00:00+00:00", subject="Secret client #99999")},
         )
         config = _config(token, ingest_subjects=False)
         sync_gmail(state, config, transport=transport, now=NOW)
         event = [e for e in state.get_events() if e.source == "email"][0]
         self.assertEqual(event.subject, "")
         # Attribution from the marker still works even with the subject dropped.
-        self.assertEqual(event.task_ids, ["9"])
+        self.assertEqual(event.task_ids, ["99999"])
 
 
 # ── acceptance: credentials + invariant ─────────────────────────────────────

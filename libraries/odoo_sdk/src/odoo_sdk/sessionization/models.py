@@ -9,12 +9,31 @@ of SQLite, GitHub, git, the filesystem, or MCP.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, tzinfo
 from enum import Enum, auto
 
-# Eastern Time reference used for day bucketing in scoring and rendering.
-# EDT (UTC-4); adjust the offset for winter (UTC-5) when required by callers.
-ET = timezone(timedelta(hours=-4), "ET")
+
+def resolve_day_bucket_tz() -> tzinfo:
+    """Return the configured day-bucketing timezone (issue #378 item 11).
+
+    Reads the standard config resolver (``[behavior] day_bucket_tz`` /
+    ``ODOO_DAY_BUCKET_TZ``, default ``America/Chicago``). The import is local so
+    this state-agnostic module carries no import-time dependency on the state
+    layer and so each call re-resolves the current config (a test can move the
+    zone via an environment variable and see the new bucketing immediately).
+    """
+    from odoo_sdk.state.config import LocalConfig
+
+    return LocalConfig.load().day_bucket_tz
+
+
+# Day-bucketing timezone reference used by scoring and rendering. Was a hardcoded
+# EDT (UTC-4) offset, which mis-bucketed the US-Central user's midnight-crossing
+# evening sessions; now config-driven (default US Central). This module-level
+# value is the resolved default for display helpers that carry no config;
+# ``SessionizationConfig.day_bucket_tz`` carries a per-run copy so the pure
+# Transform phase reads the zone from its config object, not this global.
+ET = resolve_day_bucket_tz()
 
 # Default window / billing constants (seconds unless noted).
 DEFAULT_WINDOW_GAP_SECS = 3600

@@ -16,8 +16,10 @@ UTC = timezone.utc
 
 class TestFormatting(unittest.TestCase):
     def test_fmt_et(self):
-        ts = datetime(2026, 6, 1, 16, 0, tzinfo=UTC)  # noon ET
-        self.assertEqual(fmt_et(ts), "2026-06-01 12:00 ET")
+        # Default day-bucket zone is US Central (issue #378 item 11): 16:00 UTC in
+        # June is 11:00 CDT, and the label is the resolved zone's abbreviation.
+        ts = datetime(2026, 6, 1, 16, 0, tzinfo=UTC)
+        self.assertEqual(fmt_et(ts), "2026-06-01 11:00 CDT")
 
     def test_fmt_duration(self):
         self.assertEqual(fmt_duration(3660), "1h 1m")

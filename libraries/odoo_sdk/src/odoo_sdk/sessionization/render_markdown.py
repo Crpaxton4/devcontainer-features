@@ -217,7 +217,7 @@ def _mermaid_text(text: str) -> str:
 
 
 def _mermaid_datetime(ts: datetime) -> str:
-    """Format a timestamp for Mermaid Gantt using local ET clock time."""
+    """Format a timestamp for Mermaid Gantt using local day-bucket clock time."""
     return ts.astimezone(ET).strftime("%Y-%m-%d %H:%M")
 
 
@@ -237,7 +237,7 @@ def _mermaid_gantt(title: str, entries: list[TimeEntry]) -> list[str]:
         "",
         "```mermaid",
         "gantt",
-        f"    title {_mermaid_text(title)} (ET)",
+        f"    title {_mermaid_text(title)} (local)",
         "    dateFormat YYYY-MM-DD HH:mm",
         "    axisFormat %m-%d %H:%M",
         "    tickInterval 1day",
