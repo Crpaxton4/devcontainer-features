@@ -397,6 +397,7 @@ def _print_upload_summary(result: dict, dry_run: bool) -> None:
     print(
         f"{verb} {result['uploaded']} session(s); "
         f"skipped {result['skipped']} (no task id); "
+        f"excluded {result['excluded']} (aborted runs); "
         f"retired {result['retired']} orphaned upload(s)."
     )
 

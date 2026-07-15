@@ -14,7 +14,11 @@ reconciled through :func:`odoo_sdk.utilities.timesheet.reconcile_session`, the
 sole ``account.analytic.line`` hours-writer for the derived-upload path, so a
 re-run never double-bills (each session's stable ``session_key`` maps to one
 row). Sessions lacking a numeric task id carry no Odoo task to bill and are
-skipped. After billing, the stale-mapping sweep
+skipped. Sessions lying wholly within an aborted run's window
+(``task_runs.aborted_at``, #356) are excluded outright — an abort promised not
+to log that run's work, so its leftover events must never bill — and, because
+they are excluded from the derived set, any hours a pre-abort upload already
+wrote for them are zeroed by the sweep. After billing, the stale-mapping sweep
 (:func:`odoo_sdk.utilities.timesheet.sweep_orphaned_uploads`, #353) diffs the
 upload ledger against the just-derived key set for the window and zeroes /
 retires any mapping that no longer derives, so merged-away sessions are not
@@ -32,7 +36,65 @@ from typing import Any, Optional
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
 
-from .timesheet import reconcile_session, sweep_orphaned_uploads
+from .timesheet import _as_utc, reconcile_session, sweep_orphaned_uploads
+
+
+# How far past ``aborted_at`` the aborted-run exclusion window extends (#356).
+# The abort's own dispatch telemetry — the MCP wrapper's agent event and the
+# claude-event-hook PostToolUse shim — lands moments AFTER ``aborted_at`` is
+# stamped (both emit only once the tool has returned), so a bare upper bound
+# would let that trailing event push the derived session past the window and
+# re-bill the aborted run. One minute comfortably covers dispatch latency;
+# genuine post-restart work keeps producing events past the grace, so its
+# session extends beyond the window and still bills.
+_ABORT_DISPATCH_GRACE = timedelta(seconds=60)
+
+
+def _aborted_windows(
+    state: LocalStateClient,
+) -> list[tuple[str, datetime, datetime]]:
+    """Return ``(task_id, started_at, aborted_at)`` for every aborted run (#356).
+
+    An aborted run (``abort_task`` / cross-DB ``abort_run``) promised not to log
+    its work, so the sessions its leftover events derive must not bill. Each
+    aborted run contributes the window its sessions are excluded within. Runs
+    with no ``aborted_at`` are normal stops and never appear here
+    (``get_aborted_runs`` selects only stamped rows).
+    """
+    return [
+        (str(run.task_id), run.started_at, run.aborted_at)
+        for run in state.get_aborted_runs()
+    ]
+
+
+def _within_aborted_window(
+    session: dict[str, Any], windows: list[tuple[str, datetime, datetime]]
+) -> bool:
+    """True when ``session`` lies wholly within an aborted run's window (#356).
+
+    A session is excluded only when it matches an aborted run's task AND it
+    *began during the run* (``started_at <= started <= aborted_at``, so the
+    session is the aborted run's own leftover, not a later one) AND it ended by
+    ``aborted_at`` widened with :data:`_ABORT_DISPATCH_GRACE` — the abort's own
+    dispatch event is emitted just after ``aborted_at`` is stamped and must
+    still be covered. All bounds are inclusive. Sessions that fall outside
+    still bill: one starting *after* the abort is a fresh run's work (however
+    short), and one whose gap-chain *straddles* past the grace into
+    post-restart work is returned whole rather than suppressed. Session bounds
+    are normalized to aware UTC (legacy events stored before the +00:00
+    normalization parse naive) so the comparison never mixes naive and aware.
+    """
+    task_id = str(session.get("task_id"))
+    started = _as_utc(datetime.fromisoformat(session["started_at"]))
+    ended = _as_utc(datetime.fromisoformat(session["ended_at"]))
+    for wtask, wstart, wend in windows:
+        if (
+            task_id == wtask
+            and wstart <= started <= wend
+            and ended <= wend + _ABORT_DISPATCH_GRACE
+        ):
+            return True
+    return False
 
 
 def _round_to_step(value: float, step: float) -> float:
@@ -154,23 +216,29 @@ def _upload_one(
 def _sweep(
     client: OdooClient,
     state: LocalStateClient,
+    selected: list[dict[str, Any]],
     sessions: list[dict[str, Any]],
     window_lo: datetime,
     window_hi: datetime,
 ) -> int:
     """Run the window-scoped orphan sweep after an upload (#353).
 
-    Diffs the upload ledger against the just-derived key set: a
-    previously-uploaded session that no longer derives — its events merged into
-    an adjacent session by a backfilled event — has its Odoo row zeroed and its
-    mapping retired, so the merged-away hours are not double-counted.
+    Diffs the upload ledger against the just-billed key set: a
+    previously-uploaded session that no longer bills — its events merged into an
+    adjacent session by a backfilled event, or its run was aborted (#356) — has
+    its Odoo row zeroed and its mapping retired, so the stale hours are not
+    kept. ``derived_keys`` comes from ``selected`` (aborted-window sessions
+    dropped, so their pre-abort uploads are retired) while ``derived_task_ids``
+    comes from ALL derived ``sessions``: the legacy NULL-bounds ledger branch
+    keys on the task ids active in this window, and an aborted run's task must
+    stay in that set so its legacy pre-#353 billing is zeroed too.
 
     :return: The number of mappings retired.
     """
     return sweep_orphaned_uploads(
         client,
         state,
-        derived_keys={session.get("session_key", "") for session in sessions},
+        derived_keys={session.get("session_key", "") for session in selected},
         derived_task_ids={str(session.get("task_id")) for session in sessions},
         window_lo=window_lo,
         window_hi=window_hi,
@@ -212,7 +280,8 @@ def upload_sessions(
         points (the TUI ``u`` key and ``odoo-sdk upload``) pick up the file and
         environment overrides automatically.
     :return: A summary dict with ``uploaded`` (billable session count),
-        ``skipped`` (non-numeric-task sessions), ``retired`` (orphan mappings
+        ``skipped`` (non-numeric-task sessions), ``excluded`` (sessions inside an
+        aborted run's window, never billed — #356), ``retired`` (orphan mappings
         swept), ``dry_run``, and ``rows`` (one ``{task_id, session_key, hours,
         timesheet_id}`` per billable session; ``hours`` is the policy-adjusted
         billed hours; ``timesheet_id`` is None on a dry run).
@@ -221,8 +290,14 @@ def upload_sessions(
     minimum = config.min_session_hours
     step = config.round_session_hours
     rows: list[dict[str, Any]] = []
-    skipped = 0
+    skipped = excluded = 0
+    aborted_windows = _aborted_windows(state)
+    selected: list[dict[str, Any]] = []
     for session in sessions:
+        if _within_aborted_window(session, aborted_windows):
+            excluded += 1  # aborted runs never bill (#356)
+            continue
+        selected.append(session)
         task_id = _numeric_task_id(session.get("task_id"))
         if task_id is None:
             skipped += 1
@@ -233,10 +308,11 @@ def upload_sessions(
     retired = 0
     if not dry_run:
         window_lo, window_hi = range_bounds(start_date, end_date)
-        retired = _sweep(client, state, sessions, window_lo, window_hi)
+        retired = _sweep(client, state, selected, sessions, window_lo, window_hi)
     return {
         "uploaded": len(rows),
         "skipped": skipped,
+        "excluded": excluded,
         "retired": retired,
         "dry_run": dry_run,
         "rows": rows,

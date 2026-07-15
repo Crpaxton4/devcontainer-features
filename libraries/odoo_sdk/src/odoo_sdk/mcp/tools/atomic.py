@@ -293,7 +293,7 @@ def make_resume_task_tool(registry: Registry):
 @atomic_tool("abort_task")
 def make_abort_task_tool(registry: Registry):
     def abort_task(task_id: int) -> Dict[str, Any]:
-        """Force-close a wedged session without logging hours; drop its timesheet."""
+        """Force-close a wedged session without logging hours; retire its anchor."""
         return registry["abort_task"].execute(task_id)
 
     return abort_task

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     started_at   TEXT    NOT NULL,
     stopped_at   TEXT,
     timesheet_id INTEGER,
-    notes        TEXT    NOT NULL DEFAULT '[]'
+    notes        TEXT    NOT NULL DEFAULT '[]',
+    aborted_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -339,10 +340,28 @@ def _migrate_task_sessions_to_task_runs(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE task_sessions RENAME TO task_runs")
 
 
+def _migrate_task_runs_aborted_at(conn: sqlite3.Connection) -> None:
+    """Add the additive nullable ``task_runs.aborted_at`` abort-exclusion column.
+
+    A locally aborted run must never bill (#356): its abort instant is stamped
+    here so the upload path can skip any derived session lying wholly within the
+    run's ``[started_at, aborted_at]`` window. Databases created before #356 lack
+    the column; this adds it via ``ALTER TABLE`` (guarded by a ``PRAGMA
+    table_info`` probe, since SQLite has no ``ADD COLUMN IF NOT EXISTS``). The
+    column is deliberately *outside* the ``state`` CHECK constraint — widening
+    that constraint would need a full table rebuild — so an aborted run stays
+    ``state='STOPPED'`` and merely carries the extra stamp. New DBs already carry
+    the column from :data:`_SCHEMA`, so the ``ALTER`` is skipped for them.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
+    if "aborted_at" not in columns:
+        conn.execute("ALTER TABLE task_runs ADD COLUMN aborted_at TEXT")
+
+
 # Columns selected for every task_run read, in _parse_run order.
 _TASK_RUN_COLUMNS = (
     "id, task_id, task_name, project_id, project_name, state, "
-    "started_at, stopped_at, timesheet_id, notes"
+    "started_at, stopped_at, timesheet_id, notes, aborted_at"
 )
 
 
@@ -358,6 +377,7 @@ def _parse_run(row: tuple) -> TaskRun:
         stopped_at,
         timesheet_id,
         notes_json,
+        aborted_at,
     ) = row
     return TaskRun(
         id=id_,
@@ -370,6 +390,7 @@ def _parse_run(row: tuple) -> TaskRun:
         stopped_at=datetime.fromisoformat(stopped_at) if stopped_at else None,
         timesheet_id=timesheet_id,
         notes=json.loads(notes_json),
+        aborted_at=datetime.fromisoformat(aborted_at) if aborted_at else None,
     )
 
 
@@ -564,6 +585,7 @@ class LocalStateClient:
             _migrate_drop_materialized_sessions(conn)
             _migrate_events_external_id(conn)
             _migrate_session_uploads_ledger(conn)
+            _migrate_task_runs_aborted_at(conn)
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
         with self._connect() as conn:
@@ -696,6 +718,51 @@ class LocalStateClient:
                 (stopped_at, tid, run.id),
             )
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
+
+    def abort_run(self, task_id: int) -> TaskRun:
+        """Force-close the active run to STOPPED and stamp ``aborted_at`` (#356).
+
+        The abort analog of :meth:`stop_run`: it moves the active run straight to
+        ``STOPPED`` *and* records the abort instant in the additive ``aborted_at``
+        column so the upload path can exclude the run's leftover sessions. The
+        stamp is taken as ``now`` — at or after the abort-dispatch agent event
+        that lands at abort time — so the aborted window covers that event and it
+        can never re-derive a billable session. ``stop_run`` is left
+        billing-neutral (a normal stop must still bill), which is why the abort
+        stamp lives on a distinct method rather than a flag on ``stop_run``.
+
+        :param task_id: The task whose active run is aborted.
+        :return: The stopped run, now carrying ``aborted_at``.
+        :raises TaskNotRunningError: When there is no active run to abort.
+        """
+        run = self.get_active_run(task_id)
+        if run is None:
+            raise TaskNotRunningError(
+                f"No active session found for task {task_id}."
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, "
+                "aborted_at = ? WHERE id = ?",
+                (now, now, run.id),
+            )
+        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+
+    def get_aborted_runs(self) -> list[TaskRun]:
+        """Return every aborted run (``aborted_at`` stamped), ordered by start.
+
+        The upload path (#356) skips any derived session lying wholly within an
+        aborted run's ``[started_at, aborted_at]`` window for the matching task,
+        so an aborted run's leftover events never bill. Work done on the same task
+        after a fresh ``start_task`` falls in a *later* run window and still bills.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_TASK_RUN_COLUMNS} "
+                "FROM task_runs WHERE aborted_at IS NOT NULL ORDER BY started_at"
+            ).fetchall()
+        return [_parse_run(tuple(r)) for r in rows]
 
     def update_timesheet_id(self, run_id: int, timesheet_id: int) -> None:
         with self._connect() as conn:
