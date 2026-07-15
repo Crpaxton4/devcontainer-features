@@ -191,6 +191,32 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("2-4 short bullets", content)
         self.assertIn("one-line summary", content)
 
+    def test_second_message_requires_python_unit_tests(self):
+        msgs = _build_messages(_make_task())
+        content = msgs[1]
+        self.assertIn("**TEST**", content)
+        self.assertIn("Python unit tests", content)
+        self.assertIn("tests/", content)
+
+    def test_second_message_requires_browser_tour_test(self):
+        content = _build_messages(_make_task())[1]
+        self.assertIn("browser tour test", content)
+
+    def test_test_step_requires_running_tests(self):
+        content = _build_messages(_make_task())[1]
+        self.assertIn("RUN the tests", content)
+        self.assertIn("REQUIRED", content)
+
+    def test_test_step_precedes_stop_step(self):
+        content = _build_messages(_make_task())[1]
+        self.assertLess(content.index("**TEST**"), content.index("**STOP**"))
+
+    def test_second_message_gives_concrete_note_cadence(self):
+        content = _build_messages(_make_task())[1]
+        self.assertIn("after each coherent", content)
+        self.assertIn("after tests pass", content)
+        self.assertIn("before you stop", content)
+
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])
         msgs = _build_messages(task)
