@@ -2,6 +2,17 @@
 
 MCP Tools
 
+> **Historical / superseded (2026-07).** This PRD is retained as a record of the
+> original Phase H tool plan. It does **not** describe what shipped. The nine
+> generic ORM tools below (`search`, `read`, `search_read`, `create`, `write`,
+> `unlink`, `name_search`, `read_group`, `fields_get`) wrapping `OdooRecordset`
+> were **not** built, and prompts were **not** left out of scope. What shipped is
+> a task-tracker tool surface that wraps the command **registry**: ~30 atomic
+> 1:1 typed command wrappers (`odoo_sdk/mcp/tools/atomic.py`) plus two
+> `ctx`-driven composition tools (`start_task`, `stop_task`) and two prompts
+> (`implement_task`, `report_incident`). The implemented contract is recorded in
+> [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem
