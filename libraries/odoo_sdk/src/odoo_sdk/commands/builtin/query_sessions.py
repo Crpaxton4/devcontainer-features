@@ -9,10 +9,10 @@ window it is queried through, and its linked events are returned alongside it.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from odoo_sdk.state import SessionWindow, session_key
+from odoo_sdk.utilities.upload import range_bounds
 
 from ..command import Command
 from ._registration import builtin_command
@@ -20,29 +20,6 @@ from ._registration import builtin_command
 # Derived sessions are all the development strategy; any other requested strategy
 # name matches nothing (kept as a filter parameter for API compatibility).
 _DERIVED_STRATEGY = "development"
-
-
-def _parse_date(value: Optional[str]) -> Optional[date]:
-    """Parse an ISO ``YYYY-MM-DD`` string into a :class:`date`, or None."""
-    return date.fromisoformat(value) if value else None
-
-
-def _range_bounds(
-    start_date: Optional[str], end_date: Optional[str]
-) -> tuple[datetime, datetime]:
-    """Resolve inclusive ISO date strings into a ``[start, end]`` datetime pair.
-
-    ``end`` is midnight of the day *after* ``end_date`` so the whole end day is
-    covered. When a bound is omitted it defaults to the widest representable
-    range so callers can query "everything".
-    """
-    start = _parse_date(start_date)
-    end = _parse_date(end_date)
-    lo = datetime(start.year, start.month, start.day) if start else datetime.min
-    if end is None:
-        return lo, datetime.max
-    nxt = end + timedelta(days=1)
-    return lo, datetime(nxt.year, nxt.month, nxt.day)
 
 
 @builtin_command
@@ -82,7 +59,9 @@ class QuerySessionsCommand(Command):
         """
         if strategy_name is not None and strategy_name != _DERIVED_STRATEGY:
             return []
-        lo, hi = _range_bounds(start_date, end_date)
+        # The shared range_bounds keeps the query window and the upload path's
+        # orphan-sweep window on one inclusive-date semantic (see #354).
+        lo, hi = range_bounds(start_date, end_date)
         sessions = self.state.derive_sessions_overlapping(
             lo,
             hi,

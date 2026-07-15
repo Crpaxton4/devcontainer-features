@@ -2,7 +2,7 @@
 
 This module is the **sole owner** of every ``account.analytic.line``
 create / write in the SDK (issue #181). No command, TUI surface, or other
-utility writes Odoo timesheets directly — they route through the two idempotent
+utility writes Odoo timesheets directly — they route through the idempotent
 operations here. Record deletion (``unlink``) is purposefully not implemented
 anywhere in the SDK (see :func:`odoo_sdk.transport.errors.forbid_unlink`), so
 this module never deletes a timesheet row.
@@ -13,8 +13,11 @@ The operations:
   for a task, keyed by the task and the ``[/] Work in progress`` marker so a
   second ``start_task`` reuses the first row instead of duplicating it
   (kills #177).
-* :func:`reconcile` — upsert the real elapsed hours / description onto the
-  anchor row. Idempotent: safe to re-run, it only ever writes the one anchor.
+* :func:`reconcile_session` — upsert one derived session's real hours /
+  description onto the single ``account.analytic.line`` it maps to (by its
+  stable ``session_key``). Idempotent: safe to re-run, it only ever rewrites
+  the one row a session is mapped to, so an upload never double-bills. This is
+  the sole hours-writer for the derived-session upload path (#330/#354).
 
 Both operations send **scalar** ids to Odoo (never a one-element list), which
 preserves the #170/#176 fix: a batch ``create`` returns ``[id]`` (a list) that
@@ -167,41 +170,6 @@ def ensure_anchor(
     return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
-def reconcile(
-    client: OdooClient,
-    state: LocalStateClient,
-    task_id: int,
-    description: str,
-    elapsed_hours: float,
-) -> Optional[int]:
-    """Upsert the real hours / description onto a task's anchor timesheet row.
-
-    Idempotent: it writes the single anchor row and nothing else, so re-running
-    it (e.g. a re-triggered TUI/ETL upload) only overwrites the same row rather
-    than accumulating duplicates. It is the TUI/ETL upload path — **not**
-    ``stop_task`` — that calls this to write hours; ``stop_task`` only transitions
-    the local session. The anchor id is resolved from the local session store;
-    when no anchor is known the call is a no-op.
-
-    :param client: The Odoo API client (the only writer of the timesheet row).
-    :param state: The local state store the anchor id is resolved through.
-    :param task_id: The ``project.task`` id whose anchor is reconciled.
-    :param description: The final work summary to store on the row.
-    :param elapsed_hours: The billable hours to store on the row.
-    :return: The reconciled anchor id, or ``None`` when the task has no anchor.
-    """
-    timesheet_id = _resolve_anchor_id(client, state, task_id)
-    if timesheet_id is None:
-        return None
-    client.execute(
-        "account.analytic.line",
-        "write",
-        [timesheet_id],
-        {"unit_amount": elapsed_hours, "name": description},
-    )
-    return timesheet_id
-
-
 def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
     """Close out an orphaned anchor timesheet row after a stale-run abort (#331).
 
@@ -231,21 +199,6 @@ def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
         {"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0},
     )
     return True
-
-
-def _resolve_anchor_id(
-    client: OdooClient, state: LocalStateClient, task_id: int
-) -> Optional[int]:
-    """Return the anchor id for a task from the run store, else from Odoo.
-
-    Prefers the active run's ``timesheet_id`` (the anchor created at start);
-    falls back to an Odoo lookup so a reconcile still lands when the local
-    run has already been stopped or is otherwise unavailable.
-    """
-    run = state.get_active_run(task_id)
-    if run is not None and run.timesheet_id is not None:
-        return run.timesheet_id
-    return _find_anchor(client, task_id)
 
 
 def _write_line(client: OdooClient, timesheet_id: int, vals: dict) -> None:

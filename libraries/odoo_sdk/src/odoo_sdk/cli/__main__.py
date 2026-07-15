@@ -13,12 +13,13 @@ Subcommands:
     discover                List all tracker projects and their active runs
     abort <hash> <run_id>   Abort a stale run in another project's DB
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
+    upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
 """
 
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from odoo_sdk.adapters import (
@@ -30,8 +31,9 @@ from odoo_sdk.adapters import (
 )
 from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
+from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.sessionization import EventType
-from odoo_sdk.state import EventRecord, ProjectIdError
+from odoo_sdk.state import EventRecord, LocalConfig, ProjectIdError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
 from odoo_sdk.state.discovery import discover_projects
@@ -40,6 +42,7 @@ from odoo_sdk.utilities.env import (
     assert_odoo_devcontainer,
 )
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
+from odoo_sdk.utilities.upload import upload_sessions
 
 # Subcommands that skip the global Odoo devcontainer assert and build no
 # OdooClient up front. ``log-event`` / ``discover`` are purely local; ``resync``
@@ -374,6 +377,64 @@ def cmd_resync(args: argparse.Namespace) -> None:
         print(_format_resync_line(source, result))
 
 
+def _print_upload_summary(result: dict, dry_run: bool) -> None:
+    """Print the per-session upload rows and a trailing totals line.
+
+    :param result: The ``upload_sessions`` summary dict.
+    :param dry_run: Whether the run was a dry run (changes the verb printed).
+    """
+    verb = "would bill" if dry_run else "billed"
+    for row in result["rows"]:
+        target = "(dry run)" if dry_run else f"-> timesheet {row['timesheet_id']}"
+        print(
+            f"  task {row['task_id']}  {row['session_key']}  "
+            f"{row['hours']:.2f}h  {target}"
+        )
+    print(
+        f"{verb} {result['uploaded']} session(s); "
+        f"skipped {result['skipped']} (no task id); "
+        f"retired {result['retired']} orphaned upload(s)."
+    )
+
+
+def _parse_iso_date(value: str) -> str:
+    """Validate an ISO ``YYYY-MM-DD`` argparse value, returning it unchanged.
+
+    :raises argparse.ArgumentTypeError: When ``value`` is not a valid ISO date,
+        so argparse reports the error cleanly and exits with status 2 (matching
+        ``--timestamp``'s behavior) instead of a raw traceback downstream.
+    """
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid ISO date: {value!r}") from exc
+    return value
+
+
+def cmd_upload(args: argparse.Namespace, db: TaskStateDB, client: OdooClient) -> None:
+    """Bill derived sessions headlessly, sharing the TUI's upload path (#354).
+
+    Runs the same pipeline the TUI's ``u`` key does — ``query_sessions`` derives
+    the sessions for the optional date range, then the shared
+    :func:`~odoo_sdk.utilities.upload.upload_sessions` loop reconciles each
+    session's hours and sweeps the window's stale upload mappings — so a
+    non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI would.
+    ``--dry-run`` previews the billable set without writing to Odoo.
+    """
+    sessions = QuerySessionsCommand(
+        client, state=db, config=LocalConfig.load()
+    ).execute(start_date=args.start, end_date=args.end, include_events=False)
+    result = upload_sessions(
+        client,
+        db,
+        sessions,
+        start_date=args.start,
+        end_date=args.end,
+        dry_run=args.dry_run,
+    )
+    _print_upload_summary(result, args.dry_run)
+
+
 def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
     """Abort a stale run in another project's DB and close its Odoo anchor."""
     result = AbortRunCommand(client).execute(args.project_hash, args.run_id)
@@ -474,6 +535,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default="git,github,odoo",
         help="Comma-separated subset of git,github,odoo (default: all three)",
     )
+
+    upload_p = subparsers.add_parser(
+        "upload", help="Bill derived sessions to Odoo (headless TUI upload path)"
+    )
+    upload_p.add_argument(
+        "--start",
+        type=_parse_iso_date,
+        default=None,
+        help="Inclusive ISO start date (YYYY-MM-DD)",
+    )
+    upload_p.add_argument(
+        "--end",
+        type=_parse_iso_date,
+        default=None,
+        help="Inclusive ISO end date (YYYY-MM-DD)",
+    )
+    upload_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview the billable sessions without writing to Odoo",
+    )
     return parser
 
 
@@ -503,6 +586,8 @@ def _dispatch(
         cmd_normalize(db, args, OdooClient())
     elif args.command == "abort":
         cmd_abort(args, OdooClient())
+    elif args.command == "upload":
+        cmd_upload(args, db, OdooClient())
     else:
         parser.print_help()
         sys.exit(1)

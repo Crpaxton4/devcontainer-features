@@ -1,10 +1,11 @@
 """Tests for the single-owner timesheet module (issue #181).
 
 The unified module is the sole writer of ``account.analytic.line``. These tests
-assert its two idempotent operations behave — anchor adoption (kills #177) and
-the idempotent reconcile upsert — plus the AGENT event producer (#180). A fake
-:class:`OdooExecutor` records calls so the scalar-id / adopt-not-duplicate
-guarantees are checked at the wire level.
+assert its idempotent operations behave — anchor adoption (kills #177) and the
+idempotent per-session reconcile upsert (:func:`reconcile_session`, the sole
+derived-upload hours-writer) — plus the orphan sweep (#353) and the AGENT event
+producer (#180). A fake :class:`OdooExecutor` records calls so the scalar-id /
+adopt-not-duplicate guarantees are checked at the wire level.
 """
 
 import tempfile
@@ -22,7 +23,6 @@ from odoo_sdk.utilities.timesheet import (
     ORPHANED_UPLOAD_NAME,
     emit_agent_event,
     ensure_anchor,
-    reconcile,
     reconcile_session,
     resolve_employee_id,
     sweep_orphaned_uploads,
@@ -64,9 +64,6 @@ class _AnchorExecutor(OdooExecutor):
 
     def creates(self) -> list[tuple]:
         return [c for c in self.calls if c[1] == "create"]
-
-    def writes(self) -> list[tuple]:
-        return [c for c in self.calls if c[1] == "write"]
 
 
 class TestEnsureAnchor(unittest.TestCase):
@@ -142,78 +139,6 @@ class TestEnsureAnchor(unittest.TestCase):
         domain = search[2][0]
         self.assertIn(("task_id", "=", 42), domain)
         self.assertIn(("name", "=", ANCHOR_NAME), domain)
-
-
-class TestReconcile(unittest.TestCase):
-    def test_writes_hours_and_description_onto_active_anchor(self):
-        executor = _AnchorExecutor()
-        client = OdooClient(executor=executor)
-        db = _tmp_db()
-        db.create_run(10, "Bug", 5, "Proj", timesheet_id=50)
-        result = reconcile(client, db, task_id=10, description="[/] Done", elapsed_hours=1.5)
-        self.assertEqual(result, 50)
-        writes = executor.writes()
-        self.assertEqual(len(writes), 1)
-        ids_arg, vals_arg = writes[0][2]
-        self.assertEqual(ids_arg, [50])
-        self.assertEqual(vals_arg, {"unit_amount": 1.5, "name": "[/] Done"})
-
-    def test_falls_back_to_odoo_lookup_when_no_active_session(self):
-        # Reconcile from a TUI upload has no active FSM session; it must resolve
-        # the anchor from Odoo and still write the single row.
-        executor = _AnchorExecutor(existing=[{"id": 88}])
-        client = OdooClient(executor=executor)
-        db = _tmp_db()
-        result = reconcile(client, db, task_id=10, description="[/] X", elapsed_hours=2.0)
-        self.assertEqual(result, 88)
-        self.assertEqual(len(executor.writes()), 1)
-
-    def test_no_op_when_no_anchor_found(self):
-        executor = _AnchorExecutor(existing=[])
-        client = OdooClient(executor=executor)
-        db = _tmp_db()
-        result = reconcile(client, db, task_id=10, description="[/] X", elapsed_hours=2.0)
-        self.assertIsNone(result)
-        self.assertEqual(executor.writes(), [])
-
-    def test_reconcile_is_idempotent_single_row(self):
-        # Re-running reconcile writes the same one anchor row, never a new one.
-        executor = _AnchorExecutor()
-        client = OdooClient(executor=executor)
-        db = _tmp_db()
-        db.create_run(10, "Bug", 5, "Proj", timesheet_id=50)
-        reconcile(client, db, task_id=10, description="[/] A", elapsed_hours=1.0)
-        reconcile(client, db, task_id=10, description="[/] B", elapsed_hours=2.0)
-        writes = executor.writes()
-        self.assertEqual(len(writes), 2)
-        for write in writes:
-            self.assertEqual(write[2][0], [50])  # same id both times
-        self.assertEqual(executor.creates(), [])  # never creates
-
-    def test_write_ids_are_flat_scalars_not_nested_lists(self):
-        # Regression for #193 (resurfaced #176/#167): the upload path's reconcile
-        # -> ``account.analytic.line.write`` must pass the ids as a FLAT list of
-        # scalar ints. A double-wrapped ``[[id]]`` makes Odoo ``browse([[id]])``,
-        # so ``record._ids[0]`` is itself a list; the stock timesheet write hashes
-        # it as a field-cache key and dies with ``TypeError: unhashable type:
-        # 'list'``. The strict fake below mimics that browse-and-hash exactly.
-        executor = _StrictBrowseHashExecutor()
-        client = OdooClient(executor=executor)
-        db = _tmp_db()
-        db.create_run(10, "Bug", 5, "Proj", timesheet_id=50)
-
-        # The old ``[[50]]`` shape would raise here; the fix keeps it flat.
-        result = reconcile(
-            client, db, task_id=10, description="[/] Done", elapsed_hours=1.5
-        )
-
-        self.assertEqual(result, 50)
-        ids_arg = executor.write_ids
-        self.assertEqual(ids_arg, [50])
-        # Every id handed to ``write`` must be a hashable scalar, never a list.
-        for rec_id in ids_arg:
-            self.assertNotIsInstance(rec_id, list)
-            self.assertIsInstance(rec_id, int)
 
 
 class _StrictBrowseHashExecutor(OdooExecutor):
@@ -387,6 +312,35 @@ class TestReconcileSession(unittest.TestCase):
         last_write = executor.by_method("write")[-1]
         self.assertEqual(last_write[2][0], [500])
         self.assertEqual(last_write[2][1]["unit_amount"], 2.5)
+
+    def test_write_ids_are_flat_scalars_not_nested_lists(self):
+        # Regression for #193 (resurfaced #176/#167): the upload path's
+        # ``reconcile_session`` -> ``account.analytic.line.write`` must pass the
+        # ids as a FLAT list of scalar ints. A double-wrapped ``[[id]]`` makes
+        # Odoo ``browse([[id]])`` so ``record._ids[0]`` is itself a list; the
+        # stock timesheet write hashes it as a field-cache key and dies with
+        # ``TypeError: unhashable type: 'list'``. The strict fake reproduces
+        # that browse-and-hash exactly; the mapped-row branch drives the write.
+        executor = _StrictBrowseHashExecutor()
+        client = OdooClient(executor=executor)
+        db = _tmp_db()
+        db.record_session_upload("10|1", 50, 1.0)
+
+        # The old ``[[50]]`` shape would raise here; the fix keeps it flat.
+        result = reconcile_session(
+            client, db, task_id=10, session_key="10|1",
+            description="[/] Done", hours=1.5,
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
+        )
+
+        self.assertEqual(result, 50)
+        ids_arg = executor.write_ids
+        self.assertEqual(ids_arg, [50])
+        # Every id handed to ``write`` must be a hashable scalar, never a list.
+        for rec_id in ids_arg:
+            self.assertNotIsInstance(rec_id, list)
+            self.assertIsInstance(rec_id, int)
 
 
 class _SweepExecutor(OdooExecutor):
