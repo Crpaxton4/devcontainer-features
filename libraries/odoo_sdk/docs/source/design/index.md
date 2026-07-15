@@ -9,6 +9,7 @@ implementation PRDs that drove the current codebase.
 
 odoo-sdk-architecture-plan
 odoo-sdk-design-patterns
+task-tracker/fsm
 ```
 
 ```{toctree}

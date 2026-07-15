@@ -36,10 +36,10 @@ help:
 # ─────────────────────────────────────────────
 
 html:
-	$(SPHINX_CMD_BUILD) -b html $(SPHINX_SOURCE_DIR) $(SPHINX_BUILD_DIR)
+	$(SPHINX_CMD_BUILD) $(SPHINX_CMD_OPTS) -b html $(SPHINX_SOURCE_DIR) $(SPHINX_BUILD_DIR)
 
 linkcheck:
-	$(SPHINX_CMD_BUILD) -b linkcheck $(SPHINX_SOURCE_DIR) $(SPHINX_BUILD_DIR)
+	$(SPHINX_CMD_BUILD) $(SPHINX_CMD_OPTS) -b linkcheck $(SPHINX_SOURCE_DIR) $(SPHINX_BUILD_DIR)
 
 docs: linkcheck html
 
