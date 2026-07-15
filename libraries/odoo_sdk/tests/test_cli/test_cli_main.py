@@ -9,10 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import LocalStateClient as TaskStateDB
+from odoo_sdk.state import TaskState
 from tests.support import make_state_db
 
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
+STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
 
 
 def _tmp_db() -> TaskStateDB:
@@ -74,11 +76,25 @@ class TestCmdStop(unittest.TestCase):
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.update_timesheet") as mock_update,
+            patch(STOP_GUARD),
         ):
             cli.cmd_stop(db, args, client)
-        mock_update.assert_called_once()
         self.assertIn("Stopped", captured.getvalue())
+        self.assertEqual(db.get_run_by_id(run_id).state, TaskState.STOPPED)
+
+    def test_stop_writes_no_timesheet_hours(self):
+        # Regression (#402/#403): the CLI stop path routes through
+        # StopTaskCommand, which never writes account.analytic.line hours — the
+        # upload path owns unit_amount. The run carries a timesheet id, yet no
+        # Odoo write may be attempted.
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
+        run_id = db.get_active_run(1).id
+        args = MagicMock(run_id=run_id)
+        client = _client()
+        with patch("sys.stdout", StringIO()), patch(STOP_GUARD):
+            cli.cmd_stop(db, args, client)
+        client.execute.assert_not_called()
 
     def test_skips_already_stopped(self):
         db = _tmp_db()
@@ -86,25 +102,18 @@ class TestCmdStop(unittest.TestCase):
         db.stop_run(1)
         run_id = db.get_run_by_id(1).id
         args = MagicMock(run_id=run_id)
+        client = _client()
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_stop(db, args, _client())
+            cli.cmd_stop(db, args, client)
         self.assertIn("already stopped", captured.getvalue())
+        client.execute.assert_not_called()
 
     def test_exits_for_unknown_run(self):
         db = _tmp_db()
         args = MagicMock(run_id=9999)
         with self.assertRaises(SystemExit):
             cli.cmd_stop(db, args, _client())
-
-    def test_skips_timesheet_update_when_no_timesheet(self):
-        db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
-        run_id = db.get_active_run(1).id
-        args = MagicMock(run_id=run_id)
-        with patch("odoo_sdk.cli.__main__.update_timesheet") as mock_update:
-            cli.cmd_stop(db, args, _client())
-        mock_update.assert_not_called()
 
 
 # ── cmd_stop_all ──────────────────────────────────────────────────────────────
@@ -123,14 +132,27 @@ class TestCmdStopAll(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
         args = MagicMock()
+        client = _client()
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.update_timesheet"),
+            patch(STOP_GUARD),
         ):
-            cli.cmd_stop_all(db, args, _client())
+            cli.cmd_stop_all(db, args, client)
         self.assertIn("Stopped", captured.getvalue())
         self.assertEqual(len(db.get_all_active_runs()), 0)
+
+    def test_stop_all_writes_no_timesheet_hours(self):
+        # Regression (#402/#403): stop-all bills no hours at stop time; the
+        # upload path owns account.analytic.line unit_amount for every surface.
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
+        args = MagicMock()
+        client = _client()
+        with patch("sys.stdout", StringIO()), patch(STOP_GUARD):
+            cli.cmd_stop_all(db, args, client)
+        client.execute.assert_not_called()
 
 
 # ── cmd_report ────────────────────────────────────────────────────────────────
@@ -271,8 +293,8 @@ class TestMain(unittest.TestCase):
         with (
             patch("sys.stdout", captured),
             patch("odoo_sdk.cli.__main__.OdooClient"),
-            patch("odoo_sdk.cli.__main__.update_timesheet"),
             patch(ASSERT_GUARD),
+            patch(STOP_GUARD),
             patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
             patch("sys.argv", ["odoo_sdk.cli", "stop", str(run_id)]),
         ):

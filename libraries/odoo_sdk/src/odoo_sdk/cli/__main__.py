@@ -39,6 +39,7 @@ from odoo_sdk.adapters import (
 from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
+from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import EventRecord, LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
@@ -49,7 +50,7 @@ from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
 )
-from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
+from odoo_sdk.utilities.odoo_helpers import merge_timesheets
 from odoo_sdk.utilities.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.utilities.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
@@ -104,6 +105,14 @@ def cmd_list(db: TaskStateDB, _args: argparse.Namespace) -> None:
 
 
 def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
+    """Force-stop one active run through the shared :class:`StopTaskCommand`.
+
+    Routing through the command keeps the "upload owns hours" invariant: stopping
+    a run only transitions it to STOPPED and records local session data — it never
+    writes ``account.analytic.line`` ``unit_amount`` hours. The elapsed wall-clock
+    is billed later by the upload/reconcile path (minimum floor + step rounding),
+    so the same run bills identically whether stopped here or via the MCP tool.
+    """
     run_id: int = args.run_id
     run = db.get_run_by_id(run_id)
     if run is None:
@@ -114,26 +123,27 @@ def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> N
         return
 
     description = "[/] Run ended via CLI force-stop"
-    if run.timesheet_id is not None:
-        update_timesheet(client, run.timesheet_id, run.elapsed_hours, description)
-
-    stopped = db.stop_run(run.task_id)
+    result = StopTaskCommand(client, state=db).execute(run.task_id, description)
     print(
-        f"Stopped run {run_id}: {stopped.task_name!r}  "
-        f"elapsed={stopped.elapsed_human}"
+        f"Stopped run {run_id}: {result['task_name']!r}  "
+        f"elapsed={result['elapsed']}"
     )
 
 
 def cmd_stop_all(db: TaskStateDB, _args: argparse.Namespace, client: OdooClient) -> None:
+    """Force-stop every active run through the shared :class:`StopTaskCommand`.
+
+    As with :func:`cmd_stop`, each stop only transitions the run to STOPPED and
+    never writes timesheet hours; the upload path owns all ``unit_amount`` writes.
+    """
     runs = db.get_all_active_runs()
     if not runs:
         print("Nothing to stop.")
         return
     description = "[/] Run ended via CLI force-stop"
+    command = StopTaskCommand(client, state=db)
     for r in runs:
-        if r.timesheet_id is not None:
-            update_timesheet(client, r.timesheet_id, r.elapsed_hours, description)
-        db.stop_run(r.task_id)
+        command.execute(r.task_id, description)
         print(f"Stopped run {r.id}: {r.task_name!r}  elapsed={r.elapsed_human}")
 
 
