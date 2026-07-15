@@ -1,8 +1,11 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from odoo_sdk.sessionization import (
     EventType,
+    SessionizationConfig,
+    TimeEntry,
     billable_events,
     build_window_entries,
     sweep,
@@ -11,6 +14,8 @@ from odoo_sdk.sessionization import (
 )
 
 from ._helpers import one_day_config, raw_event
+
+UTC = timezone.utc
 
 
 class TestBillableEvents(unittest.TestCase):
@@ -65,6 +70,29 @@ class TestTargetDayTotals(unittest.TestCase):
         entries = build_window_entries(events, 3600, cfg)
         totals = target_day_totals(entries, cfg)
         self.assertEqual(set(totals), set(cfg.target_dates))
+
+    def test_day_bucket_zone_moves_a_midnight_crossing_session(self):
+        # Issue #378 item 11: the same 04:00-04:45 UTC entry buckets to 07-01 in
+        # US Central (23:00-23:45 CDT) but to 07-02 in UTC — the configured zone,
+        # not a hardcoded offset, decides the day.
+        entry = TimeEntry(
+            task_id="24648",
+            repo="owner/repo",
+            pr_num=0,
+            start=datetime(2026, 7, 2, 4, 0, tzinfo=UTC),
+            end=datetime(2026, 7, 2, 4, 45, tzinfo=UTC),
+        )
+        base = {"start_date": date(2026, 7, 1), "end_date": date(2026, 7, 2)}
+        central = SessionizationConfig(day_bucket_tz=ZoneInfo("America/Chicago"), **base)
+        utc = SessionizationConfig(day_bucket_tz=ZoneInfo("UTC"), **base)
+
+        central_totals = target_day_totals([entry], central)
+        utc_totals = target_day_totals([entry], utc)
+
+        self.assertEqual(central_totals[date(2026, 7, 1)], 45 * 60.0)
+        self.assertEqual(central_totals[date(2026, 7, 2)], 0.0)
+        self.assertEqual(utc_totals[date(2026, 7, 1)], 0.0)
+        self.assertEqual(utc_totals[date(2026, 7, 2)], 45 * 60.0)
 
 
 class TestTransform(unittest.TestCase):

@@ -82,11 +82,11 @@ class ResyncCommand(Command):
         selected = _parse_sources(sources)
         summary: dict[str, Any] = {}
         if "git" in selected:
-            summary["git"] = sync_git_log(self.state)
+            summary["git"] = sync_git_log(self.state, self.config, self._client)
         if "github" in selected:
-            summary["github"] = sync_github(self.state)
+            summary["github"] = sync_github(self.state, self.config, self._client)
         if "odoo" in selected:
-            summary["odoo"] = sync_odoo_chatter(self._client, self.state)
+            summary["odoo"] = sync_odoo_chatter(self._client, self.state, self.config)
         if "gcal" in selected:
             summary["gcal"] = sync_google_calendar(self.state, self.config)
         if "gmail" in selected:

@@ -10,14 +10,14 @@ state adapter).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 
 from .models import (
     DEFAULT_BILLING_STEP_MINS,
     DEFAULT_MIN_TASK_MINUTES,
     DEFAULT_WINDOW_GAP_SECS,
-    ET,
     SessionStrategyConfig,
+    resolve_day_bucket_tz,
 )
 from .strategies import DEFAULT_SESSION_STRATEGY_CONFIGS
 
@@ -64,6 +64,12 @@ class SessionizationConfig:
         default_factory=lambda: DEFAULT_SESSION_STRATEGY_CONFIGS
     )
 
+    # Day-bucketing timezone (issue #378 item 11). Resolved from the standard
+    # config resolver by default (``[behavior] day_bucket_tz``, default US
+    # Central); the pure Transform phase reads the zone from here so bucketing is
+    # config-driven without this module touching the state layer at import.
+    day_bucket_tz: tzinfo = field(default_factory=resolve_day_bucket_tz)
+
     def __post_init__(self) -> None:
         """Enforce the monotonicity precondition on the sweep minimum gap.
 
@@ -81,19 +87,21 @@ class SessionizationConfig:
 
     @property
     def range_start(self) -> datetime:
-        """Return midnight ET on ``start_date`` (tz-aware)."""
+        """Return midnight on ``start_date`` in the day-bucketing zone (tz-aware)."""
         return datetime(
             self.start_date.year,
             self.start_date.month,
             self.start_date.day,
-            tzinfo=ET,
+            tzinfo=self.day_bucket_tz,
         )
 
     @property
     def range_end(self) -> datetime:
-        """Return midnight ET on the day after ``end_date`` (half-open)."""
+        """Return midnight on the day after ``end_date`` (half-open, tz-aware)."""
         next_day = self.end_date + timedelta(days=1)
-        return datetime(next_day.year, next_day.month, next_day.day, tzinfo=ET)
+        return datetime(
+            next_day.year, next_day.month, next_day.day, tzinfo=self.day_bucket_tz
+        )
 
     @property
     def num_days(self) -> int:

@@ -15,7 +15,7 @@ from typing import Callable, Mapping, Optional
 
 from .config import SessionizationConfig
 from .formatting import business_context, is_numeric_id
-from .models import ET, SessionStrategyConfig, TimeEntry, TransformResult
+from .models import SessionStrategyConfig, TimeEntry, TransformResult
 from .strategies import DEFAULT_SESSION_STRATEGY_CONFIGS
 
 AI_DESCRIPTION_PREFIX = "[/]"
@@ -87,7 +87,7 @@ def entry_to_csv_row(
     qty = (entry.end - entry.start).total_seconds() / 3600.0
     task_id = entry.task_id if is_numeric_id(entry.task_id) else ""
     return {
-        "Date": entry.start.astimezone(ET).strftime("%Y-%m-%d"),
+        "Date": entry.start.astimezone(config.day_bucket_tz).strftime("%Y-%m-%d"),
         "Description": _resolve_description(entry, provider),
         "Project/ID": entry.repo,
         "Task/ID": task_id,

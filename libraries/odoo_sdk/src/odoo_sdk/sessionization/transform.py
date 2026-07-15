@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from .config import SessionizationConfig
-from .models import ET, RawEvent, SweepResults, TimeEntry, TransformResult
+from .models import RawEvent, SweepResults, TimeEntry, TransformResult
 from .scoring import score_day
 from .strategies import make_sessionization_context
 
@@ -35,15 +35,16 @@ def billable_events(events: list[RawEvent]) -> list[RawEvent]:
 def _target_day_totals(
     entries: list[TimeEntry], config: SessionizationConfig
 ) -> dict[date, float]:
-    """Return target-date totals, splitting windows at ET midnight."""
+    """Return target-date totals, splitting windows at day-bucket-zone midnight."""
+    tz = config.day_bucket_tz
     totals = {target_date: 0.0 for target_date in config.target_dates}
     for entry in entries:
-        cursor = entry.start.astimezone(ET)
-        end = entry.end.astimezone(ET)
+        cursor = entry.start.astimezone(tz)
+        end = entry.end.astimezone(tz)
         while cursor < end:
             next_day = cursor.date() + timedelta(days=1)
             midnight = datetime(
-                next_day.year, next_day.month, next_day.day, tzinfo=ET
+                next_day.year, next_day.month, next_day.day, tzinfo=tz
             )
             segment_end = min(end, midnight)
             if cursor.date() in totals:
