@@ -97,7 +97,12 @@ class OptimizeSessionsCommand(Command):
         :return: A summary dict with the best gap, score, totals, and counts.
         """
         config = _build_config(start_date, end_date, overrides)
-        events = load_raw_events(self.state, config.range_start, config.range_end)
+        events = load_raw_events(
+            self.state,
+            config.range_start,
+            config.range_end,
+            exclude_synthetic=True,
+        )
         result = transform(events, config)
         return {
             "best_gap_mins": result.sweep.best_gap,

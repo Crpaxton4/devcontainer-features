@@ -71,6 +71,57 @@ class TestCmdResync(unittest.TestCase):
         # devcontainer; the guard lives in the odoo path only.
         self.assertIn("resync", cli._LOCAL_ONLY)
 
+    def test_google_sources_opt_in_only(self):
+        # gcal/gmail are never reached by the default source string.
+        git = MagicMock(return_value={"inserted": 0})
+        cal = MagicMock()
+        out = self._run(
+            ["resync"],
+            sync_git_log=git,
+            sync_github=MagicMock(return_value={"inserted": 0}),
+            sync_odoo_chatter=MagicMock(return_value={"inserted": 0}),
+            assert_odoo_devcontainer=MagicMock(),
+            OdooClient=MagicMock(),
+            sync_google_calendar=cal,
+        )
+        cal.assert_not_called()
+        self.assertNotIn("gcal", out)
+
+    def test_gcal_runs_when_requested(self):
+        cal = MagicMock(return_value={"inserted": 13})
+        out = self._run(
+            ["resync", "--sources", "gcal"],
+            sync_google_calendar=cal,
+            LocalConfig=MagicMock(),
+        )
+        cal.assert_called_once()
+        self.assertEqual(out.strip(), "gcal: inserted 13")
+
+    def test_google_auth_error_surfaces_as_skip_line(self):
+        # A missing/expired credential raises; the CLI shows the actionable
+        # message as this source's skip reason instead of aborting the resync.
+        from odoo_sdk.adapters import GoogleAuthError
+
+        cal = MagicMock(side_effect=GoogleAuthError("no token at /x; re-run helper"))
+        out = self._run(
+            ["resync", "--sources", "gcal"],
+            sync_google_calendar=cal,
+            LocalConfig=MagicMock(),
+        )
+        self.assertIn("gcal: skipped (no token at /x; re-run helper)", out)
+
+    def test_google_api_error_surfaces_as_skip_line(self):
+        # A transient REST failure must not abort the whole resync either.
+        from odoo_sdk.adapters import GoogleAPIError
+
+        mail = MagicMock(side_effect=GoogleAPIError("GET ... failed: timeout"))
+        out = self._run(
+            ["resync", "--sources", "gmail"],
+            sync_gmail=mail,
+            LocalConfig=MagicMock(),
+        )
+        self.assertIn("gmail: skipped (GET ... failed: timeout)", out)
+
 
 def _apply(patches):
     """Context manager applying a dict of ``name -> mock`` patches on the CLI."""

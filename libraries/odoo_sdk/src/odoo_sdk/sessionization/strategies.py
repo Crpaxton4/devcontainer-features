@@ -147,7 +147,14 @@ DEFAULT_SESSION_STRATEGY_CONFIGS: tuple[SessionStrategyConfig, ...] = (
     SessionStrategyConfig(
         "development",
         "Development",
-        (EventType.COMMIT, EventType.AGENT, EventType.CLAUDE_HOOK, EventType.CHATTER),
+        (
+            EventType.COMMIT,
+            EventType.AGENT,
+            EventType.CLAUDE_HOOK,
+            EventType.CHATTER,
+            EventType.CALENDAR,
+            EventType.EMAIL,
+        ),
         "session",
         ("strategy", "repo", "task_id"),
         sweep_enabled=True,
