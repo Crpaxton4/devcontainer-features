@@ -9,8 +9,8 @@ node_modules/
 **/__pycache__/
 *.py[cod]
 .venv/
-docs/build/
-libraries/docs/odoo_sdk/source/api/
+libraries/odoo_sdk/docs/build/
+libraries/odoo_sdk/docs/source/api/
 .hypothesis/
 .cosmic-ray/
 reports/
