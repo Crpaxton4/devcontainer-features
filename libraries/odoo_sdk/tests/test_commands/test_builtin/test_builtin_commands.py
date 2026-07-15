@@ -170,6 +170,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "resync",
         "timesheet_summary",
         "unbilled_hours",
+        "unlogged_time_report",
     }
 )
 

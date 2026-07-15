@@ -778,6 +778,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "resync": (),
             "timesheet_summary": ("2026-07-01", "2026-07-31"),
             "unbilled_hours": (),
+            "unlogged_time_report": ("2026-07-01", "2026-07-15"),
         }
         # Pin the atomic tool set to this explicit map so a dropped or renamed
         # @atomic_tool decorator fails here instead of silently going untested.

@@ -483,6 +483,52 @@ def make_unbilled_hours_tool(registry: Registry):
     return unbilled_hours
 
 
+@atomic_tool("unlogged_time_report")
+def make_unlogged_time_report_tool(registry: Registry):
+    def unlogged_time_report(
+        start_date: str,
+        end_date: str,
+        only_mine: bool = True,
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        """Reconcile derived-vs-logged hours per day and task (read-only).
+
+        Answers the question the manual reconciliation answered: over an
+        inclusive ``YYYY-MM-DD`` window, how do the hours an upload *would* bill
+        (derived from the event stream, through the same session derivation and
+        billing transform an upload applies — the min-session floor and rounding,
+        the aborted-run exclusion, the non-numeric-task skip) compare against the
+        hours *already logged* in Odoo (``account.analytic.line``)?
+
+        Read-only: it writes nothing, uploads nothing, and materializes no
+        session state — the derived side is a local dry-run bill, and only the
+        logged-hours read touches Odoo.
+
+        Each derived session is bucketed onto its start day (the day an upload
+        would bill it). The result carries the echoed window, ``only_mine`` /
+        ``include_all`` flags, ``unit`` (always ``"hours"``), a ``days`` list —
+        each ``{day, rows, derived_hours, logged_hours, delta}`` where every row
+        is ``{day, task_id, task, derived_hours, logged_hours, delta}`` — and the
+        window ``total_derived_hours`` / ``total_logged_hours`` /
+        ``total_delta_hours``.
+
+        By default only rows with a nonzero delta are returned (the unlogged or
+        over-logged gaps); ``include_all=True`` keeps the reconciled zero-delta
+        rows too. Per-day and window totals always cover every cell.
+        ``only_mine=True`` (default) restricts logged hours to the authenticated
+        user's own employee timesheets. An empty window returns an empty report;
+        an unreachable Odoo raises a single clear error.
+        """
+        return registry["unlogged_time_report"].execute(
+            start_date,
+            end_date,
+            only_mine=only_mine,
+            include_all=include_all,
+        )
+
+    return unlogged_time_report
+
+
 @atomic_tool("query_sessions")
 def make_query_sessions_tool(registry: Registry):
     def query_sessions(
