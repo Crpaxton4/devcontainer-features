@@ -32,9 +32,21 @@ FEATURE_JSON = FEATURE_DIR / "devcontainer-feature.json"
 # only the home-relative tail, so we re-add the prefix when comparing.
 LOCAL_ENV_PREFIX = "${localEnv:HOME}${localEnv:USERPROFILE}/"
 
-COLUMNS = ("name", "host_source", "container_target", "env_var", "env_value", "mode")
+COLUMNS = (
+    "name",
+    "host_source",
+    "container_target",
+    "env_var",
+    "env_value",
+    "mode",
+    "provision",
+)
 # Placeholder used in env_var/env_value for a row that has no container env var.
 NONE = "-"
+# Allowed values of the `provision` column: `container` = install.sh creates the
+# target at build time; `host` = the host provisions it and install.sh must not
+# (#369). Any other value is a manifest error.
+PROVISIONERS = ("container", "host")
 
 
 def load_manifest(path: Path = MANIFEST) -> list[dict]:
@@ -61,6 +73,11 @@ def load_manifest(path: Path = MANIFEST) -> list[dict]:
                 f"{path}:{lineno}: host_source and container_target disagree on the "
                 f"trailing-slash dir/file marker (both must be a directory or both a "
                 f"file): {row['host_source']!r} vs {row['container_target']!r}"
+            )
+        if row["provision"] not in PROVISIONERS:
+            raise ValueError(
+                f"{path}:{lineno}: provision must be one of {PROVISIONERS}, got "
+                f"{row['provision']!r}"
             )
         rows.append(row)
     if not rows:

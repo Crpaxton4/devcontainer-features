@@ -27,6 +27,7 @@ from odoo_sdk.utilities.timesheet import (
     resolve_employee_id,
     sweep_orphaned_uploads,
 )
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -34,7 +35,7 @@ UTC = timezone.utc
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 class _AnchorExecutor(OdooExecutor):

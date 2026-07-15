@@ -34,10 +34,10 @@ checker = _load_checker()
 
 # A minimal, self-consistent manifest + JSON pair used by the synthetic tests.
 MANIFEST_ROWS = [
-    # name, host_source, container_target, env_var, env_value, mode
-    ["alpha", ".alpha/", "/opt/alpha/", "ALPHA_DIR", "/opt/alpha", "0755"],
-    ["beta", ".config/beta/", "/opt/beta/", "BETA_CONFIG", "/opt/beta/config.ini", "0755"],
-    ["hist", ".config/hist/", "/opt/hist/", "-", "-", "0755"],
+    # name, host_source, container_target, env_var, env_value, mode, provision
+    ["alpha", ".alpha/", "/opt/alpha/", "ALPHA_DIR", "/opt/alpha", "0755", "container"],
+    ["beta", ".config/beta/", "/opt/beta/", "BETA_CONFIG", "/opt/beta/config.ini", "0755", "container"],
+    ["hist", ".config/hist/", "/opt/hist/", "-", "-", "0755", "host"],
 ]
 
 FEATURE_JSON = {
@@ -58,7 +58,10 @@ FEATURE_JSON = {
 
 
 def _write_manifest(path: Path, rows):
-    header = "# name\thost_source\tcontainer_target\tenv_var\tenv_value\tmode\n"
+    header = (
+        "# name\thost_source\tcontainer_target\tenv_var\tenv_value\tmode"
+        "\tprovision\n"
+    )
     body = "".join("\t".join(r) + "\n" for r in rows)
     path.write_text(header + body)
 
@@ -93,7 +96,15 @@ class TestLoadManifest(unittest.TestCase):
         # (no slash): install.sh would touch a file while setup.sh mkdirs a dir.
         path = self.dir / "mixed.tsv"
         _write_manifest(
-            path, [["x", ".x/", "/opt/x", "-", "-", "0755"]]
+            path, [["x", ".x/", "/opt/x", "-", "-", "0755", "container"]]
+        )
+        with self.assertRaises(ValueError):
+            checker.load_manifest(path)
+
+    def test_rejects_unknown_provision(self):
+        path = self.dir / "prov.tsv"
+        _write_manifest(
+            path, [["x", ".x/", "/opt/x/", "-", "-", "0755", "bogus"]]
         )
         with self.assertRaises(ValueError):
             checker.load_manifest(path)

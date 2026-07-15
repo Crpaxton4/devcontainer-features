@@ -9,6 +9,7 @@ from odoo_sdk.commands.builtin.abort_task import AbortTaskCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskNotRunningError, TaskState
 from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
+from tests.support import make_state_db
 
 _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
 
@@ -16,7 +17,7 @@ _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
 def _tmp_db() -> TaskStateDB:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _client_with_anchor(name) -> MagicMock:

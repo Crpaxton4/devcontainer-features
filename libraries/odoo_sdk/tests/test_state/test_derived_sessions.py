@@ -14,6 +14,7 @@ from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient, session_key
 from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
+from tests.support import make_state_db
 
 UTC = timezone.utc
 GAP = 3600  # one hour
@@ -22,7 +23,7 @@ GAP = 3600  # one hour
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _event(

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 from odoo_sdk.commands.builtin import QuerySessionsCommand
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -15,7 +16,7 @@ UTC = timezone.utc
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _config(gap_mins: int = 60) -> LocalConfig:

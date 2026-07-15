@@ -1,31 +1,23 @@
-"""Tests for the ``events.external_id`` dedupe column and migration (issue #328).
+"""Tests for the ``events.external_id`` dedupe column (issue #328).
 
 Covers the ``add_event_dedup`` idempotency primitive, ``add_event`` returning the
-existing row on conflict, ``external_id`` round-tripping, and the guarded
-``_migrate_events_external_id`` migration (old DB gains the column, new DB is
-unaffected, repeated runs are no-ops).
+existing row on conflict, ``external_id`` round-tripping, and that the base schema
+(now the single canonical DDL, #369) carries the column and its partial unique
+index so a freshly provisioned DB is immediately dedupe-capable.
 """
 
 import sqlite3
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient
-from odoo_sdk.state.db import _migrate_events_external_id
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
 
-def _tmp_path() -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return Path(tmp.name)
-
-
 def _tmp_db() -> LocalStateClient:
-    return LocalStateClient(db_path=_tmp_path())
+    return make_state_db()
 
 
 def _event(ext_id=None, task="101") -> EventRecord:
@@ -50,6 +42,22 @@ class TestExternalIdColumn(unittest.TestCase):
         db = _tmp_db()
         stored = db.add_event(_event())
         self.assertIsNone(db.get_event(stored.id).external_id)
+
+    def test_base_schema_carries_column_and_partial_index(self) -> None:
+        db = _tmp_db()
+        conn = sqlite3.connect(str(db._db_path))
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+            indexes = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                )
+            }
+        finally:
+            conn.close()
+        self.assertIn("external_id", columns)
+        self.assertIn("idx_events_external_id", indexes)
 
 
 class TestAddEventDedup(unittest.TestCase):
@@ -80,61 +88,6 @@ class TestAddEventDedup(unittest.TestCase):
         self.assertEqual(again.id, first.id)
         self.assertEqual(again.task_ids, ["101"])
         self.assertEqual(db.count_events(), 1)
-
-
-class TestMigrationIdempotence(unittest.TestCase):
-    def _legacy_events_db(self) -> Path:
-        """Create a DB whose ``events`` table predates the external_id column."""
-        path = _tmp_path()
-        conn = sqlite3.connect(str(path))
-        conn.executescript(
-            "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "source TEXT NOT NULL, timestamp TEXT NOT NULL, "
-            "task_ids TEXT NOT NULL DEFAULT '[]', repo TEXT NOT NULL DEFAULT '', "
-            "pr_num INTEGER NOT NULL DEFAULT 0, branch TEXT NOT NULL DEFAULT '', "
-            "subject TEXT NOT NULL DEFAULT '', payload TEXT);"
-        )
-        conn.commit()
-        conn.close()
-        return path
-
-    def _columns(self, path: Path) -> set:
-        conn = sqlite3.connect(str(path))
-        try:
-            return {row[1] for row in conn.execute("PRAGMA table_info(events)")}
-        finally:
-            conn.close()
-
-    def test_old_db_gains_column(self) -> None:
-        path = self._legacy_events_db()
-        self.assertNotIn("external_id", self._columns(path))
-        conn = sqlite3.connect(str(path))
-        _migrate_events_external_id(conn)
-        conn.commit()
-        conn.close()
-        self.assertIn("external_id", self._columns(path))
-
-    def test_migration_runs_twice_without_error(self) -> None:
-        path = self._legacy_events_db()
-        conn = sqlite3.connect(str(path))
-        _migrate_events_external_id(conn)
-        _migrate_events_external_id(conn)  # idempotent: no duplicate column/index
-        conn.commit()
-        conn.close()
-        self.assertIn("external_id", self._columns(path))
-
-    def test_new_db_unaffected(self) -> None:
-        # A DB created through the normal schema already has the column; opening
-        # it (which re-runs the migration) leaves it usable and dedupe-capable.
-        db = _tmp_db()
-        self.assertIn("external_id", self._columns(db._db_path))
-        self.assertTrue(db.add_event_dedup(_event(ext_id="git:xyz")))
-
-    def test_legacy_db_becomes_dedupe_capable(self) -> None:
-        path = self._legacy_events_db()
-        db = LocalStateClient(db_path=path)  # runs the migration on open
-        self.assertTrue(db.add_event_dedup(_event(ext_id="git:abc")))
-        self.assertFalse(db.add_event_dedup(_event(ext_id="git:abc")))
 
 
 if __name__ == "__main__":

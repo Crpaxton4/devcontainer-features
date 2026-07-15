@@ -18,7 +18,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
-from odoo_sdk.state import EventRecord, LocalStateClient
+from odoo_sdk.state import EventRecord
+from tests.support import make_state_db
 
 _MOD = "odoo_sdk.cli.__main__"
 UTC = timezone.utc
@@ -35,7 +36,7 @@ def _seed_db():
     session, a recent session, and an untargeted aged diagnostic event."""
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    db = LocalStateClient(db_path=Path(tmp.name))
+    db = make_state_db(Path(tmp.name))
     now = datetime.now(UTC)
     aged = now - timedelta(days=_AGED_DAYS)
     recent = now - timedelta(days=_RECENT_DAYS)

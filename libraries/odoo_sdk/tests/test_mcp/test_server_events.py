@@ -18,12 +18,13 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.mcp import server as server_mod
 from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.state import LocalStateClient
+from tests.support import make_state_db
 
 
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _build_tools(registry, explicit_tools):

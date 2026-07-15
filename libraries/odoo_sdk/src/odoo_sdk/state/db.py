@@ -1,6 +1,5 @@
 """SQLite-backed FSM state for task time-tracking sessions."""
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -12,13 +11,19 @@ from typing import Optional
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
-    ProjectIdError,
     SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskRun,
     TaskState,
+    TrackerStateMissingError,
 )
+
+#: Filename of the single central tracker database under the state root (#369).
+#: There is exactly one host-provisioned DB per user — events, ``task_runs``, and
+#: the upload ledger all live in it — so ``repo`` is an ordinary column keyed on
+#: the normalized ``owner/repo`` label rather than a per-repo directory hash.
+TRACKER_DB_FILENAME = "tracker.db"
 
 # Repo-less agent events cannot key on a real repository, so they are grouped
 # under this reserved sentinel. It is a valid, stable group key (never a real
@@ -43,7 +48,25 @@ def _default_root() -> Path:
     return base / "odoo-task-tracker"
 
 
-_SCHEMA = """
+# Canonical schema for the central tracker DB (#369). This is the ONE authoritative
+# DDL: the SDK never creates state on connection open (a missing DB raises
+# :class:`TrackerStateMissingError`), so this DDL is applied only by the host
+# provisioning step (``scripts/init_tracker_db.py``, invoked by ``setup.sh`` /
+# ``setup.ps1``) and by :func:`create_schema` — which the test suite and that init
+# script are the only callers of. The stdlib-only init script embeds a verbatim
+# copy of this DDL (it cannot import the SDK on the host); an SDK parity test
+# asserts the two produce an identical ``sqlite_master`` so they can never drift.
+#
+# It carries EVERY column and index the pre-#369 per-repo DBs accumulated across
+# their migrations — ``task_runs.aborted_at`` (#356), ``events.external_id`` with
+# its partial unique dedupe index (resync), ``idx_events_timestamp`` (#359), and
+# the ``session_uploads`` ``task_id``/``started_at``/``ended_at`` orphan-discovery
+# columns (#353) — so a freshly provisioned DB is schema-identical to a migrated
+# one. There is no migration tooling: existing per-repo DBs were ephemeral and are
+# started fresh (#369). Every statement is ``IF NOT EXISTS`` so provisioning is
+# idempotent. Sessions are still derived from ``events`` at query time (see
+# ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
+SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS task_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id      INTEGER NOT NULL,
@@ -62,14 +85,7 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-"""
 
-
-# Unified event timeseries for the sessionization ETL. This is additive and
-# lives alongside the ``task_runs`` FSM above; it never modifies it. Sessions are
-# derived from these events at query time (see ``_DERIVE_SESSIONS_SQL``); there is
-# no materialized ``sessions`` table, so nothing here can go stale.
-_SESSIONIZATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source      TEXT    NOT NULL,
@@ -85,13 +101,9 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
 
--- Idempotency ledger for the SQL-derived per-session timesheet uploads. Each
--- derived session's stable key maps to the single account.analytic.line row it
--- was reconciled onto, so a re-upload rewrites that row rather than duplicating.
--- ``task_id`` and the ``started_at``/``ended_at`` window bounds (added #353) let
--- the upload sweep discover orphaned mappings: a mapping whose recorded window
--- overlaps the queried window but no longer derives has been merged away, so its
--- Odoo row is zeroed and the mapping retired instead of silently double-counting.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external_id
+    ON events(external_id) WHERE external_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS session_uploads (
     session_key  TEXT PRIMARY KEY,
     timesheet_id INTEGER NOT NULL,
@@ -102,6 +114,20 @@ CREATE TABLE IF NOT EXISTS session_uploads (
     ended_at     TEXT
 );
 """
+
+
+def create_schema(conn: sqlite3.Connection) -> None:
+    """Apply :data:`SCHEMA_DDL` to ``conn`` (host provisioning / tests only).
+
+    This is the ONLY sanctioned way to bring a tracker DB into existence, and it
+    is called from exactly two places: the host-side ``scripts/init_tracker_db.py``
+    (which embeds an identical DDL copy for stdlib-only host use) and the SDK test
+    suite's shared fixture. It is NEVER called on connection open — the SDK
+    consumes a host-provisioned, bind-mounted DB and refuses to self-create one
+    (:meth:`LocalStateClient._connect` raises :class:`TrackerStateMissingError`
+    when the file is absent). Idempotent: every statement is ``IF NOT EXISTS``.
+    """
+    conn.executescript(SCHEMA_DDL)
 
 
 # Sources whose events participate in gap-based sessionization. Matches the
@@ -220,17 +246,29 @@ def _derive_repo_label(remote_url: str) -> str:
     return cleaned or "(unknown)"
 
 
-def _resolve_project_identity() -> tuple[Path, str]:
-    """Return the ``(project_dir, remote_url)`` for the current git working tree.
+def tracker_db_path(root: Optional[Path] = None) -> Path:
+    """Return the path to the single central tracker DB (#369).
 
-    The project dir is ``<state-root>/<sha256(remote)[:16]>`` (created if
-    absent); the remote URL is returned alongside so callers can persist the
-    repo identity into the DB itself, curing the "orphaned DB keyed by an opaque
-    hash" problem (#331).
-
-    :raises ProjectIdError: When no git remote ``origin`` can be resolved.
+    ``<state-root>/tracker.db``, where the state root is ``root`` when given, else
+    the env-aware :func:`_resolve_state_root` (``ODOO_TASK_TRACKER_DIR`` → XDG).
+    No git remote is consulted and no directory is created: the DB is
+    host-provisioned and bind-mounted, so its location is fixed and its existence
+    is the host's responsibility, not the SDK's.
     """
-    root = _resolve_state_root()
+    base = Path(root) if root is not None else _resolve_state_root()
+    return base / TRACKER_DB_FILENAME
+
+
+def current_repo_label() -> str:
+    """Return the normalized ``owner/repo`` label for the cwd's git remote, or ''.
+
+    Best-effort display metadata for events written from a working tree (#369):
+    the repo no longer selects the database (there is one central DB), so a
+    non-git cwd or a missing remote is not an error — it simply yields ``""``,
+    which sessionizes under the repo-less sentinel. ssh and https clones of one
+    repo converge because :func:`_derive_repo_label` normalizes both URL shapes
+    to the same ``owner/repo``.
+    """
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -238,124 +276,19 @@ def _resolve_project_identity() -> tuple[Path, str]:
             text=True,
             check=True,
         )
-        remote_url = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        raise ProjectIdError(
-            "Could not determine project ID: no git remote 'origin' found. "
-            "Ensure the working directory is in a git repository with a remote."
-        )
-    project_hash = hashlib.sha256(remote_url.encode()).hexdigest()[:16]
-    project_dir = root / project_hash
-    project_dir.mkdir(parents=True, exist_ok=True)
-    return project_dir, remote_url
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return ""
+    label = _derive_repo_label(result.stdout.strip())
+    return "" if label == "(unknown)" else label
 
 
-def _get_project_dir() -> Path:
-    """Return only the resolved project dir (identity discarded)."""
-    project_dir, _ = _resolve_project_identity()
-    return project_dir
-
-
-def _migrate_drop_materialized_sessions(conn: sqlite3.Connection) -> None:
-    """Drop the legacy materialized ``sessions`` table if present.
-
-    Sessions are now derived from ``events`` at query time, so the materialized
-    ``sessions`` table (and the event → session link that fed it) is dead. This
-    drops the table on any DB created before the change. Idempotent:
-    ``DROP TABLE IF EXISTS`` is a no-op once the table is gone.
-
-    The orphaned ``events.session_id`` column is deliberately left in place on
-    old DBs: dropping it needs ``ALTER TABLE DROP COLUMN`` (SQLite ≥ 3.35) and
-    the column is never written nor selected. Crucially it also carries a legacy
-    ``REFERENCES sessions`` foreign key baked into the ``events`` CREATE
-    statement; enforcing that FK after the parent table is gone would make every
-    ``events`` INSERT fail. Foreign-key enforcement is therefore left off (see
-    :meth:`LocalStateClient._connect`) — the current schema declares no foreign
-    keys at all — so the stale column and its dangling reference are wholly
-    inert.
-    """
-    conn.execute("DROP TABLE IF EXISTS sessions")
-
-
-def _migrate_events_external_id(conn: sqlite3.Connection) -> None:
-    """Add the ``events.external_id`` dedupe column and its partial unique index.
-
-    The resync pullers key each ingested event on a stable external identity
-    (``git:<sha>``, ``gh:pr:<n>``, ``odoo:mail:<id>``) so a re-run never
-    duplicates. Databases created before resync lack the column; this adds it via
-    ``ALTER TABLE`` (guarded by a ``PRAGMA table_info`` probe, since SQLite has no
-    ``ADD COLUMN IF NOT EXISTS``) and creates the ``WHERE external_id IS NOT NULL``
-    partial unique index that enforces the ``INSERT OR IGNORE`` dedupe.
-
-    Idempotent: the column is added only when absent, and the index uses
-    ``IF NOT EXISTS``. New DBs already carry the column from
-    :data:`_SESSIONIZATION_SCHEMA`, so the ``ALTER`` is skipped for them.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
-    if "external_id" not in columns:
-        conn.execute("ALTER TABLE events ADD COLUMN external_id TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external_id "
-        "ON events(external_id) WHERE external_id IS NOT NULL"
+def _missing_state_message(db_path: Path) -> str:
+    """Return the single actionable message for an absent tracker DB (#369)."""
+    return (
+        f"No tracker database at {db_path}. This database is provisioned on the "
+        "host and bind-mounted into the container; it is not created "
+        "automatically. Run setup.sh on the host, then rebuild the container."
     )
-
-
-def _migrate_session_uploads_ledger(conn: sqlite3.Connection) -> None:
-    """Add the ``task_id``/``started_at``/``ended_at`` orphan-discovery columns.
-
-    The upload ledger historically stored only ``session_key -> timesheet_id``,
-    so a mapping that stopped deriving (its events merged into an adjacent
-    session under #353) was invisible and its Odoo row kept double-counted hours
-    forever. These three columns let the upload sweep window-scope each mapping
-    and retire the orphans. Databases created before #353 lack the columns; this
-    adds each via ``ALTER TABLE`` (guarded by a ``PRAGMA table_info`` probe, since
-    SQLite has no ``ADD COLUMN IF NOT EXISTS``). Existing rows keep ``NULL`` in the
-    new columns — deliberately: a NULL-bounds row is a legacy mapping the sweep
-    retires by task rather than by window (local DBs are ephemeral, so no
-    historical bounds are backfilled). New DBs already carry the columns from
-    :data:`_SESSIONIZATION_SCHEMA`, so the ``ALTER`` is skipped for them.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(session_uploads)")}
-    for name in ("task_id", "started_at", "ended_at"):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE session_uploads ADD COLUMN {name} TEXT")
-
-
-def _migrate_task_sessions_to_task_runs(conn: sqlite3.Connection) -> None:
-    """Rename a legacy ``task_sessions`` FSM table to ``task_runs`` in place.
-
-    The FSM "session" concept was renamed to "run" to free ``session_id`` for
-    the event-derived time-sessions. Databases created before the rename carry a
-    ``task_sessions`` table; this preserves their rows by renaming the table
-    rather than letting ``CREATE TABLE IF NOT EXISTS task_runs`` create an empty
-    one alongside it. It must run BEFORE the schema script so the rename happens
-    before ``task_runs`` would otherwise be created. Idempotent: it only renames
-    when ``task_sessions`` exists and ``task_runs`` does not.
-    """
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    if "task_sessions" in tables and "task_runs" not in tables:
-        conn.execute("ALTER TABLE task_sessions RENAME TO task_runs")
-
-
-def _migrate_task_runs_aborted_at(conn: sqlite3.Connection) -> None:
-    """Add the additive nullable ``task_runs.aborted_at`` abort-exclusion column.
-
-    A locally aborted run must never bill (#356): its abort instant is stamped
-    here so the upload path can skip any derived session lying wholly within the
-    run's ``[started_at, aborted_at]`` window. Databases created before #356 lack
-    the column; this adds it via ``ALTER TABLE`` (guarded by a ``PRAGMA
-    table_info`` probe, since SQLite has no ``ADD COLUMN IF NOT EXISTS``). The
-    column is deliberately *outside* the ``state`` CHECK constraint — widening
-    that constraint would need a full table rebuild — so an aborted run stays
-    ``state='STOPPED'`` and merely carries the extra stamp. New DBs already carry
-    the column from :data:`_SCHEMA`, so the ``ALTER`` is skipped for them.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
-    if "aborted_at" not in columns:
-        conn.execute("ALTER TABLE task_runs ADD COLUMN aborted_at TEXT")
 
 
 # Columns selected for every task_run read, in _parse_run order.
@@ -533,59 +466,44 @@ class LocalStateClient:
     """SQLite-backed state store for task tracking sessions."""
 
     def __init__(self, db_path: Optional[Path] = None):
-        remote_url: Optional[str] = None
-        if db_path is None:
-            project_dir, remote_url = _resolve_project_identity()
-            db_path = project_dir / "tasks.db"
-        self._db_path = db_path
-        self._init_schema()
-        # Only stamp identity when we resolved the project ourselves; an injected
-        # db_path (tests, discovery, cross-DB abort) must never be mutated with a
-        # remote it did not come from.
-        if remote_url is not None:
-            self._persist_identity(remote_url)
+        """Bind to a tracker DB path WITHOUT touching the filesystem (#369).
 
-    def _persist_identity(self, remote_url: str) -> None:
-        """Record ``repo_remote_url``/``repo_label`` once; never overwrite.
-
-        Written exactly once per DB on the first self-resolved construction so a
-        DB carries the human-readable identity of the repo it belongs to. Existing
-        values are left untouched, so re-opening a project never clobbers an
-        identity already on record.
+        No git remote is resolved, no directory is created, and no schema is
+        applied here — construction is inert. The database is host-provisioned and
+        bind-mounted; the SDK consumes it and refuses to create one. A missing DB
+        is not detected until the first :meth:`_connect`, which raises
+        :class:`TrackerStateMissingError`. ``db_path`` defaults to the single
+        central :func:`tracker_db_path`; tests and callers pass an explicit path.
         """
-        if self.get_setting("repo_remote_url") is None:
-            self.set_setting("repo_remote_url", remote_url)
-        if self.get_setting("repo_label") is None:
-            self.set_setting("repo_label", _derive_repo_label(remote_url))
+        self._db_path = Path(db_path) if db_path is not None else tracker_db_path()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path))
+        # The DB is host-provisioned state: the SDK NEVER creates it (#369). A
+        # missing file is a hard, actionable error, not a cue to materialize an
+        # empty DB — a self-created DB would be container-local, discarded on
+        # rebuild, and silently split one person's billing timeline. ``mode=rw``
+        # raises rather than creating a missing file; the explicit existence
+        # check turns that into the single named ``TrackerStateMissingError`` every
+        # entry point surfaces.
+        if not self._db_path.exists():
+            raise TrackerStateMissingError(_missing_state_message(self._db_path))
+        conn = sqlite3.connect(f"file:{self._db_path}?mode=rw", uri=True)
         conn.row_factory = sqlite3.Row
         # WAL lets a writer and readers proceed concurrently, and a 2s busy
         # timeout makes a second writer wait for the lock instead of failing
-        # instantly with "database is locked". Without these, concurrent writers
-        # (the claude-event-hook shim, MCP _emit_tool_event, the TUI) hit an
-        # immediate lock and silently drop the event (hook `|| true`, MCP
-        # try/except pass). WAL is a persistent property of the DB file; the
-        # busy timeout is per-connection and so must be set on every connect.
+        # instantly with "database is locked". With one central DB now taking
+        # cross-container writers (the claude-event-hook shim, MCP
+        # _emit_tool_event, the TUI), these are load-bearing rather than optional
+        # (#357). WAL is a persistent property of the DB file (set by the host
+        # provisioning step and re-asserted here); the busy timeout is
+        # per-connection and so must be set on every connect. WAL works on a
+        # Docker bind mount on Linux (Docker Desktop's gRPC-FUSE share is the only
+        # environment where it can misbehave — not our containers-on-Linux case).
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=2000")
         # Foreign-key enforcement is intentionally left at SQLite's default (off).
-        # The current schema declares no foreign keys, and legacy DBs still carry
-        # an orphaned ``events.session_id REFERENCES sessions`` column; enforcing
-        # that dangling FK after the migration drops ``sessions`` would break
-        # every ``events`` INSERT (see _migrate_drop_materialized_sessions).
+        # The current schema declares no foreign keys.
         return conn
-
-    def _init_schema(self) -> None:
-        with self._connect() as conn:
-            _migrate_task_sessions_to_task_runs(conn)
-            conn.executescript(_SCHEMA)
-            conn.executescript(_SESSIONIZATION_SCHEMA)
-            _migrate_drop_materialized_sessions(conn)
-            _migrate_events_external_id(conn)
-            _migrate_session_uploads_ledger(conn)
-            _migrate_task_runs_aborted_at(conn)
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
         with self._connect() as conn:
@@ -1045,8 +963,17 @@ class LocalStateClient:
         already committed), so a lock held by a concurrent writer — VACUUM needs an
         exclusive lock — is swallowed rather than turned into a spurious failure;
         the busy timeout gives that writer a chance to drain first.
+
+        This never creates the DB (#369): a ``VACUUM`` on a missing file would
+        materialize an empty one, so an absent DB is a best-effort no-op (the DB
+        provably exists whenever the prune that calls this has already committed).
+        The ``mode=rw`` URI also refuses to create a missing file.
         """
-        conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        if not self._db_path.exists():
+            return
+        conn = sqlite3.connect(
+            f"file:{self._db_path}?mode=rw", uri=True, isolation_level=None
+        )
         conn.execute("PRAGMA busy_timeout=2000")
         try:
             conn.execute("VACUUM")

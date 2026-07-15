@@ -1,5 +1,4 @@
 import sqlite3
-import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -8,22 +7,21 @@ from unittest.mock import patch
 
 from odoo_sdk.state.db import (
     LocalStateClient as TaskStateDB,
-    _get_project_dir,
+    tracker_db_path,
 )
 from odoo_sdk.state.models import (
     InvalidStateTransitionError,
-    ProjectIdError,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskRun,
     TaskState,
+    TrackerStateMissingError,
 )
+from tests.support import make_state_db
 
 
 def _tmp_db() -> TaskStateDB:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return TaskStateDB(db_path=Path(tmp.name))
+    return make_state_db()
 
 
 def _create(db: TaskStateDB, task_id: int = 1, timesheet_id: int = 100) -> TaskRun:
@@ -292,64 +290,9 @@ class TestTaskStateDBOtherOps(unittest.TestCase):
         self.assertEqual(r.timesheet_id, 20)  # type: ignore[union-attr]
 
 
-class TestTaskSessionsMigration(unittest.TestCase):
-    def test_legacy_task_sessions_rows_preserved_under_task_runs(self):
-        """A pre-rename DB with a populated ``task_sessions`` table has its rows
-        preserved under ``task_runs`` when opened by ``LocalStateClient``."""
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        db_path = Path(tmp.name)
-
-        # Build a legacy database with the old table name and one row.
-        started_at = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc).isoformat()
-        conn = sqlite3.connect(str(db_path))
-        conn.execute(
-            """
-            CREATE TABLE task_sessions (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id      INTEGER NOT NULL,
-                task_name    TEXT    NOT NULL,
-                project_id   INTEGER NOT NULL,
-                project_name TEXT    NOT NULL,
-                state        TEXT    NOT NULL,
-                started_at   TEXT    NOT NULL,
-                stopped_at   TEXT,
-                timesheet_id INTEGER,
-                notes        TEXT    NOT NULL DEFAULT '[]'
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO task_sessions (task_id, task_name, project_id, "
-            "project_name, state, started_at, timesheet_id, notes) "
-            "VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, '[]')",
-            (7, "Legacy Task", 3, "Legacy Project", started_at, 42),
-        )
-        conn.commit()
-        conn.close()
-
-        # Opening the store runs the migration.
-        db = TaskStateDB(db_path=db_path)
-
-        # The old table is gone and the row survives under task_runs.
-        with sqlite3.connect(str(db_path)) as check:
-            tables = {
-                row[0]
-                for row in check.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-        self.assertIn("task_runs", tables)
-        self.assertNotIn("task_sessions", tables)
-
-        run = db.get_active_run(7)
-        self.assertIsNotNone(run)
-        self.assertEqual(run.task_name, "Legacy Task")  # type: ignore[union-attr]
-        self.assertEqual(run.project_name, "Legacy Project")  # type: ignore[union-attr]
-        self.assertEqual(run.timesheet_id, 42)  # type: ignore[union-attr]
-
-    def test_migration_noop_leaves_new_db_with_task_runs(self):
-        """A fresh database creates ``task_runs`` directly (no legacy table)."""
+class TestSchema(unittest.TestCase):
+    def test_provisioned_db_carries_task_runs(self):
+        """A schema-provisioned DB has ``task_runs`` (and no legacy table)."""
         db = _tmp_db()
         with sqlite3.connect(str(db._db_path)) as check:
             tables = {
@@ -362,26 +305,29 @@ class TestTaskSessionsMigration(unittest.TestCase):
         self.assertNotIn("task_sessions", tables)
 
 
-class TestGetProjectDir(unittest.TestCase):
-    def test_raises_project_id_error_on_git_failure(self):
-        with patch(
-            "odoo_sdk.state.db.subprocess.run",
-            side_effect=subprocess.CalledProcessError(128, "git"),
-        ):
-            with self.assertRaises(ProjectIdError):
-                _get_project_dir()
+class TestTrackerDbPath(unittest.TestCase):
+    def test_central_db_is_tracker_db_under_state_root(self):
+        """The central DB is ``<state-root>/tracker.db`` — no per-repo hash."""
+        with patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": "/tmp/tt-test"}):
+            path = tracker_db_path()
+        self.assertEqual(path, Path("/tmp/tt-test/tracker.db"))
 
-    def test_creates_dir_from_remote_url(self):
-        mock_run = type("R", (), {"stdout": "git@github.com:org/repo.git\n"})()
-        with (
-            patch("odoo_sdk.state.db.subprocess.run", return_value=mock_run),
-            patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": "/tmp/tt-test"}),
-            patch("odoo_sdk.state.db.Path.mkdir"),
-        ):
-            path1 = _get_project_dir()
-            path2 = _get_project_dir()
-        self.assertEqual(len(path1.name), 16)
-        self.assertEqual(path1, path2)
+    def test_explicit_root_overrides_env(self):
+        self.assertEqual(
+            tracker_db_path(Path("/some/root")), Path("/some/root/tracker.db")
+        )
+
+
+class TestMissingStateRaises(unittest.TestCase):
+    def test_absent_db_raises_named_error_on_use(self):
+        """Binding is inert; the first operation raises TrackerStateMissingError."""
+        missing = Path(tempfile.mkdtemp()) / "absent" / "tracker.db"
+        db = TaskStateDB(db_path=missing)  # construction never touches the FS
+        with self.assertRaises(TrackerStateMissingError) as ctx:
+            db.get_all_active_runs()
+        self.assertIn(str(missing), str(ctx.exception))
+        # The SDK must NOT have created the file as a side effect.
+        self.assertFalse(missing.exists())
 
 
 if __name__ == "__main__":

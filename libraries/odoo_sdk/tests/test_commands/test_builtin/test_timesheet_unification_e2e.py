@@ -25,6 +25,7 @@ from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.state import LocalStateClient, TaskAlreadyRunningError
+from tests.support import make_state_db
 
 _START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
 _STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
@@ -34,7 +35,7 @@ _NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 class _RecordingClient:

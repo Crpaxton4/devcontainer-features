@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from odoo_sdk.commands.builtin import OptimizeSessionsCommand
 from odoo_sdk.commands.builtin.optimize_sessions import _build_config, _parse_date
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -14,7 +15,7 @@ UTC = timezone.utc
 def _tmp_state() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 def _seed(state: LocalStateClient) -> None:

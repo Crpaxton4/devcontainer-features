@@ -19,7 +19,8 @@
         "ODOO_SDK_CONFIG": "/usr/local/share/odoo-sdk-config",
         "MEMPAL_DIR": "/workspaces",
         "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation",
-        "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config"
+        "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config",
+        "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker"
     },
     "mounts": [
         {
@@ -50,6 +51,11 @@
         {
             "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/devcontainer/shell-history",
             "target": "/usr/local/share/shell-history",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo-task-tracker",
+            "target": "/usr/local/share/odoo-task-tracker",
             "type": "bind"
         }
     ],

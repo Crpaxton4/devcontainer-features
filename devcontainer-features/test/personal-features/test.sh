@@ -69,18 +69,29 @@ check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_C
 check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
 
-# Regression guard for #115: the feature must NOT force the task-tracker state
-# onto the root-provisioned /usr/local/share path via ODOO_TASK_TRACKER_DIR.
-# That path is chown'd to the build-time user (uid mismatch with the runtime
-# odoo user), so it lands unwritable and every FSM tool that writes a session
-# file fails with EACCES. With the override gone, the SDK falls back to the
-# runtime user's own $XDG_STATE_HOME/~/.local/state, which it owns and can
-# write. Assert the override isn't reintroduced pointing back at that path, and
-# that the feature no longer provisions the unwritable dir.
-check "ODOO_TASK_TRACKER_DIR does not force the unwritable root state path" bash -c \
-  "[ \"\$ODOO_TASK_TRACKER_DIR\" != '/usr/local/share/odoo-task-tracker' ]"
-check "task-tracker state dir is not root-provisioned in /usr/local/share" bash -c \
-  "! test -d /usr/local/share/odoo-task-tracker"
+# #369: the central tracker DB is HOST-provisioned and bind-mounted; the
+# container consumes it and never creates one. This reverses the #115 stance
+# (which wrongly concluded the state dir couldn't be mounted): updateRemoteUserUID
+# remaps the user at container-create so bind mounts line up - the six credential
+# mounts already prove it - and install.sh must NOT pre-create the tracker target
+# (provision=host in persisted-paths.tsv), or a broken mount would masquerade as a
+# working one behind an empty container-local DB. CI runs `sh ./setup.sh` on the
+# runner before this test, so the host dir + schema exist and the mount delivers
+# them at $ODOO_TASK_TRACKER_DIR. Both checks gate on odoo-sdk like the :69 check
+# (the SDK wheel is absent on <3.10 base images).
+#
+# POSITIVE: with the mount live, `odoo-sdk log-event` writes into the central DB.
+# A missing/unmounted DB would make log-event exit non-zero (the hard error
+# below), so a successful write that lands tracker.db at the mounted path is the
+# rebuild-surviving derivation reachability of acceptance #3.
+check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bash -c \
+  '! command -v odoo-sdk >/dev/null 2>&1 || { odoo-sdk log-event --source claude:SessionStart --subject ci-positive && test -f "$ODOO_TASK_TRACKER_DIR/tracker.db"; }'
+
+# NEGATIVE: point the state root at an empty dir with no host-provisioned DB; the
+# SDK must refuse to self-create one and fail with the single actionable error
+# naming the expected path (acceptance #4), never exiting 0 silently.
+check "odoo-sdk refuses to self-create a missing central tracker DB" bash -c \
+  '! command -v odoo-sdk >/dev/null 2>&1 || { d="$(mktemp -d)"; ! ODOO_TASK_TRACKER_DIR="$d" odoo-sdk log-event --source claude:SessionStart --subject ci-negative 2>"$d/err"; grep -q "$d/tracker.db" "$d/err" && ! test -f "$d/tracker.db"; }'
 
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version

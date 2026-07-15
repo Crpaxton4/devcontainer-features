@@ -10,6 +10,7 @@ from odoo_sdk.adapters import (
 )
 from odoo_sdk.sessionization import EventType, RawEvent
 from odoo_sdk.state import EventRecord, LocalStateClient
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -17,7 +18,7 @@ UTC = timezone.utc
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    return LocalStateClient(db_path=Path(tmp.name))
+    return make_state_db(Path(tmp.name))
 
 
 class TestEventConversion(unittest.TestCase):

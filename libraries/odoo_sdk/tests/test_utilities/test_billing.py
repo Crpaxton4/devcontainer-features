@@ -34,6 +34,7 @@ from odoo_sdk.utilities.upload import (
     _round_to_step,
     upload_sessions,
 )
+from tests.support import make_state_db
 
 UTC = timezone.utc
 
@@ -153,7 +154,7 @@ def _seed_db() -> LocalStateClient:
     """
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
-    db = LocalStateClient(db_path=Path(tmp.name))
+    db = make_state_db(Path(tmp.name))
     base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
 
     db.add_event(
