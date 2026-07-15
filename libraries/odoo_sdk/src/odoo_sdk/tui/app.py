@@ -15,7 +15,7 @@ without a terminal.
 from __future__ import annotations
 
 import curses
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -24,6 +24,7 @@ from odoo_sdk.utilities.upload import range_bounds, upload_sessions
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
+from .triage import TriageRow, build_triage_rows, compose_triage_frame
 from .window import DateWindow, apply_action
 
 # Real curses key codes mapped to the window controller's action names.
@@ -38,8 +39,15 @@ _EXPORT_MD_KEY = ord("e")
 _EXPORT_CSV_KEY = ord("c")
 _UPLOAD_KEY = ord("u")
 _RESYNC_KEY = ord("r")
+_TRIAGE_KEY = ord("t")
+_SKIP_KEY = ord("s")
 _QUIT_KEYS = (ord("q"), 27)  # q or ESC
 _CONFIRM_KEYS = (ord("y"), ord("Y"))
+_ENTER_KEYS = (ord("\n"), ord("\r"), curses.KEY_ENTER)
+_BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
+
+_MODE_MAIN = "main"
+_MODE_TRIAGE = "triage"
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,12 @@ class AppState:
     :param pending_upload: True while the confirm gate awaits a keypress.
     :param empty_hint: Diagnostic line explaining an empty window; set only when
         the last query returned no sessions, otherwise ``""``.
+    :param mode: ``"main"`` (timeline) or ``"triage"`` (the unattributed-event
+        queue). The triage fields below are only meaningful in triage mode.
+    :param triage_rows: The unattributed rows currently listed for triage — one
+        per calendar series or lone event.
+    :param triage_selected: Index of the highlighted triage row.
+    :param triage_input: The task id being typed for the selected row (digits).
     """
 
     window: DateWindow
@@ -59,6 +73,10 @@ class AppState:
     status: str = ""
     pending_upload: bool = False
     empty_hint: str = ""
+    mode: str = _MODE_MAIN
+    triage_rows: list[TriageRow] = field(default_factory=list)
+    triage_selected: int = 0
+    triage_input: str = ""
 
 
 def default_window(today: Optional[date] = None, span_days: int = 7) -> DateWindow:
@@ -239,6 +257,106 @@ def do_resync(registry: Registry, state: AppState) -> AppState:
     return replace(refreshed, status=_resync_status(result), pending_upload=False)
 
 
+def _load_triage_rows(registry: Registry, window: DateWindow) -> list[TriageRow]:
+    """Query the window's unattributed events and collapse them into triage rows.
+
+    Uses the same inclusive-date ``[midnight start, midnight day-after-end)``
+    bounds the session query and empty hint use, so triage and the timeline agree
+    on what "this window" means.
+    """
+    store = registry["query_sessions"].state
+    lo, hi = _window_bounds(window)
+    return build_triage_rows(store.get_unattributed_events(lo, hi))
+
+
+def enter_triage(registry: Registry, state: AppState) -> AppState:
+    """Open the triage queue: load the window's unattributed events and select row 0.
+
+    Surfaces every event ingested with ``task_ids=[]`` in the current window so a
+    meeting or email that could not be confidently attributed is triaged rather
+    than silently never billing (#370, acceptance item 9).
+    """
+    rows = _load_triage_rows(registry, state.window)
+    return replace(
+        state,
+        mode=_MODE_TRIAGE,
+        triage_rows=rows,
+        triage_selected=0,
+        triage_input="",
+        status=f"triage — {len(rows)} unattributed item(s)",
+    )
+
+
+def _exit_triage(state: AppState) -> AppState:
+    """Leave the triage queue and return to the timeline view."""
+    return replace(state, mode=_MODE_MAIN, triage_input="", status="")
+
+
+def _move_triage_selection(state: AppState, delta: int) -> AppState:
+    """Move the triage highlight by ``delta``, clamped, discarding a typed id."""
+    if not state.triage_rows:
+        return state
+    target = max(0, min(state.triage_selected + delta, len(state.triage_rows) - 1))
+    return replace(state, triage_selected=target, triage_input="")
+
+
+def _parse_task_id(text: str) -> Optional[int]:
+    """Return the positive int a triage input holds, or None if it is not one."""
+    if not text.isdigit():
+        return None
+    value = int(text)
+    return value if value > 0 else None
+
+
+def assign_triage(registry: Registry, state: AppState) -> AppState:
+    """Attribute the selected series/event to the typed task id, then reload rows.
+
+    Validates the typed id is a positive integer, writes ``task_ids`` on every
+    event of the selected row in one transaction (series-granularity), and
+    re-queries so the now-attributed row drops out of the queue. The confirmation
+    names the series and the number of events updated; the events are immediately
+    derivable and therefore billable.
+    """
+    if not state.triage_rows:
+        return replace(state, status="nothing to triage")
+    task_id = _parse_task_id(state.triage_input)
+    if task_id is None:
+        return replace(state, status="invalid task id — type a positive integer")
+    row = state.triage_rows[state.triage_selected]
+    store = registry["query_sessions"].state
+    updated = store.assign_event_task_ids(list(row.event_ids), task_id)
+    rows = _load_triage_rows(registry, state.window)
+    selected = min(state.triage_selected, max(0, len(rows) - 1))
+    return replace(
+        state,
+        triage_rows=rows,
+        triage_selected=selected,
+        triage_input="",
+        status=f"assigned {updated} events of series {row.display_key} to task {task_id}",
+    )
+
+
+def handle_triage_key(registry: Registry, state: AppState, key: int) -> AppState:
+    """Advance triage-mode state for one keypress (never quits the app).
+
+    ``q``/ESC returns to the timeline; up/down move the highlight; ``s`` skips to
+    the next row; digits build the task id; backspace edits it; Enter assigns.
+    """
+    if key in _QUIT_KEYS:
+        return _exit_triage(state)
+    if key == curses.KEY_UP:
+        return _move_triage_selection(state, -1)
+    if key == curses.KEY_DOWN or key == _SKIP_KEY:
+        return _move_triage_selection(state, 1)
+    if key in _BACKSPACE_KEYS:
+        return replace(state, triage_input=state.triage_input[:-1])
+    if key in _ENTER_KEYS:
+        return assign_triage(registry, state)
+    if ord("0") <= key <= ord("9"):
+        return replace(state, triage_input=state.triage_input + chr(key))
+    return state
+
+
 def handle_key(
     registry: Registry,
     state: AppState,
@@ -249,9 +367,12 @@ def handle_key(
     """Advance the app state for one keypress; return ``(state, should_quit)``.
 
     Pure w.r.t. the terminal: it only calls commands (through ``registry``) and
-    the injected ``writer``. The confirm gate takes precedence so an armed upload
-    consumes the next key as its yes/no answer.
+    the injected ``writer``. In triage mode every key is routed to the triage
+    handler (which never quits the app). Otherwise the confirm gate takes
+    precedence so an armed upload consumes the next key as its yes/no answer.
     """
+    if state.mode == _MODE_TRIAGE:
+        return handle_triage_key(registry, state, key), False
     if state.pending_upload:
         return (
             confirm_upload(
@@ -272,6 +393,8 @@ def handle_key(
         return request_upload(state), False
     if key == _RESYNC_KEY:
         return do_resync(registry, state), False
+    if key == _TRIAGE_KEY:
+        return enter_triage(registry, state), False
     return state, False
 
 
@@ -284,16 +407,25 @@ def _file_writer(content: str, name: str) -> str:  # pragma: no cover
     return str(path)
 
 
+def _compose(state: AppState, width: int, height: int) -> Any:  # pragma: no cover
+    """Compose the frame for ``state`` — the triage queue or the timeline."""
+    if state.mode == _MODE_TRIAGE:
+        return compose_triage_frame(
+            state.triage_rows,
+            state.triage_selected,
+            state.triage_input,
+            width,
+            height,
+        )
+    return compose_frame(
+        state.sessions, state.window, width, height, empty_hint=state.empty_hint
+    )
+
+
 def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     """Blit the composed frame for ``state`` onto the curses screen."""
     height, width = stdscr.getmaxyx()
-    frame = compose_frame(
-        state.sessions,
-        state.window,
-        width,
-        max(height - 1, 0),
-        empty_hint=state.empty_hint,
-    )
+    frame = _compose(state, width, max(height - 1, 0))
     stdscr.erase()
     for row_index, line in enumerate(frame.rows):
         try:

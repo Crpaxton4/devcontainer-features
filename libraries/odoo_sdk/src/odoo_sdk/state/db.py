@@ -36,6 +36,12 @@ AGENTLESS_REPO_SENTINEL = "\x00agent"
 # delete is chunked to stay well under SQLite's historical 999-variable limit.
 _DELETE_CHUNK = 500
 
+# Max ids bound into a single ``UPDATE ... IN (...)`` statement when triage assigns
+# a task to a whole calendar series. Chunked for the same 999-variable reason as
+# ``_DELETE_CHUNK``; all chunks run inside one transaction so a series assignment is
+# atomic (see :meth:`LocalStateClient.assign_event_task_ids`).
+_ASSIGN_CHUNK = 500
+
 
 def _default_root() -> Path:
     """Resolve the user-writable base directory for tracker state.
@@ -820,6 +826,78 @@ class LocalStateClient:
                 tuple(params),
             ).fetchall()
         return [_parse_event(tuple(r)) for r in rows]
+
+    def get_unattributed_events(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[EventRecord]:
+        """Return events carrying NO task ids (``task_ids=[]``) in ``[start, end)``.
+
+        The read half of the TUI triage surface (#370, acceptance item 9). An
+        event ingested with an empty ``task_ids`` array is invisible to billing —
+        the derivation requires ``json_array_length(task_ids) > 0`` — so such an
+        event silently never bills unless it is surfaced for triage. This returns
+        every unattributed event in the window regardless of ``source``: triage
+        must see all ingested-but-unattributed events (calendar meetings, emails,
+        diagnostics), not only the sources that would sessionize, so the session
+        source predicate is deliberately NOT applied. Ordered by timestamp; the
+        window bounds are half-open (``>= start``, ``< end``) to match
+        :meth:`get_events` and :meth:`count_events`.
+        """
+        clauses: list[str] = ["json_array_length(task_ids) = 0"]
+        params: list[str] = []
+        if start is not None:
+            clauses.append("timestamp >= ?")
+            params.append(_bound_isoformat(start))
+        if end is not None:
+            clauses.append("timestamp < ?")
+            params.append(_bound_isoformat(end))
+        where = " WHERE " + " AND ".join(clauses)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM events{where} ORDER BY timestamp",
+                tuple(params),
+            ).fetchall()
+        return [_parse_event(tuple(r)) for r in rows]
+
+    def assign_event_task_ids(self, event_ids: list[int], task_id: int) -> int:
+        """Attribute every listed event to ``task_id`` in ONE transaction (#370).
+
+        The write half of the triage surface: it sets ``task_ids`` to
+        ``[str(task_id)]`` on all ``event_ids`` so a whole calendar series (each
+        tick a separate event sharing a ``gcal:<id>:tick:`` external-id prefix) is
+        attributed atomically by a single call. Once written the events satisfy
+        ``json_array_length(task_ids) > 0`` and immediately become derivable, so
+        the meeting bills instead of being silently dropped.
+
+        All chunks execute inside one ``self._connect()`` transaction, so a series
+        assignment is all-or-nothing — a failure part-way never leaves half a
+        series attributed. Chunking only bounds the per-statement variable count.
+
+        :param event_ids: The event ids to (re)attribute; an empty list is a no-op.
+        :param task_id: The Odoo task id to attribute them to.
+        :return: The number of event rows updated.
+        :raises ValueError: When ``task_id`` is not a positive integer. No Odoo
+            round-trip validates the id exists — triage only guarantees a
+            well-formed, positive task id, not a live one.
+        """
+        if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id <= 0:
+            raise ValueError(f"task_id must be a positive integer, got {task_id!r}")
+        if not event_ids:
+            return 0
+        payload = json.dumps([str(task_id)])
+        updated = 0
+        with self._connect() as conn:
+            for start in range(0, len(event_ids), _ASSIGN_CHUNK):
+                chunk = event_ids[start : start + _ASSIGN_CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"UPDATE events SET task_ids = ? WHERE id IN ({placeholders})",
+                    (payload, *chunk),
+                )
+                updated += cursor.rowcount
+        return updated
 
     def derive_sessions_overlapping(
         self,
