@@ -673,6 +673,27 @@ class LocalStateClient:
             )
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
 
+    def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]:
+        """Return the most recent event timestamp attributed to ``task_id``, or None.
+
+        The staleness clock for the reaper (#366): a run's "last activity" is the
+        latest event carrying its task id — the same ``task_ids`` array the
+        derivation and ``--attach-active-run`` write to. Events fan out over their
+        task ids with ``json_each`` (a hook event can carry several), so a task
+        matches whenever it appears anywhere in the array. Timestamps are stored as
+        one uniform UTC isoformat, so a string ``MAX`` is the true chronological
+        maximum. The task id is bound as text because ``task_ids`` holds string ids.
+        Returns ``None`` when the task has no events on record.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(events.timestamp) "
+                "FROM events, json_each(events.task_ids) AS task_each "
+                "WHERE task_each.value = ?",
+                (str(task_id),),
+            ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] is not None else None
+
     def get_aborted_runs(self) -> list[TaskRun]:
         """Return every aborted run (``aborted_at`` stamped), ordered by start.
 

@@ -12,6 +12,7 @@ Subcommands:
     log-event               Record a Claude Code hook event into local state
     discover                List active runs in the central tracker DB
     abort <run_id>          Abort a stale run in the central tracker DB
+    reap [--older-than 12h] Bulk-abort every stale run in the central tracker DB
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
     upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
     prune [--older-than N]  Delete aged hook events past a retention horizon
@@ -19,6 +20,7 @@ Subcommands:
 
 import argparse
 import json
+import math
 import sys
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -45,6 +47,14 @@ from odoo_sdk.utilities.env import (
 )
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
 from odoo_sdk.utilities.prune import execute_prune, plan_prune, resolve_horizon
+from odoo_sdk.utilities.reap import (
+    DEFAULT_REAP_THRESHOLD_HOURS,
+    is_run_stale,
+    reap_run,
+    resolve_env_threshold_hours,
+    stale_active_runs,
+    threshold_from_hours,
+)
 from odoo_sdk.utilities.upload import upload_sessions
 
 # Subcommands that skip the global Odoo devcontainer assert and build no
@@ -265,11 +275,24 @@ def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
     a hook firing while an FSM run is in progress. With no active run (or the
     flag absent) this yields ``[]``, i.e. untargeted session-level activity,
     matching the pre-flag default.
+
+    Stale runs are excluded (#366): a run whose last activity predates the reap
+    threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
+    :data:`~odoo_sdk.utilities.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged
+    orphan from a dead devcontainer, so attaching this event to it would only
+    accrue phantom billable wall-clock. Skipping it freezes its activity clock so
+    it stays reapable. The same staleness predicate ``reap`` uses is applied here,
+    so the two agree on exactly which runs are stale.
     """
     if args.task_id:
         return [str(task_id) for task_id in args.task_id]
     if args.attach_active_run:
-        return [str(run.task_id) for run in db.get_all_active_runs()]
+        threshold = threshold_from_hours(resolve_env_threshold_hours())
+        return [
+            str(run.task_id)
+            for run in db.get_all_active_runs()
+            if not is_run_stale(db, run, threshold)
+        ]
     return []
 
 
@@ -503,6 +526,78 @@ def cmd_prune(args: argparse.Namespace) -> None:
     )
 
 
+def _parse_reap_threshold(value: str) -> float:
+    """Parse a ``reap --older-than`` duration into hours (argparse type).
+
+    Contract: a bare number is **hours** (``36`` → 36h), an ``h`` suffix is hours
+    (``36h``), and a ``d`` suffix is days (``2d`` → 48h). The value must be
+    strictly positive — ``0`` (or negative) would set the staleness cutoff to now
+    or the future and reap every active run, so it is rejected as a usage error
+    (exit 2) rather than silently wiping the tracker's active runs.
+
+    :raises argparse.ArgumentTypeError: When ``value`` is not a positive
+        ``<number>``/``<number>h``/``<number>d`` duration.
+    """
+    text = value.strip().lower()
+    unit_hours = 1.0
+    if text.endswith("h"):
+        text = text[:-1]
+    elif text.endswith("d"):
+        unit_hours = 24.0
+        text = text[:-1]
+    try:
+        magnitude = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid --older-than duration: {value!r} "
+            "(use e.g. 12h, 36h, 2d, or a plain number of hours)"
+        ) from exc
+    # Reject non-finite magnitudes (``inf``/``nan`` parse as floats but slip past
+    # a bare ``<= 0`` check, then overflow ``timedelta`` in threshold_from_hours).
+    if not math.isfinite(magnitude) or magnitude <= 0:
+        raise argparse.ArgumentTypeError(
+            f"--older-than must be a positive, finite duration, got {value!r}"
+        )
+    return magnitude * unit_hours
+
+
+def _reap_run_line(run, *, anchor_closed: bool) -> str:
+    """Format the per-run line printed as a stale run is reaped."""
+    anchor = "closed" if anchor_closed else "left untouched"
+    return (
+        f"Reaped run {run.id} ({run.task_name!r}, task {run.task_id}); "
+        f"anchor {anchor}."
+    )
+
+
+def cmd_reap(args: argparse.Namespace, client: OdooClient) -> None:
+    """Bulk-abort every stale run in the central tracker DB (#366).
+
+    Finds the active (``RUNNING`` / ``AWAITING_ANSWERS``) runs whose last activity
+    predates ``--older-than`` (default 12h) and, unless ``--dry-run``, aborts each
+    through the same local-abort path a single ``abort`` uses — stamping
+    ``aborted_at`` (so the run is excluded from billing) and best-effort closing
+    its unedited Odoo anchor. Idempotent: a second reap finds no stale active runs
+    because the first left them ``STOPPED``.
+    """
+    db = _open_local_db()
+    threshold = threshold_from_hours(args.older_than)
+    stale = stale_active_runs(db, threshold)
+    if not stale:
+        print("No stale runs to reap.")
+        return
+    if args.dry_run:
+        print(f"Would reap {len(stale)} stale run(s):")
+        for run in stale:
+            print(f"  [{run.id}] {run.task_name!r} (task {run.task_id}, "
+                  f"{run.state.value})")
+        return
+    for run in stale:
+        anchor_closed = reap_run(db, client, run)
+        print(_reap_run_line(run, anchor_closed=anchor_closed))
+    print(f"Reaped {len(stale)} stale run(s).")
+
+
 def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
     """Abort a stale run in the central tracker DB and close its Odoo anchor."""
     result = AbortRunCommand(client).execute(args.run_id)
@@ -595,6 +690,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "run_id", type=int, help="Run id (or task id) from 'discover' to abort"
     )
 
+    reap_p = subparsers.add_parser(
+        "reap", help="Bulk-abort every stale run in the central tracker DB"
+    )
+    reap_p.add_argument(
+        "--older-than",
+        type=_parse_reap_threshold,
+        default=DEFAULT_REAP_THRESHOLD_HOURS,
+        dest="older_than",
+        help="Staleness horizon: reap runs last active before this ago "
+        "(e.g. 12h, 36h, 2d, or a plain number of hours; default: 12h)",
+    )
+    reap_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="List the stale runs that would be reaped without aborting anything",
+    )
+
     resync_p = subparsers.add_parser(
         "resync", help="Reconcile local events against git/GitHub/Odoo chatter"
     )
@@ -672,6 +785,8 @@ def _dispatch(
         cmd_normalize(db, args, OdooClient())
     elif args.command == "abort":
         cmd_abort(args, OdooClient())
+    elif args.command == "reap":
+        cmd_reap(args, OdooClient())
     elif args.command == "upload":
         cmd_upload(args, db, OdooClient())
     else:
