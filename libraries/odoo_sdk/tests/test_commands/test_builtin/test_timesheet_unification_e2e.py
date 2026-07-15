@@ -160,16 +160,29 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # Once a placeholder is reconciled (real description written) it is no
         # longer an open anchor, so a genuinely new work session on the same
         # task creates a fresh anchor rather than reusing the billed row.
-        # stop_task no longer reconciles (#325), so the upload path's reconcile
-        # is invoked directly here to close out the anchor before the next start.
-        from odoo_sdk.utilities.timesheet import reconcile
+        # stop_task no longer reconciles (#325), so the upload path's
+        # ``reconcile_session`` (the sole derived-upload hours-writer) is invoked
+        # directly here to adopt and close out the open anchor — renaming it off
+        # the ``[/] Work in progress`` marker — before the next start.
+        from datetime import datetime, timezone
+
+        from odoo_sdk.utilities.timesheet import reconcile_session
 
         client = _RecordingClient()
         db = _tmp_db()
         self._start(client, db, **self._kwargs())
         with patch(_STOP_GUARD):
             StopTaskCommand(client, state=db).execute(24648, "done")
-        reconcile(client, db, task_id=24648, description="[/] done", elapsed_hours=1.5)
+        reconcile_session(
+            client,
+            db,
+            task_id=24648,
+            session_key="24648|1",
+            description="[/] done",
+            hours=1.5,
+            started_at=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+            ended_at=datetime(2026, 7, 10, 10, 30, tzinfo=timezone.utc),
+        )
         self._start(client, db, **self._kwargs())
         self.assertEqual(len(client.analytic_calls("create")), 2)
 

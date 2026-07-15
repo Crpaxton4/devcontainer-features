@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import curses
 from dataclasses import dataclass, replace
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.utilities.timesheet import reconcile_session, sweep_orphaned_uploads
+from odoo_sdk.utilities.upload import range_bounds, upload_sessions
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
@@ -99,13 +99,12 @@ def refresh(registry: Registry, state: AppState) -> AppState:
 def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
     """Return the ``[lo, hi)`` datetime bounds the session query covers.
 
-    Matches the ``query_sessions`` command's inclusive-date semantics: ``lo`` is
-    midnight of the start day and ``hi`` is midnight of the day after the end, so
-    the whole end day is counted.
+    Delegates to the shared :func:`~odoo_sdk.utilities.upload.range_bounds` so
+    the TUI, the ``query_sessions`` command, and the upload sweep all resolve
+    one inclusive-date semantic: ``lo`` is midnight of the start day and ``hi``
+    is midnight of the day after the end, so the whole end day is counted.
     """
-    lo = datetime.combine(window.start, time.min)
-    hi = datetime.combine(window.end + timedelta(days=1), time.min)
-    return lo, hi
+    return range_bounds(window.start_iso(), window.end_iso())
 
 
 def _empty_hint(registry: Registry, window: DateWindow) -> str:
@@ -187,77 +186,29 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
 def _upload_sessions(
     registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
 ) -> tuple[int, int]:
-    """Upload each derived session's hours, then sweep orphaned upload mappings.
+    """Bill the derived sessions through the shared upload loop (#354).
 
-    The unified timesheet module (issue #181) is the sole writer of
-    ``account.analytic.line``: this delegates to its idempotent
-    :func:`reconcile_session`, which resolves the one row a derived session maps
-    to (by its stable ``session_key``) and rewrites it, so a re-run never
-    double-bills. Sessions lacking a numeric task id are skipped (they have no
-    Odoo task to bill).
+    The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
+    :func:`~odoo_sdk.utilities.upload.upload_sessions` path: it reconciles each
+    session through the sole ``account.analytic.line`` hours-writer (idempotent
+    per ``session_key``, so a re-run never double-bills) and then runs the
+    window-scoped orphan sweep (#353) that zeroes and retires mappings that no
+    longer derive. The window's inclusive dates are forwarded (bounds resolved
+    inside the shared loop) so the sweep is scoped exactly to what was queried.
+    The shared (client, state) pair is resolved off the ``stop_task`` command,
+    the same dependencies every registry command shares.
 
-    After uploading, :func:`sweep_orphaned_uploads` diffs the ledger against the
-    just-derived key set for this window (#353): a previously-uploaded session
-    that no longer derives — its events merged into an adjacent session by a
-    backfilled event — has its Odoo row zeroed and its mapping retired, so the
-    merged-away hours are not double-counted.
-
-    :return: ``(uploaded, retired)`` counts.
+    :return: ``(uploaded, retired)`` counts for the status line.
     """
     stop_cmd = registry["stop_task"]
-    client, state = stop_cmd._client, stop_cmd.state
-    uploaded = 0
-    for session in sessions:
-        task_id = _numeric_task_id(session.get("task_id"))
-        if task_id is None:
-            continue
-        _upload_one(client, state, task_id, session)
-        uploaded += 1
-    window_lo, window_hi = _window_bounds(window)
-    retired = sweep_orphaned_uploads(
-        client,
-        state,
-        derived_keys={session.get("session_key", "") for session in sessions},
-        derived_task_ids={str(session.get("task_id")) for session in sessions},
-        window_lo=window_lo,
-        window_hi=window_hi,
+    result = upload_sessions(
+        stop_cmd._client,
+        stop_cmd.state,
+        sessions,
+        start_date=window.start_iso(),
+        end_date=window.end_iso(),
     )
-    return uploaded, retired
-
-
-def _upload_one(
-    client: Any, state: Any, task_id: int, session: dict[str, Any]
-) -> None:
-    """Upload one derived session's hours onto its own timesheet row.
-
-    Delegation only: the surface passes the identity the derived session carries
-    (its numeric ``task_id``, stable ``session_key``, ``duration_secs`` and its
-    ``started_at``/``ended_at`` bounds) to :func:`reconcile_session`, which
-    resolves and rewrites the single row the session maps to and records the
-    window bounds the orphan sweep keys on. Idempotent per session key.
-    """
-    hours = float(session.get("duration_secs", 0)) / 3600
-    key = session.get("session_key", "")
-    started_at = datetime.fromisoformat(session["started_at"])
-    ended_at = datetime.fromisoformat(session["ended_at"])
-    reconcile_session(
-        client,
-        state,
-        task_id,
-        key,
-        f"[/] session {key}",
-        hours,
-        started_at,
-        ended_at,
-    )
-
-
-def _numeric_task_id(value: Any) -> Optional[int]:
-    """Return ``value`` as an int when it is a numeric task id, else None."""
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
+    return int(result["uploaded"]), int(result["retired"])
 
 
 def _source_summary(outcome: dict[str, Any]) -> str:
