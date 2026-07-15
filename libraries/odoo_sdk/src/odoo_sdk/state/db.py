@@ -331,13 +331,18 @@ def _normalize_utc_isoformat(ts: datetime) -> str:
 
 
 def _bound_isoformat(ts: datetime) -> str:
-    """Return a query bound as an isoformat string comparable to stored rows.
+    """Return a query bound in the exact form stored timestamps use.
 
-    Aware bounds are normalized to UTC to match the uniform-UTC stored strings;
-    naive bounds (``datetime.min``/``datetime.max`` sentinels from the query
-    layer) are passed through unchanged so open-ended ranges keep working.
+    Bounds are compared against stored rows *as strings*, so they must be shaped
+    identically to :func:`_normalize_utc_isoformat` output. Aware bounds convert
+    to UTC; naive bounds — the TUI's ``datetime.combine(date, time.min)`` window
+    edges and the query layer's ``datetime.min``/``datetime.max`` sentinels — are
+    assumed UTC and stamped with ``+00:00`` too. Suffixing the naive sentinels is
+    safe (they still sort past every real row), and it makes an event stamped
+    exactly at a window edge compare identically across :meth:`get_events`,
+    :meth:`count_events`, and the derivation's ``HAVING`` clause.
     """
-    return _normalize_utc_isoformat(ts) if ts.tzinfo else ts.isoformat()
+    return _normalize_utc_isoformat(ts)
 
 
 def _parse_event(row: tuple) -> EventRecord:
@@ -676,10 +681,10 @@ class LocalStateClient:
         params: list[str] = []
         if start is not None:
             clauses.append("timestamp >= ?")
-            params.append(start.isoformat())
+            params.append(_bound_isoformat(start))
         if end is not None:
             clauses.append("timestamp < ?")
-            params.append(end.isoformat())
+            params.append(_bound_isoformat(end))
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(
