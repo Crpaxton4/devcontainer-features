@@ -112,6 +112,27 @@ def make_get_task_chatter_tool(registry: Registry):
     return get_task_chatter
 
 
+@atomic_tool("get_mail_status")
+def make_get_mail_status_tool(registry: Registry):
+    def get_mail_status(res_model: str, res_id: int) -> List[dict]:
+        """Report outgoing-mail (``mail.mail``) delivery status for a record.
+
+        Read-only. Joins the record's chatter messages to their linked outbound
+        mails and returns, per mail: ``mail_id``, ``message_id``, ``subject``, a
+        ``recipients`` summary, the delivery ``state`` (``outgoing`` / ``sent`` /
+        ``exception`` / ``cancel``), the message ``date``, and — only when
+        populated — ``failure_reason`` / ``failure_type``. Use it to verify
+        "send an email" acceptance criteria: pass ``res_model="project.task"``
+        with the task id to check a task's outbound mail. Records with only
+        chatter notes return an empty list. Never retries or requeues mail.
+        ``mail.mail`` is often admin-restricted; a denied read returns a clear
+        access error.
+        """
+        return registry["get_mail_status"].execute(res_model, res_id)
+
+    return get_mail_status
+
+
 @atomic_tool("get_task_attachments")
 def make_get_task_attachments_tool(registry: Registry):
     def get_task_attachments(
