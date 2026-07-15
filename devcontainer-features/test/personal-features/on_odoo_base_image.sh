@@ -50,28 +50,24 @@ check "odoo-mcp entrypoint is executable" bash -c "test -x \"\$(command -v odoo-
 check "odoo-tui console script is on PATH" bash -c "command -v odoo-tui"
 check "odoo-tui entrypoint is executable" bash -c "test -x \"\$(command -v odoo-tui)\""
 
-# Regression guard for #115: the feature must not force the task-tracker state
-# onto the root-provisioned /usr/local/share path (which the runtime user can't
-# write). With ODOO_TASK_TRACKER_DIR unset, the SDK resolves its state root to
-# the runtime user's own $XDG_STATE_HOME/~/.local/state. Verify that the SDK's
-# resolved root is home-relative (not the old root path) and is writable.
-check "ODOO_TASK_TRACKER_DIR is not set to the unwritable root state path" bash -c \
-    "[ \"\$ODOO_TASK_TRACKER_DIR\" != '/usr/local/share/odoo-task-tracker' ]"
-check "odoo_sdk resolves a writable, home-relative task-tracker state root" \
+# #369 deliberately reversed the #115-era guard this block used to hold: the
+# tracker state is now a HOST-provisioned central DB bind-mounted at
+# /usr/local/share/odoo-task-tracker (uid-aligned via updateRemoteUserUID), and
+# ODOO_TASK_TRACKER_DIR points there on purpose. Assert the new contract: the
+# env var targets the mounted path, the SDK resolves tracker.db under it, and
+# a real log-event lands in the mounted DB (CI runs setup.sh on the host
+# before the scenario, so the dir and schema exist).
+check "ODOO_TASK_TRACKER_DIR points at the host-provisioned tracker mount" bash -c \
+    "[ \"\$ODOO_TASK_TRACKER_DIR\" = '/usr/local/share/odoo-task-tracker' ]"
+check "odoo_sdk resolves tracker.db under the mounted state root" \
     bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-import os
-from pathlib import Path
-from odoo_sdk.state.db import _default_root
+from odoo_sdk.state.db import tracker_db_path
 
-root = _default_root()
-assert not str(root).startswith(\"/usr/local/share/odoo-task-tracker\"), root
-assert str(root).startswith(str(Path.home())), (root, Path.home())
-root.mkdir(parents=True, exist_ok=True)
-probe = root / \".write-probe\"
-probe.write_text(\"ok\")
-assert probe.read_text() == \"ok\"
-probe.unlink()
+path = tracker_db_path()
+assert str(path) == \"/usr/local/share/odoo-task-tracker/tracker.db\", path
 '"
+check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bash -c \
+    "/usr/local/share/uv/tools/odoo-sdk/bin/odoo-sdk log-event --source claude:SessionStart --subject scenario-ci-positive && test -f \"\$ODOO_TASK_TRACKER_DIR/tracker.db\""
 
 check "postgresql starts and is ready" /usr/local/share/pq-init.sh
 

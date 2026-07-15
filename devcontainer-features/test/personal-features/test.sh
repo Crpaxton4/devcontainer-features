@@ -84,12 +84,14 @@ check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
 # A missing/unmounted DB would make log-event exit non-zero (the hard error
 # below), so a successful write that lands tracker.db at the mounted path is the
 # rebuild-surviving derivation reachability of acceptance #3.
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
 check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bash -c \
   '! command -v odoo-sdk >/dev/null 2>&1 || { odoo-sdk log-event --source claude:SessionStart --subject ci-positive && test -f "$ODOO_TASK_TRACKER_DIR/tracker.db"; }'
 
 # NEGATIVE: point the state root at an empty dir with no host-provisioned DB; the
 # SDK must refuse to self-create one and fail with the single actionable error
 # naming the expected path (acceptance #4), never exiting 0 silently.
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
 check "odoo-sdk refuses to self-create a missing central tracker DB" bash -c \
   '! command -v odoo-sdk >/dev/null 2>&1 || { d="$(mktemp -d)"; ! ODOO_TASK_TRACKER_DIR="$d" odoo-sdk log-event --source claude:SessionStart --subject ci-negative 2>"$d/err"; grep -q "$d/tracker.db" "$d/err" && ! test -f "$d/tracker.db"; }'
 
