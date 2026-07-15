@@ -102,9 +102,14 @@ set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
 [ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
 [ -n "$PAYLOAD" ] && set -- "$@" --payload "$PAYLOAD"
 
-# Bounded, fully detached from the session: never block, never surface output,
-# always succeed. `odoo-sdk` itself exits 0 in a non-git cwd (prints a stderr
-# notice), so the timeout is the only remaining way it could return nonzero.
-timeout 10 odoo-sdk "$@" >/dev/null 2>&1 || true
+# Fire-and-forget: fork the SDK call into a detached background subshell and
+# return immediately, so the hook never makes a tool call wait on cat+jq+the
+# Python interpreter+SQLite (hundreds of ms; up to the 10s timeout worst case).
+# The payload is already fully captured in STDIN_JSON above, so nothing here
+# depends on stdin staying open. The extra subshell wrapper `( ... & )` reparents
+# the job to init and suppresses any job-control notice, keeping stdout clean.
+# Runtime is still bounded by `timeout`, and any nonzero exit is swallowed inside
+# the background job — this shim itself always exits 0.
+( timeout 10 odoo-sdk "$@" >/dev/null 2>&1 & ) 2>/dev/null
 
 exit 0
