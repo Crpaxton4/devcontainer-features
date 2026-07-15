@@ -9,7 +9,7 @@ guarantees are checked at the wire level.
 
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -19,12 +19,16 @@ from odoo_sdk.state import LocalStateClient
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.timesheet import (
     ANCHOR_NAME,
+    ORPHANED_UPLOAD_NAME,
     emit_agent_event,
     ensure_anchor,
     reconcile,
     reconcile_session,
     resolve_employee_id,
+    sweep_orphaned_uploads,
 )
+
+UTC = timezone.utc
 
 
 def _tmp_db() -> LocalStateClient:
@@ -305,8 +309,10 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[], new_id=500)
         db = _tmp_db()
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|r|1",
-            description="[/] session 10|r|1", hours=1.5, day=date(2026, 7, 1),
+            client, db, task_id=10, session_key="10|1",
+            description="[/] session 10|1", hours=1.5,
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
         self.assertEqual(tid, 500)
         creates = executor.by_method("create")
@@ -316,16 +322,21 @@ class TestReconcileSession(unittest.TestCase):
         self.assertEqual(vals["task_id"], 10)
         self.assertEqual(vals["employee_id"], 7)
         self.assertEqual(vals["unit_amount"], 1.5)
-        self.assertEqual(vals["date"], "2026-07-01")
-        # Mapping recorded for idempotent re-runs.
-        self.assertEqual(db.get_session_upload("10|r|1")["timesheet_id"], 500)
+        self.assertEqual(vals["date"], "2026-07-01")  # from started_at
+        # Mapping recorded for idempotent re-runs, with task/window bounds.
+        mapping = db.get_session_upload("10|1")
+        self.assertEqual(mapping["timesheet_id"], 500)
+        self.assertEqual(mapping["task_id"], "10")
+        self.assertIsNotNone(mapping["started_at"])
 
     def test_adopts_existing_anchor(self):
         client, executor = self._client(anchors=[{"id": 88}])
         db = _tmp_db()
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|r|1",
-            description="[/] done", hours=2.0, day=date(2026, 7, 2),
+            client, db, task_id=10, session_key="10|1",
+            description="[/] done", hours=2.0,
+            started_at=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 2, 10, 0, tzinfo=UTC),
         )
         self.assertEqual(tid, 88)
         self.assertEqual(executor.by_method("create"), [])  # adopts, never creates
@@ -336,16 +347,18 @@ class TestReconcileSession(unittest.TestCase):
         self.assertEqual(vals_arg["unit_amount"], 2.0)
         self.assertEqual(vals_arg["name"], "[/] done")
         self.assertEqual(vals_arg["date"], "2026-07-02")
-        self.assertEqual(db.get_session_upload("10|r|1")["timesheet_id"], 88)
+        self.assertEqual(db.get_session_upload("10|1")["timesheet_id"], 88)
 
     def test_rewrites_mapped_row_ignoring_anchor(self):
         # A recorded mapping wins over any anchor: the mapped row is rewritten.
         client, executor = self._client(anchors=[{"id": 88}])
         db = _tmp_db()
-        db.record_session_upload("10|r|1", 200, 1.0)
+        db.record_session_upload("10|1", 200, 1.0)
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|r|1",
-            description="[/] x", hours=3.0, day=date(2026, 7, 3),
+            client, db, task_id=10, session_key="10|1",
+            description="[/] x", hours=3.0,
+            started_at=datetime(2026, 7, 3, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
         )
         self.assertEqual(tid, 200)  # mapped id, not the anchor's 88
         writes = executor.by_method("write")
@@ -356,20 +369,132 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[], new_id=500)
         db = _tmp_db()
         first = reconcile_session(
-            client, db, task_id=10, session_key="10|r|1",
-            description="[/] a", hours=1.0, day=date(2026, 7, 1),
+            client, db, task_id=10, session_key="10|1",
+            description="[/] a", hours=1.0,
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
         second = reconcile_session(
-            client, db, task_id=10, session_key="10|r|1",
-            description="[/] b", hours=2.5, day=date(2026, 7, 1),
+            client, db, task_id=10, session_key="10|1",
+            description="[/] b", hours=2.5,
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
         self.assertEqual(first, second)  # same timesheet id
         self.assertEqual(len(executor.by_method("create")), 1)  # created only once
         # Second run rewrote the same row with updated hours.
-        self.assertEqual(db.get_session_upload("10|r|1")["hours"], 2.5)
+        self.assertEqual(db.get_session_upload("10|1")["hours"], 2.5)
         last_write = executor.by_method("write")[-1]
         self.assertEqual(last_write[2][0], [500])
         self.assertEqual(last_write[2][1]["unit_amount"], 2.5)
+
+
+class _SweepExecutor(OdooExecutor):
+    """Fake executor recording ``account.analytic.line`` writes for the sweep."""
+
+    def __init__(self):
+        self.writes: list[tuple] = []
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "write":
+            self.writes.append((args[0], args[1]))
+            return True
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+
+class TestSweepOrphanedUploads(unittest.TestCase):
+    """#353: the sweep zeroes and retires upload mappings that no longer derive."""
+
+    def _client(self):
+        executor = _SweepExecutor()
+        return OdooClient(executor=executor), executor
+
+    def _window(self):
+        return (
+            datetime(2026, 6, 1, 0, 0, tzinfo=UTC),
+            datetime(2026, 6, 2, 0, 0, tzinfo=UTC),
+        )
+
+    def _record(self, db, key, tid, task_id, day):
+        db.record_session_upload(
+            key, tid, 1.0, task_id=task_id,
+            started_at=datetime(2026, 6, day, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 6, day, 10, 0, tzinfo=UTC),
+        )
+
+    def test_still_deriving_mapping_untouched(self):
+        client, executor = self._client()
+        db = _tmp_db()
+        self._record(db, "10|1", 500, "10", day=1)
+        lo, hi = self._window()
+        retired = sweep_orphaned_uploads(
+            client, db, derived_keys={"10|1"}, derived_task_ids={"10"},
+            window_lo=lo, window_hi=hi,
+        )
+        self.assertEqual(retired, 0)
+        self.assertEqual(executor.writes, [])
+        self.assertIsNotNone(db.get_session_upload("10|1"))
+
+    def test_orphan_in_window_is_zeroed_and_retired(self):
+        client, executor = self._client()
+        db = _tmp_db()
+        self._record(db, "10|1", 500, "10", day=1)  # merged-away session
+        lo, hi = self._window()
+        retired = sweep_orphaned_uploads(
+            client, db, derived_keys=set(), derived_task_ids={"10"},
+            window_lo=lo, window_hi=hi,
+        )
+        self.assertEqual(retired, 1)
+        ids, vals = executor.writes[0]
+        self.assertEqual(ids, [500])
+        self.assertEqual(vals["unit_amount"], 0.0)
+        self.assertEqual(vals["name"], ORPHANED_UPLOAD_NAME)
+        self.assertIsNone(db.get_session_upload("10|1"))  # mapping retired
+
+    def test_orphan_outside_window_preserved(self):
+        # A mapping whose window does not overlap the queried window is left alone
+        # even when it is not in the derived set (it was simply out of range).
+        client, executor = self._client()
+        db = _tmp_db()
+        db.record_session_upload(
+            "10|1", 500, 1.0, task_id="10",
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
+        )
+        lo, hi = self._window()  # June window; mapping is in July
+        retired = sweep_orphaned_uploads(
+            client, db, derived_keys=set(), derived_task_ids={"10"},
+            window_lo=lo, window_hi=hi,
+        )
+        self.assertEqual(retired, 0)
+        self.assertIsNotNone(db.get_session_upload("10|1"))
+
+    def test_legacy_key_retired_when_task_in_window(self):
+        # A pre-#352 3-part key (NULL bounds) can never re-derive; it is retired
+        # deliberately when its task prefix is in the current window's derived set.
+        client, executor = self._client()
+        db = _tmp_db()
+        db.record_session_upload("10|owner/repo|1", 500, 1.0)  # legacy, no bounds
+        lo, hi = self._window()
+        retired = sweep_orphaned_uploads(
+            client, db, derived_keys={"10|3"}, derived_task_ids={"10"},
+            window_lo=lo, window_hi=hi,
+        )
+        self.assertEqual(retired, 1)
+        self.assertEqual(executor.writes[0][1]["unit_amount"], 0.0)
+        self.assertIsNone(db.get_session_upload("10|owner/repo|1"))
+
+    def test_legacy_key_preserved_when_task_absent(self):
+        client, executor = self._client()
+        db = _tmp_db()
+        db.record_session_upload("99|owner/repo|1", 500, 1.0)  # legacy, other task
+        lo, hi = self._window()
+        retired = sweep_orphaned_uploads(
+            client, db, derived_keys={"10|3"}, derived_task_ids={"10"},
+            window_lo=lo, window_hi=hi,
+        )
+        self.assertEqual(retired, 0)
+        self.assertIsNotNone(db.get_session_upload("99|owner/repo|1"))
 
 
 class TestEmitAgentEvent(unittest.TestCase):

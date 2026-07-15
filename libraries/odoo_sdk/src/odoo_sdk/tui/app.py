@@ -20,7 +20,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.utilities.timesheet import reconcile_session
+from odoo_sdk.utilities.timesheet import reconcile_session, sweep_orphaned_uploads
 
 from .export import export_csv, export_markdown
 from .frame import compose_frame
@@ -177,16 +177,17 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
     """Resolve the confirm gate: on ``confirmed`` run the upload, else cancel."""
     if not confirmed:
         return replace(state, pending_upload=False, status="upload cancelled")
-    count = _upload_sessions(registry, state.sessions)
-    return replace(
-        state,
-        pending_upload=False,
-        status=f"uploaded {count} session(s)",
-    )
+    uploaded, retired = _upload_sessions(registry, state.sessions, state.window)
+    status = f"uploaded {uploaded} session(s)"
+    if retired:
+        status += f", retired {retired} orphaned upload(s)"
+    return replace(state, pending_upload=False, status=status)
 
 
-def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
-    """Upload each derived session's hours onto its own idempotent timesheet row.
+def _upload_sessions(
+    registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
+) -> tuple[int, int]:
+    """Upload each derived session's hours, then sweep orphaned upload mappings.
 
     The unified timesheet module (issue #181) is the sole writer of
     ``account.analytic.line``: this delegates to its idempotent
@@ -194,6 +195,14 @@ def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
     to (by its stable ``session_key``) and rewrites it, so a re-run never
     double-bills. Sessions lacking a numeric task id are skipped (they have no
     Odoo task to bill).
+
+    After uploading, :func:`sweep_orphaned_uploads` diffs the ledger against the
+    just-derived key set for this window (#353): a previously-uploaded session
+    that no longer derives — its events merged into an adjacent session by a
+    backfilled event — has its Odoo row zeroed and its mapping retired, so the
+    merged-away hours are not double-counted.
+
+    :return: ``(uploaded, retired)`` counts.
     """
     stop_cmd = registry["stop_task"]
     client, state = stop_cmd._client, stop_cmd.state
@@ -204,7 +213,16 @@ def _upload_sessions(registry: Registry, sessions: list[dict[str, Any]]) -> int:
             continue
         _upload_one(client, state, task_id, session)
         uploaded += 1
-    return uploaded
+    window_lo, window_hi = _window_bounds(window)
+    retired = sweep_orphaned_uploads(
+        client,
+        state,
+        derived_keys={session.get("session_key", "") for session in sessions},
+        derived_task_ids={str(session.get("task_id")) for session in sessions},
+        window_lo=window_lo,
+        window_hi=window_hi,
+    )
+    return uploaded, retired
 
 
 def _upload_one(
@@ -213,13 +231,15 @@ def _upload_one(
     """Upload one derived session's hours onto its own timesheet row.
 
     Delegation only: the surface passes the identity the derived session carries
-    (its numeric ``task_id``, stable ``session_key``, ``duration_secs`` and start
-    date) to :func:`reconcile_session`, which resolves and rewrites the single
-    row the session maps to. Idempotent per session key.
+    (its numeric ``task_id``, stable ``session_key``, ``duration_secs`` and its
+    ``started_at``/``ended_at`` bounds) to :func:`reconcile_session`, which
+    resolves and rewrites the single row the session maps to and records the
+    window bounds the orphan sweep keys on. Idempotent per session key.
     """
     hours = float(session.get("duration_secs", 0)) / 3600
     key = session.get("session_key", "")
-    day = datetime.fromisoformat(session["started_at"]).date()
+    started_at = datetime.fromisoformat(session["started_at"])
+    ended_at = datetime.fromisoformat(session["ended_at"])
     reconcile_session(
         client,
         state,
@@ -227,7 +247,8 @@ def _upload_one(
         key,
         f"[/] session {key}",
         hours,
-        day,
+        started_at,
+        ended_at,
     )
 
 

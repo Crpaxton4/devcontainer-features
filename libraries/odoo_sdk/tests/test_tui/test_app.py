@@ -33,7 +33,7 @@ def _sessions(n=2):
     return [
         {
             "session_id": i,
-            "session_key": f"{100 + i}|acme/web|{i}",
+            "session_key": f"{100 + i}|{i}",
             "task_id": str(100 + i),
             "repo": "acme/web",
             "strategy_name": "development",
@@ -73,7 +73,11 @@ class FakeRegistry:
 def _registry(query_result=None, store=None):
     # ``_upload_sessions`` resolves its (client, state) pair off the stop_task
     # command, so the fake carries both. A MagicMock stands in for the Odoo
-    # client the unified ``reconcile`` writes through.
+    # client the unified ``reconcile`` writes through. The state's
+    # ``list_session_uploads`` returns an empty ledger so the orphan sweep is a
+    # no-op by default (its behavior is tested against a real DB elsewhere).
+    stop_state = MagicMock()
+    stop_state.list_session_uploads.return_value = []
     return FakeRegistry(
         {
             "query_sessions": FakeCommand(
@@ -82,7 +86,7 @@ def _registry(query_result=None, store=None):
             "start_task": FakeCommand(result={"run_id": 1}),
             "stop_task": FakeCommand(
                 result={"elapsed_hours": 1.0},
-                state=MagicMock(),
+                state=stop_state,
                 client=MagicMock(),
             ),
         }
@@ -287,40 +291,45 @@ class TestUploadSessions(unittest.TestCase):
 
     def test_non_numeric_task_skipped(self):
         registry = _registry()
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 1))
         sessions = _sessions(1)
         sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 99})
         with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            count = _upload_sessions(registry, sessions)
-        self.assertEqual(count, 1)  # only the numeric one is billed
+            uploaded, _ = _upload_sessions(registry, sessions, window)
+        self.assertEqual(uploaded, 1)  # only the numeric one is billed
         self.assertEqual(mock_reconcile.call_count, 1)
 
     def test_upload_reconciles_once_per_session(self):
         # Each session drives exactly one reconcile_session (idempotent per key).
         registry = _registry()
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 1))
         with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            _upload_sessions(registry, _sessions(3))
+            _upload_sessions(registry, _sessions(3), window)
         self.assertEqual(mock_reconcile.call_count, 3)
 
-    def test_reconcile_receives_identity_hours_and_day(self):
+    def test_reconcile_receives_identity_hours_and_bounds(self):
         registry = _registry()
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 1))
         sessions = [
             {
                 "session_id": 5,
-                "session_key": "100|acme/web|5",
+                "session_key": "100|5",
                 "task_id": "100",
                 "duration_secs": 7200,
                 "started_at": "2026-06-01T09:00:00",
+                "ended_at": "2026-06-01T11:00:00",
                 "events": [],
             }
         ]
         with patch("odoo_sdk.tui.app.reconcile_session") as mock_reconcile:
-            _upload_sessions(registry, sessions)
+            _upload_sessions(registry, sessions, window)
         args = mock_reconcile.call_args.args
         self.assertEqual(args[2], 100)  # numeric task id
-        self.assertEqual(args[3], "100|acme/web|5")  # stable session key
-        self.assertEqual(args[4], "[/] session 100|acme/web|5")  # description
+        self.assertEqual(args[3], "100|5")  # stable session key
+        self.assertEqual(args[4], "[/] session 100|5")  # description
         self.assertEqual(args[5], 2.0)  # 7200s -> 2.0h
-        self.assertEqual(args[6], date(2026, 6, 1))  # started_at date
+        self.assertEqual(args[6], datetime(2026, 6, 1, 9, 0))  # started_at
+        self.assertEqual(args[7], datetime(2026, 6, 1, 11, 0))  # ended_at
 
 
 class TestHandleKey(unittest.TestCase):
