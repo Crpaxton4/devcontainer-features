@@ -131,16 +131,28 @@ _SESSION_SOURCE_PREDICATE = (
 # session merely straddling the queried window still pulls in its neighbours whole;
 # a session whose total span exceeds the margin can in theory be clipped at the
 # far edge (documented, accepted tradeoff — no fixed margin bounds a gap chain).
+#
+# Fan-out (#362): a multi-task event (``--attach-active-run`` attaches EVERY
+# active run's task id, so a single hook event can carry ``task_ids=[t1, t2]``)
+# is fanned out over its task ids with ``json_each``: it yields one ``base`` row
+# per task id and thus extends BOTH tasks' sessions instead of only the first.
+# ``events.id`` is qualified because ``json_each`` also exposes an ``id`` column.
+# ``DISTINCT`` collapses a task id that appears twice in one array so a duplicated
+# id can never double-count an event within its own session. One event id can now
+# anchor two tasks' sessions; keys stay distinct because the session key is
+# ``task|min_event_id`` (task-scoped).
 _DERIVE_SESSIONS_SQL = f"""
 WITH base AS (
-    SELECT id, timestamp, pr_num, repo,
-           julianday(timestamp) AS jd,
-           COALESCE(NULLIF(json_extract(task_ids, '$[0]'), ''), 'UNKNOWN') AS task_key
-    FROM events
+    SELECT DISTINCT
+           events.id AS id, events.timestamp AS timestamp,
+           events.pr_num AS pr_num, events.repo AS repo,
+           julianday(events.timestamp) AS jd,
+           COALESCE(NULLIF(task_each.value, ''), 'UNKNOWN') AS task_key
+    FROM events, json_each(events.task_ids) AS task_each
     WHERE {_SESSION_SOURCE_PREDICATE}
-      AND json_array_length(task_ids) > 0
-      AND timestamp >= :wstart
-      AND timestamp <= :wend
+      AND json_array_length(events.task_ids) > 0
+      AND events.timestamp >= :wstart
+      AND events.timestamp <= :wend
 ),
 marked AS (
     SELECT *,
@@ -821,6 +833,12 @@ class LocalStateClient:
         :func:`_derivation_margin` each side (#359), so only a timestamp slice is
         sessionized (via ``idx_events_timestamp``) rather than the whole table.
 
+        An event carrying multiple task ids (``--attach-active-run`` attaches every
+        active run's task id) is fanned out over its ``task_ids`` array: it extends
+        EVERY named task's session, not just the first (#362). One event id can
+        therefore anchor two different tasks' sessions, but the
+        ``task|min_event_id`` session key stays distinct per task.
+
         Only development-strategy sources participate (``commit``/``agent``/
         ``chatter`` and the ``claude:<HookName>`` family); ``merge``/``review`` are
         excluded. Every derived window is ``strategy_name='development'`` /
@@ -833,7 +851,8 @@ class LocalStateClient:
         :param start: Inclusive lower bound of the overlap window.
         :param end: Inclusive upper bound of the overlap window.
         :param gap_secs: The fixed inactivity gap in seconds.
-        :param task_id: Restrict to one task id (the group's first task id), or None.
+        :param task_id: Restrict to one task id (any id the event carries, since a
+            multi-task event contributes to each), or None.
         :param repo: Restrict to one *display* repo, or None. A session's display
             repo is its group's real ``owner/repo`` label when any event carried
             one, else :data:`AGENTLESS_REPO_SENTINEL`; pass the sentinel to select

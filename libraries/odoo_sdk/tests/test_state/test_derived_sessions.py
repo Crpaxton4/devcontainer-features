@@ -157,12 +157,14 @@ class TestTaskOnlyPartition(unittest.TestCase):
 
 
 class TestSourceAndTaskFiltering(unittest.TestCase):
-    def test_first_task_id_selected_from_array(self):
+    def test_multi_task_event_fans_out_to_every_task(self):
+        # A multi-active-run event (task_ids=[55, 66]) must extend BOTH tasks'
+        # sessions, not only the first.
         state = _tmp_state()
         _event(state, ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC), task_ids=["55", "66"])
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
-        self.assertEqual(windows[0].task_id, "55")
+        self.assertEqual({w.task_id for w in windows}, {"55", "66"})
 
     def test_empty_task_ids_excluded(self):
         state = _tmp_state()
@@ -195,6 +197,54 @@ class TestSourceAndTaskFiltering(unittest.TestCase):
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP, task_id="202")
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0].task_id, "202")
+
+
+class TestMultiActiveRunFanOut(unittest.TestCase):
+    def test_shared_hook_event_extends_both_tasks_with_distinct_keys(self):
+        # Two active runs -> a hook event carries task_ids=[t1, t2]. Each task
+        # gets its own session covering the shared event, and the two session
+        # keys differ (they share the same min-event-id but differ by task).
+        state = _tmp_state()
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        # Prior solo activity anchors each task's session earlier than the shared
+        # event so we can prove the shared event extends an existing session.
+        _event(state, ts=base, source="claude:PostToolUse", task_ids=["55"])
+        _event(state, ts=base + timedelta(minutes=5), source="claude:PostToolUse", task_ids=["66"])
+        shared = _event(
+            state,
+            ts=base + timedelta(minutes=10),
+            source="claude:PostToolUse",
+            task_ids=["55", "66"],
+        )
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        by_task = {w.task_id: w for w in windows}
+        self.assertEqual(set(by_task), {"55", "66"})
+        # Both tasks' sessions cover the shared event's timestamp and embed it.
+        for window in by_task.values():
+            self.assertLessEqual(window.started_at, shared.timestamp)
+            self.assertGreaterEqual(window.ended_at, shared.timestamp)
+            self.assertIn(shared.id, window.event_ids)
+        # Distinct session keys despite the shared anchor event.
+        self.assertNotEqual(
+            session_key(by_task["55"]), session_key(by_task["66"])
+        )
+
+    def test_multi_task_event_alone_seeds_both_task_sessions(self):
+        # A lone multi-task event (no prior solo activity) still seeds a session
+        # for each task; the single event id is not double-counted per session.
+        state = _tmp_state()
+        shared = _event(
+            state,
+            ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
+            source="claude:PostToolUse",
+            task_ids=["55", "66"],
+        )
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 2)
+        for window in windows:
+            self.assertEqual(window.event_ids, (shared.id,))
 
 
 class TestIdentityStability(unittest.TestCase):
