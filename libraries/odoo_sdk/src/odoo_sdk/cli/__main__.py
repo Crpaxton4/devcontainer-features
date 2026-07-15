@@ -14,6 +14,7 @@ Subcommands:
     abort <hash> <run_id>   Abort a stale run in another project's DB
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
     upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
+    prune [--older-than N]  Delete aged hook events past a retention horizon
 """
 
 import argparse
@@ -42,14 +43,17 @@ from odoo_sdk.utilities.env import (
     assert_odoo_devcontainer,
 )
 from odoo_sdk.utilities.odoo_helpers import merge_timesheets, update_timesheet
+from odoo_sdk.utilities.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.utilities.upload import upload_sessions
 
 # Subcommands that skip the global Odoo devcontainer assert and build no
 # OdooClient up front. ``log-event`` / ``discover`` are purely local; ``resync``
 # is local-first — its git/github pullers never touch Odoo, and it constructs an
 # OdooClient lazily (behind its own env assert) only when ``odoo`` is requested,
-# so the global assert must not gate it.
-_LOCAL_ONLY = {"log-event", "discover", "resync"}
+# so the global assert must not gate it. ``prune`` is purely local too: it deletes
+# aged local events and retires local ledger mappings, never writing to Odoo (a
+# pruned session's billed Odoo row keeps its hours; only the local mapping goes).
+_LOCAL_ONLY = {"log-event", "discover", "resync", "prune"}
 
 
 def _assert_env() -> None:
@@ -437,6 +441,78 @@ def cmd_upload(args: argparse.Namespace, db: TaskStateDB, client: OdooClient) ->
     _print_upload_summary(result, args.dry_run)
 
 
+def _positive_int(value: str) -> int:
+    """Parse a strictly-positive ``--older-than`` day count (argparse type).
+
+    A retention horizon must be at least one day: ``0`` (and anything negative)
+    would set the cutoff to now or the future and prune every closed session, so
+    it is rejected as a usage error (exit 2) rather than silently flushing the DB.
+    This keeps the explicit flag consistent with ``prune_horizon_days``, where
+    ``0`` means "auto-prune off".
+
+    :raises argparse.ArgumentTypeError: When ``value`` is not a positive integer.
+    """
+    try:
+        days = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from exc
+    if days < 1:
+        raise argparse.ArgumentTypeError(
+            f"--older-than must be a positive number of days, got {days}"
+        )
+    return days
+
+
+def _resolve_prune_days(
+    args: argparse.Namespace, config: LocalConfig
+) -> Optional[int]:
+    """Return the horizon in days to prune to, or None when auto-prune is off.
+
+    An explicit ``--older-than`` always wins; otherwise the configured
+    ``prune_horizon_days`` (file ``[behavior]`` or ``ODOO_PRUNE_HORIZON_DAYS``)
+    is honored, and an unset/zero default means "never auto-prune".
+    """
+    if args.older_than is not None:
+        return args.older_than
+    return resolve_horizon(config)
+
+
+def cmd_prune(args: argparse.Namespace) -> None:
+    """Delete aged hook events past a retention horizon, guarding uploads (#363).
+
+    Local-only: plans the prune (see :func:`~odoo_sdk.utilities.prune.plan_prune`)
+    so that no un-uploaded session's events and no still-tracked session's
+    minimum-id key can ever be disturbed, then either previews (``--dry-run``) or
+    executes the deletion and retires the ledger mappings of the fully-uploaded,
+    fully-aged sessions it removed. With no ``--older-than`` and no configured
+    ``prune_horizon_days``, auto-prune is disabled and nothing is deleted.
+    """
+    db = _open_local_db()
+    config = LocalConfig.load()
+    days = _resolve_prune_days(args, config)
+    if days is None:
+        print(
+            "Auto-prune disabled: pass --older-than <days> or set "
+            "prune_horizon_days (0 = off)."
+        )
+        return
+    plan = plan_prune(db, config, older_than_days=days)
+    horizon = f"older than {days} day(s) (before {plan.cutoff.isoformat()})"
+    if args.dry_run:
+        print(
+            f"Would prune {plan.delete_count} event(s) {horizon}; "
+            f"kept {plan.kept_session_count} protected session(s); "
+            f"would retire {len(plan.retire_keys)} upload mapping(s)."
+        )
+        return
+    result = execute_prune(db, plan)
+    print(
+        f"Pruned {result['deleted']} event(s) {horizon}; "
+        f"kept {result['kept_sessions']} protected session(s); "
+        f"retired {result['retired']} upload mapping(s)."
+    )
+
+
 def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
     """Abort a stale run in another project's DB and close its Odoo anchor."""
     result = AbortRunCommand(client).execute(args.project_hash, args.run_id)
@@ -559,6 +635,24 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         help="Preview the billable sessions without writing to Odoo",
     )
+
+    prune_p = subparsers.add_parser(
+        "prune", help="Delete aged hook events past a retention horizon"
+    )
+    prune_p.add_argument(
+        "--older-than",
+        type=_positive_int,
+        default=None,
+        dest="older_than",
+        help="Prune events strictly older than this many days (positive integer; "
+        "default: the configured prune_horizon_days, else no-op)",
+    )
+    prune_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview what would be pruned without deleting anything",
+    )
     return parser
 
 
@@ -605,6 +699,8 @@ def _dispatch_local_only(args: argparse.Namespace) -> None:
         cmd_discover(args)
     elif args.command == "resync":
         cmd_resync(args)
+    elif args.command == "prune":
+        cmd_prune(args)
     else:
         cmd_log_event(args)
 

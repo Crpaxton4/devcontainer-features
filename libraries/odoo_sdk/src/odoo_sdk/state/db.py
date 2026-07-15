@@ -26,6 +26,11 @@ from .models import (
 # SQL-derived read path (:meth:`LocalStateClient.derive_sessions_overlapping`).
 AGENTLESS_REPO_SENTINEL = "\x00agent"
 
+# Max ids bound into a single ``DELETE ... IN (...)`` statement. A prune can hand
+# :meth:`LocalStateClient.delete_events` a heavy day's worth of ids at once, so the
+# delete is chunked to stay well under SQLite's historical 999-variable limit.
+_DELETE_CHUNK = 500
+
 
 def _default_root() -> Path:
     """Resolve the user-writable base directory for tracker state.
@@ -922,6 +927,66 @@ class LocalStateClient:
                 f"SELECT COUNT(*) FROM events{where}", tuple(params)
             ).fetchone()
         return int(row[0])
+
+    def event_ids_before(self, cutoff: datetime) -> list[int]:
+        """Return the ids of every event strictly older than ``cutoff``, ascending.
+
+        The retention read primitive (#363): the ``prune`` planner needs the full
+        set of aged event ids — including untargeted diagnostic events that never
+        form a session — so it can subtract the ids it must protect and delete the
+        remainder. ``cutoff`` is normalized to the same uniform UTC isoformat the
+        stored timestamps use, so the ``timestamp < ?`` string comparison is exact.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM events WHERE timestamp < ? ORDER BY id",
+                (_bound_isoformat(cutoff),),
+            ).fetchall()
+        return [int(row[0]) for row in rows]
+
+    def delete_events(self, ids: list[int]) -> int:
+        """Delete the events with the given ids and return the number removed.
+
+        The retention write primitive (#363): the sole event-DELETION path in the
+        SDK. Ids are deleted in bounded chunks so a heavy day's worth of ids never
+        exceeds SQLite's per-statement variable limit. This is a raw delete with no
+        guard of its own — the ``prune`` planner is responsible for only ever
+        handing it ids it has proven safe to remove (see
+        :func:`odoo_sdk.utilities.prune.plan_prune`).
+        """
+        if not ids:
+            return 0
+        deleted = 0
+        with self._connect() as conn:
+            for start in range(0, len(ids), _DELETE_CHUNK):
+                chunk = ids[start : start + _DELETE_CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"DELETE FROM events WHERE id IN ({placeholders})", tuple(chunk)
+                )
+                deleted += cursor.rowcount
+        return deleted
+
+    def vacuum(self) -> None:
+        """Reclaim free pages left by a prune via a full ``VACUUM``.
+
+        A trivial, best-effort space reclaim (#363): after a real prune deletes
+        aged rows their pages sit on the freelist until reused, so a one-shot
+        ``VACUUM`` rewrites the (small, ephemeral) local DB to hand the space back
+        to the filesystem. Run on its own connection so no open transaction can
+        make SQLite reject the statement. Reclaim is non-essential (the prune has
+        already committed), so a lock held by a concurrent writer — VACUUM needs an
+        exclusive lock — is swallowed rather than turned into a spurious failure;
+        the busy timeout gives that writer a chance to drain first.
+        """
+        conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA busy_timeout=2000")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
 
     def get_session_upload(self, session_key: str) -> Optional[dict]:
         """Return the recorded upload for a derived session key, or None.
