@@ -177,7 +177,10 @@ are left untargeted (session-level) otherwise.
 
 **`PreToolUse` excludes `mcp__odoo__*` tools.** The odoo-sdk MCP server already
 logs its own tool dispatches server-side, so `claude-event-hook` skips those to
-avoid double-counting.
+avoid double-counting. That server-side event mirrors this shim's payload
+stance: it records only the tool name and task id — never argument values (note
+bodies, questions, search queries) — so no free-text inputs are written to the
+local events store on either path.
 
 **Never blocks a session.** `claude-event-hook` always exits 0, never writes to
 stdout (which the hooks contract could interpret as a permission decision),
