@@ -30,6 +30,8 @@ class EventType(Enum):
     REVIEW = auto()
     AGENT = auto()
     CHATTER = auto()  # Odoo task chatter authored by the tracked user (resync)
+    CALENDAR = auto()  # Google Calendar meeting tick (synthetic; resync, #370)
+    EMAIL = auto()  # Sent Gmail message, a point event (resync, #370)
     CLAUDE_HOOK = auto()  # Claude Code hook activity (source ``claude:<HookName>``)
 
 

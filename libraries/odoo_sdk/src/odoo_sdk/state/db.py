@@ -137,11 +137,16 @@ def create_schema(conn: sqlite3.Connection) -> None:
 
 
 # Sources whose events participate in gap-based sessionization. Matches the
-# development-strategy sources: ``commit``, ``agent``, future ``chatter`` resync
-# events, plus the open-ended ``claude:<HookName>`` family (EventType.CLAUDE_HOOK).
-# ``merge`` / ``review`` are fixed-strategy sources and never form sessions here.
+# development-strategy sources: ``commit``, ``agent``, ``chatter`` resync events,
+# the ``calendar`` meeting ticks and ``email`` sent-mail point events (#370), plus
+# the open-ended ``claude:<HookName>`` family (EventType.CLAUDE_HOOK). ``merge`` /
+# ``review`` are fixed-strategy sources and never form sessions here. Calendar
+# ticks are synthetic point events emitted 5 min apart across a meeting so the
+# UNCHANGED gap derivation reconstructs the meeting as one session (#370); a sent
+# email is a lone point event that picks up the #355 minimum like a commit.
 _SESSION_SOURCE_PREDICATE = (
-    "(source IN ('commit', 'agent', 'chatter') OR source LIKE 'claude:%')"
+    "(source IN ('commit', 'agent', 'chatter', 'calendar', 'email') "
+    "OR source LIKE 'claude:%')"
 )
 
 

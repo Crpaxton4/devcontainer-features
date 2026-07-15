@@ -60,6 +60,7 @@ with `odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
 
 quickstart_mcp
 quickstart_tui
+resync_google
 walkthrough
 api/modules
 design/index

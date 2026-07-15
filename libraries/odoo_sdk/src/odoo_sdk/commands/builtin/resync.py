@@ -16,25 +16,36 @@ from __future__ import annotations
 
 from typing import Any
 
-from odoo_sdk.adapters import sync_git_log, sync_github, sync_odoo_chatter
+from odoo_sdk.adapters import (
+    sync_git_log,
+    sync_github,
+    sync_gmail,
+    sync_google_calendar,
+    sync_odoo_chatter,
+)
 
 from ..command import Command
 from ._registration import builtin_command
 
-# The pullers a resync can run, in a stable order. The default runs all three.
-_ALL_SOURCES = ("git", "github", "odoo")
+# The pullers a resync can run, in a stable order. ``gcal``/``gmail`` reach the
+# Google APIs and require host-provisioned credentials, so they are opt-in: NOT
+# in the default source string, only run when explicitly requested (issue #370).
+_DEFAULT_SOURCES = ("git", "github", "odoo")
+_GOOGLE_SOURCES = ("gcal", "gmail")
+_ALL_SOURCES = _DEFAULT_SOURCES + _GOOGLE_SOURCES
 
 
 def _parse_sources(sources: str) -> list[str]:
     """Return the requested pullers from a comma-separated ``sources`` string.
 
     Order follows :data:`_ALL_SOURCES` (not the input order) so the result is
-    stable, and unknown tokens are ignored. An empty/blank string selects all
-    sources, matching the ``resync`` default.
+    stable, and unknown tokens are ignored. An empty/blank string selects the
+    DEFAULT sources only (git/github/odoo); the Google sources are opt-in and
+    must be named explicitly, so ``resync`` never reaches the network by default.
     """
     requested = {token.strip() for token in sources.split(",") if token.strip()}
     if not requested:
-        return list(_ALL_SOURCES)
+        return list(_DEFAULT_SOURCES)
     return [source for source in _ALL_SOURCES if source in requested]
 
 
@@ -55,14 +66,16 @@ class ResyncCommand(Command):
         "Manual, idempotent (dedup by external id), and tolerant of any source's "
         "tool being absent (that source is skipped). Sessions derive from events "
         "at query time, so no ingest step is needed. Pass a comma-separated "
-        "'sources' subset of git,github,odoo (default: all three)."
+        "'sources' subset of git,github,odoo,gcal,gmail (default: git,github,odoo). "
+        "gcal/gmail are opt-in Google sources needing host-provisioned credentials."
     )
 
     def execute(self, sources: str = "git,github,odoo") -> dict[str, Any]:
         """Run the requested pullers and return a per-source summary.
 
-        :param sources: Comma-separated subset of ``git,github,odoo``; blank or
-            unrecognized-only input runs all three.
+        :param sources: Comma-separated subset of ``git,github,odoo,gcal,gmail``;
+            blank or unrecognized-only input runs the default git/github/odoo
+            (the Google sources are opt-in and never run by default).
         :return: Mapping of each run source to its puller summary dict
             (``{"inserted": n}`` or ``{"skipped": reason}``).
         """
@@ -74,4 +87,8 @@ class ResyncCommand(Command):
             summary["github"] = sync_github(self.state)
         if "odoo" in selected:
             summary["odoo"] = sync_odoo_chatter(self._client, self.state)
+        if "gcal" in selected:
+            summary["gcal"] = sync_google_calendar(self.state, self.config)
+        if "gmail" in selected:
+            summary["gmail"] = sync_gmail(self.state, self.config)
         return summary

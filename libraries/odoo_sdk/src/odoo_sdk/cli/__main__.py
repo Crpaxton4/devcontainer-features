@@ -23,13 +23,17 @@ import json
 import math
 import sys
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from odoo_sdk.adapters import (
+    GoogleAPIError,
+    GoogleAuthError,
     UnknownEventSourceError,
     source_to_event_type,
     sync_git_log,
     sync_github,
+    sync_gmail,
+    sync_google_calendar,
     sync_odoo_chatter,
 )
 from odoo_sdk.client import OdooClient
@@ -347,13 +351,31 @@ def cmd_discover(args: argparse.Namespace) -> None:
         print(_discover_run_line(run))
 
 
-_RESYNC_SOURCES = ("git", "github", "odoo")
+# git/github/odoo are the default pullers; gcal/gmail are opt-in Google sources
+# (issue #370) that require host-provisioned credentials, so they are only run
+# when named explicitly and never reached by the default source string.
+_RESYNC_SOURCES = ("git", "github", "odoo", "gcal", "gmail")
 
 
 def _parse_resync_sources(raw: str) -> list[str]:
     """Return the requested resync pullers in stable order, ignoring unknowns."""
     requested = {token.strip() for token in raw.split(",") if token.strip()}
     return [source for source in _RESYNC_SOURCES if source in requested]
+
+
+def _resync_google(puller: Callable[..., dict], db: TaskStateDB) -> dict:
+    """Run one Google puller, surfacing an unusable-credential error as a skip.
+
+    The puller itself raises a single actionable :class:`GoogleAuthError` (or a
+    ``ValueError`` for a rejected tick interval) rather than silently ingesting
+    nothing; a transient REST failure surfaces as :class:`GoogleAPIError`. The
+    CLI prints any of these as this source's skip reason so one misconfigured or
+    momentarily-unreachable Google source never aborts the whole resync.
+    """
+    try:
+        return puller(db, LocalConfig.load())
+    except (GoogleAuthError, GoogleAPIError, ValueError) as exc:
+        return {"skipped": str(exc)}
 
 
 def _resync_odoo(db: TaskStateDB) -> dict:
@@ -387,7 +409,13 @@ def cmd_resync(args: argparse.Namespace) -> None:
     """
     sources = _parse_resync_sources(args.sources)
     db = _open_local_db()
-    runners = {"git": sync_git_log, "github": sync_github, "odoo": _resync_odoo}
+    runners = {
+        "git": sync_git_log,
+        "github": sync_github,
+        "odoo": _resync_odoo,
+        "gcal": lambda db: _resync_google(sync_google_calendar, db),
+        "gmail": lambda db: _resync_google(sync_gmail, db),
+    }
     for source in sources:
         result = runners[source](db)
         print(_format_resync_line(source, result))
@@ -714,7 +742,10 @@ def _build_parser() -> argparse.ArgumentParser:
     resync_p.add_argument(
         "--sources",
         default="git,github,odoo",
-        help="Comma-separated subset of git,github,odoo (default: all three)",
+        help=(
+            "Comma-separated subset of git,github,odoo,gcal,gmail "
+            "(default: git,github,odoo; gcal/gmail are opt-in Google sources)"
+        ),
     )
 
     upload_p = subparsers.add_parser(
