@@ -122,9 +122,13 @@ class SessionWindow:
 def session_key(window: SessionWindow) -> str:
     """Return a stable identity string for a derived session window.
 
-    The key is ``"{task_id}|{repo}|{id}"`` where ``id`` is the window's minimum
-    event id. Because a closed session's earliest event id is immutable under
-    append-only tail writes, the key stays stable across re-derivations and can
-    be used as the idempotency key for per-session timesheet uploads.
+    The key is ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
+    id. As of #352 sessions partition by task only (the repo is display-only
+    metadata, no longer part of the identity), so a task's agent events
+    (``repo=""``) and its resync'd commits (``repo="owner/repo"``) share one key
+    rather than splitting into two parallel lanes. Because a closed session's
+    earliest event id is immutable under append-only tail writes, the key stays
+    stable across re-derivations and is the idempotency key for per-session
+    timesheet uploads.
     """
-    return f"{window.task_id}|{window.repo}|{window.id}"
+    return f"{window.task_id}|{window.id}"
