@@ -61,6 +61,21 @@ def source_to_event_type(source: str) -> EventType:
     raise UnknownEventSourceError(f"unknown event source {source!r}")
 
 
+def _is_release_event(record: EventRecord) -> bool:
+    """Whether an event should be flagged as a release.
+
+    Multiple task ids on a ``claude:<hook>`` or ``agent`` event just means several
+    tracked runs were active when the event fired: ``log-event
+    --attach-active-run`` attaches EVERY active run's task id, so a routine
+    Read/Bash hook naturally carries ``task_ids=[t1, t2]`` with two tasks tracked.
+    Those sources are therefore never releases by task count. The other
+    release-bearing sources keep the historical ``len(task_ids) > 1`` heuristic.
+    """
+    if record.source == "agent" or record.source.startswith(_CLAUDE_SOURCE_PREFIX):
+        return False
+    return len(record.task_ids) > 1
+
+
 def event_record_to_raw_event(record: EventRecord) -> RawEvent:
     """Convert a persisted :class:`EventRecord` to a pure :class:`RawEvent`."""
     payload = record.payload or {}
@@ -71,7 +86,7 @@ def event_record_to_raw_event(record: EventRecord) -> RawEvent:
         pr_num=record.pr_num,
         event_type=source_to_event_type(record.source),
         branch=record.branch,
-        is_release=len(record.task_ids) > 1,
+        is_release=_is_release_event(record),
         subject=record.subject,
         pr_title=payload.get("pr_title", ""),
         pr_body=payload.get("pr_body", ""),
