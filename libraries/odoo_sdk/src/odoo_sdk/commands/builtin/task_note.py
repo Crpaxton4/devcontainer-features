@@ -2,6 +2,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
+from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.state import LocalStateClient as TaskStateDB
@@ -36,8 +37,13 @@ class TaskNoteCommand(Command):
 
         message_id = post_chatter_note(self._client, task_id, note)
         db.append_note(task_id, note)
-        return {
+        # The MCP wrapper records THIS call's ``task_note`` event only after the
+        # command returns, so the hint reads the gap since the *previous* note
+        # (or the run start) — exactly the cadence signal #387 asks for.
+        result: dict[str, Any] = {
             "task_name": run.task_name,
             "message_id": message_id,
             "note": note,
         }
+        result.update(checkpoint_hint(db, task_id, run.started_at))
+        return result

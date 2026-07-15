@@ -5,6 +5,7 @@ from typing import Any, Optional
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskAlreadyRunningError
+from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.utilities.timesheet import ensure_anchor, resolve_employee_id
@@ -120,8 +121,12 @@ class StartTaskCommand(Command):
                 exc_info=True,
             )
 
-        return _build_run_result(
+        result = _build_run_result(
             run, task_id, task_name, project_name, timesheet_id,
             branch_name=branch_name,
             warning=warning,
         )
+        # Prime the checkpoint-cadence signal (#387) on the very first response:
+        # a fresh run has no note yet, so this reports ~0 minutes and no nudge.
+        result.update(checkpoint_hint(db, task_id, run.started_at))
+        return result

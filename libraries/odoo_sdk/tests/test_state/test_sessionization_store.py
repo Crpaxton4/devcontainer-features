@@ -64,5 +64,53 @@ class TestEventStore(unittest.TestCase):
         self.assertEqual(len(db.get_events()), 1)
 
 
+def _note_event(minute: int, task="101") -> EventRecord:
+    return EventRecord(
+        id=None,
+        source="agent",
+        timestamp=datetime(2026, 6, 1, 9, minute, tzinfo=UTC),
+        task_ids=[task],
+        repo="",
+        subject="task_note",
+        payload={"tool": "task_note"},
+    )
+
+
+class TestLastNoteAt(unittest.TestCase):
+    def test_returns_none_when_no_note_event(self):
+        db = _tmp_db()
+        db.add_event(_event(0))  # a commit event, not a task_note
+        self.assertIsNone(db.last_note_at(101))
+
+    def test_returns_most_recent_note_timestamp(self):
+        db = _tmp_db()
+        db.add_event(_note_event(5, task="101"))
+        db.add_event(_note_event(30, task="101"))
+        self.assertEqual(
+            db.last_note_at(101), datetime(2026, 6, 1, 9, 30, tzinfo=UTC)
+        )
+
+    def test_ignores_notes_for_other_tasks(self):
+        db = _tmp_db()
+        db.add_event(_note_event(30, task="999"))
+        self.assertIsNone(db.last_note_at(101))
+
+    def test_matches_multi_task_note_event(self):
+        db = _tmp_db()
+        rec = _note_event(12, task="101")
+        rec.task_ids = ["101", "202"]
+        db.add_event(rec)
+        self.assertEqual(
+            db.last_note_at(202), datetime(2026, 6, 1, 9, 12, tzinfo=UTC)
+        )
+
+    def test_ignores_non_note_agent_events(self):
+        db = _tmp_db()
+        rec = _note_event(20, task="101")
+        rec.subject = "start_task"
+        db.add_event(rec)
+        self.assertIsNone(db.last_note_at(101))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -283,6 +283,54 @@ class TestTaskNoteCommand(unittest.TestCase):
             with self.assertRaises(TaskNotRunningError):
                 TaskNoteCommand(_client()).execute(999, "note")
 
+    def test_response_carries_checkpoint_hint(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=55,
+            ),
+        ):
+            result = TaskNoteCommand(client).execute(1, "Note text")
+        self.assertIn("minutes_since_last_note", result)
+        self.assertIn("suggest_checkpoint", result)
+        self.assertFalse(result["suggest_checkpoint"])
+
+    def test_hint_suggests_checkpoint_after_stale_note(self):
+        from datetime import datetime, timedelta, timezone
+
+        from odoo_sdk.state import EventRecord
+
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=datetime.now(timezone.utc) - timedelta(minutes=25),
+                task_ids=["1"],
+                repo="",
+                subject="task_note",
+                payload={"tool": "task_note"},
+            )
+        )
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=55,
+            ),
+        ):
+            result = TaskNoteCommand(client).execute(1, "Note text")
+        self.assertEqual(result["minutes_since_last_note"], 25)
+        self.assertTrue(result["suggest_checkpoint"])
+
 
 # ── TaskQuestionCommand ───────────────────────────────────────────────────────
 
@@ -451,6 +499,13 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertIn("run_id", result)
         mock_note.assert_called_once_with(client, 10, "Work started on this task.")
         self.assertIsNotNone(db.get_active_run(10))
+
+    def test_response_carries_checkpoint_hint_at_zero(self):
+        client = _client()
+        db = _tmp_db()
+        result, _ = self._start(client, db, **self._base_kwargs())
+        self.assertEqual(result["minutes_since_last_note"], 0)
+        self.assertFalse(result["suggest_checkpoint"])
 
     def test_echoes_branch_name_and_warning(self):
         client = _client()

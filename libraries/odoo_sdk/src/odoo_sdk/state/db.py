@@ -777,6 +777,28 @@ class LocalStateClient:
             ).fetchone()
         return _parse_event(tuple(row)) if row else None
 
+    def last_note_at(self, task_id: int) -> Optional[datetime]:
+        """Return the timestamp of the most recent recorded ``task_note`` for a task.
+
+        Reads the append-only ``events`` timeseries for the newest
+        ``source='agent'`` event whose subject is ``task_note`` and whose
+        ``task_ids`` include this task, fanning out the JSON array with
+        ``json_each`` so a multi-task event still matches. Returns ``None`` when
+        the task has no recorded note event yet. This is the read primitive the
+        checkpoint-cadence hint (#387) derives elapsed time from; it never writes
+        and is safe to call on every note/start.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(events.timestamp) FROM events, "
+                "json_each(events.task_ids) AS task_each "
+                "WHERE events.source = 'agent' AND events.subject = 'task_note' "
+                "AND task_each.value = ?",
+                (str(task_id),),
+            ).fetchone()
+        ts = row[0] if row is not None else None
+        return datetime.fromisoformat(ts) if ts else None
+
     def get_events(
         self,
         start: Optional[datetime] = None,
