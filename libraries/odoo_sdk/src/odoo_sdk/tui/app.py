@@ -20,10 +20,14 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.state import EventRecord
+from odoo_sdk.utilities.logged_lines import logged_hours_by_task_day
 from odoo_sdk.utilities.upload import range_bounds, upload_sessions
 
+from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
 from .frame import compose_frame
+from .review import compose_review_frame
 from .triage import TriageRow, build_triage_rows, compose_triage_frame
 from .window import DateWindow, apply_action
 
@@ -40,6 +44,7 @@ _EXPORT_CSV_KEY = ord("c")
 _UPLOAD_KEY = ord("u")
 _RESYNC_KEY = ord("r")
 _TRIAGE_KEY = ord("t")
+_REVIEW_KEY = ord("v")
 _SKIP_KEY = ord("s")
 _QUIT_KEYS = (ord("q"), 27)  # q or ESC
 _CONFIRM_KEYS = (ord("y"), ord("Y"))
@@ -48,6 +53,7 @@ _BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
 
 _MODE_MAIN = "main"
 _MODE_TRIAGE = "triage"
+_MODE_REVIEW = "review"
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,11 @@ class AppState:
         per calendar series or lone event.
     :param triage_selected: Index of the highlighted triage row.
     :param triage_input: The task id being typed for the selected row (digits).
+    :param review_cards: The derived sessions decorated for review (#378 items
+        7-9): confidence class, already-logged and overlap badges, citations.
+        Only meaningful in ``"review"`` mode.
+    :param review_selected: Index of the highlighted review card.
+    :param review_expanded: Whether the selected card's evidence pane is open.
     """
 
     window: DateWindow
@@ -77,6 +88,9 @@ class AppState:
     triage_rows: list[TriageRow] = field(default_factory=list)
     triage_selected: int = 0
     triage_input: str = ""
+    review_cards: list[ReviewCard] = field(default_factory=list)
+    review_selected: int = 0
+    review_expanded: bool = False
 
 
 def default_window(today: Optional[date] = None, span_days: int = 7) -> DateWindow:
@@ -357,6 +371,105 @@ def handle_triage_key(registry: Registry, state: AppState, key: int) -> AppState
     return state
 
 
+def _member_events(
+    store: Any, sessions: list[dict[str, Any]]
+) -> dict[int, list[EventRecord]]:
+    """Fetch each session's member events (with payload + external id) from state.
+
+    The ``query_sessions`` render embeds only a thin event summary; the review
+    surface needs the full :class:`EventRecord` — its ``external_id`` for the
+    citation trail and its ``payload`` for the unvalidated-id flag — so the member
+    events are re-read read-only from the store by their ids.
+    """
+    return {
+        session["session_id"]: store.get_events_by_ids(
+            [event["event_id"] for event in session.get("events", [])]
+        )
+        for session in sessions
+    }
+
+
+def _fetch_logged_hours(
+    registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
+) -> dict[tuple[str, str], float]:
+    """Best-effort read of already-logged Odoo hours per task/day (#378 item 7).
+
+    Degrades gracefully: any transport failure (offline, auth, no employee record)
+    is swallowed so the review surface still renders, just without the
+    already-logged badge. The read is strictly read-only (``search_read``).
+    """
+    task_ids = [session["task_id"] for session in sessions]
+    try:
+        client = registry["stop_task"]._client
+        return logged_hours_by_task_day(
+            client, task_ids, window.start_iso(), window.end_iso()
+        )
+    except Exception:  # noqa: BLE001 - best-effort badge; any failure = no badge
+        return {}
+
+
+def enter_review(registry: Registry, state: AppState) -> AppState:
+    """Open the review surface over the current window's derived sessions.
+
+    Builds one decorated card per session (#378 items 7-9): fetches member events
+    from the store for the citation trail and confidence class, computes pairwise
+    cross-task overlaps, and best-effort reads the day's already-logged Odoo hours
+    for the already-logged badge. Everything informs the reviewer; nothing trims
+    or uploads.
+    """
+    store = registry["query_sessions"].state
+    events_by_session = _member_events(store, state.sessions)
+    overlaps = compute_overlaps(state.sessions)
+    logged = _fetch_logged_hours(registry, state.sessions, state.window)
+    cards = build_review_cards(state.sessions, events_by_session, logged, overlaps)
+    return replace(
+        state,
+        mode=_MODE_REVIEW,
+        review_cards=cards,
+        review_selected=0,
+        review_expanded=False,
+        status=f"review — {len(cards)} session(s)",
+    )
+
+
+def _exit_review(state: AppState) -> AppState:
+    """Leave the review surface and return to the timeline view."""
+    return replace(state, mode=_MODE_MAIN, review_expanded=False, status="")
+
+
+def _move_review_selection(state: AppState, delta: int) -> AppState:
+    """Move the review highlight by ``delta``, clamped, collapsing the pane."""
+    if not state.review_cards:
+        return state
+    target = max(0, min(state.review_selected + delta, len(state.review_cards) - 1))
+    return replace(state, review_selected=target, review_expanded=False)
+
+
+def _toggle_evidence(state: AppState) -> AppState:
+    """Toggle the selected card's evidence pane (no-op with no cards)."""
+    if not state.review_cards:
+        return state
+    return replace(state, review_expanded=not state.review_expanded)
+
+
+def handle_review_key(state: AppState, key: int) -> AppState:
+    """Advance review-mode state for one keypress (never quits the app).
+
+    ``q``/ESC returns to the timeline; up/down move the highlight (collapsing the
+    open pane); ``e``/Enter toggles the selected card's evidence pane. The cards
+    are read-only — no key here trims hours or uploads.
+    """
+    if key in _QUIT_KEYS:
+        return _exit_review(state)
+    if key == curses.KEY_UP:
+        return _move_review_selection(state, -1)
+    if key == curses.KEY_DOWN:
+        return _move_review_selection(state, 1)
+    if key == _EXPORT_MD_KEY or key in _ENTER_KEYS:
+        return _toggle_evidence(state)
+    return state
+
+
 def handle_key(
     registry: Registry,
     state: AppState,
@@ -373,6 +486,8 @@ def handle_key(
     """
     if state.mode == _MODE_TRIAGE:
         return handle_triage_key(registry, state, key), False
+    if state.mode == _MODE_REVIEW:
+        return handle_review_key(state, key), False
     if state.pending_upload:
         return (
             confirm_upload(
@@ -395,6 +510,8 @@ def handle_key(
         return do_resync(registry, state), False
     if key == _TRIAGE_KEY:
         return enter_triage(registry, state), False
+    if key == _REVIEW_KEY:
+        return enter_review(registry, state), False
     return state, False
 
 
@@ -408,12 +525,20 @@ def _file_writer(content: str, name: str) -> str:  # pragma: no cover
 
 
 def _compose(state: AppState, width: int, height: int) -> Any:  # pragma: no cover
-    """Compose the frame for ``state`` — the triage queue or the timeline."""
+    """Compose the frame for ``state`` — triage, review, or the timeline."""
     if state.mode == _MODE_TRIAGE:
         return compose_triage_frame(
             state.triage_rows,
             state.triage_selected,
             state.triage_input,
+            width,
+            height,
+        )
+    if state.mode == _MODE_REVIEW:
+        return compose_review_frame(
+            state.review_cards,
+            state.review_selected,
+            state.review_expanded,
             width,
             height,
         )
