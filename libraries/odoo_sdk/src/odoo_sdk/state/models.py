@@ -40,6 +40,14 @@ class TaskRun:
     stopped_at: Optional[datetime]
     timesheet_id: Optional[int]
     notes: list[str]
+    aborted_at: Optional[datetime] = None
+    """When the run was force-aborted (never billed), else ``None`` (#356).
+
+    An additive, nullable stamp set by :meth:`LocalStateClient.abort_run`. The
+    upload path excludes any derived session lying wholly within the aborted
+    run's ``[started_at, aborted_at]`` window for the same task, so an aborted
+    run's leftover events never bill. A normally stopped run leaves this ``None``.
+    """
 
     @property
     def elapsed_seconds(self) -> float:

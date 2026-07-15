@@ -72,7 +72,7 @@ class AbortRunCommand(Command):
         self, target: LocalStateClient, project_hash: str, run: TaskRun
     ) -> dict[str, Any]:
         """Stop the active run and retire its Odoo anchor timesheet."""
-        stopped = target.stop_run(run.task_id)
+        stopped = target.abort_run(run.task_id)
         anchor_closed = close_anchor(self._client, stopped.timesheet_id)
         return {
             "project_hash": project_hash,
