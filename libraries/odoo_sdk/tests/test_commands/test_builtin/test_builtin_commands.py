@@ -145,6 +145,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "get_todo",
         "get_task",
         "get_task_chatter",
+        "get_mail_status",
         "get_task_attachments",
         "read_attachment",
         "create_task",

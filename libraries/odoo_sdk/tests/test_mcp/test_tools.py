@@ -755,6 +755,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "get_todo": (5,),
             "get_task": (5,),
             "get_task_chatter": (5,),
+            "get_mail_status": ("project.task", 5),
             "get_task_attachments": (5,),
             "read_attachment": (5,),
             "create_task": ("n", 1, "d"),
