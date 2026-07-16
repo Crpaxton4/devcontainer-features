@@ -77,6 +77,15 @@ def run(
         output = "".join(output_chunks)
 
     # ─────────────────────────────────────────────
+    # Fail fast on non-zero exit
+    # ─────────────────────────────────────────────
+    # A failed step (e.g. a broken ``cosmic-ray`` run) must raise rather than be
+    # silently ignored, otherwise the pipeline can emit an empty/partial report
+    # that looks clean. Mirrors ``tools/static_analysis.py``.
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output)
+
+    # ─────────────────────────────────────────────
     # File output behavior
     # ─────────────────────────────────────────────
     if out is not None:

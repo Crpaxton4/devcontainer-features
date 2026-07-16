@@ -121,10 +121,8 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         with self.assertRaises(TaskAlreadyRunningError):
             self._start(client, db, **self._kwargs())
 
-        with patch(_NOTE_GUARD), patch(
-            "odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db
-        ):
-            TaskNoteCommand(client).execute(24648, "made progress")
+        with patch(_NOTE_GUARD):
+            TaskNoteCommand(client, state=db).execute(24648, "made progress")
 
         with patch(_STOP_GUARD):
             StopTaskCommand(client, state=db).execute(24648, "finished the VAT fix")

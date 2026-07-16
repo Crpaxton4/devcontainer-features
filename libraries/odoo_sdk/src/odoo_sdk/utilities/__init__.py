@@ -14,13 +14,12 @@ from .odoo_helpers import (
     get_employee_id,
     get_task_chatter,
     get_task_detail,
-    merge_timesheets,
     name_search_projects,
     name_search_tasks,
     post_chatter_note,
     resolve_many2one,
-    update_timesheet,
 )
+from .timesheet import merge_timesheets, update_timesheet
 
 __all__ = [
     "assert_odoo_devcontainer",

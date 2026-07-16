@@ -120,21 +120,6 @@ def create_timesheet(
     return client.execute("account.analytic.line", "create", vals)
 
 
-def update_timesheet(
-    client: OdooClient,
-    timesheet_id: int,
-    unit_amount: float,
-    description: str,
-) -> None:
-    """Update the timesheet entry with final elapsed hours and description."""
-    client.execute(
-        "account.analytic.line",
-        "write",
-        [timesheet_id],
-        {"unit_amount": unit_amount, "name": description},
-    )
-
-
 def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     """Post a chatter note on project.task and return the message id.
 
@@ -696,44 +681,6 @@ def get_unbilled_hours(
         order="date asc",
     )
     return _unbilled_envelope(records, full)
-
-
-def merge_timesheets(
-    client: OdooClient, primary_id: int, ids_to_merge: list[int]
-) -> None:
-    """Sum unit_amount and join descriptions onto the primary timesheet row.
-
-    Record deletion via ``unlink`` is purposefully not implemented in this SDK
-    (irrecoverable data loss risk), so the merged-in rows are **kept in place**
-    rather than deleted. To stop them double-counting their hours after the sum
-    is written onto the primary row, their ``unit_amount`` is zeroed with a
-    single ``write`` and their ``name`` is prefixed with ``[merged]`` for
-    traceability. The rows remain readable but contribute 0 hours.
-    """
-    all_ids = [primary_id] + ids_to_merge
-    records = client.execute(
-        "account.analytic.line",
-        "read",
-        [all_ids],
-        {"fields": ["id", "unit_amount", "name"]},
-    )
-    total_hours = sum(r["unit_amount"] for r in records)
-    descriptions = list(
-        dict.fromkeys(
-            r["name"] for r in records if r["name"] != "[/] Work in progress"
-        )
-    )
-    merged_desc = " | ".join(descriptions) if descriptions else "[/] Work in progress"
-    update_timesheet(client, primary_id, total_hours, merged_desc)
-    if ids_to_merge:
-        # Zero the merged-in rows so they no longer double-count their hours,
-        # keeping them in place because ``unlink`` is forbidden system-wide.
-        client.execute(
-            "account.analytic.line",
-            "write",
-            ids_to_merge,
-            {"unit_amount": 0.0, "name": "[merged] " + merged_desc},
-        )
 
 
 # ── task_aging (read-only) ────────────────────────────────────────────────────

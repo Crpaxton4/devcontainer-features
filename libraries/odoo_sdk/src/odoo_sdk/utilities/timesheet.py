@@ -365,3 +365,60 @@ def sweep_orphaned_uploads(
         state.delete_session_upload(entry["session_key"])
         retired += 1
     return retired
+
+
+def update_timesheet(
+    client: OdooClient,
+    timesheet_id: int,
+    unit_amount: float,
+    description: str,
+) -> None:
+    """Update one timesheet row's final elapsed hours and description.
+
+    :param client: Connected Odoo client.
+    :param timesheet_id: The ``account.analytic.line`` id to rewrite.
+    :param unit_amount: The hours to record on the row.
+    :param description: The ``name`` (description) to record on the row.
+    """
+    _write_line(client, timesheet_id, {"unit_amount": unit_amount, "name": description})
+
+
+def merge_timesheets(
+    client: OdooClient, primary_id: int, ids_to_merge: list[int]
+) -> None:
+    """Sum unit_amount and join descriptions onto the primary timesheet row.
+
+    Record deletion via ``unlink`` is purposefully not implemented in this SDK
+    (irrecoverable data loss risk), so the merged-in rows are **kept in place**
+    rather than deleted. To stop them double-counting their hours after the sum
+    is written onto the primary row, their ``unit_amount`` is zeroed with a
+    single ``write`` and their ``name`` is prefixed with ``[merged]`` for
+    traceability. The rows remain readable but contribute 0 hours.
+
+    :param client: Connected Odoo client.
+    :param primary_id: The surviving ``account.analytic.line`` id that keeps the
+        summed hours and joined description.
+    :param ids_to_merge: The rows folded into ``primary_id`` and then zeroed.
+    """
+    all_ids = [primary_id] + ids_to_merge
+    records = client.execute(
+        "account.analytic.line",
+        "read",
+        [all_ids],
+        {"fields": ["id", "unit_amount", "name"]},
+    )
+    total_hours = sum(r["unit_amount"] for r in records)
+    descriptions = list(
+        dict.fromkeys(r["name"] for r in records if r["name"] != ANCHOR_NAME)
+    )
+    merged_desc = " | ".join(descriptions) if descriptions else ANCHOR_NAME
+    update_timesheet(client, primary_id, total_hours, merged_desc)
+    if ids_to_merge:
+        # Zero the merged-in rows so they no longer double-count their hours,
+        # keeping them in place because ``unlink`` is forbidden system-wide.
+        client.execute(
+            "account.analytic.line",
+            "write",
+            ids_to_merge,
+            {"unit_amount": 0.0, "name": "[merged] " + merged_desc},
+        )

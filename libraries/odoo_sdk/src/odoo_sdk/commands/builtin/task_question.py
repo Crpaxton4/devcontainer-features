@@ -5,7 +5,6 @@ from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 from odoo_sdk.state import TaskNotRunningError, TaskState
-from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 @builtin_command
@@ -27,7 +26,7 @@ class TaskQuestionCommand(Command):
         :return: Confirmation with message id and new state.
         """
         assert_odoo_devcontainer()
-        db = TaskStateDB()
+        db = self.state
         run = db.get_active_run(task_id)
         if run is None:
             raise TaskNotRunningError(f"No active session for task {task_id}.")

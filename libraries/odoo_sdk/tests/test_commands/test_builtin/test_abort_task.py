@@ -142,7 +142,7 @@ class TestAbortTaskCommand(unittest.TestCase):
         with (
             patch(_ABORT_GUARD),
             patch(
-                "odoo_sdk.utilities.odoo_helpers.update_timesheet"
+                "odoo_sdk.utilities.timesheet.update_timesheet"
             ) as mock_update,
         ):
             _cmd_with_db(client, db).execute(1)

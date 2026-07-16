@@ -41,7 +41,6 @@ class SessionStats:
     calendar_utilization: float
     overlap_ratio: float
     peak_concurrency: int
-    mean_concurrency: float
     active_days: int = 0
     lane_count: int = 0
     tasks: list[str] = field(default_factory=list)
@@ -187,7 +186,6 @@ def compute_stats(
         calendar_utilization=round(_ratio(session_secs, span_secs), 4),
         overlap_ratio=round(_ratio(session_secs, covered_secs), 4),
         peak_concurrency=_peak_concurrency(sessions),
-        mean_concurrency=round(_ratio(session_secs, span_secs), 4),
         active_days=active_days,
         lane_count=len(lanes),
         tasks=tasks,
