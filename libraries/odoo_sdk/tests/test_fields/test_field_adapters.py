@@ -306,7 +306,7 @@ class TestFieldAdapters(unittest.TestCase):
         self.assertEqual(result["image_128"], b"hello")
 
     def test_relation_collection_stores_tuple_ids(self) -> None:
-        result = RelationCollection.from_ids("res.partner.category", [3, 1, 2])
+        result = RelationCollection("res.partner.category", [3, 1, 2])
 
         self.assertEqual(result.ids, (3, 1, 2))
 
