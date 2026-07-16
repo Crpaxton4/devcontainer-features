@@ -46,25 +46,14 @@ def build_explicit_tools(
     """
     tools: Dict[str, Tuple[Callable[..., Any], str]] = {}
     for name, factory in TOOL_FACTORIES.items():
-        description = _description_for(registry, name)
+        try:
+            # ``build_explicit_tools`` is public API for custom registries, so a
+            # tool with no like-named command falls back to an empty description.
+            description = registry[name].description
+        except KeyError:
+            description = ""
         tools[name] = (factory(registry), description)
     return tools
-
-
-def _description_for(registry: Registry, name: str) -> str:
-    """Return the registered command's description for ``name``, or empty string.
-
-    :param registry: Command registry to consult.
-    :type registry: Registry
-    :param name: Tool/command name to look up.
-    :type name: str
-    :return: The command description, or ``""`` when the command is absent.
-    :rtype: str
-    """
-    try:
-        return registry[name].description
-    except KeyError:
-        return ""
 
 
 __all__ = [

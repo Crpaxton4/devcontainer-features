@@ -5,12 +5,12 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_sdk.commands import Command, Registry
-from odoo_sdk.mcp.prompts.builtin.implement_task import (
-    _build_messages,
-    make_implement_task_prompt,
-)
+from odoo_sdk.mcp.prompts.builtin.implement_task import make_implement_task_prompt
 from odoo_sdk.mcp.prompts.builtin.report_incident import report_incident
 from odoo_sdk.mcp.server import OdooMCPServer
+from odoo_sdk.utilities.prompt_messages import (
+    build_implement_task_messages as _build_messages,
+)
 
 
 def _make_task(**overrides) -> dict:
