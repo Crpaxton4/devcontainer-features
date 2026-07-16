@@ -1,9 +1,9 @@
 """Pure data structures for the sessionization ETL.
 
 This module is state-agnostic: it defines only the normalized event model,
-the computed time-entry model, strategy configuration rows, and the result
-containers produced by the Transform phase. It performs no I/O and is unaware
-of SQLite, GitHub, git, the filesystem, or MCP.
+the computed time-entry render model, and the result containers produced by the
+Transform phase. It performs no I/O and is unaware of SQLite, GitHub, git, the
+filesystem, or MCP.
 """
 
 from __future__ import annotations
@@ -27,6 +27,44 @@ def resolve_day_bucket_tz() -> tzinfo:
     return LocalConfig.load().day_bucket_tz
 
 
+def resolve_session_gap_secs() -> int:
+    """Return the fixed sessionization inactivity gap in seconds (issue #404).
+
+    Reads the single first-class knob (``[behavior] session_gap_secs`` /
+    ``ODOO_SESSION_GAP_MINS``) so the pure Transform phase re-windows on exactly
+    the gap the SQL-derived billing path (``derive_sessions_overlapping``) uses.
+    The import is local so this state-agnostic module carries no import-time
+    dependency on the state layer and each call re-resolves the current config.
+    """
+    from odoo_sdk.state.config import LocalConfig
+
+    return LocalConfig.load().session_gap_secs
+
+
+def resolve_min_session_hours() -> float:
+    """Return the per-session billing floor in hours (issue #404).
+
+    Reads the same ``[behavior] min_session_hours`` / ``ODOO_MIN_SESSION_HOURS``
+    knob the upload path bills with, so the diagnostic gap-sweep and export
+    round identically to what an upload writes. Resolved lazily per call.
+    """
+    from odoo_sdk.state.config import LocalConfig
+
+    return LocalConfig.load().min_session_hours
+
+
+def resolve_round_session_hours() -> float:
+    """Return the per-session rounding step in hours (issue #404).
+
+    Reads the same ``[behavior] round_session_hours`` / ``ODOO_ROUND_SESSION_HOURS``
+    knob the upload path bills with (half-up rounding), so the diagnostic
+    gap-sweep and export never report hours an upload would not write.
+    """
+    from odoo_sdk.state.config import LocalConfig
+
+    return LocalConfig.load().round_session_hours
+
+
 # Day-bucketing timezone reference used by scoring and rendering. Was a hardcoded
 # EDT (UTC-4) offset, which mis-bucketed the US-Central user's midnight-crossing
 # evening sessions; now config-driven (default US Central). This module-level
@@ -35,10 +73,10 @@ def resolve_day_bucket_tz() -> tzinfo:
 # Transform phase reads the zone from its config object, not this global.
 ET = resolve_day_bucket_tz()
 
-# Default window / billing constants (seconds unless noted).
+# Default fixed sessionization gap (seconds). The billing floor/step now share the
+# upload path's hour-denominated knobs (``min_session_hours`` /
+# ``round_session_hours``), so no minute-denominated billing constant survives.
 DEFAULT_WINDOW_GAP_SECS = 3600
-DEFAULT_MIN_TASK_MINUTES = 15
-DEFAULT_BILLING_STEP_MINS = 15
 
 
 class EventType(Enum):
@@ -72,13 +110,21 @@ class RawEvent:
 
 @dataclass
 class TimeEntry:
-    """A computed, bounded time block attributed to one task."""
+    """A computed, bounded time block attributed to one task.
+
+    A render/view model only (issue #404): the SQL derivation
+    (``derive_sessions_overlapping``) is the single sessionization algorithm, and
+    both the diagnostic gap-sweep and the TUI export project their windows onto
+    this shape purely so the #105 markdown/CSV renderers stay reusable. ``end``
+    already carries the billed duration (start + billed span), so a renderer bills
+    a row by reading ``end - start`` without re-applying any policy.
+    """
 
     task_id: str
     repo: str
     pr_num: int
     start: datetime  # tz-aware UTC
-    end: datetime  # tz-aware UTC
+    end: datetime  # tz-aware UTC (start + billed span)
     label: str = ""  # "owner/repo"
     branch: str = ""
     source_events: list[RawEvent] = field(default_factory=list)
@@ -90,26 +136,6 @@ class TimeEntry:
     def duration_secs(self) -> int:
         """Return the entry duration in whole seconds."""
         return int((self.end - self.start).total_seconds())
-
-
-@dataclass(frozen=True)
-class SessionStrategyConfig:
-    """Flat configuration row for one sessionization strategy."""
-
-    name: str
-    category: str
-    event_types: tuple[EventType, ...]
-    strategy_kind: str
-    group_keys: tuple[str, ...]
-    gap_secs: int = DEFAULT_WINDOW_GAP_SECS
-    fixed_secs: int = DEFAULT_MIN_TASK_MINUTES * 60
-    billing_floor_secs: int = DEFAULT_MIN_TASK_MINUTES * 60
-    billing_step_secs: int = DEFAULT_BILLING_STEP_MINS * 60
-    sweep_enabled: bool = False
-    context_fields: tuple[str, ...] = ("pr_title", "subject", "pr_body")
-    context_limit: int = 220
-    fallback_action: str = "advanced project work"
-    priority: int = 100
 
 
 @dataclass

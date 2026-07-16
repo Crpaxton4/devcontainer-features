@@ -10,12 +10,17 @@ Layout:
 
 * :mod:`~odoo_sdk.sessionization.models` -- event / entry / result data model.
 * :mod:`~odoo_sdk.sessionization.config` -- pure hyperparameter config.
-* :mod:`~odoo_sdk.sessionization.windows` -- gap-based window computation.
+* :mod:`~odoo_sdk.sessionization.windows` -- gap-based window computation + billing.
 * :mod:`~odoo_sdk.sessionization.scoring` -- utilisation scoring.
-* :mod:`~odoo_sdk.sessionization.strategies` -- the strategy pattern.
 * :mod:`~odoo_sdk.sessionization.transform` -- gap sweep + Transform orchestrator.
 * :mod:`~odoo_sdk.sessionization.render_markdown` -- markdown diagnostics (``-> str``).
 * :mod:`~odoo_sdk.sessionization.render_csv` -- Odoo CSV rendering (``-> str``).
+
+The former Strategy pattern (interchangeable per-event-type billing algorithms)
+is retired (issue #404): the SQL CTE ``derive_sessions_overlapping`` is the single
+sessionization algorithm, and :func:`~odoo_sdk.sessionization.compute_windows`
+survives only as the diagnostic gap-sweep's in-Python re-windowing, pinned to the
+SQL derivation by a parity test.
 """
 
 from .config import SessionizationConfig
@@ -23,7 +28,6 @@ from .models import (
     ET,
     EventType,
     RawEvent,
-    SessionStrategyConfig,
     SweepResults,
     TimeEntry,
     TransformResult,
@@ -31,17 +35,6 @@ from .models import (
 from .render_csv import CSV_COLUMNS, default_description, render_odoo_csv
 from .render_markdown import render_markdown
 from .scoring import score_day, score_gap
-from .strategies import (
-    DEFAULT_SESSION_STRATEGY_CONFIGS,
-    DuplicateStrategyOwnershipError,
-    FixedDurationStrategy,
-    SessionizationContext,
-    SessionizationStrategy,
-    StrategyEventGroup,
-    WindowedSessionStrategy,
-    make_sessionization_context,
-    validate_single_strategy_ownership,
-)
 from .transform import (
     billable_events,
     build_window_entries,
@@ -49,28 +42,18 @@ from .transform import (
     target_day_totals,
     transform,
 )
-from .windows import ceil_to_billing_step, compute_windows
+from .windows import billable_seconds, compute_windows
 
 __all__ = [
     "ET",
     "EventType",
     "RawEvent",
     "TimeEntry",
-    "SessionStrategyConfig",
     "SweepResults",
     "TransformResult",
     "SessionizationConfig",
-    "DEFAULT_SESSION_STRATEGY_CONFIGS",
-    "SessionizationStrategy",
-    "WindowedSessionStrategy",
-    "FixedDurationStrategy",
-    "SessionizationContext",
-    "StrategyEventGroup",
-    "make_sessionization_context",
-    "validate_single_strategy_ownership",
-    "DuplicateStrategyOwnershipError",
     "compute_windows",
-    "ceil_to_billing_step",
+    "billable_seconds",
     "score_gap",
     "score_day",
     "build_window_entries",

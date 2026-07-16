@@ -10,17 +10,102 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from .config import SessionizationConfig
-from .models import RawEvent, SweepResults, TimeEntry, TransformResult
+from .models import EventType, RawEvent, SweepResults, TimeEntry, TransformResult
 from .scoring import score_day
-from .strategies import make_sessionization_context
+from .windows import billable_seconds, compute_windows
+
+# Sources that DO NOT participate in gap-based sessionization. ``merge`` is a
+# point-in-time release marker (audit-only), excluded from windowed billing
+# exactly as the SQL derivation excludes it (issue #404 / #378 item 6). Every
+# other event type — the development family and the review family — windows
+# uniformly; there is no per-event fixed-duration strategy anymore.
+_NON_SESSION_TYPES = frozenset({EventType.MERGE})
+
+# Development-family event types: a window holding ANY of these is labeled
+# "Development" (development wins a mixed task's label); a window of purely
+# review-family events (``REVIEW``) is labeled "Review". Mirrors the SQL
+# derivation's ``has_dev`` decision so the two engines agree on the category.
+_DEVELOPMENT_TYPES = frozenset(
+    {
+        EventType.COMMIT,
+        EventType.AGENT,
+        EventType.CLAUDE_HOOK,
+        EventType.CHATTER,
+        EventType.CALENDAR,
+        EventType.EMAIL,
+    }
+)
+
+
+def _session_label(events: list[RawEvent]) -> tuple[str, str]:
+    """Return the ``(strategy_name, category)`` label for a window's events."""
+    if any(event.event_type in _DEVELOPMENT_TYPES for event in events):
+        return "development", "Development"
+    return "review", "Review"
+
+
+def _window_entry(
+    task_id: str,
+    window_events: list[RawEvent],
+    start: datetime,
+    end_raw: datetime,
+    config: SessionizationConfig,
+) -> TimeEntry:
+    """Build one billed :class:`TimeEntry` from a raw window and its events."""
+    # A window always holds at least the event(s) that anchor its bounds.
+    strategy_name, category = _session_label(window_events)
+    repo = max((event.repo for event in window_events if event.repo), default="")
+    billed = billable_seconds((end_raw - start).total_seconds(), config)
+    return TimeEntry(
+        task_id=task_id,
+        repo=repo,
+        pr_num=max(event.pr_num for event in window_events),
+        start=start,
+        end=start + timedelta(seconds=billed),
+        label=repo,
+        branch=", ".join(
+            sorted({event.branch for event in window_events if event.branch})
+        ),
+        source_events=window_events,
+        strategy_name=strategy_name,
+        strategy_category=category,
+        activity_type=window_events[0].event_type.name,
+    )
 
 
 def build_window_entries(
     events: list[RawEvent], gap_secs: int, config: SessionizationConfig
 ) -> list[TimeEntry]:
-    """Build entries through the sessionization strategy context."""
-    context = make_sessionization_context(config.session_strategy_configs)
-    return context.build_entries(events, gap_secs, config)
+    """Window events into billed entries by the single SQL-parity algorithm.
+
+    Every session-source event (development + review families; ``merge`` is
+    excluded, matching ``derive_sessions_overlapping``) is fanned out over its
+    task ids, grouped by task alone (repo is display metadata, not a partition
+    key — #352), and partitioned into gap-separated windows. Each window bills its
+    raw wall-clock span through :func:`billable_seconds`, so the entries reproduce
+    the SQL derivation's grouping and the upload path's billed hours.
+    """
+    by_task: dict[str, list[RawEvent]] = {}
+    for event in events:
+        if event.event_type in _NON_SESSION_TYPES:
+            continue
+        for task_id in event.task_ids or ["UNKNOWN"]:
+            by_task.setdefault(task_id, []).append(event)
+    entries: list[TimeEntry] = []
+    for task_id, task_events in by_task.items():
+        ordered = sorted(task_events, key=lambda event: event.timestamp)
+        for start, end_raw in compute_windows(
+            [event.timestamp for event in ordered], gap_secs
+        ):
+            window_events = [
+                event for event in ordered if start <= event.timestamp <= end_raw
+            ]
+            entries.append(
+                _window_entry(task_id, window_events, start, end_raw, config)
+            )
+    return sorted(
+        entries, key=lambda entry: (entry.start, entry.repo, entry.task_id)
+    )
 
 
 def billable_events(events: list[RawEvent]) -> list[RawEvent]:
@@ -165,7 +250,7 @@ def transform(
     """Compute all time entries and sweep results from raw events."""
     events_for_billing = billable_events(events)
     window_entries = build_window_entries(
-        events_for_billing, config.window_gap_secs, config
+        events_for_billing, config.session_gap_secs, config
     )
     sweep_results = sweep(events_for_billing, config)
     best_gap_entries = build_window_entries(
