@@ -33,8 +33,8 @@ from typing import Any, Optional
 
 from markitdown import MarkItDown
 
+from odoo_sdk import OdooMissingRecordError
 from odoo_sdk.client import OdooClient
-from odoo_sdk.transport.errors import OdooMissingRecordError
 
 # Metadata read for every attachment. ``datas`` (the base64 raw bytes) is added
 # to this list only when ``include_content`` is set, so the default stays light.

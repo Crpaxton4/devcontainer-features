@@ -12,7 +12,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from odoo_sdk.state.config import LocalConfig
 
 
-class OdooClient(OdooExecutor):
+class OdooClient:
     """Expose the public facade for model lookup and executor-backed access.
 
     The client is the supported SDK entry point. It is necessary because consumers
@@ -195,9 +195,11 @@ class OdooClient(OdooExecutor):
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate one model method call through the shared guarded seam.
 
-        This wrapper is necessary because the public facade must satisfy the executor
-        contract while still allowing the injected or constructed executor to own the
-        actual transport implementation. It routes through
+        This wrapper is necessary because the public facade must satisfy the
+        :class:`~odoo_sdk.commands.protocols.RpcClient` contract structurally
+        (via composition, not inheritance) while still allowing the injected or
+        constructed executor to own the actual transport implementation. It routes
+        through
         :func:`guarded_execute` — the single chokepoint that applies the
         cross-cutting ``forbid_unlink`` guard exactly once.
 

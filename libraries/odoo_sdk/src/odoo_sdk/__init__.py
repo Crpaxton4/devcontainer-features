@@ -24,7 +24,19 @@ from .state import OdooConnectionSettings
 from .query.domain import Domain, DomainExpression
 from .records import OdooRecordset
 from .records.recordset import Record
-from .transport import OdooExecutor, OdooJson2Executor, OdooRpcExecutor
+from .transport import (
+    DeletionNotSupportedError,
+    OdooAccessError,
+    OdooAuthenticationError,
+    OdooError,
+    OdooExecutor,
+    OdooJson2Executor,
+    OdooMissingRecordError,
+    OdooRpcExecutor,
+    OdooServerError,
+    OdooTransportError,
+    OdooValidationError,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from .mcp.server import OdooMCPServer
@@ -43,6 +55,14 @@ __all__ = [
     "Domain",
     "DomainExpression",
     "Record",
+    "OdooError",
+    "OdooAuthenticationError",
+    "OdooAccessError",
+    "OdooValidationError",
+    "OdooMissingRecordError",
+    "OdooTransportError",
+    "OdooServerError",
+    "DeletionNotSupportedError",
 ]
 
 

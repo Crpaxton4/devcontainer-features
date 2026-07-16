@@ -34,8 +34,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
+from odoo_sdk import OdooTransportError
 from odoo_sdk.state import LocalConfig, LocalStateClient, SessionWindow, session_key
-from odoo_sdk.transport.errors import OdooTransportError
 
 from .odoo_helpers import get_employee_id, resolve_many2one
 from .timesheets import _day_label, _parse_date, _row_hours
