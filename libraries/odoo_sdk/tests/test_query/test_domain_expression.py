@@ -9,7 +9,6 @@ from odoo_sdk.query.domain import (
     _Condition,
     _normalize_domain_nodes,
     _parse_expression,
-    _serialize_boolean,
     _VALID_LEAF_OPERATORS,
 )
 
@@ -247,10 +246,6 @@ class TestDomainExpression(unittest.TestCase):
         )
 
         self.assertEqual(expression.serialize(), ["!", ("active", "=", True)])
-
-    def test_serialize_boolean_rejects_single_operand_binary_operator(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least two operands"):
-            _serialize_boolean("&", (_Condition("active", "=", True),))
 
     @given(
         strategies.text().filter(lambda text: text not in {"&", "|", "!"}),

@@ -33,17 +33,8 @@ X2ManyTupleCommand: TypeAlias = tuple[int, int, Any]
 class X2ManyCommand:
     """Represent one validated write-side x2many command.
 
-    This helper type is necessary because Odoo x2many writes rely on positional tuple
-    commands that are easy to misuse directly. The SDK wraps them in named factories,
-    validation, and canonical serialization before recordset writes reach the server.
-
-    :param code: Odoo x2many command code.
-    :type code: int
-    :param record_id: Related record id used by update, delete, unlink, and link
-        commands, defaults to 0.
-    :type record_id: int
-    :param payload: Command payload such as values or a set of ids, defaults to 0.
-    :type payload: Any
+    Wraps Odoo's positional ``(code, id, payload)`` tuple protocol behind named
+    factories, validation, and canonical serialization.
     """
 
     code: int
@@ -52,111 +43,43 @@ class X2ManyCommand:
 
     @classmethod
     def create(cls, values: Mapping[str, Any]) -> "X2ManyCommand":
-        """Build a create command for a new related record.
-
-        This factory is necessary because create commands require a mapping payload and
-        a fixed placeholder id in Odoo's tuple protocol.
-
-        :param values: Field values for the related record to create.
-        :type values: Mapping[str, Any]
-        :return: Validated create command.
-        :rtype: X2ManyCommand
-        """
+        """Build a create command for a new related record."""
         return cls(CREATE, payload=values)
 
     @classmethod
     def update(cls, record_id: int, values: Mapping[str, Any]) -> "X2ManyCommand":
-        """Build an update command for an existing related record.
-
-        This factory is necessary because update commands must carry both a positive
-        related id and a mapping payload.
-
-        :param record_id: Related record identifier to update.
-        :type record_id: int
-        :param values: Field values to write on the related record.
-        :type values: Mapping[str, Any]
-        :return: Validated update command.
-        :rtype: X2ManyCommand
-        """
+        """Build an update command for an existing related record."""
         return cls(UPDATE, record_id=record_id, payload=values)
 
     @classmethod
     def delete(cls, record_id: int) -> "X2ManyCommand":
-        """Build a delete command for a related record.
-
-        This factory is necessary because delete commands remove the related record
-        itself and therefore must validate the provided record id.
-
-        :param record_id: Related record identifier to delete.
-        :type record_id: int
-        :return: Validated delete command.
-        :rtype: X2ManyCommand
-        """
+        """Build a delete command that removes the related record itself."""
         return cls(DELETE, record_id=record_id)
 
     @classmethod
     def unlink(cls, record_id: int) -> "X2ManyCommand":
-        """Build an unlink command that removes the relation only.
-
-        This factory is necessary because Odoo distinguishes unlinking a relation from
-        deleting the related record itself.
-
-        :param record_id: Related record identifier to unlink.
-        :type record_id: int
-        :return: Validated unlink command.
-        :rtype: X2ManyCommand
-        """
+        """Build an unlink command that removes the relation only."""
         return cls(UNLINK, record_id=record_id)
 
     @classmethod
     def link(cls, record_id: int) -> "X2ManyCommand":
-        """Build a link command for an existing related record.
-
-        This factory is necessary because link commands attach existing related ids to
-        the relation without creating new rows.
-
-        :param record_id: Related record identifier to link.
-        :type record_id: int
-        :return: Validated link command.
-        :rtype: X2ManyCommand
-        """
+        """Build a link command for an existing related record."""
         return cls(LINK, record_id=record_id)
 
     @classmethod
     def clear(cls) -> "X2ManyCommand":
-        """Build a clear command that removes every related id.
-
-        This factory is necessary because Odoo uses a distinct command code to clear a
-        relation, and callers should not have to remember its raw tuple shape.
-
-        :return: Validated clear command.
-        :rtype: X2ManyCommand
-        """
+        """Build a clear command that removes every related id."""
         return cls(CLEAR)
 
     @classmethod
     def set(cls, ids: Iterable[int]) -> "X2ManyCommand":
-        """Build a set command that replaces the full related id set.
-
-        This factory is necessary because set commands need iterable id validation and
-        a canonical tuple payload before serialization.
-
-        :param ids: Related record ids that should remain linked.
-        :type ids: Iterable[int]
-        :return: Validated set command.
-        :rtype: X2ManyCommand
-        """
+        """Build a set command that replaces the full related id set."""
         return cls(SET, payload=ids)
 
     def __post_init__(self) -> None:
         """Validate and normalize command state after construction.
 
-        This hook is necessary because each x2many command code has different rules
-        for ids and payloads, and invalid state should fail before serialization.
-
-        :raises ValueError: Raised when the command code or payload shape is invalid.
-        :return: None.
-        :rtype: None
+        :raises ValueError: When the command code or payload shape is invalid.
         """
         if self.code not in _COMMAND_NAMES:
             raise ValueError(f"Unsupported x2many command code: {self.code!r}")
@@ -165,27 +88,26 @@ class X2ManyCommand:
     def serialize(self) -> X2ManyTupleCommand:
         """Serialize the validated helper into Odoo's tuple command form.
 
-        This method is necessary because recordset writes ultimately send raw tuple
-        commands over XML-RPC even though callers use a typed helper surface.
-
-        :return: Canonical Odoo x2many tuple command.
-        :rtype: X2ManyTupleCommand
+        ``__post_init__`` has already normalized ``record_id`` and ``payload`` into
+        their canonical shapes per code, so the wire tuple is a uniform
+        ``(code, record_id, payload)`` with the payload copied out defensively: a
+        mapping (create/update) is deep-copied, an id iterable (set) becomes a list,
+        and the placeholder ``0`` (delete/unlink/link/clear) passes through.
         """
-        return _COMMAND_SERIALIZERS[self.code](self)
+        payload = self.payload
+        if isinstance(payload, Mapping):
+            payload = deepcopy(dict(payload))
+        elif isinstance(payload, tuple):
+            payload = list(payload)
+        return (self.code, self.record_id, payload)
 
 
 def normalize_x2many_commands(value: Any) -> list[X2ManyTupleCommand]:
     """Normalize helpers or raw tuples into canonical x2many command tuples.
 
-    This entry point is necessary because callers may supply one helper, one raw tuple,
-    or a sequence of either, while the write path needs one canonical list form.
+    Accepts one helper, one raw tuple, or a sequence of either.
 
-    :param value: Helper, raw tuple, or sequence of commands to normalize.
-    :type value: Any
-    :raises ValueError: Raised when the input cannot be interpreted as valid x2many
-        command data.
-    :return: Canonical list of Odoo x2many tuple commands.
-    :rtype: list[X2ManyTupleCommand]
+    :raises ValueError: When the input cannot be interpreted as valid command data.
     """
     if isinstance(value, X2ManyCommand):
         return [value.serialize()]
@@ -204,16 +126,9 @@ def normalize_x2many_commands(value: Any) -> list[X2ManyTupleCommand]:
 
 
 def _normalize_single_command(value: Any) -> X2ManyTupleCommand:
-    """Normalize one helper or raw tuple into a canonical command tuple.
+    """Normalize one helper or raw tuple item into a canonical command tuple.
 
-    This helper is necessary because command sequences may mix helper instances and
-    raw tuples, but the normalizer still needs one per-item validation path.
-
-    :param value: One sequence item to normalize.
-    :type value: Any
-    :raises ValueError: Raised when the item is not a supported command shape.
-    :return: Canonical Odoo x2many tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the item is not a supported command shape.
     """
     if isinstance(value, X2ManyCommand):
         return value.serialize()
@@ -225,16 +140,9 @@ def _normalize_single_command(value: Any) -> X2ManyTupleCommand:
 
 
 def _normalize_raw_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
-    """Normalize one raw Odoo command tuple into canonical form.
+    """Validate and reserialize one raw Odoo command tuple into canonical form.
 
-    This helper is necessary because callers may still pass low-level tuple commands,
-    but the SDK needs to validate and reserialize them before use.
-
-    :param command: Raw x2many tuple command.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple shape or command code is invalid.
-    :return: Canonical Odoo x2many tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple shape or command code is invalid.
     """
     if not command:
         raise ValueError("x2many raw command tuples cannot be empty")
@@ -249,16 +157,7 @@ def _normalize_raw_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
 
 
 def _normalize_create_state(command: X2ManyCommand) -> None:
-    """Normalize state for a create command.
-
-    This helper is necessary because create commands must discard any provided record
-    id and preserve only a mapping payload.
-
-    :param command: X2ManyCommand instance to normalize in place.
-    :type command: X2ManyCommand
-    :return: None.
-    :rtype: None
-    """
+    """Normalize state for a create command in place."""
     object.__setattr__(command, "record_id", 0)
     object.__setattr__(
         command,
@@ -268,16 +167,7 @@ def _normalize_create_state(command: X2ManyCommand) -> None:
 
 
 def _normalize_update_state(command: X2ManyCommand) -> None:
-    """Normalize state for an update command.
-
-    This helper is necessary because update commands require a positive related id and
-    a mapping payload before they can be serialized safely.
-
-    :param command: X2ManyCommand instance to normalize in place.
-    :type command: X2ManyCommand
-    :return: None.
-    :rtype: None
-    """
+    """Normalize state for an update command in place."""
     _validate_record_id(command.record_id, operation="update")
     object.__setattr__(
         command,
@@ -287,46 +177,19 @@ def _normalize_update_state(command: X2ManyCommand) -> None:
 
 
 def _normalize_relation_id_state(command: X2ManyCommand) -> None:
-    """Normalize state for relation-id-only commands.
-
-    This helper is necessary because delete, unlink, and link commands should carry a
-    validated record id and no payload.
-
-    :param command: X2ManyCommand instance to normalize in place.
-    :type command: X2ManyCommand
-    :return: None.
-    :rtype: None
-    """
+    """Normalize state for delete, unlink, and link commands in place."""
     _validate_record_id(command.record_id, operation=_COMMAND_NAMES[command.code])
     object.__setattr__(command, "payload", 0)
 
 
 def _normalize_clear_state(command: X2ManyCommand) -> None:
-    """Normalize state for a clear command.
-
-    This helper is necessary because clear commands should never retain ids or payload
-    data from construction inputs.
-
-    :param command: X2ManyCommand instance to normalize in place.
-    :type command: X2ManyCommand
-    :return: None.
-    :rtype: None
-    """
+    """Normalize state for a clear command in place."""
     object.__setattr__(command, "record_id", 0)
     object.__setattr__(command, "payload", 0)
 
 
 def _normalize_set_state(command: X2ManyCommand) -> None:
-    """Normalize state for a set command.
-
-    This helper is necessary because set commands replace the relation with a concrete
-    iterable of validated related ids.
-
-    :param command: X2ManyCommand instance to normalize in place.
-    :type command: X2ManyCommand
-    :return: None.
-    :rtype: None
-    """
+    """Normalize state for a set command in place."""
     object.__setattr__(command, "record_id", 0)
     object.__setattr__(
         command,
@@ -335,88 +198,10 @@ def _normalize_set_state(command: X2ManyCommand) -> None:
     )
 
 
-def _serialize_create_command(command: X2ManyCommand) -> X2ManyTupleCommand:
-    """Serialize a create helper into Odoo tuple form.
-
-    This helper is necessary because create commands always use placeholder id ``0``
-    and a copied mapping payload.
-
-    :param command: Validated create command.
-    :type command: X2ManyCommand
-    :return: Serialized create tuple.
-    :rtype: X2ManyTupleCommand
-    """
-    return (CREATE, 0, deepcopy(command.payload))
-
-
-def _serialize_update_command(command: X2ManyCommand) -> X2ManyTupleCommand:
-    """Serialize an update helper into Odoo tuple form.
-
-    This helper is necessary because update commands must preserve both the target id
-    and a copied mapping payload.
-
-    :param command: Validated update command.
-    :type command: X2ManyCommand
-    :return: Serialized update tuple.
-    :rtype: X2ManyTupleCommand
-    """
-    return (UPDATE, command.record_id, deepcopy(command.payload))
-
-
-def _serialize_relation_id_command(command: X2ManyCommand) -> X2ManyTupleCommand:
-    """Serialize a delete, unlink, or link helper into tuple form.
-
-    This helper is necessary because relation-id-only commands all share the same raw
-    tuple shape once validation has succeeded.
-
-    :param command: Validated relation-id command.
-    :type command: X2ManyCommand
-    :return: Serialized tuple command.
-    :rtype: X2ManyTupleCommand
-    """
-    return (command.code, command.record_id, 0)
-
-
-def _serialize_clear_command(command: X2ManyCommand) -> X2ManyTupleCommand:
-    """Serialize a clear helper into tuple form.
-
-    This helper is necessary because clear commands always reduce to the same fixed
-    tuple regardless of the helper instance state.
-
-    :param command: Validated clear command.
-    :type command: X2ManyCommand
-    :return: Serialized clear tuple.
-    :rtype: X2ManyTupleCommand
-    """
-    del command
-    return (CLEAR, 0, 0)
-
-
-def _serialize_set_command(command: X2ManyCommand) -> X2ManyTupleCommand:
-    """Serialize a set helper into tuple form.
-
-    This helper is necessary because set commands always use placeholder id ``0`` and
-    a list payload of related ids.
-
-    :param command: Validated set command.
-    :type command: X2ManyCommand
-    :return: Serialized set tuple.
-    :rtype: X2ManyTupleCommand
-    """
-    return (SET, 0, list(command.payload))
-
-
 def _normalize_raw_create_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     """Validate and normalize a raw create tuple.
 
-    This helper is necessary because legacy callers may still construct raw create
-    tuples directly, and those tuples need validation before reuse.
-
-    :param command: Raw create tuple.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple shape is invalid.
-    :return: Canonical create tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple shape is invalid.
     """
     if len(command) != 3:
         raise ValueError("x2many create tuples must contain exactly 3 items")
@@ -428,14 +213,7 @@ def _normalize_raw_create_command(command: tuple[Any, ...]) -> X2ManyTupleComman
 def _normalize_raw_update_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     """Validate and normalize a raw update tuple.
 
-    This helper is necessary because raw update tuples must validate their shape and
-    target id before entering the write path.
-
-    :param command: Raw update tuple.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple shape is invalid.
-    :return: Canonical update tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple shape is invalid.
     """
     if len(command) != 3:
         raise ValueError("x2many update tuples must contain exactly 3 items")
@@ -445,14 +223,7 @@ def _normalize_raw_update_command(command: tuple[Any, ...]) -> X2ManyTupleComman
 def _normalize_raw_relation_id_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     """Validate and normalize a raw delete, unlink, or link tuple.
 
-    This helper is necessary because relation-id-only commands share similar tuple
-    rules and should be canonicalized through one validation path.
-
-    :param command: Raw relation-id command tuple.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple shape or placeholder values are invalid.
-    :return: Canonical relation-id tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple shape or placeholder values are invalid.
     """
     if len(command) not in {2, 3}:
         raise ValueError(
@@ -468,14 +239,9 @@ def _normalize_raw_relation_id_command(command: tuple[Any, ...]) -> X2ManyTupleC
 def _normalize_raw_clear_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     """Validate and normalize a raw clear tuple.
 
-    This helper is necessary because Odoo tolerates several raw clear tuple lengths,
-    but the SDK stores one canonical clear command shape.
+    Odoo tolerates several raw clear tuple lengths (1 to 3 items).
 
-    :param command: Raw clear tuple.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple uses invalid placeholder values.
-    :return: Canonical clear tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple uses invalid placeholder values.
     """
     command_length = len(command)
     if command_length > 3:
@@ -490,14 +256,7 @@ def _normalize_raw_clear_command(command: tuple[Any, ...]) -> X2ManyTupleCommand
 def _normalize_raw_set_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
     """Validate and normalize a raw set tuple.
 
-    This helper is necessary because raw set tuples must validate their placeholder id
-    and related id iterable before being used in writes.
-
-    :param command: Raw set tuple.
-    :type command: tuple[Any, ...]
-    :raises ValueError: Raised when the tuple shape is invalid.
-    :return: Canonical set tuple command.
-    :rtype: X2ManyTupleCommand
+    :raises ValueError: When the tuple shape is invalid.
     """
     if len(command) != 3:
         raise ValueError("x2many set tuples must contain exactly 3 items")
@@ -507,18 +266,9 @@ def _normalize_raw_set_command(command: tuple[Any, ...]) -> X2ManyTupleCommand:
 
 
 def _normalize_mapping_payload(payload: Any, *, operation: str) -> dict[str, Any]:
-    """Validate and copy a mapping payload for create or update commands.
+    """Validate and deep-copy a mapping payload for create or update commands.
 
-    This helper is necessary because Odoo create and update tuple commands require a
-    mapping payload and should not retain caller-owned mutable state.
-
-    :param payload: Candidate mapping payload.
-    :type payload: Any
-    :param operation: Logical command operation being normalized.
-    :type operation: str
-    :raises ValueError: Raised when the payload is not a mapping.
-    :return: Deep-copied mapping payload.
-    :rtype: dict[str, Any]
+    :raises ValueError: When the payload is not a mapping.
     """
     if not isinstance(payload, Mapping):
         raise ValueError(f"x2many {operation} commands require a mapping payload")
@@ -526,18 +276,9 @@ def _normalize_mapping_payload(payload: Any, *, operation: str) -> dict[str, Any
 
 
 def _normalize_id_payload(payload: Any, *, operation: str) -> tuple[int, ...]:
-    """Validate and normalize an iterable payload of related ids.
+    """Validate and normalize an iterable payload of related ids into a tuple.
 
-    This helper is necessary because set commands accept arbitrary iterables, but the
-    write path needs a concrete tuple of positive integer ids.
-
-    :param payload: Candidate iterable of related ids.
-    :type payload: Any
-    :param operation: Logical command operation being normalized.
-    :type operation: str
-    :raises ValueError: Raised when the payload is not a valid iterable of ids.
-    :return: Normalized related ids.
-    :rtype: tuple[int, ...]
+    :raises ValueError: When the payload is not a valid iterable of ids.
     """
     if isinstance(payload, Mapping) or isinstance(payload, (str, bytes, bytearray)):
         raise ValueError(f"x2many {operation} commands require an iterable of ids")
@@ -557,65 +298,25 @@ def _normalize_id_payload(payload: Any, *, operation: str) -> tuple[int, ...]:
 def _validate_record_id(record_id: Any, *, operation: str) -> None:
     """Validate that a command record id is a positive integer.
 
-    This helper is necessary because x2many command tuples use record ids in multiple
-    places and all of them require the same positive-integer constraint.
-
-    :param record_id: Candidate record identifier.
-    :type record_id: Any
-    :param operation: Logical operation being validated.
-    :type operation: str
-    :raises ValueError: Raised when the record id is not a positive integer.
-    :return: None.
-    :rtype: None
+    :raises ValueError: When the record id is not a positive integer.
     """
     if not _is_record_id(record_id):
         raise ValueError(f"x2many {operation} commands require a positive integer id")
 
 
 def _is_command_code(value: Any) -> bool:
-    """Return whether a value is a supported integer command code.
-
-    This predicate is necessary because bools are integers in Python, but should not
-    be accepted as x2many command codes.
-
-    :param value: Candidate command code.
-    :type value: Any
-    :return: True when the value is an integer command code.
-    :rtype: bool
-    """
+    """Return whether a value is a supported integer command code (excluding bool)."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_record_id(value: Any) -> bool:
-    """Return whether a value is a valid positive integer record id.
-
-    This predicate is necessary because x2many relation ids must exclude booleans,
-    zero, and negative integers.
-
-    :param value: Candidate related record id.
-    :type value: Any
-    :return: True when the value is a positive integer id.
-    :rtype: bool
-    """
+    """Return whether a value is a positive integer record id (excluding bool)."""
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _is_placeholder(value: Any) -> bool:
-    """Return whether a value is an accepted Odoo placeholder token.
-
-    This helper is necessary because several raw x2many tuple forms accept ``0``,
-    ``None``, or ``False`` as interchangeable placeholders.
-
-    :param value: Candidate placeholder value.
-    :type value: Any
-    :return: True when the value is an accepted placeholder token.
-    :rtype: bool
-    """
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return not value
-    return isinstance(value, int) and not value
+    """Return whether a value is an accepted Odoo placeholder (``0``, ``None``, ``False``)."""
+    return value is None or (isinstance(value, int) and not value)
 
 
 _COMMAND_STATE_NORMALIZERS: Final[dict[int, Any]] = {
@@ -626,16 +327,6 @@ _COMMAND_STATE_NORMALIZERS: Final[dict[int, Any]] = {
     LINK: _normalize_relation_id_state,
     CLEAR: _normalize_clear_state,
     SET: _normalize_set_state,
-}
-
-_COMMAND_SERIALIZERS: Final[dict[int, Any]] = {
-    CREATE: _serialize_create_command,
-    UPDATE: _serialize_update_command,
-    DELETE: _serialize_relation_id_command,
-    UNLINK: _serialize_relation_id_command,
-    LINK: _serialize_relation_id_command,
-    CLEAR: _serialize_clear_command,
-    SET: _serialize_set_command,
 }
 
 _RAW_COMMAND_NORMALIZERS: Final[dict[int, Any]] = {
@@ -659,15 +350,10 @@ _DEPRECATED_COMMAND_ALIAS = (
 def __getattr__(name: str) -> Any:
     """Resolve the deprecated ``Command`` alias to :class:`X2ManyCommand` (PEP 562).
 
-    The x2many write-command builder was renamed to :class:`X2ManyCommand` so its
-    public name no longer collides with the command-registry base
-    :class:`odoo_sdk.commands.command.Command`. Accessing the old ``Command`` name
-    still resolves, but emits a :class:`DeprecationWarning`.
+    The builder was renamed to :class:`X2ManyCommand` to avoid colliding with the
+    command-registry base :class:`odoo_sdk.commands.command.Command`; the old name
+    still resolves but emits a :class:`DeprecationWarning`.
 
-    :param name: Attribute requested on the module.
-    :type name: str
-    :return: :class:`X2ManyCommand` when ``name`` is the deprecated alias.
-    :rtype: Any
     :raises AttributeError: If ``name`` is not a module attribute.
     """
     if name == "Command":
