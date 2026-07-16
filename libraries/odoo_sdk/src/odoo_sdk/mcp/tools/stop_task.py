@@ -12,11 +12,14 @@ from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
 
+from .composition import composition_tool
+
 
 class _ReviewDescription(BaseModel):
     description: str
 
 
+@composition_tool("stop_task")
 def make_stop_task_tool(registry: Registry):
     """Build the async ``stop_task`` MCP tool bound to ``registry``.
 

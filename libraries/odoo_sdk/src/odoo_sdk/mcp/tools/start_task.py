@@ -19,6 +19,8 @@ from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
 
+from .composition import composition_tool
+
 
 class _SelectProject(BaseModel):
     selection: int
@@ -326,6 +328,7 @@ async def _resolve_task_and_project(
     return task, project, warning, None
 
 
+@composition_tool("start_task")
 def make_start_task_tool(registry: Registry):
     """Build the async ``start_task`` MCP tool bound to ``registry``.
 

@@ -2,6 +2,10 @@ import importlib.metadata
 import os
 import sys
 
+from odoo_sdk.commands import Registry
+
+from ._registration import builtin_prompt
+
 _REPO = "https://github.com/Crpaxton4/devcontainer-features/"
 
 
@@ -62,3 +66,19 @@ def report_incident(description: str = "") -> list[str]:
     )
 
     return [instructions]
+
+
+@builtin_prompt("report_incident")
+def make_report_incident_prompt(command_registry: Registry):
+    """Register :func:`report_incident` as a built-in prompt.
+
+    ``report_incident`` reads only process/environment details, so it needs no
+    command access; ``command_registry`` is accepted (and ignored) purely to keep
+    the prompt-factory interface uniform with the registry-consuming prompts.
+
+    :param command_registry: Command registry, unused by this prompt.
+    :type command_registry: Registry
+    :return: The ``report_incident`` prompt callable, unchanged.
+    :rtype: Callable[..., list[str]]
+    """
+    return report_incident
