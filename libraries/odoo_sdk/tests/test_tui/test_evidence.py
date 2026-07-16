@@ -129,9 +129,9 @@ class TestUnvalidatedFlag(unittest.TestCase):
     def test_empty_list_is_not_unvalidated(self):
         self.assertFalse(event_unvalidated({"unvalidated_task_ids": []}))
 
-    def test_alternate_spellings_honoured(self):
-        self.assertTrue(event_unvalidated({"task_ids_unvalidated": True}))
-        self.assertTrue(event_unvalidated({"unvalidated": True}))
+    def test_other_key_spellings_are_no_signal(self):
+        self.assertFalse(event_unvalidated({"task_ids_unvalidated": True}))
+        self.assertFalse(event_unvalidated({"unvalidated": True}))
 
 
 # ── Confidence (item 9) ─────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ class TestBuildReviewCards(unittest.TestCase):
         events = {
             1: [
                 _event(10, external_id="git:aaa111"),
-                _event(11, external_id="git:bbb222", payload={"unvalidated": True}),
+                _event(11, external_id="git:bbb222", payload={"unvalidated_task_ids": ["99999"]}),
             ]
         }
         cards = build_review_cards([session], events, {}, {})

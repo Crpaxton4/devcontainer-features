@@ -29,9 +29,6 @@ def main() -> None:  # pragma: no cover
     harvests them off command instances. Resolving ``registry.state_client``
     caches the shared store on the registry, so both the driver and the commands
     it dispatches read and write the one store.
-
-    :return: None.
-    :rtype: None
     """
     config = LocalConfig.load()
     client = OdooClient()

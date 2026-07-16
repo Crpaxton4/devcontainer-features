@@ -405,61 +405,59 @@ fi
 # and deterministic (see the version block above); no api.github.com calls.
 # Collect their PIDs so we can wait on each individually (see the wait below).
 _download_pids=()
-install_gh_release yq \
+# Background a download job and record its PID so the wait loop below can reap
+# each one individually.
+bg() { "$@" & _download_pids+=("$!"); }
+bg install_gh_release yq \
     "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${ARCH_DEB}" \
-    /usr/local/bin/yq &
-_download_pids+=("$!")
-install_gh_release eza \
-    "https://github.com/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${ARCH_GNU}-unknown-linux-gnu.tar.gz" &
-_download_pids+=("$!")
-install_gh_release tealdeer \
+    /usr/local/bin/yq
+bg install_gh_release eza \
+    "https://github.com/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${ARCH_GNU}-unknown-linux-gnu.tar.gz"
+bg install_gh_release tealdeer \
     "https://github.com/dbrgn/tealdeer/releases/download/v${TEALDEER_VERSION}/tealdeer-linux-${ARCH_GNU}-musl" \
-    /usr/local/bin/tldr &
-_download_pids+=("$!")
+    /usr/local/bin/tldr
 # zoxide's upstream install.sh only resolves versions via api.github.com (no
 # pin flag), so download the release tarball directly instead. It bundles man
 # pages/completions/README alongside the binary, so extract just `zoxide`.
-install_gh_release zoxide \
+bg install_gh_release zoxide \
     "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${ARCH_GNU}-unknown-linux-musl.tar.gz" \
-    "" zoxide &
-_download_pids+=("$!")
-install_gh_release gitleaks \
-    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_SHORT}.tar.gz" &
-_download_pids+=("$!")
+    "" zoxide
+bg install_gh_release gitleaks \
+    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_SHORT}.tar.gz"
 # delta (better git diffs) - its tarball nests LICENSE/README/delta under a
 # top-level delta-<ver>-<arch> dir, so extract just the binary and strip that
 # leading component (strip=1) to land it directly on /usr/local/bin. No aarch64
 # musl asset is published, so use the gnu tarball for both arches. Wired up as
 # git's pager via `git config --system` below.
-install_gh_release delta \
+bg install_gh_release delta \
     "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/delta-${DELTA_VERSION}-${ARCH_GNU}-unknown-linux-gnu.tar.gz" \
-    "" "delta-${DELTA_VERSION}-${ARCH_GNU}-unknown-linux-gnu/delta" 1 &
-_download_pids+=("$!")
+    "" "delta-${DELTA_VERSION}-${ARCH_GNU}-unknown-linux-gnu/delta" 1
 # lazygit (TUI git client) - ships the bare binary at the tarball root alongside
 # LICENSE/README, so extract just `lazygit` (like zoxide).
-install_gh_release lazygit \
+bg install_gh_release lazygit \
     "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_linux_${ARCH_LAZYGIT}.tar.gz" \
-    "" lazygit &
-_download_pids+=("$!")
+    "" lazygit
 # qsv (CSV data toolkit) - ships a .zip bundling many binaries, so it uses its
 # own installer (see install_qsv above) which extracts only the `qsv` binary.
 # ARCH_QSV selects the per-arch target (static musl on amd64, gnu on arm64).
-install_qsv \
-    "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip" &
-_download_pids+=("$!")
+bg install_qsv \
+    "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip"
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
 # installer (https://cli.coderabbit.ai/install.sh) pinned to /usr/local/bin.
 # CI=1 suppresses the interactive post-install login prompt; the installer's
 # own PATH/profile edits are harmless no-ops here since it lands on a dir
 # already on PATH. The vars must be exported (not just prefixed) so the
-# installer's `sh` — a separate child process — actually inherits them. Auth is
+# installer's `sh` — a separate child process — actually inherits them. The
+# subshell isolates those exports from the rest of the script. Auth is
 # user-specific and persisted via the mount below, so it is deliberately not
 # baked in. Best-effort like the tools above.
-( export CODERABBIT_INSTALL_DIR=/usr/local/bin CI=1
-    run_installer https://cli.coderabbit.ai/install.sh \
-    || echo "WARNING: failed to install coderabbit, skipping" >&2 ) &
-_download_pids+=("$!")
+install_coderabbit() {
+    ( export CODERABBIT_INSTALL_DIR=/usr/local/bin CI=1
+        run_installer https://cli.coderabbit.ai/install.sh \
+        || echo "WARNING: failed to install coderabbit, skipping" >&2 )
+}
+bg install_coderabbit
 
 echo "Configuring global git hooks (core.hooksPath)"
 GIT_HOOKS_DIR="/usr/local/share/git-hooks"
@@ -516,9 +514,11 @@ echo "Installing shell enhancements (Starship prompt, aliases, persisted history
 # --version pins the release; the installer then builds a direct
 # releases/download/<tag>/ URL (no api.github.com) and resolves the right
 # per-arch target itself (x86_64 gnu / aarch64 musl).
-( run_installer https://starship.rs/install.sh --version "v${STARSHIP_VERSION}" --bin-dir /usr/local/bin -y \
-    || echo "WARNING: failed to install starship, skipping" >&2 ) &
-_download_pids+=("$!")
+install_starship() {
+    run_installer https://starship.rs/install.sh --version "v${STARSHIP_VERSION}" --bin-dir /usr/local/bin -y \
+        || echo "WARNING: failed to install starship, skipping" >&2
+}
+bg install_starship
 
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
 # lazygit, qsv, coderabbit, starship). Each job already warns and exits 0 on its own failure;

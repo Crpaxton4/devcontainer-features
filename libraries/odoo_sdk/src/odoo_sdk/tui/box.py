@@ -25,7 +25,6 @@ class BoxChars:
 
 
 ROUNDED = BoxChars("╭", "╮", "╰", "╯", "─", "│")
-SQUARE = BoxChars("┌", "┐", "└", "┘", "─", "│")
 
 
 def _title_segment(title: str, inner_width: int) -> str:

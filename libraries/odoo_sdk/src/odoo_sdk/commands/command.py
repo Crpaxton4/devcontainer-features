@@ -1,9 +1,27 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from odoo_sdk.state import LocalConfig, LocalStateClient
+from odoo_sdk.state import (
+    LocalConfig,
+    LocalStateClient,
+    TaskNotRunningError,
+    TaskRun,
+)
 
 from .protocols import RpcClient
+
+
+def require_active_run(db: LocalStateClient, task_id: int) -> TaskRun:
+    """Return the active run for ``task_id`` or raise ``TaskNotRunningError``.
+
+    Shared by the session-mutating builtin commands (``task_question``,
+    ``task_note``, ``abort_task``, ``stop_task``), which all guard on the same
+    "no active session" precondition with an identical message.
+    """
+    run = db.get_active_run(task_id)
+    if run is None:
+        raise TaskNotRunningError(f"No active session for task {task_id}.")
+    return run
 
 
 class Command(ABC):

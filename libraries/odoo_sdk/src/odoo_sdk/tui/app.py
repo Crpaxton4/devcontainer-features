@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import curses
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
@@ -95,23 +95,14 @@ class TuiDeps:
 class AppState:
     """The pure, serializable state the driver renders and mutates.
 
-    :param window: The current inclusive date window.
-    :param sessions: The sessions last returned by ``query_sessions``.
-    :param status: A transient status line (export path, upload result, errors).
-    :param pending_upload: True while the confirm gate awaits a keypress.
-    :param empty_hint: Diagnostic line explaining an empty window; set only when
-        the last query returned no sessions, otherwise ``""``.
-    :param mode: ``"main"`` (timeline) or ``"triage"`` (the unattributed-event
-        queue). The triage fields below are only meaningful in triage mode.
-    :param triage_rows: The unattributed rows currently listed for triage — one
-        per calendar series or lone event.
-    :param triage_selected: Index of the highlighted triage row.
-    :param triage_input: The task id being typed for the selected row (digits).
-    :param review_cards: The derived sessions decorated for review (#378 items
-        7-9): confidence class, already-logged and overlap badges, citations.
-        Only meaningful in ``"review"`` mode.
-    :param review_selected: Index of the highlighted review card.
-    :param review_expanded: Whether the selected card's evidence pane is open.
+    Most fields are self-describing (see the annotations below); only the
+    non-obvious invariants are documented here:
+
+    * ``empty_hint`` is a diagnostic line set only when the last query returned
+      no sessions, otherwise ``""``.
+    * ``mode`` is ``"main"`` (timeline), ``"triage"`` (the unattributed-event
+      queue), or ``"review"``; the ``triage_*`` fields are meaningful only in
+      triage mode and the ``review_*`` fields only in review mode.
     """
 
     window: DateWindow
@@ -163,17 +154,6 @@ def refresh(deps: TuiDeps, state: AppState) -> AppState:
     return replace(state, sessions=sessions, empty_hint=hint)
 
 
-def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
-    """Return the ``[lo, hi)`` datetime bounds the session query covers.
-
-    Delegates to the shared :func:`~odoo_sdk.billing.upload.range_bounds` so
-    the TUI, the ``query_sessions`` command, and the upload sweep all resolve
-    one inclusive-date semantic: ``lo`` is midnight of the start day and ``hi``
-    is midnight of the day after the end, so the whole end day is counted.
-    """
-    return range_bounds(window.start_iso(), window.end_iso())
-
-
 def _empty_hint(deps: TuiDeps, window: DateWindow) -> str:
     """Return a diagnostic line for a window that derived no sessions.
 
@@ -182,7 +162,7 @@ def _empty_hint(deps: TuiDeps, window: DateWindow) -> str:
     task runs are on record overall, and the session gap the deriver uses.
     """
     store = deps.store
-    lo, hi = _window_bounds(window)
+    lo, hi = range_bounds(window.start_iso(), window.end_iso())
     events = store.count_events(lo, hi)
     runs = len(store.get_all_runs())
     gap = deps.config.session_gap_mins
@@ -255,14 +235,9 @@ def _upload_sessions(
     """Bill the derived sessions through the shared upload loop (#354).
 
     The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
-    :func:`~odoo_sdk.billing.upload.upload_sessions` path: it reconciles each
-    session through the sole ``account.analytic.line`` hours-writer (idempotent
-    per ``session_key``, so a re-run never double-bills) and then runs the
-    window-scoped orphan sweep (#353) that zeroes and retires mappings that no
-    longer derive. The window's inclusive dates are forwarded (bounds resolved
-    inside the shared loop) so the sweep is scoped exactly to what was queried.
-    The (client, state) pair is the driver's own injected pair — the same shared
-    dependencies every registry command receives — never harvested off a command.
+    :func:`~odoo_sdk.billing.upload.upload_sessions` path: idempotent per
+    ``session_key`` (a re-run never double-bills) plus a window-scoped orphan
+    sweep (#353) scoped to the inclusive dates forwarded here.
 
     :return: ``(uploaded, retired)`` counts for the status line.
     """
@@ -312,7 +287,7 @@ def _load_triage_rows(deps: TuiDeps, window: DateWindow) -> list[TriageRow]:
     on what "this window" means.
     """
     store = deps.store
-    lo, hi = _window_bounds(window)
+    lo, hi = range_bounds(window.start_iso(), window.end_iso())
     return build_triage_rows(store.get_unattributed_events(lo, hi))
 
 

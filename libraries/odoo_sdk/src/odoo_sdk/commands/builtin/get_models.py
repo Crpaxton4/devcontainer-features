@@ -12,10 +12,5 @@ class GetModelsCommand(Command):
     _description = "Get a list of all models with their names."
 
     def execute(self) -> List[Dict[str, Any]]:
-        """Return every ``ir.model`` record's technical and display name.
-
-        :return: A list of dictionaries with ``model`` and ``name`` keys.
-        :rtype: List[Dict[str, Any]]
-        """
-
+        """Return every ``ir.model`` record's technical and display name."""
         return self._client["ir.model"].search([]).read(["model", "name"])

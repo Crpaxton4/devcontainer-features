@@ -35,11 +35,11 @@ _CITATIONS = (
     (re.compile(r"^odoo:mail:(?P<n>.+)$"), "chatter msg {n}"),
 )
 
-# Payload keys the #378a sibling may stamp when a task id was extracted but did
-# not validate against ``project.task``. Read defensively: a truthy value under
-# any of these marks the session weak; their absence is simply no signal (an
-# un-flagged event is not evidence of validity either way).
-_UNVALIDATED_KEYS = ("unvalidated_task_ids", "task_ids_unvalidated", "unvalidated")
+# The key the #378a producer (:mod:`odoo_sdk.adapters.external_sync`) stamps when
+# a task id was extracted but did not validate against ``project.task``. A truthy
+# value (a non-empty list) marks the session weak; its absence is simply no
+# signal (an un-flagged event is not evidence of validity either way).
+_UNVALIDATED_KEY = "unvalidated_task_ids"
 
 
 @dataclass(frozen=True)
@@ -149,13 +149,12 @@ def event_citation(source: str, external_id: str | None) -> str:
 def event_unvalidated(payload: Any) -> bool:
     """Return True when an event payload flags an unvalidated task id (#378a).
 
-    Read defensively: the sibling stamping this flag lands the same wave, so any
-    of a few plausible key spellings is honoured, a non-dict/absent payload is no
-    signal, and only a truthy value (a non-empty list or ``True``) marks it.
+    A non-dict/absent payload is no signal, and only a truthy value (a non-empty
+    list) under :data:`_UNVALIDATED_KEY` marks the event unvalidated.
     """
     if not isinstance(payload, dict):
         return False
-    return any(payload.get(key) for key in _UNVALIDATED_KEYS)
+    return bool(payload.get(_UNVALIDATED_KEY))
 
 
 def _valid_task_id(task_id: Any) -> bool:
