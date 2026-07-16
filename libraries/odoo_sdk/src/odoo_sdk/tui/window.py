@@ -56,14 +56,6 @@ class DateWindow:
             new_end = self.start
         return DateWindow(self.start, new_end)
 
-    def with_start(self, value: date) -> "DateWindow":
-        """Return a window with a new ``start`` (clamped to at most ``end``)."""
-        return DateWindow(min(value, self.end), self.end)
-
-    def with_end(self, value: date) -> "DateWindow":
-        """Return a window with a new ``end`` (clamped to at least ``start``)."""
-        return DateWindow(self.start, max(value, self.start))
-
     def start_iso(self) -> str:
         """Return the start date as an ISO ``YYYY-MM-DD`` string."""
         return self.start.isoformat()

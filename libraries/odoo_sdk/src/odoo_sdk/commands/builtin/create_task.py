@@ -10,18 +10,7 @@ class CreateTaskCommand(Command):
     _description = "Creates a project task with standard default values."
 
     def execute(self, name: str, project_id: int, description: str = "") -> int:
-        """Create a ``project.task`` and return its new id.
-
-        :param name: Task title; prefixed with ``[MCP]`` on creation.
-        :type name: str
-        :param project_id: Identifier of the project the task belongs to.
-        :type project_id: int
-        :param description: Optional task description.
-        :type description: str
-        :return: The id of the created task.
-        :rtype: int
-        """
-
+        """Create a ``project.task`` (title prefixed ``[MCP]``) and return its id."""
         task_vals = {
             "name": f"[MCP] {name}",
             "project_id": project_id,

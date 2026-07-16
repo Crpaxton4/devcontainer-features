@@ -11,6 +11,7 @@ the returned rows verbatim, so all layout arithmetic (and its reflow on
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, time
 from typing import Any, Mapping, Sequence
 
 from odoo_sdk.utilities.stats import SessionStats, compute_stats
@@ -116,8 +117,6 @@ def _timeline_lines(
     empty_hint: str = "",
 ) -> list[str]:
     """Return the hero timeline body: one ``label | bar`` line per lane."""
-    from datetime import datetime, time
-
     # Bind the naive date window to the local timezone so the axis bounds are
     # tz-aware; stored session timestamps carry offsets, and subtracting a naive
     # bound from an aware timestamp raises TypeError (issue #333).

@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REPORTS = REPO_ROOT / "reports"
@@ -22,17 +23,13 @@ MI_RANKS = {"A": "✅", "B": "⚠️", "C": "❌"}
 COMPLEXITY_THRESHOLD = 15
 
 
+def _icon(value: float, warn: float, fail: float) -> str:
+    """Return ✅/⚠️/❌ for ``value`` on a higher-is-better warn/fail scale."""
+    return "✅" if value >= warn else ("⚠️" if value >= fail else "❌")
+
+
 def badge(value: float, warn: float, fail: float, fmt: str = ".1f") -> str:
-    icon = "✅" if value >= warn else ("⚠️" if value >= fail else "❌")
-    return f"{icon} **{value:{fmt}}%**"
-
-
-def cc_badge(rank: str) -> str:
-    return CC_RANKS.get(rank, "❓")
-
-
-def mi_badge(rank: str) -> str:
-    return MI_RANKS.get(rank, "❓")
+    return f"{_icon(value, warn, fail)} **{value:{fmt}}%**"
 
 
 def load_json(path: Path) -> dict | list | None:
@@ -67,15 +64,12 @@ def _cc_rank(score: int) -> str:
 
 
 # ── Section builders ──────────────────────────────────────────────────────────
+# Each builder receives the loaded (non-None) JSON and appends its body to
+# ``lines``; the shared :func:`_emit_section` driver writes the header and the
+# missing-file hint, so builders never repeat that preamble.
 
 
-def section_coverage(lines: list[str]) -> None:
-    data = load_json(REPORTS / "coverage" / "coverage.json")
-    lines.append("## 🧪 Coverage\n")
-    if data is None:
-        lines.append("> _No coverage.json found — run `make coverage`_\n")
-        return
-
+def section_coverage(lines: list[str], data: Any) -> None:
     totals = data.get("totals", {})
     pct = totals.get("percent_covered", 0.0)
     stmts = totals.get("num_statements", 0)
@@ -102,11 +96,7 @@ def section_coverage(lines: list[str]) -> None:
         for path_str, fdata in files.items():
             s = fdata.get("summary", {})
             f_pct = s.get("percent_covered", 0.0)
-            icon = (
-                "✅"
-                if f_pct >= COVERAGE_WARN
-                else ("⚠️" if f_pct >= COVERAGE_FAIL else "❌")
-            )
+            icon = _icon(f_pct, COVERAGE_WARN, COVERAGE_FAIL)
             rows.append(
                 (
                     f_pct,
@@ -123,15 +113,7 @@ def section_coverage(lines: list[str]) -> None:
         lines.append("")
 
 
-def section_mutation(lines: list[str]) -> None:
-    data = load_json(REPORTS / "mutation" / "mutation.json")
-    lines.append("## 🧬 Mutation Testing\n")
-    if data is None:
-        lines.append(
-            "> _No mutation.json found — run `make mutation`_\n"
-        )
-        return
-
+def section_mutation(lines: list[str], data: Any) -> None:
     if not isinstance(data, list):
         lines.append("> _Unexpected mutation.json format_\n")
         return
@@ -171,15 +153,7 @@ def section_mutation(lines: list[str]) -> None:
         lines.append("")
 
 
-def section_cyclomatic(lines: list[str]) -> None:
-    data = load_json(REPORTS / "radon" / "cc.json")
-    lines.append("## 🔁 Cyclomatic Complexity\n")
-    if data is None:
-        lines.append(
-            "> _No cc.json found — run `make static`_\n"
-        )
-        return
-
+def section_cyclomatic(lines: list[str], data: Any) -> None:
     # Flatten all blocks across all files
     all_blocks: list[dict] = []
     rank_counts: dict[str, int] = {r: 0 for r in "ABCDEF"}
@@ -229,15 +203,7 @@ def section_cyclomatic(lines: list[str]) -> None:
         lines.append("")
 
 
-def section_maintainability(lines: list[str]) -> None:
-    data = load_json(REPORTS / "radon" / "mi.json")
-    lines.append("## 🛠 Maintainability Index\n")
-    if data is None:
-        lines.append(
-            "> _No mi.json found — run `make static`_\n"
-        )
-        return
-
+def section_maintainability(lines: list[str], data: Any) -> None:
     lines.append("_Scale: A (100–20) = high · B (19–10) = medium · C (9–0) = low_\n")
     lines.append("| File | MI | Rank |")
     lines.append("|---|--:|---|")
@@ -253,15 +219,7 @@ def section_maintainability(lines: list[str]) -> None:
     lines.append("")
 
 
-def section_raw(lines: list[str]) -> None:
-    data = load_json(REPORTS / "radon" / "raw.json")
-    lines.append("## 📐 Raw Metrics\n")
-    if data is None:
-        lines.append(
-            "> _No raw.json found — run `make static`_\n"
-        )
-        return
-
+def section_raw(lines: list[str], data: Any) -> None:
     # Aggregate totals
     totals = {"loc": 0, "lloc": 0, "sloc": 0, "comments": 0, "multi": 0, "blank": 0}
     file_rows = []
@@ -293,15 +251,7 @@ def section_raw(lines: list[str]) -> None:
         lines.append("")
 
 
-def section_halstead(lines: list[str]) -> None:
-    data = load_json(REPORTS / "radon" / "hal.json")
-    lines.append("## 🔬 Halstead Metrics\n")
-    if data is None:
-        lines.append(
-            "> _No hal.json found — run `make static`_\n"
-        )
-        return
-
+def section_halstead(lines: list[str], data: Any) -> None:
     rows = []
     for file_path, metrics in data.items():
         # radon hal --json: file → {total: {…}} or file → list
@@ -337,15 +287,7 @@ def section_halstead(lines: list[str]) -> None:
     lines.append("")
 
 
-def section_complexipy(lines: list[str]) -> None:
-    data = load_json(REPORTS / "complexipy" / "complexipy-results.json")
-    lines.append("## 🧠 Cognitive Complexity (complexipy)\n")
-    if data is None:
-        lines.append(
-            "> _No complexipy-results.json found — run `make static`_\n"
-        )
-        return
-
+def section_complexipy(lines: list[str], data: Any) -> None:
     if not isinstance(data, list):
         lines.append("> _Unexpected complexipy-results.json format_\n")
         return
@@ -394,6 +336,45 @@ def section_complexipy(lines: list[str]) -> None:
         lines.append("")
 
 
+# ── Section table ─────────────────────────────────────────────────────────────
+# (emoji, title, json path, make target, builder). This one table drives the
+# table of contents, each section's header + missing-file hint, its body, and the
+# ``---`` separators woven between sections (see :func:`main`).
+Builder = Callable[[list[str], Any], None]
+SECTIONS: list[tuple[str, str, Path, str, Builder]] = [
+    ("🧪", "Coverage", REPORTS / "coverage" / "coverage.json", "make coverage", section_coverage),
+    ("🧬", "Mutation Testing", REPORTS / "mutation" / "mutation.json", "make mutation", section_mutation),
+    ("🔁", "Cyclomatic Complexity", REPORTS / "radon" / "cc.json", "make static", section_cyclomatic),
+    ("🛠", "Maintainability Index", REPORTS / "radon" / "mi.json", "make static", section_maintainability),
+    ("📐", "Raw Metrics", REPORTS / "radon" / "raw.json", "make static", section_raw),
+    ("🔬", "Halstead Metrics", REPORTS / "radon" / "hal.json", "make static", section_halstead),
+    (
+        "🧠",
+        "Cognitive Complexity (complexipy)",
+        REPORTS / "complexipy" / "complexipy-results.json",
+        "make static",
+        section_complexipy,
+    ),
+]
+
+
+def _emit_section(
+    lines: list[str],
+    emoji: str,
+    title: str,
+    path: Path,
+    make_target: str,
+    builder: Builder,
+) -> None:
+    """Write one section's header, then its body or a missing-file hint."""
+    data = load_json(path)
+    lines.append(f"## {emoji} {title}\n")
+    if data is None:
+        lines.append(f"> _No {path.name} found — run `{make_target}`_\n")
+        return
+    builder(lines, data)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -401,38 +382,20 @@ def main() -> int:
     lines: list[str] = []
     now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    lines.append(f"# Quality Report\n")
+    lines.append("# Quality Report\n")
     lines.append(f"_Generated: {now}_\n")
     lines.append("---\n")
 
     lines.append("## Contents\n")
     lines.append("| # | Section |\n|---|---|")
-    sections = [
-        "Coverage",
-        "Mutation Testing",
-        "Cyclomatic Complexity",
-        "Maintainability Index",
-        "Raw Metrics",
-        "Halstead Metrics",
-        "Cognitive Complexity (complexipy)",
-    ]
-    for i, s in enumerate(sections, 1):
-        lines.append(f"| {i} | {s} |")
+    for i, section in enumerate(SECTIONS, 1):
+        lines.append(f"| {i} | {section[1]} |")
     lines.append("\n---\n")
 
-    section_coverage(lines)
-    lines.append("---\n")
-    section_mutation(lines)
-    lines.append("---\n")
-    section_cyclomatic(lines)
-    lines.append("---\n")
-    section_maintainability(lines)
-    lines.append("---\n")
-    section_raw(lines)
-    lines.append("---\n")
-    section_halstead(lines)
-    lines.append("---\n")
-    section_complexipy(lines)
+    for index, section in enumerate(SECTIONS):
+        _emit_section(lines, *section)
+        if index < len(SECTIONS) - 1:
+            lines.append("---\n")
 
     REPORTS.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text("\n".join(lines) + "\n")

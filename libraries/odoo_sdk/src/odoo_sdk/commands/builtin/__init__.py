@@ -56,14 +56,7 @@ from .unlogged_time_report import UnloggedTimeReportCommand
 
 
 def register_builtins(registry: Registry) -> Registry:
-    """Register every built-in command on ``registry``.
-
-    :param registry: Registry to populate with the built-in commands.
-    :type registry: Registry
-    :return: The same registry, returned for convenient chaining.
-    :rtype: Registry
-    """
-
+    """Register every built-in command on ``registry`` and return it (chaining)."""
     for command_name, command in BUILTIN_COMMANDS.items():
         registry.register(command_name, command)
     return registry

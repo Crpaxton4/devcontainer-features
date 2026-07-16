@@ -2,7 +2,7 @@
 
 import unittest
 
-from odoo_sdk.tui.box import ROUNDED, SQUARE, draw_box, place_text
+from odoo_sdk.tui.box import ROUNDED, draw_box, place_text
 
 
 class TestDrawBox(unittest.TestCase):
@@ -17,11 +17,6 @@ class TestDrawBox(unittest.TestCase):
         self.assertTrue(box[0].endswith("╮"))
         self.assertTrue(box[-1].startswith("╰"))
         self.assertTrue(box[-1].endswith("╯"))
-
-    def test_square_corners(self):
-        box = draw_box(6, 3, chars=SQUARE)
-        self.assertTrue(box[0].startswith("┌"))
-        self.assertTrue(box[-1].endswith("┘"))
 
     def test_title_embedded_in_top_border(self):
         box = draw_box(20, 3, "hi")

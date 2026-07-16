@@ -16,16 +16,7 @@ class GetTasksCommand(Command):
         domain: Optional[List[Tuple[str, str, Any]]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Search ``project.task`` and return summary fields for each match.
-
-        :param domain: Optional Odoo domain filter; an empty domain matches all.
-        :type domain: Optional[List[Tuple[str, str, Any]]]
-        :param limit: Maximum number of tasks to return.
-        :type limit: int
-        :return: A list of task records with summary fields.
-        :rtype: List[Dict[str, Any]]
-        """
-
+        """Search ``project.task`` and return summary fields for each match."""
         task_domain = domain or []
         fields_to_fetch = [
             "name",

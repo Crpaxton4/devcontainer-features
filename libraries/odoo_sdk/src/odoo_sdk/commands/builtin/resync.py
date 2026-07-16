@@ -27,12 +27,20 @@ from odoo_sdk.adapters import (
 from ..command import Command
 from ._registration import builtin_command
 
-# The pullers a resync can run, in a stable order. ``gcal``/``gmail`` reach the
-# Google APIs and require host-provisioned credentials, so they are opt-in: NOT
-# in the default source string, only run when explicitly requested (issue #370).
+# The pullers a resync can run, keyed by source in a stable order; each value
+# runs that source's sync against the command's shared dependencies. ``gcal`` and
+# ``gmail`` reach the Google APIs and require host-provisioned credentials, so
+# they are opt-in: NOT in the default source string, only run when explicitly
+# requested (issue #370).
+_SYNC_DISPATCH = {
+    "git": lambda cmd: sync_git_log(cmd.state, cmd.config, cmd._client),
+    "github": lambda cmd: sync_github(cmd.state, cmd.config, cmd._client),
+    "odoo": lambda cmd: sync_odoo_chatter(cmd._client, cmd.state, cmd.config),
+    "gcal": lambda cmd: sync_google_calendar(cmd.state, cmd.config),
+    "gmail": lambda cmd: sync_gmail(cmd.state, cmd.config),
+}
 _DEFAULT_SOURCES = ("git", "github", "odoo")
-_GOOGLE_SOURCES = ("gcal", "gmail")
-_ALL_SOURCES = _DEFAULT_SOURCES + _GOOGLE_SOURCES
+_ALL_SOURCES = tuple(_SYNC_DISPATCH)
 
 
 def _parse_sources(sources: str) -> list[str]:
@@ -80,15 +88,4 @@ class ResyncCommand(Command):
             (``{"inserted": n}`` or ``{"skipped": reason}``).
         """
         selected = _parse_sources(sources)
-        summary: dict[str, Any] = {}
-        if "git" in selected:
-            summary["git"] = sync_git_log(self.state, self.config, self._client)
-        if "github" in selected:
-            summary["github"] = sync_github(self.state, self.config, self._client)
-        if "odoo" in selected:
-            summary["odoo"] = sync_odoo_chatter(self._client, self.state, self.config)
-        if "gcal" in selected:
-            summary["gcal"] = sync_google_calendar(self.state, self.config)
-        if "gmail" in selected:
-            summary["gmail"] = sync_gmail(self.state, self.config)
-        return summary
+        return {source: _SYNC_DISPATCH[source](self) for source in selected}
