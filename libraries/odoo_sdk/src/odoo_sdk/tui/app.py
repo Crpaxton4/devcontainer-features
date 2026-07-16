@@ -4,7 +4,15 @@ This is the one impure surface: it owns the ``curses`` loop, parses keystrokes,
 calls commands through a :class:`~odoo_sdk.commands.Registry`, and blits the rows
 returned by the pure frame composer. It holds no business logic — session
 detection is the ``query_sessions`` command's job, export reuses the #105
-renderers, and upload delegates to the timesheet commands behind a confirm gate.
+renderers, upload delegates to the timesheet commands behind a confirm gate, and
+the triage write delegates to the ``assign_event`` command.
+
+Its dependencies — the RPC client, the local state store, and the resolved
+config, plus the command registry it composes — are injected once at
+construction as a :class:`TuiDeps` bundle (``tui/__main__`` has all of them in
+hand). The driver never harvests them off command instances (no reaching into a
+command's private ``._client`` or its ``.state`` / ``.config``); every state
+mutation goes through a command, so MCP and CLI can share the same operations.
 
 The genuinely terminal-bound parts (the render loop, raw ``addstr`` blitting, and
 the console entry) are marked ``# pragma: no cover``; the command composition,
@@ -20,7 +28,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.state import EventRecord
+from odoo_sdk.commands.protocols import RpcClient
+from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
 from odoo_sdk.utilities.logged_lines import logged_hours_by_task_day
 from odoo_sdk.utilities.upload import range_bounds, upload_sessions
 
@@ -54,6 +63,32 @@ _BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
 _MODE_MAIN = "main"
 _MODE_TRIAGE = "triage"
 _MODE_REVIEW = "review"
+
+
+@dataclass(frozen=True)
+class TuiDeps:
+    """The driver's injected dependencies, resolved once at construction.
+
+    The read/write side needs the same three peers the command layer uses — the
+    RPC ``client``, the local state ``store``, and the resolved ``config`` — plus
+    the command ``registry`` it composes. They are handed in explicitly (see
+    :func:`odoo_sdk.tui.__main__.main`) rather than harvested off command
+    instances, so the driver never touches a command's private ``._client`` or
+    reaches into its ``.state`` / ``.config``. The ``store`` is the very object
+    the registry shares with every command, so a write routed through a command
+    (e.g. ``assign_event``) is immediately visible to the driver's own reads.
+
+    :param registry: Command registry the driver dispatches through.
+    :param client: RPC client for the best-effort Odoo reads (logged hours) and
+        the upload path.
+    :param store: Shared local state client (the same one the commands use).
+    :param config: Resolved SDK configuration (e.g. the session gap).
+    """
+
+    registry: Registry
+    client: RpcClient
+    store: LocalStateClient
+    config: LocalConfig
 
 
 @dataclass(frozen=True)
@@ -100,21 +135,21 @@ def default_window(today: Optional[date] = None, span_days: int = 7) -> DateWind
     return DateWindow(start, end)
 
 
-def query_sessions(registry: Registry, window: DateWindow) -> list[dict[str, Any]]:
+def query_sessions(deps: TuiDeps, window: DateWindow) -> list[dict[str, Any]]:
     """Compose the ``query_sessions`` command for ``window``'s inclusive range.
 
     This is the only path to sessions: the command detects them globally, so the
     TUI never recomputes boundaries. The result is a list of session dicts with
     embedded events.
     """
-    return registry["query_sessions"].execute(
+    return deps.registry["query_sessions"].execute(
         start_date=window.start_iso(),
         end_date=window.end_iso(),
         include_events=True,
     )
 
 
-def refresh(registry: Registry, state: AppState) -> AppState:
+def refresh(deps: TuiDeps, state: AppState) -> AppState:
     """Return ``state`` with its sessions re-queried for the current window.
 
     When the query returns no sessions the empty window is ambiguous: nothing may
@@ -123,8 +158,8 @@ def refresh(registry: Registry, state: AppState) -> AppState:
     counts so the two cases are distinguishable; it is cleared whenever sessions
     are present.
     """
-    sessions = query_sessions(registry, state.window)
-    hint = _empty_hint(registry, state.window) if not sessions else ""
+    sessions = query_sessions(deps, state.window)
+    hint = _empty_hint(deps, state.window) if not sessions else ""
     return replace(state, sessions=sessions, empty_hint=hint)
 
 
@@ -139,50 +174,49 @@ def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
     return range_bounds(window.start_iso(), window.end_iso())
 
 
-def _empty_hint(registry: Registry, window: DateWindow) -> str:
+def _empty_hint(deps: TuiDeps, window: DateWindow) -> str:
     """Return a diagnostic line for a window that derived no sessions.
 
     Reports how many events fall inside the queried window (``0`` means nothing
     happened; ``N>0`` means data exists but does not sessionize here), how many
     task runs are on record overall, and the session gap the deriver uses.
     """
-    command = registry["query_sessions"]
-    store = command.state
+    store = deps.store
     lo, hi = _window_bounds(window)
     events = store.count_events(lo, hi)
     runs = len(store.get_all_runs())
-    gap = command.config.session_gap_mins
+    gap = deps.config.session_gap_mins
     return (
         f"no sessions derivable — {events} events in window, "
         f"{runs} runs recorded, gap={gap}m"
     )
 
 
-def move_window(registry: Registry, state: AppState, action: str) -> AppState:
+def move_window(deps: TuiDeps, state: AppState, action: str) -> AppState:
     """Apply an arrow ``action`` and re-query only when the window changed."""
     new_window = apply_action(state.window, action)
     if new_window == state.window:
         return state
     moved = replace(state, window=new_window, status="", pending_upload=False)
-    return refresh(registry, moved)
+    return refresh(deps, moved)
 
 
 def do_export(
     state: AppState,
-    registry: Registry,
+    deps: TuiDeps,
     kind: str,
     writer: Callable[[str, str], str],
 ) -> AppState:
     """Render an export via the #105 renderers and write it, updating status.
 
     :param state: The current app state (its window bounds the export).
-    :param registry: Registry supplying the shared local state client.
+    :param deps: Injected dependencies supplying the shared local state store.
     :param kind: ``"markdown"`` or ``"csv"``.
     :param writer: Sink taking ``(content, suggested_name)`` and returning the
         path (or label) written, injected so the pure path stays testable.
     :return: The state with a status line describing the export.
     """
-    store = registry["query_sessions"].state
+    store = deps.store
     start, end = state.window.start, state.window.end
     if kind == "csv":
         content = export_csv(store, start, end)
@@ -204,11 +238,11 @@ def request_upload(state: AppState) -> AppState:
     )
 
 
-def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppState:
+def confirm_upload(state: AppState, deps: TuiDeps, confirmed: bool) -> AppState:
     """Resolve the confirm gate: on ``confirmed`` run the upload, else cancel."""
     if not confirmed:
         return replace(state, pending_upload=False, status="upload cancelled")
-    uploaded, retired = _upload_sessions(registry, state.sessions, state.window)
+    uploaded, retired = _upload_sessions(deps, state.sessions, state.window)
     status = f"uploaded {uploaded} session(s)"
     if retired:
         status += f", retired {retired} orphaned upload(s)"
@@ -216,7 +250,7 @@ def confirm_upload(state: AppState, registry: Registry, confirmed: bool) -> AppS
 
 
 def _upload_sessions(
-    registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
+    deps: TuiDeps, sessions: list[dict[str, Any]], window: DateWindow
 ) -> tuple[int, int]:
     """Bill the derived sessions through the shared upload loop (#354).
 
@@ -227,15 +261,14 @@ def _upload_sessions(
     window-scoped orphan sweep (#353) that zeroes and retires mappings that no
     longer derive. The window's inclusive dates are forwarded (bounds resolved
     inside the shared loop) so the sweep is scoped exactly to what was queried.
-    The shared (client, state) pair is resolved off the ``stop_task`` command,
-    the same dependencies every registry command shares.
+    The (client, state) pair is the driver's own injected pair — the same shared
+    dependencies every registry command receives — never harvested off a command.
 
     :return: ``(uploaded, retired)`` counts for the status line.
     """
-    stop_cmd = registry["stop_task"]
     result = upload_sessions(
-        stop_cmd._client,
-        stop_cmd.state,
+        deps.client,
+        deps.store,
         sessions,
         start_date=window.start_iso(),
         end_date=window.end_iso(),
@@ -258,7 +291,7 @@ def _resync_status(result: dict[str, Any]) -> str:
     return "resync — " + ", ".join(parts)
 
 
-def do_resync(registry: Registry, state: AppState) -> AppState:
+def do_resync(deps: TuiDeps, state: AppState) -> AppState:
     """Run the manual resync, re-query the window, and report per-source counts.
 
     Reconciles the current repo's events (git commits, GitHub PRs/reviews, Odoo
@@ -266,31 +299,31 @@ def do_resync(registry: Registry, state: AppState) -> AppState:
     appear immediately, and surfaces each source's inserted count (or skip
     reason) on the status line.
     """
-    result = registry["resync"].execute()
-    refreshed = refresh(registry, state)
+    result = deps.registry["resync"].execute()
+    refreshed = refresh(deps, state)
     return replace(refreshed, status=_resync_status(result), pending_upload=False)
 
 
-def _load_triage_rows(registry: Registry, window: DateWindow) -> list[TriageRow]:
+def _load_triage_rows(deps: TuiDeps, window: DateWindow) -> list[TriageRow]:
     """Query the window's unattributed events and collapse them into triage rows.
 
     Uses the same inclusive-date ``[midnight start, midnight day-after-end)``
     bounds the session query and empty hint use, so triage and the timeline agree
     on what "this window" means.
     """
-    store = registry["query_sessions"].state
+    store = deps.store
     lo, hi = _window_bounds(window)
     return build_triage_rows(store.get_unattributed_events(lo, hi))
 
 
-def enter_triage(registry: Registry, state: AppState) -> AppState:
+def enter_triage(deps: TuiDeps, state: AppState) -> AppState:
     """Open the triage queue: load the window's unattributed events and select row 0.
 
     Surfaces every event ingested with ``task_ids=[]`` in the current window so a
     meeting or email that could not be confidently attributed is triaged rather
     than silently never billing (#370, acceptance item 9).
     """
-    rows = _load_triage_rows(registry, state.window)
+    rows = _load_triage_rows(deps, state.window)
     return replace(
         state,
         mode=_MODE_TRIAGE,
@@ -322,14 +355,15 @@ def _parse_task_id(text: str) -> Optional[int]:
     return value if value > 0 else None
 
 
-def assign_triage(registry: Registry, state: AppState) -> AppState:
+def assign_triage(deps: TuiDeps, state: AppState) -> AppState:
     """Attribute the selected series/event to the typed task id, then reload rows.
 
-    Validates the typed id is a positive integer, writes ``task_ids`` on every
-    event of the selected row in one transaction (series-granularity), and
-    re-queries so the now-attributed row drops out of the queue. The confirmation
-    names the series and the number of events updated; the events are immediately
-    derivable and therefore billable.
+    Parses the typed keystrokes into a positive integer task id (a UI concern),
+    then routes the write through the ``assign_event`` command, which owns the
+    validated, atomic series write and is shared with MCP/CLI. Re-queries so the
+    now-attributed row drops out of the queue. The confirmation names the series
+    and the number of events updated; the events are immediately derivable and
+    therefore billable.
     """
     if not state.triage_rows:
         return replace(state, status="nothing to triage")
@@ -337,9 +371,11 @@ def assign_triage(registry: Registry, state: AppState) -> AppState:
     if task_id is None:
         return replace(state, status="invalid task id — type a positive integer")
     row = state.triage_rows[state.triage_selected]
-    store = registry["query_sessions"].state
-    updated = store.assign_event_task_ids(list(row.event_ids), task_id)
-    rows = _load_triage_rows(registry, state.window)
+    result = deps.registry["assign_event"].execute(
+        event_ids=list(row.event_ids), task_id=task_id
+    )
+    updated = result["updated"]
+    rows = _load_triage_rows(deps, state.window)
     selected = min(state.triage_selected, max(0, len(rows) - 1))
     return replace(
         state,
@@ -350,7 +386,7 @@ def assign_triage(registry: Registry, state: AppState) -> AppState:
     )
 
 
-def handle_triage_key(registry: Registry, state: AppState, key: int) -> AppState:
+def handle_triage_key(deps: TuiDeps, state: AppState, key: int) -> AppState:
     """Advance triage-mode state for one keypress (never quits the app).
 
     ``q``/ESC returns to the timeline; up/down move the highlight; ``s`` skips to
@@ -365,7 +401,7 @@ def handle_triage_key(registry: Registry, state: AppState, key: int) -> AppState
     if key in _BACKSPACE_KEYS:
         return replace(state, triage_input=state.triage_input[:-1])
     if key in _ENTER_KEYS:
-        return assign_triage(registry, state)
+        return assign_triage(deps, state)
     if ord("0") <= key <= ord("9"):
         return replace(state, triage_input=state.triage_input + chr(key))
     return state
@@ -390,25 +426,25 @@ def _member_events(
 
 
 def _fetch_logged_hours(
-    registry: Registry, sessions: list[dict[str, Any]], window: DateWindow
+    deps: TuiDeps, sessions: list[dict[str, Any]], window: DateWindow
 ) -> dict[tuple[str, str], float]:
     """Best-effort read of already-logged Odoo hours per task/day (#378 item 7).
 
     Degrades gracefully: any transport failure (offline, auth, no employee record)
     is swallowed so the review surface still renders, just without the
-    already-logged badge. The read is strictly read-only (``search_read``).
+    already-logged badge. The read is strictly read-only (``search_read``). The
+    RPC client is the driver's own injected one, not a command's private field.
     """
     task_ids = [session["task_id"] for session in sessions]
     try:
-        client = registry["stop_task"]._client
         return logged_hours_by_task_day(
-            client, task_ids, window.start_iso(), window.end_iso()
+            deps.client, task_ids, window.start_iso(), window.end_iso()
         )
     except Exception:  # noqa: BLE001 - best-effort badge; any failure = no badge
         return {}
 
 
-def enter_review(registry: Registry, state: AppState) -> AppState:
+def enter_review(deps: TuiDeps, state: AppState) -> AppState:
     """Open the review surface over the current window's derived sessions.
 
     Builds one decorated card per session (#378 items 7-9): fetches member events
@@ -417,10 +453,10 @@ def enter_review(registry: Registry, state: AppState) -> AppState:
     for the already-logged badge. Everything informs the reviewer; nothing trims
     or uploads.
     """
-    store = registry["query_sessions"].state
+    store = deps.store
     events_by_session = _member_events(store, state.sessions)
     overlaps = compute_overlaps(state.sessions)
-    logged = _fetch_logged_hours(registry, state.sessions, state.window)
+    logged = _fetch_logged_hours(deps, state.sessions, state.window)
     cards = build_review_cards(state.sessions, events_by_session, logged, overlaps)
     return replace(
         state,
@@ -471,7 +507,7 @@ def handle_review_key(state: AppState, key: int) -> AppState:
 
 
 def handle_key(
-    registry: Registry,
+    deps: TuiDeps,
     state: AppState,
     key: int,
     *,
@@ -479,39 +515,37 @@ def handle_key(
 ) -> tuple[AppState, bool]:
     """Advance the app state for one keypress; return ``(state, should_quit)``.
 
-    Pure w.r.t. the terminal: it only calls commands (through ``registry``) and
-    the injected ``writer``. In triage mode every key is routed to the triage
-    handler (which never quits the app). Otherwise the confirm gate takes
-    precedence so an armed upload consumes the next key as its yes/no answer.
+    Pure w.r.t. the terminal: it only calls commands (through ``deps``) and the
+    injected ``writer``. In triage mode every key is routed to the triage handler
+    (which never quits the app). Otherwise the confirm gate takes precedence so an
+    armed upload consumes the next key as its yes/no answer.
     """
     if state.mode == _MODE_TRIAGE:
-        return handle_triage_key(registry, state, key), False
+        return handle_triage_key(deps, state, key), False
     if state.mode == _MODE_REVIEW:
         return handle_review_key(state, key), False
     if state.pending_upload:
         return (
-            confirm_upload(
-                registry=registry, state=state, confirmed=key in _CONFIRM_KEYS
-            ),
+            confirm_upload(state=state, deps=deps, confirmed=key in _CONFIRM_KEYS),
             False,
         )
     if key in _QUIT_KEYS:
         return state, True
     action = _KEY_ACTIONS.get(key)
     if action is not None:
-        return move_window(registry, state, action), False
+        return move_window(deps, state, action), False
     if key == _EXPORT_MD_KEY:
-        return do_export(state, registry, "markdown", writer), False
+        return do_export(state, deps, "markdown", writer), False
     if key == _EXPORT_CSV_KEY:
-        return do_export(state, registry, "csv", writer), False
+        return do_export(state, deps, "csv", writer), False
     if key == _UPLOAD_KEY:
         return request_upload(state), False
     if key == _RESYNC_KEY:
-        return do_resync(registry, state), False
+        return do_resync(deps, state), False
     if key == _TRIAGE_KEY:
-        return enter_triage(registry, state), False
+        return enter_triage(deps, state), False
     if key == _REVIEW_KEY:
-        return enter_review(registry, state), False
+        return enter_review(deps, state), False
     return state, False
 
 
@@ -566,29 +600,29 @@ def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     curses.doupdate()
 
 
-def _loop(stdscr: Any, registry: Registry) -> None:  # pragma: no cover
+def _loop(stdscr: Any, deps: TuiDeps) -> None:  # pragma: no cover
     """Run the interactive render/read loop until the user quits."""
     curses.curs_set(0)
     stdscr.keypad(True)
-    state = refresh(registry, AppState(window=default_window(), sessions=[]))
+    state = refresh(deps, AppState(window=default_window(), sessions=[]))
     while True:
         _draw(stdscr, state)
         key = stdscr.getch()
         if key == curses.KEY_RESIZE:
             continue
-        state, should_quit = handle_key(registry, state, key, writer=_file_writer)
+        state, should_quit = handle_key(deps, state, key, writer=_file_writer)
         if should_quit:
             break
 
 
-def run(registry: Registry) -> None:  # pragma: no cover
-    """Start the curses TUI bound to ``registry`` and run until quit.
+def run(deps: TuiDeps) -> None:  # pragma: no cover
+    """Start the curses TUI bound to ``deps`` and run until quit.
 
     ``Ctrl+C`` at the blocking ``getch`` surfaces as ``KeyboardInterrupt``; treat
     it as a normal quit. ``curses.wrapper`` already restores the terminal in its
     own ``finally``, so swallowing the interrupt just avoids a noisy traceback.
     """
     try:
-        curses.wrapper(_loop, registry)
+        curses.wrapper(_loop, deps)
     except KeyboardInterrupt:
         pass  # Ctrl+C is a normal quit; the terminal is already restored.

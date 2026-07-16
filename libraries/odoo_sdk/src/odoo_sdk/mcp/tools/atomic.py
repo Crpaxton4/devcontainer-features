@@ -320,6 +320,21 @@ def make_abort_task_tool(registry: Registry):
     return abort_task
 
 
+@atomic_tool("assign_event")
+def make_assign_event_tool(registry: Registry):
+    def assign_event(event_ids: List[int], task_id: int) -> Dict[str, Any]:
+        """Attribute tracker events to an Odoo task id in one transaction.
+
+        The triage write: sets ``task_ids`` on every listed event (an
+        unattributed meeting/email or a whole calendar series) so they become
+        derivable and billable. Validates a positive integer ``task_id`` and
+        returns the number of event rows updated.
+        """
+        return registry["assign_event"].execute(event_ids=event_ids, task_id=task_id)
+
+    return assign_event
+
+
 @atomic_tool("discover_runs")
 def make_discover_runs_tool(registry: Registry):
     def discover_runs(stale_after_hours: float = 12.0) -> List[Dict[str, Any]]:

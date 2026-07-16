@@ -73,3 +73,20 @@ def build_fake_registry() -> FakeRegistry:
             "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
         }
     )
+
+
+def build_fake_deps() -> Any:
+    """Return a :class:`~odoo_sdk.tui.app.TuiDeps` over fakes (no Odoo, no SQLite).
+
+    The driver receives its dependencies as an injected bundle; the pyte drive
+    only exercises the main-timeline path (which touches ``query_sessions``
+    only), so the store/config/client peers are harmless stand-ins.
+    """
+    from odoo_sdk.tui.app import TuiDeps
+
+    return TuiDeps(
+        registry=build_fake_registry(),
+        client=None,
+        store=None,
+        config=None,
+    )

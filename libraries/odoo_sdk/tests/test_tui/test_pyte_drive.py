@@ -43,11 +43,11 @@ def _child_main(slave_fd: int) -> None:  # pragma: no cover - runs in child proc
     import curses
 
     from odoo_sdk.tui.app import _loop
-    from tests.test_tui._fake import build_fake_registry
+    from tests.test_tui._fake import build_fake_deps
 
-    registry = build_fake_registry()
+    deps = build_fake_deps()
     try:
-        curses.wrapper(_loop, registry)
+        curses.wrapper(_loop, deps)
     except Exception:
         os._exit(1)
     os._exit(0)
