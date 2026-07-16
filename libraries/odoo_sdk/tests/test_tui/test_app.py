@@ -2,7 +2,9 @@
 
 The curses render loop itself is excluded from coverage; these tests exercise the
 pure state transitions and the command composition through a fake registry, so no
-terminal and no live Odoo are involved.
+terminal and no live Odoo are involved. The driver receives its dependencies as an
+injected :class:`~odoo_sdk.tui.app.TuiDeps` bundle (client, store, config, and the
+command registry) rather than harvesting them off command instances.
 """
 
 import curses
@@ -12,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo_sdk.tui.app import (
     AppState,
+    TuiDeps,
     confirm_upload,
     default_window,
     do_export,
@@ -69,26 +72,33 @@ class FakeRegistry:
         return self._commands[name]
 
 
-def _registry(query_result=None, store=None):
-    # The TUI's ``_upload_sessions`` delegates to the shared upload loop (#354),
-    # resolving its (client, state) pair off the stop_task command, so the fake
-    # carries both. The state's ``list_session_uploads`` returns an empty ledger
-    # so an unpatched upload's orphan sweep is a no-op (the loop's behavior is
-    # tested in ``tests/test_utilities/test_upload.py``).
-    stop_state = MagicMock()
-    stop_state.list_session_uploads.return_value = []
+def _registry(query_result=None):
     return FakeRegistry(
         {
-            "query_sessions": FakeCommand(
-                result=query_result or _sessions(), state=store
-            ),
+            "query_sessions": FakeCommand(result=query_result or _sessions()),
             "start_task": FakeCommand(result={"run_id": 1}),
-            "stop_task": FakeCommand(
-                result={"elapsed_hours": 1.0},
-                state=stop_state,
-                client=MagicMock(),
-            ),
+            "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
         }
+    )
+
+
+def _default_store():
+    # The shared upload loop's orphan sweep reads the ledger; an empty one keeps
+    # an unpatched upload a no-op (the loop is tested in test_utilities/test_upload).
+    store = MagicMock()
+    store.list_session_uploads.return_value = []
+    return store
+
+
+def _deps(query_result=None, store=None, client=None, config=None, registry=None):
+    """Build a :class:`TuiDeps` over fakes for the driver's injected dependencies."""
+    if registry is None:
+        registry = _registry(query_result=query_result)
+    return TuiDeps(
+        registry=registry,
+        client=client if client is not None else MagicMock(),
+        store=store if store is not None else _default_store(),
+        config=config if config is not None else MagicMock(),
     )
 
 
@@ -106,47 +116,51 @@ class TestDefaultWindow(unittest.TestCase):
 
 class TestQueryAndRefresh(unittest.TestCase):
     def test_query_sessions_passes_window_bounds(self):
-        registry = _registry()
+        deps = _deps()
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
-        query_sessions(registry, window)
-        call = registry["query_sessions"].calls[0]
+        query_sessions(deps, window)
+        call = deps.registry["query_sessions"].calls[0]
         self.assertEqual(call["start_date"], "2026-06-01")
         self.assertEqual(call["end_date"], "2026-06-03")
         self.assertTrue(call["include_events"])
 
     def test_refresh_stores_result(self):
-        registry = _registry(query_result=_sessions(3))
+        deps = _deps(query_result=_sessions(3))
         state = AppState(window=default_window(today=date(2026, 6, 5)), sessions=[])
-        refreshed = refresh(registry, state)
+        refreshed = refresh(deps, state)
         self.assertEqual(len(refreshed.sessions), 3)
 
 
 class TestEmptyHint(unittest.TestCase):
     """The empty-window hint (issue #332) distinguishes no-data from no-derivable."""
 
-    def _registry_for_hint(self, *, events, runs, gap_mins=30):
+    def _deps_for_hint(self, *, events, runs, gap_mins=30):
         store = MagicMock()
         store.count_events.return_value = events
         store.get_all_runs.return_value = list(range(runs))
-        query = FakeCommand(result=[], state=store)
-        query.config = MagicMock(session_gap_mins=gap_mins)
-        return FakeRegistry({"query_sessions": query}), store
+        registry = FakeRegistry({"query_sessions": FakeCommand(result=[])})
+        deps = _deps(
+            registry=registry,
+            store=store,
+            config=MagicMock(session_gap_mins=gap_mins),
+        )
+        return deps, store
 
     def test_hint_only_computed_when_empty(self):
         # A populated window carries no hint, and never touches count_events.
-        registry = _registry(query_result=_sessions(2))
+        deps = _deps(query_result=_sessions(2))
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        refreshed = refresh(registry, state)
+        refreshed = refresh(deps, state)
         self.assertEqual(refreshed.empty_hint, "")
 
     def test_hint_reports_counts_and_gap(self):
-        registry, _ = self._registry_for_hint(events=5, runs=3, gap_mins=45)
+        deps, _ = self._deps_for_hint(events=5, runs=3, gap_mins=45)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        refreshed = refresh(registry, state)
+        refreshed = refresh(deps, state)
         self.assertEqual(
             refreshed.empty_hint,
             "no sessions derivable — 5 events in window, 3 runs recorded, gap=45m",
@@ -154,64 +168,64 @@ class TestEmptyHint(unittest.TestCase):
 
     def test_hint_counts_events_over_query_bounds(self):
         # count_events is asked for [midnight start, midnight day-after-end).
-        registry, store = self._registry_for_hint(events=0, runs=0)
+        deps, store = self._deps_for_hint(events=0, runs=0)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        refresh(registry, state)
+        refresh(deps, state)
         lo, hi = store.count_events.call_args.args
         self.assertEqual(lo, datetime(2026, 6, 1, 0, 0, 0))
         self.assertEqual(hi, datetime(2026, 6, 4, 0, 0, 0))
 
     def test_no_data_case_shows_zero_events(self):
-        registry, _ = self._registry_for_hint(events=0, runs=0)
+        deps, _ = self._deps_for_hint(events=0, runs=0)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        refreshed = refresh(registry, state)
+        refreshed = refresh(deps, state)
         self.assertIn("0 events in window", refreshed.empty_hint)
 
     def test_data_exists_but_not_derivable_shows_nonzero_events(self):
-        registry, _ = self._registry_for_hint(events=7, runs=2)
+        deps, _ = self._deps_for_hint(events=7, runs=2)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        refreshed = refresh(registry, state)
+        refreshed = refresh(deps, state)
         self.assertIn("7 events in window", refreshed.empty_hint)
 
     def test_hint_cleared_when_sessions_appear_on_later_refresh(self):
-        registry, store = self._registry_for_hint(events=3, runs=1)
+        deps, store = self._deps_for_hint(events=3, runs=1)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
-        empty = refresh(registry, state)
+        empty = refresh(deps, state)
         self.assertNotEqual(empty.empty_hint, "")
         # A later refresh that finds sessions clears the hint.
-        registry["query_sessions"]._result = _sessions(2)
-        populated = refresh(registry, empty)
+        deps.registry["query_sessions"]._result = _sessions(2)
+        populated = refresh(deps, empty)
         self.assertEqual(populated.empty_hint, "")
         self.assertEqual(len(populated.sessions), 2)
 
 
 class TestMoveWindow(unittest.TestCase):
     def test_move_requeries_when_window_changes(self):
-        registry = _registry()
+        deps = _deps()
         state = AppState(
             window=DateWindow(date(2026, 6, 3), date(2026, 6, 5)), sessions=[]
         )
-        moved = move_window(registry, state, "left")
+        moved = move_window(deps, state, "left")
         self.assertEqual(moved.window.start, date(2026, 6, 2))
-        self.assertEqual(len(registry["query_sessions"].calls), 1)
+        self.assertEqual(len(deps.registry["query_sessions"].calls), 1)
 
     def test_no_change_does_not_requery(self):
-        registry = _registry()
+        deps = _deps()
         # A one-day window clamped by "right" cannot narrow further.
         state = AppState(
             window=DateWindow(date(2026, 6, 5), date(2026, 6, 5)), sessions=[]
         )
-        moved = move_window(registry, state, "right")
+        moved = move_window(deps, state, "right")
         self.assertEqual(moved, state)
-        self.assertEqual(len(registry["query_sessions"].calls), 0)
+        self.assertEqual(len(deps.registry["query_sessions"].calls), 0)
 
 
 class TestExport(unittest.TestCase):
@@ -228,24 +242,24 @@ class TestExport(unittest.TestCase):
     def test_markdown_export_writes_and_sets_status(self):
         store = MagicMock()
         store.get_events.return_value = []
-        registry = _registry(store=store)
+        deps = _deps(store=store)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[]
         )
         writer, written = self._writer()
-        result = do_export(state, registry, "markdown", writer)
+        result = do_export(state, deps, "markdown", writer)
         self.assertIn("exported markdown", result.status)
         self.assertTrue(written["name"].endswith(".md"))
 
     def test_csv_export_writes_and_sets_status(self):
         store = MagicMock()
         store.get_events.return_value = []
-        registry = _registry(store=store)
+        deps = _deps(store=store)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[]
         )
         writer, written = self._writer()
-        result = do_export(state, registry, "csv", writer)
+        result = do_export(state, deps, "csv", writer)
         self.assertIn("exported csv", result.status)
         self.assertTrue(written["name"].endswith(".csv"))
 
@@ -258,19 +272,19 @@ class TestUploadGate(unittest.TestCase):
         self.assertIn("confirm", armed.status)
 
     def test_confirm_cancels_when_not_confirmed(self):
-        registry = _registry()
+        deps = _deps()
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
         with patch("odoo_sdk.tui.app.upload_sessions") as mock_upload:
-            resolved = confirm_upload(state, registry, confirmed=False)
+            resolved = confirm_upload(state, deps, confirmed=False)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("cancelled", resolved.status)
         # The shared upload loop is never invoked on a cancel.
         mock_upload.assert_not_called()
 
     def test_confirm_runs_upload(self):
-        registry = _registry()
+        deps = _deps()
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
@@ -278,14 +292,14 @@ class TestUploadGate(unittest.TestCase):
             "odoo_sdk.tui.app.upload_sessions",
             return_value={"uploaded": 2, "retired": 0},
         ) as mock_upload:
-            resolved = confirm_upload(state, registry, confirmed=True)
+            resolved = confirm_upload(state, deps, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
         self.assertNotIn("retired", resolved.status)  # 0 orphans stays quiet
         mock_upload.assert_called_once()
 
     def test_confirm_reports_retired_orphans(self):
-        registry = _registry()
+        deps = _deps()
         state = AppState(
             window=default_window(), sessions=_sessions(1), pending_upload=True
         )
@@ -293,7 +307,7 @@ class TestUploadGate(unittest.TestCase):
             "odoo_sdk.tui.app.upload_sessions",
             return_value={"uploaded": 1, "retired": 2},
         ):
-            resolved = confirm_upload(state, registry, confirmed=True)
+            resolved = confirm_upload(state, deps, confirmed=True)
         self.assertIn("uploaded 1", resolved.status)
         self.assertIn("retired 2 orphaned upload(s)", resolved.status)
 
@@ -301,23 +315,22 @@ class TestUploadGate(unittest.TestCase):
 class TestUploadSessions(unittest.TestCase):
     def test_delegates_to_shared_loop_with_sessions_and_window(self):
         # The TUI upload path is a thin delegation to the shared upload loop
-        # (#354): it forwards the stop_task command's (client, state) pair, the
+        # (#354): it forwards the driver's own injected (client, store) pair, the
         # derived sessions, and the window's inclusive dates (the loop resolves
         # the sweep bounds itself so the query and sweep windows cannot drift),
         # and returns the (uploaded, retired) counts for the status line.
-        registry = _registry()
+        deps = _deps()
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
         sessions = _sessions(3)
         with patch(
             "odoo_sdk.tui.app.upload_sessions",
             return_value={"uploaded": 3, "retired": 1},
         ) as mock_upload:
-            uploaded, retired = _upload_sessions(registry, sessions, window)
+            uploaded, retired = _upload_sessions(deps, sessions, window)
         self.assertEqual((uploaded, retired), (3, 1))
-        stop_cmd = registry["stop_task"]
         mock_upload.assert_called_once_with(
-            stop_cmd._client,
-            stop_cmd.state,
+            deps.client,
+            deps.store,
             sessions,
             start_date="2026-06-01",
             end_date="2026-06-03",
@@ -337,51 +350,55 @@ class TestHandleKey(unittest.TestCase):
         return lambda content, name: f"/out/{name}"
 
     def test_quit_key_returns_should_quit(self):
-        registry = _registry()
+        deps = _deps()
         _, should_quit = handle_key(
-            registry, self._state(), ord("q"), writer=self._writer()
+            deps, self._state(), ord("q"), writer=self._writer()
         )
         self.assertTrue(should_quit)
 
     def test_escape_key_quits(self):
-        registry = _registry()
-        _, should_quit = handle_key(registry, self._state(), 27, writer=self._writer())
+        deps = _deps()
+        _, should_quit = handle_key(deps, self._state(), 27, writer=self._writer())
         self.assertTrue(should_quit)
 
     def test_arrow_key_moves_window(self):
-        registry = _registry()
+        deps = _deps()
         state, should_quit = handle_key(
-            registry, self._state(), curses.KEY_LEFT, writer=self._writer()
+            deps, self._state(), curses.KEY_LEFT, writer=self._writer()
         )
         self.assertFalse(should_quit)
         self.assertEqual(state.window.start, date(2026, 6, 2))
 
     def test_upload_key_arms_gate(self):
-        registry = _registry()
-        state, _ = handle_key(registry, self._state(), ord("u"), writer=self._writer())
+        deps = _deps()
+        state, _ = handle_key(deps, self._state(), ord("u"), writer=self._writer())
         self.assertTrue(state.pending_upload)
 
     def test_pending_upload_consumes_confirm_key(self):
-        registry = _registry()
+        deps = _deps()
         state = self._state(pending_upload=True)
-        resolved, should_quit = handle_key(
-            registry, state, ord("y"), writer=self._writer()
-        )
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={"uploaded": 2, "retired": 0},
+        ):
+            resolved, should_quit = handle_key(
+                deps, state, ord("y"), writer=self._writer()
+            )
         self.assertFalse(should_quit)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded", resolved.status)
 
     def test_pending_upload_cancels_on_other_key(self):
-        registry = _registry()
+        deps = _deps()
         state = self._state(pending_upload=True)
-        resolved, _ = handle_key(registry, state, ord("n"), writer=self._writer())
+        resolved, _ = handle_key(deps, state, ord("n"), writer=self._writer())
         self.assertIn("cancelled", resolved.status)
 
     def test_unknown_key_is_noop(self):
-        registry = _registry()
+        deps = _deps()
         state = self._state()
         result, should_quit = handle_key(
-            registry, state, ord("z"), writer=self._writer()
+            deps, state, ord("z"), writer=self._writer()
         )
         self.assertFalse(should_quit)
         self.assertEqual(result, state)
@@ -389,30 +406,31 @@ class TestHandleKey(unittest.TestCase):
     def test_export_key_triggers_export(self):
         store = MagicMock()
         store.get_events.return_value = []
-        registry = _registry(store=store)
+        deps = _deps(store=store)
         state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
-        result, _ = handle_key(registry, state, ord("e"), writer=self._writer())
+        result, _ = handle_key(deps, state, ord("e"), writer=self._writer())
         self.assertIn("exported markdown", result.status)
 
     def test_csv_export_key_triggers_csv_export(self):
         store = MagicMock()
         store.get_events.return_value = []
-        registry = _registry(store=store)
+        deps = _deps(store=store)
         state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
-        result, _ = handle_key(registry, state, ord("c"), writer=self._writer())
+        result, _ = handle_key(deps, state, ord("c"), writer=self._writer())
         self.assertIn("exported csv", result.status)
 
 
 class TestResync(unittest.TestCase):
     """The ``r`` keybind runs resync, refreshes, and reports per-source counts."""
 
-    def _registry(self, resync_result, query_result=None):
-        return FakeRegistry(
+    def _resync_deps(self, resync_result, query_result=None):
+        registry = FakeRegistry(
             {
                 "resync": FakeCommand(result=resync_result),
                 "query_sessions": FakeCommand(result=query_result or _sessions()),
             }
         )
+        return _deps(registry=registry)
 
     def test_resync_status_summarizes_inserts_and_skips(self):
         status = _resync_status(
@@ -430,14 +448,14 @@ class TestResync(unittest.TestCase):
         self.assertEqual(_resync_status({}), "resync — nothing to do")
 
     def test_do_resync_runs_command_refreshes_and_sets_status(self):
-        registry = self._registry(
+        deps = self._resync_deps(
             {"git": {"inserted": 3}, "github": {"skipped": "no gh"}},
             query_result=_sessions(2),
         )
         state = AppState(window=default_window(today=date(2026, 6, 5)), sessions=[])
-        result = do_resync(registry, state)
+        result = do_resync(deps, state)
         # The resync command ran with the default (all) sources.
-        self.assertEqual(registry["resync"].calls, [{}])
+        self.assertEqual(deps.registry["resync"].calls, [{}])
         # Sessions were re-queried and the status shows per-source counts.
         self.assertEqual(len(result.sessions), 2)
         self.assertIn("git: +3", result.status)
@@ -445,16 +463,16 @@ class TestResync(unittest.TestCase):
         self.assertFalse(result.pending_upload)
 
     def test_resync_key_dispatches(self):
-        registry = self._registry({"git": {"inserted": 1}})
+        deps = self._resync_deps({"git": {"inserted": 1}})
         state = AppState(
             window=DateWindow(date(2026, 6, 3), date(2026, 6, 5)), sessions=[]
         )
         result, should_quit = handle_key(
-            registry, state, ord("r"), writer=lambda c, n: n
+            deps, state, ord("r"), writer=lambda c, n: n
         )
         self.assertFalse(should_quit)
         self.assertIn("resync", result.status)
-        self.assertEqual(len(registry["resync"].calls), 1)
+        self.assertEqual(len(deps.registry["resync"].calls), 1)
 
 
 class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
@@ -467,7 +485,7 @@ class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
             raise KeyboardInterrupt
 
         with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom) as wrapper:
-            run(_registry())  # must not raise
+            run(_deps())  # must not raise
 
         wrapper.assert_called_once()
 
@@ -478,7 +496,7 @@ class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
 
         with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom):
             with self.assertRaises(RuntimeError):
-                run(_registry())
+                run(_deps())
 
 
 if __name__ == "__main__":

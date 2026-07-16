@@ -158,6 +158,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "stop_task",
         "abort_task",
         "abort_run",
+        "assign_event",
         "discover_runs",
         "resume_task",
         "task_status",

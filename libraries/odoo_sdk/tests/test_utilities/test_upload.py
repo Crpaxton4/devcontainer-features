@@ -157,20 +157,23 @@ class TestSharedPathWithTui(unittest.TestCase):
     """The TUI and a headless caller bill identically: one shared loop."""
 
     def test_tui_delegation_and_direct_call_bill_identically(self):
-        from odoo_sdk.tui.app import _upload_sessions
+        from odoo_sdk.tui.app import TuiDeps, _upload_sessions
         from odoo_sdk.tui.window import DateWindow
 
         sessions = _sessions(3)
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
         client, state = MagicMock(), MagicMock()
-        stop_cmd = MagicMock(_client=client, state=state)
-        registry = {"stop_task": stop_cmd}
+        # The driver forwards its own injected (client, store) pair to the shared
+        # loop — no reaching into a command's private ``._client``/``.state``.
+        deps = TuiDeps(
+            registry={}, client=client, store=state, config=MagicMock()
+        )
 
         # The TUI 'u' path routes through the shared loop.
         with patch(_RECONCILE, return_value=1) as reconcile, patch(
             _SWEEP, return_value=0
         ) as sweep:
-            uploaded, retired = _upload_sessions(registry, sessions, window)
+            uploaded, retired = _upload_sessions(deps, sessions, window)
         tui_calls = [c.args for c in reconcile.call_args_list]
         tui_sweep = sweep.call_args.kwargs
 

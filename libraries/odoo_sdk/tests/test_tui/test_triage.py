@@ -12,9 +12,11 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from odoo_sdk.commands.builtin import AssignEventCommand
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.tui.app import (
     AppState,
+    TuiDeps,
     assign_triage,
     enter_triage,
     handle_key,
@@ -63,8 +65,20 @@ class FakeRegistry:
         return self._commands[name]
 
 
-def _registry(store):
-    return FakeRegistry({"query_sessions": FakeCommand(state=store)})
+def _deps(store):
+    """Bundle the driver's injected deps over a real store.
+
+    The triage write is routed through the real ``assign_event`` command bound to
+    the same store, so the assignment lands in the DB exactly as it does in
+    production (no fake short-circuits the write path).
+    """
+    registry = FakeRegistry(
+        {
+            "query_sessions": FakeCommand(state=store),
+            "assign_event": AssignEventCommand(None, state=store),
+        }
+    )
+    return TuiDeps(registry=registry, client=None, store=store, config=None)
 
 
 # ── Series recognition ──────────────────────────────────────────────────────
@@ -212,8 +226,8 @@ class TestTriageKeyHandling(unittest.TestCase):
         return AppState(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[])
 
     def test_enter_triage_lists_series_and_lone_rows(self):
-        registry = _registry(_fixture_store())
-        opened = enter_triage(registry, self._state())
+        deps = _deps(_fixture_store())
+        opened = enter_triage(deps, self._state())
         self.assertEqual(opened.mode, "triage")
         # One row for the whole 13-tick series + one for the lone event.
         self.assertEqual(len(opened.triage_rows), 2)
@@ -222,87 +236,87 @@ class TestTriageKeyHandling(unittest.TestCase):
         self.assertEqual(series.display_key, "gcal:evt-9:tick:")
 
     def test_t_key_from_main_opens_triage(self):
-        registry = _registry(_fixture_store())
+        deps = _deps(_fixture_store())
         state, quit_ = handle_key(
-            registry, self._state(), ord("t"), writer=lambda c, n: n
+            deps, self._state(), ord("t"), writer=lambda c, n: n
         )
         self.assertFalse(quit_)
         self.assertEqual(state.mode, "triage")
 
     def test_digits_build_input_and_backspace_edits(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
         for ch in "2464":
-            state = handle_triage_key(registry, state, ord(ch))
+            state = handle_triage_key(deps, state, ord(ch))
         self.assertEqual(state.triage_input, "2464")
-        state = handle_triage_key(registry, state, curses.KEY_BACKSPACE)
+        state = handle_triage_key(deps, state, curses.KEY_BACKSPACE)
         self.assertEqual(state.triage_input, "246")
 
     def test_down_moves_selection_and_clears_input(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        state = handle_triage_key(registry, state, ord("9"))
-        state = handle_triage_key(registry, state, curses.KEY_DOWN)
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        state = handle_triage_key(deps, state, ord("9"))
+        state = handle_triage_key(deps, state, curses.KEY_DOWN)
         self.assertEqual(state.triage_selected, 1)
         self.assertEqual(state.triage_input, "")
 
     def test_skip_key_moves_selection(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        state = handle_triage_key(registry, state, ord("s"))
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        state = handle_triage_key(deps, state, ord("s"))
         self.assertEqual(state.triage_selected, 1)
 
     def test_up_clamps_at_top(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        state = handle_triage_key(registry, state, curses.KEY_UP)
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        state = handle_triage_key(deps, state, curses.KEY_UP)
         self.assertEqual(state.triage_selected, 0)
 
     def test_quit_returns_to_main(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        state = handle_triage_key(registry, state, ord("q"))
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        state = handle_triage_key(deps, state, ord("q"))
         self.assertEqual(state.mode, "main")
 
     def test_unknown_key_is_noop(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        result = handle_triage_key(registry, state, ord("Z"))
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        result = handle_triage_key(deps, state, ord("Z"))
         self.assertEqual(result, state)
 
     def test_move_on_empty_queue_is_noop(self):
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
         empty = make_state_db(Path(tmp.name))
-        registry = _registry(empty)
-        state = enter_triage(registry, self._state())
-        result = handle_triage_key(registry, state, curses.KEY_DOWN)
+        deps = _deps(empty)
+        state = enter_triage(deps, self._state())
+        result = handle_triage_key(deps, state, curses.KEY_DOWN)
         self.assertEqual(result, state)
 
     def test_invalid_task_id_reports_and_does_not_assign(self):
         store = _fixture_store()
-        registry = _registry(store)
-        state = enter_triage(registry, self._state())
+        deps = _deps(store)
+        state = enter_triage(deps, self._state())
         # No digits typed → Enter is rejected.
-        state = handle_triage_key(registry, state, ord("\n"))
+        state = handle_triage_key(deps, state, ord("\n"))
         self.assertIn("invalid task id", state.status)
         self.assertEqual(len(state.triage_rows), 2)  # nothing dropped out
 
     def test_zero_is_not_a_valid_task_id(self):
-        registry = _registry(_fixture_store())
-        state = enter_triage(registry, self._state())
-        state = handle_triage_key(registry, state, ord("0"))
-        state = handle_triage_key(registry, state, curses.KEY_ENTER)
+        deps = _deps(_fixture_store())
+        state = enter_triage(deps, self._state())
+        state = handle_triage_key(deps, state, ord("0"))
+        state = handle_triage_key(deps, state, curses.KEY_ENTER)
         self.assertIn("invalid task id", state.status)
 
     def test_assign_on_empty_queue_is_guarded(self):
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
         empty = make_state_db(Path(tmp.name))
-        registry = _registry(empty)
-        state = enter_triage(registry, self._state())
+        deps = _deps(empty)
+        state = enter_triage(deps, self._state())
         state = replace_input(state, "24648")
-        state = assign_triage(registry, state)
+        state = assign_triage(deps, state)
         self.assertIn("nothing to triage", state.status)
 
 
@@ -317,20 +331,20 @@ class TestTriageEndToEnd(unittest.TestCase):
 
     def test_series_assignment_updates_all_ticks_and_derives_a_session(self):
         store = _fixture_store()
-        registry = _registry(store)
+        deps = _deps(store)
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 1))
         state = AppState(window=window, sessions=[])
 
         # Open triage: one row for the series, one for the lone event.
-        state, _ = handle_key(registry, state, ord("t"), writer=lambda c, n: n)
+        state, _ = handle_key(deps, state, ord("t"), writer=lambda c, n: n)
         self.assertEqual(len(state.triage_rows), 2)
         series_ids = list(state.triage_rows[0].event_ids)
         self.assertEqual(len(series_ids), 13)
 
         # Type the task id and assign the whole series in one transaction.
         for ch in "24648":
-            state, _ = handle_key(registry, state, ord(ch), writer=lambda c, n: n)
-        state, _ = handle_key(registry, state, ord("\n"), writer=lambda c, n: n)
+            state, _ = handle_key(deps, state, ord(ch), writer=lambda c, n: n)
+        state, _ = handle_key(deps, state, ord("\n"), writer=lambda c, n: n)
 
         self.assertIn("assigned 13 events of series gcal:evt-9:tick: to task 24648", state.status)
         # All 13 ticks now carry the task id.

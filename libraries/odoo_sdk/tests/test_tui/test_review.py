@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from odoo_sdk.state import EventRecord
 from odoo_sdk.tui.app import (
     AppState,
+    TuiDeps,
     enter_review,
     handle_key,
     handle_review_key,
@@ -118,13 +119,15 @@ def _fixture():
     return store, sessions
 
 
-def _registry(store, client):
-    return FakeRegistry(
-        {
-            "query_sessions": FakeCommand(state=store),
-            "stop_task": FakeCommand(client=client),
-        }
-    )
+def _deps(store, client):
+    """Bundle the driver's injected deps: the store and the read-only RPC client.
+
+    The review surface reads member events off the injected store and best-effort
+    reads already-logged hours off the injected client — never harvested off a
+    command instance's ``.state`` or private ``._client``.
+    """
+    registry = FakeRegistry({"query_sessions": FakeCommand(state=store)})
+    return TuiDeps(registry=registry, client=client, store=store, config=None)
 
 
 def _state(store, sessions):
@@ -219,7 +222,7 @@ class TestEnterReview(unittest.TestCase):
         client = FakeClient(
             lines=[{"task_id": [24648, "T"], "date": "2026-07-01", "unit_amount": 2.0}]
         )
-        state = enter_review(_registry(store, client), _state(store, sessions))
+        state = enter_review(_deps(store, client), _state(store, sessions))
         self.assertEqual(state.mode, "review")
         by_task = {c.task_id: c for c in state.review_cards}
         # Item 9: strong (validated id, two direct events, no overlap).
@@ -238,7 +241,7 @@ class TestEnterReview(unittest.TestCase):
     def test_offline_transport_still_renders_without_logged_badge(self):
         store, sessions = _fixture()
         client = FakeClient(raise_on=RuntimeError("odoo unreachable"))
-        state = enter_review(_registry(store, client), _state(store, sessions))
+        state = enter_review(_deps(store, client), _state(store, sessions))
         self.assertEqual(state.mode, "review")
         by_task = {c.task_id: c for c in state.review_cards}
         # No badge offline, but the card (and its overlap/confidence) still render.
@@ -253,15 +256,15 @@ class TestEnterReview(unittest.TestCase):
 class TestReviewKeyHandling(unittest.TestCase):
     def _opened(self):
         store, sessions = _fixture()
-        registry = _registry(store, FakeClient())
-        state = enter_review(registry, _state(store, sessions))
-        return registry, state
+        deps = _deps(store, FakeClient())
+        state = enter_review(deps, _state(store, sessions))
+        return deps, state
 
     def test_v_key_from_main_opens_review(self):
         store, sessions = _fixture()
-        registry = _registry(store, FakeClient())
+        deps = _deps(store, FakeClient())
         state, quit_ = handle_key(
-            registry, _state(store, sessions), ord("v"), writer=lambda c, n: n
+            deps, _state(store, sessions), ord("v"), writer=lambda c, n: n
         )
         self.assertFalse(quit_)
         self.assertEqual(state.mode, "review")

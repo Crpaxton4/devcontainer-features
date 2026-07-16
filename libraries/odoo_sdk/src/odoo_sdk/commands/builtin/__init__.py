@@ -17,6 +17,7 @@ from ..command_registry import Registry
 from ._registration import BUILTIN_COMMANDS, builtin_command
 from .abort_run import AbortRunCommand
 from .abort_task import AbortTaskCommand
+from .assign_event import AssignEventCommand
 from .create_task import CreateTaskCommand
 from .discover_runs import DiscoverRunsCommand
 from .get_mail_status import GetMailStatusCommand
