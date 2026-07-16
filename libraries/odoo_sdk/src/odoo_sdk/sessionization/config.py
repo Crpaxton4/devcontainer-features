@@ -10,7 +10,7 @@ state adapter).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 
 from .models import (
     resolve_day_bucket_tz,
@@ -88,20 +88,13 @@ class SessionizationConfig:
     @property
     def range_start(self) -> datetime:
         """Return midnight on ``start_date`` in the day-bucketing zone (tz-aware)."""
-        return datetime(
-            self.start_date.year,
-            self.start_date.month,
-            self.start_date.day,
-            tzinfo=self.day_bucket_tz,
-        )
+        return datetime.combine(self.start_date, time.min, tzinfo=self.day_bucket_tz)
 
     @property
     def range_end(self) -> datetime:
         """Return midnight on the day after ``end_date`` (half-open, tz-aware)."""
         next_day = self.end_date + timedelta(days=1)
-        return datetime(
-            next_day.year, next_day.month, next_day.day, tzinfo=self.day_bucket_tz
-        )
+        return datetime.combine(next_day, time.min, tzinfo=self.day_bucket_tz)
 
     @property
     def num_days(self) -> int:
