@@ -22,7 +22,7 @@ import argparse
 import json
 import math
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Callable, Optional
 
 from odoo_sdk.adapters import (
@@ -37,11 +37,12 @@ from odoo_sdk.adapters import (
     sync_odoo_chatter,
 )
 from odoo_sdk.client import OdooClient
+from odoo_sdk.commands import LogEventCommand
 from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.sessionization import EventType
-from odoo_sdk.state import EventRecord, LocalConfig, TrackerStateMissingError
+from odoo_sdk.state import LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
 from odoo_sdk.state.db import current_repo_label
@@ -311,21 +312,26 @@ def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
 
 
 def cmd_log_event(args: argparse.Namespace) -> None:
-    """Record a single Claude Code hook event into the local ``events`` table."""
+    """Record a single Claude Code hook event into the local ``events`` table.
+
+    The event write is routed through :class:`~odoo_sdk.commands.log_event.
+    LogEventCommand` — the single command-layer owner of the ``events``
+    append (issue #407) — so this subcommand no longer constructs an
+    ``EventRecord`` and calls ``add_event`` inline. The interface-specific
+    resolution stays here: ``--source`` validation, ``--payload`` parsing, the
+    ``--task-id`` / ``--attach-active-run`` task-scope policy, and the repo label
+    are computed from ``args`` and handed to the command.
+    """
     event_type = _resolve_source(args.source)
     payload = _parse_payload(args.payload)
-    timestamp = args.timestamp or datetime.now(timezone.utc)
     db = _open_local_db()
-    db.add_event(
-        EventRecord(
-            id=None,
-            source=args.source,
-            timestamp=timestamp,
-            task_ids=_resolve_task_ids(db, args),
-            repo=current_repo_label(),
-            subject=args.subject,
-            payload=payload,
-        )
+    LogEventCommand(state=db).execute(
+        source=args.source,
+        subject=args.subject,
+        payload=payload,
+        task_ids=_resolve_task_ids(db, args),
+        repo=current_repo_label(),
+        timestamp=args.timestamp,
     )
     print(f"Logged event {args.source!r} ({event_type.name}).")
 
