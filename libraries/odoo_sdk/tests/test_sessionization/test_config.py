@@ -6,11 +6,12 @@ from odoo_sdk.sessionization import ET, SessionizationConfig
 
 class TestConfigValidation(unittest.TestCase):
     def test_rejects_sweep_min_below_two_floors(self):
+        # 2 * 0.25h == 30 min, so a 29-min sweep floor is rejected.
         with self.assertRaises(ValueError):
-            SessionizationConfig(min_task_minutes=15, sweep_min_gap_mins=29)
+            SessionizationConfig(min_session_hours=0.25, sweep_min_gap_mins=29)
 
     def test_accepts_sweep_min_at_boundary(self):
-        cfg = SessionizationConfig(min_task_minutes=15, sweep_min_gap_mins=30)
+        cfg = SessionizationConfig(min_session_hours=0.25, sweep_min_gap_mins=30)
         self.assertEqual(cfg.sweep_min_gap_mins, 30)
 
 
@@ -42,8 +43,11 @@ class TestDerivedProperties(unittest.TestCase):
         self.assertNotIn(date(2026, 6, 2), cfg.target_dates)
         self.assertEqual(cfg.num_days, 2)
 
-    def test_min_task_secs(self):
-        self.assertEqual(SessionizationConfig(min_task_minutes=15).min_task_secs, 900)
+    def test_billing_policy_defaults_match_upload(self):
+        cfg = SessionizationConfig()
+        self.assertEqual(cfg.min_session_hours, 0.25)
+        self.assertEqual(cfg.round_session_hours, 0.05)
+        self.assertEqual(cfg.session_gap_secs, 3600)
 
     def test_in_range(self):
         cfg = SessionizationConfig(

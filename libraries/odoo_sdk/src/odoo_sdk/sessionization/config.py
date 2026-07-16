@@ -13,13 +13,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, tzinfo
 
 from .models import (
-    DEFAULT_BILLING_STEP_MINS,
-    DEFAULT_MIN_TASK_MINUTES,
-    DEFAULT_WINDOW_GAP_SECS,
-    SessionStrategyConfig,
     resolve_day_bucket_tz,
+    resolve_min_session_hours,
+    resolve_round_session_hours,
+    resolve_session_gap_secs,
 )
-from .strategies import DEFAULT_SESSION_STRATEGY_CONFIGS
 
 
 @dataclass
@@ -28,6 +26,12 @@ class SessionizationConfig:
 
     All fields have defaults so a bare ``SessionizationConfig()`` is valid; the
     CLI and adapters override individual fields.
+
+    The window gap and the billing policy (floor + rounding step) default from the
+    single first-class config (``LocalConfig``, issue #404), so the diagnostic
+    gap-sweep and the export re-window and round on exactly the knobs the
+    SQL-derived billing/upload path uses — no parallel minute-denominated
+    ``min_task_minutes`` / ``billing_step_mins`` vocabulary survives.
     """
 
     # Date range (inclusive).
@@ -35,10 +39,11 @@ class SessionizationConfig:
     end_date: date = field(default_factory=lambda: date(2026, 6, 2))
     target_excluded_dates: set[date] = field(default_factory=set)
 
-    # Window / billing.
-    window_gap_secs: int = DEFAULT_WINDOW_GAP_SECS
-    min_task_minutes: int = DEFAULT_MIN_TASK_MINUTES
-    billing_step_mins: int = DEFAULT_BILLING_STEP_MINS
+    # Fixed session gap + billing policy (resolved from LocalConfig; shared with
+    # the SQL derivation and the upload path so numbers cannot diverge).
+    session_gap_secs: int = field(default_factory=resolve_session_gap_secs)
+    min_session_hours: float = field(default_factory=resolve_min_session_hours)
+    round_session_hours: float = field(default_factory=resolve_round_session_hours)
 
     # Gap sweep bounds (minutes).
     sweep_min_gap_mins: int = 30
@@ -59,11 +64,6 @@ class SessionizationConfig:
     odoo_uom_id: int = 6
     odoo_company_id: int = 1
 
-    # Strategy configuration rows.
-    session_strategy_configs: tuple[SessionStrategyConfig, ...] = field(
-        default_factory=lambda: DEFAULT_SESSION_STRATEGY_CONFIGS
-    )
-
     # Day-bucketing timezone (issue #378 item 11). Resolved from the standard
     # config resolver by default (``[behavior] day_bucket_tz``, default US
     # Central); the pure Transform phase reads the zone from here so bucketing is
@@ -73,16 +73,16 @@ class SessionizationConfig:
     def __post_init__(self) -> None:
         """Enforce the monotonicity precondition on the sweep minimum gap.
 
-        Requiring ``sweep_min_gap_mins >= 2 * min_task_minutes`` guarantees that
-        total billed time is non-decreasing as the gap grows: any two sessions
-        that merge are at least ``2 * floor`` apart, so the merged elapsed always
-        exceeds the sum of the two floored originals.
+        Requiring ``sweep_min_gap_mins >= 2 * min_session_hours`` (in minutes)
+        guarantees total billed time is non-decreasing as the gap grows: any two
+        sessions that merge are at least ``2 * floor`` apart, so the merged
+        elapsed always exceeds the sum of the two floored originals.
         """
-        min_valid = 2 * self.min_task_minutes
+        min_valid = 2 * self.min_session_hours * 60
         if self.sweep_min_gap_mins < min_valid:
             raise ValueError(
                 "sweep_min_gap_mins must be at least "
-                f"2 * min_task_minutes ({min_valid})"
+                f"2 * min_session_hours in minutes ({min_valid})"
             )
 
     @property
@@ -118,11 +118,6 @@ class SessionizationConfig:
             if (day := self.start_date + timedelta(days=offset))
             not in self.target_excluded_dates
         ]
-
-    @property
-    def min_task_secs(self) -> int:
-        """Return the absolute minimum billable unit in seconds."""
-        return self.min_task_minutes * 60
 
     def in_range(self, ts: datetime) -> bool:
         """Return True iff ``ts`` falls in ``[range_start, range_end)``."""

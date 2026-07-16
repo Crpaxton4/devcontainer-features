@@ -44,9 +44,9 @@ def _build_config(
     if end is not None:
         values["end_date"] = end
     allowed = {
-        "window_gap_secs",
-        "min_task_minutes",
-        "billing_step_mins",
+        "session_gap_secs",
+        "min_session_hours",
+        "round_session_hours",
         "sweep_min_gap_mins",
         "sweep_max_gap_mins",
         "sweep_step_mins",

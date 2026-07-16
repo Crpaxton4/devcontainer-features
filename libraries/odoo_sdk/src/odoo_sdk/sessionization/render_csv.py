@@ -15,10 +15,20 @@ from typing import Callable, Mapping, Optional
 
 from .config import SessionizationConfig
 from .formatting import business_context, is_numeric_id
-from .models import SessionStrategyConfig, TimeEntry, TransformResult
-from .strategies import DEFAULT_SESSION_STRATEGY_CONFIGS
+from .models import TimeEntry, TransformResult
 
 AI_DESCRIPTION_PREFIX = "[/]"
+
+# Deterministic fallback action phrase per session category (issue #404). The
+# Strategy pattern that once carried these per-row is retired; the two windowed
+# categories the SQL derivation labels — ``development`` and ``review`` — keep a
+# customer-facing default here, and any unrecognised label degrades to the
+# generic phrase rather than raising.
+_FALLBACK_ACTIONS = {
+    "development": "advanced project implementation",
+    "review": "validated project changes",
+}
+_DEFAULT_FALLBACK_ACTION = "advanced project work"
 
 CSV_COLUMNS = [
     "Date",
@@ -36,14 +46,6 @@ CSV_COLUMNS = [
 DescriptionProvider = Callable[[TimeEntry], str]
 
 
-def _strategy_settings_for_entry(entry: TimeEntry) -> SessionStrategyConfig:
-    """Return the configured strategy settings for a :class:`TimeEntry`."""
-    for settings in DEFAULT_SESSION_STRATEGY_CONFIGS:
-        if settings.name == entry.strategy_name:
-            return settings
-    return DEFAULT_SESSION_STRATEGY_CONFIGS[0]
-
-
 def sanitize_description(text: str) -> str:
     """Return CSV-safe description text without the AI prefix marker."""
     text = text.strip()
@@ -55,10 +57,12 @@ def sanitize_description(text: str) -> str:
 
 
 def default_description(entry: TimeEntry) -> str:
-    """Return the deterministic strategy-based fallback description."""
-    settings = _strategy_settings_for_entry(entry)
-    action = sanitize_description(settings.fallback_action)
-    return f"{AI_DESCRIPTION_PREFIX} {settings.category}: {action}"
+    """Return the deterministic category-based fallback description."""
+    action = sanitize_description(
+        _FALLBACK_ACTIONS.get(entry.strategy_name, _DEFAULT_FALLBACK_ACTION)
+    )
+    category = entry.strategy_category or "Development"
+    return f"{AI_DESCRIPTION_PREFIX} {category}: {action}"
 
 
 def prefixed_description(entry: TimeEntry, action: str) -> str:
