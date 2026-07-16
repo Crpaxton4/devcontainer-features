@@ -106,7 +106,7 @@ def raw_event_to_event_record(event: RawEvent) -> EventRecord:
     """Convert a pure :class:`RawEvent` to a persistable :class:`EventRecord`."""
     return EventRecord(
         id=None,
-        source=_EVENT_TYPE_TO_SOURCE.get(event.event_type, "commit"),
+        source=_EVENT_TYPE_TO_SOURCE[event.event_type],
         timestamp=event.timestamp,
         task_ids=list(event.task_ids),
         repo=event.repo,

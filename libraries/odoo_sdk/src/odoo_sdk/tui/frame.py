@@ -71,7 +71,6 @@ def _stat_lines(stats: SessionStats, inner_width: int) -> list[str]:
         f"events/day      {stats.events_per_day:>8.2f}",
         f"events/week     {stats.events_per_week:>8.2f}",
         f"peak parallel   {stats.peak_concurrency:>8d}",
-        f"mean parallel   {stats.mean_concurrency:>8.2f}",
         f"overlap ratio   {stats.overlap_ratio:>8.2f}",
     ]
     meter_width = max(0, inner_width - 18)
