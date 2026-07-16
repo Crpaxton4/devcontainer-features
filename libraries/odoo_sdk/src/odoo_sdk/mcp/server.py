@@ -7,7 +7,6 @@ import os
 import tempfile
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Union
 
@@ -15,9 +14,8 @@ from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool
 
 from odoo_sdk import OdooError
-from odoo_sdk.commands import Registry
+from odoo_sdk.commands import LogEventCommand, Registry
 from odoo_sdk.state.models import (
-    EventRecord,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TrackerStateMissingError,
@@ -222,6 +220,15 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
 def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     """Append one ``source="agent"`` event describing a successful dispatch.
 
+    The write is routed through :class:`~odoo_sdk.commands.log_event.
+    LogEventCommand` — the single command-layer owner of the ``events`` append
+    (issue #407) — rather than constructing an ``EventRecord`` and calling
+    ``add_event`` inline, so "commands own state mutation" holds for MCP
+    telemetry too. The command is bound directly to ``state`` (resolved from
+    ``registry.state_client`` at call time), never looked up by name, so
+    emission does not depend on ``log_event`` being registered on the server's
+    registry.
+
     The persisted record carries only the tool name (as both subject and
     payload) and the task scope derived from ``task_id`` — never any argument
     *values*. Chatter note bodies, stakeholder questions, search queries, and
@@ -230,9 +237,8 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     identifiers without prompt/``tool_input`` contents. What is *sent to Odoo*
     is unaffected; this concerns only local persistence.
 
-    The record is built directly (rather than via
-    :func:`odoo_sdk.utilities.timesheet.emit_agent_event`, which requires a
-    single task id) so non-task-scoped tools can log with an empty task scope.
+    An empty task scope is passed for non-task-scoped tools, so a tool that
+    takes no ``task_id`` still logs a row without a spurious attribution.
 
     :param state: The local state store the event is appended to.
     :type state: Any
@@ -245,16 +251,12 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     :rtype: None
     """
 
-    state.add_event(
-        EventRecord(
-            id=None,
-            source="agent",
-            timestamp=datetime.now(timezone.utc),
-            task_ids=_event_task_ids(arguments),
-            repo="",
-            subject=name,
-            payload={"tool": name},
-        )
+    LogEventCommand(state=state).execute(
+        source="agent",
+        subject=name,
+        payload={"tool": name},
+        task_ids=_event_task_ids(arguments),
+        repo="",
     )
 
 
