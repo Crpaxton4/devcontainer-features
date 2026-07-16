@@ -349,7 +349,8 @@ def make_start_task_tool(registry: Registry):
         When task_id is supplied, looks up the task directly and skips name-search
         disambiguation. Without task_id, searches by task_name_query and
         project_name_query with disambiguation prompts. Always asks for confirmation
-        before starting. Creates a placeholder timesheet entry in Odoo.
+        before starting. Records a local tracking session and posts a chatter note;
+        writes no Odoo timesheet (hours are derived by the sessionization upload).
         """
         task, project, warning, error = await _resolve_task_and_project(
             ctx, registry, task_name_query, project_name_query, task_id

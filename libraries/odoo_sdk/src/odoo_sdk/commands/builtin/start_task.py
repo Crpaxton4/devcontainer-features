@@ -1,5 +1,4 @@
 import logging
-from datetime import date
 from typing import Any, Optional
 
 from ..command import Command
@@ -8,7 +7,6 @@ from odoo_sdk.state import TaskAlreadyRunningError
 from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.billing.timesheet import ensure_anchor, resolve_employee_id
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +16,6 @@ def _build_run_result(
     task_id: int,
     task_name: str,
     project_name: str,
-    timesheet_id: int,
     *,
     branch_name: Optional[str] = None,
     warning: Optional[str] = None,
@@ -29,7 +26,7 @@ def _build_run_result(
         "task_name": task_name,
         "project_name": project_name,
         "started_at": run.started_at.isoformat(),
-        "timesheet_id": timesheet_id,
+        "timesheet_id": run.timesheet_id,
     }
     if branch_name is not None:
         result["branch_name"] = branch_name
@@ -40,23 +37,27 @@ def _build_run_result(
 
 @builtin_command
 class StartTaskCommand(Command):
-    """Start time-tracking a resolved project task, creating a placeholder timesheet.
+    """Start time-tracking a resolved project task in local state (no timesheet write).
 
     This command is atomic and surface-agnostic: it takes already-resolved task and
     project identity (the MCP tool performs any name-search disambiguation, user
-    confirmation, and git branch setup) and creates the timesheet entry, chatter
-    note, and local session.
+    confirmation, and git branch setup) and creates the local tracking session plus
+    a best-effort chatter announcement.
 
-    The timesheet entry is a lightweight 0-hour ``[/] Work in progress`` anchor
-    for task-board visibility only. It is later closed out (real hours and final
-    description written) by the TUI/ETL upload path, not by ``stop_task``.
+    As of #325 the FSM writes **no** ``account.analytic.line`` row: the former
+    0-hour ``[/] Work in progress`` anchor is gone. Billable hours are derived
+    end-to-end from captured events by the sessionization → ETL upload path, which
+    is the sole owner of every timesheet write. Task-board "work started"
+    visibility is carried by the chatter note alone, so ``run.timesheet_id`` stays
+    ``None`` until the upload path materializes the derived session.
     """
 
     _name = "start_task"
     _description = (
         "Begin tracking time on a resolved Odoo project.task. Takes resolved task "
         "and project identifiers (no name-search or confirmation prompts). Creates a "
-        "placeholder timesheet entry in Odoo and a local tracking session."
+        "local tracking session and posts a chatter note; writes no Odoo timesheet "
+        "(the sessionization/ETL upload path owns all timesheet hours)."
     )
 
     def execute(
@@ -70,13 +71,18 @@ class StartTaskCommand(Command):
     ) -> dict[str, Any]:
         """Start a tracking session for an already-resolved task.
 
+        No Odoo timesheet is written (#325): the run is recorded in local state
+        and a best-effort chatter note announces the start. Hours are derived by
+        the sessionization/ETL upload path, the sole timesheet writer.
+
         :param task_id: Resolved Odoo project.task id.
         :param task_name: Resolved task display name.
         :param project_id: Resolved Odoo project id.
         :param project_name: Resolved project display name.
         :param branch_name: Optional git branch created for the task, echoed back.
         :param warning: Optional non-fatal warning to include in the result.
-        :return: Session details including task name, project, and started_at.
+        :return: Session details including task name, project, and started_at
+            (``timesheet_id`` is ``None`` — no anchor is created).
         :raises TaskAlreadyRunningError: When the task already has an active
             session.
         """
@@ -90,20 +96,14 @@ class StartTaskCommand(Command):
                 f"(id={existing.id}, state={existing.state.value})."
             )
 
-        employee_id = resolve_employee_id(self._client, db)
-
-        timesheet_id = ensure_anchor(
-            self._client, task_id, project_id, employee_id, date.today()
-        )
-        # If the local run insert fails, re-raise so the failure surfaces
-        # loudly. The freshly-created anchor is intentionally left in Odoo:
-        # record deletion (unlink) is purposefully not implemented for safety.
+        # No timesheet anchor is created: the FSM performs no ``account.analytic.
+        # line`` write (#325). ``timesheet_id`` stays NULL until the upload path
+        # materializes the derived session.
         run = db.create_run(
             task_id=task_id,
             task_name=task_name,
             project_id=project_id,
             project_name=project_name,
-            timesheet_id=timesheet_id,
         )
         # The chatter note is a best-effort announcement, not tracking state:
         # the run is already RUNNING above. If the post fails (network/Odoo
@@ -122,7 +122,7 @@ class StartTaskCommand(Command):
             )
 
         result = _build_run_result(
-            run, task_id, task_name, project_name, timesheet_id,
+            run, task_id, task_name, project_name,
             branch_name=branch_name,
             warning=warning,
         )

@@ -10,19 +10,16 @@ adopt-not-duplicate guarantees are checked at the wire level.
 
 import tempfile
 import unittest
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalStateClient
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.billing.timesheet import (
-    ANCHOR_NAME,
     ORPHANED_UPLOAD_NAME,
     emit_agent_event,
-    ensure_anchor,
     reconcile_session,
     resolve_employee_id,
     sweep_orphaned_uploads,
@@ -36,110 +33,6 @@ def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     return make_state_db(Path(tmp.name))
-
-
-class _AnchorExecutor(OdooExecutor):
-    """Fake executor for the anchor search/create/write flow.
-
-    ``search_read`` returns the seeded existing rows so adoption can be
-    exercised; ``create`` mimics Odoo's single-dict → scalar id semantics; every
-    call is recorded so the test can assert exactly one create ever fires.
-    """
-
-    def __init__(self, existing: list[dict] | None = None, new_id: Any = 123):
-        self._existing = existing or []
-        self._new_id = new_id
-        self.calls: list[tuple] = []
-
-    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
-        self.calls.append((model, method, args, kwargs))
-        if method == "search_read":
-            return list(self._existing)
-        if method == "create":
-            (vals,) = args
-            # Single-dict create → scalar id (batch would be a list).
-            return [self._new_id] if isinstance(vals, list) else self._new_id
-        if method == "write":
-            return True
-        raise AssertionError(f"unexpected call: {model}.{method}")
-
-    def creates(self) -> list[tuple]:
-        return [c for c in self.calls if c[1] == "create"]
-
-
-class TestEnsureAnchor(unittest.TestCase):
-    def test_creates_anchor_when_none_exists(self):
-        executor = _AnchorExecutor(existing=[], new_id=99)
-        client = OdooClient(executor=executor)
-        anchor_id = ensure_anchor(
-            client, task_id=10, project_id=5, employee_id=3, today=date(2026, 7, 1)
-        )
-        self.assertEqual(anchor_id, 99)
-        creates = executor.creates()
-        self.assertEqual(len(creates), 1)
-        vals = creates[0][2][0]
-        self.assertEqual(vals["name"], ANCHOR_NAME)
-        self.assertEqual(vals["task_id"], 10)
-        self.assertEqual(vals["project_id"], 5)
-        self.assertEqual(vals["employee_id"], 3)
-        self.assertEqual(vals["date"], "2026-07-01")
-        self.assertEqual(vals["unit_amount"], 0.0)
-
-    def test_returns_scalar_id_not_list(self):
-        # Regression for #170/#176: a batch create yields ``[id]`` (a list) that
-        # breaks the SQLite bind and the later timesheet write. The single-dict
-        # create must be issued and the result unwrapped to a scalar int.
-        executor = _AnchorExecutor(existing=[], new_id=77)
-        client = OdooClient(executor=executor)
-        anchor_id = ensure_anchor(
-            client, task_id=1, project_id=2, employee_id=3, today=date(2026, 7, 1)
-        )
-        self.assertIsInstance(anchor_id, int)
-        self.assertEqual(anchor_id, 77)
-
-    def test_unwraps_list_create_result_defensively(self):
-        # A batch-style ``[id]`` result (should never happen for a single-dict
-        # create, but Odoo variants differ) is unwrapped to a scalar so the
-        # #170/#176 crash cannot resurface downstream.
-        executor = _AnchorExecutor(existing=[], new_id=42)
-
-        def _list_execute(model, method, *args, **kwargs):
-            executor.calls.append((model, method, args, kwargs))
-            if method == "search_read":
-                return []
-            if method == "create":
-                return [42]  # list-wrapped result
-            raise AssertionError(method)
-
-        client = OdooClient(executor=executor)
-        with patch.object(client, "execute", _list_execute):
-            anchor_id = ensure_anchor(
-                client, task_id=1, project_id=2, employee_id=3, today=date(2026, 7, 1)
-            )
-        self.assertIsInstance(anchor_id, int)
-        self.assertEqual(anchor_id, 42)
-
-    def test_adopts_existing_anchor_instead_of_duplicating(self):
-        # #177: a second start must reuse the existing "[/] Work in progress"
-        # row rather than create a duplicate placeholder.
-        executor = _AnchorExecutor(existing=[{"id": 55}])
-        client = OdooClient(executor=executor)
-        anchor_id = ensure_anchor(
-            client, task_id=10, project_id=5, employee_id=3, today=date(2026, 7, 1)
-        )
-        self.assertEqual(anchor_id, 55)
-        self.assertEqual(executor.creates(), [])  # never creates a second row
-
-    def test_search_keys_on_task_and_marker(self):
-        executor = _AnchorExecutor(existing=[])
-        client = OdooClient(executor=executor)
-        ensure_anchor(
-            client, task_id=42, project_id=1, employee_id=1, today=date(2026, 7, 1)
-        )
-        search = next(c for c in executor.calls if c[1] == "search_read")
-        domain = search[2][0]
-        self.assertIn(("task_id", "=", 42), domain)
-        self.assertIn(("name", "=", ANCHOR_NAME), domain)
 
 
 class _StrictBrowseHashExecutor(OdooExecutor):
@@ -179,7 +72,7 @@ class _SessionExecutor(OdooExecutor):
     semantics. Every call is recorded so branch selection can be asserted.
     """
 
-    def __init__(self, anchors: list[dict] | None = None, new_id: int = 500):
+    def __init__(self, anchors: list[dict] | None = None, new_id: Any = 500):
         self._anchors = anchors or []
         self._new_id = new_id
         self.calls: list[tuple] = []
@@ -254,6 +147,23 @@ class TestReconcileSession(unittest.TestCase):
         self.assertEqual(mapping["timesheet_id"], 500)
         self.assertEqual(mapping["task_id"], "10")
         self.assertIsNotNone(mapping["started_at"])
+
+    def test_create_result_list_is_unwrapped_to_scalar(self):
+        # Regression for #170/#176: a batch-style ``[id]`` create result (a list)
+        # breaks the SQLite bind and the later timesheet write. The fresh-line
+        # create must unwrap it to a scalar int at the source.
+        # list-wrapped id, as Odoo's batch create returns
+        client, executor = self._client(anchors=[], new_id=[502])
+        db = _tmp_db()
+        tid = reconcile_session(
+            client, db, task_id=10, session_key="10|9",
+            description="[/] session 10|9", hours=1.0,
+            started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
+        )
+        self.assertIsInstance(tid, int)
+        self.assertEqual(tid, 502)
+        self.assertEqual(db.get_session_upload("10|9")["timesheet_id"], 502)
 
     def test_adopts_existing_anchor(self):
         client, executor = self._client(anchors=[{"id": 88}])
