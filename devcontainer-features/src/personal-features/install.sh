@@ -44,6 +44,28 @@ run_installer() {
     return "$rc"
 }
 
+# retry(cmd...): run cmd, retrying transient failures. Mirrors fetch()'s
+# `curl --retry 3 --retry-delay 2` for commands curl can't drive - notably the
+# `uv` wheel installs below, whose large downloads (e.g. onnxruntime, 17.8 MiB)
+# can exceed uv's HTTP timeout on a slow link and fail the whole image build on
+# the first hiccup. Runs up to 3 attempts with a 2s delay between them and
+# returns the last attempt's exit status, so a caller under `set -e` still
+# aborts if every attempt fails and a `|| ...` caller still sees the failure.
+retry() {
+    local attempt=1
+    while true; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge 3 ]; then
+            return 1
+        fi
+        echo "WARNING: '$*' failed (attempt $attempt/3); retrying in 2s" >&2
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+}
+
 CLAUDE_HOME="/usr/local/share/claude-home"
 
 # Create the fixed container-side paths that the containerEnv vars point at and
@@ -194,6 +216,11 @@ chmod +x "$WRAPPER_PATH"
 # skip silently on older images (e.g. odoo:16).
 FEATURE_DIR="$(dirname "$0")"
 if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+    # Give uv's downloads plenty of headroom: the odoo_sdk dependency tree pulls
+    # large wheels (onnxruntime 17.8 MiB, numpy 15.9 MiB, ...) that can exceed
+    # uv's default 30s HTTP timeout on a slow link and fail the whole image
+    # build. Paired with the retry() wrapper on the install calls below.
+    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
     # odoo base images don't ship uv; install it so we can create an isolated
     # venv without touching system Python packages.
     if ! command -v uv >/dev/null 2>&1; then
@@ -215,9 +242,9 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
         # bundled wheel the old in-loop `uv venv` would re-run on the same path
         # and error. The `[ -d ]` guard also makes a re-provision over a
         # persisted venv a no-op. `uv pip install` still runs per wheel.
-        [ -d "$_SDK_ENV" ] || uv venv "$_SDK_ENV"
+        [ -d "$_SDK_ENV" ] || retry uv venv "$_SDK_ENV"
         for wheel in "${_sdk_wheels[@]}"; do
-            uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+            retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
         done
         # Link the entry points once, after all wheels are installed.
         ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
@@ -231,7 +258,7 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
     # would be root-only). Best-effort - a PyPI/network hiccup shouldn't fail
     # the whole build, matching the other optional-tool installs.
     UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        uv tool install mempalace \
+        retry uv tool install mempalace \
         || echo "WARNING: failed to install mempalace, skipping" >&2
 else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
