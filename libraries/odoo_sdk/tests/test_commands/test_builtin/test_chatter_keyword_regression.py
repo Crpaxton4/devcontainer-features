@@ -114,17 +114,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_start_task_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.utilities.timesheet.get_employee_id",
-                return_value=3,
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.ensure_anchor",
-                return_value=99,
-            ),
-        ):
+        with patch(_START_GUARD):
             StartTaskCommand(client, state=db).execute(
                 task_id=10,
                 task_name="Fix VAT",
@@ -143,12 +133,8 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         db.transition_to_awaiting(1)
         with (
             patch(_RESUME_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.resume_task.TaskStateDB",
-                return_value=db,
-            ),
         ):
-            ResumeTaskCommand(client).execute(1)
+            ResumeTaskCommand(client, state=db).execute(1)
         self._assert_recorded_keyword(
             executor,
             task_id=1,
@@ -161,12 +147,8 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.task_note.TaskStateDB",
-                return_value=db,
-            ),
         ):
-            TaskNoteCommand(client).execute(1, "Note text")
+            TaskNoteCommand(client, state=db).execute(1, "Note text")
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>Note text</p>"
         )
@@ -177,12 +159,8 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_QUESTION_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.task_question.TaskStateDB",
-                return_value=db,
-            ),
         ):
-            TaskQuestionCommand(client).execute(1, "Which approach?")
+            TaskQuestionCommand(client, state=db).execute(1, "Which approach?")
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>[?] Which approach?</p>"
         )

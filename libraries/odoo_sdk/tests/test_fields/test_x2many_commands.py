@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 
 from hypothesis import given, strategies
 
-from odoo_sdk.fields.commands import Command
+from odoo_sdk.fields.commands import X2ManyCommand as Command
 from odoo_sdk.fields.commands import (
     _is_placeholder,
     _normalize_id_payload,

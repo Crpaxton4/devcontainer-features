@@ -8,6 +8,7 @@ single markdown document.
 
 from __future__ import annotations
 
+import itertools
 import re
 from datetime import date, datetime, timedelta
 
@@ -50,23 +51,19 @@ def _rle_sweep_rows(
 ) -> list[str]:
     """Run-length encode identical sweep totals into table row strings."""
     rows: list[str] = []
-    i, n = 0, len(totals)
-    while i < n:
-        run_val = totals[i]
-        j = i
-        while j < n and totals[j] == run_val:
-            j += 1
+    for run_val, group in itertools.groupby(range(len(totals)), key=totals.__getitem__):
+        idx = list(group)
+        first, last = idx[0], idx[-1]
         gap_range = (
-            f"{gap_vals[i]}m"
-            if i == j - 1
-            else f"{gap_vals[i]}-{gap_vals[j - 1]}m"
+            f"{gap_vals[first]}m"
+            if first == last
+            else f"{gap_vals[first]}-{gap_vals[last]}m"
         )
         s = score_gap(run_val, num_days, config)
         rows.append(
             f"| {gap_range:<12} | {s:<8.3f} | "
-            f"{fmt_duration(int(run_val)):<12} | {j - i:<8} |"
+            f"{fmt_duration(int(run_val)):<12} | {len(idx):<8} |"
         )
-        i = j
     return rows
 
 

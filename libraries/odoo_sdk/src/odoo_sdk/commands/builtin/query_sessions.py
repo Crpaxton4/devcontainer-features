@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from odoo_sdk.state import SessionWindow, session_key
-from odoo_sdk.utilities.upload import range_bounds
+from odoo_sdk.billing.upload import range_bounds
 
 from ..command import Command
 from ._registration import builtin_command

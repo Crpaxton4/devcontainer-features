@@ -9,10 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import LocalStateClient as TaskStateDB
+from odoo_sdk.state import TaskState
 from tests.support import make_state_db
 
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
+STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
 
 
 def _tmp_db() -> TaskStateDB:
@@ -23,6 +25,19 @@ def _tmp_db() -> TaskStateDB:
 
 def _client() -> MagicMock:
     return MagicMock()
+
+
+def _registry(db: TaskStateDB, client: MagicMock = None):
+    """Build the shared built-in registry over ``db`` for direct cmd_* calls."""
+    from odoo_sdk.commands import Registry
+    from odoo_sdk.commands.builtin import register_builtins
+
+    return register_builtins(
+        Registry(client if client is not None else MagicMock(), state_client=db)
+    )
+
+
+NORMALIZE_MERGE = "odoo_sdk.commands.builtin.normalize_timesheets.merge_timesheets"
 
 
 # ── _assert_env ───────────────────────────────────────────────────────────────
@@ -41,6 +56,26 @@ class TestAssertEnv(unittest.TestCase):
             cli._assert_env()  # must not raise
 
 
+# ── _LazyOdooClient ───────────────────────────────────────────────────────────
+
+class TestLazyOdooClient(unittest.TestCase):
+    def test_defers_construction_until_first_use(self):
+        with patch("odoo_sdk.cli.__main__.OdooClient") as make_client:
+            lazy = cli._LazyOdooClient()
+            make_client.assert_not_called()  # construction is deferred
+            real = make_client.return_value
+            real.uid = 7
+            real.__getitem__.return_value = "recordset"
+            real.execute.return_value = "ok"
+
+            self.assertEqual(lazy.uid, 7)
+            self.assertEqual(lazy.execute("m", "read", 1), "ok")
+            self.assertEqual(lazy["m"], "recordset")
+        # Built exactly once and cached across every member access.
+        make_client.assert_called_once_with()
+        real.execute.assert_called_once_with("m", "read", 1)
+
+
 # ── cmd_list ─────────────────────────────────────────────────────────────────
 
 class TestCmdList(unittest.TestCase):
@@ -49,7 +84,7 @@ class TestCmdList(unittest.TestCase):
         args = MagicMock()
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_list(db, args)
+            cli.cmd_list(_registry(db), args)
         self.assertIn("No active", captured.getvalue())
 
     def test_prints_active_runs(self):
@@ -58,7 +93,7 @@ class TestCmdList(unittest.TestCase):
         args = MagicMock()
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_list(db, args)
+            cli.cmd_list(_registry(db), args)
         self.assertIn("Bug Fix", captured.getvalue())
 
 
@@ -70,15 +105,25 @@ class TestCmdStop(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         run_id = db.get_active_run(1).id
         args = MagicMock(run_id=run_id)
-        client = _client()
         captured = StringIO()
-        with (
-            patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.update_timesheet") as mock_update,
-        ):
-            cli.cmd_stop(db, args, client)
-        mock_update.assert_called_once()
+        with patch("sys.stdout", captured):
+            cli.cmd_stop(_registry(db), args)
         self.assertIn("Stopped", captured.getvalue())
+        self.assertEqual(db.get_run_by_id(run_id).state, TaskState.STOPPED)
+
+    def test_stop_writes_no_timesheet_hours(self):
+        # Regression (#402/#403): the CLI stop path routes through the command
+        # layer (StopRunCommand), which never writes account.analytic.line hours
+        # — the upload path owns unit_amount. The run carries a timesheet id, yet
+        # no Odoo write may be attempted.
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
+        run_id = db.get_active_run(1).id
+        args = MagicMock(run_id=run_id)
+        client = _client()
+        with patch("sys.stdout", StringIO()):
+            cli.cmd_stop(_registry(db, client), args)
+        client.execute.assert_not_called()
 
     def test_skips_already_stopped(self):
         db = _tmp_db()
@@ -86,25 +131,18 @@ class TestCmdStop(unittest.TestCase):
         db.stop_run(1)
         run_id = db.get_run_by_id(1).id
         args = MagicMock(run_id=run_id)
+        client = _client()
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_stop(db, args, _client())
+            cli.cmd_stop(_registry(db, client), args)
         self.assertIn("already stopped", captured.getvalue())
+        client.execute.assert_not_called()
 
     def test_exits_for_unknown_run(self):
         db = _tmp_db()
         args = MagicMock(run_id=9999)
         with self.assertRaises(SystemExit):
-            cli.cmd_stop(db, args, _client())
-
-    def test_skips_timesheet_update_when_no_timesheet(self):
-        db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
-        run_id = db.get_active_run(1).id
-        args = MagicMock(run_id=run_id)
-        with patch("odoo_sdk.cli.__main__.update_timesheet") as mock_update:
-            cli.cmd_stop(db, args, _client())
-        mock_update.assert_not_called()
+            cli.cmd_stop(_registry(db), args)
 
 
 # ── cmd_stop_all ──────────────────────────────────────────────────────────────
@@ -115,7 +153,7 @@ class TestCmdStopAll(unittest.TestCase):
         args = MagicMock()
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_stop_all(db, args, _client())
+            cli.cmd_stop_all(_registry(db), args)
         self.assertIn("Nothing", captured.getvalue())
 
     def test_stops_all_active(self):
@@ -124,13 +162,22 @@ class TestCmdStopAll(unittest.TestCase):
         db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
         args = MagicMock()
         captured = StringIO()
-        with (
-            patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.update_timesheet"),
-        ):
-            cli.cmd_stop_all(db, args, _client())
+        with patch("sys.stdout", captured):
+            cli.cmd_stop_all(_registry(db), args)
         self.assertIn("Stopped", captured.getvalue())
         self.assertEqual(len(db.get_all_active_runs()), 0)
+
+    def test_stop_all_writes_no_timesheet_hours(self):
+        # Regression (#402/#403): stop-all bills no hours at stop time; the
+        # upload path owns account.analytic.line unit_amount for every surface.
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
+        args = MagicMock()
+        client = _client()
+        with patch("sys.stdout", StringIO()):
+            cli.cmd_stop_all(_registry(db, client), args)
+        client.execute.assert_not_called()
 
 
 # ── cmd_report ────────────────────────────────────────────────────────────────
@@ -144,7 +191,7 @@ class TestCmdReport(unittest.TestCase):
         args = MagicMock(all=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_report(db, args)
+            cli.cmd_report(_registry(db), args)
         output = captured.getvalue()
         self.assertIn("Bug", output)
         self.assertNotIn("Done", output)
@@ -156,7 +203,7 @@ class TestCmdReport(unittest.TestCase):
         args = MagicMock(all=True)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_report(db, args)
+            cli.cmd_report(_registry(db), args)
         self.assertIn("Bug", captured.getvalue())
 
     def test_empty_report(self):
@@ -164,7 +211,7 @@ class TestCmdReport(unittest.TestCase):
         args = MagicMock(all=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_report(db, args)
+            cli.cmd_report(_registry(db), args)
         self.assertIn("No runs", captured.getvalue())
 
 
@@ -176,7 +223,7 @@ class TestCmdNormalize(unittest.TestCase):
         args = MagicMock(apply=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_normalize(db, args, _client())
+            cli.cmd_normalize(_registry(db, _client()), args)
         self.assertIn("No duplicate", captured.getvalue())
 
     def test_dry_run_reports_without_merging(self):
@@ -189,9 +236,9 @@ class TestCmdNormalize(unittest.TestCase):
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.merge_timesheets") as mock_merge,
+            patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(db, args, _client())
+            cli.cmd_normalize(_registry(db, _client()), args)
         mock_merge.assert_not_called()
         output = captured.getvalue()
         self.assertIn("Dry run", output)
@@ -207,9 +254,9 @@ class TestCmdNormalize(unittest.TestCase):
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
-            patch("odoo_sdk.cli.__main__.merge_timesheets") as mock_merge,
+            patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(db, args, _client())
+            cli.cmd_normalize(_registry(db, _client()), args)
         mock_merge.assert_called_once()
         self.assertIn("Merged", captured.getvalue())
 
@@ -271,8 +318,8 @@ class TestMain(unittest.TestCase):
         with (
             patch("sys.stdout", captured),
             patch("odoo_sdk.cli.__main__.OdooClient"),
-            patch("odoo_sdk.cli.__main__.update_timesheet"),
             patch(ASSERT_GUARD),
+            patch(STOP_GUARD),
             patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
             patch("sys.argv", ["odoo_sdk.cli", "stop", str(run_id)]),
         ):

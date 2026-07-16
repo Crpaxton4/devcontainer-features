@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient, session_key
-from odoo_sdk.utilities.prune import (
+from odoo_sdk.prune import (
     PRUNE_HORIZON_ENV_VAR,
     execute_prune,
     plan_prune,

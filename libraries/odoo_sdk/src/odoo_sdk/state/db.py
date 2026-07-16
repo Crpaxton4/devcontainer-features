@@ -4,9 +4,12 @@ import json
 import os
 import sqlite3
 import subprocess
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+from odoo_sdk._utils import as_utc
 
 from .models import (
     EventRecord,
@@ -31,16 +34,16 @@ TRACKER_DB_FILENAME = "tracker.db"
 # SQL-derived read path (:meth:`LocalStateClient.derive_sessions_overlapping`).
 AGENTLESS_REPO_SENTINEL = "\x00agent"
 
-# Max ids bound into a single ``DELETE ... IN (...)`` statement. A prune can hand
-# :meth:`LocalStateClient.delete_events` a heavy day's worth of ids at once, so the
-# delete is chunked to stay well under SQLite's historical 999-variable limit.
-_DELETE_CHUNK = 500
+# Max ids bound into a single ``... IN (...)`` statement (delete and series-assign).
+# Chunked to stay well under SQLite's historical 999-variable limit; each caller
+# runs all chunks inside one transaction so the whole operation stays atomic.
+_ID_CHUNK = 500
 
-# Max ids bound into a single ``UPDATE ... IN (...)`` statement when triage assigns
-# a task to a whole calendar series. Chunked for the same 999-variable reason as
-# ``_DELETE_CHUNK``; all chunks run inside one transaction so a series assignment is
-# atomic (see :meth:`LocalStateClient.assign_event_task_ids`).
-_ASSIGN_CHUNK = 500
+
+def _chunks(seq: Sequence[int], size: int = _ID_CHUNK):
+    """Yield successive ``size``-length slices of ``seq``."""
+    for start in range(0, len(seq), size):
+        yield seq[start : start + size]
 
 
 def _default_root() -> Path:
@@ -54,24 +57,22 @@ def _default_root() -> Path:
     return base / "odoo-task-tracker"
 
 
-# Canonical schema for the central tracker DB (#369). This is the ONE authoritative
-# DDL: the SDK never creates state on connection open (a missing DB raises
-# :class:`TrackerStateMissingError`), so this DDL is applied only by the host
-# provisioning step (``scripts/init_tracker_db.py``, invoked by ``setup.sh`` /
-# ``setup.ps1``) and by :func:`create_schema` — which the test suite and that init
-# script are the only callers of. The stdlib-only init script embeds a verbatim
-# copy of this DDL (it cannot import the SDK on the host); an SDK parity test
-# asserts the two produce an identical ``sqlite_master`` so they can never drift.
+# Canonical schema for the central tracker DB — the ONE authoritative DDL, applied
+# only by the host provisioning step (``scripts/init_tracker_db.py``, invoked by
+# ``setup.sh`` / ``setup.ps1``) and by :func:`create_schema`, never on connection
+# open (#369; see :class:`TrackerStateMissingError`). The stdlib-only init script
+# embeds a verbatim copy of this DDL (it cannot import the SDK on the host); an SDK
+# parity test asserts the two produce an identical ``sqlite_master`` so they never
+# drift.
 #
 # It carries EVERY column and index the pre-#369 per-repo DBs accumulated across
 # their migrations — ``task_runs.aborted_at`` (#356), ``events.external_id`` with
 # its partial unique dedupe index (resync), ``idx_events_timestamp`` (#359), and
 # the ``session_uploads`` ``task_id``/``started_at``/``ended_at`` orphan-discovery
 # columns (#353) — so a freshly provisioned DB is schema-identical to a migrated
-# one. There is no migration tooling: existing per-repo DBs were ephemeral and are
-# started fresh (#369). Every statement is ``IF NOT EXISTS`` so provisioning is
-# idempotent. Sessions are still derived from ``events`` at query time (see
-# ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
+# one; there is no migration tooling. Every statement is ``IF NOT EXISTS`` so
+# provisioning is idempotent. Sessions are still derived from ``events`` at query
+# time (see ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS task_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,13 +126,12 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 def create_schema(conn: sqlite3.Connection) -> None:
     """Apply :data:`SCHEMA_DDL` to ``conn`` (host provisioning / tests only).
 
-    This is the ONLY sanctioned way to bring a tracker DB into existence, and it
-    is called from exactly two places: the host-side ``scripts/init_tracker_db.py``
-    (which embeds an identical DDL copy for stdlib-only host use) and the SDK test
-    suite's shared fixture. It is NEVER called on connection open — the SDK
-    consumes a host-provisioned, bind-mounted DB and refuses to self-create one
-    (:meth:`LocalStateClient._connect` raises :class:`TrackerStateMissingError`
-    when the file is absent). Idempotent: every statement is ``IF NOT EXISTS``.
+    The ONLY sanctioned way to bring a tracker DB into existence, called from
+    exactly two places: the host-side ``scripts/init_tracker_db.py`` (which embeds
+    an identical DDL copy for stdlib-only host use) and the SDK test suite's shared
+    fixture. It is NEVER called on connection open — the SDK consumes a
+    host-provisioned DB and refuses to self-create one (#369; see
+    :class:`TrackerStateMissingError`). Idempotent: every statement is ``IF NOT EXISTS``.
     """
     conn.executescript(SCHEMA_DDL)
 
@@ -209,6 +209,12 @@ _SESSION_SOURCE_PREDICATE = (
 # ANY development-family event is "Development" (development wins a mixed task's
 # label), a group of purely review-family events is "Review". The flag is derived
 # from ``source`` alone, so it does not perturb the ``DISTINCT`` (one id → one row).
+#
+# Task attribution (#409): the ``json_array_length(events.task_ids) > 0`` filter
+# below — with ``COALESCE(NULLIF(value, ''), 'UNKNOWN')`` bucketing empty ids — is
+# the CANONICAL attribution predicate. The diagnostic gap-sweep mirrors the same
+# "non-empty ``task_ids``" rule in ``sessionization/transform.py``
+# (``billable_events``); parity is pinned by ``test_sessionization/test_parity.py``.
 _DERIVE_SESSIONS_SQL = f"""
 WITH base AS (
     SELECT DISTINCT
@@ -289,9 +295,8 @@ def tracker_db_path(root: Optional[Path] = None) -> Path:
 
     ``<state-root>/tracker.db``, where the state root is ``root`` when given, else
     the env-aware :func:`_resolve_state_root` (``ODOO_TASK_TRACKER_DIR`` → XDG).
-    No git remote is consulted and no directory is created: the DB is
-    host-provisioned and bind-mounted, so its location is fixed and its existence
-    is the host's responsibility, not the SDK's.
+    No git remote is consulted and no directory is created (#369): the location is
+    fixed and the DB's existence is the host's responsibility, not the SDK's.
     """
     base = Path(root) if root is not None else _resolve_state_root()
     return base / TRACKER_DB_FILENAME
@@ -318,15 +323,6 @@ def current_repo_label() -> str:
         return ""
     label = _derive_repo_label(result.stdout.strip())
     return "" if label == "(unknown)" else label
-
-
-def _missing_state_message(db_path: Path) -> str:
-    """Return the single actionable message for an absent tracker DB (#369)."""
-    return (
-        f"No tracker database at {db_path}. This database is provisioned on the "
-        "host and bind-mounted into the container; it is not created "
-        "automatically. Run setup.sh on the host, then rebuild the container."
-    )
 
 
 # Columns selected for every task_run read, in _parse_run order.
@@ -373,31 +369,17 @@ _EVENT_COLUMNS = (
 
 
 def _normalize_utc_isoformat(ts: datetime) -> str:
-    """Return ``ts`` as a uniform UTC isoformat string.
+    """Return ``ts`` as a uniform UTC isoformat string, used for stored values and bounds.
 
-    The SQL-derived read path compares ``MIN/MAX(timestamp)`` as *strings*, which
-    is only correct when every stored timestamp shares one UTC offset. An aware
-    timestamp is converted to UTC; a naive one is treated as already-UTC and
-    stamped with ``+00:00`` so all rows sort and compare uniformly.
+    The SQL-derived read path compares ``MIN/MAX(timestamp)`` and query bounds as
+    *strings*, which is only correct when every value shares one UTC offset. An aware
+    timestamp is converted to UTC; a naive one — a stored value, the TUI's
+    ``datetime.combine(date, time.min)`` window edge, or the query layer's
+    ``datetime.min``/``datetime.max`` sentinel — is treated as already-UTC and
+    stamped with ``+00:00``, so all rows and bounds sort and compare uniformly (the
+    naive sentinels still sort past every real row).
     """
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc).isoformat()
-    return ts.astimezone(timezone.utc).isoformat()
-
-
-def _bound_isoformat(ts: datetime) -> str:
-    """Return a query bound in the exact form stored timestamps use.
-
-    Bounds are compared against stored rows *as strings*, so they must be shaped
-    identically to :func:`_normalize_utc_isoformat` output. Aware bounds convert
-    to UTC; naive bounds — the TUI's ``datetime.combine(date, time.min)`` window
-    edges and the query layer's ``datetime.min``/``datetime.max`` sentinels — are
-    assumed UTC and stamped with ``+00:00`` too. Suffixing the naive sentinels is
-    safe (they still sort past every real row), and it makes an event stamped
-    exactly at a window edge compare identically across :meth:`get_events`,
-    :meth:`count_events`, and the derivation's ``HAVING`` clause.
-    """
-    return _normalize_utc_isoformat(ts)
+    return as_utc(ts).isoformat()
 
 
 def _derivation_margin(gap_secs: int) -> timedelta:
@@ -414,28 +396,40 @@ def _derivation_margin(gap_secs: int) -> timedelta:
     return timedelta(seconds=max(gap_secs, 86_400))
 
 
-def _widen_lower(ts: datetime, margin: timedelta) -> datetime:
-    """Return ``ts - margin``, clamped to ``datetime.min`` on underflow.
+def _widen(ts: datetime, delta: timedelta) -> datetime:
+    """Return ``ts + delta``, clamped to ``datetime.min``/``max`` on over/underflow.
 
-    The query layer passes ``datetime.min`` for an unbounded lower edge, and
-    subtracting a margin from it overflows; clamping keeps the widened bound a
-    valid, still-earlier-than-everything sentinel.
+    The query layer passes ``datetime.min``/``datetime.max`` for an unbounded edge,
+    and shifting those overflows; clamping by the sign of ``delta`` keeps the widened
+    bound a valid, still-past-everything sentinel.
     """
     try:
-        return ts - margin
+        return ts + delta
     except OverflowError:
-        return datetime.min
+        return datetime.min if delta < timedelta(0) else datetime.max
 
 
-def _widen_upper(ts: datetime, margin: timedelta) -> datetime:
-    """Return ``ts + margin``, clamped to ``datetime.max`` on overflow.
+def _window_where(
+    start: Optional[datetime],
+    end: Optional[datetime],
+    extra_clauses: Sequence[str] = (),
+) -> tuple[str, list[str]]:
+    """Build the optional ``[start, end)`` timestamp WHERE clause and its params.
 
-    Mirror of :func:`_widen_lower` for the unbounded ``datetime.max`` upper edge.
+    Bounds are half-open (``>= start``, ``< end``) and normalized to the uniform
+    stored-timestamp string form. ``extra_clauses`` are ANDed ahead of the bounds
+    (e.g. an unattributed-events filter that always yields a WHERE).
     """
-    try:
-        return ts + margin
-    except OverflowError:
-        return datetime.max
+    clauses = list(extra_clauses)
+    params: list[str] = []
+    if start is not None:
+        clauses.append("timestamp >= ?")
+        params.append(_normalize_utc_isoformat(start))
+    if end is not None:
+        clauses.append("timestamp < ?")
+        params.append(_normalize_utc_isoformat(end))
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, params
 
 
 def _parse_event(row: tuple) -> EventRecord:
@@ -514,27 +508,26 @@ class LocalStateClient:
     def __init__(self, db_path: Optional[Path] = None):
         """Bind to a tracker DB path WITHOUT touching the filesystem (#369).
 
-        No git remote is resolved, no directory is created, and no schema is
-        applied here — construction is inert. The database is host-provisioned and
-        bind-mounted; the SDK consumes it and refuses to create one. A missing DB
-        is not detected until the first :meth:`_connect`, which raises
-        :class:`TrackerStateMissingError`. ``db_path`` defaults to the single
-        central :func:`tracker_db_path`; tests and callers pass an explicit path.
+        Construction is inert — no git remote, directory, or schema work. A missing
+        DB is not detected until the first :meth:`_connect`, which raises
+        :class:`TrackerStateMissingError`. ``db_path`` defaults to the single central
+        :func:`tracker_db_path`; tests and callers pass an explicit path.
         """
         self._db_path = Path(db_path) if db_path is not None else tracker_db_path()
 
     def _connect(self) -> sqlite3.Connection:
-        # The DB is host-provisioned state: the SDK NEVER creates it (#369). A
-        # missing file is a hard, actionable error, not a cue to materialize an
-        # empty DB — a self-created DB would be container-local, discarded on
-        # rebuild, and silently split one person's billing timeline. ``mode=rw``
-        # raises rather than creating a missing file; the explicit existence
-        # check turns that into the single named ``TrackerStateMissingError`` every
-        # entry point surfaces.
+        # The DB is host-provisioned; the SDK NEVER creates it (#369; see
+        # :class:`TrackerStateMissingError`). ``mode=rw`` raises rather than creating
+        # a missing file; the explicit existence check turns that into the single
+        # named error every entry point surfaces.
         if not self._db_path.exists():
-            raise TrackerStateMissingError(_missing_state_message(self._db_path))
+            raise TrackerStateMissingError(
+                f"No tracker database at {self._db_path}. This database is "
+                "provisioned on the host and bind-mounted into the container; it is "
+                "not created automatically. Run setup.sh on the host, then rebuild "
+                "the container."
+            )
         conn = sqlite3.connect(f"file:{self._db_path}?mode=rw", uri=True)
-        conn.row_factory = sqlite3.Row
         # WAL lets a writer and readers proceed concurrently, and a 2s busy
         # timeout makes a second writer wait for the lock instead of failing
         # instantly with "database is locked". With one central DB now taking
@@ -551,40 +544,45 @@ class LocalStateClient:
         # The current schema declares no foreign keys.
         return conn
 
-    def get_active_run(self, task_id: int) -> Optional[TaskRun]:
+    def _select_runs(self, where: str, params: tuple = ()) -> list[TaskRun]:
+        """Run ``SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}`` and parse rows."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
+            ).fetchall()
+        return [_parse_run(row) for row in rows]
+
+    def _select_run(self, where: str, params: tuple) -> Optional[TaskRun]:
+        """Return the single matching task_run, or None."""
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs WHERE task_id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS')",
-                (task_id,),
+                f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
             ).fetchone()
-        return _parse_run(tuple(row)) if row else None
+        return _parse_run(row) if row else None
+
+    def _require_active_run(self, task_id: int) -> TaskRun:
+        """Return the active run for ``task_id`` or raise :class:`TaskNotRunningError`."""
+        run = self.get_active_run(task_id)
+        if run is None:
+            raise TaskNotRunningError(f"No active session found for task {task_id}.")
+        return run
+
+    def get_active_run(self, task_id: int) -> Optional[TaskRun]:
+        return self._select_run(
+            "WHERE task_id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS')",
+            (task_id,),
+        )
 
     def get_run_by_id(self, run_id: int) -> Optional[TaskRun]:
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs WHERE id = ?",
-                (run_id,),
-            ).fetchone()
-        return _parse_run(tuple(row)) if row else None
+        return self._select_run("WHERE id = ?", (run_id,))
 
     def get_all_active_runs(self) -> list[TaskRun]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs WHERE state IN ('RUNNING', 'AWAITING_ANSWERS') "
-                "ORDER BY started_at"
-            ).fetchall()
-        return [_parse_run(tuple(r)) for r in rows]
+        return self._select_runs(
+            "WHERE state IN ('RUNNING', 'AWAITING_ANSWERS') ORDER BY started_at"
+        )
 
     def get_all_runs(self) -> list[TaskRun]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs ORDER BY started_at"
-            ).fetchall()
-        return [_parse_run(tuple(r)) for r in rows]
+        return self._select_runs("ORDER BY started_at")
 
     def distinct_task_ids(self) -> list[int]:
         """Return the distinct task ids on record in ``task_runs``, ascending.
@@ -600,13 +598,9 @@ class LocalStateClient:
         return [int(row[0]) for row in rows]
 
     def get_stopped_runs_with_timesheet(self) -> list[TaskRun]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs WHERE state = 'STOPPED' AND timesheet_id IS NOT NULL "
-                "ORDER BY started_at"
-            ).fetchall()
-        return [_parse_run(tuple(r)) for r in rows]
+        return self._select_runs(
+            "WHERE state = 'STOPPED' AND timesheet_id IS NOT NULL ORDER BY started_at"
+        )
 
     def create_run(
         self,
@@ -633,15 +627,10 @@ class LocalStateClient:
         return self.get_run_by_id(run_id)  # type: ignore[return-value]
 
     def transition_to_awaiting(self, task_id: int) -> TaskRun:
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(
-                f"No active session found for task {task_id}."
-            )
-        if run.state not in (TaskState.RUNNING, TaskState.AWAITING_ANSWERS):
-            raise InvalidStateTransitionError(
-                f"Cannot transition task {task_id} to AWAITING_ANSWERS from {run.state.value}."
-            )
+        run = self._require_active_run(task_id)
+        # get_active_run only returns RUNNING/AWAITING_ANSWERS rows, so every active
+        # run may transition to AWAITING_ANSWERS; the guard cannot fire.
+        assert run.state in (TaskState.RUNNING, TaskState.AWAITING_ANSWERS)
         with self._connect() as conn:
             conn.execute(
                 "UPDATE task_runs SET state = 'AWAITING_ANSWERS' WHERE id = ?",
@@ -650,11 +639,7 @@ class LocalStateClient:
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
 
     def transition_to_running(self, task_id: int) -> TaskRun:
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(
-                f"No active session found for task {task_id}."
-            )
+        run = self._require_active_run(task_id)
         if run.state != TaskState.AWAITING_ANSWERS:
             raise InvalidStateTransitionError(
                 f"Cannot resume task {task_id}: expected AWAITING_ANSWERS, "
@@ -668,11 +653,7 @@ class LocalStateClient:
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
 
     def stop_run(self, task_id: int, timesheet_id: Optional[int] = None) -> TaskRun:
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(
-                f"No active session found for task {task_id}."
-            )
+        run = self._require_active_run(task_id)
         stopped_at = datetime.now(timezone.utc).isoformat()
         tid = timesheet_id if timesheet_id is not None else run.timesheet_id
         with self._connect() as conn:
@@ -695,15 +676,9 @@ class LocalStateClient:
         billing-neutral (a normal stop must still bill), which is why the abort
         stamp lives on a distinct method rather than a flag on ``stop_run``.
 
-        :param task_id: The task whose active run is aborted.
-        :return: The stopped run, now carrying ``aborted_at``.
         :raises TaskNotRunningError: When there is no active run to abort.
         """
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(
-                f"No active session found for task {task_id}."
-            )
+        run = self._require_active_run(task_id)
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
@@ -742,12 +717,7 @@ class LocalStateClient:
         so an aborted run's leftover events never bill. Work done on the same task
         after a fresh ``start_task`` falls in a *later* run window and still bills.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} "
-                "FROM task_runs WHERE aborted_at IS NOT NULL ORDER BY started_at"
-            ).fetchall()
-        return [_parse_run(tuple(r)) for r in rows]
+        return self._select_runs("WHERE aborted_at IS NOT NULL ORDER BY started_at")
 
     def update_timesheet_id(self, run_id: int, timesheet_id: int) -> None:
         with self._connect() as conn:
@@ -842,7 +812,7 @@ class LocalStateClient:
                 f"SELECT {_EVENT_COLUMNS} FROM events WHERE id = ?",
                 (event_id,),
             ).fetchone()
-        return _parse_event(tuple(row)) if row else None
+        return _parse_event(row) if row else None
 
     def last_note_at(self, task_id: int) -> Optional[datetime]:
         """Return the timestamp of the most recent recorded ``task_note`` for a task.
@@ -872,21 +842,13 @@ class LocalStateClient:
         end: Optional[datetime] = None,
     ) -> list[EventRecord]:
         """Return events ordered by timestamp, optionally bounded by range."""
-        clauses: list[str] = []
-        params: list[str] = []
-        if start is not None:
-            clauses.append("timestamp >= ?")
-            params.append(_bound_isoformat(start))
-        if end is not None:
-            clauses.append("timestamp < ?")
-            params.append(_bound_isoformat(end))
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = _window_where(start, end)
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT {_EVENT_COLUMNS} FROM events{where} ORDER BY timestamp",
                 tuple(params),
             ).fetchall()
-        return [_parse_event(tuple(r)) for r in rows]
+        return [_parse_event(r) for r in rows]
 
     def get_unattributed_events(
         self,
@@ -906,21 +868,13 @@ class LocalStateClient:
         window bounds are half-open (``>= start``, ``< end``) to match
         :meth:`get_events` and :meth:`count_events`.
         """
-        clauses: list[str] = ["json_array_length(task_ids) = 0"]
-        params: list[str] = []
-        if start is not None:
-            clauses.append("timestamp >= ?")
-            params.append(_bound_isoformat(start))
-        if end is not None:
-            clauses.append("timestamp < ?")
-            params.append(_bound_isoformat(end))
-        where = " WHERE " + " AND ".join(clauses)
+        where, params = _window_where(start, end, ("json_array_length(task_ids) = 0",))
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT {_EVENT_COLUMNS} FROM events{where} ORDER BY timestamp",
                 tuple(params),
             ).fetchall()
-        return [_parse_event(tuple(r)) for r in rows]
+        return [_parse_event(r) for r in rows]
 
     def assign_event_task_ids(self, event_ids: list[int], task_id: int) -> int:
         """Attribute every listed event to ``task_id`` in ONE transaction (#370).
@@ -936,9 +890,6 @@ class LocalStateClient:
         assignment is all-or-nothing — a failure part-way never leaves half a
         series attributed. Chunking only bounds the per-statement variable count.
 
-        :param event_ids: The event ids to (re)attribute; an empty list is a no-op.
-        :param task_id: The Odoo task id to attribute them to.
-        :return: The number of event rows updated.
         :raises ValueError: When ``task_id`` is not a positive integer. No Odoo
             round-trip validates the id exists — triage only guarantees a
             well-formed, positive task id, not a live one.
@@ -950,8 +901,7 @@ class LocalStateClient:
         payload = json.dumps([str(task_id)])
         updated = 0
         with self._connect() as conn:
-            for start in range(0, len(event_ids), _ASSIGN_CHUNK):
-                chunk = event_ids[start : start + _ASSIGN_CHUNK]
+            for chunk in _chunks(event_ids):
                 placeholders = ",".join("?" for _ in chunk)
                 cursor = conn.execute(
                     f"UPDATE events SET task_ids = ? WHERE id IN ({placeholders})",
@@ -971,57 +921,33 @@ class LocalStateClient:
     ) -> list[SessionWindow]:
         """Derive whole sessions overlapping ``[start, end]`` directly from events.
 
-        Gap-based sessionization is computed in one CTE over the ``events`` table
-        at query time — the inactivity gap is bound at execution — so there is no
-        materialized ``sessions`` table to go stale for any producer. A session is
-        a maximal run of a single *task*'s events where every consecutive pair is
-        at most ``gap_secs`` apart (repo is display-only metadata, not part of the
-        partition — #352); it is returned whole (its true global bounds), never
-        clipped, so cross-day and cross-range sessions read identically through any
-        overlapping window.
-
-        The ``events`` scan is prefiltered to the queried window widened by
-        :func:`_derivation_margin` each side (#359), so only a timestamp slice is
-        sessionized (via ``idx_events_timestamp``) rather than the whole table.
-
-        An event carrying multiple task ids (``--attach-active-run`` attaches every
-        active run's task id) is fanned out over its ``task_ids`` array: it extends
-        EVERY named task's session, not just the first (#362). One event id can
-        therefore anchor two different tasks' sessions, but the
-        ``task|min_event_id`` session key stays distinct per task.
-
-        Development-family sources (``commit``/``agent``/``chatter``/``calendar``/
-        ``email`` and the ``claude:<HookName>`` family) and review-family sources
-        (``review``/``comment``, #378 item 6) both participate; ``merge`` is
-        excluded (fixed/audit-only). A window is ``strategy_name='development'`` /
-        ``category='Development'`` when it holds any development-family event, else
-        ``strategy_name='review'`` / ``category='Review'`` — so a task mixing
-        development and review activity in one gap-chain takes the development
-        label, and a purely review/comment burst is labeled "Review".
+        Gap-based sessionization is computed in one CTE over ``events`` at query
+        time (the gap is bound at execution, so nothing materializes or goes stale).
+        A session is a maximal run of a single *task*'s events at most ``gap_secs``
+        apart, returned whole (its true global bounds), never clipped. The mechanics
+        — task-only partitioning (#352), the window prefilter (#359), multi-task
+        fan-out (#362), and the development/review labeling (#378 item 6) — are
+        documented in full on :data:`_DERIVE_SESSIONS_SQL`.
 
         **Intentional behavior delta:** events carrying *no* task ids (e.g. most
         MCP-wrapper dispatch events) are stored as diagnostics but NEVER form a
         session — they are filtered out (``json_array_length(task_ids) > 0``).
 
-        :param start: Inclusive lower bound of the overlap window.
-        :param end: Inclusive upper bound of the overlap window.
-        :param gap_secs: The fixed inactivity gap in seconds.
-        :param task_id: Restrict to one task id (any id the event carries, since a
-            multi-task event contributes to each), or None.
-        :param repo: Restrict to one *display* repo, or None. A session's display
-            repo is its group's real ``owner/repo`` label when any event carried
-            one, else :data:`AGENTLESS_REPO_SENTINEL`; pass the sentinel to select
-            purely repo-less (agent-only) sessions.
-        :return: Overlapping derived windows ordered by start time.
+        ``start``/``end`` bound the overlap window (inclusive). ``task_id`` restricts
+        to one task id (any id an event carries, since a multi-task event contributes
+        to each). ``repo`` restricts to one *display* repo — a group's real
+        ``owner/repo`` when any event carried one, else :data:`AGENTLESS_REPO_SENTINEL`
+        (pass the sentinel to select purely repo-less sessions). Results are ordered
+        by start time.
         """
         margin = _derivation_margin(gap_secs)
         params: dict[str, object] = {
             "sentinel": AGENTLESS_REPO_SENTINEL,
             "gap_secs": gap_secs,
-            "start": _bound_isoformat(start),
-            "end": _bound_isoformat(end),
-            "wstart": _bound_isoformat(_widen_lower(start, margin)),
-            "wend": _bound_isoformat(_widen_upper(end, margin)),
+            "start": _normalize_utc_isoformat(start),
+            "end": _normalize_utc_isoformat(end),
+            "wstart": _normalize_utc_isoformat(_widen(start, -margin)),
+            "wend": _normalize_utc_isoformat(_widen(end, margin)),
         }
         extra = ""
         if task_id is not None:
@@ -1036,7 +962,7 @@ class LocalStateClient:
         sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [_parse_derived_window(tuple(r)) for r in rows]
+        return [_parse_derived_window(r) for r in rows]
 
     def get_events_by_ids(self, ids: list[int]) -> list[EventRecord]:
         """Return the events with the given ids, in the order requested.
@@ -1054,7 +980,7 @@ class LocalStateClient:
                 f"SELECT {_EVENT_COLUMNS} FROM events WHERE id IN ({placeholders})",
                 tuple(ids),
             ).fetchall()
-        by_id = {row[0]: _parse_event(tuple(row)) for row in rows}
+        by_id = {row[0]: _parse_event(row) for row in rows}
         return [by_id[i] for i in ids if i in by_id]
 
     def count_events(
@@ -1063,15 +989,7 @@ class LocalStateClient:
         end: Optional[datetime] = None,
     ) -> int:
         """Return the number of events, optionally bounded by ``[start, end)``."""
-        clauses: list[str] = []
-        params: list[str] = []
-        if start is not None:
-            clauses.append("timestamp >= ?")
-            params.append(_bound_isoformat(start))
-        if end is not None:
-            clauses.append("timestamp < ?")
-            params.append(_bound_isoformat(end))
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = _window_where(start, end)
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT COUNT(*) FROM events{where}", tuple(params)
@@ -1090,7 +1008,7 @@ class LocalStateClient:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id FROM events WHERE timestamp < ? ORDER BY id",
-                (_bound_isoformat(cutoff),),
+                (_normalize_utc_isoformat(cutoff),),
             ).fetchall()
         return [int(row[0]) for row in rows]
 
@@ -1102,14 +1020,13 @@ class LocalStateClient:
         exceeds SQLite's per-statement variable limit. This is a raw delete with no
         guard of its own — the ``prune`` planner is responsible for only ever
         handing it ids it has proven safe to remove (see
-        :func:`odoo_sdk.utilities.prune.plan_prune`).
+        :func:`odoo_sdk.prune.plan_prune`).
         """
         if not ids:
             return 0
         deleted = 0
         with self._connect() as conn:
-            for start in range(0, len(ids), _DELETE_CHUNK):
-                chunk = ids[start : start + _DELETE_CHUNK]
+            for chunk in _chunks(ids):
                 placeholders = ",".join("?" for _ in chunk)
                 cursor = conn.execute(
                     f"DELETE FROM events WHERE id IN ({placeholders})", tuple(chunk)
@@ -1130,9 +1047,8 @@ class LocalStateClient:
         the busy timeout gives that writer a chance to drain first.
 
         This never creates the DB (#369): a ``VACUUM`` on a missing file would
-        materialize an empty one, so an absent DB is a best-effort no-op (the DB
-        provably exists whenever the prune that calls this has already committed).
-        The ``mode=rw`` URI also refuses to create a missing file.
+        materialize an empty one, so an absent DB is a best-effort no-op (and
+        ``mode=rw`` refuses to create one anyway).
         """
         if not self._db_path.exists():
             return
@@ -1237,9 +1153,3 @@ class LocalStateClient:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
-
-
-# Backwards-compatible alias: the local state store was historically named
-# ``TaskStateDB``. Keep the old name importable so existing callers and tests
-# that reference ``TaskStateDB`` continue to work.
-TaskStateDB = LocalStateClient

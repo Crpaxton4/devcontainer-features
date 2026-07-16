@@ -5,12 +5,12 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_sdk.commands import Command, Registry
-from odoo_sdk.mcp.prompts.builtin.implement_task import (
-    _build_messages,
-    make_implement_task_prompt,
-)
+from odoo_sdk.mcp.prompts.builtin.implement_task import make_implement_task_prompt
 from odoo_sdk.mcp.prompts.builtin.report_incident import report_incident
 from odoo_sdk.mcp.server import OdooMCPServer
+from odoo_sdk.utilities.prompt_messages import (
+    build_implement_task_messages as _build_messages,
+)
 
 
 def _make_task(**overrides) -> dict:
@@ -329,6 +329,71 @@ class TestReportIncidentMessages(unittest.TestCase):
         self.assertIn("db exploded", msgs[0])
         self.assertIn("ODOO_URL", msgs[0])
         self.assertIn("<environment>", msgs[0])
+
+
+class TestBuiltinPromptDecorator(unittest.TestCase):
+    """``@builtin_prompt("name")`` populates ``BUILTIN_PROMPT_FACTORIES``."""
+
+    def test_registers_the_shipped_prompts(self):
+        from odoo_sdk.mcp.prompts.builtin import BUILTIN_PROMPT_FACTORIES
+
+        # The decorator populates the registry at import time — no hand-edited
+        # ``mcp.add_prompt(...)`` lines. Pin the set so a dropped/renamed
+        # decorator fails here.
+        self.assertEqual(
+            set(BUILTIN_PROMPT_FACTORIES), {"implement_task", "report_incident"}
+        )
+
+    def test_registration_order_is_import_order(self):
+        # register_builtin_prompts iterates the registry in insertion order, and
+        # the server-registration tests assert implement_task is captured first.
+        from odoo_sdk.mcp.prompts.builtin import BUILTIN_PROMPT_FACTORIES
+
+        self.assertEqual(
+            list(BUILTIN_PROMPT_FACTORIES), ["implement_task", "report_incident"]
+        )
+
+    def test_registers_factory_under_explicit_name(self):
+        from odoo_sdk.mcp.prompts.builtin import (
+            BUILTIN_PROMPT_FACTORIES,
+            builtin_prompt,
+        )
+
+        def _factory(command_registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        with patch.dict(BUILTIN_PROMPT_FACTORIES, clear=False):
+            returned = builtin_prompt("probe_prompt")(_factory)
+            # The decorator is transparent and keys by the explicit name.
+            self.assertIs(returned, _factory)
+            self.assertIs(BUILTIN_PROMPT_FACTORIES["probe_prompt"], _factory)
+        self.assertNotIn("probe_prompt", BUILTIN_PROMPT_FACTORIES)
+
+    def test_duplicate_name_raises(self):
+        from odoo_sdk.mcp.prompts.builtin import (
+            BUILTIN_PROMPT_FACTORIES,
+            builtin_prompt,
+        )
+
+        def _factory(command_registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        original = BUILTIN_PROMPT_FACTORIES["implement_task"]
+        with self.assertRaises(ValueError) as ctx:
+            builtin_prompt("implement_task")(_factory)
+        self.assertIn("implement_task", str(ctx.exception))
+        # The collision left the genuine factory in place (no silent overwrite).
+        self.assertIs(BUILTIN_PROMPT_FACTORIES["implement_task"], original)
+
+    def test_report_incident_factory_ignores_registry(self):
+        from odoo_sdk.mcp.prompts.builtin.report_incident import (
+            make_report_incident_prompt,
+            report_incident,
+        )
+
+        # The factory returns the plain prompt callable regardless of the
+        # registry it is handed (report_incident needs no command access).
+        self.assertIs(make_report_incident_prompt(Mock()), report_incident)
 
 
 if __name__ == "__main__":

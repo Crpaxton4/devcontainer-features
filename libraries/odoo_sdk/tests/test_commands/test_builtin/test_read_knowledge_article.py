@@ -23,7 +23,6 @@ from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.knowledge import (
     BODY_CHAR_CAP,
     KNOWLEDGE_UNAVAILABLE_MESSAGE,
-    _article_not_found_message,
     assert_knowledge_available,
     read_knowledge_article,
 )
@@ -119,9 +118,6 @@ class TestReadKnowledgeArticleQuery(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             read_knowledge_article(client, 404)
         self.assertEqual(str(ctx.exception), "knowledge.article 404 not found")
-        self.assertEqual(
-            str(ctx.exception), _article_not_found_message(404)
-        )
         # The probe passed and the read was attempted before raising.
         self.assertEqual(len(executor.calls), 2)
 

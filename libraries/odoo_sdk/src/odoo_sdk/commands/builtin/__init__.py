@@ -17,6 +17,7 @@ from ..command_registry import Registry
 from ._registration import BUILTIN_COMMANDS, builtin_command
 from .abort_run import AbortRunCommand
 from .abort_task import AbortTaskCommand
+from .assign_event import AssignEventCommand
 from .create_task import CreateTaskCommand
 from .discover_runs import DiscoverRunsCommand
 from .get_mail_status import GetMailStatusCommand
@@ -27,10 +28,13 @@ from .get_task_chatter import GetTaskChatterCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
+from .list_runs import ListRunsCommand
+from .normalize_timesheets import NormalizeTimesheetsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
 from .read_attachment import ReadAttachmentCommand
 from .read_knowledge_article import ReadKnowledgeArticleCommand
+from .report_runs import ReportRunsCommand
 from .resume_task import ResumeTaskCommand
 from .resync import ResyncCommand
 from .search_chatter import SearchChatterCommand
@@ -38,6 +42,8 @@ from .search_knowledge_articles import SearchKnowledgeArticlesCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
+from .stop_all_runs import StopAllRunsCommand
+from .stop_run import StopRunCommand
 from .stop_task import StopTaskCommand
 from .task_aging import TaskAgingCommand
 from .task_list import TaskListCommand
@@ -50,14 +56,7 @@ from .unlogged_time_report import UnloggedTimeReportCommand
 
 
 def register_builtins(registry: Registry) -> Registry:
-    """Register every built-in command on ``registry``.
-
-    :param registry: Registry to populate with the built-in commands.
-    :type registry: Registry
-    :return: The same registry, returned for convenient chaining.
-    :rtype: Registry
-    """
-
+    """Register every built-in command on ``registry`` and return it (chaining)."""
     for command_name, command in BUILTIN_COMMANDS.items():
         registry.register(command_name, command)
     return registry

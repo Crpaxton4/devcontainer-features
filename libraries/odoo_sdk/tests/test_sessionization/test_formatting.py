@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from odoo_sdk.sessionization.formatting import (
     business_context,
-    dashes,
     fmt_delta,
     fmt_duration,
     fmt_et,
@@ -29,9 +28,6 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(fmt_delta(0), "0h 0m")
         self.assertEqual(fmt_delta(3660), "+1h 1m")
         self.assertEqual(fmt_delta(-3660), "-1h 1m")
-
-    def test_dashes(self):
-        self.assertEqual(dashes(3), "---")
 
     def test_md_table_header(self):
         header = md_table_header([("A", 3), ("B", 4)])

@@ -32,8 +32,10 @@ class TestMainEntryPoint(unittest.TestCase):
         ):
             entry.main()
 
-        registry = mock_run.call_args.args[0]
-        registered = [name for name, _ in registry.items()]
+        # The driver now receives an injected ``TuiDeps`` bundle; its registry
+        # carries every built-in command.
+        deps = mock_run.call_args.args[0]
+        registered = [name for name, _ in deps.registry.items()]
         self.assertEqual(set(registered), set(BUILTIN_COMMANDS))
 
 

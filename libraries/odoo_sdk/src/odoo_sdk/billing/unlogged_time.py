@@ -11,7 +11,7 @@ write:
 * **Derived hours** come from the same path the upload takes. Sessions are
   derived with :meth:`~odoo_sdk.state.LocalStateClient.derive_sessions_overlapping`
   (the ``query_sessions`` derivation) and run through
-  :func:`~odoo_sdk.utilities.upload.upload_sessions` in ``dry_run`` mode, so the
+  :func:`~odoo_sdk.billing.upload.upload_sessions` in ``dry_run`` mode, so the
   reported hours carry the *exact* billing transform an upload applies — the
   ``min_session_hours`` floor and ``round_session_hours`` rounding (#355), the
   aborted-run exclusion (#356), and the non-numeric-task skip. The report
@@ -22,7 +22,7 @@ write:
   ``date:day`` axes at once so each (day, task) cell is summed by Odoo.
 
 Each derived session is bucketed onto its start day (``started_at.date()``) —
-the same day :func:`~odoo_sdk.utilities.timesheet.reconcile_session` bills it on
+the same day :func:`~odoo_sdk.billing.timesheet.reconcile_session` bills it on
 — and only days within the requested window are reported. Only rows with a
 nonzero delta are returned by default; ``include_all`` keeps the reconciled
 (zero-delta) rows too. Window and per-day totals are computed over *all* cells
@@ -34,11 +34,11 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
+from odoo_sdk import OdooTransportError
 from odoo_sdk.state import LocalConfig, LocalStateClient, SessionWindow, session_key
-from odoo_sdk.transport.errors import OdooTransportError
+from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
 
-from .odoo_helpers import get_employee_id, resolve_many2one
-from .timesheets import _day_label, _parse_date, _row_hours
+from .timesheet_reports import day_label, parse_date, row_hours
 from .upload import range_bounds, upload_sessions
 
 #: Message raised when the logged-hours read cannot reach Odoo. The report is
@@ -53,7 +53,7 @@ _UNREACHABLE = (
 def _session_dict(window: SessionWindow) -> dict[str, Any]:
     """Render the minimal session dict the upload path bills from.
 
-    Only the fields :func:`~odoo_sdk.utilities.upload.upload_sessions` reads are
+    Only the fields :func:`~odoo_sdk.billing.upload.upload_sessions` reads are
     populated (task id, stable key, bounds, duration); events are omitted since
     the dry-run billing never inspects them.
     """
@@ -139,12 +139,12 @@ def _logged_hours_by_day_task(
         task = row.get("task_id")
         if not task:
             continue
-        task_id = task[0] if isinstance(task, (list, tuple)) else task
-        cell = (_day_label(row), int(task_id))
+        task_id = m2o_id(task)
+        cell = (day_label(row), int(task_id))
         bucket = buckets.setdefault(
             cell, {"hours": 0.0, "task": resolve_many2one(task)}
         )
-        bucket["hours"] += _row_hours(row)
+        bucket["hours"] += row_hours(row)
     return buckets
 
 
@@ -253,8 +253,8 @@ def unlogged_time_report(
     :raises ValueError: On a malformed date.
     :raises OdooTransportError: When Odoo is unreachable for the logged read.
     """
-    start = _parse_date(start_date, "start_date")
-    end = _parse_date(end_date, "end_date")
+    start = parse_date(start_date, "start_date")
+    end = parse_date(end_date, "end_date")
     derived = _derived_hours_by_day_task(
         client, state, config, start, end, start_date, end_date
     )

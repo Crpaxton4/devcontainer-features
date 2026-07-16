@@ -304,6 +304,62 @@ check "claude-event-hook attaches the active run" bash -c \
 check "claude-event-hook no-ops with exit 0 when odoo-sdk is absent" bash -c \
   "printf '{}' | PATH=/usr/bin:/bin /usr/local/bin/claude-event-hook PreToolUse; test \$? -eq 0"
 
+# #411: hook<->CLI CONTRACT, exercised end to end. The grep guards above only
+# prove the flag STRINGS survive in the shim text; they cannot catch a rename on
+# the SDK side. Because the shim swallows every failure (always exit 0) and forks
+# the SDK call into a DETACHED background job, a rename of --attach-active-run /
+# --payload or of the `claude:` source prefix would drop every event in
+# production while passing all of the above. So drive the REAL claude-event-hook
+# with a representative PreToolUse payload and assert a row actually LANDED,
+# carrying the trimmed --payload and (proof of the whole vector) still MATCHING
+# the billing predicate that keys on the `claude:` prefix. A flag/prefix drift
+# fails this loudly.
+#
+# Self-contained by design: it provisions its OWN throwaway tracker DB with the
+# SDK schema and points the shim at it via ODOO_TASK_TRACKER_DIR, so it runs
+# deterministically whether or not a host-provisioned central DB is mounted (it
+# is under CI's setup.sh, but NOT under a plain `devcontainer features test`) and
+# never touches the real DB. Gated on the SDK being installed (absent on <3.10
+# images); the SDK bin dir is put on PATH so the shim's bare `odoo-sdk` resolves
+# to the real installed CLI. `odoo-sdk` is deliberately NOT on the default PATH
+# (only odoo-mcp/odoo-tui are symlinked), so this uses the venv bin explicitly.
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook drives a real PreToolUse event through --attach-active-run/--payload into a provisioned DB" bash -c '
+  SDK_BIN=/usr/local/share/uv/tools/odoo-sdk/bin
+  test -x "$SDK_BIN/odoo-sdk" || exit 0
+  STATE="$(mktemp -d)"
+  DB="$STATE/tracker.db"
+  # Provision a throwaway central DB with the SDK schema (never the real one).
+  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_sdk.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
+    || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
+  subj="ci-hook-e2e-$$"
+  printf "{\"session_id\":\"s-%s\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$$" "$subj" \
+    | ODOO_TASK_TRACKER_DIR="$STATE" PATH="$SDK_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+  # The shim fires the SDK write in a DETACHED background job, so poll the DB.
+  for _ in $(seq 1 50); do
+    "$SDK_BIN/python" - "$DB" "$subj" <<PY && { rm -rf "$STATE"; exit 0; }
+import json, sqlite3, sys
+from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE
+db, subj = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db)
+row = conn.execute(
+    f"SELECT source, payload FROM events WHERE subject = ? AND {_DEVELOPMENT_SOURCE_PREDICATE}",
+    (subj,),
+).fetchone()
+if row is None:
+    sys.exit(1)
+source, payload = row
+assert source == "claude:PreToolUse", source
+assert json.loads(payload)["tool_name"] == subj, payload
+sys.exit(0)
+PY
+    sleep 0.2
+  done
+  echo "no billing-eligible claude:PreToolUse row for subject $subj ever landed" >&2
+  rm -rf "$STATE"
+  exit 1
+'
+
 # Behavioural checks for sync-claude-hooks against a throwaway CLAUDE_CONFIG_DIR.
 HOOKS_TEST_ROOT="$(mktemp -d)"
 

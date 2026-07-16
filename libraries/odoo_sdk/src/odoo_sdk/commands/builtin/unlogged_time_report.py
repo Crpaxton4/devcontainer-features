@@ -1,6 +1,6 @@
 """Builtin command exposing the read-only unlogged-time gap report (#378 item 10).
 
-A thin delegator to :func:`odoo_sdk.utilities.unlogged_time.unlogged_time_report`,
+A thin delegator to :func:`odoo_sdk.billing.unlogged_time.unlogged_time_report`,
 which composes the existing derivation and billing path with a read-only Odoo
 timesheet read — it materializes no session state and writes nothing.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from odoo_sdk.utilities.unlogged_time import unlogged_time_report
+from odoo_sdk.billing.unlogged_time import unlogged_time_report
 
 from ..command import Command
 from ._registration import builtin_command

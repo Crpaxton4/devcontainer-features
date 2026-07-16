@@ -153,7 +153,7 @@ task-scoped or fall outside the gap grouping.
 
 The tracker keys each project's local database by a hash of its git remote, so a
 run left open in a checkout you've since deleted becomes invisible from any other
-working tree — and its 0-hour anchor stays open in Odoo. The `odoo-sdk` CLI
+working tree. The `odoo-sdk` CLI
 finds and clears these across every project database under the state root.
 
 **Discover** lists every tracker project and its active runs, flagging any run

@@ -764,7 +764,13 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "resume_task": (5,),
             "abort_task": (5,),
             "abort_run": (1,),
+            "assign_event": ([5], 1),
             "discover_runs": (),
+            "list_runs": (),
+            "report_runs": (),
+            "stop_run": (1,),
+            "stop_all": (),
+            "normalize_timesheets": (),
             "search_chatter": ("q",),
             "search_knowledge_articles": ("q",),
             "read_knowledge_article": (5,),
@@ -836,6 +842,57 @@ def make_get_task_tool_reg():
             return cmd
 
     return make_get_task_tool(_Reg())
+
+
+class TestCompositionToolDecorator(unittest.TestCase):
+    """``@composition_tool("name")`` populates ``COMPOSITION_TOOL_FACTORIES``."""
+
+    def test_registers_the_shipped_composition_tools(self):
+        from odoo_sdk.mcp.tools.composition import COMPOSITION_TOOL_FACTORIES
+
+        # The decorator populates the registry at import time — no hand-edited
+        # dict literal. Pin the set so a dropped/renamed decorator fails here.
+        self.assertEqual(
+            set(COMPOSITION_TOOL_FACTORIES), {"start_task", "stop_task"}
+        )
+        self.assertIs(
+            COMPOSITION_TOOL_FACTORIES["start_task"], make_start_task_tool
+        )
+        self.assertIs(
+            COMPOSITION_TOOL_FACTORIES["stop_task"], make_stop_task_tool
+        )
+
+    def test_registers_factory_under_explicit_name(self):
+        from odoo_sdk.mcp.tools.composition import (
+            COMPOSITION_TOOL_FACTORIES,
+            composition_tool,
+        )
+
+        def _factory(registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        with patch.dict(COMPOSITION_TOOL_FACTORIES, clear=False):
+            returned = composition_tool("probe_tool")(_factory)
+            # The decorator is transparent and keys by the explicit name.
+            self.assertIs(returned, _factory)
+            self.assertIs(COMPOSITION_TOOL_FACTORIES["probe_tool"], _factory)
+        self.assertNotIn("probe_tool", COMPOSITION_TOOL_FACTORIES)
+
+    def test_duplicate_name_raises(self):
+        from odoo_sdk.mcp.tools.composition import (
+            COMPOSITION_TOOL_FACTORIES,
+            composition_tool,
+        )
+
+        def _factory(registry):  # pragma: no cover - never invoked
+            return lambda: None
+
+        original = COMPOSITION_TOOL_FACTORIES["start_task"]
+        with self.assertRaises(ValueError) as ctx:
+            composition_tool("start_task")(_factory)
+        self.assertIn("start_task", str(ctx.exception))
+        # The collision left the genuine factory in place (no silent overwrite).
+        self.assertIs(COMPOSITION_TOOL_FACTORIES["start_task"], original)
 
 
 class TestAtomicToolDecorator(unittest.TestCase):

@@ -30,9 +30,10 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 
+from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalStateClient, TaskNotRunningError, TaskRun
-from odoo_sdk.utilities.timesheet import close_anchor
+from odoo_sdk.billing.timesheet import close_anchor
 
 #: Default staleness horizon (hours) for both ``reap`` and the attachment
 #: exclusion when no ``--older-than`` flag or env override is given.
@@ -42,11 +43,6 @@ DEFAULT_REAP_THRESHOLD_HOURS = 12.0
 #: the mitigation can be tuned without a flag. ``reap`` takes its threshold from
 #: ``--older-than`` (default :data:`DEFAULT_REAP_THRESHOLD_HOURS`).
 REAP_THRESHOLD_ENV = "ODOO_REAP_THRESHOLD_HOURS"
-
-
-def _as_utc(ts: datetime) -> datetime:
-    """Return ``ts`` as an aware UTC datetime (naive stamps are assumed UTC)."""
-    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
 
 
 def threshold_from_hours(hours: float) -> datetime:
@@ -78,11 +74,11 @@ def resolve_env_threshold_hours() -> float:
 
 def run_last_activity(db: LocalStateClient, run: TaskRun) -> datetime:
     """Return a run's last-activity instant (see this module's docstring)."""
-    started = _as_utc(run.started_at)
+    started = as_utc(run.started_at)
     latest = db.latest_event_timestamp_for_task(run.task_id)
     if latest is None:
         return started
-    return max(_as_utc(latest), started)
+    return max(as_utc(latest), started)
 
 
 def is_run_stale(db: LocalStateClient, run: TaskRun, threshold: datetime) -> bool:

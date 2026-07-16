@@ -18,8 +18,7 @@ class GetTaskCommand(Command):
     )
 
     def execute(self, task_id: int, include: list[str] | None = None) -> dict | None:
-        detail_include = None if include is None else include
-        task = get_task_detail(self._client, task_id, include=detail_include)
+        task = get_task_detail(self._client, task_id, include=include)
         if task is None:
             return None
         if include is not None and "chatter" in include:

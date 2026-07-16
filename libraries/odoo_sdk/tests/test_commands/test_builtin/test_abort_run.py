@@ -12,7 +12,7 @@ from odoo_sdk.state import (
     TaskState,
     TrackerStateMissingError,
 )
-from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME, close_anchor
+from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME, close_anchor
 from tests.support import make_state_db
 
 _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_run.assert_odoo_devcontainer"

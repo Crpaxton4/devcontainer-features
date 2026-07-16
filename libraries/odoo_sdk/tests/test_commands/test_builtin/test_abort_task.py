@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from odoo_sdk.commands.builtin.abort_task import AbortTaskCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskNotRunningError, TaskState
-from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
+from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
 from tests.support import make_state_db
 
 _ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
@@ -142,7 +142,7 @@ class TestAbortTaskCommand(unittest.TestCase):
         with (
             patch(_ABORT_GUARD),
             patch(
-                "odoo_sdk.utilities.odoo_helpers.update_timesheet"
+                "odoo_sdk.billing.timesheet.update_timesheet"
             ) as mock_update,
         ):
             _cmd_with_db(client, db).execute(1)

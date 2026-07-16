@@ -29,7 +29,7 @@ from unittest.mock import MagicMock, patch
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.state.config import LocalConfig
-from odoo_sdk.utilities.upload import (
+from odoo_sdk.billing.upload import (
     _billable_hours,
     _round_to_step,
     upload_sessions,
@@ -248,12 +248,13 @@ def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
     """
     from odoo_sdk.commands import Registry
     from odoo_sdk.commands.builtin import register_builtins
-    from odoo_sdk.tui.app import _upload_sessions
+    from odoo_sdk.tui.app import TuiDeps, _upload_sessions
     from odoo_sdk.tui.window import DateWindow
 
     registry = register_builtins(
         Registry(client, state_client=db, config=config)
     )
+    deps = TuiDeps(registry=registry, client=client, store=db, config=config)
     window = DateWindow(date(2026, 6, 1), date(2026, 6, 7))
     sessions = registry["query_sessions"].execute(
         start_date=window.start_iso(),
@@ -261,9 +262,9 @@ def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
         include_events=True,
     )
     with patch(
-        "odoo_sdk.utilities.upload.LocalConfig.load", return_value=config
+        "odoo_sdk.billing.upload.LocalConfig.load", return_value=config
     ):
-        return _upload_sessions(registry, sessions, window)
+        return _upload_sessions(deps, sessions, window)
 
 
 class TestBillingEndToEnd(unittest.TestCase):

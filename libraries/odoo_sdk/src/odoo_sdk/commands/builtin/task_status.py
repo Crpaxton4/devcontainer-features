@@ -3,7 +3,6 @@ from typing import Any
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 @builtin_command
@@ -22,7 +21,7 @@ class TaskStatusCommand(Command):
         :return: List of active session dicts.
         """
         assert_odoo_devcontainer()
-        db = TaskStateDB()
+        db = self.state
         runs = db.get_all_active_runs()
         return [
             {

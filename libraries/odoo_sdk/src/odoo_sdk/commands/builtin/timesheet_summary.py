@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.timesheets import timesheet_summary
+from odoo_sdk.billing.timesheet_reports import timesheet_summary
 
 
 @builtin_command

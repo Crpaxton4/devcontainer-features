@@ -10,10 +10,5 @@ class GetUidCommand(Command):
     _description = "Get the UID of the current user."
 
     def execute(self) -> int:
-        """Return the authenticated user's Odoo id.
-
-        :return: The current user's UID.
-        :rtype: int
-        """
-
+        """Return the authenticated user's Odoo id."""
         return self._client.uid

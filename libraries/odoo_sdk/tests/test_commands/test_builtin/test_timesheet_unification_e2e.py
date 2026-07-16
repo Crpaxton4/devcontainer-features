@@ -1,18 +1,20 @@
-"""End-to-end regression for the unified timesheet flow (issue #181).
+"""End-to-end regression for the unified timesheet flow (issues #181/#325).
 
 Drives the real FSM tools against a temporary state DB and a fake ``OdooClient``
-that records every ``account.analytic.line`` call, so the invariant behind #181
+that records every ``account.analytic.line`` call, so the invariant behind #325
 is verified through the whole producer path with no live Odoo:
 
-* (a) exactly ONE ``account.analytic.line`` create per task even when
-  ``start_task`` runs twice (idempotent anchor adoption — kills #177).
+* (a) the FSM writes ZERO ``account.analytic.line`` rows across the full
+  lifecycle — ``start_task`` (twice) → ``task_note`` → ``stop_task`` — because
+  as of #325 the eager anchor create is gone; the sessionization/ETL upload path
+  is the sole timesheet writer.
 * (b) command bodies emit NO ``agent`` events themselves — as of #326 the sole
   producer for the MCP tool surface is the ``_event_emitting`` wrapper in
   :mod:`odoo_sdk.mcp.server` (covered by ``tests/test_mcp/test_server_events``),
   so driving the commands directly writes no event rows.
-* (d) stop_task writes NO ``account.analytic.line`` row (#325): hours are the
-  exclusive job of the TUI/ETL upload path, which reconciles the anchor via the
-  unified module; no record deletion is ever attempted.
+* (c) the upload's ``reconcile_session`` is the first and only creator of a
+  billed row: with no anchor to adopt it creates a fresh line, and re-running the
+  FSM afterwards still writes nothing — no record deletion is ever attempted.
 """
 
 import tempfile
@@ -62,6 +64,9 @@ class _RecordingClient:
             return [{"id": 3}]
         if model == "project.task" and method == "message_post":
             return 999
+        if model == "project.task" and method == "read":
+            # reconcile_session's Create tier resolves the owning project.
+            return [{"project_id": [5, "Accounting"]}]
         if model == "account.analytic.line":
             return self._analytic(method, args)
         raise AssertionError(f"unexpected call: {model}.{method}")
@@ -109,31 +114,28 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
             "project_name": "Accounting",
         }
 
-    def test_single_create_single_write_and_no_command_body_events(self):
+    def test_fsm_lifecycle_writes_no_analytic_line_and_no_command_body_events(self):
         client = _RecordingClient()
         db = _tmp_db()
 
-        # start_task twice: second call short-circuits on the active session but
-        # even if it reached ensure_anchor it would adopt the first row.
+        # start_task twice: the second call short-circuits on the active session.
+        # Neither call writes an anchor — the FSM makes no analytic.line call.
         first = self._start(client, db, **self._kwargs())
         self.assertIn("run_id", first)
-        # already active; raises before any duplicate anchor is created
+        self.assertIsNone(first["timesheet_id"])  # no anchor is created (#325)
         with self.assertRaises(TaskAlreadyRunningError):
             self._start(client, db, **self._kwargs())
 
-        with patch(_NOTE_GUARD), patch(
-            "odoo_sdk.commands.builtin.task_note.TaskStateDB", return_value=db
-        ):
-            TaskNoteCommand(client).execute(24648, "made progress")
+        with patch(_NOTE_GUARD):
+            TaskNoteCommand(client, state=db).execute(24648, "made progress")
 
         with patch(_STOP_GUARD):
             StopTaskCommand(client, state=db).execute(24648, "finished the VAT fix")
 
-        # (a) exactly one create for the anchor across the whole flow.
-        self.assertEqual(len(client.analytic_calls("create")), 1)
-        # (d) stop_task writes NO analytic line (#325): the anchor is left for
-        # the upload path to reconcile, so this FSM-only flow issues zero writes;
+        # (a) the FSM issues ZERO account.analytic.line creates or writes across
+        # the whole lifecycle (#325) — timesheet hours are the upload path's job;
         # no deletion happens (the recording client would crash loudly on unlink).
+        self.assertEqual(len(client.analytic_calls("create")), 0)
         self.assertEqual(len(client.analytic_calls("write")), 0)
 
         # (b) command bodies no longer emit agent events (#326): emission moved
@@ -141,39 +143,21 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         agent = [e for e in db.get_events() if e.source == "agent"]
         self.assertEqual(agent, [])
 
-    def test_repeated_start_before_reconcile_adopts_open_anchor(self):
-        # Two starts on the same task while the first placeholder is still open
-        # (unreconciled, 0h) must NOT duplicate the anchor — this is the exact
-        # #177 scenario. The active-session guard normally short-circuits the
-        # second start; even reaching ensure_anchor directly must adopt.
-        client = _RecordingClient()
-        db = _tmp_db()
-        from datetime import date
-
-        from odoo_sdk.utilities.timesheet import ensure_anchor
-
-        first_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
-        second_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
-        self.assertEqual(first_id, second_id)  # adopted the first anchor
-        self.assertEqual(len(client.analytic_calls("create")), 1)
-
-    def test_new_anchor_after_reconcile(self):
-        # Once a placeholder is reconciled (real description written) it is no
-        # longer an open anchor, so a genuinely new work session on the same
-        # task creates a fresh anchor rather than reusing the billed row.
-        # stop_task no longer reconciles (#325), so the upload path's
-        # ``reconcile_session`` (the sole derived-upload hours-writer) is invoked
-        # directly here to adopt and close out the open anchor — renaming it off
-        # the ``[/] Work in progress`` marker — before the next start.
+    def test_upload_reconcile_is_sole_creator_and_fsm_replay_writes_nothing(self):
+        # The FSM created no anchor, so the upload path's ``reconcile_session``
+        # (the sole derived-upload hours-writer) finds nothing to adopt and
+        # creates the one and only billed line. Re-running the FSM afterwards
+        # still writes nothing, proving the FSM never touches account.analytic.line.
         from datetime import datetime, timezone
 
-        from odoo_sdk.utilities.timesheet import reconcile_session
+        from odoo_sdk.billing.timesheet import reconcile_session
 
         client = _RecordingClient()
         db = _tmp_db()
         self._start(client, db, **self._kwargs())
         with patch(_STOP_GUARD):
             StopTaskCommand(client, state=db).execute(24648, "done")
+        # No anchor exists, so reconcile creates the billed row (Create tier).
         reconcile_session(
             client,
             db,
@@ -184,8 +168,10 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
             started_at=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
             ended_at=datetime(2026, 7, 10, 10, 30, tzinfo=timezone.utc),
         )
+        self.assertEqual(len(client.analytic_calls("create")), 1)
+        # A fresh FSM cycle on the same task adds no further analytic.line create.
         self._start(client, db, **self._kwargs())
-        self.assertEqual(len(client.analytic_calls("create")), 2)
+        self.assertEqual(len(client.analytic_calls("create")), 1)
 
 
 if __name__ == "__main__":

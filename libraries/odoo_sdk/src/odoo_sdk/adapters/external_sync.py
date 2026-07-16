@@ -1,16 +1,21 @@
 """Idempotent resync pullers reconciling local event state with external history.
 
-Three small, current-repo-scoped pullers write into the unified ``events`` table
-so that sessions — derived from events at query time — reflect work that happened
-outside the live hook/agent stream: local git commits, merged GitHub PRs and the
-reviews authored on them, and the authenticated user's Odoo task chatter.
+Small, current-repo-scoped pullers write into the unified ``events`` table so
+that sessions — derived from events at query time — reflect work that happened
+outside the live hook/agent stream: local git commits, GitHub PRs / reviews /
+comments, Odoo task chatter, and (opt-in) Google Calendar meetings and sent
+Gmail. Two issues drive this surface: **#378** widened resync capture (commits
+across all branches, opened as well as merged PRs, reviews on others' PRs, and
+author-wide chatter, with a batched ``project.task`` existence check that keeps
+well-formed-but-nonexistent ids from minting phantom session lanes), and
+**#370** added the Google sources.
 
-Every puller is idempotent: each event carries a stable ``external_id`` and is
-written through :meth:`LocalStateClient.add_event_dedup`, so re-running a puller
-inserts nothing the second time (``INSERT OR IGNORE`` against the partial unique
-index on ``events(external_id)``). Each puller returns a summary dict
-(``{"inserted": n}``) and tolerates its backing tool being absent or
-unauthenticated by returning ``{"skipped": <reason>}`` rather than raising.
+Every puller is idempotent: each event carries a stable ``external_id`` written
+through :meth:`LocalStateClient.add_event_dedup` (``INSERT OR IGNORE`` against
+the partial unique index on ``events(external_id)``), so re-running inserts
+nothing the second time. Each returns ``{"inserted": n}`` and tolerates its
+backing tool being absent or unauthenticated by returning ``{"skipped": reason}``
+rather than raising (the Google pullers are the exception — see below).
 
 ``merge`` / ``review`` events are stored for audit but, being fixed-strategy
 sources, never appear in *derived development sessions* — that exclusion is
@@ -30,7 +35,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from odoo_sdk.adapters.state_persistence import _SYNTHETIC_PAYLOAD_KEY
 from odoo_sdk.sessionization.config import SessionizationConfig
@@ -40,9 +45,9 @@ from odoo_sdk.state.db import _derive_repo_label, _normalize_utc_isoformat
 from odoo_sdk.transport.errors import OdooError
 
 # Minimum task-id magnitude. Real Odoo task ids are 4-5 digits; requiring at
-# least this many digits kills the July false-positives where a short client-side
-# number (``#31 - Hardcode…``) or a PR cross-reference (``(#189)``) minted a
-# phantom task lane (issue #378 item 1).
+# least this many digits kills false positives where a short client-side number
+# (``#31 - Hardcode…``) or a PR cross-reference (``(#189)``) minted a phantom
+# task lane (issue #378 item 1).
 _MIN_TASK_ID_DIGITS = 4
 
 # Task-id extractors applied to a commit/PR subject and its branch/ref context.
@@ -68,23 +73,17 @@ _TASK_ID_PATTERNS = (
 _GIT_FIELD_SEP = "\x1f"
 
 # Payload key flagging extracted task ids that FAILED the ``project.task``
-# existence check at resync time (issue #378 item 1). Such ids are kept OUT of the
-# event's ``task_ids`` so the event never joins a derived session (no phantom
-# lane); they are recorded here so the TUI triage surface can present the event as
-# a WEAK candidate for manual attribution. Payload shape (read by the TUI sibling):
-# ``{"unvalidated_task_ids": ["99999", ...]}`` — a non-empty list means "weak".
+# existence check at resync time (issue #378 item 1). Such ids are kept OUT of
+# the event's ``task_ids`` (no phantom lane) but recorded here so the TUI triage
+# surface can present the event as a WEAK candidate; a non-empty list means weak.
 _UNVALIDATED_TASK_IDS_KEY = "unvalidated_task_ids"
 
 
 def _extract_task_ids(subject: str, branch: str) -> list[str]:
-    """Return the distinct task ids referenced in a subject/branch, in order.
+    """Return the distinct task ids in ``"{subject} {branch}"``, first-seen order.
 
-    Scans ``"{subject} {branch}"`` for each documented form and returns the
-    numeric ids as strings, de-duped with first-seen order preserved. Every form
-    requires at least :data:`_MIN_TASK_ID_DIGITS` digits, so a short client-side
-    number or a PR cross-reference is never mistaken for a task id. Returns ``[]``
-    when nothing matches; such events are still stored for audit but are excluded
-    from derived sessions by the ``json_array_length(task_ids) > 0`` filter.
+    Every form requires at least :data:`_MIN_TASK_ID_DIGITS` digits, so a short
+    client-side number or a PR cross-reference is never mistaken for a task id.
     """
     text = f"{subject} {branch}"
     ids: list[str] = []
@@ -98,17 +97,16 @@ def _extract_task_ids(subject: str, branch: str) -> list[str]:
 def _validate_task_ids(client: Any, ids: set[str]) -> Optional[set[str]]:
     """Return the subset of ``ids`` that name a real ``project.task`` (issue #378).
 
-    ONE batched ``search_read`` over the whole id set per call — the existence
-    check that stops a well-formed but nonexistent id (e.g. a 4-digit PR
-    cross-reference that survived the magnitude filter) from minting a phantom
-    session lane. Returns ``None`` when validation cannot run — no client, or Odoo
-    unreachable — so the caller trusts the extracted ids as-is (best-effort
-    offline) rather than dropping attribution; returns ``set()`` (nothing valid)
-    only when the client is present but the id set holds no numeric candidates.
+    One batched ``search_read`` over the whole id set. Returns ``None`` when
+    validation cannot run — no client, or Odoo unreachable — so the caller trusts
+    the extracted ids as-is (best-effort offline); returns ``set()`` when the
+    client is present but ``ids`` is empty. Every id is a digit run by
+    construction (all come from :func:`_extract_task_ids`).
     """
     if client is None:
         return None
-    numeric = sorted({int(i) for i in ids if i.isdigit()})
+    assert all(i.isdigit() for i in ids)
+    numeric = sorted({int(i) for i in ids})
     if not numeric:
         return set()
     try:
@@ -120,30 +118,18 @@ def _validate_task_ids(client: Any, ids: set[str]) -> Optional[set[str]]:
     return {str(row["id"]) for row in rows}
 
 
-def _partition_task_ids(
-    ids: list[str], valid: Optional[set[str]]
-) -> tuple[list[str], list[str]]:
-    """Split extracted ids into ``(validated, unvalidated)`` against ``valid``.
-
-    ``valid=None`` means validation did not run, so every id is trusted as-is
-    (returned as validated, nothing flagged). Order is preserved in both lists.
-    """
-    if valid is None:
-        return ids, []
-    known = [i for i in ids if i in valid]
-    unknown = [i for i in ids if i not in valid]
-    return known, unknown
-
-
 def _finalize_task_attribution(event: EventRecord, valid: Optional[set[str]]) -> None:
     """Move an event's unvalidated ids out of ``task_ids`` into the weak flag.
 
     Mutates ``event`` in place: validated ids stay in ``task_ids`` (they bill
-    normally); unvalidated ids are dropped from ``task_ids`` (so the event never
-    joins a session) and recorded under :data:`_UNVALIDATED_TASK_IDS_KEY` in the
-    payload so triage surfaces the event as weak.
+    normally); unvalidated ids are dropped (so the event never joins a session)
+    and recorded under :data:`_UNVALIDATED_TASK_IDS_KEY`. ``valid=None`` means
+    validation did not run, so every id is trusted as-is.
     """
-    known, unknown = _partition_task_ids(event.task_ids, valid)
+    if valid is None:
+        return
+    known = [i for i in event.task_ids if i in valid]
+    unknown = [i for i in event.task_ids if i not in valid]
     event.task_ids = known
     if unknown:
         payload = dict(event.payload) if event.payload else {}
@@ -154,13 +140,7 @@ def _finalize_task_attribution(event: EventRecord, valid: Optional[set[str]]) ->
 def _store_pending(
     state: LocalStateClient, pending: list[EventRecord], client: Any
 ) -> int:
-    """Validate every pending event's ids in ONE batch, then store them.
-
-    Collects the distinct extracted ids across all ``pending`` events, runs a
-    single :func:`_validate_task_ids` check, finalizes each event's attribution
-    (validated ids kept, unvalidated flagged), and inserts it deduped by external
-    id. Returns the number of newly-written rows.
-    """
+    """Validate every pending event's ids in ONE batch, then store them deduped."""
     all_ids = {i for event in pending for i in event.task_ids}
     valid = _validate_task_ids(client, all_ids)
     inserted = 0
@@ -174,10 +154,9 @@ def _store_pending(
 def _run_capture(cmd: list[str]) -> Optional[str]:
     """Run ``cmd`` and return its stripped stdout, or None when it is unusable.
 
-    Absence tolerance lives here: a missing binary (``FileNotFoundError``) and a
-    non-zero exit (``CalledProcessError`` — not a repo, unauthenticated, no match)
-    both collapse to ``None`` so callers can report a skip reason instead of
-    raising.
+    A missing binary (``FileNotFoundError``) and a non-zero exit
+    (``CalledProcessError`` — not a repo, unauthenticated, no match) both collapse
+    to ``None`` so callers can report a skip reason instead of raising.
     """
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -187,13 +166,10 @@ def _run_capture(cmd: list[str]) -> Optional[str]:
 
 
 def _current_repo_label(state: LocalStateClient) -> str:
-    """Return the ``owner/repo`` label for the current repo.
+    """Return the current repo's ``owner/repo`` label, or empty string.
 
-    Prefers the identity persisted into the DB (``repo_label``, stamped on
-    self-resolved construction per #331); falls back to deriving it from the
-    ``origin`` remote via the shared :func:`_derive_repo_label` helper so the
-    label matches the one the rest of the SDK uses. Empty string when neither is
-    available (events then group under the repo-less sentinel).
+    Prefers the identity persisted into the DB (``repo_label``, stamped per #331);
+    falls back to deriving it from the ``origin`` remote.
     """
     label = state.get_setting("repo_label")
     if label:
@@ -222,16 +198,11 @@ def _parse_odoo_dt(value: str) -> datetime:
 # ── git commits ─────────────────────────────────────────────────────────────
 
 
-def _git_config_email() -> Optional[str]:
-    """Return the configured git ``user.email``, or None when git is unusable."""
-    return _run_capture(["git", "config", "user.email"]) or None
-
-
 def _window_start(config: Optional[LocalConfig], now: Optional[datetime]) -> datetime:
-    """Return the inclusive lower bound of the resync capture window (issue #378).
+    """Return the inclusive lower bound ``now - resync_window_days`` in UTC (#378).
 
-    ``now - resync_window_days`` in UTC; ``now`` defaults to the current UTC time
-    and is injectable so tests pin a deterministic window.
+    ``now`` defaults to the current UTC time and is injectable for deterministic
+    tests.
     """
     days = config.resync_window_days if config else _DEFAULT_RESYNC_WINDOW_DAYS
     moment = now or datetime.now(timezone.utc)
@@ -241,24 +212,23 @@ def _window_start(config: Optional[LocalConfig], now: Optional[datetime]) -> dat
 def _git_author_emails(config: Optional[LocalConfig]) -> list[str]:
     """Return the git author emails to filter commits by (issue #378 item 4).
 
-    The configured identities that look like emails (contain ``@``); when none are
-    configured, falls back to the single ``git user.email``. Multiple emails are
-    OR-ed by ``git log`` via repeated ``--author`` flags.
+    The configured identities that look like emails; when none are configured,
+    falls back to the single ``git user.email``. Multiple emails are OR-ed by
+    ``git log`` via repeated ``--author`` flags.
     """
     configured = [a for a in (config.resync_authors if config else []) if "@" in a]
     if configured:
         return configured
-    email = _git_config_email()
+    email = _run_capture(["git", "config", "user.email"])
     return [email] if email else []
 
 
 def _git_log(emails: list[str], since: datetime) -> Optional[str]:
     """Return commits by ``emails`` across ALL branches since ``since``.
 
-    ``--all`` (issue #378 item 2) makes unmerged branch work visible — exactly the
-    work most likely to be unlogged — while ``--since`` bounds the scan so re-runs
-    stay cheap; ``git:<sha>`` external ids dedupe the overlap ``--all`` introduces
-    between branches. Multiple ``--author`` flags are OR-ed by git.
+    ``--all`` (issue #378 item 2) makes unmerged branch work visible — the work
+    most likely to be unlogged — while ``git:<sha>`` external ids dedupe the
+    branch overlap ``--all`` introduces.
     """
     pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%D"))
     cmd = ["git", "log", "--all", f"--pretty={pretty}", f"--since={since.date().isoformat()}"]
@@ -269,10 +239,9 @@ def _git_log(emails: list[str], since: datetime) -> Optional[str]:
 def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
     """Build one ``commit`` event from a git-log line, or None when malformed.
 
-    The trailing ``%D`` (ref decorations) field is optional: git omits the final
-    separator when a commit carries no decoration, so the line has three fields
-    (sha, date, subject) rather than four. Anything shorter is malformed. Task
-    ids are left unvalidated here; :func:`_store_pending` validates the batch.
+    The trailing ``%D`` (ref decorations) field is optional — git omits the final
+    separator for an undecorated commit, so a valid line has three fields (sha,
+    date, subject) or four. Task ids are validated later by :func:`_store_pending`.
     """
     parts = line.split(_GIT_FIELD_SEP)
     if len(parts) < 3:
@@ -302,11 +271,8 @@ def sync_git_log(
 
     Reads ``git log --all --since=<window>`` filtered to the configured author
     emails (issue #378 items 2 & 4) and stores each commit as a ``commit`` event
-    keyed ``git:<sha>``. Extracted task ids are validated in one batched
-    ``project.task`` check when ``client`` is supplied (item 1); unknown ids are
-    flagged weak rather than billed. Idempotent. Returns ``{"inserted": n}``, or
-    ``{"skipped": reason}`` when git is absent, no author email resolves, or the
-    log cannot be read.
+    keyed ``git:<sha>``, validating task ids in one batch when ``client`` is
+    supplied. Idempotent. Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
     """
     emails = _git_author_emails(config)
     if not emails:
@@ -329,11 +295,7 @@ def sync_git_log(
 
 @dataclass(frozen=True)
 class _GithubCtx:
-    """Per-resync GitHub context shared by the identity collectors.
-
-    Bundles the current repo's label and gh-api slug with the window lower bound
-    so the collector helpers stay short (issue #378 items 3 & 4).
-    """
+    """Per-resync GitHub context (current repo label + gh slug + window start)."""
 
     label: str
     slug: Optional[str]
@@ -357,11 +319,7 @@ def _gh_json(cmd: list[str]) -> Optional[Any]:
 
 
 def _gh_repo_slug() -> Optional[str]:
-    """Return the current repo's ``owner/repo`` slug for gh api paths, or None.
-
-    Uses ``--jq`` so gh emits the bare slug string (not JSON), so this reads it
-    with :func:`_run_capture` directly rather than JSON-decoding it.
-    """
+    """Return the current repo's ``owner/repo`` slug for gh api paths, or None."""
     return _run_capture(
         ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
     ) or None
@@ -370,9 +328,8 @@ def _gh_repo_slug() -> Optional[str]:
 def _github_logins(config: Optional[LocalConfig], active: str) -> list[str]:
     """Return the GitHub logins to capture for (issue #378 item 4).
 
-    The configured identities that are NOT emails (no ``@``); when none are
-    configured, falls back to the single authenticated ``active`` login, so a
-    single-account user needs no config.
+    The configured non-email identities; falls back to the authenticated
+    ``active`` login so a single-account user needs no config.
     """
     configured = [a for a in (config.resync_authors if config else []) if "@" not in a]
     return configured or [active]
@@ -388,21 +345,22 @@ def _repo_of(item: dict) -> str:
     return (item.get("repository") or {}).get("nameWithOwner", "")
 
 
-def _within_window(ts_str: Optional[str], since: datetime) -> bool:
-    """Whether an ISO timestamp string falls at or after the window start."""
+def _ts_in_window(ts_str: Optional[str], since: datetime) -> Optional[datetime]:
+    """Parse an ISO timestamp and return it if at/after ``since``, else None."""
     if not ts_str:
-        return False
+        return None
     try:
-        return _parse_iso_utc(ts_str) >= since
-    except (ValueError, TypeError):
-        return False
+        parsed = _parse_iso_utc(ts_str)
+    except ValueError:
+        return None
+    return parsed if parsed >= since else None
 
 
 def _gh_authored_prs(login: str) -> Optional[list[dict]]:
     """Return ALL PRs authored by ``login`` in the current repo (issue #378 #3).
 
-    ``--state all`` captures opened/closed PRs, not just merged ones — the 145
-    opened PRs of the July window were invisible when only ``merged`` was listed.
+    ``--state all`` captures opened as well as merged PRs — the opened PRs were
+    invisible when only ``merged`` was listed.
     """
     return _gh_json(
         [
@@ -415,12 +373,11 @@ def _gh_authored_prs(login: str) -> Optional[list[dict]]:
 def _pr_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
     """Build a ``merge`` (audit) event for one authored PR, or None.
 
-    Timestamped at ``mergedAt`` when merged, else ``createdAt`` (the open PR's
-    authoring moment). Skipped when neither timestamp exists or it falls outside
-    the window. ``merge`` stays a fixed/audit-only source (never a session).
+    Timestamped at ``mergedAt`` when merged, else ``createdAt``. Skipped when
+    neither timestamp exists or it falls outside the window.
     """
-    ts = pr.get("mergedAt") or pr.get("createdAt")
-    if not _within_window(ts, ctx.since):
+    ts = _ts_in_window(pr.get("mergedAt") or pr.get("createdAt"), ctx.since)
+    if ts is None:
         return None
     number = pr["number"]
     title = pr.get("title", "")
@@ -428,7 +385,7 @@ def _pr_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
     return EventRecord(
         id=None,
         source="merge",
-        timestamp=_parse_iso_utc(ts),
+        timestamp=ts,
         task_ids=_extract_task_ids(title, branch),
         repo=ctx.label,
         pr_num=number,
@@ -441,21 +398,16 @@ def _pr_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
 def _review_event(
     review: dict, pr: dict, repo: str, since: datetime
 ) -> Optional[EventRecord]:
-    """Build a ``review`` event for one submitted review, or None.
-
-    Skipped when the review carries no ``submitted_at`` or it falls outside the
-    window. ``pr`` supplies title/branch/number for attribution and may be either
-    a full PR object or a gh-search result (branch then absent).
-    """
-    submitted = review.get("submitted_at")
-    if not _within_window(submitted, since):
+    """Build a ``review`` event for one submitted review, or None (out of window)."""
+    ts = _ts_in_window(review.get("submitted_at"), since)
+    if ts is None:
         return None
     branch = pr.get("headRefName", "")
     title = pr.get("title", "")
     return EventRecord(
         id=None,
         source="review",
-        timestamp=_parse_iso_utc(submitted),
+        timestamp=ts,
         task_ids=_extract_task_ids(title, branch),
         repo=repo,
         pr_num=pr.get("number", 0),
@@ -465,26 +417,67 @@ def _review_event(
     )
 
 
+def _comment_event(
+    comment: dict, item: dict, repo: str, since: datetime
+) -> Optional[EventRecord]:
+    """Build a ``comment`` event for one authored issue/PR comment, or None.
+
+    ``comment`` (issue #378 item 3) is keyed ``gh:comment:<id>`` and derives as
+    windowed sessions. Skipped outside the window.
+    """
+    ts = _ts_in_window(comment.get("created_at"), since)
+    if ts is None:
+        return None
+    title = item.get("title", "")
+    return EventRecord(
+        id=None,
+        source="comment",
+        timestamp=ts,
+        task_ids=_extract_task_ids(title, ""),
+        repo=repo,
+        pr_num=item.get("number", 0),
+        subject=title,
+        external_id=f"gh:comment:{comment['id']}",
+    )
+
+
+# One collector for the three review-family sources (issue #378 item 3): fetch a
+# parent's sub-objects (reviews or comments), keep those authored by ``login``,
+# and build an event for each. ``parents`` yields ``(parent, repo, api_slug)``.
+def _collect_review_family(
+    parents: list[tuple[dict, str, str]],
+    login: str,
+    since: datetime,
+    api_path: Callable[[str, int], str],
+    builder: Callable[[dict, dict, str, datetime], Optional[EventRecord]],
+) -> list[EventRecord]:
+    events: list[EventRecord] = []
+    for parent, repo, api_slug in parents:
+        subs = _gh_json(["gh", "api", api_path(api_slug, parent["number"])]) or []
+        events.extend(
+            event
+            for sub in subs
+            if _review_login(sub) == login
+            if (event := builder(sub, parent, repo, since)) is not None
+        )
+    return events
+
+
+def _reviews_path(slug: str, number: int) -> str:
+    return f"repos/{slug}/pulls/{number}/reviews"
+
+
 def _own_review_events(
     ctx: _GithubCtx, login: str, prs: list[dict]
 ) -> list[EventRecord]:
-    """Return ``login``'s reviews on their OWN current-repo PRs (existing #3 path).
+    """Return ``login``'s reviews on their OWN current-repo PRs (issue #378 #3).
 
-    No-op when the current repo's slug is unresolved. Filtered to reviews authored
-    by ``login`` so a PR's other reviewers are never attributed to this user.
+    No-op when the current repo's slug is unresolved.
     """
     if ctx.slug is None:
         return []
-    events: list[EventRecord] = []
-    for pr in prs:
-        reviews = _gh_json(["gh", "api", f"repos/{ctx.slug}/pulls/{pr['number']}/reviews"]) or []
-        events.extend(
-            event
-            for review in reviews
-            if _review_login(review) == login
-            if (event := _review_event(review, pr, ctx.label, ctx.since)) is not None
-        )
-    return events
+    parents = [(pr, ctx.label, ctx.slug) for pr in prs]
+    return _collect_review_family(parents, login, ctx.since, _reviews_path, _review_event)
 
 
 def _gh_reviewed_prs(login: str) -> list[dict]:
@@ -500,48 +493,14 @@ def _gh_reviewed_prs(login: str) -> list[dict]:
 def _others_review_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
     """Return ``login``'s reviews on OTHER people's PRs across repos (issue #378 #3).
 
-    The dominant July review workload was on others' PRs; a ``reviewed-by:`` search
-    finds those PRs, and each one's reviews are fetched and filtered to ``login``.
     Each review is stored against the reviewed PR's own repo, not the current one.
     """
-    events: list[EventRecord] = []
-    for item in _gh_reviewed_prs(login):
-        repo = _repo_of(item)
-        if not repo:
-            continue
-        reviews = _gh_json(["gh", "api", f"repos/{repo}/pulls/{item['number']}/reviews"]) or []
-        events.extend(
-            event
-            for review in reviews
-            if _review_login(review) == login
-            if (event := _review_event(review, item, repo, ctx.since)) is not None
-        )
-    return events
-
-
-def _comment_event(
-    comment: dict, item: dict, repo: str, since: datetime
-) -> Optional[EventRecord]:
-    """Build a ``comment`` event for one authored issue/PR comment, or None.
-
-    ``comment`` is a new resync event source (issue #378 item 3) keyed
-    ``gh:comment:<id>``; a sibling worker (item 6) makes the ``comment`` family
-    derive as windowed sessions. Skipped outside the window.
-    """
-    created = comment.get("created_at")
-    if not _within_window(created, since):
-        return None
-    title = item.get("title", "")
-    return EventRecord(
-        id=None,
-        source="comment",
-        timestamp=_parse_iso_utc(created),
-        task_ids=_extract_task_ids(title, ""),
-        repo=repo,
-        pr_num=item.get("number", 0),
-        subject=title,
-        external_id=f"gh:comment:{comment['id']}",
-    )
+    parents = [
+        (item, repo, repo)
+        for item in _gh_reviewed_prs(login)
+        if (repo := _repo_of(item))
+    ]
+    return _collect_review_family(parents, login, ctx.since, _reviews_path, _review_event)
 
 
 def _gh_commented_issues(login: str) -> list[dict]:
@@ -556,19 +515,18 @@ def _gh_commented_issues(login: str) -> list[dict]:
 
 def _comment_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
     """Return ``login``'s authored issue/PR comments across repos (issue #378 #3)."""
-    events: list[EventRecord] = []
-    for item in _gh_commented_issues(login):
-        repo = _repo_of(item)
-        if not repo:
-            continue
-        comments = _gh_json(["gh", "api", f"repos/{repo}/issues/{item['number']}/comments"]) or []
-        events.extend(
-            event
-            for comment in comments
-            if _review_login(comment) == login
-            if (event := _comment_event(comment, item, repo, ctx.since)) is not None
-        )
-    return events
+    parents = [
+        (item, repo, repo)
+        for item in _gh_commented_issues(login)
+        if (repo := _repo_of(item))
+    ]
+    return _collect_review_family(
+        parents,
+        login,
+        ctx.since,
+        lambda slug, number: f"repos/{slug}/issues/{number}/comments",
+        _comment_event,
+    )
 
 
 def _github_identity_events(
@@ -601,15 +559,12 @@ def sync_github(
 ) -> dict[str, Any]:
     """Reconcile authored GitHub activity into the ``events`` table (issue #378).
 
-    For every configured author identity (item 4; default the active login) and
-    bounded by the resync window, stores: all authored PRs — opened as well as
-    merged — as ``merge`` audit events (``gh:pr:<n>``); the user's reviews on both
-    their own and OTHERS' PRs as ``review`` events (``gh:review:<id>``); and the
-    user's authored issue/PR comments as a new ``comment`` source
-    (``gh:comment:<id>``) (item 3). Extracted task ids are validated in one batched
-    ``project.task`` check when ``client`` is supplied (item 1). Idempotent.
-    Returns ``{"inserted": n}``, or ``{"skipped": reason}`` when gh is
-    absent/unauthenticated or the authored-PR list cannot be read.
+    For every configured author identity (default the active login) and bounded by
+    the resync window, stores: all authored PRs (opened as well as merged) as
+    ``merge`` audit events; the user's reviews on their own AND others' PRs as
+    ``review`` events; and authored issue/PR comments as ``comment`` events. Task
+    ids are validated in one batch when ``client`` is supplied. Idempotent.
+    Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
     """
     login = _gh_login()
     if login is None:
@@ -652,13 +607,10 @@ def _odoo_dt_str(moment: datetime) -> str:
 def _search_chatter(
     client: Any, partner_id: int, since: datetime, until: datetime
 ) -> list[dict]:
-    """Return the user's authored task chatter over a date window (issue #378 #5).
+    """Return the user's authored task chatter over ``[since, until]`` (issue #378 #5).
 
-    Author-wide: scoped by ``author_id`` and the ``[since, until]`` ``date`` range
-    over ALL ``project.task`` messages, NOT to already-tracked tasks — the biggest
-    manual finding was unlogged work on tasks never started locally (diagnoses,
-    quote revisions, consulting replies). ``odoo:mail:<id>`` dedupe keeps the wider
-    search idempotent.
+    Author-wide over ALL ``project.task`` messages, NOT just tracked tasks — the
+    biggest manual finding was unlogged work on tasks never started locally.
     """
     return client.execute(
         "mail.message",
@@ -676,10 +628,9 @@ def _search_chatter(
 def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
     """Store one chatter message as a ``chatter`` event; return 1 if inserted.
 
-    A message with no timestamp (Odoo returns ``False`` for an empty datetime)
-    cannot be sessionized, so it is skipped rather than crashing the puller. The
-    task id is the message's ``res_id`` — the task the message is ON — so it is an
-    existing task by construction and needs no separate existence check.
+    A message with no timestamp (Odoo returns ``False`` for an empty datetime) is
+    skipped rather than crashing the puller. The task id is the message's
+    ``res_id`` (the task it is ON), so it exists by construction.
     """
     date = message.get("date")
     if not date:
@@ -706,11 +657,9 @@ def sync_odoo_chatter(
 ) -> dict[str, Any]:
     """Reconcile the user's Odoo task chatter into the ``events`` table (issue #378).
 
-    Searches ``mail.message`` AUTHOR-WIDE over the resync date window — every
-    ``project.task`` message authored by the authenticated uid's partner within
-    the window (item 5), superseding the old tracked-task-only scope — and stores
-    each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent. Returns
-    ``{"inserted": n}``, or ``{"skipped": reason}`` when Odoo is unreachable.
+    Searches ``mail.message`` author-wide over the resync date window (item 5) and
+    stores each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent.
+    Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
     """
     now = now or datetime.now(timezone.utc)
     since = _window_start(config, now)
@@ -732,7 +681,9 @@ def sync_odoo_chatter(
 # fully offline. Credentials are host-provisioned: a token JSON written by
 # ``scripts/google_oauth_setup.py`` into the existing ``~/.config/odoo_sdk`` mount
 # is CONSUMED here (refreshed via a plain token-endpoint POST when stale). The SDK
-# never runs the OAuth flow and never mints credentials.
+# never runs the OAuth flow and never mints credentials. Ingesting zero events
+# silently is the forbidden failure mode (acceptance #10), so these pullers RAISE
+# on unusable credentials rather than returning a skip.
 #
 # **Email — active participation only.** Only messages the user SENT are ingested
 # (Gmail ``in:sent``); received mail is never a row. Each sent message is one
@@ -761,13 +712,10 @@ _CALENDAR_SOURCE = "calendar"
 _EMAIL_SOURCE = "email"
 _TICK_MARKER = ":tick:"
 _DEFAULT_TOKEN_FILENAME = "google_token.json"
-# The synthetic-tick payload marker is OWNED by state_persistence (the reader that
-# excludes ticks from the sweep); imported here so the writer and reader can never
-# drift to different literals.
 
-# The sweep floor the tick interval must stay strictly below (acceptance #11); the
-# ``optimize_sessions`` sweep will not scan below this gap, so a tick at or above
-# it would let a meeting shatter into per-tick minimum-billed sessions.
+# The sweep floor the tick interval must stay strictly below (acceptance #11); a
+# tick at or above it would let a meeting shatter into per-tick minimum-billed
+# sessions since ``optimize_sessions`` never scans below this gap.
 _SWEEP_MIN_GAP_MINS = SessionizationConfig().sweep_min_gap_mins
 
 # Injected HTTP transport: ``transport(method, url, *, headers=None, data=None)``
@@ -779,10 +727,9 @@ GoogleTransport = Callable[..., dict]
 class GoogleAuthError(RuntimeError):
     """Raised when Google credentials are missing, unreadable, or unrefreshable.
 
-    Carries a single actionable message naming the token path and the fix
-    (re-run the host OAuth helper). Ingesting zero events silently is the
-    forbidden failure mode (acceptance #10), so the calendar/gmail pullers raise
-    this rather than degrading to a skip when credentials cannot be used.
+    Carries a single actionable message naming the token path and the fix; the
+    calendar/gmail pullers raise this rather than degrading to a skip so
+    credentials failures are never silent (acceptance #10).
     """
 
 
@@ -799,11 +746,8 @@ def _urllib_transport(
 ) -> dict:
     """Perform one HTTP call over stdlib ``urllib`` and JSON-decode the body.
 
-    ``data`` (a mapping) is form-encoded and marks a POST; its presence never
-    changes ``method`` (the caller passes both explicitly). Any transport-level
-    failure — connection error or non-2xx status — is surfaced as
-    :class:`GoogleAPIError` so callers can translate it into the appropriate
-    auth/skip decision rather than leaking a ``urllib`` exception.
+    ``data`` (a mapping) is form-encoded and marks a POST body. Any
+    transport-level failure is surfaced as :class:`GoogleAPIError`.
     """
     body = urllib.parse.urlencode(data).encode() if data is not None else None
     request = urllib.request.Request(
@@ -822,11 +766,8 @@ def _urllib_transport(
 def _resolve_google_token_path(config: LocalConfig) -> Path:
     """Return the path the Google token JSON is read from (issue #370).
 
-    Precedence: an explicit ``google_token_path`` config/env override, then a
-    path derived from the existing ``ODOO_SDK_CONFIG`` mount (its directory, or
-    the parent of a config *file*), then ``~/.config/odoo_sdk``. The token is
-    host-provisioned and bind-mounted alongside the other SDK config; the SDK
-    only reads it.
+    Precedence: an explicit ``google_token_path`` override, then a path derived
+    from the ``ODOO_SDK_CONFIG`` mount, then ``~/.config/odoo_sdk``.
     """
     explicit = config.google_token_path
     if explicit:
@@ -861,9 +802,7 @@ def _load_google_credentials(path: Path) -> dict:
 def _token_is_current(creds: dict, now: datetime) -> bool:
     """Whether the stored access token is present and not past its expiry.
 
-    A token with no recorded ``expiry`` is trusted as-is (nothing proves it
-    stale); a token whose ``expiry`` is at or before ``now`` is treated as
-    expired so the refresh path runs.
+    A token with no recorded ``expiry`` is trusted as-is (nothing proves it stale).
     """
     if not creds.get("token"):
         return False
@@ -915,18 +854,34 @@ def _google_get(url: str, token: str, transport: GoogleTransport) -> dict:
     return transport("GET", url, headers={"Authorization": f"Bearer {token}"})
 
 
+def _google_pages(
+    url_builder: Callable[[Optional[str]], str],
+    token: str,
+    transport: GoogleTransport,
+) -> Iterator[dict]:
+    """Yield each page's JSON body, following ``nextPageToken`` to exhaustion.
+
+    ``url_builder`` takes the current page token (None on the first request) and
+    returns the URL to fetch.
+    """
+    page_token: Optional[str] = None
+    while True:
+        data = _google_get(url_builder(page_token), token, transport)
+        yield data
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+
 # ── calendar ────────────────────────────────────────────────────────────────
 
 
 def _validate_tick_interval(config: LocalConfig) -> None:
     """Reject a tick interval not strictly below the gap and sweep floor (#11).
 
-    If the tick interval were at or above the inactivity gap (or the sweep
-    floor), a meeting's ticks would no longer chain into one session — every
-    tick would split off and independently bill the per-session minimum, turning
-    a 1-hour meeting into N minimum-billed sessions. The invariant is asserted at
-    resync so the misconfiguration is rejected loudly rather than silently
-    shattering meetings.
+    At or above the gap (or sweep floor) a meeting's ticks would stop chaining
+    into one session and each would independently bill the per-session minimum, so
+    the invariant is asserted loudly at resync.
     """
     tick = config.calendar_tick_mins
     gap = config.session_gap_mins
@@ -942,8 +897,7 @@ def _parse_google_dt(node: Optional[dict]) -> Optional[datetime]:
     """Parse a Calendar ``start``/``end`` node to UTC, or None for an all-day one.
 
     A timed event carries ``dateTime`` (offset-aware ISO); an all-day event
-    carries only ``date`` and is not a meeting, so it yields None (the caller
-    excludes it upstream, but returning None keeps this total).
+    carries only ``date`` and yields None.
     """
     if not node:
         return None
@@ -964,9 +918,8 @@ def _self_attendee(event: dict) -> Optional[dict]:
 def _has_other_attendees(event: dict) -> bool:
     """Whether the event has at least one human attendee other than the user.
 
-    Solo blocks (no other attendees) are calendar furniture, not meetings, so
-    they are excluded regardless of how the user responded. Resource rows (rooms)
-    do not count as people.
+    Solo blocks (no other attendees) are furniture, not meetings. Resource rows
+    (rooms) do not count as people.
     """
     for attendee in event.get("attendees", []):
         if attendee.get("self") or attendee.get("resource"):
@@ -978,9 +931,8 @@ def _has_other_attendees(event: dict) -> bool:
 def _self_participated(event: dict) -> bool:
     """Whether the user organized the event or accepted the invite.
 
-    Organizing counts regardless of ``responseStatus``; otherwise only an
-    explicit ``accepted`` counts — declined, tentative, and needsAction (never
-    answered) are not participation.
+    Organizing counts regardless of ``responseStatus``; otherwise only an explicit
+    ``accepted`` counts (declined/tentative/needsAction do not).
     """
     if (event.get("organizer") or {}).get("self"):
         return True
@@ -988,19 +940,26 @@ def _self_participated(event: dict) -> bool:
     return bool(attendee) and attendee.get("responseStatus") == _ACCEPTED_STATUS
 
 
-def _should_ingest_calendar_event(event: dict) -> bool:
-    """Apply the participation filter to one Calendar event instance."""
+def _meeting_span(event: dict) -> Optional[tuple[datetime, datetime]]:
+    """Return a participated meeting's ``(start, end)`` span, or None to exclude it.
+
+    Applies the participation filter (cancelled, furniture, all-day, solo,
+    declined) and, when the event qualifies, returns its parsed span so callers
+    need not re-parse ``start``/``end``.
+    """
     if event.get("status") == "cancelled":
-        return False
+        return None
     if event.get("eventType") in _EXCLUDED_EVENT_TYPES:
-        return False
+        return None
     start = _parse_google_dt(event.get("start"))
     end = _parse_google_dt(event.get("end"))
     if start is None or end is None:  # all-day or malformed
-        return False
+        return None
     if not _has_other_attendees(event):
-        return False
-    return _self_participated(event)
+        return None
+    if not _self_participated(event):
+        return None
+    return (start, end)
 
 
 def _expand_ticks(start: datetime, end: datetime, tick_mins: int) -> list[datetime]:
@@ -1022,11 +981,6 @@ def _expand_ticks(start: datetime, end: datetime, tick_mins: int) -> list[dateti
     return ticks
 
 
-def _series_id_for(event_id: str) -> str:
-    """Return the parent-event series key an event's ticks are grouped under."""
-    return f"gcal:{event_id}"
-
-
 def _series_id_of(external_id: Optional[str]) -> Optional[str]:
     """Return the series key encoded in a tick's ``external_id``, or None."""
     if not external_id or _TICK_MARKER not in external_id:
@@ -1038,8 +992,7 @@ def _tick_external_id(series_id: str, moment: datetime) -> str:
     """Return the stable, synthetic-marked external id for one tick.
 
     Keying on the tick's ISO timestamp (not an index) makes a moved or resized
-    meeting produce a different id set, so the reconcile diff naturally detects
-    the change; the ``:tick:`` marker keeps it recognizably synthetic.
+    meeting produce a different id set, so the reconcile diff detects the change.
     """
     return f"{series_id}{_TICK_MARKER}{_normalize_utc_isoformat(moment)}"
 
@@ -1049,15 +1002,13 @@ def _desired_ticks(
 ) -> list[tuple[str, datetime]]:
     """Return the (external_id, timestamp) ticks a fetched event should produce.
 
-    Empty when the event fails the participation filter (declined, cancelled,
-    solo, furniture, all-day), which drives the reconcile to remove any existing
-    series for it.
+    Empty when the event fails the participation filter, which drives the
+    reconcile to remove any existing series for it.
     """
-    if not _should_ingest_calendar_event(event):
+    span = _meeting_span(event)
+    if span is None:
         return []
-    start = _parse_google_dt(event["start"])
-    end = _parse_google_dt(event["end"])
-    assert start is not None and end is not None  # guaranteed by the filter
+    start, end = span
     return [(_tick_external_id(series_id, m), m) for m in _expand_ticks(start, end, tick_mins)]
 
 
@@ -1068,8 +1019,8 @@ def _propagate_task_ids(
 
     An explicit ``#id`` / ``[id]`` marker in the meeting title always attributes
     (and refreshes on every resync). Otherwise the prior series' ticks' task ids
-    are propagated forward so a triage assignment made at series granularity
-    survives a reschedule; a series with neither stays inert (``[]``).
+    are propagated forward so a triage assignment survives a reschedule; a series
+    with neither stays inert (``[]``).
     """
     if event is not None:
         subject_ids = _extract_task_ids(event.get("summary", ""), "")
@@ -1107,13 +1058,6 @@ def _make_tick_event(
     )
 
 
-def _tick_subject(event: Optional[dict], config: LocalConfig) -> str:
-    """Return the meeting title to store on ticks, honoring ``ingest_subjects``."""
-    if not config.ingest_subjects:
-        return ""
-    return (event or {}).get("summary", "")
-
-
 def _insert_tick_series(
     state: LocalStateClient,
     desired: list[tuple[str, datetime]],
@@ -1140,11 +1084,9 @@ def _reconcile_series(
     """Reconcile one meeting's tick series to its desired shape; return inserts.
 
     Delete-series-and-re-expand keyed on the parent event id: when the desired
-    tick set (by external id) already matches what is stored, nothing changes and
-    the stored rows — including any triage task assignment — are preserved. On
-    ANY difference (reschedule, extend, shorten, cancel, or first ingest) the
-    whole existing series is deleted and the desired ticks are inserted fresh, so
-    no orphan tick can survive and no duplicate can be created.
+    tick set already matches what is stored, nothing changes (preserving any
+    triage assignment). On ANY difference the whole existing series is deleted and
+    the desired ticks inserted fresh, so no orphan or duplicate can survive.
     """
     desired = _desired_ticks(event, series_id, config.calendar_tick_mins) if event else []
     if {row.external_id for row in existing_rows} == {ext for ext, _ in desired}:
@@ -1153,9 +1095,8 @@ def _reconcile_series(
     if stale_ids:
         state.delete_events(stale_ids)
     task_ids = _propagate_task_ids(event, existing_rows)
-    return _insert_tick_series(
-        state, desired, series_id, task_ids, _tick_subject(event, config)
-    )
+    subject = (event or {}).get("summary", "") if config.ingest_subjects else ""
+    return _insert_tick_series(state, desired, series_id, task_ids, subject)
 
 
 def _calendar_events_url(
@@ -1183,14 +1124,10 @@ def _fetch_calendar_items(
 ) -> list[dict]:
     """Page through every calendar event instance in the reconcile window."""
     items: list[dict] = []
-    page_token: Optional[str] = None
-    while True:
-        url = _calendar_events_url(time_min, time_max, page_token)
-        data = _google_get(url, token, transport)
-        items.extend(data.get("items", []))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
+    for page in _google_pages(
+        lambda tok: _calendar_events_url(time_min, time_max, tok), token, transport
+    ):
+        items.extend(page.get("items", []))
     return items
 
 
@@ -1218,12 +1155,9 @@ def sync_google_calendar(
     """Reconcile accepted/organized meetings into synthetic tick series (#370).
 
     Validates the tick invariant (acceptance #11), resolves a host-provisioned
-    Google token (raising a clear error when unusable, acceptance #10), fetches
-    every event instance in the ``google_sync_window_days`` window each side of
-    now, and reconciles each parent event's tick series delete-and-re-expand.
-    Series present in the store but no longer returned (hard-deleted) are removed
-    too. Idempotent: an unchanged window inserts nothing. Returns
-    ``{"inserted": n}``.
+    Google token, fetches every event instance in the window, and reconciles each
+    parent event's tick series delete-and-re-expand. Series no longer returned
+    (hard-deleted) are removed too. Idempotent. Returns ``{"inserted": n}``.
 
     :raises ValueError: When the tick interval violates the gap/sweep invariant.
     :raises GoogleAuthError: When credentials are missing, expired, or unrefreshable.
@@ -1236,13 +1170,14 @@ def sync_google_calendar(
     # scheduled meeting is not billable work yet, so ingesting its tick train
     # would let an upload window bill an hour before the meeting happens. An
     # in-progress meeting (start < now, end > now) is still fetched and expanded
-    # to its full scheduled span — the accepted scheduled-span default. The
-    # EXISTING-tick load still spans forward so an in-progress meeting's already
-    # -written future ticks are seen whole and the reconcile stays a clean no-op.
+    # to its full scheduled span. The EXISTING-tick load still spans forward so an
+    # in-progress meeting's already-written future ticks are seen whole and the
+    # reconcile stays a clean no-op.
     time_min = now - radius
     items = _fetch_calendar_items(token, transport, time_min, now)
     existing = _load_existing_calendar_series(state, time_min, now + radius)
-    items_by_series = {_series_id_for(item["id"]): item for item in items}
+    # ``gcal:<id>`` series key pairs with :func:`_series_id_of` on the tick ids.
+    items_by_series = {f"gcal:{item['id']}": item for item in items}
     inserted = 0
     for series_id in set(existing) | set(items_by_series):
         inserted += _reconcile_series(
@@ -1275,25 +1210,19 @@ def _fetch_sent_message_ids(
     traffic never appear — receiving is not participation (acceptance #5).
     """
     query = f"in:sent after:{int(after.timestamp())}"
-    ids: list[str] = []
-    page_token: Optional[str] = None
-    while True:
-        data = _google_get(_gmail_list_url(query, page_token), token, transport)
-        ids.extend(message["id"] for message in data.get("messages", []))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-    return ids
+    return [
+        message["id"]
+        for page in _google_pages(
+            lambda tok: _gmail_list_url(query, tok), token, transport
+        )
+        for message in page.get("messages", [])
+    ]
 
 
 def _existing_gmail_ids(
     state: LocalStateClient, start: datetime, end: datetime
 ) -> set[str]:
-    """Return the external ids of sent-mail events already stored in the window.
-
-    Lets the puller skip re-fetching message detail for messages it has already
-    ingested, so an overlapping-window re-sync is cheap and inserts nothing.
-    """
+    """Return the external ids of sent-mail events already stored in the window."""
     return {
         record.external_id
         for record in state.get_events(start, end)
@@ -1328,12 +1257,6 @@ def _gmail_timestamp(message: dict) -> Optional[datetime]:
         return None
 
 
-def _is_sent_message(message: dict) -> bool:
-    """Belt-and-suspenders check that a fetched message really is sent mail."""
-    labels = message.get("labelIds")
-    return labels is None or "SENT" in labels
-
-
 def _store_sent_message(
     state: LocalStateClient,
     message: dict,
@@ -1341,12 +1264,9 @@ def _store_sent_message(
 ) -> int:
     """Store one sent Gmail message as an ``email`` point event; 1 if inserted.
 
-    Metadata only — message-id, thread-id, participants, direction, timestamp —
-    never the body. Attribution is by an explicit ``#id`` / ``[id]`` marker in
-    the subject; without one the event is inert (``task_ids=[]``) by design.
+    Metadata only — never the body. Attribution is by an explicit ``#id`` /
+    ``[id]`` marker in the subject; without one the event is inert (``task_ids=[]``).
     """
-    if not _is_sent_message(message):
-        return 0
     timestamp = _gmail_timestamp(message)
     if timestamp is None:
         return 0
@@ -1381,12 +1301,10 @@ def sync_gmail(
 ) -> dict[str, Any]:
     """Reconcile the user's SENT Gmail into ``email`` point events (issue #370).
 
-    Resolves a host-provisioned Google token (raising a clear error when
-    unusable, acceptance #10) and ingests each message sent within the
-    ``google_sync_window_days`` backward window as a metadata-only point event
-    keyed ``gmail:<id>``. Received mail is never touched (acceptance #5).
-    Idempotent: already-stored messages are skipped without re-fetching detail,
-    so an overlapping-window re-sync inserts nothing. Returns ``{"inserted": n}``.
+    Resolves a host-provisioned Google token and ingests each message sent within
+    the window as a metadata-only point event keyed ``gmail:<id>``. Received mail
+    is never touched (acceptance #5). Idempotent: already-stored messages are
+    skipped without re-fetching detail. Returns ``{"inserted": n}``.
 
     :raises GoogleAuthError: When credentials are missing, expired, or unrefreshable.
     """

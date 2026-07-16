@@ -1,19 +1,20 @@
 import unittest
 
+from odoo_sdk.commands.command import Command
 from odoo_sdk.commands.command_registry import Registry
 
 
-class DummyCommandOk:
-    def __init__(self, client):
-        self.client = client
+class DummyCommandOk(Command):
+    _name = "dummy_ok"
+    _description = "dummy ok command"
 
     def execute(self):
-        return ("ok", self.client)
+        return ("ok", self._client)
 
 
-class DummyCommandAlt:
-    def __init__(self, client):
-        self.client = client
+class DummyCommandAlt(Command):
+    _name = "dummy_alt"
+    _description = "dummy alt command"
 
     def execute(self):
         return "alt"
@@ -39,9 +40,9 @@ class TestRegistry(unittest.TestCase):
         res1 = dispatcher["cmd"].execute()
         self.assertEqual(res1, "alt")
 
-        class NewCmd:
-            def __init__(self, client):
-                self.client = client
+        class NewCmd(Command):
+            _name = "new"
+            _description = "new command"
 
             def execute(self):
                 return "new"
@@ -61,7 +62,7 @@ class TestRegistryItems(unittest.TestCase):
 
         self.assertEqual(set(items), {"dummy"})
         self.assertIsInstance(items["dummy"], DummyCommandOk)
-        self.assertIs(items["dummy"].client, client)
+        self.assertIs(items["dummy"]._client, client)
 
     def test_items_empty_registry_is_empty(self):
         self.assertEqual(list(Registry(object()).items()), [])

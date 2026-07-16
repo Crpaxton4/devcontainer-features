@@ -21,12 +21,10 @@ uniform ``{"error": {"type", "message"}}`` payload, so an LLM caller sees a clea
 message rather than an opaque access traceback.
 """
 
-from typing import Any
-
+from odoo_sdk import OdooAccessError, OdooError
 from odoo_sdk.client import OdooClient
-from odoo_sdk.transport.errors import OdooAccessError, OdooError
 
-from .odoo_helpers import resolve_many2one
+from .odoo_helpers import m2o_id
 
 #: Exact, stable error raised when reading ``mail.mail`` is denied. ``mail.mail``
 #: (the outgoing mail queue) is commonly admin-restricted, so an
@@ -64,34 +62,8 @@ _MAIL_BASE_FIELDS = [
 _MAIL_FAILURE_FIELDS = ["failure_reason", "failure_type"]
 
 
-def _m2o_id(value: Any) -> Any:
-    """Return the id from a many2one ``[id, name]`` pair, else the value itself.
-
-    ``resolve_many2one`` extracts the *display name*; this is its id-side twin,
-    used to recover the ``mail.message`` id a ``mail.mail`` links to.
-
-    :param value: Raw many2one value (``[id, name]`` pair) or scalar.
-    :type value: Any
-    :return: The id when a pair is given, otherwise ``value`` unchanged.
-    :rtype: Any
-    """
-    if isinstance(value, (list, tuple)) and len(value) == 2:
-        return value[0]
-    return value
-
-
 def _fetch_messages(client: OdooClient, res_model: str, res_id: int) -> list[dict]:
-    """Read the ``mail.message`` rows attached to one record.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param res_model: The record's model, e.g. ``"project.task"``.
-    :type res_model: str
-    :param res_id: The record's id.
-    :type res_id: int
-    :return: Raw ``mail.message`` rows carrying :data:`_MESSAGE_FIELDS`.
-    :rtype: list[dict]
-    """
+    """Read the ``mail.message`` rows attached to one record, oldest first."""
     return client.execute(
         "mail.message",
         "search_read",
@@ -106,11 +78,6 @@ def _probe_mail_failure_fields(client: OdooClient) -> list[str]:
 
     ``fields_get`` returns metadata only for the requested fields that exist, so
     membership of each name in the response is a capability check.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :return: The subset of failure fields present on this deployment, in order.
-    :rtype: list[str]
     """
     meta = client.execute("mail.mail", "fields_get", _MAIL_FAILURE_FIELDS)
     return [field for field in _MAIL_FAILURE_FIELDS if field in meta]
@@ -119,17 +86,7 @@ def _probe_mail_failure_fields(client: OdooClient) -> list[str]:
 def _read_mail_rows(
     client: OdooClient, message_ids: list[int], extra_fields: list[str]
 ) -> list[dict]:
-    """Read the ``mail.mail`` rows linked to the given message ids.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param message_ids: ``mail.message`` ids whose linked mails to fetch.
-    :type message_ids: list[int]
-    :param extra_fields: Probed failure fields to read alongside the base set.
-    :type extra_fields: list[str]
-    :return: Raw ``mail.mail`` rows, oldest message first.
-    :rtype: list[dict]
-    """
+    """Read the ``mail.mail`` rows linked to the given message ids, oldest first."""
     return client.execute(
         "mail.mail",
         "search_read",
@@ -147,13 +104,6 @@ def _recipient_names(client: OdooClient, rows: list[dict]) -> dict[int, str]:
     partner read is denied or otherwise fails, an empty map is returned and the
     recipients summary degrades to the raw ``email_to`` addresses rather than
     aborting the whole status report.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param rows: Raw ``mail.mail`` rows carrying ``recipient_ids``.
-    :type rows: list[dict]
-    :return: Map of partner id to display name (empty when unresolved).
-    :rtype: dict[int, str]
     """
     partner_ids = sorted(
         {pid for row in rows for pid in (row.get("recipient_ids") or [])}
@@ -175,14 +125,6 @@ def _summarize_recipients(row: dict, partner_names: dict[int, str]) -> str:
     Combines the raw ``email_to`` addresses with the resolved display names of
     the ``recipient_ids`` partners, preserving order and dropping duplicates and
     blanks.
-
-    :param row: Raw ``mail.mail`` row.
-    :type row: dict
-    :param partner_names: Partner id to display name map from
-        :func:`_recipient_names`.
-    :type partner_names: dict[int, str]
-    :return: Human-readable recipients summary, ``""`` when none are known.
-    :rtype: str
     """
     parts: list[str] = []
     email_to = row.get("email_to") or ""
@@ -201,18 +143,8 @@ def _shape_mail_row(
     The message id recovered from ``mail_message_id`` looks up the originating
     message's ``date`` and (fallback) ``subject``. Failure fields are surfaced
     only when populated, so a successfully ``sent`` mail carries no failure keys.
-
-    :param row: Raw ``mail.mail`` row.
-    :type row: dict
-    :param message_index: ``mail.message`` id to raw message row map.
-    :type message_index: dict[int, dict]
-    :param partner_names: Partner id to display name map.
-    :type partner_names: dict[int, str]
-    :return: Status entry with ``mail_id``, ``message_id``, ``subject``,
-        ``recipients``, ``state``, ``date`` and any populated failure fields.
-    :rtype: dict
     """
-    message_id = _m2o_id(row.get("mail_message_id"))
+    message_id = m2o_id(row.get("mail_message_id"))
     message = message_index.get(message_id, {})
     subject = row.get("subject") or message.get("subject") or ""
     entry = {
@@ -249,16 +181,6 @@ def get_mail_status(
     ``mail.mail`` is commonly admin-restricted; a denied read raises a
     :class:`ValueError` carrying :data:`MAIL_ACCESS_DENIED_MESSAGE` rather than
     surfacing an opaque access fault.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param res_model: The record's model, e.g. ``"project.task"``.
-    :type res_model: str
-    :param res_id: The record's id.
-    :type res_id: int
-    :raises ValueError: When reading ``mail.mail`` is denied.
-    :return: One status entry per linked ``mail.mail``, oldest first.
-    :rtype: list[dict]
     """
     messages = _fetch_messages(client, res_model, res_id)
     if not messages:

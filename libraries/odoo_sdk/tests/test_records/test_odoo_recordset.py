@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from typing import Sequence
 from unittest.mock import Mock, call
 
-from odoo_sdk.fields.commands import Command
+from odoo_sdk.fields.commands import X2ManyCommand as Command
 from odoo_sdk.fields.values import RelationCollection, RelationValue
 from odoo_sdk.records.recordset import OdooRecordset
 from odoo_sdk.transport.errors import OdooMissingRecordError

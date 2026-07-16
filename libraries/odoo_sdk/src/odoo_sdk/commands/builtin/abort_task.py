@@ -1,10 +1,9 @@
 from typing import Any
 
-from ..command import Command
+from ..command import Command, require_active_run
 from ._registration import builtin_command
-from odoo_sdk.state import TaskNotRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.utilities.timesheet import close_anchor
+from odoo_sdk.billing.timesheet import close_anchor
 
 
 @builtin_command
@@ -38,9 +37,7 @@ class AbortTaskCommand(Command):
         """
         assert_odoo_devcontainer()
         db = self.state
-        run = db.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(f"No active session for task {task_id}.")
+        require_active_run(db, task_id)
 
         stopped = db.abort_run(task_id)
         try:

@@ -1,3 +1,4 @@
+import json
 import signal
 import socket
 import subprocess
@@ -39,15 +40,9 @@ def run(
     - out: write stdout to file
     """
 
-    # ─────────────────────────────────────────────
-    # Determine PIPE usage
-    # ─────────────────────────────────────────────
     stdout_mode = subprocess.PIPE if not quiet or capture_output or out else None
     stdin_mode = subprocess.PIPE if text_input is not None else None
 
-    # ─────────────────────────────────────────────
-    # Start process
-    # ─────────────────────────────────────────────
     with subprocess.Popen(
         cmd,
         stdin=stdin_mode,
@@ -55,19 +50,12 @@ def run(
         stderr=subprocess.STDOUT,
         text=True,
     ) as proc:
-        # ─────────────────────────────────────────────
-        # Input handling
-        # ─────────────────────────────────────────────
         if text_input is not None:
             assert proc.stdin is not None  # Invalid: text_input without stdin=PIPE
             proc.stdin.write(text_input)
             proc.stdin.close()
 
-        # ─────────────────────────────────────────────
-        # Output handling
-        # ─────────────────────────────────────────────
         output_chunks: list[str] = []
-
         if proc.stdout is not None:
             for line in proc.stdout:
                 if not quiet:
@@ -76,19 +64,64 @@ def run(
 
         output = "".join(output_chunks)
 
-    # ─────────────────────────────────────────────
-    # File output behavior
-    # ─────────────────────────────────────────────
+    # A failed step (e.g. a broken ``cosmic-ray`` run) must raise rather than be
+    # silently ignored, otherwise the pipeline can emit an empty/partial report
+    # that looks clean. Mirrors ``tools/static_analysis.py``.
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output)
+
     if out is not None:
         out.write_text(output)
 
     return output if capture_output else None
 
 
+def _wait_for_worker(url: ParseResult, timeout: int) -> None:
+    """Wait for a single worker URL to become responsive (or time out).
+
+    :param url: Worker URL in the form "host:port" (e.g. "localhost:8000").
+    :param timeout: Seconds any socket operation may take before timing out.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect((url.hostname, url.port))
+            print(f"Worker at {url.hostname}:{url.port} is responsive.")
+        except socket.timeout:
+            print("The connection attempt timed out!")
+
+
+def _wait_for_workers(toml_path: Path, timeout: int) -> None:
+    """Block until every worker URL configured in ``toml_path`` is responsive."""
+    worker_urls = [
+        urlparse(str(url))
+        for url in (
+            tomllib.loads(toml_path.read_text())
+            .get("cosmic-ray", {})
+            .get("distributor", {})
+            .get("http", {})
+            .get("worker-urls", [])
+        )
+    ]
+    with ThreadPoolExecutor(max_workers=len(worker_urls)) as executor:
+        print("Waiting for workers to be responsive...")
+        print(worker_urls)
+        executor.map(lambda url: _wait_for_worker(url, timeout), worker_urls)
+
+
+def _shutdown_workers(proc: "subprocess.Popen[str]") -> None:
+    """Shut the HTTP workers down by terminating (then killing) their process."""
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 @contextmanager
 def cr_workers(toml_path: Path, repo_root: Path, timeout: int = 10):
-    """
-    Context manager for Cosmic Ray HTTP workers via cr-http-workers.
+    """Context manager for Cosmic Ray HTTP workers via cr-http-workers.
 
     Responsibilities delegated entirely to cr-http-workers:
     - worker lifecycle
@@ -96,66 +129,19 @@ def cr_workers(toml_path: Path, repo_root: Path, timeout: int = 10):
     - HTTP server startup
     - cleanup on termination
     """
-
-    def __wait_for_workers():
-        """Wait for all worker URLs to be responsive before yielding control."""
-
-        def __wait_for_worker(url: ParseResult):
-            """Wait for a single worker URL to be responsive.
-
-            Args:
-                url (ParseResult): Worker URL in the form "host:port" (e.g. "localhost:8000")
-            """
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                # Throw a socket.timeout error if any operation takes longer than 5 seconds
-                sock.settimeout(timeout)
-                try:
-                    sock.connect((url.hostname, url.port))
-                    print(f"Worker at {url.hostname}:{url.port} is responsive.")
-                except socket.timeout:
-                    print("The connection attempt timed out!")
-
-        worker_urls = [
-            urlparse(str(url))
-            for url in (
-                tomllib.loads(toml_path.read_text())
-                .get("cosmic-ray", {})
-                .get("distributor", {})
-                .get("http", {})
-                .get("worker-urls", [])
-            )
-        ]
-
-        with ThreadPoolExecutor(max_workers=len(worker_urls)) as executor:
-            print("Waiting for workers to be responsive...")
-            print(worker_urls)
-            executor.map(__wait_for_worker, worker_urls)
-
-    def __shutdown():
-        """Shutdown the HTTP workers by terminating main process"""
-        # TODO: This is some strange currying
-        # `proc` comes from the outer scope of `cr_workers`
-        if proc.poll() is None:
-            proc.send_signal(signal.SIGTERM)
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
+    proc = subprocess.Popen(
+        ["cr-http-workers", str(toml_path), str(repo_root)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
-        proc = subprocess.Popen(
-            ["cr-http-workers", str(toml_path), str(repo_root)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        __wait_for_workers()
+        _wait_for_workers(toml_path, timeout)
         print("All workers are responsive...")
         yield proc
     finally:
         print("cr-http-workers shutting down...")
-        __shutdown()
+        _shutdown_workers(proc)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -245,18 +231,10 @@ def main() -> None:
         quiet=True,
     )
 
-    print(f"jq: {SESSION_NAME}")
-    _prompt("Press Enter to continue...")
-    run(
-        [
-            "jq",
-            "-sn",
-            "[inputs]",
-        ],
-        text_input=dump,
-        out=REPORTS_DIR / "mutation.json",
-        quiet=True,
-    )
+    # ``cosmic-ray dump`` emits NDJSON (one mutation record per line); wrap it in
+    # a JSON array for the report tooling. Done in-process (no external ``jq``).
+    records = [json.loads(line) for line in (dump or "").splitlines() if line.strip()]
+    (REPORTS_DIR / "mutation.json").write_text(json.dumps(records))
 
 
 if __name__ == "__main__":

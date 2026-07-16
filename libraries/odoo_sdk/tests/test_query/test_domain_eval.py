@@ -3,7 +3,7 @@ from datetime import date
 
 from odoo_sdk.query.domain import (
     DomainExpression,
-    _extract_comparison_value,
+    extract_comparison_value,
     _match_condition,
     _collect_domain_fields,
 )
@@ -18,22 +18,22 @@ class _FakeRecordset:
 
 class TestExtractComparisonValue(unittest.TestCase):
     def test_plain_scalar_passes_through(self) -> None:
-        self.assertEqual(_extract_comparison_value(42), 42)
-        self.assertEqual(_extract_comparison_value("hello"), "hello")
-        self.assertIs(_extract_comparison_value(True), True)
-        self.assertIs(_extract_comparison_value(None), None)
+        self.assertEqual(extract_comparison_value(42), 42)
+        self.assertEqual(extract_comparison_value("hello"), "hello")
+        self.assertIs(extract_comparison_value(True), True)
+        self.assertIs(extract_comparison_value(None), None)
 
     def test_empty_recordset_becomes_false(self) -> None:
         rs = _FakeRecordset()
-        self.assertIs(_extract_comparison_value(rs), False)
+        self.assertIs(extract_comparison_value(rs), False)
 
     def test_singleton_recordset_becomes_id_int(self) -> None:
         rs = _FakeRecordset(7)
-        self.assertEqual(_extract_comparison_value(rs), 7)
+        self.assertEqual(extract_comparison_value(rs), 7)
 
     def test_multi_recordset_becomes_id_tuple(self) -> None:
         rs = _FakeRecordset(1, 2, 3)
-        self.assertEqual(_extract_comparison_value(rs), (1, 2, 3))
+        self.assertEqual(extract_comparison_value(rs), (1, 2, 3))
 
 
 class TestMatchCondition(unittest.TestCase):

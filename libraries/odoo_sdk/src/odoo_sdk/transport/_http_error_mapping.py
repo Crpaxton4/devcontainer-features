@@ -40,24 +40,14 @@ def map_http_error(
 ) -> OdooError:
     """Map an HTTP error status and response body to an SDK exception.
 
-    This function is necessary so both ``OdooJson2Executor`` and any future
-    JSON-2 transport can share one consistent error classification path without
-    duplicating the mapping logic.
-
-    :param status_code: HTTP status code from the error response.
-    :type status_code: int
-    :param body: Raw response body string.
-    :type body: str
-    :param model: Odoo model name involved in the call, defaults to None.
-    :type model: Optional[str]
-    :param method: Odoo method name involved in the call, defaults to None.
-    :type method: Optional[str]
-    :return: An SDK exception instance appropriate for the error.
-    :rtype: OdooError
+    Shared by ``OdooJson2Executor`` (and any future JSON-2 transport) so error
+    classification lives in one place: a JSON body's ``name`` maps by
+    :data:`_NAME_MAP`, otherwise the status maps by :data:`_STATUS_MAP`, falling
+    back to :class:`OdooServerError`.
     """
     try:
         data = json.loads(body)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         return OdooTransportError(
             "Non-JSON response received from server",
             model=model,

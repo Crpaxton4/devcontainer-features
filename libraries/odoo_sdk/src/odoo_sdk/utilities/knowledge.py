@@ -42,17 +42,6 @@ SNIPPET_CHAR_CAP = 500
 BODY_CHAR_CAP = 50_000
 
 
-def _article_not_found_message(article_id: int) -> str:
-    """Exact ``ValueError`` message for a missing/inaccessible article id.
-
-    :param article_id: The ``knowledge.article`` id that returned no record.
-    :type article_id: int
-    :return: A stable, id-naming message for the Epic C error boundary to format.
-    :rtype: str
-    """
-    return f"knowledge.article {article_id} not found"
-
-
 def assert_knowledge_available(client: OdooClient) -> None:
     """Raise ``ValueError`` when the ``knowledge.article`` model is unavailable.
 
@@ -61,13 +50,6 @@ def assert_knowledge_available(client: OdooClient) -> None:
     Community edition (or the Knowledge app is not installed), and a typed
     :class:`ValueError` with :data:`KNOWLEDGE_UNAVAILABLE_MESSAGE` is raised for
     the Epic C error boundary to format.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :raises ValueError: With :data:`KNOWLEDGE_UNAVAILABLE_MESSAGE` when the model
-        does not exist.
-    :return: None.
-    :rtype: None
     """
     count = client.execute(
         "ir.model", "search_count", [("model", "=", "knowledge.article")]
@@ -79,11 +61,8 @@ def assert_knowledge_available(client: OdooClient) -> None:
 def _article_snippet(body: str) -> str:
     """Convert an article HTML body into a length-capped Markdown preview.
 
-    :param body: Raw HTML body of the article (may be empty/falsy).
-    :type body: str
-    :return: HTML-stripped Markdown, capped at :data:`SNIPPET_CHAR_CAP`
-        characters; an over-length preview is right-stripped and ends in ``"…"``.
-    :rtype: str
+    The Markdown is capped at :data:`SNIPPET_CHAR_CAP` characters; an over-length
+    preview is right-stripped and suffixed with a single ellipsis (``"…"``).
     """
     markdown = html_to_markdown(body or "")
     if len(markdown) > SNIPPET_CHAR_CAP:
@@ -101,19 +80,9 @@ def search_knowledge_articles(
     case-insensitively (``ilike``) against either the article ``name`` **or** its
     ``body`` (an OR domain), orders the most recently written articles first
     (``write_date desc``, tie-broken by ``id desc`` for a fully deterministic
-    order), and caps the result count at ``limit``.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param query: Substring matched (``ilike``) against name OR body.
-    :type query: str
-    :param limit: Maximum number of articles to return.
-    :type limit: int
-    :return: List of ``{"id", "name", "snippet", "write_date"}`` dicts, where
-        ``snippet`` is the HTML-stripped body preview capped at
-        :data:`SNIPPET_CHAR_CAP` characters.
-    :rtype: list[dict[str, Any]]
-    :raises ValueError: When ``knowledge.article`` is unavailable (Community).
+    order), and caps the result count at ``limit``. Returns
+    ``{"id", "name", "snippet", "write_date"}`` dicts (``snippet`` capped at
+    :data:`SNIPPET_CHAR_CAP`) and raises ``ValueError`` on a Community database.
     """
     assert_knowledge_available(client)
     records = client.execute(
@@ -150,18 +119,9 @@ def read_knowledge_article(client: OdooClient, article_id: int) -> dict[str, Any
     and suffixed with a single ellipsis (``"…"``), and ``truncated`` is set
     ``True`` (it is ``False`` for any body at or under the cap).
 
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param article_id: The ``knowledge.article`` id to read.
-    :type article_id: int
-    :return: A ``{"id", "name", "body", "write_date", "truncated"}`` dict, where
-        ``body`` is the HTML-stripped Markdown (capped at
-        :data:`BODY_CHAR_CAP` characters) and ``truncated`` flags whether that
-        cap was applied.
-    :rtype: dict[str, Any]
-    :raises ValueError: When ``knowledge.article`` is unavailable (the database
-        is Odoo Community, not Enterprise), or when no article exists with
-        ``article_id`` (``knowledge.article <id> not found``).
+    Returns a ``{"id", "name", "body", "write_date", "truncated"}`` dict and
+    raises ``ValueError`` on a Community database or when no article with
+    ``article_id`` exists (``knowledge.article <id> not found``).
     """
     assert_knowledge_available(client)
     records = client.execute(
@@ -171,7 +131,7 @@ def read_knowledge_article(client: OdooClient, article_id: int) -> dict[str, Any
         fields=["id", "name", "body", "write_date"],
     )
     if not records:
-        raise ValueError(_article_not_found_message(article_id))
+        raise ValueError(f"knowledge.article {article_id} not found")
     record = records[0]
     markdown = html_to_markdown(record.get("body") or "")
     truncated = len(markdown) > BODY_CHAR_CAP

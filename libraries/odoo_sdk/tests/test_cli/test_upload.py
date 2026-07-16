@@ -175,10 +175,10 @@ class TestCmdUpload(unittest.TestCase):
         # The acceptance proof for #354: the same seeded events driven through
         # the TUI 'u' loop and through headless `odoo-sdk upload` produce the
         # IDENTICAL account.analytic.line wire calls, because both surfaces
-        # share the one utilities.upload.upload_sessions loop.
+        # share the one billing.upload.upload_sessions loop.
         from odoo_sdk.commands import Registry
         from odoo_sdk.commands.builtin import register_builtins
-        from odoo_sdk.tui.app import _upload_sessions
+        from odoo_sdk.tui.app import TuiDeps, _upload_sessions
         from odoo_sdk.tui.window import DateWindow
 
         cli_db, cli_client = _seed_db(), _RecordingOdooClient()
@@ -189,13 +189,16 @@ class TestCmdUpload(unittest.TestCase):
         registry = register_builtins(
             Registry(tui_client, state_client=tui_db, config=_config())
         )
+        deps = TuiDeps(
+            registry=registry, client=tui_client, store=tui_db, config=_config()
+        )
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 7))
         sessions = registry["query_sessions"].execute(
             start_date=window.start_iso(),
             end_date=window.end_iso(),
             include_events=True,
         )
-        uploaded, retired = _upload_sessions(registry, sessions, window)
+        uploaded, retired = _upload_sessions(deps, sessions, window)
 
         self.assertEqual((uploaded, retired), (1, 0))
         self.assertEqual(cli_client.analytic_calls(), tui_client.analytic_calls())

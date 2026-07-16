@@ -1,11 +1,10 @@
 from typing import Any
 
-from ..command import Command
+from ..command import Command, require_active_run
 from ._registration import builtin_command
 from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.state import LocalStateClient as TaskStateDB
 
 
 @builtin_command
@@ -29,11 +28,8 @@ class TaskNoteCommand(Command):
         :return: Confirmation with message id.
         """
         assert_odoo_devcontainer()
-        db = TaskStateDB()
-        run = db.get_active_run(task_id)
-        if run is None:
-            from odoo_sdk.state import TaskNotRunningError
-            raise TaskNotRunningError(f"No active session for task {task_id}.")
+        db = self.state
+        run = require_active_run(db, task_id)
 
         message_id = post_chatter_note(self._client, task_id, note)
         db.append_note(task_id, note)

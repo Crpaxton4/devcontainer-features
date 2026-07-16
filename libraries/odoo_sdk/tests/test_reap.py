@@ -1,4 +1,4 @@
-"""Unit tests for the stale-run reaper helpers (:mod:`odoo_sdk.utilities.reap`, #366).
+"""Unit tests for the stale-run reaper helpers (:mod:`odoo_sdk.reap`, #366).
 
 These exercise the staleness predicate, the ``last activity`` clock (latest event
 for the run's task, falling back to ``started_at``), the env-driven threshold used
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from odoo_sdk.state import EventRecord
-from odoo_sdk.utilities.reap import (
+from odoo_sdk.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
     REAP_THRESHOLD_ENV,
     is_run_stale,
@@ -22,7 +22,7 @@ from odoo_sdk.utilities.reap import (
     stale_active_runs,
     threshold_from_hours,
 )
-from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
+from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
 from tests.support import make_state_db
 
 

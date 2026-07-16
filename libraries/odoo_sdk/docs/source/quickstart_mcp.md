@@ -82,16 +82,16 @@ to fork from), then does three things atomically:
   run (`RUNNING` or `AWAITING_ANSWERS`), `start_task` raises
   `TaskAlreadyRunningError` instead of opening a second one. Call `task_status`
   first if you are unsure whether a run is already open.
-- **Anchor semantics.** It creates a single **0-hour** `"[/] Work in progress"`
-  timesheet anchor for task-board visibility. The anchor is *adopted* if one
-  already exists, so a repeated start never duplicates it. This anchor carries
-  **no hours** — hours are written later, and only by the TUI upload (see step
-  6).
+- **No timesheet write.** `start_task` writes **no** `account.analytic.line`
+  row — the former 0-hour `"[/] Work in progress"` anchor is gone (#325). All
+  billable hours are derived from captured events by the sessionization → TUI
+  upload path (see step 6), which is the sole timesheet writer. Task-board
+  "work started" visibility is carried by the chatter note alone.
 - Posts a `"Work started on this task."` note to the task chatter and records
   the run locally.
 
-It returns the `run_id`, `task_id`, `started_at`, and the `timesheet_id` of the
-anchor.
+It returns the `run_id`, `task_id`, `started_at`, and `timesheet_id` (which is
+`null` — no anchor is created).
 
 ## 3. Work, leaving `task_note` checkpoints
 
@@ -139,8 +139,9 @@ stop_task(task_id=1234, description="Fixed null-coupon crash in checkout; added 
 ```
 
 **`stop_task` does not write timesheet hours.** Say it plainly: stopping only
-ends the run. The 0-hour anchor from step 2 is left untouched, and the elapsed
-hours are computed and returned for display but *not* posted to Odoo. All
+ends the run. No timesheet was ever written by the FSM (`start_task` creates no
+anchor as of #325), and the elapsed hours are computed and returned for display
+but *not* posted to Odoo. All
 `account.analytic.line` hour writes are owned by the TUI upload path
 (`odoo-tui`, key `u`) — see {doc}`the TUI quickstart <quickstart_tui>`. If there
 is no active run, `stop_task` raises `TaskNotRunningError`.
@@ -162,7 +163,7 @@ task_status()  -> [{run_id, task_id, task_name, state, started_at, elapsed}, ...
 search_projects / search_tasks / get_task   (read-only discovery, any order)
         │
         ▼
-start_task            opens the one run; creates the 0-hour anchor
+start_task            opens the one run (no timesheet write)
         │
         ▼
 task_note ...         checkpoints (needs an active run; no state change)

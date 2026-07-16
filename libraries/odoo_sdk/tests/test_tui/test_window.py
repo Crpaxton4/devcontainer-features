@@ -58,17 +58,7 @@ class TestMoves(unittest.TestCase):
         self.assertLessEqual(window.start, window.end)
 
 
-class TestWithSetters(unittest.TestCase):
-    def test_with_start_clamped_to_end(self):
-        window = DateWindow(date(2026, 6, 1), date(2026, 6, 5))
-        clamped = window.with_start(date(2026, 6, 9))
-        self.assertEqual(clamped.start, date(2026, 6, 5))
-
-    def test_with_end_clamped_to_start(self):
-        window = DateWindow(date(2026, 6, 5), date(2026, 6, 9))
-        clamped = window.with_end(date(2026, 6, 1))
-        self.assertEqual(clamped.end, date(2026, 6, 5))
-
+class TestIsoHelpers(unittest.TestCase):
     def test_iso_helpers(self):
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 5))
         self.assertEqual(window.start_iso(), "2026-06-01")

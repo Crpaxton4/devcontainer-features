@@ -536,12 +536,15 @@ class TestParsingAndGuards(unittest.TestCase):
     def test_build_commit_event_skips_malformed_line(self) -> None:
         self.assertIsNone(ex._build_commit_event("just-a-sha", "o/r"))
 
-    def test_within_window_bounds(self) -> None:
+    def test_ts_in_window_bounds(self) -> None:
         since = datetime(2026, 7, 1, tzinfo=timezone.utc)
-        self.assertTrue(ex._within_window("2026-07-02T00:00:00Z", since))
-        self.assertFalse(ex._within_window("2026-06-30T00:00:00Z", since))
-        self.assertFalse(ex._within_window(None, since))
-        self.assertFalse(ex._within_window("not-a-date", since))
+        self.assertEqual(
+            ex._ts_in_window("2026-07-02T00:00:00Z", since),
+            datetime(2026, 7, 2, tzinfo=timezone.utc),
+        )
+        self.assertIsNone(ex._ts_in_window("2026-06-30T00:00:00Z", since))
+        self.assertIsNone(ex._ts_in_window(None, since))
+        self.assertIsNone(ex._ts_in_window("not-a-date", since))
 
     def test_gh_json_returns_none_on_bad_json(self) -> None:
         with patch.object(ex.subprocess, "run", _fake_run([(_has("api"), "not json")])):

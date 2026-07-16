@@ -25,12 +25,12 @@ from unittest.mock import MagicMock, patch
 from odoo_sdk.commands.builtin.abort_task import AbortTaskCommand
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.state import EventRecord, LocalStateClient, TaskNotRunningError
-from odoo_sdk.utilities.timesheet import (
+from odoo_sdk.billing.timesheet import (
     ABORTED_ANCHOR_NAME,
     ANCHOR_NAME,
     ORPHANED_UPLOAD_NAME,
 )
-from odoo_sdk.utilities.upload import (
+from odoo_sdk.billing.upload import (
     _ABORT_DISPATCH_GRACE,
     _within_aborted_window,
     upload_sessions,
@@ -271,9 +271,9 @@ class TestUploadSelectionFilter(unittest.TestCase):
             "session_key": "101|9",
         }
         with patch(
-            "odoo_sdk.utilities.upload.reconcile_session", return_value=700
+            "odoo_sdk.billing.upload.reconcile_session", return_value=700
         ) as reconcile, patch(
-            "odoo_sdk.utilities.upload.sweep_orphaned_uploads", return_value=0
+            "odoo_sdk.billing.upload.sweep_orphaned_uploads", return_value=0
         ) as sweep:
             result = upload_sessions(
                 MagicMock(),
@@ -321,7 +321,7 @@ class TestUploadSelectionFilter(unittest.TestCase):
 
     def test_dry_run_previews_the_same_exclusion(self):
         db = self._db_with_aborted_run()
-        with patch("odoo_sdk.utilities.upload.reconcile_session") as reconcile:
+        with patch("odoo_sdk.billing.upload.reconcile_session") as reconcile:
             result = upload_sessions(
                 MagicMock(),
                 db,

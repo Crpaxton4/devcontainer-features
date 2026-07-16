@@ -17,14 +17,12 @@ from typing import Any, Callable, Dict, Tuple
 from odoo_sdk.commands import Registry
 
 from .atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
+from .composition import COMPOSITION_TOOL_FACTORIES, composition_tool
+
+# Importing these modules runs their ``@composition_tool`` decorators, populating
+# COMPOSITION_TOOL_FACTORIES; the names are also re-exported below.
 from .start_task import make_start_task_tool
 from .stop_task import make_stop_task_tool
-
-# Composition tools that take the FastMCP ``ctx`` and orchestrate commands.
-COMPOSITION_TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
-    "start_task": make_start_task_tool,
-    "stop_task": make_stop_task_tool,
-}
 
 # Full public tool surface: name -> factory(registry) -> tool callable.
 TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
@@ -48,25 +46,14 @@ def build_explicit_tools(
     """
     tools: Dict[str, Tuple[Callable[..., Any], str]] = {}
     for name, factory in TOOL_FACTORIES.items():
-        description = _description_for(registry, name)
+        try:
+            # ``build_explicit_tools`` is public API for custom registries, so a
+            # tool with no like-named command falls back to an empty description.
+            description = registry[name].description
+        except KeyError:
+            description = ""
         tools[name] = (factory(registry), description)
     return tools
-
-
-def _description_for(registry: Registry, name: str) -> str:
-    """Return the registered command's description for ``name``, or empty string.
-
-    :param registry: Command registry to consult.
-    :type registry: Registry
-    :param name: Tool/command name to look up.
-    :type name: str
-    :return: The command description, or ``""`` when the command is absent.
-    :rtype: str
-    """
-    try:
-        return registry[name].description
-    except KeyError:
-        return ""
 
 
 __all__ = [
@@ -74,6 +61,7 @@ __all__ = [
     "ATOMIC_TOOL_FACTORIES",
     "COMPOSITION_TOOL_FACTORIES",
     "atomic_tool",
+    "composition_tool",
     "build_explicit_tools",
     "make_start_task_tool",
     "make_stop_task_tool",

@@ -16,7 +16,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient
-from odoo_sdk.state.db import _bound_isoformat, _normalize_utc_isoformat
+from odoo_sdk.state.db import _normalize_utc_isoformat
 from tests.support import make_state_db
 
 UTC = timezone.utc
@@ -49,26 +49,29 @@ class TestBoundFormatting(unittest.TestCase):
         # The TUI builds naive midnight bounds; they must be stamped +00:00 so
         # they compare byte-for-byte against stored rows.
         naive = datetime(2026, 6, 1, 0, 0, 0)
-        self.assertEqual(_bound_isoformat(naive), "2026-06-01T00:00:00+00:00")
+        self.assertEqual(_normalize_utc_isoformat(naive), "2026-06-01T00:00:00+00:00")
 
-    def test_naive_bound_matches_stored_normalization(self):
-        # A naive bound and the stored form of the same wall-clock instant must
-        # be identical strings.
+    def test_naive_bound_matches_stored_event_timestamp(self):
+        # A naive bound and the stored form of the same wall-clock instant must be
+        # identical strings: insert an event at that instant and confirm the read
+        # path stored it in exactly the shape the bound helper produces.
+        state = _tmp_state()
         instant = datetime(2026, 6, 1, 0, 0, 0)
+        stored = _event(state, ts=instant)
         self.assertEqual(
-            _bound_isoformat(instant),
             _normalize_utc_isoformat(instant),
+            state.get_event(stored.id).timestamp.isoformat(),
         )
 
     def test_aware_non_utc_bound_converted_to_utc(self):
         aware = datetime(2026, 6, 1, 8, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
-        self.assertEqual(_bound_isoformat(aware), "2026-06-01T12:00:00+00:00")
+        self.assertEqual(_normalize_utc_isoformat(aware), "2026-06-01T12:00:00+00:00")
 
     def test_open_range_sentinels_still_sort_past_every_row(self):
         # datetime.min/max are naive sentinels from the query layer; suffixing
         # them must not disturb their role as outer bounds.
-        self.assertLess(_bound_isoformat(datetime.min), "2026-06-01T00:00:00+00:00")
-        self.assertGreater(_bound_isoformat(datetime.max), "9998-01-01T00:00:00+00:00")
+        self.assertLess(_normalize_utc_isoformat(datetime.min), "2026-06-01T00:00:00+00:00")
+        self.assertGreater(_normalize_utc_isoformat(datetime.max), "9998-01-01T00:00:00+00:00")
 
 
 class TestLowerBoundEdge(unittest.TestCase):
