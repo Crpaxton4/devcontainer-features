@@ -9,6 +9,8 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.utilities.odoo_helpers import format_chatter as _format_chatter
 from odoo_sdk.utilities.prompt_messages import build_implement_task_messages
 
+from ._registration import builtin_prompt
+
 # Backwards-compatible thin aliases kept so existing callers/tests can import
 # these names from this module.
 _build_messages = build_implement_task_messages
@@ -16,6 +18,7 @@ _build_messages = build_implement_task_messages
 __all__ = ["make_implement_task_prompt", "_build_messages", "_format_chatter"]
 
 
+@builtin_prompt("implement_task")
 def make_implement_task_prompt(command_registry: Registry):
     def implement_task(task_id: int) -> list[str]:
         """Prime the agent to implement an Odoo task using the FSM workflow.

@@ -17,14 +17,12 @@ from typing import Any, Callable, Dict, Tuple
 from odoo_sdk.commands import Registry
 
 from .atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
+from .composition import COMPOSITION_TOOL_FACTORIES, composition_tool
+
+# Importing these modules runs their ``@composition_tool`` decorators, populating
+# COMPOSITION_TOOL_FACTORIES; the names are also re-exported below.
 from .start_task import make_start_task_tool
 from .stop_task import make_stop_task_tool
-
-# Composition tools that take the FastMCP ``ctx`` and orchestrate commands.
-COMPOSITION_TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
-    "start_task": make_start_task_tool,
-    "stop_task": make_stop_task_tool,
-}
 
 # Full public tool surface: name -> factory(registry) -> tool callable.
 TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
@@ -74,6 +72,7 @@ __all__ = [
     "ATOMIC_TOOL_FACTORIES",
     "COMPOSITION_TOOL_FACTORIES",
     "atomic_tool",
+    "composition_tool",
     "build_explicit_tools",
     "make_start_task_tool",
     "make_stop_task_tool",
