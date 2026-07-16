@@ -1,28 +1,8 @@
-"""Odoo API helpers for reading a task's attachments.
+"""Odoo API helpers for reading a task's attachments (list + single read).
 
-An agent can read a task's body and chatter text but has no path to the binary
-documents attached to it (screenshots, PDFs, CSVs). This module is the single
-owner of that read path: it lists a ``project.task``'s attachments from **both**
-sources they live in and returns them as flat metadata dicts, with the raw
-bytes gated behind an opt-in flag so the default call stays cheap.
-
-The two sources:
-
-* ``ir.attachment`` records linked directly to the task
-  (``res_model="project.task"``, ``res_id=task_id``) — ``source="task"``.
-* ``mail.message`` chatter attachments reached via ``attachment_ids`` — those
-  carry ``source="message"``.
-
-An attachment can appear in both (a chatter attachment is still an
-``ir.attachment`` linked to the task), so results are **deduped by attachment
-id**; the direct-task query is read first, so a shared attachment keeps its
-``source="task"`` label.
-
-The design mirrors the opt-in "expensive detail" convention of
-:func:`odoo_sdk.utilities.odoo_helpers.get_task_detail` (its ``include``): the
-default omits the raw ``datas`` bytes and ``include_content=True`` opts into
-the base64 payload, so listing attachments never drags their contents over the
-wire unless asked.
+The single owner of the task-attachment read path. The full two-source /
+dedupe / opt-in-``datas`` story lives on :func:`get_task_attachments`;
+:func:`read_attachment` reads one already-stored ``ir.attachment`` by id.
 """
 
 import base64
@@ -125,17 +105,7 @@ def get_task_attachments(
     ``file_size``, ``create_date`` and ``source``. The raw bytes are opt-in:
     with the default ``include_content=False`` the base64 ``datas`` payload is
     omitted so the call stays cheap; ``include_content=True`` adds ``datas`` to
-    each result.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param task_id: The ``project.task`` id whose attachments are listed.
-    :type task_id: int
-    :param include_content: When ``True``, include the base64 ``datas`` bytes of
-        each attachment. Defaults to ``False`` (metadata only).
-    :type include_content: bool
-    :return: One flat dict per distinct attachment, task-linked ones first.
-    :rtype: list[dict]
+    each result. Task-linked attachments are returned first.
     """
     results: list[dict] = []
     seen: set[int] = set()
@@ -316,20 +286,9 @@ def read_attachment(
       size and the cap.
 
     Every result echoes the requested ``mode`` and carries the metadata fields.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param attachment_id: The ``ir.attachment`` id to read.
-    :type attachment_id: int
-    :param mode: One of :data:`READ_ATTACHMENT_MODES`; defaults to ``"text"``.
-    :type mode: str
-    :raises ValueError: When ``mode`` is not a valid mode, or (in ``raw`` mode)
-        the payload exceeds the size cap.
-    :raises OdooMissingRecordError: When no attachment with ``attachment_id``
-        exists or it is not accessible.
-    :return: A metadata dict, extended per ``mode`` with ``text``/``truncated``
-        (``text``), ``datas`` (``raw``), or nothing further (``metadata``).
-    :rtype: dict[str, Any]
+    Raises :class:`OdooMissingRecordError` when no attachment ``attachment_id``
+    exists, and :class:`ValueError` for an invalid ``mode`` or an oversized
+    ``raw`` payload.
     """
     if mode not in READ_ATTACHMENT_MODES:
         raise ValueError(

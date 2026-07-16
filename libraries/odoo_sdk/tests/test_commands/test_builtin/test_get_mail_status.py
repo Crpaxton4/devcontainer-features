@@ -21,11 +21,11 @@ from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.mail_status import (
     MAIL_ACCESS_DENIED_MESSAGE,
-    _m2o_id,
     _recipient_names,
     _summarize_recipients,
     get_mail_status,
 )
+from odoo_sdk.utilities.odoo_helpers import m2o_id
 
 _MESSAGE_FIELDS = ["id", "date", "subject"]
 _MAIL_BASE_FIELDS = [
@@ -258,7 +258,7 @@ class TestRecipientNames(unittest.TestCase):
 
     def test_scalar_mail_message_id_is_returned_unchanged(self):
         # Some serializations return a bare id rather than an [id, name] pair.
-        self.assertEqual(_m2o_id(55), 55)
+        self.assertEqual(m2o_id(55), 55)
 
     def test_partner_read_error_returns_empty_map(self):
         class _BoomExecutor(OdooExecutor):

@@ -36,7 +36,7 @@ from typing import Any, Optional
 
 from odoo_sdk import OdooTransportError
 from odoo_sdk.state import LocalConfig, LocalStateClient, SessionWindow, session_key
-from odoo_sdk.utilities.odoo_helpers import get_employee_id, resolve_many2one
+from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
 
 from .timesheet_reports import day_label, parse_date, row_hours
 from .upload import range_bounds, upload_sessions
@@ -139,7 +139,7 @@ def _logged_hours_by_day_task(
         task = row.get("task_id")
         if not task:
             continue
-        task_id = task[0] if isinstance(task, (list, tuple)) else task
+        task_id = m2o_id(task)
         cell = (day_label(row), int(task_id))
         bucket = buckets.setdefault(
             cell, {"hours": 0.0, "task": resolve_many2one(task)}

@@ -18,7 +18,7 @@ _MOD = "odoo_sdk.cli.__main__"
 class TestCmdResync(unittest.TestCase):
     def _run(self, argv, **patches):
         out = StringIO()
-        with patch(f"{_MOD}._open_local_db", return_value=MagicMock()), patch(
+        with patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()), patch(
             "sys.stdout", out
         ), patch("sys.argv", ["odoo-sdk", *argv]):
             with _apply(patches):
