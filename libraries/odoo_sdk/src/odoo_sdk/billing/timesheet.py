@@ -31,7 +31,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
-from odoo_sdk.utilities.odoo_helpers import get_employee_id
+from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id
 
 # The marker name every anchor row carries. Reusing the marker is what lets a
 # repeated ``ensure_anchor`` adopt the existing row rather than duplicate it.
@@ -209,8 +209,7 @@ def _write_line(client: OdooClient, timesheet_id: int, vals: dict) -> None:
 def _project_id_for(client: OdooClient, task_id: int) -> int:
     """Return the ``project.project`` id owning a ``project.task``."""
     rows = client.execute("project.task", "read", [task_id], fields=["project_id"])
-    project = rows[0]["project_id"]
-    return project[0] if isinstance(project, (list, tuple)) else project
+    return m2o_id(rows[0]["project_id"])
 
 
 def _create_session_line(
@@ -372,13 +371,7 @@ def update_timesheet(
     unit_amount: float,
     description: str,
 ) -> None:
-    """Update one timesheet row's final elapsed hours and description.
-
-    :param client: Connected Odoo client.
-    :param timesheet_id: The ``account.analytic.line`` id to rewrite.
-    :param unit_amount: The hours to record on the row.
-    :param description: The ``name`` (description) to record on the row.
-    """
+    """Update one timesheet row's final elapsed hours (``unit_amount``) and name."""
     _write_line(client, timesheet_id, {"unit_amount": unit_amount, "name": description})
 
 

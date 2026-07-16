@@ -26,15 +26,10 @@ _GROUP_FIELD = {
 
 
 def parse_date(value: Any, label: str) -> Any:
-    """Parse a ``YYYY-MM-DD`` string, raising a naming ``ValueError`` otherwise.
+    """Parse a ``YYYY-MM-DD`` string into a date; raise a ``label``-naming error.
 
-    :param value: Candidate date string supplied by the caller.
-    :type value: Any
-    :param label: Parameter name used in the error message (e.g. ``start_date``).
-    :type label: str
-    :return: The parsed :class:`datetime.date`.
-    :rtype: datetime.date
-    :raises ValueError: When ``value`` is not a ``YYYY-MM-DD`` date string.
+    ``label`` (e.g. ``start_date``) names the offending parameter in the raised
+    ``ValueError`` when ``value`` is not a ``YYYY-MM-DD`` date string.
     """
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -158,21 +153,12 @@ def timesheet_summary(
     group_by: str = "project",
     only_mine: bool = True,
 ) -> dict:
-    """Summarize logged timesheet hours over a date range, grouped one way.
+    """Summarize logged timesheet hours over an inclusive ``YYYY-MM-DD`` range.
 
-    :param client: Odoo API client.
-    :type client: OdooClient
-    :param start_date: Inclusive range start, ``YYYY-MM-DD``.
-    :type start_date: str
-    :param end_date: Inclusive range end, ``YYYY-MM-DD``.
-    :type end_date: str
-    :param group_by: Aggregation axis; one of :data:`VALID_GROUP_BY`.
-    :type group_by: str
-    :param only_mine: Restrict to the authenticated user's employee timesheets.
-    :type only_mine: bool
-    :return: Summary dict with per-group hours/entries and a grand total.
-    :rtype: dict
-    :raises ValueError: On an invalid ``group_by`` or a malformed date.
+    ``group_by`` is one of :data:`VALID_GROUP_BY`; ``only_mine`` restricts to the
+    authenticated user's employee timesheets. Returns a summary dict with
+    per-group hours/entries and a grand total, and raises ``ValueError`` on an
+    invalid ``group_by`` or a malformed date.
     """
     if group_by not in VALID_GROUP_BY:
         raise ValueError(

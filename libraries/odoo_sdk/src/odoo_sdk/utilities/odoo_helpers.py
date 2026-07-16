@@ -22,29 +22,29 @@ _html_to_markdown = html_to_markdown
 
 
 def resolve_many2one(field_val: Any) -> Any:
-    """Return the display name of a many2one field value.
+    """Return the display name of a many2one ``[id, name]`` pair, else the value.
 
-    Odoo returns many2one values as ``[id, "Display Name"]`` pairs. This pure
-    helper extracts the display name, passing through scalars untouched.
-
-    :param field_val: Raw many2one field value or scalar.
-    :type field_val: Any
-    :return: Display name when a ``[id, name]`` pair is given, else the value.
-    :rtype: Any
+    Odoo returns many2one values as ``[id, "Display Name"]`` pairs; this pure
+    helper extracts the display name and passes scalars through untouched.
     """
     if isinstance(field_val, (list, tuple)) and len(field_val) == 2:
         return field_val[1]
     return field_val
 
 
-def format_chatter(chatter: list[dict]) -> str:
-    """Render chatter messages into a plain-text block.
+def m2o_id(field_val: Any) -> Any:
+    """Return the id of a many2one ``[id, name]`` pair, else the value.
 
-    :param chatter: Chatter message dicts with ``date``/``author``/``body`` keys.
-    :type chatter: list[dict]
-    :return: Newline-joined, human-readable chatter transcript.
-    :rtype: str
+    The id-side twin of :func:`resolve_many2one`: pulls ``id`` from an
+    ``[id, name]`` pair and passes scalars through untouched.
     """
+    if isinstance(field_val, (list, tuple)) and len(field_val) == 2:
+        return field_val[0]
+    return field_val
+
+
+def format_chatter(chatter: list[dict]) -> str:
+    """Render chatter messages (``date``/``author``/``body`` dicts) as plain text."""
     lines: list[str] = []
     for msg in chatter:
         header = (
@@ -101,25 +101,6 @@ def get_employee_id(client: OdooClient, uid: int) -> int:
     return records[0]["id"]
 
 
-def create_timesheet(
-    client: OdooClient,
-    task_id: int,
-    project_id: int,
-    employee_id: int,
-    today: date,
-) -> int:
-    """Create a placeholder account.analytic.line and return its id."""
-    vals = {
-        "name": "[/] Work in progress",
-        "unit_amount": 0.0,
-        "project_id": project_id,
-        "task_id": task_id,
-        "date": today.isoformat(),
-        "employee_id": employee_id,
-    }
-    return client.execute("account.analytic.line", "create", vals)
-
-
 def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     """Post a chatter note on project.task and return the message id.
 
@@ -160,17 +141,9 @@ _CHATTER_MESSAGE_FIELDS = [
 def shape_chatter_message(message: dict) -> dict:
     """Normalise one raw ``mail.message`` record into a chatter entry.
 
-    This is the single shaping helper reused by every chatter reader so the
-    presentation stays consistent: the ``author_id`` and ``subtype_id`` many2one
-    pairs are reduced to their display names, and the HTML ``body`` is converted
-    to trimmed Markdown via :func:`html_to_markdown`.
-
-    :param message: Raw ``mail.message`` record carrying at least the fields in
-        :data:`_CHATTER_MESSAGE_FIELDS`.
-    :type message: dict
-    :return: Dict with ``id``, ``date``, ``author``, ``type``, ``subtype`` and a
-        Markdown ``body``.
-    :rtype: dict
+    The single shaping helper reused by every chatter reader so presentation
+    stays consistent: ``author_id`` / ``subtype_id`` many2one pairs are reduced
+    to display names and the HTML ``body`` is converted to trimmed Markdown.
     """
     return {
         "id": message["id"],
@@ -206,31 +179,11 @@ def search_chatter(
 ) -> list[dict]:
     """Full-text search ``mail.message`` bodies, newest-first.
 
-    Builds a ``body ilike <query>`` domain and appends the optional filters that
-    were supplied, then reuses :func:`shape_chatter_message` for presentation and
-    adds the originating ``res_model`` / ``res_id`` so callers can navigate to the
-    source record. Read-only: issues a single ``search_read``.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param query: Substring matched case-insensitively against message bodies.
-    :type query: str
-    :param model: Optional Odoo model name (e.g. ``project.task``) to restrict
-        the search to messages on that model.
-    :type model: str | None
-    :param record_id: Optional record id to restrict the search to one record's
-        conversation; usually paired with ``model``.
-    :type record_id: int | None
-    :param date_from: Optional inclusive lower bound (``YYYY-MM-DD``) on the
-        message timestamp.
-    :type date_from: str | None
-    :param date_to: Optional inclusive upper bound (``YYYY-MM-DD``) on the message
-        timestamp; compared against the start of that day.
-    :type date_to: str | None
-    :param limit: Maximum number of messages to return, newest first.
-    :type limit: int
-    :return: Shaped chatter entries, each carrying ``res_model`` and ``res_id``.
-    :rtype: list[dict]
+    Builds a ``body ilike <query>`` domain plus the optional ``model`` /
+    ``record_id`` / ``date_from`` / ``date_to`` filters, then reuses
+    :func:`shape_chatter_message` and adds the originating ``res_model`` /
+    ``res_id`` so callers can navigate to the source record. Read-only: issues a
+    single ``search_read``.
     """
     domain: list[tuple[str, str, Any]] = [("body", "ilike", query)]
     if model is not None:
@@ -250,13 +203,10 @@ def search_chatter(
         order="date desc",
         limit=limit,
     )
-    result = []
-    for m in messages:
-        shaped = shape_chatter_message(m)
-        shaped["res_model"] = m.get("model")
-        shaped["res_id"] = m.get("res_id")
-        result.append(shaped)
-    return result
+    return [
+        {**shape_chatter_message(m), "res_model": m.get("model"), "res_id": m.get("res_id")}
+        for m in messages
+    ]
 
 
 # Base identity fields always fetched for a task, regardless of ``include``.
@@ -344,11 +294,12 @@ def _task_subtasks(client: OdooClient, child_ids: list[int]) -> list[dict]:
 def _task_detail_fields(selected: list[str]) -> list[str]:
     """Build the Odoo ``fields`` list for the selected ``include`` keys."""
     fields = list(_TASK_BASE_FIELDS)
+    # ``_TASK_INCLUDE_FIELDS`` values are disjoint from ``_TASK_BASE_FIELDS``, so
+    # no base field can be duplicated; ``dict.fromkeys`` dedups repeated selectors.
     extra = [
         field
         for key in selected
         for field in _TASK_INCLUDE_FIELDS.get(key, [])
-        if field not in _TASK_BASE_FIELDS
     ]
     fields.extend(dict.fromkeys(extra))
     return fields
@@ -384,18 +335,9 @@ def get_task_detail(
 
     Base identity fields (name, project, stage, assignees, deadline, priority,
     tags) are always present. Each entry in ``include`` opts into an extra,
-    more expensive collection. When ``include`` is ``None`` the default is
+    more expensive collection (``description``, ``dependencies``,
+    ``timesheets``, ``subtasks``). When ``include`` is ``None`` the default is
     description only, and no relation fields are fetched.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param task_id: The project.task id to fetch.
-    :type task_id: int
-    :param include: Opt-in selectors: ``description``, ``dependencies``,
-        ``timesheets``, ``subtasks``. Defaults to ``["description"]``.
-    :type include: list[str] | None
-    :return: Task detail dict, or ``None`` if the task does not exist.
-    :rtype: dict | None
     """
     selected = ["description"] if include is None else include
 
@@ -464,40 +406,11 @@ MISSING_UNBILLED_CAPABILITY_MESSAGE = (
 )
 
 
-def _probe_unbilled_fields(client: OdooClient) -> tuple[bool, bool]:
-    """Report which ``sale_timesheet`` billing fields exist on the timesheet model.
-
-    ``fields_get`` returns metadata only for the requested fields that actually
-    exist, so membership of each name in the response is a capability check.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :return: ``(has_invoice_id, has_invoice_type)`` presence flags.
-    :rtype: tuple[bool, bool]
-    """
-    meta = client.execute(
-        "account.analytic.line",
-        "fields_get",
-        [_UNBILLED_INVOICE_ID_FIELD, _UNBILLED_INVOICE_TYPE_FIELD],
-    )
-    return (
-        _UNBILLED_INVOICE_ID_FIELD in meta,
-        _UNBILLED_INVOICE_TYPE_FIELD in meta,
-    )
-
-
 def _validate_iso_date(value: str | None, label: str) -> None:
     """Reject a non-``YYYY-MM-DD`` date so filters never silently mis-compare.
 
-    ``None`` (the "unbounded" sentinel) passes through untouched.
-
-    :param value: Candidate ISO date string, or ``None``.
-    :type value: str | None
-    :param label: Parameter name used in the error message.
-    :type label: str
-    :raises ValueError: When ``value`` is not a valid ``YYYY-MM-DD`` string.
-    :return: None.
-    :rtype: None
+    ``None`` (the "unbounded" sentinel) passes through untouched; any other value
+    that is not a canonical ``YYYY-MM-DD`` string raises ``ValueError``.
     """
     if value is None:
         return
@@ -527,17 +440,6 @@ def _unbilled_domain(
     outcome: in full mode an *uninvoiced* line is ``timesheet_invoice_id = False``;
     in fallback mode (only one billing field present) the proxy is
     ``so_line = False`` — not yet attached to a sale order for invoicing.
-
-    :param full: True when both billing fields exist (full semantics).
-    :type full: bool
-    :param start_date: Inclusive lower ``date`` bound (``YYYY-MM-DD``) or None.
-    :type start_date: str | None
-    :param end_date: Inclusive upper ``date`` bound (``YYYY-MM-DD``) or None.
-    :type end_date: str | None
-    :param project_id: Restrict to this ``project.project`` id, or None.
-    :type project_id: int | None
-    :return: Odoo search domain as a list of triples.
-    :rtype: list[tuple]
     """
     domain: list[tuple] = [("project_id", "!=", False)]
     if full:
@@ -558,13 +460,6 @@ def _unbilled_row(record: dict, full: bool) -> dict:
 
     Many2one values are flattened to their display name. ``invoice_type`` is
     included only in full mode; its presence signals which semantics applied.
-
-    :param record: Raw ``search_read`` record.
-    :type record: dict
-    :param full: Whether full (both-field) semantics produced this row.
-    :type full: bool
-    :return: Output line dict with resolved names and decimal hours.
-    :rtype: dict
     """
     row = {
         "id": record["id"],
@@ -583,47 +478,21 @@ def _unbilled_row(record: dict, full: bool) -> dict:
 def _resolve_unbilled_mode(client: OdooClient) -> bool:
     """Probe billing capability, returning the *full-mode* flag or raising.
 
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :raises ValueError: When neither billing field exists.
-    :return: True when both fields exist (full mode); False for the fallback.
-    :rtype: bool
+    ``fields_get`` returns metadata only for the requested fields that actually
+    exist, so membership in the response is a capability check. Returns ``True``
+    when both fields exist (full mode), ``False`` when only one does (fallback),
+    and raises ``ValueError`` when neither exists.
     """
-    has_invoice_id, has_invoice_type = _probe_unbilled_fields(client)
+    meta = client.execute(
+        "account.analytic.line",
+        "fields_get",
+        [_UNBILLED_INVOICE_ID_FIELD, _UNBILLED_INVOICE_TYPE_FIELD],
+    )
+    has_invoice_id = _UNBILLED_INVOICE_ID_FIELD in meta
+    has_invoice_type = _UNBILLED_INVOICE_TYPE_FIELD in meta
     if not has_invoice_id and not has_invoice_type:
         raise ValueError(MISSING_UNBILLED_CAPABILITY_MESSAGE)
     return has_invoice_id and has_invoice_type
-
-
-def _row_hours(record: dict) -> float:
-    """Return a line's ``unit_amount`` as hours, treating missing/empty as zero.
-
-    :param record: Raw ``account.analytic.line`` record.
-    :type record: dict
-    :return: Decimal hours logged on the line.
-    :rtype: float
-    """
-    return record.get("unit_amount") or 0.0
-
-
-def _unbilled_envelope(records: list[dict], full: bool) -> dict:
-    """Assemble the summary envelope from raw records under the given mode.
-
-    :param records: Raw ``search_read`` records.
-    :type records: list[dict]
-    :param full: Whether full (both-field) semantics were used.
-    :type full: bool
-    :return: ``{"mode", "count", "total_hours", "lines"}`` summary envelope.
-    :rtype: dict
-    """
-    lines = [_unbilled_row(record, full) for record in records]
-    total_hours = round(sum(_row_hours(record) for record in records), 2)
-    return {
-        "mode": "full" if full else "fallback",
-        "count": len(lines),
-        "total_hours": total_hours,
-        "lines": lines,
-    }
 
 
 def get_unbilled_hours(
@@ -650,19 +519,9 @@ def get_unbilled_hours(
 
     Only genuine timesheet lines are considered (``project_id != False``). Dates
     are inclusive ``YYYY-MM-DD`` strings; ``hours`` and ``total_hours`` are
-    decimal hours (``unit_amount``).
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param start_date: Inclusive lower ``date`` bound (``YYYY-MM-DD``) or None.
-    :type start_date: str | None
-    :param end_date: Inclusive upper ``date`` bound (``YYYY-MM-DD``) or None.
-    :type end_date: str | None
-    :param project_id: Restrict to this ``project.project`` id, or None for all.
-    :type project_id: int | None
-    :raises ValueError: On a malformed date or when no billing field exists.
-    :return: ``{"mode", "count", "total_hours", "lines"}`` summary envelope.
-    :rtype: dict
+    decimal hours (``unit_amount``). Returns a ``{"mode", "count", "total_hours",
+    "lines"}`` envelope and raises ``ValueError`` on a malformed date or when no
+    billing field exists.
     """
     _validate_iso_date(start_date, "start_date")
     _validate_iso_date(end_date, "end_date")
@@ -680,7 +539,14 @@ def get_unbilled_hours(
         fields=fields,
         order="date asc",
     )
-    return _unbilled_envelope(records, full)
+    lines = [_unbilled_row(record, full) for record in records]
+    total_hours = round(sum(record.get("unit_amount") or 0.0 for record in records), 2)
+    return {
+        "mode": "full" if full else "fallback",
+        "count": len(lines),
+        "total_hours": total_hours,
+        "lines": lines,
+    }
 
 
 # ── task_aging (read-only) ────────────────────────────────────────────────────
@@ -708,14 +574,6 @@ def _odoo_days_since(value: Any, now: datetime) -> Optional[int]:
     string also yields ``None`` rather than raising, so one malformed row cannot
     abort the whole read-only report. The result is floored to whole days
     (``timedelta.days``).
-
-    :param value: Raw Odoo datetime string, or a falsy empty value.
-    :type value: Any
-    :param now: UTC-aware reference "now".
-    :type now: datetime
-    :return: Whole days elapsed, or ``None`` when ``value`` is empty or
-        unparseable.
-    :rtype: Optional[int]
     """
     if not value:
         return None
@@ -786,21 +644,9 @@ def get_task_aging(
     ``limit`` bounds the query at the database (the tasks with the oldest
     ``date_last_stage_update`` are fetched), so at most ``limit`` records are
     returned. ``project_id`` filters by exact project id; ``stage`` is a
-    case-insensitive substring match against the stage's display name.
-
-    :param client: The Odoo API client.
-    :type client: OdooClient
-    :param project_id: Restrict to one project id, or ``None`` for all.
-    :type project_id: Optional[int]
-    :param stage: Case-insensitive stage-name substring filter, or ``None``.
-    :type stage: Optional[str]
-    :param limit: Maximum number of tasks to return.
-    :type limit: int
-    :param now: UTC-aware reference "now"; defaults to the current time.
-        Injected by tests for deterministic day counts.
-    :type now: Optional[datetime]
-    :return: Aging records, stalest-first.
-    :rtype: list[dict]
+    case-insensitive substring match against the stage's display name. ``now``
+    (UTC-aware) defaults to the current time and is injected by tests for
+    deterministic day counts.
     """
     if now is None:
         now = datetime.now(timezone.utc)

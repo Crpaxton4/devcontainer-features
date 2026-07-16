@@ -214,38 +214,6 @@ def _upload_one(
     }
 
 
-def _sweep(
-    client: OdooClient,
-    state: LocalStateClient,
-    selected: list[dict[str, Any]],
-    sessions: list[dict[str, Any]],
-    window_lo: datetime,
-    window_hi: datetime,
-) -> int:
-    """Run the window-scoped orphan sweep after an upload (#353).
-
-    Diffs the upload ledger against the just-billed key set: a
-    previously-uploaded session that no longer bills — its events merged into an
-    adjacent session by a backfilled event, or its run was aborted (#356) — has
-    its Odoo row zeroed and its mapping retired, so the stale hours are not
-    kept. ``derived_keys`` comes from ``selected`` (aborted-window sessions
-    dropped, so their pre-abort uploads are retired) while ``derived_task_ids``
-    comes from ALL derived ``sessions``: the legacy NULL-bounds ledger branch
-    keys on the task ids active in this window, and an aborted run's task must
-    stay in that set so its legacy pre-#353 billing is zeroed too.
-
-    :return: The number of mappings retired.
-    """
-    return sweep_orphaned_uploads(
-        client,
-        state,
-        derived_keys={session.get("session_key", "") for session in selected},
-        derived_task_ids={str(session.get("task_id")) for session in sessions},
-        window_lo=window_lo,
-        window_hi=window_hi,
-    )
-
-
 def upload_sessions(
     client: OdooClient,
     state: LocalStateClient,
@@ -309,7 +277,20 @@ def upload_sessions(
     retired = 0
     if not dry_run:
         window_lo, window_hi = range_bounds(start_date, end_date)
-        retired = _sweep(client, state, selected, sessions, window_lo, window_hi)
+        # Window-scoped orphan sweep (#353): ``derived_keys`` comes from
+        # ``selected`` (aborted-window sessions dropped, so their pre-abort
+        # uploads are retired) while ``derived_task_ids`` comes from ALL derived
+        # ``sessions`` — the legacy NULL-bounds ledger branch keys on the task
+        # ids active in this window, and an aborted run's task must stay in that
+        # set so its legacy pre-#353 billing is zeroed too.
+        retired = sweep_orphaned_uploads(
+            client,
+            state,
+            derived_keys={s.get("session_key", "") for s in selected},
+            derived_task_ids={str(s.get("task_id")) for s in sessions},
+            window_lo=window_lo,
+            window_hi=window_hi,
+        )
     return {
         "uploaded": len(rows),
         "skipped": skipped,

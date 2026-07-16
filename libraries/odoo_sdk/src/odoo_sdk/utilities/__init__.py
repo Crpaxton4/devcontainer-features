@@ -9,7 +9,6 @@ command bodies stay at one altitude.
 from .env import OdooDevcontainerRequiredError, assert_odoo_devcontainer
 from .html import html_to_markdown
 from .odoo_helpers import (
-    create_timesheet,
     format_chatter,
     get_employee_id,
     get_task_chatter,
@@ -29,7 +28,6 @@ __all__ = [
     "name_search_projects",
     "name_search_tasks",
     "get_employee_id",
-    "create_timesheet",
     "post_chatter_note",
     "get_task_chatter",
     "get_task_detail",

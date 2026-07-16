@@ -23,7 +23,7 @@ import json
 import math
 import sys
 from datetime import date, datetime
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
 from odoo_sdk.adapters import (
     GoogleAPIError,
@@ -57,16 +57,6 @@ from odoo_sdk.reap import (
     threshold_from_hours,
 )
 from odoo_sdk.billing.upload import upload_sessions
-
-# Subcommands that skip the global Odoo devcontainer assert and build no
-# OdooClient up front. ``log-event`` / ``discover`` are purely local; ``resync``
-# is local-first — its git/github pullers never touch Odoo, and it constructs an
-# OdooClient lazily (behind its own env assert) only when ``odoo`` is requested,
-# so the global assert must not gate it. ``prune`` is purely local too: it deletes
-# aged local events and retires local ledger mappings, never writing to Odoo (a
-# pruned session's billed Odoo row keeps its hours; only the local mapping goes).
-_LOCAL_ONLY = {"log-event", "discover", "resync", "prune"}
-
 
 def _assert_env() -> None:
     try:
@@ -117,15 +107,9 @@ def _build_registry(
 
     The CLI dispatches every command through this registry instead of
     constructing command classes by hand, so the command layer is the single
-    integration point and no subcommand reaches into ``state`` internals.
-
-    :param client: RPC client shared with every command (the CLI passes a
-        :class:`_LazyOdooClient`).
-    :param state: Shared local state client injected into each command; ``None``
-        lets each command resolve its own (used by the local-only ``discover``).
-    :param config: Shared resolved config injected into each command.
-    :returns: The populated registry.
-    :rtype: Registry
+    integration point and no subcommand reaches into ``state`` internals. A
+    ``None`` ``state`` lets each command resolve its own (the local-only
+    ``discover`` path).
     """
     return register_builtins(Registry(client, state_client=state, config=config))
 
@@ -142,16 +126,21 @@ def _fmt_row(row: dict, *, include_state: bool = True) -> str:
     return "  ".join(parts)
 
 
-def cmd_list(registry: Registry, _args: argparse.Namespace) -> None:
-    runs = registry["list_runs"].execute()
-    if not runs:
-        print("No active runs.")
-        return
+def _print_runs(runs: list[dict]) -> None:
+    """Print the shared run table: header, rule, and one ``_fmt_row`` per run."""
     header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
     print(header)
     print("-" * len(header))
     for row in runs:
         print(_fmt_row(row))
+
+
+def cmd_list(registry: Registry, _args: argparse.Namespace) -> None:
+    runs = registry["list_runs"].execute()
+    if not runs:
+        print("No active runs.")
+        return
+    _print_runs(runs)
 
 
 def cmd_stop(registry: Registry, args: argparse.Namespace) -> None:
@@ -198,11 +187,7 @@ def cmd_report(registry: Registry, args: argparse.Namespace) -> None:
     if not runs:
         print("No runs found.")
         return
-    header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
-    print(header)
-    print("-" * len(header))
-    for row in runs:
-        print(_fmt_row(row))
+    _print_runs(runs)
 
 
 def cmd_normalize(registry: Registry, args: argparse.Namespace) -> None:
@@ -264,19 +249,6 @@ def _parse_payload(raw: Optional[str]) -> Optional[dict]:
     return parsed
 
 
-def _open_local_db() -> TaskStateDB:
-    """Bind to the central tracker DB (construction is inert; no I/O yet).
-
-    The central DB is host-provisioned and bind-mounted (#369): binding never
-    touches the filesystem, so a missing DB is not surfaced here but on the first
-    query/write as a :class:`TrackerStateMissingError`, which :func:`main`
-    renders as one clean, actionable error. Unlike the pre-#369 behavior there is
-    no silent exit-0 for a non-git cwd — repo identity no longer selects the DB,
-    so events log fine with ``repo=""`` from anywhere.
-    """
-    return TaskStateDB()
-
-
 def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
     """Resolve which task ids a logged event attributes to.
 
@@ -320,7 +292,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
     """
     event_type = _resolve_source(args.source)
     payload = _parse_payload(args.payload)
-    db = _open_local_db()
+    db = TaskStateDB()
     LogEventCommand(state=db).execute(
         source=args.source,
         subject=args.subject,
@@ -426,7 +398,7 @@ def cmd_resync(args: argparse.Namespace) -> None:
     and prints a per-source inserted count or skip reason.
     """
     sources = _parse_resync_sources(args.sources)
-    db = _open_local_db()
+    db = TaskStateDB()
     config = LocalConfig.load()
     runners = {
         # git/github stay local-only in the CLI (no Odoo client, so task-id
@@ -554,7 +526,7 @@ def cmd_prune(args: argparse.Namespace) -> None:
     fully-aged sessions it removed. With no ``--older-than`` and no configured
     ``prune_horizon_days``, auto-prune is disabled and nothing is deleted.
     """
-    db = _open_local_db()
+    db = TaskStateDB()
     config = LocalConfig.load()
     days = _resolve_prune_days(args, config)
     if days is None:
@@ -624,7 +596,7 @@ def _reap_run_line(run, *, anchor_closed: bool) -> str:
     )
 
 
-def cmd_reap(args: argparse.Namespace, client) -> None:
+def cmd_reap(args: argparse.Namespace, client, db: TaskStateDB) -> None:
     """Bulk-abort every stale run in the central tracker DB (#366).
 
     Finds the active (``RUNNING`` / ``AWAITING_ANSWERS``) runs whose last activity
@@ -634,7 +606,6 @@ def cmd_reap(args: argparse.Namespace, client) -> None:
     its unedited Odoo anchor. Idempotent: a second reap finds no stale active runs
     because the first left them ``STOPPED``.
     """
-    db = _open_local_db()
     threshold = threshold_from_hours(args.older_than)
     stale = stale_active_runs(db, threshold)
     if not stale:
@@ -820,67 +791,46 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _dispatch(
-    parser: argparse.ArgumentParser,
-    registry: Registry,
-    client,
-    db: TaskStateDB,
-    config: LocalConfig,
-    args: argparse.Namespace,
-) -> None:
-    """Route parsed arguments to the matching command handler.
+class _Ctx(NamedTuple):
+    """The shared peers a subcommand handler may draw on.
 
-    Every subcommand dispatches through the shared ``registry``; the raw
-    ``client``/``db``/``config`` are handed only to the handlers whose utility
-    (``upload_sessions``, ``reap_run``) still needs the injected peers directly.
-
-    :param parser: Parser used to print help for unknown commands.
-    :type parser: argparse.ArgumentParser
-    :param registry: Shared built-in command registry.
-    :type registry: Registry
-    :param client: Shared (lazy) RPC client.
-    :param db: Shared local task-state database.
-    :type db: TaskStateDB
-    :param config: Shared resolved SDK config.
-    :type config: LocalConfig
-    :param args: Parsed CLI arguments.
-    :type args: argparse.Namespace
+    ``registry`` / ``client`` / ``db`` / ``config`` are built only for the
+    Odoo-backed commands; local-only handlers receive ``None`` for them and use
+    just ``args`` (they construct their own local ``TaskStateDB``).
     """
-    if args.command == "list":
-        cmd_list(registry, args)
-    elif args.command == "stop":
-        cmd_stop(registry, args)
-    elif args.command == "stop-all":
-        cmd_stop_all(registry, args)
-    elif args.command == "report":
-        cmd_report(registry, args)
-    elif args.command == "normalize":
-        cmd_normalize(registry, args)
-    elif args.command == "abort":
-        cmd_abort(registry, args)
-    elif args.command == "reap":
-        cmd_reap(args, client)
-    elif args.command == "upload":
-        cmd_upload(args, registry, client, db, config)
-    else:
-        parser.print_help()
-        sys.exit(1)
+
+    args: argparse.Namespace
+    registry: Optional[Registry]
+    client: object
+    db: Optional[TaskStateDB]
+    config: Optional[LocalConfig]
 
 
-def _dispatch_local_only(args: argparse.Namespace) -> None:
-    """Route a local-only command that constructs no OdooClient.
+# The single routing table: command name -> (handler, needs_odoo). A
+# ``needs_odoo=False`` command skips the devcontainer assert and builds no
+# OdooClient because it touches only local tracker state — ``log-event`` writes
+# it, ``discover`` / ``prune`` read it, and ``resync`` is local-first (its
+# git/github pullers never touch Odoo and it constructs an OdooClient lazily,
+# behind its own env assert, only when ``odoo`` is requested). Adding a
+# subcommand means one entry here (plus its parser).
+_COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
+    "list": (lambda c: cmd_list(c.registry, c.args), True),
+    "stop": (lambda c: cmd_stop(c.registry, c.args), True),
+    "stop-all": (lambda c: cmd_stop_all(c.registry, c.args), True),
+    "report": (lambda c: cmd_report(c.registry, c.args), True),
+    "normalize": (lambda c: cmd_normalize(c.registry, c.args), True),
+    "abort": (lambda c: cmd_abort(c.registry, c.args), True),
+    "reap": (lambda c: cmd_reap(c.args, c.client, c.db), True),
+    "upload": (lambda c: cmd_upload(c.args, c.registry, c.client, c.db, c.config), True),
+    "discover": (lambda c: cmd_discover(c.args), False),
+    "resync": (lambda c: cmd_resync(c.args), False),
+    "prune": (lambda c: cmd_prune(c.args), False),
+    "log-event": (lambda c: cmd_log_event(c.args), False),
+}
 
-    These subcommands read (and, for ``log-event``, write) only local tracker
-    state, so they skip the devcontainer assert and never build an OdooClient.
-    """
-    if args.command == "discover":
-        cmd_discover(args)
-    elif args.command == "resync":
-        cmd_resync(args)
-    elif args.command == "prune":
-        cmd_prune(args)
-    else:
-        cmd_log_event(args)
+# The local-only command names, derived from the table so routing stays a single
+# source of truth.
+_LOCAL_ONLY = {name for name, (_, needs_odoo) in _COMMANDS.items() if not needs_odoo}
 
 
 def main() -> None:
@@ -888,16 +838,21 @@ def main() -> None:
     args = parser.parse_args()
     if args.command is None:
         args.command = "list"
+    entry = _COMMANDS.get(args.command)
+    if entry is None:
+        parser.print_help()
+        sys.exit(1)
+    handler, needs_odoo = entry
     try:
-        if args.command in _LOCAL_ONLY:
-            _dispatch_local_only(args)
+        if not needs_odoo:
+            handler(_Ctx(args, None, None, None, None))
             return
         _assert_env()
         client = _LazyOdooClient()
         db = TaskStateDB()
         config = LocalConfig.load()
         registry = _build_registry(client, state=db, config=config)
-        _dispatch(parser, registry, client, db, config, args)
+        handler(_Ctx(args, registry, client, db, config))
     except TrackerStateMissingError as exc:
         # The central DB is host-provisioned and bind-mounted; the SDK never
         # creates it (#369). Surface the single actionable error and fail hard
