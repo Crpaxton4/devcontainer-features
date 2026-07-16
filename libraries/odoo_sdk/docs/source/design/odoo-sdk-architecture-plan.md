@@ -1,5 +1,30 @@
 # Odoo SDK - Architecture Plan
 
+> **Reconciliation note (2026-07).** Sections that describe the *current
+> implemented* state — the recommendation boundary, package layout, current
+> implementation review, public API trajectory, and the system diagrams — have
+> been reconciled to the shipped `odoo_sdk` package. The shipped high-level
+> public surface is `OdooClient`, `OdooRecordset`, and `DomainExpression`
+> (plus `Domain`, `Record`, `Command`/`Registry`, and the `OdooExecutor` /
+> `OdooRpcExecutor` / `OdooJson2Executor` transport tier). Planning-era names
+> that were **never shipped under those names** — `OdooEnv` (the class),
+> `OdooModel`, `OdooQuery`, `OdooSession`, and the `odoo_service` /
+> `command_registry`-at-`src`-top-level package tree — have been removed from
+> the current-state sections or explicitly flagged as unbuilt. Earlier narrative
+> that discusses the *pre-refactor starting point* or *rejected options*
+> intentionally still names the historical thin wrappers (`OdooModel`,
+> `OdooQuery`) and the never-shipped `OdooEnv` object: in the phased roadmap
+> (Phases A–D), the Existing System Review, and the rejected options, those
+> names describe the *plan* and its *starting point*, not the shipped design —
+> where context and the full ORM-like surface live on `OdooRecordset` and the
+> client is itself the model registry. A dedicated session / transport-policy
+> object remains
+> *proposed only* — see [ADR-002](./architecture/ADR-002-session-and-transport-boundary.md)
+> (Proposed); **no session type exists as of 2026-07** (only a passing
+> "session bootstrap" mention in a transport error docstring). The implemented
+> MCP contract is recorded in
+> [ADR-004](./architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 ## Discovery Summary
 > Captured requirements, constraints, and assumptions.
 
@@ -10,13 +35,14 @@ Known requirements
 - Keep tooling local-only for now; no CI pipeline or package publishing workflow is required at this phase.
 - Improve extensibility so new abstractions can be added without repeatedly widening `OdooModel` or `OdooQuery`.
 
-Existing system snapshot
-- Transport: `OdooRpcExecutor` authenticates through `/xmlrpc/2/common` and calls `execute_kw` on `/xmlrpc/2/object`.
-- Entry point: `OdooClient` caches model-bound recordsets and delegates execute calls.
-- Model API: `OdooModel` now acts as a legacy adapter over the recordset-first core; explicit `read()` helpers still return row payloads.
-- Query API: `OdooQuery` remains a legacy fluent compatibility shim over recordset-owned execution.
-- Tooling: local scripts exist for local validation, and mutation testing now defaults to fixed local HTTP Cosmic Ray workers on ports `18101`-`18108` with per-worker copies isolated under `/tmp`.
-- Extension sample: `CommandDispatcher` provides consumer-side command wiring but is orthogonal to ORM mirroring.
+Existing system snapshot (as shipped)
+- Transport: an `OdooExecutor` base with two concrete executors — `OdooRpcExecutor` (XML-RPC over `/xmlrpc/2/common` + `execute_kw` on `/xmlrpc/2/object`) and `OdooJson2Executor` (JSON-2) — live under `odoo_sdk/transport`, alongside the error taxonomy and the cross-cutting `forbid_unlink` guard.
+- Entry point: `OdooClient` (itself an `OdooExecutor`) acts as the model registry facade — `client["model"]` returns a cached, empty model-bound `OdooRecordset`.
+- Core abstraction: `OdooRecordset` carries ids, model identity, executor, and context inline, and owns the ORM-like surface (`search`, `browse`, `read`/`read_adapted`, `create`, `write`, `name_search`, `_read_group`, `filtered`/`mapped`/`sorted`/`grouped`, set operators, `with_context`/`with_company`, `exists`, `action_archive`, …). There is no separate `OdooModel` / `OdooQuery` type; `unlink` is intentionally forbidden SDK-wide by `forbid_unlink`.
+- Domain: `DomainExpression` (with `Condition` / `BooleanExpression`) under `odoo_sdk/query` centralizes domain algebra and serialization.
+- Metadata: `MetadataCache` / `MetadataRequestKey` under `odoo_sdk/env` cache `fields_get` payloads; field value adaptation and x2many command helpers live under `odoo_sdk/fields`.
+- Extension sample: the command `Registry` (`odoo_sdk/commands`) provides consumer-side command wiring and is the surface the MCP server wraps (see [ADR-004](./architecture/ADR-004-mcp-wraps-the-command-registry.md)); it is orthogonal to ORM mirroring.
+- Tooling: local scripts exist for local validation, and mutation testing defaults to fixed local HTTP Cosmic Ray workers on ports `18101`-`18108` with per-worker copies isolated under `/tmp`.
 
 Assumptions
 - This is currently a synchronous Python package, not a web service.
@@ -61,17 +87,17 @@ Option 3: Code-generated model clients from live metadata
 | Trade-offs | Poor fit for Odoo's dynamic model landscape, version drift becomes a build problem, custom modules make the generated surface unstable |
 
 Recommendation
-- Use Option 2.
-- Keep `OdooClient` as the main facade, but re-center the SDK on `OdooEnv`, `OdooRecordset`, and a metadata-aware model registry.
-- Retain the current thin wrappers only as transition layers, not as the final core.
-- Promote `OdooEnv`, `DomainExpression`, and `OdooRecordset` into the supported package API now that the recordset-first contract is implemented.
+- Use Option 2 (this was the direction taken and shipped).
+- Keep `OdooClient` as the main facade and metadata-aware model registry, and center the SDK on `OdooRecordset`.
+- The historical thin wrappers (`OdooModel`, `OdooQuery`) were **not** retained: the recordset-first core replaced them outright rather than carrying them as compatibility layers.
+- `DomainExpression` and `OdooRecordset` are promoted into the supported package API; the recordset-first contract is implemented.
 
-Current implementation boundary
-- `OdooClient`, `OdooEnv`, `DomainExpression`, and `OdooRecordset` are now the supported public entry surfaces.
-- `client["model"]` and `env["model"]` return empty model-bound `OdooRecordset` instances.
-- `OdooModel` and `OdooQuery` remain compatibility layers. They delegate toward env-bound and recordset-bound behavior and are no longer the preferred usage story.
-- `OdooEnv` owns execution context, metadata caching, and the shared field-value cache used for lazy singleton field access.
-- Raw `read()` and `read_adapted()` extraction remain explicit low-level helpers even though the primary ergonomic path is now recordset identity plus dot access.
+Current implementation boundary (as shipped)
+- `OdooClient`, `DomainExpression`, and `OdooRecordset` are the supported public entry surfaces. There is no `OdooEnv`, `OdooModel`, or `OdooQuery` class — those planning-era names were never shipped.
+- `client["model"]` returns an empty model-bound `OdooRecordset` instance.
+- Execution context is carried **inline on `OdooRecordset`** (there is no separate environment object); `with_context` / `with_company` return a derived recordset rather than mutating in place.
+- Metadata caching is owned by `MetadataCache` (`odoo_sdk/env`), shared across recordsets that descend from the same client root; lazily fetched singleton field values are cached on the recordset.
+- Raw `read()` and `read_adapted()` extraction remain explicit low-level helpers even though the primary ergonomic path is recordset identity plus dot access.
 
 Why
 - The current architecture already has a clean transport seam.
@@ -101,39 +127,42 @@ Layer recommendations
 | Public API | Recordset-first synchronous Python facade | Query-builder-first facade | Recordsets mirror Odoo better; query builders are simpler but less expressive |
 | Transport | Wrapped `xmlrpc.client` session adapter | Custom XML-RPC over `httpx` | Stdlib is simpler; custom HTTP client gives finer timeout and telemetry control |
 | Metadata | In-memory `fields_get` cache with explicit invalidation | Optional SQLite metadata cache | Memory cache is enough early; SQLite only matters for heavy reuse or offline tooling |
-| Context and identity | `OdooEnv` plus immutable `OdooRecordset` | Context passed ad hoc in each method | First-class env and recordset objects support `with_context` and future auth variants |
+| Context and identity | Context carried inline on immutable `OdooRecordset` | Context passed ad hoc in each method | A single identity-bearing recordset supports `with_context` / `with_company`; a separate environment object (`OdooEnv`) was considered but not shipped |
 | Value adaptation | Dynamic field adapters based on metadata | Raw dict responses everywhere | Adapters add complexity but are mandatory for ORM-like relations |
 | Extension model | Recordset-centered semantic seams in Phase B, then narrow plugin contracts plus centralized plugin-aware wiring in Phase C | `CommandDispatcher`-only extensions | Deferring plugin seams until Phase C keeps Phase B focused on shared semantic boundaries while keeping Phase C additive to the recordset-first core |
 | Build and test | Keep `unittest`, Hypothesis, coverage, and local scripts such as `uv` tasks and Cosmic Ray helpers | Mock-only tests | Local integration checks against a live Odoo instance still catch version drift without introducing CI yet |
 | Observability | Structured logging now, local execution-policy hooks in Phase C, hosted observability deferred | Logging only | Logging is enough now; later hooks keep future instrumentation cheap without widening Phase B or requiring hosted services |
 
-Recommended package layout evolution
+Shipped package layout
+
+The early plan sketched an `odoo_service/` tree with a top-level `command_registry/`
+package. **That layout was not shipped.** The code lives under a single
+`odoo_sdk` package, with each concern in its own subpackage:
 
 ```text
-src/
-    command_registry/
-        command_registry.py
-    odoo_service/
-        errors.py
-        odoo_client.py
-        odoo_env.py
-        odoo_executor.py
-        odoo_rpc_executor.py
-        domain_expression.py
-        odoo_recordset.py
-        field_adapters.py
-        metadata_cache.py
-        x2many_commands.py
-        plugins/
-            contracts.py
-            registry.py
-        adapters/
-            registry.py
-            stable_models.py
-        execution_policy.py
+src/odoo_sdk/
+    __init__.py           # public exports: OdooClient, OdooRecordset,
+                          #   DomainExpression, Domain, Record, Command, Registry, …
+    transport/            # OdooExecutor base, OdooRpcExecutor (XML-RPC),
+                          #   OdooJson2Executor (JSON-2), errors + forbid_unlink,
+                          #   fault/HTTP error mapping
+    client/               # OdooClient facade / model registry
+    records/              # OdooRecordset (the ORM-like core) + Record
+    query/                # DomainExpression, Condition, BooleanExpression
+    env/                  # MetadataCache, MetadataRequestKey
+    fields/               # field value adaptation + x2many command helpers
+    adapters/             # external-sync and state-persistence adapters
+    commands/             # Command, Registry, builtin commands
+    state/                # local task-tracker state (LocalStateClient, models)
+    sessionization/       # session derivation from events
+    mcp/                  # embedded MCP server, tools, prompts (see ADR-004)
+    cli/  tui/            # command-line and terminal UIs
+    utilities/            # env/timesheet/prune/reap helpers
 ```
 
-Phase B is primarily concerned with the shared semantic boundaries already living under `odoo_sdk.odoo_service`. Phase C should extend that existing package with narrow internal plugin, adapter, and policy modules rather than forcing a package rename or a second public architecture.
+Semantic growth (metadata cache, field adaptation, x2many helpers) and
+extensibility work land in these existing subpackages rather than a separate
+`odoo_service` package or a package rename.
 
 ## System Architecture
 > All Mermaid diagrams with detailed explanations.
@@ -143,37 +172,35 @@ Current implementation review
 
 | Current component | Current role | Extensibility assessment |
 |---|---|---|
-| `OdooClient` | Entry point and model-bound recordset cache | Strong facade now that it anchors the root env and public recordset lookup |
-| `OdooRpcExecutor` | Authentication and `execute_kw` transport | Strong transport seam worth preserving |
-| `OdooModel` | Legacy compatibility adapter over recordset behavior | Useful only as a migration layer; no longer the public center |
-| `OdooQuery` | Legacy fluent builder shim | Useful for compatibility, but no longer returned by the primary lookup path |
-| `CommandDispatcher` | Consumer-side command wiring | Useful integration helper, but not core to ORM mirroring |
+| `OdooClient` | Entry point, model registry facade, and model-bound recordset cache | Strong facade; it is itself an `OdooExecutor` and anchors public recordset lookup |
+| `OdooExecutor` / `OdooRpcExecutor` / `OdooJson2Executor` | Transport base plus XML-RPC and JSON-2 executors; authentication and `execute_kw` | Strong transport seam worth preserving |
+| `OdooRecordset` | The recordset-first ORM-like core: ids, model identity, inline context, reads/writes, x2many, set/functional operations | The public center of the SDK |
+| `DomainExpression` | Domain algebra and serialization | Centralized domain builder |
+| `Registry` (command registry) | Consumer-side command wiring; wrapped by the MCP server | Useful integration helper and the MCP surface, but not core to ORM mirroring |
 
 Root architectural findings
-- The SDK now models env, domain, and recordset explicitly at the public boundary.
-- `browse` now returns model-bound `OdooRecordset` identity instead of row payloads.
+- The SDK models domain and recordset explicitly at the public boundary; context is carried inline on the recordset (there is no `OdooEnv` object).
+- `browse` returns model-bound `OdooRecordset` identity instead of row payloads.
 - `DomainExpression` centralizes boolean-prefix domain support and serialization.
-- Context is first-class in `OdooEnv`, and recordsets carry that env boundary forward.
-- Field metadata and lazily fetched singleton field values are now cached centrally through the env boundary.
+- Field metadata is cached by `MetadataCache`; lazily fetched singleton field values are cached on the recordset.
 - Raw `read()` extraction remains explicit, while x2many writes and singleton dot access route through recordset-owned behavior.
-- `CommandDispatcher` remains exported, but it is still orthogonal to the ORM-like core.
+- The command `Registry` remains exported and is the surface the embedded MCP server wraps, but it is still orthogonal to the ORM-like core.
 
 Public API trajectory
 
 | Public surface | Current implemented behavior | Notes |
 |---|---|---|
 | `client["res.partner"]` | Returns an empty model-bound `OdooRecordset` | Primary supported entry path |
-| `search(domain, limit=..., offset=..., order=...)` | Returns `OdooRecordset` | Native Odoo-style search shape on recordsets and `OdooModel` |
+| `search(domain, limit=..., offset=..., order=...)` | Returns `OdooRecordset` | Native Odoo-style search on recordsets |
 | `browse(ids)` | Returns `OdooRecordset` with stable identity | No row-returning browse path remains on the primary API |
 | `read()` and `read_adapted()` | Return row payloads explicitly | Low-level extraction helpers, not the primary ergonomic API |
-| `with_context(...)` | Returns a derived env or recordset | Context ownership lives in `OdooEnv` |
-| Relational field access | `read()` stays raw, `read_adapted()` adapts payloads, singleton dot access returns adapted values or related recordsets | Current code already supports many2one traversal and cached singleton scalar access |
+| `with_context(...)` / `with_company(...)` | Returns a derived `OdooRecordset` | Context is owned inline by the recordset |
+| Relational field access | `read()` stays raw, `read_adapted()` adapts payloads, singleton dot access returns adapted values or related recordsets | Supports many2one traversal and cached singleton scalar access |
 
-Compatibility overlay
-- `OdooModel` and `OdooQuery` remain importable for compatibility, but they no longer define the primary public contract.
-- `OdooModel.search()` now returns `OdooRecordset` directly.
-- `OdooQuery` remains available only for callers that intentionally preserve legacy builder-style chaining.
-- Raw extraction still coexists with recordset identity and dot access; the compatibility surface is additive rather than a second architectural center.
+Recordset-first surface (no legacy overlay)
+- The shipped SDK exposes **no** `OdooModel` or `OdooQuery` compatibility types — the recordset-first core is the single architectural center.
+- `unlink` is intentionally forbidden SDK-wide by the `forbid_unlink` guard in `odoo_sdk/transport/errors.py`.
+- Raw extraction (`read` / `read_adapted`) coexists with recordset identity and dot access as low-level helpers, not as a second architectural center.
 
 ### System Context Diagram
 
@@ -195,50 +222,41 @@ This context is intentionally small. The SDK sits between Python consumer code a
 ```mermaid
 graph TD
     subgraph PublicAPI["Current Public API"]
-        Client["OdooClient facade"]
-        Env["OdooEnv"]
-        Recordset["OdooRecordset"]
+        Client["OdooClient facade / model registry"]
+        Recordset["OdooRecordset (inline context)"]
         Domain["DomainExpression"]
     end
 
     subgraph Core["Shared Semantic Core"]
-        ModelRegistry["Model registry"]
-        MetadataCache["Metadata cache"]
-        FieldAdapters["Field adapters"]
-        X2Many["x2many helpers"]
-        ErrorMapper["Error mapper"]
-        Session["OdooSession"]
-        Transport["XML-RPC transport"]
+        MetadataCache["MetadataCache"]
+        FieldAdapters["Field value adapters (fields/)"]
+        X2Many["x2many command helpers (fields/)"]
+        ErrorMapper["Error mapper + forbid_unlink"]
+        Transport["OdooExecutor tier: OdooRpcExecutor / OdooJson2Executor"]
     end
 
-    subgraph PhaseCExtensibility["Phase C Extensibility"]
-        PluginHooks["Plugin hooks"]
+    subgraph Proposed["Proposed (not built) — ADR-002"]
+        Session["Session / transport-policy boundary"]
     end
 
-    Client --> Env
     Client --> Recordset
-    Env --> ModelRegistry
-    ModelRegistry --> Recordset
+    Client --> Transport
     Recordset --> Domain
     Recordset --> FieldAdapters
     Recordset --> X2Many
-    ModelRegistry --> MetadataCache
+    Recordset --> MetadataCache
     FieldAdapters --> MetadataCache
-    Env --> Session
-    Session --> Transport
-    Session --> ErrorMapper
-    PluginHooks -.-> FieldAdapters
-    PluginHooks -.-> ModelRegistry
-    Transport --> Odoo["Odoo XML-RPC"]
+    Recordset --> Transport
+    Transport --> ErrorMapper
+    Session -.->|proposed| Transport
+    Transport --> Odoo["Odoo XML-RPC / JSON-2"]
 ```
 
-The major improvement is the separation of concerns:
-- The current public API is recordset-first: `OdooClient`, `OdooEnv`, `DomainExpression`, and `OdooRecordset` are all supported exports.
-- A shared execution boundary, potentially realized as `OdooSession`, owns authentication, transport policy, and mapped-error behavior in the longer-term architecture.
-- `OdooEnv` owns context and session-bound model resolution.
-- `OdooRecordset` owns ids, model identity, and fluent ORM-like behavior.
-- `MetadataCache`, `FieldAdapters`, and x2many helpers are the Phase B semantic additions routed through the shared core.
-- Plugin hooks remain a Phase C extensibility seam rather than a Phase B deliverable.
+The separation of concerns as shipped:
+- The public API is recordset-first: `OdooClient`, `DomainExpression`, and `OdooRecordset` are the supported high-level exports. There is no `OdooEnv` class — the client itself is the model registry and executor, and `OdooRecordset` carries context inline.
+- `OdooRecordset` owns ids, model identity, context, and fluent ORM-like behavior; it issues calls through the `OdooExecutor` tier.
+- `MetadataCache`, the field value adapters, and the x2many command helpers are the semantic additions routed through the shared core.
+- A dedicated session / transport-policy object that would own authentication, retry/timeout policy, and mapped-error behavior in one place is **proposed only** in [ADR-002](./architecture/ADR-002-session-and-transport-boundary.md) (Proposed) and is **not built** — no `OdooSession` type exists as of 2026-07. Today those concerns live on the executor tier and the error-mapping helpers.
 
 ### Data Flow Diagram
 
@@ -246,27 +264,27 @@ The major improvement is the separation of concerns:
 sequenceDiagram
     participant User as Consumer code
     participant Client as OdooClient
-    participant Env as OdooEnv
-    participant Meta as Metadata cache
+    participant Recordset as OdooRecordset
+    participant Meta as MetadataCache
     participant Serializer as Domain and command serializer
-    participant Transport as XML-RPC transport
+    participant Transport as OdooExecutor tier
     participant Odoo as Odoo server
 
-    User->>Client: resolve model
-    Client->>Env: create model handle with context
-    User->>Env: search or browse
-    Env->>Meta: request field metadata
+    User->>Client: resolve model (client["model"])
+    Client-->>Recordset: empty model-bound recordset (inline context)
+    User->>Recordset: search or browse
+    Recordset->>Meta: request field metadata
     alt metadata miss
         Meta->>Transport: fields_get
         Transport->>Odoo: execute_kw(fields_get)
         Odoo-->>Meta: field metadata
     end
-    Env->>Serializer: serialize domain, context, x2many commands
+    Recordset->>Serializer: serialize domain, context, x2many commands
     Serializer->>Transport: execute_kw(search, read, write, ...)
-    Transport->>Odoo: authenticated XML-RPC call
+    Transport->>Odoo: authenticated XML-RPC / JSON-2 call
     Odoo-->>Transport: raw payload
-    Transport-->>Env: raw response or fault
-    Env-->>User: recordset, ids, rows, or mapped error
+    Transport-->>Recordset: raw response or mapped fault
+    Recordset-->>User: recordset, ids, rows, or mapped error
 ```
 
 This keeps network I/O explicit and gives the SDK a consistent place to plug in retries, tracing, redaction, and field adaptation.
@@ -423,7 +441,7 @@ Deferred in Phase C
 
 Guardrails
 - Keep the synchronous facade as the default supported execution path throughout Phase C.
-- Preserve `OdooClient`, `OdooEnv`, `DomainExpression`, `OdooRecordset`, `OdooModel`, `OdooQuery`, `OdooExecutor`, and `CommandDispatcher` as usable public surfaces.
+- Preserve the shipped public surfaces: `OdooClient`, `DomainExpression`, `OdooRecordset`, `OdooExecutor` / `OdooRpcExecutor` / `OdooJson2Executor`, and the command `Registry`. (The roadmap originally also named `OdooEnv`, `OdooModel`, and `OdooQuery`, which were never shipped as separate types — context and the full ORM-like surface live on `OdooRecordset`.)
 - Keep validation local-only and defer hosted observability, CI exit gates, packaging automation, and release automation.
 
 What changes from Phase B
@@ -630,6 +648,7 @@ Data handling
 - [ADR-001 - Adopt a recordset-first public API](./architecture/ADR-001-recordset-first-public-api.md)
 - [ADR-002 - Introduce a session and transport policy boundary](./architecture/ADR-002-session-and-transport-boundary.md)
 - [ADR-003 - Add metadata caching and internal field adaptation](./architecture/ADR-003-metadata-cache-and-plugin-adapters.md)
+- [ADR-004 - MCP wraps the command registry](./architecture/ADR-004-mcp-wraps-the-command-registry.md)
 
 ## Next Steps
 > Prioritized action items for the implementation team.
