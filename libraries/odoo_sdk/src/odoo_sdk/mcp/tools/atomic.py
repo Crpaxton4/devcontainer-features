@@ -544,6 +544,78 @@ def make_unlogged_time_report_tool(registry: Registry):
     return unlogged_time_report
 
 
+@atomic_tool("list_runs")
+def make_list_runs_tool(registry: Registry):
+    def list_runs() -> List[Dict[str, Any]]:
+        """List the active tracker runs with elapsed time.
+
+        Read-only local query of the tracker DB: returns the active
+        RUNNING/AWAITING_ANSWERS runs, each with its run id, task id, task and
+        project names, state, and human-readable elapsed time.
+        """
+        return registry["list_runs"].execute()
+
+    return list_runs
+
+
+@atomic_tool("report_runs")
+def make_report_runs_tool(registry: Registry):
+    def report_runs(include_stopped: bool = False) -> List[Dict[str, Any]]:
+        """Report tracker runs, optionally including the stopped ones.
+
+        Read-only local query of the tracker DB. By default only the active
+        runs are returned; set ``include_stopped=True`` to include STOPPED runs
+        too. Each row carries the run id, task id, task and project names, state,
+        and human-readable elapsed time.
+        """
+        return registry["report_runs"].execute(include_stopped=include_stopped)
+
+    return report_runs
+
+
+@atomic_tool("stop_run")
+def make_stop_run_tool(registry: Registry):
+    def stop_run(run_id: int) -> Dict[str, Any]:
+        """Force-stop one tracker run by its SQLite run id.
+
+        Transitions the run to STOPPED without logging hours (the upload path
+        owns unit_amount; the run stays billable). Reports a missing or
+        already-stopped run instead of raising.
+        """
+        return registry["stop_run"].execute(run_id)
+
+    return stop_run
+
+
+@atomic_tool("stop_all")
+def make_stop_all_tool(registry: Registry):
+    def stop_all() -> List[Dict[str, Any]]:
+        """Force-stop every active tracker run.
+
+        Transitions each active RUNNING/AWAITING_ANSWERS run to STOPPED without
+        logging hours (the upload path owns unit_amount; the runs stay billable)
+        and returns one summary per run stopped.
+        """
+        return registry["stop_all"].execute()
+
+    return stop_all
+
+
+@atomic_tool("normalize_timesheets")
+def make_normalize_timesheets_tool(registry: Registry):
+    def normalize_timesheets(apply: bool = False) -> Dict[str, Any]:
+        """Detect (and optionally merge) duplicate timesheet entries.
+
+        Finds stopped runs of the same task on the same calendar date that each
+        carry their own timesheet. With ``apply=False`` (default) it only reports
+        the duplicate groups; with ``apply=True`` it merges each group into its
+        lowest timesheet id and remaps the local runs.
+        """
+        return registry["normalize_timesheets"].execute(apply=apply)
+
+    return normalize_timesheets
+
+
 @atomic_tool("query_sessions")
 def make_query_sessions_tool(registry: Registry):
     def query_sessions(

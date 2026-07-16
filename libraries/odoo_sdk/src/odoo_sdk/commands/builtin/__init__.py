@@ -28,10 +28,13 @@ from .get_task_chatter import GetTaskChatterCommand
 from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
+from .list_runs import ListRunsCommand
+from .normalize_timesheets import NormalizeTimesheetsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
 from .read_attachment import ReadAttachmentCommand
 from .read_knowledge_article import ReadKnowledgeArticleCommand
+from .report_runs import ReportRunsCommand
 from .resume_task import ResumeTaskCommand
 from .resync import ResyncCommand
 from .search_chatter import SearchChatterCommand
@@ -39,6 +42,8 @@ from .search_knowledge_articles import SearchKnowledgeArticlesCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand
 from .start_task import StartTaskCommand
+from .stop_all_runs import StopAllRunsCommand
+from .stop_run import StopRunCommand
 from .stop_task import StopTaskCommand
 from .task_aging import TaskAgingCommand
 from .task_list import TaskListCommand

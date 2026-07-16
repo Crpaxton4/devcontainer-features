@@ -11,6 +11,7 @@ from .db import (
     SCHEMA_DDL,
     TaskStateDB,
     create_schema,
+    current_repo_label,
     tracker_db_path,
 )
 from .models import (
@@ -38,6 +39,7 @@ __all__ = [
     "session_key",
     "SCHEMA_DDL",
     "create_schema",
+    "current_repo_label",
     "tracker_db_path",
     "TaskAlreadyRunningError",
     "TaskNotRunningError",

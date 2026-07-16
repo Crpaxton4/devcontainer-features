@@ -37,21 +37,16 @@ from odoo_sdk.adapters import (
     sync_odoo_chatter,
 )
 from odoo_sdk.client import OdooClient
-from odoo_sdk.commands import LogEventCommand
-from odoo_sdk.commands.builtin.abort_run import AbortRunCommand
-from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
-from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
+from odoo_sdk.commands import LogEventCommand, Registry
+from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import TaskState
-from odoo_sdk.state.db import current_repo_label
-from odoo_sdk.state.discovery import discover_runs
+from odoo_sdk.state import current_repo_label
 from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
 )
-from odoo_sdk.utilities.odoo_helpers import merge_timesheets
 from odoo_sdk.utilities.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.utilities.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
@@ -81,32 +76,86 @@ def _assert_env() -> None:
         sys.exit(1)
 
 
-def _fmt_row(run, *, include_state: bool = True) -> str:
+class _LazyOdooClient:
+    """Defer :class:`OdooClient` construction until an RPC member is first used.
+
+    The shared :class:`~odoo_sdk.commands.Registry` the CLI builds requires an
+    ``RpcClient``, but several subcommands resolve only local commands
+    (``list``, ``report``, ``discover``, a dry-run ``normalize``) that never
+    reach Odoo. Wrapping the client behind first use lets the CLI build one
+    registry for every subcommand without eagerly constructing — and resolving
+    connection settings for — a client the local-only paths would never touch.
+    The instance is cached, so the first RPC call builds the real client and
+    every later call reuses it. It structurally satisfies
+    :class:`~odoo_sdk.commands.protocols.RpcClient`.
+    """
+
+    def __init__(self) -> None:
+        self._client: Optional[OdooClient] = None
+
+    def _resolve(self) -> OdooClient:
+        """Build the real client on first use and cache it thereafter."""
+        if self._client is None:
+            self._client = OdooClient()
+        return self._client
+
+    @property
+    def uid(self) -> int:
+        return self._resolve().uid
+
+    def execute(self, model: str, method: str, *args, **kwargs):
+        return self._resolve().execute(model, method, *args, **kwargs)
+
+    def __getitem__(self, model_name: str):
+        return self._resolve()[model_name]
+
+
+def _build_registry(
+    client, state: Optional[TaskStateDB] = None, config: Optional[LocalConfig] = None
+) -> Registry:
+    """Build the shared built-in command registry, exactly like MCP/TUI.
+
+    The CLI dispatches every command through this registry instead of
+    constructing command classes by hand, so the command layer is the single
+    integration point and no subcommand reaches into ``state`` internals.
+
+    :param client: RPC client shared with every command (the CLI passes a
+        :class:`_LazyOdooClient`).
+    :param state: Shared local state client injected into each command; ``None``
+        lets each command resolve its own (used by the local-only ``discover``).
+    :param config: Shared resolved config injected into each command.
+    :returns: The populated registry.
+    :rtype: Registry
+    """
+    return register_builtins(Registry(client, state_client=state, config=config))
+
+
+def _fmt_row(row: dict, *, include_state: bool = True) -> str:
     parts = [
-        f"[{run.id}]",
-        f"{run.task_name[:40]:<40}",
-        f"{run.project_name[:25]:<25}",
+        f"[{row['id']}]",
+        f"{row['task_name'][:40]:<40}",
+        f"{row['project_name'][:25]:<25}",
     ]
     if include_state:
-        parts.append(f"{run.state.value:<18}")
-    parts.append(run.elapsed_human)
+        parts.append(f"{row['state']:<18}")
+    parts.append(row["elapsed"])
     return "  ".join(parts)
 
 
-def cmd_list(db: TaskStateDB, _args: argparse.Namespace) -> None:
-    runs = db.get_all_active_runs()
+def cmd_list(registry: Registry, _args: argparse.Namespace) -> None:
+    runs = registry["list_runs"].execute()
     if not runs:
         print("No active runs.")
         return
     header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
     print(header)
     print("-" * len(header))
-    for r in runs:
-        print(_fmt_row(r))
+    for row in runs:
+        print(_fmt_row(row))
 
 
-def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
-    """Force-stop one active run through the shared :class:`StopTaskCommand`.
+def cmd_stop(registry: Registry, args: argparse.Namespace) -> None:
+    """Force-stop one run through the shared :class:`StopRunCommand`.
 
     Routing through the command keeps the "upload owns hours" invariant: stopping
     a run only transitions it to STOPPED and records local session data — it never
@@ -114,119 +163,66 @@ def cmd_stop(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> N
     is billed later by the upload/reconcile path (minimum floor + step rounding),
     so the same run bills identically whether stopped here or via the MCP tool.
     """
-    run_id: int = args.run_id
-    run = db.get_run_by_id(run_id)
-    if run is None:
-        print(f"Error: no run with id {run_id}.", file=sys.stderr)
+    result = registry["stop_run"].execute(args.run_id)
+    if not result["found"]:
+        print(f"Error: no run with id {args.run_id}.", file=sys.stderr)
         sys.exit(1)
-    if run.state == TaskState.STOPPED:
-        print(f"Run {run_id} is already stopped.")
+    if result["already_stopped"]:
+        print(f"Run {args.run_id} is already stopped.")
         return
-
-    description = "[/] Run ended via CLI force-stop"
-    result = StopTaskCommand(client, state=db).execute(run.task_id, description)
     print(
-        f"Stopped run {run_id}: {result['task_name']!r}  "
+        f"Stopped run {args.run_id}: {result['task_name']!r}  "
         f"elapsed={result['elapsed']}"
     )
 
 
-def cmd_stop_all(db: TaskStateDB, _args: argparse.Namespace, client: OdooClient) -> None:
-    """Force-stop every active run through the shared :class:`StopTaskCommand`.
+def cmd_stop_all(registry: Registry, _args: argparse.Namespace) -> None:
+    """Force-stop every active run through the shared :class:`StopAllRunsCommand`.
 
     As with :func:`cmd_stop`, each stop only transitions the run to STOPPED and
     never writes timesheet hours; the upload path owns all ``unit_amount`` writes.
     """
-    runs = db.get_all_active_runs()
-    if not runs:
+    stopped = registry["stop_all"].execute()
+    if not stopped:
         print("Nothing to stop.")
         return
-    description = "[/] Run ended via CLI force-stop"
-    command = StopTaskCommand(client, state=db)
-    for r in runs:
-        command.execute(r.task_id, description)
-        print(f"Stopped run {r.id}: {r.task_name!r}  elapsed={r.elapsed_human}")
+    for row in stopped:
+        print(
+            f"Stopped run {row['id']}: {row['task_name']!r}  "
+            f"elapsed={row['elapsed']}"
+        )
 
 
-def cmd_report(db: TaskStateDB, args: argparse.Namespace) -> None:
-    runs = db.get_all_runs() if args.all else db.get_all_active_runs()
+def cmd_report(registry: Registry, args: argparse.Namespace) -> None:
+    runs = registry["report_runs"].execute(include_stopped=args.all)
     if not runs:
         print("No runs found.")
         return
     header = f"{'[ID]':<5}  {'Task':<40}  {'Project':<25}  {'State':<18}  Elapsed"
     print(header)
     print("-" * len(header))
-    for r in runs:
-        print(_fmt_row(r))
+    for row in runs:
+        print(_fmt_row(row))
 
 
-def _find_duplicate_timesheets(stopped: list) -> dict[tuple[int, str], list]:
-    """Group stopped runs by task and calendar date, keeping only duplicates.
-
-    :param stopped: Stopped runs that each carry a timesheet id.
-    :type stopped: list
-    :returns: Mapping of ``(task_id, day)`` to the runs sharing that key,
-        limited to keys with more than one run.
-    :rtype: dict[tuple[int, str], list]
-    """
-    groups: dict[tuple[int, str], list] = {}
-    for r in stopped:
-        day = r.started_at.date().isoformat()
-        key = (r.task_id, day)
-        groups.setdefault(key, []).append(r)
-    return {k: v for k, v in groups.items() if len(v) > 1}
-
-
-def _apply_timesheet_merge(
-    db: TaskStateDB,
-    client: OdooClient,
-    runs: list,
-    ids: list[int],
-) -> int:
-    """Merge duplicate timesheet entries into the lowest id and remap runs.
-
-    :param db: Local task-state database used to remap timesheet ids.
-    :type db: TaskStateDB
-    :param client: Odoo client used to merge the remote timesheets.
-    :type client: OdooClient
-    :param runs: Runs sharing the same task and calendar date.
-    :type runs: list
-    :param ids: Timesheet ids belonging to ``runs``.
-    :type ids: list[int]
-    :returns: The primary timesheet id the others were merged into.
-    :rtype: int
-    """
-    primary = min(ids)
-    others = [i for i in ids if i != primary]
-    merge_timesheets(client, primary, others)
-    for r in runs:
-        if r.timesheet_id in others:
-            db.remap_timesheet_id(r.timesheet_id, primary)
-    return primary
-
-
-def cmd_normalize(db: TaskStateDB, args: argparse.Namespace, client: OdooClient) -> None:
+def cmd_normalize(registry: Registry, args: argparse.Namespace) -> None:
     """Detect and optionally merge duplicate timesheet entries for same task+date."""
-    duplicates = _find_duplicate_timesheets(db.get_stopped_runs_with_timesheet())
-
-    if not duplicates:
+    report = registry["normalize_timesheets"].execute(apply=args.apply)
+    groups = report["groups"]
+    if not groups:
         print("No duplicate timesheet entries found.")
         return
 
-    for (task_id, day), runs in duplicates.items():
-        task_name = runs[0].task_name
-        total_hours = sum(r.elapsed_hours for r in runs)
-        ids = [r.timesheet_id for r in runs if r.timesheet_id]
+    for group in groups:
         print(
-            f"Task {task_id!r} ({task_name}) on {day}: "
-            f"{len(ids)} entries totalling {total_hours:.2f}h  "
-            f"timesheet_ids={ids}"
+            f"Task {group['task_id']!r} ({group['task_name']}) on {group['day']}: "
+            f"{group['count']} entries totalling {group['total_hours']:.2f}h  "
+            f"timesheet_ids={group['timesheet_ids']}"
         )
-        if args.apply and len(ids) > 1:
-            primary = _apply_timesheet_merge(db, client, runs, ids)
-            print(f"  -> Merged into timesheet {primary}.")
+        if group["merged_into"] is not None:
+            print(f"  -> Merged into timesheet {group['merged_into']}.")
 
-    if not args.apply:
+    if not report["applied"]:
         print("\nDry run — pass --apply to execute the merge.")
 
 
@@ -352,8 +348,14 @@ def _discover_run_line(run: dict) -> str:
 
 
 def cmd_discover(args: argparse.Namespace) -> None:
-    """List every active run in the central tracker DB."""
-    runs = discover_runs(stale_after_hours=args.stale_after_hours)
+    """List every active run in the central tracker DB.
+
+    Local-only: dispatches through the shared registry's ``discover_runs``
+    command (a read-only central-DB query that needs no Odoo connection), so the
+    CLI reaches this via the command layer rather than ``state.discovery``.
+    """
+    registry = _build_registry(_LazyOdooClient())
+    runs = registry["discover_runs"].execute(stale_after_hours=args.stale_after_hours)
     if not runs:
         print("No active runs.")
         return
@@ -475,18 +477,23 @@ def _parse_iso_date(value: str) -> str:
     return value
 
 
-def cmd_upload(args: argparse.Namespace, db: TaskStateDB, client: OdooClient) -> None:
+def cmd_upload(
+    args: argparse.Namespace,
+    registry: Registry,
+    client,
+    db: TaskStateDB,
+    config: LocalConfig,
+) -> None:
     """Bill derived sessions headlessly, sharing the TUI's upload path (#354).
 
-    Runs the same pipeline the TUI's ``u`` key does — ``query_sessions`` derives
-    the sessions for the optional date range, then the shared
-    :func:`~odoo_sdk.utilities.upload.upload_sessions` loop reconciles each
-    session's hours and sweeps the window's stale upload mappings — so a
-    non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI would.
-    ``--dry-run`` previews the billable set without writing to Odoo.
+    Runs the same pipeline the TUI's ``u`` key does — the shared registry's
+    ``query_sessions`` command derives the sessions for the optional date range,
+    then the shared :func:`~odoo_sdk.utilities.upload.upload_sessions` loop
+    reconciles each session's hours and sweeps the window's stale upload mappings
+    — so a non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI
+    would. ``--dry-run`` previews the billable set without writing to Odoo.
     """
-    config = LocalConfig.load()
-    sessions = QuerySessionsCommand(client, state=db, config=config).execute(
+    sessions = registry["query_sessions"].execute(
         start_date=args.start, end_date=args.end, include_events=False
     )
     result = upload_sessions(
@@ -617,7 +624,7 @@ def _reap_run_line(run, *, anchor_closed: bool) -> str:
     )
 
 
-def cmd_reap(args: argparse.Namespace, client: OdooClient) -> None:
+def cmd_reap(args: argparse.Namespace, client) -> None:
     """Bulk-abort every stale run in the central tracker DB (#366).
 
     Finds the active (``RUNNING`` / ``AWAITING_ANSWERS``) runs whose last activity
@@ -645,9 +652,13 @@ def cmd_reap(args: argparse.Namespace, client: OdooClient) -> None:
     print(f"Reaped {len(stale)} stale run(s).")
 
 
-def cmd_abort(args: argparse.Namespace, client: OdooClient) -> None:
-    """Abort a stale run in the central tracker DB and close its Odoo anchor."""
-    result = AbortRunCommand(client).execute(args.run_id)
+def cmd_abort(registry: Registry, args: argparse.Namespace) -> None:
+    """Abort a stale run in the central tracker DB and close its Odoo anchor.
+
+    Dispatches through the shared registry's ``abort_run`` command rather than
+    constructing :class:`AbortRunCommand` by hand.
+    """
+    result = registry["abort_run"].execute(args.run_id)
     if result["already_stopped"]:
         print(
             f"Run {result['run_id']} is already stopped; nothing to abort."
@@ -811,34 +822,46 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _dispatch(
     parser: argparse.ArgumentParser,
+    registry: Registry,
+    client,
     db: TaskStateDB,
+    config: LocalConfig,
     args: argparse.Namespace,
 ) -> None:
     """Route parsed arguments to the matching command handler.
 
+    Every subcommand dispatches through the shared ``registry``; the raw
+    ``client``/``db``/``config`` are handed only to the handlers whose utility
+    (``upload_sessions``, ``reap_run``) still needs the injected peers directly.
+
     :param parser: Parser used to print help for unknown commands.
     :type parser: argparse.ArgumentParser
-    :param db: Local task-state database.
+    :param registry: Shared built-in command registry.
+    :type registry: Registry
+    :param client: Shared (lazy) RPC client.
+    :param db: Shared local task-state database.
     :type db: TaskStateDB
+    :param config: Shared resolved SDK config.
+    :type config: LocalConfig
     :param args: Parsed CLI arguments.
     :type args: argparse.Namespace
     """
     if args.command == "list":
-        cmd_list(db, args)
+        cmd_list(registry, args)
     elif args.command == "stop":
-        cmd_stop(db, args, OdooClient())
+        cmd_stop(registry, args)
     elif args.command == "stop-all":
-        cmd_stop_all(db, args, OdooClient())
+        cmd_stop_all(registry, args)
     elif args.command == "report":
-        cmd_report(db, args)
+        cmd_report(registry, args)
     elif args.command == "normalize":
-        cmd_normalize(db, args, OdooClient())
+        cmd_normalize(registry, args)
     elif args.command == "abort":
-        cmd_abort(args, OdooClient())
+        cmd_abort(registry, args)
     elif args.command == "reap":
-        cmd_reap(args, OdooClient())
+        cmd_reap(args, client)
     elif args.command == "upload":
-        cmd_upload(args, db, OdooClient())
+        cmd_upload(args, registry, client, db, config)
     else:
         parser.print_help()
         sys.exit(1)
@@ -870,7 +893,11 @@ def main() -> None:
             _dispatch_local_only(args)
             return
         _assert_env()
-        _dispatch(parser, TaskStateDB(), args)
+        client = _LazyOdooClient()
+        db = TaskStateDB()
+        config = LocalConfig.load()
+        registry = _build_registry(client, state=db, config=config)
+        _dispatch(parser, registry, client, db, config, args)
     except TrackerStateMissingError as exc:
         # The central DB is host-provisioned and bind-mounted; the SDK never
         # creates it (#369). Surface the single actionable error and fail hard
