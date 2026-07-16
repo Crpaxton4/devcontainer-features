@@ -28,6 +28,7 @@ is issued and any list result is unwrapped to an int at the source.
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
+from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
 
@@ -299,11 +300,6 @@ def reconcile_session(
     return timesheet_id
 
 
-def _as_utc(ts: datetime) -> datetime:
-    """Return ``ts`` as an aware UTC datetime (naive bounds are assumed UTC)."""
-    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
-
-
 def _mapping_is_window_orphan(
     entry: dict,
     derived_task_ids: set[str],
@@ -325,7 +321,7 @@ def _mapping_is_window_orphan(
     """
     started, ended = entry.get("started_at"), entry.get("ended_at")
     if started is not None and ended is not None:
-        lo, hi = _as_utc(window_lo), _as_utc(window_hi)
+        lo, hi = as_utc(window_lo), as_utc(window_hi)
         return (
             datetime.fromisoformat(ended) >= lo
             and datetime.fromisoformat(started) <= hi

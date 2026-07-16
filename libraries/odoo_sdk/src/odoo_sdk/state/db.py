@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from odoo_sdk._utils import as_utc
+
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
@@ -209,6 +211,12 @@ _SESSION_SOURCE_PREDICATE = (
 # ANY development-family event is "Development" (development wins a mixed task's
 # label), a group of purely review-family events is "Review". The flag is derived
 # from ``source`` alone, so it does not perturb the ``DISTINCT`` (one id → one row).
+#
+# Task attribution (#409): the ``json_array_length(events.task_ids) > 0`` filter
+# below — with ``COALESCE(NULLIF(value, ''), 'UNKNOWN')`` bucketing empty ids — is
+# the CANONICAL attribution predicate. The diagnostic gap-sweep mirrors the same
+# "non-empty ``task_ids``" rule in ``sessionization/transform.py``
+# (``billable_events``); parity is pinned by ``test_sessionization/test_parity.py``.
 _DERIVE_SESSIONS_SQL = f"""
 WITH base AS (
     SELECT DISTINCT
@@ -380,9 +388,7 @@ def _normalize_utc_isoformat(ts: datetime) -> str:
     timestamp is converted to UTC; a naive one is treated as already-UTC and
     stamped with ``+00:00`` so all rows sort and compare uniformly.
     """
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc).isoformat()
-    return ts.astimezone(timezone.utc).isoformat()
+    return as_utc(ts).isoformat()
 
 
 def _bound_isoformat(ts: datetime) -> str:
