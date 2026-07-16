@@ -13,26 +13,13 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 class OdooClient:
-    """Expose the public facade for model lookup and executor-backed access.
+    """Public facade for model lookup and executor-backed access — the SDK entry point.
 
-    The client is the supported SDK entry point. It is necessary because consumers
-    need one object that owns connection bootstrap, shared environment state, and
-    cached model proxies while hiding the lower-level executor and transport details.
-
-    :param url: URL of the Odoo server, defaults to None.
-    :type url: Optional[str]
-    :param db: Database name to authenticate against, defaults to None.
-    :type db: Optional[str]
-    :param username: Username used for authentication, defaults to None.
-    :type username: Optional[str]
-    :param password: Password or API key used for authentication, defaults to None.
-    :type password: Optional[str]
-    :param executor: Prebuilt executor to inject instead of creating XML-RPC
-        transport state, defaults to None.
-    :type executor: Optional[OdooExecutor]
-    :param config_path: Optional path to an INI file with connection settings,
-        defaults to None.
-    :type config_path: Optional[str]
+    Owns connection bootstrap, shared environment state, and cached model proxies
+    while hiding the executor and transport details. An ``executor`` may be injected
+    directly (e.g. a test double); otherwise connection state is resolved from an
+    explicit ``config``, then from ``url``/``db``/``username``/``password`` and
+    ``config_path`` via :meth:`OdooConnectionSettings.from_sources`.
     """
 
     def __init__(
@@ -45,30 +32,7 @@ class OdooClient:
         config_path: Optional[str] = None,
         config: Optional["LocalConfig"] = None,
     ):
-        """Initialize the facade with either injected or resolved connection state.
-
-        This constructor is necessary because tests and local tooling need to inject
-        executors directly, while production-style callers need configuration values
-        resolved into a concrete XML-RPC executor automatically.
-
-        :param url: URL of the Odoo server, defaults to None.
-        :type url: Optional[str]
-        :param db: Database name to authenticate against, defaults to None.
-        :type db: Optional[str]
-        :param username: Username used for authentication, defaults to None.
-        :type username: Optional[str]
-        :param password: Password or API key used for authentication, defaults to
-            None.
-        :type password: Optional[str]
-        :param executor: Prebuilt executor to inject instead of creating XML-RPC
-            transport state, defaults to None.
-        :type executor: Optional[OdooExecutor]
-        :param config_path: Optional path to an INI file with connection settings,
-            defaults to None.
-        :type config_path: Optional[str]
-        :return: None.
-        :rtype: None
-        """
+        """Bind an injected executor, or resolve one from ``config``/args."""
         # If an executor is provided by the caller (e.g. a mock in tests),
         # avoid resolving connection settings so construction remains simple
         # and predictable. Only resolve settings when we need to create
@@ -118,15 +82,7 @@ class OdooClient:
         username: str,
         password: str,
     ) -> "OdooClient":
-        """Create a client backed by an XML-RPC executor.
-
-        :param url: Base URL of the Odoo server.
-        :param db: Database name to authenticate against.
-        :param username: Username used for authentication.
-        :param password: Password used for authentication.
-        :return: OdooClient backed by OdooRpcExecutor.
-        :rtype: OdooClient
-        """
+        """Create a client backed by an XML-RPC executor."""
         return cls(executor=OdooRpcExecutor(url, db, username, password))
 
     @classmethod
@@ -136,14 +92,7 @@ class OdooClient:
         db: str,
         api_key: str,
     ) -> "OdooClient":
-        """Create a client backed by a JSON-2 executor.
-
-        :param url: Base URL of the Odoo server.
-        :param db: Database name to authenticate against.
-        :param api_key: Bearer API key used for authentication.
-        :return: OdooClient backed by OdooJson2Executor.
-        :rtype: OdooClient
-        """
+        """Create a client backed by a JSON-2 executor."""
         return cls(executor=OdooJson2Executor(url, db, api_key))
 
     @classmethod
@@ -153,39 +102,20 @@ class OdooClient:
         This factory realizes the layered design where connection settings are
         resolved once (File > Env > Default) by :class:`LocalConfig` and injected,
         rather than each client resolving settings internally.
-
-        :param config: Resolved local configuration.
-        :type config: LocalConfig
-        :return: OdooClient backed by the transport chosen by ``config``.
-        :rtype: OdooClient
         """
         return cls(config=config)
 
     @property
     def uid(self) -> int:
-        """Return the authenticated Odoo user id.
-
-        This property is necessary because some consumers need direct access to the
-        authenticated identity while the client still controls when authentication is
-        triggered.
-
-        :return: Authenticated Odoo user identifier.
-        :rtype: int
-        """
+        """Return the authenticated Odoo user id."""
         return int(self._executor.uid)
 
     @property
     def authenticated(self) -> bool:
-        """Indicate whether the client has successfully authenticated.
+        """Return whether the client has authenticated.
 
-        This property is necessary because some consumers need a simple boolean check
-        for authentication status without directly accessing the uid or handling
-        exceptions from failed authentication attempts. A rejected login raises
-        :class:`OdooAuthenticationError` from the executor, which is translated here
-        into a plain ``False`` rather than propagating.
-
-        :return: True if authenticated successfully, False otherwise.
-        :rtype: bool
+        A rejected login raises :class:`OdooAuthenticationError` from the executor,
+        which is translated here into ``False`` rather than propagating.
         """
         try:
             return bool(self._executor.uid)
@@ -195,38 +125,14 @@ class OdooClient:
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate one model method call through the shared guarded seam.
 
-        This wrapper is necessary because the public facade must satisfy the
-        :class:`~odoo_sdk.commands.protocols.RpcClient` contract structurally
-        (via composition, not inheritance) while still allowing the injected or
-        constructed executor to own the actual transport implementation. It routes
-        through
-        :func:`guarded_execute` — the single chokepoint that applies the
-        cross-cutting ``forbid_unlink`` guard exactly once.
-
-        :param model: Name of the Odoo model to call.
-        :type model: str
-        :param method: Name of the Odoo method to invoke.
-        :type method: str
-        :param args: Positional RPC arguments forwarded to the executor.
-        :type args: Any
-        :param kwargs: Keyword RPC arguments forwarded to the executor.
-        :type kwargs: Any
-        :return: Result returned by the executor.
-        :rtype: Any
+        Satisfies the :class:`~odoo_sdk.commands.protocols.RpcClient` contract by
+        composition and routes through :func:`guarded_execute` — the single
+        chokepoint that applies the ``forbid_unlink`` guard exactly once.
         """
         return guarded_execute(self._executor, model, method, *args, **kwargs)
 
     def __getitem__(self, model_name: str) -> OdooRecordset:
-        """Return a cached model-bound recordset for one Odoo model name.
-
-        This lookup is necessary because the client acts like Odoo's model registry,
-        and the supported high-level contract starts from empty model-bound recordsets.
-
-        :param model_name: Name of the Odoo model to access.
-        :type model_name: str
-        :return: Cached or newly created empty recordset bound to the model.
-        :rtype: OdooRecordset
-        """
+        """Return a cached empty recordset bound to ``model_name``."""
         if model_name not in self._model_recordsets:
             with self._lock:
                 if model_name not in self._model_recordsets:
@@ -236,13 +142,8 @@ class OdooClient:
         return self._model_recordsets[model_name]
 
     def __iter__(self) -> None:
-        """Reject iteration over the client facade.
+        """Reject iteration: the client is keyed model access, not a collection.
 
-        This guard is necessary because the client behaves like keyed model access,
-        not a materialized collection of every model exposed by the server.
-
-        :raises TypeError: Always raised to prevent accidental iteration.
-        :return: This method never returns successfully.
-        :rtype: None
+        :raises TypeError: Always, to prevent accidental iteration.
         """
         raise TypeError("OdooClient is not iterable")
