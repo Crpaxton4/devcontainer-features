@@ -10,8 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from odoo_sdk.client import OdooClient
-
-from .odoo_helpers import get_employee_id, resolve_many2one
+from odoo_sdk.utilities.odoo_helpers import get_employee_id, resolve_many2one
 
 #: Public grouping axes accepted by :func:`timesheet_summary`.
 VALID_GROUP_BY = ("project", "client", "task", "day")
@@ -26,7 +25,7 @@ _GROUP_FIELD = {
 }
 
 
-def _parse_date(value: Any, label: str) -> Any:
+def parse_date(value: Any, label: str) -> Any:
     """Parse a ``YYYY-MM-DD`` string, raising a naming ``ValueError`` otherwise.
 
     :param value: Candidate date string supplied by the caller.
@@ -59,7 +58,7 @@ def _read_group_hours(
     )
 
 
-def _row_hours(row: dict) -> float:
+def row_hours(row: dict) -> float:
     """Return the summed hours for one ``read_group`` row (0.0 when absent)."""
     return float(row.get("unit_amount") or 0.0)
 
@@ -69,7 +68,7 @@ def _row_count(row: dict) -> int:
     return int(row.get("__count") or 0)
 
 
-def _day_label(row: dict) -> Any:
+def day_label(row: dict) -> Any:
     """Return the ISO ``YYYY-MM-DD`` day for a ``date:day`` group row.
 
     Odoo's ``read_group`` renders the ``date:day`` value as a locale-formatted
@@ -95,11 +94,11 @@ def _simple_groups(rows: list[dict], group_by: str) -> list[dict]:
     groups = []
     for row in rows:
         if group_by == "day":
-            label = _day_label(row)
+            label = day_label(row)
         else:
             label = resolve_many2one(row.get(field)) or None
         groups.append(
-            {"label": label, "hours": _row_hours(row), "entries": _row_count(row)}
+            {"label": label, "hours": row_hours(row), "entries": _row_count(row)}
         )
     return groups
 
@@ -144,7 +143,7 @@ def _client_groups(client: OdooClient, rows: list[dict]) -> list[dict]:
         project_id = _project_id_of(row)
         label = partner_by_project.get(project_id) if project_id is not None else None
         bucket = accumulated.setdefault(label, {"hours": 0.0, "entries": 0})
-        bucket["hours"] += _row_hours(row)
+        bucket["hours"] += row_hours(row)
         bucket["entries"] += _row_count(row)
     return [
         {"label": label, "hours": data["hours"], "entries": data["entries"]}
@@ -180,8 +179,8 @@ def timesheet_summary(
             f"Invalid group_by {group_by!r}: expected one of "
             "'project', 'client', 'task', 'day'."
         )
-    start = _parse_date(start_date, "start_date")
-    end = _parse_date(end_date, "end_date")
+    start = parse_date(start_date, "start_date")
+    end = parse_date(end_date, "end_date")
 
     domain = [("date", ">=", start.isoformat()), ("date", "<=", end.isoformat())]
     if only_mine:

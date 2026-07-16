@@ -18,7 +18,7 @@ from unittest.mock import patch
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalStateClient
 from odoo_sdk.transport.executor import OdooExecutor
-from odoo_sdk.utilities.timesheet import (
+from odoo_sdk.billing.timesheet import (
     ANCHOR_NAME,
     ORPHANED_UPLOAD_NAME,
     emit_agent_event,

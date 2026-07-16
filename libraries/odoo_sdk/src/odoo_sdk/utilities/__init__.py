@@ -19,7 +19,6 @@ from .odoo_helpers import (
     post_chatter_note,
     resolve_many2one,
 )
-from .timesheet import merge_timesheets, update_timesheet
 
 __all__ = [
     "assert_odoo_devcontainer",
@@ -31,9 +30,7 @@ __all__ = [
     "name_search_tasks",
     "get_employee_id",
     "create_timesheet",
-    "update_timesheet",
     "post_chatter_note",
     "get_task_chatter",
     "get_task_detail",
-    "merge_timesheets",
 ]

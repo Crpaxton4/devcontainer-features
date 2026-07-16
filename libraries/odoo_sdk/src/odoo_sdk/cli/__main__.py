@@ -47,8 +47,8 @@ from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
 )
-from odoo_sdk.utilities.prune import execute_prune, plan_prune, resolve_horizon
-from odoo_sdk.utilities.reap import (
+from odoo_sdk.prune import execute_prune, plan_prune, resolve_horizon
+from odoo_sdk.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
     is_run_stale,
     reap_run,
@@ -56,7 +56,7 @@ from odoo_sdk.utilities.reap import (
     stale_active_runs,
     threshold_from_hours,
 )
-from odoo_sdk.utilities.upload import upload_sessions
+from odoo_sdk.billing.upload import upload_sessions
 
 # Subcommands that skip the global Odoo devcontainer assert and build no
 # OdooClient up front. ``log-event`` / ``discover`` are purely local; ``resync``
@@ -289,7 +289,7 @@ def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
 
     Stale runs are excluded (#366): a run whose last activity predates the reap
     threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
-    :data:`~odoo_sdk.utilities.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged
+    :data:`~odoo_sdk.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged
     orphan from a dead devcontainer, so attaching this event to it would only
     accrue phantom billable wall-clock. Skipping it freezes its activity clock so
     it stays reapable. The same staleness predicate ``reap`` uses is applied here,
@@ -488,7 +488,7 @@ def cmd_upload(
 
     Runs the same pipeline the TUI's ``u`` key does — the shared registry's
     ``query_sessions`` command derives the sessions for the optional date range,
-    then the shared :func:`~odoo_sdk.utilities.upload.upload_sessions` loop
+    then the shared :func:`~odoo_sdk.billing.upload.upload_sessions` loop
     reconciles each session's hours and sweeps the window's stale upload mappings
     — so a non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI
     would. ``--dry-run`` previews the billable set without writing to Odoo.
@@ -547,7 +547,7 @@ def _resolve_prune_days(
 def cmd_prune(args: argparse.Namespace) -> None:
     """Delete aged hook events past a retention horizon, guarding uploads (#363).
 
-    Local-only: plans the prune (see :func:`~odoo_sdk.utilities.prune.plan_prune`)
+    Local-only: plans the prune (see :func:`~odoo_sdk.prune.plan_prune`)
     so that no un-uploaded session's events and no still-tracked session's
     minimum-id key can ever be disturbed, then either previews (``--dry-run``) or
     executes the deletion and retires the ledger mappings of the fully-uploaded,

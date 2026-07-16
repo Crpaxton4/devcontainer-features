@@ -29,7 +29,7 @@ from unittest.mock import MagicMock, patch
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.state.config import LocalConfig
-from odoo_sdk.utilities.upload import (
+from odoo_sdk.billing.upload import (
     _billable_hours,
     _round_to_step,
     upload_sessions,
@@ -262,7 +262,7 @@ def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
         include_events=True,
     )
     with patch(
-        "odoo_sdk.utilities.upload.LocalConfig.load", return_value=config
+        "odoo_sdk.billing.upload.LocalConfig.load", return_value=config
     ):
         return _upload_sessions(deps, sessions, window)
 

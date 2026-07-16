@@ -1,6 +1,6 @@
 """Tests for the ``timesheet_summary`` built-in command and its MCP tool.
 
-The command is a thin delegator to ``utilities.timesheets.timesheet_summary``;
+The command is a thin delegator to ``billing.timesheet_reports.timesheet_summary``;
 the TOON case drives the full atomic tool -> command -> helper path through the
 server wrapper with ``ODOO_TOON_OUTPUT=1``.
 """

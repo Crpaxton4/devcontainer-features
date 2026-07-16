@@ -31,8 +31,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
-
-from .odoo_helpers import get_employee_id
+from odoo_sdk.utilities.odoo_helpers import get_employee_id
 
 # The marker name every anchor row carries. Reusing the marker is what lets a
 # repeated ``ensure_anchor`` adopt the existing row rather than duplicate it.

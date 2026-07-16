@@ -117,7 +117,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch(
-                "odoo_sdk.utilities.timesheet.get_employee_id",
+                "odoo_sdk.billing.timesheet.get_employee_id",
                 return_value=3,
             ),
             patch(

@@ -1,7 +1,7 @@
 """Tests for the read-only ``unlogged_time_report`` builtin and its MCP tool.
 
 The command delegates to
-:func:`odoo_sdk.utilities.unlogged_time.unlogged_time_report`, which composes the
+:func:`odoo_sdk.billing.unlogged_time.unlogged_time_report`, which composes the
 existing session derivation and dry-run billing path with a read-only Odoo
 ``read_group`` over ``account.analytic.line``. Every test drives real derived
 sessions from a schema-provisioned state DB against a mocked Odoo transport — no

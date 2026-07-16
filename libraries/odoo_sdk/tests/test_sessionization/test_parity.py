@@ -17,7 +17,7 @@ from odoo_sdk.sessionization import (
     build_window_entries,
 )
 from odoo_sdk.state import EventRecord
-from odoo_sdk.utilities.upload import _billable_hours
+from odoo_sdk.billing.upload import _billable_hours
 from tests.support import make_state_db
 
 UTC = timezone.utc

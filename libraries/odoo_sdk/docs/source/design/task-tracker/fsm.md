@@ -72,7 +72,7 @@ Aborting is the escape hatch for wedged runs; it never logs hours.
 
 - `abort_task(task_id)` (`odoo_sdk/commands/builtin/abort_task.py`) force-closes the *active* run for a task, delegating to `LocalStateClient.abort_run` (`odoo_sdk/state/db.py`), which moves the run to `STOPPED` and stamps `aborted_at`. It best-effort retires the run's orphaned Odoo `[/] Work in progress` anchor (renaming it to `[/] aborted stale run` at 0 h), never clobbering a human-edited anchor.
 - `abort_run(run_id_or_task_id)` (`odoo_sdk/commands/builtin/abort_run.py`) resolves a run by SQLite run id first, then by task id, so a run started from a since-deleted checkout is still reachable — there is now one central DB shared across every container. An already-stopped run is reported as a no-op.
-- The reaper (`odoo_sdk/utilities/reap.py`) bulk-aborts every *stale* run through that same `abort_run` path (idempotent). A run's "last activity" is the most recent of the latest event attributed to its task id and its own `started_at`; a run is stale when that predates the threshold.
+- The reaper (`odoo_sdk/reap.py`) bulk-aborts every *stale* run through that same `abort_run` path (idempotent). A run's "last activity" is the most recent of the latest event attributed to its task id and its own `started_at`; a run is stale when that predates the threshold.
 - `discover_runs` (`odoo_sdk/state/discovery.py`) is read-only: it lists active (`RUNNING` / `AWAITING_ANSWERS`) runs with a per-run `stale` flag so an operator can find and abort orphans. It needs no Odoo connection.
 - Aborted runs are excluded from billing: the upload path skips any derived session lying wholly within an aborted run's `[started_at, aborted_at]` window (see `LocalStateClient.get_aborted_runs`).
 
