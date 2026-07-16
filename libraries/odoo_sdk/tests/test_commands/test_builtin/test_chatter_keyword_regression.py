@@ -114,17 +114,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_start_task_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.billing.timesheet.get_employee_id",
-                return_value=3,
-            ),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.ensure_anchor",
-                return_value=99,
-            ),
-        ):
+        with patch(_START_GUARD):
             StartTaskCommand(client, state=db).execute(
                 task_id=10,
                 task_name="Fix VAT",

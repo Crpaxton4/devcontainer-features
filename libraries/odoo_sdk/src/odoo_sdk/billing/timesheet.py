@@ -9,10 +9,6 @@ this module never deletes a timesheet row.
 
 The operations:
 
-* :func:`ensure_anchor` — create (or **adopt** an existing) single anchor row
-  for a task, keyed by the task and the ``[/] Work in progress`` marker so a
-  second ``start_task`` reuses the first row instead of duplicating it
-  (kills #177).
 * :func:`reconcile_session` — upsert one derived session's real hours /
   description onto the single ``account.analytic.line`` it maps to (by its
   stable ``session_key``). Idempotent: safe to re-run, it only ever rewrites
@@ -33,13 +29,14 @@ from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id
 
-# The marker name every anchor row carries. Reusing the marker is what lets a
-# repeated ``ensure_anchor`` adopt the existing row rather than duplicate it.
+# The marker a legacy anchor row carries. The FSM no longer creates anchors
+# (#325), but :func:`_find_anchor` still keys on this marker to adopt any
+# pre-#325 anchor into the upload's reconcile path rather than orphan it.
 ANCHOR_NAME = "[/] Work in progress"
 
 # The name written onto an anchor when a stale orphaned run is aborted across
 # DBs (#331). Distinct from ``ANCHOR_NAME`` so a closed-out orphan is never
-# re-adopted by a later ``ensure_anchor``.
+# re-adopted by a later reconcile via :func:`_find_anchor`.
 ABORTED_ANCHOR_NAME = "[/] aborted stale run"
 
 
@@ -122,6 +119,11 @@ def _find_anchor(client: OdooClient, task_id: int) -> Optional[int]:
     The lookup keys on ``task_id`` plus the anchor marker so only a genuine
     unreconciled anchor is adopted; a reconciled row (real description) is left
     untouched. The lowest id wins so repeated adoption is deterministic.
+
+    As of #325 the FSM no longer *creates* anchors, so this only ever matches a
+    **legacy** row left over from a pre-#325 ``start_task`` — kept so the upload
+    path adopts and closes it out (rather than orphaning it) during the upgrade
+    window; :func:`close_anchor` likewise retires stale legacy anchors on abort.
     """
     rows = client.execute(
         "account.analytic.line",
@@ -132,42 +134,6 @@ def _find_anchor(client: OdooClient, task_id: int) -> Optional[int]:
         limit=1,
     )
     return rows[0]["id"] if rows else None
-
-
-def ensure_anchor(
-    client: OdooClient,
-    task_id: int,
-    project_id: int,
-    employee_id: int,
-    today: date,
-) -> int:
-    """Return the single anchor timesheet id for a task, creating one if needed.
-
-    Idempotent: when an unreconciled ``[/] Work in progress`` row already exists
-    for the task it is **adopted** (its id returned) rather than creating a
-    second one, so a repeated ``start_task`` never duplicates the anchor (#177).
-    Otherwise a single placeholder row (0 hours) is created and its scalar id
-    returned.
-
-    :param client: The Odoo API client.
-    :param task_id: Resolved ``project.task`` id the anchor belongs to.
-    :param project_id: Resolved ``project.project`` id.
-    :param employee_id: The ``hr.employee`` id logging the time.
-    :param today: The anchor row's date.
-    :return: The scalar ``account.analytic.line`` id of the anchor.
-    """
-    existing = _find_anchor(client, task_id)
-    if existing is not None:
-        return existing
-    vals = {
-        "name": ANCHOR_NAME,
-        "unit_amount": 0.0,
-        "project_id": project_id,
-        "task_id": task_id,
-        "date": today.isoformat(),
-        "employee_id": employee_id,
-    }
-    return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
 def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
@@ -234,7 +200,7 @@ def _create_session_line(
 
 # Marker written onto an orphaned upload row the sweep zeroes (#353). Distinct
 # from every other anchor marker so a superseded row is unmistakable in Odoo and
-# is never re-adopted by a later ``ensure_anchor``.
+# is never re-adopted by a later reconcile via :func:`_find_anchor`.
 ORPHANED_UPLOAD_NAME = "[x] session superseded (merged into another session)"
 
 
@@ -256,10 +222,12 @@ def reconcile_session(
 
     1. **Mapped** — a prior upload for ``session_key`` is recorded; its timesheet
        row is rewritten (hours/description) and the mapping's hours updated.
-    2. **Adopt** — no mapping yet, but an unreconciled ``[/] Work in progress``
-       anchor exists for the task (the 0-hour row ``start_task`` created); it is
-       adopted (hours/description/date written) and the mapping recorded.
-    3. **Create** — otherwise a fresh billed line is created (project resolved
+    2. **Adopt** — no mapping yet, but a legacy unreconciled ``[/] Work in
+       progress`` anchor exists for the task (a 0-hour row a pre-#325
+       ``start_task`` created — the FSM no longer makes these); it is adopted
+       (hours/description/date written) and the mapping recorded, so upgrade-era
+       anchors are closed out rather than orphaned.
+    3. **Create** — otherwise (the norm now) a fresh billed line is created (project resolved
        from the task, employee via :func:`resolve_employee_id`) and mapped.
 
     Re-running with the same ``session_key`` always rewrites the same row, so the
