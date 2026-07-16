@@ -148,7 +148,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         db = _tmp_db()
         from datetime import date
 
-        from odoo_sdk.utilities.timesheet import ensure_anchor
+        from odoo_sdk.billing.timesheet import ensure_anchor
 
         first_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
         second_id = ensure_anchor(client, 24648, 5, 3, date(2026, 7, 10))
@@ -165,7 +165,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         # the ``[/] Work in progress`` marker — before the next start.
         from datetime import datetime, timezone
 
-        from odoo_sdk.utilities.timesheet import reconcile_session
+        from odoo_sdk.billing.timesheet import reconcile_session
 
         client = _RecordingClient()
         db = _tmp_db()

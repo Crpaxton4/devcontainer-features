@@ -6,7 +6,7 @@ from ..command import Command
 from ..protocols import RpcClient
 from ._registration import builtin_command
 from odoo_sdk.state import LocalStateClient
-from odoo_sdk.utilities.timesheet import merge_timesheets
+from odoo_sdk.billing.timesheet import merge_timesheets
 
 
 def _find_duplicate_timesheets(stopped: list) -> dict[tuple[int, str], list]:
@@ -62,7 +62,7 @@ class NormalizeTimesheetsCommand(Command):
     their own ``account.analytic.line``; this command finds those duplicate
     groups. By default it only reports them (a dry run). With ``apply=True`` it
     merges each group's entries into their lowest timesheet id (via
-    :func:`~odoo_sdk.utilities.timesheet.merge_timesheets`) and remaps the
+    :func:`~odoo_sdk.billing.timesheet.merge_timesheets`) and remaps the
     local runs onto that primary id, so the day's hours land on one timesheet.
     """
 

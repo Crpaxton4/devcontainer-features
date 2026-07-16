@@ -17,7 +17,7 @@ from odoo_sdk.utilities.odoo_helpers import (
     name_search_tasks,
     post_chatter_note,
 )
-from odoo_sdk.utilities.timesheet import merge_timesheets, update_timesheet
+from odoo_sdk.billing.timesheet import merge_timesheets, update_timesheet
 
 
 def _client() -> MagicMock:

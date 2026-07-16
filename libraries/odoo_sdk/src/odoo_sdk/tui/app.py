@@ -31,7 +31,7 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.commands.protocols import RpcClient
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
 from odoo_sdk.utilities.logged_lines import logged_hours_by_task_day
-from odoo_sdk.utilities.upload import range_bounds, upload_sessions
+from odoo_sdk.billing.upload import range_bounds, upload_sessions
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
@@ -166,7 +166,7 @@ def refresh(deps: TuiDeps, state: AppState) -> AppState:
 def _window_bounds(window: DateWindow) -> tuple[datetime, datetime]:
     """Return the ``[lo, hi)`` datetime bounds the session query covers.
 
-    Delegates to the shared :func:`~odoo_sdk.utilities.upload.range_bounds` so
+    Delegates to the shared :func:`~odoo_sdk.billing.upload.range_bounds` so
     the TUI, the ``query_sessions`` command, and the upload sweep all resolve
     one inclusive-date semantic: ``lo`` is midnight of the start day and ``hi``
     is midnight of the day after the end, so the whole end day is counted.
@@ -255,7 +255,7 @@ def _upload_sessions(
     """Bill the derived sessions through the shared upload loop (#354).
 
     The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
-    :func:`~odoo_sdk.utilities.upload.upload_sessions` path: it reconciles each
+    :func:`~odoo_sdk.billing.upload.upload_sessions` path: it reconciles each
     session through the sole ``account.analytic.line`` hours-writer (idempotent
     per ``session_key``, so a re-run never double-bills) and then runs the
     window-scoped orphan sweep (#353) that zeroes and retires mappings that no

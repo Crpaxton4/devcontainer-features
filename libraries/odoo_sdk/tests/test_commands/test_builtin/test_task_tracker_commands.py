@@ -459,7 +459,7 @@ class TestStartTaskCommand(unittest.TestCase):
     def _start(self, client, db, **kwargs):
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.billing.timesheet.get_employee_id", return_value=3),
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
         ):
@@ -530,7 +530,7 @@ class TestStartTaskCommand(unittest.TestCase):
         db.set_setting("employee_id", "42")
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id") as mock_eid,
+            patch("odoo_sdk.billing.timesheet.get_employee_id") as mock_eid,
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=1),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):
@@ -543,7 +543,7 @@ class TestStartTaskCommand(unittest.TestCase):
         with (
             patch(_START_GUARD),
             patch(
-                "odoo_sdk.utilities.timesheet.get_employee_id",
+                "odoo_sdk.billing.timesheet.get_employee_id",
                 return_value=77,
             ) as mock_eid,
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=1),
@@ -587,7 +587,7 @@ class TestStartTaskCommand(unittest.TestCase):
 
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.billing.timesheet.get_employee_id", return_value=3),
             patch(
                 "odoo_sdk.commands.builtin.start_task.ensure_anchor",
                 side_effect=lambda *a, **k: order.append("timesheet") or 99,
@@ -611,7 +611,7 @@ class TestStartTaskCommand(unittest.TestCase):
         db = _tmp_db()
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.billing.timesheet.get_employee_id", return_value=3),
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch(
                 "odoo_sdk.commands.builtin.start_task.post_chatter_note",
@@ -643,7 +643,7 @@ class TestStartTaskCommand(unittest.TestCase):
         db = _tmp_db()
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.billing.timesheet.get_employee_id", return_value=3),
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch(
                 "odoo_sdk.commands.builtin.start_task.post_chatter_note",
@@ -739,7 +739,7 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         db = _tmp_db()
         with (
             patch(_START_GUARD),
-            patch("odoo_sdk.utilities.timesheet.get_employee_id", return_value=3),
+            patch("odoo_sdk.billing.timesheet.get_employee_id", return_value=3),
             patch("odoo_sdk.commands.builtin.start_task.ensure_anchor", return_value=99),
             patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
         ):

@@ -43,7 +43,7 @@ def billable_seconds(raw_secs: float, config: "SessionizationConfig") -> float:
     Applies the shared billing policy — round the raw span (in hours) to the
     nearest ``round_session_hours`` step half-up, then raise it to the
     ``min_session_hours`` floor — and converts back to seconds. This mirrors
-    ``odoo_sdk.utilities.upload._billable_hours`` bit-for-bit, so a session's
+    ``odoo_sdk.billing.upload._billable_hours`` bit-for-bit, so a session's
     billed duration here equals the hours an upload writes for the same span.
     """
     raw_hours = raw_secs / 3600.0

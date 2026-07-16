@@ -4,7 +4,7 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskNotRunningError
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
-from odoo_sdk.utilities.timesheet import close_anchor
+from odoo_sdk.billing.timesheet import close_anchor
 
 
 @builtin_command

@@ -8,7 +8,7 @@ from odoo_sdk.state import TaskAlreadyRunningError
 from odoo_sdk.utilities.checkpoint import checkpoint_hint
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
-from odoo_sdk.utilities.timesheet import ensure_anchor, resolve_employee_id
+from odoo_sdk.billing.timesheet import ensure_anchor, resolve_employee_id
 
 log = logging.getLogger(__name__)
 

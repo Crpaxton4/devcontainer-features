@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalStateClient, TaskNotRunningError, TaskRun
-from odoo_sdk.utilities.timesheet import close_anchor
+from odoo_sdk.billing.timesheet import close_anchor
 
 #: Default staleness horizon (hours) for both ``reap`` and the attachment
 #: exclusion when no ``--older-than`` flag or env override is given.

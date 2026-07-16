@@ -8,7 +8,7 @@ empty ranges, ``only_mine`` on/off, and the invalid-input error messages.
 import unittest
 from unittest.mock import MagicMock
 
-from odoo_sdk.utilities.timesheets import timesheet_summary
+from odoo_sdk.billing.timesheet_reports import timesheet_summary
 
 
 def _client(uid: int = 7) -> MagicMock:

@@ -10,7 +10,7 @@ code) and the built-in command surface is pinned 1:1 to the explicit MCP tool
 surface, which deliberately does not expose an upload tool.
 
 The loop is: **reconcile each session, then orphan-sweep once**. Sessions are
-reconciled through :func:`odoo_sdk.utilities.timesheet.reconcile_session`, the
+reconciled through :func:`odoo_sdk.billing.timesheet.reconcile_session`, the
 sole ``account.analytic.line`` hours-writer for the derived-upload path, so a
 re-run never double-bills (each session's stable ``session_key`` maps to one
 row). Sessions lacking a numeric task id carry no Odoo task to bill and are
@@ -19,7 +19,7 @@ skipped. Sessions lying wholly within an aborted run's window
 to log that run's work, so its leftover events must never bill — and, because
 they are excluded from the derived set, any hours a pre-abort upload already
 wrote for them are zeroed by the sweep. After billing, the stale-mapping sweep
-(:func:`odoo_sdk.utilities.timesheet.sweep_orphaned_uploads`, #353) diffs the
+(:func:`odoo_sdk.billing.timesheet.sweep_orphaned_uploads`, #353) diffs the
 upload ledger against the just-derived key set for the window and zeroes /
 retires any mapping that no longer derives, so merged-away sessions are not
 double-counted. Because the sweep runs inside this shared path, both entry

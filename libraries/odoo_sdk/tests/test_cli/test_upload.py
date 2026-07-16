@@ -175,7 +175,7 @@ class TestCmdUpload(unittest.TestCase):
         # The acceptance proof for #354: the same seeded events driven through
         # the TUI 'u' loop and through headless `odoo-sdk upload` produce the
         # IDENTICAL account.analytic.line wire calls, because both surfaces
-        # share the one utilities.upload.upload_sessions loop.
+        # share the one billing.upload.upload_sessions loop.
         from odoo_sdk.commands import Registry
         from odoo_sdk.commands.builtin import register_builtins
         from odoo_sdk.tui.app import TuiDeps, _upload_sessions

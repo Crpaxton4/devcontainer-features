@@ -19,8 +19,8 @@ from unittest.mock import MagicMock, patch
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.state import LocalStateClient
 from odoo_sdk.state.db import tracker_db_path
-from odoo_sdk.utilities.reap import REAP_THRESHOLD_ENV
-from odoo_sdk.utilities.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
+from odoo_sdk.reap import REAP_THRESHOLD_ENV
+from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
 from tests.support import provision_schema
 
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"

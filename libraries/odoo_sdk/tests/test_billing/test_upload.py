@@ -17,14 +17,14 @@ from unittest.mock import MagicMock, patch
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.state import EventRecord
 from odoo_sdk.state.config import LocalConfig
-from odoo_sdk.utilities.upload import (
+from odoo_sdk.billing.upload import (
     range_bounds,
     upload_sessions,
     _numeric_task_id,
 )
 from tests.support import make_state_db
 
-_MOD = "odoo_sdk.utilities.upload"
+_MOD = "odoo_sdk.billing.upload"
 _RECONCILE = f"{_MOD}.reconcile_session"
 _SWEEP = f"{_MOD}.sweep_orphaned_uploads"
 
