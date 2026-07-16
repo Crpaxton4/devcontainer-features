@@ -1,7 +1,29 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
+
+
+def as_utc(ts: datetime) -> datetime:
+    """Return ``ts`` as an aware UTC datetime.
+
+    This helper is the single source for the naive→UTC normalization that several
+    layers (``utilities/``, ``state/``) previously each re-implemented by hand and
+    had to keep behavior-identical. A naive datetime is assumed to already be UTC
+    and is stamped with the UTC timezone; an aware datetime is converted to UTC.
+    Both forms therefore return the same instant expressed in one uniform offset,
+    which callers rely on for offset-safe comparison, arithmetic, and string
+    formatting.
+
+    :param ts: Naive or aware datetime to normalize.
+    :type ts: datetime
+    :return: The same instant as an aware UTC datetime.
+    :rtype: datetime
+    """
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
 
 
 def _is_sequence(value: Any) -> bool:

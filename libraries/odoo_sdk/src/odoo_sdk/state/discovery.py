@@ -17,14 +17,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from odoo_sdk._utils import as_utc
+
 from .db import LocalStateClient, tracker_db_path
 
 
 def _is_stale(started_at: datetime, threshold: datetime) -> bool:
     """Return whether ``started_at`` is older than ``threshold`` (UTC-safe)."""
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=timezone.utc)
-    return started_at < threshold
+    return as_utc(started_at) < threshold
 
 
 def _run_entry(run: Any, threshold: datetime) -> dict:

@@ -15,6 +15,8 @@ mirroring how MCP telemetry emission is swallowed in ``mcp/server.py``.
 from datetime import datetime, timezone
 from typing import Any
 
+from odoo_sdk._utils import as_utc
+
 # Minutes since the last ``task_note`` beyond which the response nudges the
 # agent to post a checkpoint. 15 minutes is long enough not to fire mid
 # file-group on a normally-paced implementation, yet short enough to flag the
@@ -30,7 +32,7 @@ def _elapsed_minutes(since: datetime) -> int:
     A naive ``since`` is treated as UTC so it can be subtracted from an aware
     ``now``; a negative delta (clock skew) is clamped to 0.
     """
-    reference = since if since.tzinfo is not None else since.replace(tzinfo=timezone.utc)
+    reference = as_utc(since)
     seconds = (datetime.now(timezone.utc) - reference).total_seconds()
     return max(0, int(seconds // 60))
 

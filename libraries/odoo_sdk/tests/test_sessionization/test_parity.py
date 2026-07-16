@@ -124,5 +124,57 @@ class TestSessionizationParity(unittest.TestCase):
         self.assertEqual(python, sql)
 
 
+class TestAttributionFilterParity(unittest.TestCase):
+    """Pin the task-attribution filter's single-sourcing (issue #409).
+
+    The canonical predicate is ``state/db.py``'s SQL
+    (``json_array_length(task_ids) > 0``); the Python diagnostic
+    :func:`billable_events` mirrors the shared "non-empty ``task_ids``" rule and
+    intentionally adds a stricter "resolved-only" refinement. This suite pins
+    both the shared agreement and the documented divergence so neither drifts
+    silently.
+    """
+
+    def setUp(self):
+        self.db = make_state_db()
+        self.config = SessionizationConfig(
+            start_date=date(2026, 6, 1), end_date=date(2026, 6, 1)
+        )
+
+    def _sql_task_ids(self):
+        windows = self.db.derive_sessions_overlapping(
+            self.config.range_start,
+            self.config.range_end,
+            gap_secs=self.config.session_gap_secs,
+        )
+        return {window.task_id for window in windows}
+
+    def _python_kept_task_ids(self):
+        events = load_raw_events(
+            self.db, self.config.range_start, self.config.range_end
+        )
+        kept = []
+        for event in billable_events(events):
+            kept.extend(event.task_ids)
+        return set(kept)
+
+    def test_both_engines_drop_events_with_empty_task_ids(self):
+        # The shared canonical predicate: an event carrying no task id at all is
+        # excluded by BOTH the SQL derivation and the Python diagnostic filter.
+        _event(self.db, "commit", 9, 0, "101")
+        _event(self.db, "commit", 9, 5, "")  # empty task_ids
+        self.assertEqual(self._sql_task_ids(), {"101"})
+        self.assertEqual(self._python_kept_task_ids(), {"101"})
+
+    def test_unknown_bucket_kept_by_sql_but_dropped_by_python(self):
+        # Documented divergence (#409): the SQL derivation keeps an unresolved
+        # event under the ``UNKNOWN`` task_key for the full audit, while the
+        # diagnostic sweep drops it so it cannot skew resolved-task utilisation.
+        _event(self.db, "commit", 9, 0, "101")
+        _event(self.db, "commit", 9, 10, "UNKNOWN")
+        self.assertEqual(self._sql_task_ids(), {"101", "UNKNOWN"})
+        self.assertEqual(self._python_kept_task_ids(), {"101"})
+
+
 if __name__ == "__main__":
     unittest.main()

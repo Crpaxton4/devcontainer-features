@@ -109,7 +109,20 @@ def build_window_entries(
 
 
 def billable_events(events: list[RawEvent]) -> list[RawEvent]:
-    """Return events with resolved task IDs only."""
+    """Return events with resolved task IDs only.
+
+    The canonical task-attribution predicate is the SQL in ``state/db.py``'s
+    ``derive_sessions_overlapping`` (``json_array_length(events.task_ids) > 0``,
+    with ``COALESCE(NULLIF(value, ''), 'UNKNOWN')`` bucketing) — that production
+    derivation is the single source of truth for whether an event carries a task.
+    This diagnostic gap-sweep filter shares that "non-empty ``task_ids``" rule and
+    additionally drops events whose task set is unresolved (contains ``UNKNOWN``),
+    because the sweep scores resolved-task utilisation and must not let an
+    ``UNKNOWN`` bucket skew gap selection; the SQL path instead keeps such rows
+    under an ``UNKNOWN`` ``task_key`` for the full audit. Both the shared predicate
+    and this intentional divergence are pinned by
+    ``tests/test_sessionization/test_parity.py``.
+    """
     return [
         event
         for event in events

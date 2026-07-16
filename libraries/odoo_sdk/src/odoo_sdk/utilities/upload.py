@@ -33,10 +33,11 @@ from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Optional
 
+from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
 
-from .timesheet import _as_utc, reconcile_session, sweep_orphaned_uploads
+from .timesheet import reconcile_session, sweep_orphaned_uploads
 
 
 # How far past ``aborted_at`` the aborted-run exclusion window extends (#356).
@@ -85,8 +86,8 @@ def _within_aborted_window(
     normalization parse naive) so the comparison never mixes naive and aware.
     """
     task_id = str(session.get("task_id"))
-    started = _as_utc(datetime.fromisoformat(session["started_at"]))
-    ended = _as_utc(datetime.fromisoformat(session["ended_at"]))
+    started = as_utc(datetime.fromisoformat(session["started_at"]))
+    ended = as_utc(datetime.fromisoformat(session["ended_at"]))
     for wtask, wstart, wend in windows:
         if (
             task_id == wtask
