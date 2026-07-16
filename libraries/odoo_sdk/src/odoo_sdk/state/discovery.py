@@ -8,9 +8,8 @@ container, so discovery collapses to an ordinary query of that one DB: list the
 active (``RUNNING``/``AWAITING_ANSWERS``) runs and flag the stale ones so an
 operator can abort the orphans with ``abort_run``.
 
-The DB is host-provisioned and never self-created: when it is absent,
-:meth:`LocalStateClient._connect` raises :class:`TrackerStateMissingError`, and
-that single actionable error propagates to the caller rather than being masked.
+The DB is host-provisioned and never self-created (#369; see
+:class:`TrackerStateMissingError`), so an absent DB surfaces that error here too.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -52,10 +51,6 @@ def discover_runs(
     ``started_at``, ``timesheet_id`` and a per-run ``stale`` flag (started before
     ``stale_after_hours`` ago).
 
-    :param root: State root holding ``tracker.db``; defaults to the env-aware
-        resolution.
-    :param stale_after_hours: Age past which an active run is flagged stale.
-    :return: One dict per active run, ordered by start time.
     :raises TrackerStateMissingError: When the central DB has not been
         host-provisioned at its expected path.
     """

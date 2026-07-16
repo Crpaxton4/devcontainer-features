@@ -9,7 +9,6 @@ from .config import LocalConfig, OdooConnectionSettings
 from .db import (
     LocalStateClient,
     SCHEMA_DDL,
-    TaskStateDB,
     create_schema,
     current_repo_label,
     tracker_db_path,
@@ -17,7 +16,6 @@ from .db import (
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
-    ProjectIdError,
     SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
@@ -29,7 +27,6 @@ from .models import (
 
 __all__ = [
     "LocalStateClient",
-    "TaskStateDB",
     "LocalConfig",
     "OdooConnectionSettings",
     "TaskState",
@@ -44,6 +41,5 @@ __all__ = [
     "TaskAlreadyRunningError",
     "TaskNotRunningError",
     "InvalidStateTransitionError",
-    "ProjectIdError",
     "TrackerStateMissingError",
 ]

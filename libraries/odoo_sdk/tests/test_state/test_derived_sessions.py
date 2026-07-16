@@ -510,10 +510,9 @@ class TestDerivationPrefilter(unittest.TestCase):
         from odoo_sdk.state.db import (
             AGENTLESS_REPO_SENTINEL,
             _DERIVE_SESSIONS_SQL,
-            _bound_isoformat,
             _derivation_margin,
-            _widen_lower,
-            _widen_upper,
+            _normalize_utc_isoformat,
+            _widen,
         )
 
         state = _tmp_state()
@@ -524,10 +523,10 @@ class TestDerivationPrefilter(unittest.TestCase):
         params = {
             "sentinel": AGENTLESS_REPO_SENTINEL,
             "gap_secs": GAP,
-            "start": _bound_isoformat(lo),
-            "end": _bound_isoformat(hi),
-            "wstart": _bound_isoformat(_widen_lower(lo, margin)),
-            "wend": _bound_isoformat(_widen_upper(hi, margin)),
+            "start": _normalize_utc_isoformat(lo),
+            "end": _normalize_utc_isoformat(hi),
+            "wstart": _normalize_utc_isoformat(_widen(lo, -margin)),
+            "wend": _normalize_utc_isoformat(_widen(hi, margin)),
         }
         sql = "EXPLAIN QUERY PLAN " + _DERIVE_SESSIONS_SQL.format(extra="")
         with state._connect() as conn:

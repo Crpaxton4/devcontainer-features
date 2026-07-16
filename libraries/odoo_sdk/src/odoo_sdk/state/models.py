@@ -12,10 +12,6 @@ class TaskState(str, Enum):
     STOPPED = "STOPPED"
 
 
-class ProjectIdError(RuntimeError):
-    """Raised when the git remote origin URL cannot be determined."""
-
-
 class TrackerStateMissingError(RuntimeError):
     """Raised when the central tracker database does not exist at its path.
 
