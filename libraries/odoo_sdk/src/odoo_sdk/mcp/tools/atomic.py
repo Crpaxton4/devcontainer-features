@@ -90,14 +90,7 @@ def make_get_task_tool(registry: Registry):
     def get_task(
         task_id: int, include: Optional[List[str]] = None
     ) -> Optional[dict]:
-        """Fetch task context for a project task with opt-in extra detail.
-
-        Base identity fields (name, project, stage, assignees, deadline,
-        priority, tags) are always returned. ``include`` selects extra, more
-        expensive detail; each entry is one of: ``description``, ``chatter``,
-        ``dependencies``, ``timesheets``, ``subtasks``. When omitted the cheap
-        default is description only.
-        """
+        """Fetch task context for a project task with opt-in extra detail."""
         return registry["get_task"].execute(task_id, include=include)
 
     return get_task
@@ -115,19 +108,7 @@ def make_get_task_chatter_tool(registry: Registry):
 @atomic_tool("get_mail_status")
 def make_get_mail_status_tool(registry: Registry):
     def get_mail_status(res_model: str, res_id: int) -> List[dict]:
-        """Report outgoing-mail (``mail.mail``) delivery status for a record.
-
-        Read-only. Joins the record's chatter messages to their linked outbound
-        mails and returns, per mail: ``mail_id``, ``message_id``, ``subject``, a
-        ``recipients`` summary, the delivery ``state`` (``outgoing`` / ``sent`` /
-        ``exception`` / ``cancel``), the message ``date``, and — only when
-        populated — ``failure_reason`` / ``failure_type``. Use it to verify
-        "send an email" acceptance criteria: pass ``res_model="project.task"``
-        with the task id to check a task's outbound mail. Records with only
-        chatter notes return an empty list. Never retries or requeues mail.
-        ``mail.mail`` is often admin-restricted; a denied read returns a clear
-        access error.
-        """
+        """Report outgoing-mail (``mail.mail``) delivery status for a record."""
         return registry["get_mail_status"].execute(res_model, res_id)
 
     return get_mail_status
@@ -138,14 +119,7 @@ def make_get_task_attachments_tool(registry: Registry):
     def get_task_attachments(
         task_id: int, include_content: bool = False
     ) -> List[dict]:
-        """List a task's attachments from both the task and its chatter.
-
-        Each entry always carries metadata: ``id``, ``name``, ``mimetype``,
-        ``file_size``, ``create_date``, and ``source`` (``task`` or ``message``),
-        deduped by attachment id. Raw bytes are opt-in: with the default
-        ``include_content=False`` the base64 ``datas`` payload is omitted to keep
-        the call cheap; set ``True`` to include it.
-        """
+        """List a task's attachments from both the task and its chatter."""
         return registry["get_task_attachments"].execute(
             task_id, include_content=include_content
         )
@@ -156,25 +130,7 @@ def make_get_task_attachments_tool(registry: Registry):
 @atomic_tool("read_attachment")
 def make_read_attachment_tool(registry: Registry):
     def read_attachment(attachment_id: int, mode: str = "text") -> Dict[str, Any]:
-        """Read one document already stored in Odoo (read-only).
-
-        Reads an existing ``ir.attachment``; it never uploads or attaches
-        anything. ``mode`` selects what is returned:
-
-        * ``metadata`` — identity only, no bytes: ``id``, ``name``, ``mimetype``,
-          ``file_size``, ``res_model``, ``res_id``, ``create_date``.
-        * ``text`` — decode the binary payload and convert it to Markdown via
-          markitdown (PDF / docx / xlsx / CSV / HTML → Markdown). The decoded
-          payload is capped at 10 MiB; a larger payload is truncated before
-          conversion and the result carries ``truncated: true``. An unsupported
-          or unconvertible format (or an empty payload) degrades to ``text=""``
-          plus an explanatory ``note`` — never a raised error.
-        * ``raw`` — the base64 ``datas`` payload, refusing anything over the
-          10 MiB cap with a ``ValueError`` naming the size and the cap.
-
-        A missing or inaccessible ``attachment_id`` raises the missing-record
-        error; an invalid ``mode`` raises ``ValueError``.
-        """
+        """Read one document already stored in Odoo (read-only)."""
         return registry["read_attachment"].execute(attachment_id, mode=mode)
 
     return read_attachment
@@ -199,26 +155,7 @@ def make_search_chatter_tool(registry: Registry):
         date_to: Optional[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
-        """Full-text search across Odoo chatter (``mail.message``) bodies.
-
-        Matches ``query`` case-insensitively against message bodies
-        (``body ilike``) and returns the newest matches first, capped at
-        ``limit``. Read-only.
-
-        Optional filters (all combinable):
-
-        * ``model`` — restrict to messages on one Odoo model, e.g.
-          ``"project.task"``.
-        * ``record_id`` — restrict to one record's conversation; pair with
-          ``model`` to target a specific record.
-        * ``date_from`` / ``date_to`` — inclusive message-timestamp bounds as
-          ``YYYY-MM-DD`` strings (``date_to`` compares against the start of that
-          day).
-
-        Each result carries ``id``, ``date``, ``author``, ``type``, ``subtype``,
-        an HTML-stripped Markdown ``body``, and the originating ``res_model`` /
-        ``res_id`` so the source record can be located.
-        """
+        """Full-text search across Odoo chatter (``mail.message``) bodies."""
         return registry["search_chatter"].execute(
             query,
             model=model,
@@ -236,22 +173,7 @@ def make_search_knowledge_articles_tool(registry: Registry):
     def search_knowledge_articles(
         query: str, limit: int = 10
     ) -> List[Dict[str, Any]]:
-        """Search the Odoo Knowledge base (``knowledge.article``) by text.
-
-        Matches ``query`` case-insensitively against each article's ``name``
-        **or** its ``body`` (an OR ``ilike`` domain) and returns the most
-        recently updated articles first (``write_date desc``, then ``id desc``),
-        capped at ``limit``. Read-only: no article is created or modified.
-
-        Each result carries ``id``, ``name``, a ``snippet`` (the article body
-        converted from HTML to Markdown and capped at 500 characters), and
-        ``write_date`` (``YYYY-MM-DD HH:MM:SS``).
-
-        ``knowledge.article`` is an Odoo **Enterprise** model. On a Community
-        database (or when the Knowledge app is not installed) this raises an
-        error — "knowledge.article model not available (Odoo Enterprise
-        required)" — rather than returning results.
-        """
+        """Search the Odoo Knowledge base (``knowledge.article``) by text."""
         return registry["search_knowledge_articles"].execute(query, limit=limit)
 
     return search_knowledge_articles
@@ -260,23 +182,7 @@ def make_search_knowledge_articles_tool(registry: Registry):
 @atomic_tool("read_knowledge_article")
 def make_read_knowledge_article_tool(registry: Registry):
     def read_knowledge_article(article_id: int) -> Dict[str, Any]:
-        """Read one Odoo Knowledge article (``knowledge.article``) by id.
-
-        Returns the article's **full** body converted from HTML to Markdown
-        (not the capped search snippet). Read-only: nothing is created or
-        modified.
-
-        The result carries ``id``, ``name``, ``body`` (the full Markdown, capped
-        at 50000 characters), ``write_date`` (``YYYY-MM-DD HH:MM:SS``), and a
-        ``truncated`` boolean that is ``True`` only when the body exceeded that
-        cap and was shortened.
-
-        An unknown ``article_id`` raises "knowledge.article <id> not found".
-        ``knowledge.article`` is an Odoo **Enterprise** model: on a Community
-        database (or when the Knowledge app is not installed) this raises
-        "knowledge.article model not available (Odoo Enterprise required)"
-        rather than returning content.
-        """
+        """Read one Odoo Knowledge article (``knowledge.article``) by id."""
         return registry["read_knowledge_article"].execute(article_id)
 
     return read_knowledge_article
@@ -323,13 +229,7 @@ def make_abort_task_tool(registry: Registry):
 @atomic_tool("assign_event")
 def make_assign_event_tool(registry: Registry):
     def assign_event(event_ids: List[int], task_id: int) -> Dict[str, Any]:
-        """Attribute tracker events to an Odoo task id in one transaction.
-
-        The triage write: sets ``task_ids`` on every listed event (an
-        unattributed meeting/email or a whole calendar series) so they become
-        derivable and billable. Validates a positive integer ``task_id`` and
-        returns the number of event rows updated.
-        """
+        """Attribute tracker events to an Odoo task id in one transaction."""
         return registry["assign_event"].execute(event_ids=event_ids, task_id=task_id)
 
     return assign_event
@@ -338,12 +238,7 @@ def make_assign_event_tool(registry: Registry):
 @atomic_tool("discover_runs")
 def make_discover_runs_tool(registry: Registry):
     def discover_runs(stale_after_hours: float = 12.0) -> List[Dict[str, Any]]:
-        """Discover active runs in the central tracker DB.
-
-        Read-only local query: lists the active RUNNING/AWAITING_ANSWERS runs in
-        the one host-provisioned central DB, flagging any started before
-        ``stale_after_hours`` ago as stale so orphaned runs can be found.
-        """
+        """Discover active runs in the central tracker DB."""
         return registry["discover_runs"].execute(stale_after_hours=stale_after_hours)
 
     return discover_runs
@@ -352,12 +247,7 @@ def make_discover_runs_tool(registry: Registry):
 @atomic_tool("abort_run")
 def make_abort_run_tool(registry: Registry):
     def abort_run(run_id_or_task_id: int) -> Dict[str, Any]:
-        """Abort a stale run in the central tracker DB and close its Odoo anchor.
-
-        Addresses the run by SQLite run id or Odoo task id in the one central DB
-        (regardless of cwd), force-closes it without logging hours, and retires
-        its orphaned anchor timesheet (only when still unreconciled).
-        """
+        """Abort a stale run in the central tracker DB and close its Odoo anchor."""
         return registry["abort_run"].execute(run_id_or_task_id)
 
     return abort_run
@@ -366,16 +256,7 @@ def make_abort_run_tool(registry: Registry):
 @atomic_tool("resync")
 def make_resync_tool(registry: Registry):
     def resync(sources: str = "git,github,odoo") -> Dict[str, Any]:
-        """Reconcile local event state against git, GitHub, and Odoo chatter.
-
-        Manual, current-repo-scoped, idempotent reconciliation: pulls authored
-        git commits, merged GitHub PRs and reviews, and the authenticated user's
-        Odoo task chatter into the local events table, deduped by external id so a
-        re-run inserts nothing. Any source whose tool is absent or unauthenticated
-        is skipped (never fatal). ``sources`` is a comma-separated subset of
-        ``git,github,odoo`` (default: all three). Returns a per-source summary
-        dict of ``{"inserted": n}`` / ``{"skipped": reason}``.
-        """
+        """Reconcile local event state against git, GitHub, and Odoo chatter."""
         return registry["resync"].execute(sources=sources)
 
     return resync
@@ -448,15 +329,12 @@ def make_optimize_sessions_tool(registry: Registry):
         sweep_step_mins: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Analyze stored events by sweeping gaps; report the best gap (read-only)."""
-        overrides = {
-            "sweep_min_gap_mins": sweep_min_gap_mins,
-            "sweep_max_gap_mins": sweep_max_gap_mins,
-            "sweep_step_mins": sweep_step_mins,
-        }
         return registry["optimize_sessions"].execute(
             start_date=start_date,
             end_date=end_date,
-            **overrides,
+            sweep_min_gap_mins=sweep_min_gap_mins,
+            sweep_max_gap_mins=sweep_max_gap_mins,
+            sweep_step_mins=sweep_step_mins,
         )
 
     return optimize_sessions
@@ -469,28 +347,7 @@ def make_unbilled_hours_tool(registry: Registry):
         end_date: Optional[str] = None,
         project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Report logged-but-not-yet-invoiced timesheet hours (read-only).
-
-        Returns a summary envelope ``{mode, count, total_hours, lines}``.
-        ``total_hours`` and each line's ``hours`` are decimal hours; each line
-        carries ``id``, ``date``, ``employee``, ``project``, ``task``, ``hours``
-        and ``name``.
-
-        Semantics depend on a ``fields_get`` capability probe of
-        ``account.analytic.line`` and are reported in ``mode``:
-
-        * ``"full"`` — both ``timesheet_invoice_id`` and
-          ``timesheet_invoice_type`` exist: unbilled means not posted to any
-          customer invoice, and every line adds ``invoice_type`` (billable vs
-          non-billable).
-        * ``"fallback"`` — only one field exists: unbilled is approximated as
-          "not linked to a sale order line"; ``invoice_type`` is omitted.
-        * neither field exists: returns a structured error payload.
-
-        ``start_date``/``end_date`` are inclusive ``YYYY-MM-DD`` bounds (omit for
-        unbounded); ``project_id`` is a ``project.project`` id restricting the
-        report to one project.
-        """
+        """Report logged-but-not-yet-invoiced timesheet hours (read-only)."""
         return registry["unbilled_hours"].execute(
             start_date=start_date, end_date=end_date, project_id=project_id
         )
@@ -506,34 +363,7 @@ def make_unlogged_time_report_tool(registry: Registry):
         only_mine: bool = True,
         include_all: bool = False,
     ) -> Dict[str, Any]:
-        """Reconcile derived-vs-logged hours per day and task (read-only).
-
-        Answers the question the manual reconciliation answered: over an
-        inclusive ``YYYY-MM-DD`` window, how do the hours an upload *would* bill
-        (derived from the event stream, through the same session derivation and
-        billing transform an upload applies — the min-session floor and rounding,
-        the aborted-run exclusion, the non-numeric-task skip) compare against the
-        hours *already logged* in Odoo (``account.analytic.line``)?
-
-        Read-only: it writes nothing, uploads nothing, and materializes no
-        session state — the derived side is a local dry-run bill, and only the
-        logged-hours read touches Odoo.
-
-        Each derived session is bucketed onto its start day (the day an upload
-        would bill it). The result carries the echoed window, ``only_mine`` /
-        ``include_all`` flags, ``unit`` (always ``"hours"``), a ``days`` list —
-        each ``{day, rows, derived_hours, logged_hours, delta}`` where every row
-        is ``{day, task_id, task, derived_hours, logged_hours, delta}`` — and the
-        window ``total_derived_hours`` / ``total_logged_hours`` /
-        ``total_delta_hours``.
-
-        By default only rows with a nonzero delta are returned (the unlogged or
-        over-logged gaps); ``include_all=True`` keeps the reconciled zero-delta
-        rows too. Per-day and window totals always cover every cell.
-        ``only_mine=True`` (default) restricts logged hours to the authenticated
-        user's own employee timesheets. An empty window returns an empty report;
-        an unreachable Odoo raises a single clear error.
-        """
+        """Reconcile derived-vs-logged hours per day and task (read-only)."""
         return registry["unlogged_time_report"].execute(
             start_date,
             end_date,
@@ -547,12 +377,7 @@ def make_unlogged_time_report_tool(registry: Registry):
 @atomic_tool("list_runs")
 def make_list_runs_tool(registry: Registry):
     def list_runs() -> List[Dict[str, Any]]:
-        """List the active tracker runs with elapsed time.
-
-        Read-only local query of the tracker DB: returns the active
-        RUNNING/AWAITING_ANSWERS runs, each with its run id, task id, task and
-        project names, state, and human-readable elapsed time.
-        """
+        """List the active tracker runs with elapsed time."""
         return registry["list_runs"].execute()
 
     return list_runs
@@ -561,13 +386,7 @@ def make_list_runs_tool(registry: Registry):
 @atomic_tool("report_runs")
 def make_report_runs_tool(registry: Registry):
     def report_runs(include_stopped: bool = False) -> List[Dict[str, Any]]:
-        """Report tracker runs, optionally including the stopped ones.
-
-        Read-only local query of the tracker DB. By default only the active
-        runs are returned; set ``include_stopped=True`` to include STOPPED runs
-        too. Each row carries the run id, task id, task and project names, state,
-        and human-readable elapsed time.
-        """
+        """Report tracker runs, optionally including the stopped ones."""
         return registry["report_runs"].execute(include_stopped=include_stopped)
 
     return report_runs
@@ -576,12 +395,7 @@ def make_report_runs_tool(registry: Registry):
 @atomic_tool("stop_run")
 def make_stop_run_tool(registry: Registry):
     def stop_run(run_id: int) -> Dict[str, Any]:
-        """Force-stop one tracker run by its SQLite run id.
-
-        Transitions the run to STOPPED without logging hours (the upload path
-        owns unit_amount; the run stays billable). Reports a missing or
-        already-stopped run instead of raising.
-        """
+        """Force-stop one tracker run by its SQLite run id."""
         return registry["stop_run"].execute(run_id)
 
     return stop_run
@@ -590,12 +404,7 @@ def make_stop_run_tool(registry: Registry):
 @atomic_tool("stop_all")
 def make_stop_all_tool(registry: Registry):
     def stop_all() -> List[Dict[str, Any]]:
-        """Force-stop every active tracker run.
-
-        Transitions each active RUNNING/AWAITING_ANSWERS run to STOPPED without
-        logging hours (the upload path owns unit_amount; the runs stay billable)
-        and returns one summary per run stopped.
-        """
+        """Force-stop every active tracker run."""
         return registry["stop_all"].execute()
 
     return stop_all
@@ -604,13 +413,7 @@ def make_stop_all_tool(registry: Registry):
 @atomic_tool("normalize_timesheets")
 def make_normalize_timesheets_tool(registry: Registry):
     def normalize_timesheets(apply: bool = False) -> Dict[str, Any]:
-        """Detect (and optionally merge) duplicate timesheet entries.
-
-        Finds stopped runs of the same task on the same calendar date that each
-        carry their own timesheet. With ``apply=False`` (default) it only reports
-        the duplicate groups; with ``apply=True`` it merges each group into its
-        lowest timesheet id and remaps the local runs.
-        """
+        """Detect (and optionally merge) duplicate timesheet entries."""
         return registry["normalize_timesheets"].execute(apply=apply)
 
     return normalize_timesheets
@@ -647,27 +450,7 @@ def make_timesheet_summary_tool(registry: Registry):
         group_by: str = "project",
         only_mine: bool = True,
     ) -> Dict[str, Any]:
-        """Summarize logged timesheet hours over a date range, grouped one way.
-
-        Dates are ``YYYY-MM-DD`` and inclusive on both ends. Hours are the unit —
-        Odoo's ``unit_amount`` on ``account.analytic.line`` — summed per group.
-        ``group_by`` selects the single axis to collapse onto:
-
-        * ``project`` — total hours per task's project.
-        * ``client`` — total hours per project's partner (the customer); a
-          project with no partner is grouped under a ``null`` label.
-        * ``task`` — total hours per individual task.
-        * ``day`` — total hours per calendar day, with ``YYYY-MM-DD`` labels.
-
-        ``only_mine=True`` (default) restricts the summary to the authenticated
-        user's own employee timesheets; ``False`` includes every timesheet the
-        user can see. An invalid ``group_by`` or a malformed date raises
-        ``ValueError``.
-
-        Returns a dict with ``group_by``, the echoed ``start_date``/``end_date``,
-        ``only_mine``, ``unit`` (always ``"hours"``), a ``groups`` list of
-        ``{label, hours, entries}`` objects, and a grand ``total_hours``.
-        """
+        """Summarize logged timesheet hours over a date range, grouped one way."""
         return registry["timesheet_summary"].execute(
             start_date,
             end_date,

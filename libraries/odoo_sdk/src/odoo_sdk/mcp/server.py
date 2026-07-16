@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import cProfile
 import functools
 import inspect
@@ -53,12 +54,8 @@ DEFAULT_INSTRUCTIONS = "Provides tools for interacting with Odoo ERP"
 def _toon_output_enabled() -> bool:
     """Return whether TOON output is enabled via the environment flag.
 
-    Reading the flag on every call (rather than at import time) keeps the
-    behavior togglable per process invocation and makes the gate trivial to
-    exercise from tests.
-
-    :return: ``True`` when :data:`TOON_OUTPUT_ENV` is set to a truthy value.
-    :rtype: bool
+    Read per call (not at import) so the gate stays togglable per process and
+    trivial to exercise from tests.
     """
 
     return os.environ.get(TOON_OUTPUT_ENV, "").strip().lower() in {
@@ -94,34 +91,81 @@ def _to_toon(result: Any) -> Any:
         return result
 
 
-def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a tool callable so its result is routed through :func:`_to_toon`.
+def _wrap_tool(
+    tool_fn: Callable[..., Any],
+    *,
+    on_result: Callable[[Any], Any] = lambda result: result,
+    catch: Tuple[type[BaseException], ...] = (),
+    on_error: Optional[Callable[[BaseException], Any]] = None,
+    on_success: Optional[Callable[[tuple, dict], None]] = None,
+    setup: Optional[Callable[[], Any]] = None,
+    teardown: Optional[Callable[[Any], None]] = None,
+) -> Callable[..., Any]:
+    """Build a signature-preserving sync/async wrapper from a set of hooks.
 
-    The wrapper is always applied, but :func:`_to_toon` is a no-op unless the
-    ``ODOO_TOON_OUTPUT`` flag is set, so behavior is unchanged when the flag is
-    off. Sync and async tools are handled separately, and the original typed
-    signature is preserved so FastMCP builds the same wire schema (including any
-    ``ctx`` parameter).
+    One combinator behind every MCP tool decorator: it owns the
+    coroutine-vs-plain branch and the ``functools.wraps`` scaffold once, so each
+    decorator supplies only the hooks it needs — ``on_result`` transforms a
+    successful result, ``catch``/``on_error`` map a caught exception to a return
+    value, ``on_success`` fires a side effect after a successful call, and
+    ``setup``/``teardown`` bracket every dispatch (teardown runs in ``finally``,
+    so it still fires when the tool raises). ``functools.wraps`` sets
+    ``__wrapped__``, which ``inspect.signature`` follows, so FastMCP builds the
+    same wire schema (including any ``ctx`` parameter) without an explicit
+    ``__signature__`` assignment.
 
     :param tool_fn: The tool callable to wrap.
     :type tool_fn: Callable[..., Any]
-    :return: A signature-preserving wrapper that TOON-encodes the result.
+    :return: A signature-preserving wrapper applying the given hooks.
     :rtype: Callable[..., Any]
     """
+
+    def _finish(result: Any, args: tuple, kwargs: dict) -> Any:
+        result = on_result(result)
+        if on_success is not None:
+            on_success(args, kwargs)
+        return result
+
+    @contextlib.contextmanager
+    def _bracket() -> Any:
+        token = setup() if setup is not None else None
+        try:
+            yield
+        finally:
+            if teardown is not None:
+                teardown(token)
+
     if asyncio.iscoroutinefunction(tool_fn):
 
         @functools.wraps(tool_fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return _to_toon(await tool_fn(*args, **kwargs))
+            with _bracket():
+                try:
+                    return _finish(await tool_fn(*args, **kwargs), args, kwargs)
+                except catch as exc:
+                    return on_error(exc)  # type: ignore[misc]
 
     else:
 
         @functools.wraps(tool_fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return _to_toon(tool_fn(*args, **kwargs))
+            with _bracket():
+                try:
+                    return _finish(tool_fn(*args, **kwargs), args, kwargs)
+                except catch as exc:
+                    return on_error(exc)  # type: ignore[misc]
 
-    wrapper.__signature__ = inspect.signature(tool_fn)
     return wrapper
+
+
+def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool callable so its result is routed through :func:`_to_toon`.
+
+    The wrapper is always applied, but :func:`_to_toon` is a no-op unless the
+    ``ODOO_TOON_OUTPUT`` flag is set, so behavior is unchanged when the flag is
+    off.
+    """
+    return _wrap_tool(tool_fn, on_result=_to_toon)
 
 
 #: Exceptions the MCP error boundary renders as a structured payload. Every
@@ -146,11 +190,6 @@ def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
 
     The concrete class name is used (rather than the caught base) so a mapped
     subclass such as ``OdooValidationError`` remains distinguishable to callers.
-
-    :param exc: The caught, caller-actionable exception.
-    :type exc: BaseException
-    :return: ``{"error": {"type": <class name>, "message": <str(exc)>}}``.
-    :rtype: dict
     """
 
     return {"error": {"type": type(exc).__name__, "message": str(exc)}}
@@ -163,35 +202,9 @@ def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     predictable ``{"error": {"type", "message"}}`` shape so LLM callers always
     see structured data instead of a stack trace; programming errors propagate
     unchanged. Applied inside :func:`_toon_encoded` so the error payload is TOON
-    encoded like any other result. Sync and async tools are handled separately,
-    and the original typed signature is preserved so FastMCP builds the same
-    wire schema (including any ``ctx`` parameter).
-
-    :param tool_fn: The tool callable to wrap.
-    :type tool_fn: Callable[..., Any]
-    :return: A signature-preserving wrapper that formats caught errors.
-    :rtype: Callable[..., Any]
+    encoded like any other result.
     """
-    if asyncio.iscoroutinefunction(tool_fn):
-
-        @functools.wraps(tool_fn)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return await tool_fn(*args, **kwargs)
-            except _BOUNDARY_ERRORS as exc:
-                return _error_payload(exc)
-
-    else:
-
-        @functools.wraps(tool_fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return tool_fn(*args, **kwargs)
-            except _BOUNDARY_ERRORS as exc:
-                return _error_payload(exc)
-
-    wrapper.__signature__ = inspect.signature(tool_fn)
-    return wrapper
+    return _wrap_tool(tool_fn, catch=_BOUNDARY_ERRORS, on_error=_error_payload)
 
 
 def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
@@ -263,17 +276,7 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
 def _bound_arguments(
     signature: inspect.Signature, args: tuple, kwargs: dict
 ) -> dict[str, Any]:
-    """Bind a call's positional/keyword args to names, dropping any ``ctx``.
-
-    :param signature: The wrapped tool's signature.
-    :type signature: inspect.Signature
-    :param args: Positional arguments the tool was called with.
-    :type args: tuple
-    :param kwargs: Keyword arguments the tool was called with.
-    :type kwargs: dict
-    :return: A name to value map of the bound arguments, without ``ctx``.
-    :rtype: dict[str, Any]
-    """
+    """Bind a call's positional/keyword args to names, dropping any ``ctx``."""
 
     bound = dict(signature.bind_partial(*args, **kwargs).arguments)
     bound.pop("ctx", None)
@@ -285,24 +288,13 @@ def _event_emitting(
 ) -> Callable[..., Any]:
     """Wrap a tool callable so a *successful* dispatch emits one agent event.
 
-    This is the sole event producer for the MCP tool surface: it is applied
-    innermost (closest to the real tool), so the event is written only after the
-    tool returns — an exception propagates outward, past the emit, and no event
-    is recorded. The state store is resolved from ``registry.state_client`` at
-    call time (never at registration), so building a server never forces the
-    SQLite database into existence and a test can inject a fake. The whole
-    emission is guarded by ``try/except`` because telemetry must never break a
-    tool call. Sync and async tools are handled separately, and the original
-    typed signature is preserved so FastMCP builds the same wire schema.
-
-    :param tool_fn: The tool callable to wrap.
-    :type tool_fn: Callable[..., Any]
-    :param name: Public tool name recorded on the event.
-    :type name: str
-    :param registry: Registry whose ``state_client`` receives the event.
-    :type registry: Registry
-    :return: A signature-preserving wrapper that emits one event on success.
-    :rtype: Callable[..., Any]
+    This is the sole event producer for the MCP tool surface: applied innermost
+    (closest to the real tool), so the event is written only after the tool
+    returns — an exception propagates outward, past the emit, and no event is
+    recorded. The state store is resolved from ``registry.state_client`` at call
+    time (never at registration), so building a server never forces the SQLite
+    database into existence and a test can inject a fake. The emit is guarded by
+    ``try/except`` because telemetry must never break a tool call.
     """
     signature = inspect.signature(tool_fn)
 
@@ -316,24 +308,7 @@ def _event_emitting(
             # binding/serializing arguments) must never break the tool call.
             pass
 
-    if asyncio.iscoroutinefunction(tool_fn):
-
-        @functools.wraps(tool_fn)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = await tool_fn(*args, **kwargs)
-            emit(args, kwargs)
-            return result
-
-    else:
-
-        @functools.wraps(tool_fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = tool_fn(*args, **kwargs)
-            emit(args, kwargs)
-            return result
-
-    wrapper.__signature__ = signature
-    return wrapper
+    return _wrap_tool(tool_fn, on_success=emit)
 
 
 class OdooMCPServer:
@@ -419,24 +394,16 @@ class OdooMCPServer:
     def _unpack_spec(spec: ToolSpec) -> Tuple[Callable[..., Any], str]:
         """Normalize a tool spec into a ``(callable, description)`` pair.
 
-        :param spec: Bare callable or ``(callable, description)`` pair.
-        :type spec: ToolSpec
-        :return: The tool callable and its description (``""`` when absent).
-        :rtype: Tuple[Callable[..., Any], str]
+        A bare callable (tests pass these) gets an empty description.
         """
 
-        if isinstance(spec, tuple):
-            tool_fn, description = spec
-            return tool_fn, description
-        return spec, ""
+        return spec if isinstance(spec, tuple) else (spec, "")
 
     def run(self, **kwargs: Any) -> None:
         """Start the FastMCP server.
 
-        :param kwargs: Transport options forwarded to ``FastMCP.run`` (defaults
-            to stdio when none are given).
-        :return: None.
-        :rtype: None
+        ``kwargs`` are transport options forwarded to ``FastMCP.run`` (defaults
+        to stdio when none are given).
         """
 
         self.mcp.run(**kwargs)
@@ -445,55 +412,28 @@ class OdooMCPServer:
 def _profiled(tool_fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     """Wrap a tool callable so each dispatch is captured with :mod:`cProfile`.
 
-    Sync and async tools are handled separately so the wrapper awaits coroutine
-    tools correctly. The profile is dumped in a ``finally`` block so it is still
-    written when the tool raises, and the original typed signature is preserved
-    so FastMCP builds the same wire schema (including any ``ctx`` parameter).
-
-    :param tool_fn: The tool callable to wrap.
-    :type tool_fn: Callable[..., Any]
-    :param tool_name: Public tool name used in the profile and archive names.
-    :type tool_name: str
-    :return: A signature-preserving wrapper that profiles each dispatch.
-    :rtype: Callable[..., Any]
+    The profile is dumped in a ``finally`` block so it is still written when the
+    tool raises.
     """
-    if asyncio.iscoroutinefunction(tool_fn):
 
-        @functools.wraps(tool_fn)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            profiler = cProfile.Profile()
-            profiler.enable()
-            try:
-                return await tool_fn(*args, **kwargs)
-            finally:
-                profiler.disable()
-                _dump_profile(profiler, tool_name)
+    def _start() -> cProfile.Profile:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        return profiler
 
-    else:
+    def _stop(profiler: cProfile.Profile) -> None:
+        profiler.disable()
+        _dump_profile(profiler, tool_name)
 
-        @functools.wraps(tool_fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            profiler = cProfile.Profile()
-            profiler.enable()
-            try:
-                return tool_fn(*args, **kwargs)
-            finally:
-                profiler.disable()
-                _dump_profile(profiler, tool_name)
-
-    wrapper.__signature__ = inspect.signature(tool_fn)
-    return wrapper
+    return _wrap_tool(tool_fn, setup=_start, teardown=_stop)
 
 
 def _profile_dir() -> Path:
     """Return the profiling-archive directory, creating it if absent.
 
     Archives live in a dedicated :data:`PROFILE_SUBDIR` under the system temp
-    dir so pruning only ever touches the SDK's own files. The system temp dir is
-    resolved on every call (rather than cached) so tests can redirect it.
-
-    :return: The existing archive directory.
-    :rtype: Path
+    dir so pruning only ever touches the SDK's own files. The temp dir is
+    resolved on every call (not cached) so tests can redirect it.
     """
 
     directory = Path(tempfile.gettempdir()) / PROFILE_SUBDIR
@@ -505,14 +445,8 @@ def _prune_profiles(directory: Path) -> None:
     """Delete the oldest archives, retaining at most :data:`PROFILE_KEEP_LAST`.
 
     Archives are ordered oldest-first by modification time (with the filename as
-    a stable tiebreaker), and everything before the newest
-    :data:`PROFILE_KEEP_LAST` entries is removed. When the directory holds at
-    most that many archives nothing is deleted.
-
-    :param directory: Directory whose ``odoo_profile_*.zip`` archives to prune.
-    :type directory: Path
-    :return: None.
-    :rtype: None
+    a stable tiebreaker); when the directory holds at most that many nothing is
+    deleted.
     """
 
     archives = sorted(

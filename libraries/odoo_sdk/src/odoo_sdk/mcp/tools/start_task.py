@@ -11,7 +11,7 @@ the FastMCP ``ctx``; primitives resolved here are passed to the command.
 
 import re
 import subprocess
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastmcp import Context
 from mcp.types import ClientCapabilities, SamplingCapability
@@ -22,11 +22,9 @@ from odoo_sdk.commands import Registry
 from .composition import composition_tool
 
 
-class _SelectProject(BaseModel):
-    selection: int
+class _SelectIndex(BaseModel):
+    """One-field schema for picking a numbered item (project, task, or branch)."""
 
-
-class _SelectTask(BaseModel):
     selection: int
 
 
@@ -40,24 +38,19 @@ class _ConfirmGate(BaseModel):
     """
 
 
-class _SelectBranch(BaseModel):
-    selection: int
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """Run a read-only ``git`` command, capturing its text output."""
+    return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
 def _current_branch() -> Optional[str]:
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True,
-    )
+    result = _git("rev-parse", "--abbrev-ref", "HEAD")
     name = result.stdout.strip()
     return name if result.returncode == 0 and name != "HEAD" else None
 
 
 def _list_local_branches() -> list[str]:
-    result = subprocess.run(
-        ["git", "branch", "--format=%(refname:short)"],
-        capture_output=True, text=True,
-    )
+    result = _git("branch", "--format=%(refname:short)")
     if result.returncode != 0:
         return []
     branches = [b.strip() for b in result.stdout.splitlines() if b.strip() and "#" not in b]
@@ -65,38 +58,19 @@ def _list_local_branches() -> list[str]:
 
 
 def _is_dirty() -> bool:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True,
-    )
+    result = _git("status", "--porcelain")
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _branch_exists(branch_name: str) -> bool:
-    """True when ``branch_name`` already exists locally.
-
-    :param branch_name: Local branch ref to probe.
-    :type branch_name: str
-    :return: Whether the branch resolves to a commit.
-    :rtype: bool
-    """
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}"],
-        capture_output=True, text=True,
-    )
+    """True when ``branch_name`` already exists locally."""
+    result = _git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}")
     return result.returncode == 0
 
 
 def _stash_count() -> int:
-    """Return the number of entries currently on the git stash.
-
-    :return: Count of stash entries, or ``0`` when the command fails.
-    :rtype: int
-    """
-    result = subprocess.run(
-        ["git", "stash", "list"],
-        capture_output=True, text=True,
-    )
+    """Return the number of entries currently on the git stash (``0`` on error)."""
+    result = _git("stash", "list")
     if result.returncode != 0:
         return 0
     return sum(1 for line in result.stdout.splitlines() if line.strip())
@@ -117,8 +91,8 @@ def _rollback_task_branch(branch_name: str, original_branch: Optional[str]) -> N
     :type original_branch: Optional[str]
     """
     if original_branch is not None:
-        subprocess.run(["git", "checkout", original_branch], capture_output=True, text=True)
-    subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, text=True)
+        _git("checkout", original_branch)
+    _git("branch", "-D", branch_name)
 
 
 def _create_task_branch(branch_name: str, base_branch: str) -> bool:
@@ -219,7 +193,7 @@ async def _setup_task_branch(
     numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
     result = await ctx.elicit(
         f"Select base branch to fork from:\n{numbered}\nSelect number:",
-        _SelectBranch,
+        _SelectIndex,
     )
     if result.action != "accept":
         return None, False, "Branch selection cancelled."
@@ -235,10 +209,15 @@ async def _setup_task_branch(
     return branch_name, created, None
 
 
-async def _disambiguate(ctx: Any, message: str, items: list[dict], schema_cls: type) -> Optional[dict]:
+async def _disambiguate(
+    ctx: Any,
+    message: str,
+    items: list,
+    label: Callable[[Any], str] = lambda item: item["name"],
+) -> Optional[Any]:
     """Prompt user to pick one item from a list; return item or None on cancel/bad index."""
-    numbered = "\n".join(f"{i + 1}. {item['name']}" for i, item in enumerate(items))
-    result = await ctx.elicit(f"{message}\n{numbered}\nSelect number:", schema_cls)
+    numbered = "\n".join(f"{i + 1}. {label(item)}" for i, item in enumerate(items))
+    result = await ctx.elicit(f"{message}\n{numbered}\nSelect number:", _SelectIndex)
     if result.action != "accept":
         return None
     idx = result.data.selection - 1
@@ -267,19 +246,42 @@ def _lookup_task_by_id(client: Any, task_id: int) -> Optional[tuple[dict, dict]]
     return {"id": r["id"], "name": r["name"]}, project
 
 
+async def _search_and_pick(
+    ctx: Any,
+    results: list,
+    *,
+    empty_error: str,
+    multi_prompt: str,
+    cancel_error: str,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Resolve a search result to one item; return (item, error) — one non-None.
+
+    Empty results yield ``empty_error``; a single result is returned directly; a
+    multiple result set is disambiguated, with a cancel/bad-index returning
+    ``cancel_error``.
+    """
+    if not results:
+        return None, empty_error
+    if len(results) == 1:
+        return results[0], None
+    picked = await _disambiguate(ctx, multi_prompt, results)
+    if picked is None:
+        return None, cancel_error
+    return picked, None
+
+
 async def _resolve_project(
     ctx: Any, registry: Registry, query: str
 ) -> tuple[Optional[dict], Optional[str]]:
     """Return (project, error_string) — exactly one will be non-None."""
     projects = registry["search_projects"].execute(query, limit=10)
-    if not projects:
-        return None, f"No projects found matching {query!r}."
-    if len(projects) == 1:
-        return projects[0], None
-    project = await _disambiguate(ctx, "Multiple projects found:", projects, _SelectProject)
-    if project is None:
-        return None, "Project selection cancelled."
-    return project, None
+    return await _search_and_pick(
+        ctx,
+        projects,
+        empty_error=f"No projects found matching {query!r}.",
+        multi_prompt="Multiple projects found:",
+        cancel_error="Project selection cancelled.",
+    )
 
 
 async def _resolve_task(
@@ -287,14 +289,13 @@ async def _resolve_task(
 ) -> tuple[Optional[dict], Optional[str]]:
     """Return (task, error_string) — exactly one will be non-None."""
     tasks = registry["search_tasks"].execute(query, project_id, limit=10)
-    if not tasks:
-        return None, f"No tasks found matching {query!r} in project {project_name!r}."
-    if len(tasks) == 1:
-        return tasks[0], None
-    task = await _disambiguate(ctx, "Multiple tasks found:", tasks, _SelectTask)
-    if task is None:
-        return None, "Task selection cancelled."
-    return task, None
+    return await _search_and_pick(
+        ctx,
+        tasks,
+        empty_error=f"No tasks found matching {query!r} in project {project_name!r}.",
+        multi_prompt="Multiple tasks found:",
+        cancel_error="Task selection cancelled.",
+    )
 
 
 async def _resolve_task_and_project(
