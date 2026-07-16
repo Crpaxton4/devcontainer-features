@@ -34,15 +34,10 @@ def fmt_delta(secs: float) -> str:
     return f"{sign}{whole // 3600}h {(whole % 3600) // 60}m"
 
 
-def dashes(n: int) -> str:
-    """Return ``n`` dash characters for markdown table separators."""
-    return "-" * n
-
-
 def md_table_header(cols: list[tuple[str, int]]) -> list[str]:
     """Return the header and separator lines for a markdown table."""
     header = "| " + " | ".join(f"{name:<{w}}" for name, w in cols) + " |"
-    separator = "| " + " | ".join(dashes(w) for _, w in cols) + " |"
+    separator = "| " + " | ".join("-" * w for _, w in cols) + " |"
     return [header, separator]
 
 

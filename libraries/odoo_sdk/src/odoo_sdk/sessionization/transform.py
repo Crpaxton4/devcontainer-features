@@ -7,7 +7,7 @@ to pick the best gap. No I/O is performed.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from .config import SessionizationConfig
 from .models import EventType, RawEvent, SweepResults, TimeEntry, TransformResult
@@ -130,7 +130,7 @@ def billable_events(events: list[RawEvent]) -> list[RawEvent]:
     ]
 
 
-def _target_day_totals(
+def target_day_totals(
     entries: list[TimeEntry], config: SessionizationConfig
 ) -> dict[date, float]:
     """Return target-date totals, splitting windows at day-bucket-zone midnight."""
@@ -141,9 +141,7 @@ def _target_day_totals(
         end = entry.end.astimezone(tz)
         while cursor < end:
             next_day = cursor.date() + timedelta(days=1)
-            midnight = datetime(
-                next_day.year, next_day.month, next_day.day, tzinfo=tz
-            )
+            midnight = datetime.combine(next_day, time.min, tzinfo=tz)
             segment_end = min(end, midnight)
             if cursor.date() in totals:
                 totals[cursor.date()] += (segment_end - cursor).total_seconds()
@@ -151,18 +149,11 @@ def _target_day_totals(
     return totals
 
 
-def target_day_totals(
-    entries: list[TimeEntry], config: SessionizationConfig
-) -> dict[date, float]:
-    """Public wrapper over :func:`_target_day_totals` for renderers/adapters."""
-    return _target_day_totals(entries, config)
-
-
 def _score_entries_by_target_day(
     entries: list[TimeEntry], config: SessionizationConfig
 ) -> float:
     """Return the mean score after scoring each target day independently."""
-    day_totals = _target_day_totals(entries, config)
+    day_totals = target_day_totals(entries, config)
     if not day_totals:
         return score_day(0.0, config)
     return sum(score_day(total, config) for total in day_totals.values()) / len(
@@ -217,11 +208,10 @@ def _build_per_task_matrix(
     all_task_sums: list[dict[str, float]], all_task_ids: set[str]
 ) -> dict[str, list[float]]:
     """Build the per-task totals matrix from cached sweep results."""
-    per_task: dict[str, list[float]] = {tid: [] for tid in sorted(all_task_ids)}
-    for sums in all_task_sums:
-        for tid in sorted(all_task_ids):
-            per_task[tid].append(sums.get(tid, 0.0))
-    return per_task
+    return {
+        tid: [sums.get(tid, 0.0) for sums in all_task_sums]
+        for tid in sorted(all_task_ids)
+    }
 
 
 def _sweep_gap_values(config: SessionizationConfig) -> list[int]:

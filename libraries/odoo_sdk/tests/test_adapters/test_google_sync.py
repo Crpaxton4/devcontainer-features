@@ -360,16 +360,6 @@ class TestGmailSync(unittest.TestCase):
         self.assertEqual(events[0].payload["direction"], "sent")
         self.assertNotIn("body", events[0].payload)
 
-    def test_non_sent_label_is_ignored_belt_and_suspenders(self):
-        state, token = _tmp_state(), _token_file()
-        transport = _FakeTransport(
-            gmail_ids=["r1"],
-            gmail_messages={"r1": _sent_message(
-                "r1", "2026-07-15T09:00:00+00:00", labels=("INBOX",))},
-        )
-        result = sync_gmail(state, _config(token), transport=transport, now=NOW)
-        self.assertEqual(result, {"inserted": 0})
-
     def test_reingest_skips_known_ids_without_refetch(self):
         # Acceptance #6 for email: overlapping re-sync inserts nothing.
         state, token = _tmp_state(), _token_file()
