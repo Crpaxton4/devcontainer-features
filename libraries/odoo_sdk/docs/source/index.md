@@ -6,8 +6,8 @@ raw model names and row dictionaries.
 
 ## Install
 
-The project uses [uv](https://docs.astral.sh/uv/) for environment and
-dependency management:
+Environment and dependencies are managed with
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync
@@ -49,9 +49,9 @@ for task in open_tasks:
     print(task.name)
 ```
 
-`OdooRecordset` is the core abstraction every SDK operation flows through —
-see {doc}`the API reference <api/modules>` for the full surface, starting
-with `odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
+`OdooRecordset` is the core abstraction every SDK operation flows through. See
+{doc}`the API reference <api/modules>` for the full surface, starting with
+`odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
 `odoo_sdk.query.domain`.
 
 ```{toctree}
