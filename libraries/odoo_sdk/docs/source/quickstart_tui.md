@@ -1,16 +1,19 @@
 # Quickstart: the `odoo-tui` viewer
 
-This is a walkthrough of `odoo-tui`, the btop-style terminal viewer for your
-tracked work — written for the **human** at the keyboard. It covers launching,
-the timeline/window model, every keybind, the empty-state diagnostics, and the
-`odoo-sdk discover`/`abort` flow for cleaning up stale runs left in other
-projects.
+`odoo-tui` is the btop-style terminal viewer for your tracked work, for the
+**human** at the keyboard.
 
 **There is no ingest step.** The timeline is derived live from the local
-`events` timeseries every time you open or move the window, so whatever your
-agent and hooks have logged is already there. If the screen is empty, that is a
-fact about the window, not a missing build step — the empty-state hint tells you
-which (see [Reading the empty state](reading-the-empty-state)).
+`events` timeseries each time you open or move the window. An empty screen is a
+fact about the window, not a missing build step (see
+[Reading the empty state](reading-the-empty-state)).
+
+## Contents
+
+```{contents}
+:local:
+:depth: 2
+```
 
 ## Launch
 
@@ -18,27 +21,25 @@ which (see [Reading the empty state](reading-the-empty-state)).
 odoo-tui          # or: python -m odoo_sdk.tui
 ```
 
-It opens a full-screen curses view. The header names the current date window and
-the headline counts (sessions, tasks, events, hours); the body is a **timeline**
+Opens a full-screen curses view: the header names the current date window and
+headline counts (sessions, tasks, events, hours); the body is a **timeline**
 panel beside a **stats** panel; the footer lists the keybinds.
 
 ## The timeline and window model
 
-The viewer always shows a single inclusive **date window**. On launch that
-window ends today and spans the last 7 days. Within it, `odoo-tui` calls the
-same `query_sessions` command the MCP surface exposes and draws one timeline lane
-per derived session.
+The viewer shows a single inclusive **date window**, ending today and spanning
+the last 7 days on launch. Within it, `odoo-tui` calls the same `query_sessions`
+command the MCP surface exposes and draws one timeline lane per derived session.
 
-Sessions are **derived from events in SQL at query time** — gap-based: events
-for a task are grouped into a session until a gap larger than the configured
-session gap (default 60 minutes) splits them. Nothing is materialized, so the
-timeline always reflects the current events. Moving the window re-queries and
-re-derives; you never rebuild anything.
+Sessions are **derived from events in SQL at query time**, gap-based: events for
+a task group into a session until a gap larger than the session gap (default 60
+minutes) splits them. Nothing is materialized; moving the window re-queries and
+re-derives.
 
 ## Keybinds
 
-The footer shows: `←/→ start  ↑/↓ end  e:export  u:upload  r:resync  q:quit`.
-In full:
+The footer shows `←/→ start  ↑/↓ end  e:export  u:upload  r:resync  q:quit`. In
+full:
 
 | Key(s) | Action |
 |--------|--------|
@@ -50,53 +51,48 @@ In full:
 | `r` | **Resync** the current repo's events from git / GitHub / Odoo |
 | `q` or `Esc` | Quit |
 
-Moving the window only re-queries when the dates actually change. Exports write a
-file to the working directory and report the path on the status line.
+Moving the window re-queries only when the dates change. Exports write to the
+working directory and report the path on the status line.
 
 ### Upload (`u`) — anchor adoption and idempotent re-upload
 
-Upload is the **only** thing that writes hours to Odoo. `stop_task` never does;
-it only ends the run. So the normal rhythm is: your agent runs tasks all day
-(each `start_task` leaving a 0-hour `"[/] Work in progress"` anchor), then you
-open `odoo-tui` and press `u` to bill the derived sessions.
+Upload is the **only** thing that writes hours to Odoo (`stop_task` only ends the
+run). The normal rhythm: your agent runs tasks all day, then you open `odoo-tui`
+and press `u` to bill the derived sessions.
 
-Pressing `u` arms a confirm gate — the status line asks you to press `y` to
-confirm (any other key cancels). On confirm, each derived session with a numeric
-task id is written to a **single** timesheet row, resolved in three tiers:
+`u` arms a confirm gate — press `y` to confirm, any other key cancels. On
+confirm, each derived session with a numeric task id is written to a **single**
+timesheet row, resolved in three tiers:
 
 1. **Mapped** — a prior upload for this session's stable `session_key` is on
    record; that same row is rewritten.
 2. **Adopt** — no mapping yet, but the task still has its unreconciled
-   `"[/] Work in progress"` anchor (the 0-hour row `start_task` created); the
-   anchor is **adopted** — its hours, description, and date are written in place.
+   `"[/] Work in progress"` anchor (the 0-hour row); the anchor is adopted — its
+   hours, description, and date are written in place.
 3. **Create** — otherwise a fresh billed line is created.
 
-Because uploads are recorded in an idempotent `session_uploads` ledger keyed by
-`session_key`, **re-uploading the same window rewrites the same rows rather than
-double-billing.** Sessions with no numeric task id are skipped (they have no
-Odoo task to bill).
+Uploads are recorded in an idempotent `session_uploads` ledger keyed by
+`session_key`, so **re-uploading the same window rewrites the same rows rather
+than double-billing.** Sessions with no numeric task id are skipped.
 
 #### Billed hours: minimum and rounding
 
-A session bills its **wall-clock span** — the time from its first event to its
-last. Raw span alone under-bills at the small end: a single-event session (one
-commit, one log call) spans *zero* time, and a 30-second session rounds toward
-nothing. To keep short-but-real work from billing `0`, the upload path applies
-two policies to every session's span, at the one point that feeds both the `u`
-key and `odoo-sdk upload`:
+A session bills its **wall-clock span** (first event to last). Raw span
+under-bills at the small end — a single-event session spans zero time — so the
+upload path applies two policies at the one point feeding both `u` and
+`odoo-sdk upload`:
 
-- **Minimum** (`min_session_hours`, default `0.25`) — a session is floored *up*
-  to this many hours. A below-minimum session is never dropped; it bills the
-  minimum. A single-event (zero-span) session therefore bills exactly `0.25h`.
+- **Minimum** (`min_session_hours`, default `0.25`) — the span is floored *up* to
+  this many hours; a below-minimum session bills the minimum, never `0`.
 - **Rounding** (`round_session_hours`, default `0.05`) — the span is rounded to
-  the nearest multiple of this step (half-up), then held at or above the
-  minimum. A `1.87h` session bills `1.85h`. Setting the step to `0` disables
-  rounding and bills the raw span (still subject to the minimum).
+  the nearest multiple of this step (half-up), then held at or above the minimum.
+  A `1.87h` session bills `1.85h`. Step `0` disables rounding (raw span, still
+  floored to the minimum).
 
-There is **no cap** — a long session bills its full span. Both knobs live in the
-`[behavior]` section of the SDK config file, or as the `ODOO_MIN_SESSION_HOURS`
-and `ODOO_ROUND_SESSION_HOURS` environment variables, resolved with the usual
-**file > environment > default** precedence:
+There is **no cap**. Both knobs live in the `[behavior]` config section or as
+`ODOO_MIN_SESSION_HOURS` / `ODOO_ROUND_SESSION_HOURS`, resolved **file >
+environment > default**. An invalid value falls back to its default rather than
+failing the upload:
 
 ```toml
 [behavior]
@@ -104,57 +100,49 @@ min_session_hours = 0.25
 round_session_hours = 0.05
 ```
 
-A negative, non-numeric, or otherwise invalid value for either knob falls back
-to its default rather than failing the upload.
-
 ### Resync (`r`) — three pullers, current-repo and manual only
 
 Resync reconciles the local `events` table against external activity, then
-re-derives sessions so anything new appears immediately. It runs three pullers —
-**git** (your authored commits), **github** (merged PRs and reviews), and
-**odoo** (your task chatter) — and is:
+re-derives sessions. It runs three pullers — **git** (your commits), **github**
+(merged PRs and reviews), and **odoo** (your task chatter) — and is:
 
-- **current-repo scoped** — it reads only the repo you launched from and the
-  authenticated user's activity;
-- **manual** — it runs only when you press `r` (nothing resyncs on a timer);
+- **current-repo scoped** — only the launch repo and the authenticated user's
+  activity;
+- **manual** — only on `r`; nothing resyncs on a timer;
 - **idempotent** — every event is deduped by external id, so a re-run inserts
   nothing new.
 
 The status line reports each source's inserted count, or a skip reason when a
-source's tool is missing or unauthenticated (a skipped source is never fatal).
+source's tool is missing or unauthenticated (a skip is never fatal).
 
 (reading-the-empty-state)=
 ## Reading the empty state
 
-An empty window is never a silent dead end. When the query derives no sessions,
-the panel shows a diagnostic line of the form:
+When the query derives no sessions, the panel shows a diagnostic line:
 
 ```text
 no sessions derivable — 12 events in window, 3 runs recorded, gap=60m
 ```
 
-followed by the guidance `log events via start_task / odoo-sdk log-event, or
-widen the window`. Read the counts as:
+followed by `log events via start_task / odoo-sdk log-event, or widen the
+window`. Read the counts as:
 
-- **events in window** — how many events fall inside the queried dates. `0`
-  means nothing happened in this window; a number `> 0` means data exists but
-  does not sessionize *here* (wrong window, taskless events, or the gap config).
-- **runs recorded** — how many task runs are on record overall, across all
-  windows. A nonzero value with `0` events in-window usually just means you are
-  looking at the wrong dates — move the window.
-- **gap** — the session gap (in minutes) the deriver uses to split events into
-  sessions.
+- **events in window** — events inside the queried dates. `0` means nothing
+  happened here; `> 0` means data exists but does not sessionize here (wrong
+  window, taskless events, or the gap config).
+- **runs recorded** — task runs on record across all windows. Nonzero with `0`
+  in-window events usually means wrong dates — move the window.
+- **gap** — the session gap (minutes) used to split events into sessions.
 
-So: if events-in-window is `0`, widen or move the window (or the work genuinely
-predates it); if it is `> 0` but you still see no lanes, the events aren't
-task-scoped or fall outside the gap grouping.
+So: if events-in-window is `0`, widen or move the window; if `> 0` with no lanes,
+the events aren't task-scoped or fall outside the gap grouping.
 
 ## Cleaning up stale runs in other projects (`odoo-sdk discover` / `abort`)
 
 The tracker keys each project's local database by a hash of its git remote, so a
-run left open in a checkout you've since deleted becomes invisible from any other
-working tree. The `odoo-sdk` CLI
-finds and clears these across every project database under the state root.
+run left open in a deleted checkout is invisible from any other working tree. The
+`odoo-sdk` CLI finds and clears these across every project database under the
+state root.
 
 **Discover** lists every tracker project and its active runs, flagging any run
 older than the staleness threshold (default 12 hours) as `STALE`:
@@ -164,19 +152,19 @@ odoo-sdk discover                       # or: odoo-sdk discover --stale-after-ho
 ```
 
 Each row shows the project hash, repo label, run id, task, state, start time, and
-the stale flag. **Abort** then force-closes a specific stale run by its project
-hash and run id, closing out its orphaned anchor (only when the anchor is still
-the unreconciled `"[/] Work in progress"` marker — a human-edited row is left
-untouched):
+stale flag. **Abort** then force-closes a specific stale run by project hash and
+run id, closing its orphaned anchor — but only when the anchor is still the
+unreconciled `"[/] Work in progress"` marker; a human-edited row is left
+untouched:
 
 ```bash
 odoo-sdk abort <project_hash> <run_id>
 ```
 
-Aborting logs no hours; it simply retires the wedged run and its anchor so your
-timeline and timesheets stay clean.
+Aborting logs no hours; it retires the wedged run and its anchor so your timeline
+and timesheets stay clean.
 
 ---
 
-For how those runs and anchors are created in the first place, see
-{doc}`the MCP quickstart <quickstart_mcp>`.
+For how those runs and anchors are created, see {doc}`the MCP quickstart
+<quickstart_mcp>`.
