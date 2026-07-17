@@ -2,6 +2,12 @@
 
 This repo holds two packages: a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`) and a Python SDK for Odoo ERP access (`odoo_sdk`).
 
+- [`personal-features`](#personal-features)
+- [`odoo_sdk`](#odoo_sdk)
+- [Repo and Feature structure](#repo-and-feature-structure)
+- [Versioning & releases](#versioning--releases)
+- [Testing](#testing)
+
 ## `personal-features`
 
 Personal dev container tooling, meant to be added as a default Feature across projects. Currently it installs [Claude Code](https://code.claude.com/docs) and wraps the `claude` command so a default session automatically connects to the IDE (`--ide`), since this Feature is meant purely for use inside a VS Code dev container. It also persists Claude Code's and the GitHub CLI's auth/config by bind-mounting them from your host home directory, shared across every project on the machine, so logging in once is enough.
@@ -60,15 +66,27 @@ See [`devcontainer-features/src/personal-features/NOTES.md`](devcontainer-featur
 
 A Python SDK for Odoo ERP access via XML-RPC and JSON-RPC, with a built-in [MCP](https://modelcontextprotocol.io) server so AI agents can call Odoo operations as tools.
 
-### Core types
+### Subsystems
 
-| Type | Role |
+The complete map of `src/odoo_sdk/` — detail lives in the Sphinx docs.
+
+| Package | Role |
 | --- | --- |
-| `OdooClient` | Entry point — connects to an Odoo server and returns model proxies via `client["model.name"]`. Reads connection settings from keyword args or a `.odoo_sdk.ini` config file. |
-| `OdooRecordset` | Represents an ordered set of records on a model. Supports `search`, `read`, `write`, `create`, `unlink`, and x2many field commands. |
-| `DomainExpression` | Builder for Odoo search domains — composes `Condition` nodes with `&`, `\|`, `!` operators and serializes to the wire format. |
-| `Command` / `Registry` | Base class + registry for wrapping Odoo operations as named, dependency-injected commands. The `Registry` owns each command's shared dependencies (client, state, config); explicit MCP tools compose those commands. |
-| `OdooMCPServer` | FastMCP server that exposes an explicit, hand-written set of MCP tools (built via `build_explicit_tools`) over a `Registry`. Each tool is a real, typed function that delegates to a command — the server performs no auto-reflection of command signatures, so the wire schema is an intentional surface. |
+| `client` | `OdooClient` — connects to an Odoo server and returns model proxies via `client["model.name"]`; reads settings from keyword args or a `.odoo_sdk.ini` file. |
+| `records` | `OdooRecordset` — an ordered set of records; supports `search`, `read`, `write`, `create`, `unlink`, and x2many field commands. |
+| `query` | `DomainExpression` — composes search domains from `Condition` nodes (`&`, `\|`, `!`) and serializes to the wire format. |
+| `fields` | Field-value adaptation and x2many command normalization. |
+| `commands` | `Command` / `Registry` — Odoo operations wrapped as named, dependency-injected commands; the `Registry` owns each command's shared client/state/config. |
+| `mcp` | `OdooMCPServer` — FastMCP server exposing an explicit, hand-written tool set (`build_explicit_tools`) over a `Registry`, with no auto-reflection of command signatures. |
+| `cli` | Command-line companion for Odoo task time-tracking. |
+| `tui` | Terminal UI that explores sessions over a date window as per-lane timeline bars. |
+| `transport` | XML-RPC / JSON-RPC transport and the SDK's error hierarchy. |
+| `env` | Metadata cache for Odoo model schema. |
+| `state` | `LocalStateClient` (SQLite task-session FSM) and `LocalConfig` (File > Env > Default settings). |
+| `sessionization` | Pure Transform + Load core that derives sessions from tracked events; unaware of SQLite, git, and MCP. |
+| `adapters` | Bridge the pure `sessionization` core to stateful edges — the SQLite `events` table and external systems. |
+| `billing` | Turns tracked work into billed Odoo timesheet rows (`account.analytic.line`). |
+| `utilities` | Reusable pure helpers and thin single-call Odoo wrappers that commands compose. |
 
 ### Quickstart
 
@@ -123,39 +141,20 @@ make coverage     # run tests + enforce 90 % coverage threshold
 
 ## Repo and Feature structure
 
-Each package lives under `src/` with its tests under `test/`:
+The two packages sit under `devcontainer-features/` and `libraries/`, with shared scripts in `scripts/`:
 
 ```
 ├── devcontainer-features
-│   ├── src
-│   │   └── personal-features      # devcontainer Feature
-│   │       ├── devcontainer-feature.json
-│   │       ├── install.sh
-│   │       └── NOTES.md
-│   └── test
-│       └── personal-features      # devcontainer feature tests
-│           ├── scenarios.json
-│           └── test.sh
-└── libraries
-    ├── src
-    │   └── odoo_sdk               # Python SDK
-    │       ├── client/
-    │       ├── commands/
-    │       ├── mcp/
-    │       ├── query/
-    │       ├── records/
-    │       └── transport/
-    ├── tests
-    │   └── odoo_sdk               # Python unit tests
-    │       ├── test_client/
-    │       ├── test_mcp/
-    │       ├── test_query/
-    │       └── test_records/
-    ├── docs/                      # Sphinx docs for odoo_sdk
-    ├── examples/                  # odoo_sdk usage examples
-    ├── tools/                     # coverage + static-analysis scripts
-    ├── pyproject.toml             # odoo_sdk build + tooling config
-    └── Makefile                   # dev task shortcuts
+│   ├── src/personal-features/     # devcontainer Feature — install.sh, skills/, create-pr/, claude-event-hook/, sync-claude-*
+│   └── test/personal-features/    # feature test scenarios
+├── libraries
+│   └── odoo_sdk/                  # owns src/, tests/, docs/, examples/, tools/ directly
+│       ├── src/odoo_sdk/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, state, transport, tui, utilities
+│       ├── tests/                 # one test_<pkg>/ per subpackage
+│       ├── docs/source/           # Sphinx docs
+│       ├── examples/, tools/
+│       └── pyproject.toml, Makefile
+└── scripts/                       # google_oauth_setup.py, init_tracker_db.py
 ```
 
 `devcontainer-features/src/personal-features/README.md` is auto-generated by the release workflow from `devcontainer-feature.json` merged with `NOTES.md` — don't hand-edit it.
