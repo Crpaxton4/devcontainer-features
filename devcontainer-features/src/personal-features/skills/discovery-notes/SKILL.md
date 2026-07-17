@@ -32,27 +32,27 @@ Bring what you found *into* the session as things to confirm, not re-ask.
 Work these groups; capture answers verbatim where wording matters. Mark any
 answer you did not get as `UNKNOWN — follow up`.
 
-**Current process**
+#### Current process
 - Walk the end-to-end process step by step. What triggers it? What ends it?
 - Which steps are manual, spreadsheet-based, or outside any system today?
 
-**Actors and roles**
+#### Actors and roles
 - Who performs each step? Which Odoo groups/departments do they map to?
 - Who approves? Who is accountable for the outcome?
 
-**Volumes and frequency**
+#### Volumes and frequency
 - How many transactions/records per day/week/month? Peak vs. average?
 - Data volumes to migrate (records, documents, history depth)?
 
-**Systems and integrations**
+#### Systems and integrations
 - What systems are in play (Odoo modules + external)? Source of truth for each?
 - Required integrations, data flows, direction, and frequency (real-time/batch)?
 
-**Pain points**
+#### Pain points
 - Where does it break, slow down, or cause rework/errors today?
 - What is the cost of the pain (time, money, risk, compliance)?
 
-**Constraints and success**
+#### Constraints and success
 - Odoo version/edition, deadlines, budget signals, compliance/regulatory needs.
 - What does "done well" look like to the client? How will they measure it?
 

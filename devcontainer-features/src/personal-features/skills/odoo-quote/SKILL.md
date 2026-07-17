@@ -215,14 +215,14 @@ cost / prioritisation` section (Step 8).
 
 ## 8. Where human judgment is required (flag, don't fabricate)
 
-**Client work:**
+#### Client work
 
 - Hourly/day rates, discounts, payment terms, and fixed-price vs T&M — the owner
   sets these commercially. Present hours; leave money to the human unless a rate
   was given.
 - Final sign-off and any client-facing commitment.
 
-**Internal work:**
+#### Internal work
 
 - No rates, discounts, payment terms, or fixed-price-vs-T&M — these do not apply.
   Present hours only.
