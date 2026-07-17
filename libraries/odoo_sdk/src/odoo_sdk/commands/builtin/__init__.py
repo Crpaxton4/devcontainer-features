@@ -38,6 +38,7 @@ from .report_runs import ReportRunsCommand
 from .resume_task import ResumeTaskCommand
 from .resync import ResyncCommand
 from .search_chatter import SearchChatterCommand
+from .search_count import SearchCountCommand
 from .search_knowledge_articles import SearchKnowledgeArticlesCommand
 from .search_projects import SearchProjectsCommand
 from .search_tasks import SearchTasksCommand

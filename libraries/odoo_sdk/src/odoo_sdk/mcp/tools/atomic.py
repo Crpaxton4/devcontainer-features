@@ -460,3 +460,15 @@ def make_timesheet_summary_tool(registry: Registry):
 
     return timesheet_summary
 
+
+@atomic_tool("search_count")
+def make_search_count_tool(registry: Registry):
+    def search_count(
+        model: str,
+        domain: Optional[List[Tuple[str, str, Any]]] = None,
+    ) -> int:
+        """Count records on a model matching a domain, without fetching them."""
+        return registry["search_count"].execute(model, domain=domain)
+
+    return search_count
+
