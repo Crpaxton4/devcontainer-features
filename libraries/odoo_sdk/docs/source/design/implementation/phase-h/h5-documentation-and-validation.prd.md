@@ -2,6 +2,13 @@
 
 Phase H Documentation and Validation
 
+> **Historical / superseded (2026-07).** The validation targets here (`odoo://`
+> resources, the `search_read` tool, a `client.mcp_server().run()` example) do not
+> match what shipped: command-registry atomic and composition tools plus prompts.
+> `OdooMCPServer` is exported (lazily) and runnable via the `odoo-mcp` entry point.
+> The implemented contract is
+> [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem

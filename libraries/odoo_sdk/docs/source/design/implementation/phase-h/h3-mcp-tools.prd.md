@@ -9,8 +9,9 @@ MCP Tools
 > were **not** built, and prompts were **not** left out of scope. What shipped is
 > a task-tracker tool surface that wraps the command **registry**: ~30 atomic
 > 1:1 typed command wrappers (`odoo_sdk/mcp/tools/atomic.py`) plus two
-> `ctx`-driven composition tools (`start_task`, `stop_task`) and two prompts
-> (`implement_task`, `report_incident`). The implemented contract is recorded in
+> `ctx`-driven composition tools (`start_task`, `stop_task`) and eight prompts
+> (`implement_task`, `report_incident`, and six more added in PR #464). The
+> implemented contract is recorded in
 > [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
 
 # Goal

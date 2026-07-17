@@ -2,6 +2,12 @@
 
 OdooClient Integration
 
+> **Historical / superseded (2026-07).** No `OdooClient.mcp_server()` factory
+> shipped. `OdooMCPServer` is constructed from a command `Registry`, lazily
+> importable as `odoo_sdk.OdooMCPServer`, and launched via the `odoo-mcp` entry
+> point. The implemented contract is
+> [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem

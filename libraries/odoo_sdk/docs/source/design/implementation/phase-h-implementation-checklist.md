@@ -1,5 +1,12 @@
 # Phase H Implementation Checklist
 
+> **Historical / superseded (2026-07).** This checklist tracks the original Phase
+> H plan (`odoo://` resources, nine generic ORM tools via `client.mcp_server()`,
+> prompts out of scope). What shipped instead projects the command registry:
+> ~30 atomic tools plus `start_task`/`stop_task` and prompts, an `odoo-mcp` CLI
+> entry point, and no resources. The implemented contract is
+> [ADR-004 — MCP wraps the command registry](../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 ## Objective
 
 Embed an MCP (Model Context Protocol) server inside the SDK so AI coding assistants and LLM agents can interact with a connected Odoo instance through standardized MCP resources and tools. The MCP layer is accessed via `client.mcp_server()` factory, inherits the existing authenticated connection, and exposes schema discovery, record reads, and write operations through MCP-native interfaces.
