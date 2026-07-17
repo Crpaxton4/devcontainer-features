@@ -74,9 +74,12 @@ class TestPromptRegistration(unittest.TestCase):
             OdooMCPServer(registry)
         return mock_mcp, captured
 
-    def test_implement_task_registered_on_server(self):
+    def _named(self, captured, name):
+        return next(p for p in captured if p.name == name)
+
+    def test_all_builtin_prompts_registered_on_server(self):
         _, captured = self._build(_empty_registry())
-        self.assertEqual(len(captured), 2)
+        self.assertEqual(len(captured), 8)
 
     def test_registered_prompt_is_a_prompt_instance(self):
         from fastmcp.prompts import Prompt
@@ -84,14 +87,15 @@ class TestPromptRegistration(unittest.TestCase):
         _, captured = self._build(_empty_registry())
         self.assertIsInstance(captured[0], Prompt)
 
-    def test_registered_prompt_name_is_implement_task(self):
+    def test_implement_task_registered_by_name(self):
         _, captured = self._build(_empty_registry())
-        self.assertEqual(captured[0].name, "implement_task")
+        self.assertEqual(self._named(captured, "implement_task").name, "implement_task")
 
-    def test_registered_prompt_has_description(self):
+    def test_implement_task_has_description(self):
         _, captured = self._build(_empty_registry())
-        self.assertIsNotNone(captured[0].description)
-        self.assertIn("FSM", captured[0].description)
+        prompt = self._named(captured, "implement_task")
+        self.assertIsNotNone(prompt.description)
+        self.assertIn("FSM", prompt.description)
 
 
 class TestImplementTaskPromptFactory(unittest.TestCase):
@@ -341,16 +345,36 @@ class TestBuiltinPromptDecorator(unittest.TestCase):
         # ``mcp.add_prompt(...)`` lines. Pin the set so a dropped/renamed
         # decorator fails here.
         self.assertEqual(
-            set(BUILTIN_PROMPT_FACTORIES), {"implement_task", "report_incident"}
+            set(BUILTIN_PROMPT_FACTORIES),
+            {
+                "client_status_report",
+                "discovery_notes",
+                "fibonacci_estimate",
+                "implement_task",
+                "odoo_code_review",
+                "odoo_design_doc",
+                "odoo_quote",
+                "report_incident",
+            },
         )
 
     def test_registration_order_is_import_order(self):
-        # register_builtin_prompts iterates the registry in insertion order, and
-        # the server-registration tests assert implement_task is captured first.
+        # register_builtin_prompts iterates the registry in insertion order, which
+        # follows the alphabetical import list in mcp/prompts/builtin/__init__.py.
         from odoo_sdk.mcp.prompts.builtin import BUILTIN_PROMPT_FACTORIES
 
         self.assertEqual(
-            list(BUILTIN_PROMPT_FACTORIES), ["implement_task", "report_incident"]
+            list(BUILTIN_PROMPT_FACTORIES),
+            [
+                "client_status_report",
+                "discovery_notes",
+                "fibonacci_estimate",
+                "implement_task",
+                "odoo_code_review",
+                "odoo_design_doc",
+                "odoo_quote",
+                "report_incident",
+            ],
         )
 
     def test_registers_factory_under_explicit_name(self):
@@ -394,6 +418,84 @@ class TestBuiltinPromptDecorator(unittest.TestCase):
         # The factory returns the plain prompt callable regardless of the
         # registry it is handed (report_incident needs no command access).
         self.assertIs(make_report_incident_prompt(Mock()), report_incident)
+
+
+class TestMigratedSkillPrompts(unittest.TestCase):
+    """The 6 personal-features skills ported to built-in MCP prompts.
+
+    Each is a ``report_incident``-shaped prompt: a plain callable returning the
+    skill body as a one-element message list, and a factory that ignores the
+    command registry. This drives them from their public modules so a rename or
+    dropped decorator fails here.
+    """
+
+    # module/prompt name -> a phrase that must appear in the returned body.
+    SKILLS = {
+        "client_status_report": "timesheet_summary",
+        "discovery_notes": "Gap analysis",
+        "fibonacci_estimate": "Fibonacci",
+        "odoo_code_review": "sudo()",
+        "odoo_design_doc": "Record rules",
+        "odoo_quote": "assumptions",
+    }
+
+    def _load(self, name):
+        import importlib
+
+        module = importlib.import_module(f"odoo_sdk.mcp.prompts.builtin.{name}")
+        return getattr(module, name), getattr(module, f"make_{name}_prompt")
+
+    def test_callable_returns_single_nonempty_message(self):
+        for name in self.SKILLS:
+            with self.subTest(name=name):
+                fn, _ = self._load(name)
+                msgs = fn()
+                self.assertEqual(len(msgs), 1)
+                self.assertIsInstance(msgs[0], str)
+                self.assertTrue(msgs[0].strip())
+
+    def test_body_contains_key_phrase(self):
+        for name, phrase in self.SKILLS.items():
+            with self.subTest(name=name):
+                fn, _ = self._load(name)
+                self.assertIn(phrase, fn()[0])
+
+    def test_body_omits_frontmatter_and_feature_comment(self):
+        for name in self.SKILLS:
+            with self.subTest(name=name):
+                fn, _ = self._load(name)
+                body = fn()[0]
+                self.assertNotIn("feature-managed", body)
+                self.assertNotIn("\ndescription:", body)
+
+    def test_factory_ignores_registry(self):
+        for name in self.SKILLS:
+            with self.subTest(name=name):
+                fn, factory = self._load(name)
+                self.assertIs(factory(Mock()), fn)
+
+    def test_registered_on_server_with_description(self):
+        from fastmcp.prompts import Prompt
+
+        mock_mcp = MagicMock()
+        captured: list = []
+        mock_mcp.add_prompt.side_effect = captured.append
+        with patch("odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp):
+            OdooMCPServer(_empty_registry())
+        by_name = {p.name: p for p in captured if isinstance(p, Prompt)}
+        for name in self.SKILLS:
+            with self.subTest(name=name):
+                self.assertIn(name, by_name)
+                self.assertTrue(by_name[name].description)
+
+    def test_registered_prompts_take_no_arguments(self):
+        from fastmcp.prompts import Prompt
+
+        for name in self.SKILLS:
+            with self.subTest(name=name):
+                fn, _ = self._load(name)
+                prompt = Prompt.from_function(fn)
+                self.assertFalse(prompt.arguments)
 
 
 if __name__ == "__main__":

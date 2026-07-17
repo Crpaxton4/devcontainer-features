@@ -16,6 +16,31 @@ The actual skill content is authored separately (issue #251); this directory
 may therefore be empty of skills apart from this README, and the delivery
 mechanism handles both the empty and the populated case.
 
+## Two delivery paths (both live)
+
+These skills reach an agent by **two independent paths**, and this directory
+stays the source of truth for both:
+
+1. **Mounted `SKILL.md` files** (Claude Code only) — staged at build time and
+   copied into `$CLAUDE_CONFIG_DIR/skills/<name>` at container-create time. See
+   [How these skills reach `claude`](#how-these-skills-reach-claude) below.
+2. **`odoo-mcp` built-in prompts** (any MCP client) — since #455, each of the
+   six skills is also exposed as a built-in MCP prompt by the `odoo-sdk` MCP
+   server, so any MCP client gets it without the mount/copy machinery or even a
+   live personal-features container. The prompt modules live at
+   `libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py` (one per
+   skill, underscored: `odoo-quote` → `odoo_quote`, etc.); each embeds this
+   directory's `SKILL.md` body verbatim (frontmatter → prompt description,
+   markdown body → prompt message) and is registered via the same
+   `@builtin_prompt` decorator as `implement_task`/`report_incident`.
+
+Both paths are kept deliberately: the mounted path preserves Claude Code's
+native slash-command/skill-discovery UX, while the MCP-prompt path removes the
+mount dependency and reaches non-Claude-Code clients. **When you edit a
+`SKILL.md` here, mirror the change into the matching prompt module** (the module
+embeds the body as a string literal — they are not auto-synced), or the two
+paths will drift.
+
 ## How these skills reach `claude`
 
 Claude Code discovers user-scope skills at `$CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md`
