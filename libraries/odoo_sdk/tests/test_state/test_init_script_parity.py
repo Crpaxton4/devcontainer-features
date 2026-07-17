@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from odoo_sdk.state.db import SCHEMA_DDL, create_schema
+from odoo_sdk.state.db import SCHEMA_DDL, SCHEMA_VERSION, create_schema
 
 INIT_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "init_tracker_db.py"
 
@@ -40,6 +40,14 @@ def _schema_objects(db_path: Path) -> list:
         conn.close()
 
 
+def _user_version(db_path: Path) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+
 class TestInitScriptParity(unittest.TestCase):
     def test_init_script_exists(self):
         self.assertTrue(
@@ -49,6 +57,10 @@ class TestInitScriptParity(unittest.TestCase):
     def test_ddl_is_verbatim_copy(self):
         init = _load_init_script()
         self.assertEqual(init.SCHEMA_DDL, SCHEMA_DDL)
+
+    def test_schema_version_is_in_parity(self):
+        init = _load_init_script()
+        self.assertEqual(init.SCHEMA_VERSION, SCHEMA_VERSION)
 
     def test_resulting_schema_is_identical(self):
         init = _load_init_script()
@@ -63,6 +75,27 @@ class TestInitScriptParity(unittest.TestCase):
         conn.close()
 
         self.assertEqual(_schema_objects(from_script), _schema_objects(from_sdk))
+        # Both provisioners stamp the same schema version marker (#452).
+        self.assertEqual(_user_version(from_script), SCHEMA_VERSION)
+        self.assertEqual(_user_version(from_sdk), SCHEMA_VERSION)
+
+    def test_provisioned_tables_are_strict(self):
+        # STRICT lives in the sqlite_master ``sql`` compared above; assert it
+        # explicitly so the write-time validation guarantee is pinned (#452).
+        init = _load_init_script()
+        path = Path(tempfile.mkdtemp()) / "tracker.db"
+        init.init_tracker_db(path)
+        conn = sqlite3.connect(str(path))
+        try:
+            table_sql = conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(table_sql), 4)
+        for name, sql in table_sql:
+            self.assertIn("STRICT", sql.upper(), f"{name} is not STRICT")
 
     def test_init_script_is_idempotent(self):
         init = _load_init_script()
