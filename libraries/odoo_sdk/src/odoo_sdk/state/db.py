@@ -57,6 +57,15 @@ def _default_root() -> Path:
     return base / "odoo-task-tracker"
 
 
+#: Schema version stamped into ``PRAGMA user_version``. Bumped from the implicit
+#: ``0`` of the pre-#452 non-STRICT schema to ``1`` when the STRICT typed schema
+#: (write-time validation) was adopted. Provisioning reads this marker to tell an
+#: old-shape DB (``0`` — needs the rebuild :func:`migrate_schema`) from a current
+#: one (``1`` — idempotent no-op), which ``CREATE ... IF NOT EXISTS`` alone cannot,
+#: since it would silently skip an already-present old-shape table.
+SCHEMA_VERSION = 1
+
+
 # Canonical schema for the central tracker DB — the ONE authoritative DDL, applied
 # only by the host provisioning step (``scripts/init_tracker_db.py``, invoked by
 # ``setup.sh`` / ``setup.ps1``) and by :func:`create_schema`, never on connection
@@ -69,10 +78,19 @@ def _default_root() -> Path:
 # their migrations — ``task_runs.aborted_at`` (#356), ``events.external_id`` with
 # its partial unique dedupe index (resync), ``idx_events_timestamp`` (#359), and
 # the ``session_uploads`` ``task_id``/``started_at``/``ended_at`` orphan-discovery
-# columns (#353) — so a freshly provisioned DB is schema-identical to a migrated
-# one; there is no migration tooling. Every statement is ``IF NOT EXISTS`` so
-# provisioning is idempotent. Sessions are still derived from ``events`` at query
-# time (see ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
+# columns (#353). Every statement is ``IF NOT EXISTS`` so provisioning is
+# idempotent. Sessions are still derived from ``events`` at query time (see
+# ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
+#
+# All four tables are ``STRICT`` with CHECK constraints (#452) so malformed data
+# fails at WRITE time — ``json_valid`` guards the JSON columns (``events.task_ids``,
+# ``task_runs.notes``) and ``datetime(...) IS NOT NULL`` guards every timestamp —
+# instead of surfacing later as a ``json_each``/``julianday`` failure inside a
+# reporting query. STRICT cannot be added to an existing table in place, so an
+# old-shape (schema-version 0) DB is rebuilt by :func:`migrate_schema`; the
+# :data:`SCHEMA_VERSION` marker in ``PRAGMA user_version`` lets provisioning tell a
+# pre-STRICT DB (needs the rebuild) from a current one (idempotent no-op) rather
+# than relying on ``IF NOT EXISTS`` alone, which would silently skip an old table.
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS task_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,30 +99,30 @@ CREATE TABLE IF NOT EXISTS task_runs (
     project_id   INTEGER NOT NULL,
     project_name TEXT    NOT NULL,
     state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')),
-    started_at   TEXT    NOT NULL,
-    stopped_at   TEXT,
+    started_at   TEXT    NOT NULL CHECK(datetime(started_at) IS NOT NULL),
+    stopped_at   TEXT             CHECK(stopped_at IS NULL OR datetime(stopped_at) IS NOT NULL),
     timesheet_id INTEGER,
-    notes        TEXT    NOT NULL DEFAULT '[]',
-    aborted_at   TEXT
-);
+    notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
+    aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source      TEXT    NOT NULL,
-    timestamp   TEXT    NOT NULL,
-    task_ids    TEXT    NOT NULL DEFAULT '[]',
+    timestamp   TEXT    NOT NULL CHECK(datetime(timestamp) IS NOT NULL),
+    task_ids    TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(task_ids)),
     repo        TEXT    NOT NULL DEFAULT '',
     pr_num      INTEGER NOT NULL DEFAULT 0,
     branch      TEXT    NOT NULL DEFAULT '',
     subject     TEXT    NOT NULL DEFAULT '',
     payload     TEXT,
     external_id TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
 
@@ -115,25 +133,186 @@ CREATE TABLE IF NOT EXISTS session_uploads (
     session_key  TEXT PRIMARY KEY,
     timesheet_id INTEGER NOT NULL,
     hours        REAL NOT NULL,
-    uploaded_at  TEXT NOT NULL,
+    uploaded_at  TEXT NOT NULL CHECK(datetime(uploaded_at) IS NOT NULL),
     task_id      TEXT,
-    started_at   TEXT,
-    ended_at     TEXT
-);
+    started_at   TEXT          CHECK(started_at IS NULL OR datetime(started_at) IS NOT NULL),
+    ended_at     TEXT          CHECK(ended_at IS NULL OR datetime(ended_at) IS NOT NULL)
+) STRICT;
 """
 
 
-def create_schema(conn: sqlite3.Connection) -> None:
-    """Apply :data:`SCHEMA_DDL` to ``conn`` (host provisioning / tests only).
+class SchemaMigrationError(RuntimeError):
+    """Raised when the tracker DB cannot be rebuilt into the STRICT schema (#452).
 
-    The ONLY sanctioned way to bring a tracker DB into existence, called from
-    exactly two places: the host-side ``scripts/init_tracker_db.py`` (which embeds
-    an identical DDL copy for stdlib-only host use) and the SDK test suite's shared
-    fixture. It is NEVER called on connection open — the SDK consumes a
-    host-provisioned DB and refuses to self-create one (#369; see
-    :class:`TrackerStateMissingError`). Idempotent: every statement is ``IF NOT EXISTS``.
+    The rebuild ABORTS — leaving the existing database untouched — rather than
+    silently dropping rows that would violate the new STRICT/CHECK constraints.
+    The message lists every offending row (``table[key=…]: reason``) so the
+    operator can fix or delete them and re-run provisioning. Abort-and-report is
+    chosen over silent quarantine: the local DB is low-volume, so a human deciding
+    what to do with a handful of corrupt rows is safer than dropping data that a
+    background provisioning step never surfaces.
     """
+
+
+# Tables rebuilt by the STRICT migration, in a fixed order (no foreign keys, so
+# any order is correct; fixed only for deterministic abort output).
+_MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
+
+# Per-table write-validation predicates mirroring the SCHEMA_DDL CHECK clauses.
+# Reused at migration time to PRE-FLIGHT existing rows and build a precise abort
+# listing before any destructive rewrite. Each entry is (SQL predicate that a BAD
+# row satisfies, human-readable reason). Keep in lockstep with the CHECKs above.
+_ROW_VALIDATIONS = {
+    "events": (
+        ("datetime(timestamp) IS NULL", "invalid timestamp"),
+        ("NOT json_valid(task_ids)", "invalid task_ids JSON"),
+    ),
+    "task_runs": (
+        ("datetime(started_at) IS NULL", "invalid started_at"),
+        ("stopped_at IS NOT NULL AND datetime(stopped_at) IS NULL", "invalid stopped_at"),
+        ("aborted_at IS NOT NULL AND datetime(aborted_at) IS NULL", "invalid aborted_at"),
+        ("NOT json_valid(notes)", "invalid notes JSON"),
+        ("state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')", "invalid state"),
+    ),
+    "session_uploads": (
+        ("datetime(uploaded_at) IS NULL", "invalid uploaded_at"),
+        ("started_at IS NOT NULL AND datetime(started_at) IS NULL", "invalid started_at"),
+        ("ended_at IS NOT NULL AND datetime(ended_at) IS NULL", "invalid ended_at"),
+    ),
+}
+
+# Column used to identify an offending row of each table in the abort message.
+_ROW_KEY = {"events": "id", "task_runs": "id", "session_uploads": "session_key"}
+
+
+def _ddl_statements() -> list:
+    """Split :data:`SCHEMA_DDL` into its individual CREATE statements.
+
+    Every statement is cleanly ``;``-terminated and none embeds a ``;`` (no string
+    literal or CHECK clause does), so a plain split is exact. The migration rebuilds
+    one table at a time from these — the SAME source a fresh provision uses — so a
+    rebuilt schema can never drift from :data:`SCHEMA_DDL`.
+    """
+    return [stmt.strip() for stmt in SCHEMA_DDL.split(";") if stmt.strip()]
+
+
+def _schema_by_table() -> dict:
+    """Map each table name to its ``(CREATE TABLE, [CREATE INDEX, ...])`` DDL."""
+    tables: dict = {}
+    indexes = []
+    for stmt in _ddl_statements():
+        if stmt.upper().startswith("CREATE TABLE"):
+            name = stmt.split("(", 1)[0].replace("IF NOT EXISTS", "").split()[-1]
+            tables[name] = (stmt, [])
+        else:
+            target = stmt[stmt.upper().index(" ON ") + 4 :].split("(")[0].strip().split()[0]
+            indexes.append((target, stmt))
+    for target, stmt in indexes:
+        tables[target][1].append(stmt)
+    return tables
+
+
+def _invalid_rows(conn: sqlite3.Connection, table: str) -> list:
+    """Return a ``table[key=…]: reason`` line for every row failing validation."""
+    checks = _ROW_VALIDATIONS.get(table)
+    if not checks:
+        return []
+    key = _ROW_KEY[table]
+    where = " OR ".join(f"({pred})" for pred, _ in checks)
+    reason = " ".join(f"WHEN {pred} THEN {label!r}" for pred, label in checks)
+    rows = conn.execute(
+        f"SELECT {key}, CASE {reason} END FROM {table} WHERE {where}"
+    ).fetchall()
+    return [f"{table}[{key}={k}]: {label}" for k, label in rows]
+
+
+def _stale_tables(conn: sqlite3.Connection) -> list:
+    """Return the existing tables still on the pre-STRICT schema, in fixed order."""
+    stale = []
+    for table in _MIGRATION_TABLES:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if row is not None and "STRICT" not in row[0].upper():
+            stale.append(table)
+    return stale
+
+
+def _rebuild_table(
+    conn: sqlite3.Connection, table: str, create_sql: str, index_sqls: list
+) -> None:
+    """Rebuild one table into its STRICT form, preserving rows and ids.
+
+    The canonical SQLite table rebuild: rename the old table aside, create the new
+    typed table from the SAME DDL a fresh provision uses, copy every row (``SELECT
+    *`` — column order is identical, so ids and all values carry over), drop the
+    old table (freeing its index names), then recreate the indexes. The caller has
+    already pre-flighted every row, so the copy cannot fail on data.
+    """
+    old = f"{table}__pre_strict"
+    conn.execute(f'ALTER TABLE "{table}" RENAME TO "{old}"')
+    conn.execute(create_sql)
+    conn.execute(f'INSERT INTO "{table}" SELECT * FROM "{old}"')
+    conn.execute(f'DROP TABLE "{old}"')
+    for index_sql in index_sqls:
+        conn.execute(index_sql)
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    """Rebuild any pre-#452 non-STRICT tables into the STRICT typed schema.
+
+    A no-op when the DB is already at :data:`SCHEMA_VERSION` or holds no pre-STRICT
+    tables (a fresh DB — its tables are created STRICT directly by
+    :func:`create_schema`). Otherwise every offending row is listed and the
+    migration ABORTS with :class:`SchemaMigrationError` BEFORE any destructive
+    rewrite, so a DB that cannot be cleanly migrated is left exactly as it was. The
+    rebuild itself runs inside one transaction and is all-or-nothing.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+        return
+    stale = _stale_tables(conn)
+    if not stale:
+        return
+    problems = [line for table in stale for line in _invalid_rows(conn, table)]
+    if problems:
+        raise SchemaMigrationError(
+            "Cannot migrate tracker.db to the STRICT schema: "
+            f"{len(problems)} row(s) fail the new write-time validation and would "
+            "be lost. Fix or delete them, then re-run provisioning:\n"
+            + "\n".join(problems)
+        )
+    schema = _schema_by_table()
+    conn.commit()
+    conn.execute("BEGIN")
+    try:
+        for table in stale:
+            create_sql, index_sqls = schema[table]
+            _rebuild_table(conn, table, create_sql, index_sqls)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def create_schema(conn: sqlite3.Connection) -> None:
+    """Bring ``conn`` to the current STRICT schema (host provisioning / tests only).
+
+    The ONLY sanctioned way to bring a tracker DB up to schema, called from exactly
+    two places: the host-side ``scripts/init_tracker_db.py`` (which embeds an
+    identical DDL copy + migration for stdlib-only host use) and the SDK test
+    suite's shared fixture. It is NEVER called on connection open — the SDK consumes
+    a host-provisioned DB and refuses to self-create one (#369; see
+    :class:`TrackerStateMissingError`).
+
+    Idempotent and version-aware: it first rebuilds any pre-STRICT tables
+    (:func:`migrate_schema`), then applies the ``IF NOT EXISTS`` DDL to create any
+    missing tables on a fresh DB, then stamps :data:`SCHEMA_VERSION` into
+    ``PRAGMA user_version`` so a subsequent run is a fast no-op.
+    """
+    migrate_schema(conn)
     conn.executescript(SCHEMA_DDL)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 # Development-family sources: ``commit``, ``agent``, ``chatter`` resync events,
