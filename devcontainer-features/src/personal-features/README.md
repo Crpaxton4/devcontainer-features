@@ -17,6 +17,20 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 |-----|-----|-----|-----|
 
 
+## Contents
+
+- [Companion Features](#companion-features)
+- [One-time host setup](#one-time-host-setup)
+- [What persists, and where](#what-persists-and-where)
+- [Windows and WSL](#windows-and-wsl)
+- [Migrating shell history](#migrating-shell-history)
+- [CodeRabbit CLI](#coderabbit-cli)
+- [The `create-pr` command](#the-create-pr-command)
+- [The `claude` command](#the-claude-command)
+- [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
+- [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
+- [Additional tooling](#additional-tooling)
+
 ## Companion Features
 
 This Feature `dependsOn` the official Node.js Feature, so it's installed automatically even if a consumer only adds `personal-features` (e.g. via `dev.containers.defaultFeatures`) — npm installs Claude Code, so a base image's own system Node can't be relied on (some base images, like Odoo's, bundle an ancient one ahead of it on PATH; `install.sh` also hard-fails with a clear error if it ends up on Node <18 for any reason).
@@ -34,30 +48,32 @@ Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` 
 
 ## One-time host setup
 
-Run the repo's setup script once per machine, **before** starting any dev container that uses this Feature. Use the one that matches the host you launch VS Code from:
+Run the setup script once per machine, **before** starting any dev container that uses this Feature:
 
-```sh
-./setup.sh      # Linux, WSL, macOS
-```
+1. From the host you launch VS Code on, run the script for your platform:
 
-```powershell
-.\setup.ps1     # native Windows host
-```
+   ```sh
+   ./setup.sh      # Linux, WSL, macOS
+   ```
 
-If PowerShell refuses to run it ("running scripts is disabled on this system"), use `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
+   ```powershell
+   .\setup.ps1     # native Windows host
+   ```
 
-This creates the host-side directories that are bind-mounted into the container:
+   If PowerShell blocks it ("running scripts is disabled on this system"), use `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
 
-```
-~/.claude                            — Claude Code auth and settings
-~/.config/gh                         — gh CLI auth and settings
-~/.config/odoo_sdk                   — odoo_sdk connection config
-~/.config/pr-automation              — create-pr config (global.yaml + projects/)
-~/.config/coderabbit                 — CodeRabbit CLI config/auth state
-~/.config/devcontainer/shell-history — bash history
-```
+2. Confirm it created the host-side directories that are bind-mounted into the container:
 
-It's safe to re-run — creating an existing directory is a no-op.
+   ```
+   ~/.claude                            — Claude Code auth and settings
+   ~/.config/gh                         — gh CLI auth and settings
+   ~/.config/odoo_sdk                   — odoo_sdk connection config
+   ~/.config/pr-automation              — create-pr config (global.yaml + projects/)
+   ~/.config/coderabbit                 — CodeRabbit CLI config/auth state
+   ~/.config/devcontainer/shell-history — bash history
+   ```
+
+Re-running is safe — creating an existing directory is a no-op.
 
 **This step is not optional.** A bind mount whose source doesn't exist on the host is a hard container-create failure, not a fallback:
 
@@ -83,17 +99,15 @@ A note on the history mount: bash writes `HISTFILE` after every command, and the
 
 ## Windows and WSL
 
-Mount sources are written as `${localEnv:HOME}${localEnv:USERPROFILE}/...`. The devcontainer spec has no conditional, so this relies on exactly one of the two being defined: Windows sets `USERPROFILE`, Linux/WSL/macOS set `HOME`. They concatenate into a valid path either way.
+Mount sources use the prefix `${localEnv:HOME}${localEnv:USERPROFILE}`. The spec has no conditional, so this relies on exactly one being defined — Windows sets `USERPROFILE`, Linux/WSL/macOS set `HOME` — and they concatenate into a valid path either way.
 
-That leaves one sharp edge. **If `HOME` is set on Windows too, both expand** and the mount source becomes garbage — `/c/Users/you` + `C:\Users\you` + `/.claude` — and the container fails to start with a mount error naming a source that contains *both* `/c/Users/...` and `C:\Users\...`. Git Bash sets `HOME` inside its own shell, so launching VS Code with `code .` from Git Bash leaks it; a `HOME` persisted as a User/Machine variable leaks into every launch. Fix it by removing the persisted `HOME`, or by launching VS Code from PowerShell or the Start menu. `setup.ps1` warns when it detects this.
+**If `HOME` is also set on Windows, both expand** and the mount source becomes garbage (`/c/Users/you` + `C:\Users\you` + `/.claude`), so the container fails to start. Git Bash sets `HOME` in its own shell (launching with `code .` from Git Bash leaks it); a persisted User/Machine `HOME` leaks into every launch. Fix by removing the persisted `HOME`, or launch VS Code from PowerShell or the Start menu. `setup.ps1` warns when it detects this.
 
-Mounts resolve against whatever environment launches VS Code, not against where the repo lives. If you open a folder through Remote-WSL, the container mounts the **WSL** home directory — so run `setup.sh` inside WSL, not `setup.ps1` in PowerShell.
+Mounts resolve against whatever environment launches VS Code, not where the repo lives: open a folder through Remote-WSL and the container mounts the **WSL** home — so run `setup.sh` inside WSL, not `setup.ps1` in PowerShell.
 
 ## Migrating shell history
 
-Shell history used to be a single-file bind mount of the host's own `~/.bash_history`. It's now a directory mount (`~/.config/devcontainer/shell-history`), because Docker Desktop materialises a missing single-file mount source as a *directory*, which then fails the mount.
-
-Two consequences: your existing history won't appear in the container, and container history no longer writes back into your host shell's history. To carry the old history over:
+History is now a directory mount (`~/.config/devcontainer/shell-history`), not a single-file mount of `~/.bash_history` — Docker Desktop materialises a missing single-file source as a *directory*, which then fails the mount. So your old host history won't appear in the container, and container history no longer writes back to the host. To carry the old history over:
 
 ```sh
 cp ~/.bash_history ~/.config/devcontainer/shell-history/bash_history
@@ -120,7 +134,7 @@ To make `CODERABBIT_API_KEY` available inside the container from your host env, 
 
 Caveats:
 
-- **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which typically isn't running in a container — in that case it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` is set to the bind-mounted dir above so any on-disk config/auth survives rebuilds, but the exact config-dir env var / path the CLI honors isn't formally documented and may change; the reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key` (cheap, one command). Verify with `coderabbit doctor`.
+- **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which usually isn't running in a container, so it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` points at the bind-mounted dir so that state survives rebuilds — but the exact config-dir path the CLI honors isn't documented and may change. The reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key`. Verify with `coderabbit doctor`.
 - `.coderabbit.yaml` is a per-repo config file read by CodeRabbit's cloud service. It's authored by the user at the repo root and is **not** managed by this Feature.
 - The Claude Code CodeRabbit plugin / Agentic API access may require a paid CodeRabbit plan — check your account's plan if `/coderabbit:review` reports auth or entitlement errors.
 
