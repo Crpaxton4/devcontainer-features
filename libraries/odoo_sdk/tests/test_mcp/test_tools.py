@@ -772,6 +772,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "stop_all": (),
             "normalize_timesheets": (),
             "search_chatter": ("q",),
+            "search_count": ("project.task",),
             "search_knowledge_articles": ("q",),
             "read_knowledge_article": (5,),
             "task_status": (),

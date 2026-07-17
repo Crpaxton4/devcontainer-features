@@ -150,6 +150,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "read_attachment",
         "create_task",
         "search_chatter",
+        "search_count",
         "search_knowledge_articles",
         "read_knowledge_article",
         "search_projects",
