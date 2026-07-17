@@ -1,5 +1,34 @@
 # Changelog
 
+## [4.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v3.0.0...personal-features-v4.0.0) (2026-07-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **state:** existing tracker.db files must run the rebuild migration (via setup.sh / init_tracker_db.py) to move to the STRICT schema; a DB containing rows that fail the new validation aborts the migration until those rows are fixed.
+* **sdk:** `start_task` writes no timesheet and returns `timesheet_id: null`. A task no longer gets a 0-hour anchor row on start; the first `account.analytic.line` row for a task is created by the upload path when it bills the derived session. Behaviour for reconcile is unchanged for existing anchors (still adopted), but new work never produces an anchor to adopt.
+
+### Features
+
+* **mcp:** add search_count aggregate tool ([#460](https://github.com/Crpaxton4/devcontainer-features/issues/460)) ([a2a0c6f](https://github.com/Crpaxton4/devcontainer-features/commit/a2a0c6ffcda4038334b5ce71c9c87f69581b5b32)), closes [#445](https://github.com/Crpaxton4/devcontainer-features/issues/445)
+* **mcp:** decorator registries for prompts and composition tools ([#432](https://github.com/Crpaxton4/devcontainer-features/issues/432)) ([45af6cb](https://github.com/Crpaxton4/devcontainer-features/commit/45af6cb63c186420c1702c0d49f328cb25522aee)), closes [#410](https://github.com/Crpaxton4/devcontainer-features/issues/410)
+* **mcp:** expose personal-features skills as MCP prompts ([#464](https://github.com/Crpaxton4/devcontainer-features/issues/464)) ([222ab9d](https://github.com/Crpaxton4/devcontainer-features/commit/222ab9dea27762535eda0a24a979d2634b33cf41)), closes [#455](https://github.com/Crpaxton4/devcontainer-features/issues/455)
+* **personal-features:** add fibonacci-estimate skill ([#456](https://github.com/Crpaxton4/devcontainer-features/issues/456)) ([be0fdf0](https://github.com/Crpaxton4/devcontainer-features/commit/be0fdf0e535bf5e2779852187a2da655445267e4)), closes [#450](https://github.com/Crpaxton4/devcontainer-features/issues/450)
+* **sdk:** stop start_task writing Odoo timesheets — sessionization is sole timelog source ([#443](https://github.com/Crpaxton4/devcontainer-features/issues/443)) ([2ed3446](https://github.com/Crpaxton4/devcontainer-features/commit/2ed34465aed9f4fe522e911999344b6888fdab52)), closes [#329](https://github.com/Crpaxton4/devcontainer-features/issues/329)
+
+
+### Bug Fixes
+
+* **cli:** route stop/stop-all through StopTaskCommand ([#423](https://github.com/Crpaxton4/devcontainer-features/issues/423)) ([621d919](https://github.com/Crpaxton4/devcontainer-features/commit/621d91991064208ab49b43040778d0b093929c20)), closes [#402](https://github.com/Crpaxton4/devcontainer-features/issues/402) [#403](https://github.com/Crpaxton4/devcontainer-features/issues/403)
+* **personal-features:** conform odoo-quote to in-house estimate standard ([#457](https://github.com/Crpaxton4/devcontainer-features/issues/457)) ([429b1c7](https://github.com/Crpaxton4/devcontainer-features/commit/429b1c7086345aba049d9bd3ac2e588817c42d20))
+* **personal-features:** harden uv installs against network timeouts ([#431](https://github.com/Crpaxton4/devcontainer-features/issues/431)) ([91bf6b5](https://github.com/Crpaxton4/devcontainer-features/commit/91bf6b5acd1629a571e7239e4af188e123b7f78b)), closes [#401](https://github.com/Crpaxton4/devcontainer-features/issues/401)
+* **sdk:** correctness and consistency fixes from simplification review ([#436](https://github.com/Crpaxton4/devcontainer-features/issues/436)) ([39f879b](https://github.com/Crpaxton4/devcontainer-features/commit/39f879b57e0207a435c72bfd3a54966913e64eeb)), closes [#421](https://github.com/Crpaxton4/devcontainer-features/issues/421)
+* **sdk:** fork start_task branch from fetched origin tip, not stale local base ([#461](https://github.com/Crpaxton4/devcontainer-features/issues/461)) ([87a7b36](https://github.com/Crpaxton4/devcontainer-features/commit/87a7b361ecf5ff51185ba17187c14e6f381c4981)), closes [#454](https://github.com/Crpaxton4/devcontainer-features/issues/454)
+* **sdk:** pass body_is_html=True so chatter notes render as HTML ([#458](https://github.com/Crpaxton4/devcontainer-features/issues/458)) ([33d1bfb](https://github.com/Crpaxton4/devcontainer-features/commit/33d1bfb4bff13ab31b7cdee0a703ee4cd33e9026)), closes [#453](https://github.com/Crpaxton4/devcontainer-features/issues/453)
+* **sdk:** stop knowledge tools probing ir.model, classify errors instead ([#462](https://github.com/Crpaxton4/devcontainer-features/issues/462)) ([435f6ed](https://github.com/Crpaxton4/devcontainer-features/commit/435f6ed80e97fa65ce69026a323459cc50e93470)), closes [#444](https://github.com/Crpaxton4/devcontainer-features/issues/444)
+* **state:** STRICT typed tracker schema with write-time validation ([#463](https://github.com/Crpaxton4/devcontainer-features/issues/463)) ([0fee768](https://github.com/Crpaxton4/devcontainer-features/commit/0fee76806b76d4fad0c9abb9aee7e118260248ee)), closes [#452](https://github.com/Crpaxton4/devcontainer-features/issues/452)
+* **tui:** translate agentless repo sentinel so odoo-tui stops crashing ([#459](https://github.com/Crpaxton4/devcontainer-features/issues/459)) ([7cd014e](https://github.com/Crpaxton4/devcontainer-features/commit/7cd014ed4734f1fcdaf16f86c10fd9059ebb8943)), closes [#451](https://github.com/Crpaxton4/devcontainer-features/issues/451)
+
 ## [3.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v2.1.0...personal-features-v3.0.0) (2026-07-15)
 
 
