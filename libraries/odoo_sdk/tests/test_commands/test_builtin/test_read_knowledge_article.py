@@ -1,13 +1,15 @@
 """Tests for the read-only ``read_knowledge_article`` MCP tool (issue #249).
 
 The helper is driven through a real :class:`OdooClient` wrapping a recording
-fake executor so the exact ``ir.model`` capability probe and the
-``knowledge.article`` ``read`` id / fields issued to Odoo are asserted, and the
-full HTML-to-Markdown body conversion (plus the generous body cap) is exercised
-end-to-end. ``knowledge.article`` is an Odoo Enterprise model, so the
-model-absent (Community) path is pinned to its exact ``ValueError`` message, and
-a missing id is pinned to the exact id-naming ``ValueError``. No live Odoo is
-used.
+fake executor so the exact ``knowledge.article`` ``read`` id / fields issued to
+Odoo are asserted, and the full HTML-to-Markdown body conversion (plus the
+generous body cap) is exercised end-to-end. ``knowledge.article`` is an Odoo
+Enterprise model whose availability is determined by attempting the real query —
+there is *no* ``ir.model`` probe (issue #444), so every test asserts ``ir.model``
+is never touched. The model-absent (Community) path is pinned to its exact
+``ValueError`` message, a permission denial is pinned to propagating as the
+original :class:`OdooAccessError`, and a missing id is pinned to the exact
+id-naming ``ValueError``. No live Odoo is used.
 """
 
 import unittest
@@ -19,16 +21,34 @@ from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.commands.builtin.read_knowledge_article import (
     ReadKnowledgeArticleCommand,
 )
+from odoo_sdk.transport.errors import (
+    OdooAccessError,
+    OdooMissingRecordError,
+    OdooServerError,
+)
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.knowledge import (
     BODY_CHAR_CAP,
     KNOWLEDGE_UNAVAILABLE_MESSAGE,
-    assert_knowledge_available,
+    _is_missing_model_error,
     read_knowledge_article,
 )
 
 _READ_FIELDS = ["id", "name", "body", "write_date"]
-_PROBE_DOMAIN = [("model", "=", "knowledge.article")]
+
+# A realistic missing-model fault: Odoo resolves ``env["knowledge.article"]`` to a
+# ``KeyError`` that surfaces across transports as an unmapped ``OdooServerError``.
+_MODEL_ABSENT_ERROR = OdooServerError(
+    "KeyError: 'knowledge.article'",
+    model="knowledge.article",
+    fault_string="Traceback ...\nKeyError: 'knowledge.article'",
+)
+# A realistic permission denial for a least-privileged (non-admin) account.
+_ACCESS_ERROR = OdooAccessError(
+    "You are not allowed to access 'Article' (knowledge.article) records.",
+    model="knowledge.article",
+    method="read",
+)
 
 
 def _article(**overrides: Any) -> dict:
@@ -44,64 +64,84 @@ def _article(**overrides: Any) -> dict:
 
 
 class _RecordingExecutor(OdooExecutor):
-    """Fake executor recording every call; probes present/absent, returns rows.
+    """Fake executor recording every call; returns rows or raises a canned fault.
 
     Real ``OdooClient`` execution runs through this (including the system-wide
     ``forbid_unlink`` guard), and every issued call is captured in ``calls`` so
-    the exact probe domain and the ``read`` id / fields can be asserted.
-    ``ir.model.search_count`` reports the model's presence and
-    ``knowledge.article.read`` returns the canned rows (an empty list models a
-    missing/inaccessible id).
+    the exact ``read`` id / fields can be asserted and — as the #444 regression
+    guard — so tests can prove ``ir.model`` is never touched. When ``error`` is
+    set the call raises it (modelling a Community/missing-model fault or a
+    permission denial); otherwise the canned rows are returned (an empty list
+    models a missing/inaccessible id).
     """
 
     def __init__(
-        self, rows: list[dict] | None = None, *, model_present: bool = True
+        self, rows: list[dict] | None = None, *, error: Exception | None = None
     ) -> None:
         self._rows = rows if rows is not None else []
-        self._present = model_present
+        self._error = error
         self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((model, method, args, kwargs))
-        if (model, method) == ("ir.model", "search_count"):
-            return 1 if self._present else 0
+        if self._error is not None:
+            raise self._error
         return self._rows
 
 
 def _client(
-    rows: list[dict] | None = None, *, model_present: bool = True
+    rows: list[dict] | None = None, *, error: Exception | None = None
 ) -> tuple[OdooClient, _RecordingExecutor]:
-    executor = _RecordingExecutor(rows, model_present=model_present)
+    executor = _RecordingExecutor(rows, error=error)
     return OdooClient(executor=executor), executor
 
 
-class TestReadKnowledgeArticleQuery(unittest.TestCase):
-    """The probe precedes a single ``read`` of the requested id and fields."""
+def _assert_never_probes_ir_model(executor: _RecordingExecutor) -> None:
+    """Fail if any recorded call touched the administrative ``ir.model`` table."""
+    models = [model for model, _, _, _ in executor.calls]
+    assert "ir.model" not in models, f"ir.model must never be probed: {executor.calls}"
 
-    def test_probes_then_reads_the_requested_id(self):
+
+class TestReadKnowledgeArticleQuery(unittest.TestCase):
+    """The tool issues a single ``read`` of the requested id and fields."""
+
+    def test_reads_the_requested_id_without_probing_ir_model(self):
         client, executor = _client([_article(id=7)])
         read_knowledge_article(client, 7)
-        # Two read-only calls: the ir.model probe, then the article read.
-        self.assertEqual(len(executor.calls), 2)
-        self.assertEqual(executor.calls[0][:2], ("ir.model", "search_count"))
-        self.assertEqual(executor.calls[0][2][0], _PROBE_DOMAIN)
-        model, method, args, _ = executor.calls[1]
+        # A single read-only call: the article read. No ir.model probe.
+        self.assertEqual(len(executor.calls), 1)
+        _assert_never_probes_ir_model(executor)
+        model, method, args, _ = executor.calls[0]
         self.assertEqual((model, method), ("knowledge.article", "read"))
         self.assertEqual(args[0], [7])
 
     def test_reads_expected_fields(self):
         client, executor = _client([_article()])
         read_knowledge_article(client, 7)
-        self.assertEqual(executor.calls[1][3]["fields"], _READ_FIELDS)
+        self.assertEqual(executor.calls[0][3]["fields"], _READ_FIELDS)
 
     def test_only_read_only_methods_issued(self):
         client, executor = _client([_article()])
         read_knowledge_article(client, 7)
         methods = [method for _, method, _, _ in executor.calls]
-        self.assertEqual(methods, ["search_count", "read"])
+        self.assertEqual(methods, ["read"])
+        _assert_never_probes_ir_model(executor)
 
-    def test_absent_model_raises_exact_message_and_skips_read(self):
-        client, executor = _client([_article()], model_present=False)
+    def test_missing_id_raises_exact_message_naming_the_id(self):
+        client, executor = _client([])  # empty read result => id not found
+        with self.assertRaises(ValueError) as ctx:
+            read_knowledge_article(client, 404)
+        self.assertEqual(str(ctx.exception), "knowledge.article 404 not found")
+        # The single read was attempted before raising.
+        self.assertEqual(len(executor.calls), 1)
+        _assert_never_probes_ir_model(executor)
+
+
+class TestReadKnowledgeArticleAvailability(unittest.TestCase):
+    """Availability comes from the real query's fault, never an ir.model probe."""
+
+    def test_absent_model_raises_exact_community_message(self):
+        client, executor = _client(error=_MODEL_ABSENT_ERROR)
         with self.assertRaises(ValueError) as ctx:
             read_knowledge_article(client, 7)
         self.assertEqual(str(ctx.exception), KNOWLEDGE_UNAVAILABLE_MESSAGE)
@@ -109,17 +149,79 @@ class TestReadKnowledgeArticleQuery(unittest.TestCase):
             KNOWLEDGE_UNAVAILABLE_MESSAGE,
             "knowledge.article model not available (Odoo Enterprise required)",
         )
-        # Only the probe ran; no knowledge.article read was issued.
+        # The real query was attempted directly; ir.model was never probed.
         self.assertEqual(len(executor.calls), 1)
-        self.assertEqual(executor.calls[0][:2], ("ir.model", "search_count"))
+        self.assertEqual(executor.calls[0][:2], ("knowledge.article", "read"))
+        _assert_never_probes_ir_model(executor)
 
-    def test_missing_id_raises_exact_message_naming_the_id(self):
-        client, executor = _client([])  # empty read result => id not found
-        with self.assertRaises(ValueError) as ctx:
+    def test_permission_error_propagates_and_is_not_relabeled(self):
+        client, executor = _client(error=_ACCESS_ERROR)
+        # A least-privileged account's access denial must surface as-is, NOT be
+        # swallowed into the edition ValueError.
+        with self.assertRaises(OdooAccessError) as ctx:
+            read_knowledge_article(client, 7)
+        self.assertIs(ctx.exception, _ACCESS_ERROR)
+        self.assertNotEqual(str(ctx.exception), KNOWLEDGE_UNAVAILABLE_MESSAGE)
+        _assert_never_probes_ir_model(executor)
+
+    def test_missing_record_error_propagates_not_relabeled(self):
+        # A MissingError names the model in its text, but it is a missing *record*
+        # (bad id), not a missing model — it must not become the edition error.
+        missing = OdooMissingRecordError(
+            "Record does not exist or has been deleted. "
+            "(Records: knowledge.article(404,), User: 2)",
+            model="knowledge.article",
+        )
+        client, _ = _client(error=missing)
+        with self.assertRaises(OdooMissingRecordError) as ctx:
             read_knowledge_article(client, 404)
-        self.assertEqual(str(ctx.exception), "knowledge.article 404 not found")
-        # The probe passed and the read was attempted before raising.
-        self.assertEqual(len(executor.calls), 2)
+        self.assertIs(ctx.exception, missing)
+
+    def test_edition_and_permission_errors_are_distinguishable(self):
+        absent_client, _ = _client(error=_MODEL_ABSENT_ERROR)
+        access_client, _ = _client(error=_ACCESS_ERROR)
+        with self.assertRaises(ValueError) as absent_ctx:
+            read_knowledge_article(absent_client, 7)
+        with self.assertRaises(OdooAccessError) as access_ctx:
+            read_knowledge_article(access_client, 7)
+        self.assertNotIsInstance(access_ctx.exception, ValueError)
+        self.assertIsInstance(absent_ctx.exception, ValueError)
+
+
+class TestIsMissingModelError(unittest.TestCase):
+    """The classifier separates a missing model from every other fault."""
+
+    def test_unmapped_keyerror_fault_is_missing_model(self):
+        self.assertTrue(_is_missing_model_error(_MODEL_ABSENT_ERROR))
+
+    def test_marker_in_fault_string_only_is_detected(self):
+        exc = OdooServerError(
+            "server error", fault_string="odoo model not found for knowledge.article"
+        )
+        self.assertTrue(_is_missing_model_error(exc))
+
+    def test_access_error_is_not_missing_model(self):
+        self.assertFalse(_is_missing_model_error(_ACCESS_ERROR))
+
+    def test_missing_record_error_is_not_missing_model(self):
+        exc = OdooMissingRecordError("Record does not exist or has been deleted.")
+        self.assertFalse(_is_missing_model_error(exc))
+
+    def test_generic_server_error_is_not_missing_model(self):
+        self.assertFalse(_is_missing_model_error(OdooServerError("boom")))
+
+    def test_marker_without_model_name_is_not_missing_model(self):
+        # An unrelated business UserError (mapped to OdooServerError) can
+        # legitimately say "does not exist" about something else entirely (a
+        # broken cross-reference, a missing linked document); it must not be
+        # misread as the knowledge.article model itself being absent, which
+        # would hide the real failure behind the Community-edition message.
+        exc = OdooServerError("The linked document does not exist anymore.")
+        self.assertFalse(_is_missing_model_error(exc))
+
+    def test_model_name_without_marker_is_not_missing_model(self):
+        exc = OdooServerError("knowledge.article write failed unexpectedly")
+        self.assertFalse(_is_missing_model_error(exc))
 
 
 class TestReadKnowledgeArticleShaping(unittest.TestCase):
@@ -207,19 +309,10 @@ class TestReadKnowledgeArticleCommand(unittest.TestCase):
     def test_execute_defaults_are_read_only(self):
         client, executor = _client([_article()])
         ReadKnowledgeArticleCommand(client).execute(7)
-        # A read-only probe + read, no writes of any kind.
+        # A single read-only read, no ir.model probe and no writes.
         methods = [method for _, method, _, _ in executor.calls]
-        self.assertEqual(methods, ["search_count", "read"])
-
-
-class TestAssertKnowledgeAvailableShared(unittest.TestCase):
-    """The shared Enterprise probe is reused, not re-implemented."""
-
-    def test_probe_present_issues_single_search_count(self):
-        client, executor = _client(model_present=True)
-        assert_knowledge_available(client)
-        self.assertEqual(len(executor.calls), 1)
-        self.assertEqual(executor.calls[0][:2], ("ir.model", "search_count"))
+        self.assertEqual(methods, ["read"])
+        _assert_never_probes_ir_model(executor)
 
 
 class TestReadKnowledgeArticleToonEncoding(unittest.TestCase):

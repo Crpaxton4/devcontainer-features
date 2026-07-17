@@ -1,12 +1,14 @@
 """Tests for the read-only ``search_knowledge_articles`` MCP tool (issue #248).
 
 The helper is driven through a real :class:`OdooClient` wrapping a recording
-fake executor so the exact ``ir.model`` capability probe and the
-``knowledge.article`` ``search_read`` domain / fields / order / limit issued to
-Odoo are asserted, and the HTML-to-Markdown body snippet capping is exercised
-end-to-end. ``knowledge.article`` is an Odoo Enterprise model, so the
-model-absent (Community) path is pinned to its exact ``ValueError`` message. No
-live Odoo is used.
+fake executor so the exact ``knowledge.article`` ``search_read`` domain / fields
+/ order / limit issued to Odoo are asserted, and the HTML-to-Markdown body
+snippet capping is exercised end-to-end. ``knowledge.article`` is an Odoo
+Enterprise model whose availability is determined by attempting the real query —
+there is *no* ``ir.model`` probe (issue #444), so every test asserts ``ir.model``
+is never touched. The model-absent (Community) path is pinned to its exact
+``ValueError`` message, and a permission denial is pinned to propagating as the
+original :class:`OdooAccessError`. No live Odoo is used.
 """
 
 import unittest
@@ -18,18 +20,31 @@ from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.commands.builtin.search_knowledge_articles import (
     SearchKnowledgeArticlesCommand,
 )
+from odoo_sdk.transport.errors import OdooAccessError, OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.knowledge import (
     KNOWLEDGE_UNAVAILABLE_MESSAGE,
     SNIPPET_CHAR_CAP,
     _article_snippet,
-    assert_knowledge_available,
     search_knowledge_articles,
 )
 
 _SEARCH_FIELDS = ["id", "name", "body", "write_date"]
-_PROBE_DOMAIN = [("model", "=", "knowledge.article")]
 _SEARCH_DOMAIN = ["|", ("name", "ilike", "vat"), ("body", "ilike", "vat")]
+
+# A realistic missing-model fault: Odoo resolves ``env["knowledge.article"]`` to a
+# ``KeyError`` that surfaces across transports as an unmapped ``OdooServerError``.
+_MODEL_ABSENT_ERROR = OdooServerError(
+    "KeyError: 'knowledge.article'",
+    model="knowledge.article",
+    fault_string="Traceback ...\nKeyError: 'knowledge.article'",
+)
+# A realistic permission denial for a least-privileged (non-admin) account.
+_ACCESS_ERROR = OdooAccessError(
+    "You are not allowed to access 'Article' (knowledge.article) records.",
+    model="knowledge.article",
+    method="search_read",
+)
 
 
 def _article(**overrides: Any) -> dict:
@@ -45,75 +60,60 @@ def _article(**overrides: Any) -> dict:
 
 
 class _RecordingExecutor(OdooExecutor):
-    """Fake executor recording every call; probes present/absent, returns rows.
+    """Fake executor recording every call; returns rows or raises a canned fault.
 
     Real ``OdooClient`` execution runs through this (including the system-wide
     ``forbid_unlink`` guard), and every issued call is captured in ``calls`` so
-    the exact probe domain and search domain / fields / order / limit can be
-    asserted. ``ir.model.search_count`` reports the model's presence and
-    ``knowledge.article.search_read`` returns the canned rows.
+    the exact search domain / fields / order / limit can be asserted and — as the
+    #444 regression guard — so tests can prove ``ir.model`` is never touched. When
+    ``error`` is set the call raises it (modelling a Community/missing-model fault
+    or a permission denial); otherwise the canned rows are returned.
     """
 
     def __init__(
-        self, rows: list[dict] | None = None, *, model_present: bool = True
+        self, rows: list[dict] | None = None, *, error: Exception | None = None
     ) -> None:
         self._rows = rows if rows is not None else []
-        self._present = model_present
+        self._error = error
         self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((model, method, args, kwargs))
-        if (model, method) == ("ir.model", "search_count"):
-            return 1 if self._present else 0
+        if self._error is not None:
+            raise self._error
         return self._rows
 
 
 def _client(
-    rows: list[dict] | None = None, *, model_present: bool = True
+    rows: list[dict] | None = None, *, error: Exception | None = None
 ) -> tuple[OdooClient, _RecordingExecutor]:
-    executor = _RecordingExecutor(rows, model_present=model_present)
+    executor = _RecordingExecutor(rows, error=error)
     return OdooClient(executor=executor), executor
 
 
-class TestAssertKnowledgeAvailable(unittest.TestCase):
-    """The Enterprise-only probe gates every read with a clear typed error."""
-
-    def test_probe_uses_ir_model_search_count(self):
-        client, executor = _client(model_present=True)
-        assert_knowledge_available(client)
-        self.assertEqual(len(executor.calls), 1)
-        model, method, args, _ = executor.calls[0]
-        self.assertEqual((model, method), ("ir.model", "search_count"))
-        self.assertEqual(args[0], _PROBE_DOMAIN)
-
-    def test_absent_model_raises_exact_message(self):
-        client, _ = _client(model_present=False)
-        with self.assertRaises(ValueError) as ctx:
-            assert_knowledge_available(client)
-        self.assertEqual(str(ctx.exception), KNOWLEDGE_UNAVAILABLE_MESSAGE)
-        self.assertEqual(
-            KNOWLEDGE_UNAVAILABLE_MESSAGE,
-            "knowledge.article model not available (Odoo Enterprise required)",
-        )
+def _assert_never_probes_ir_model(executor: _RecordingExecutor) -> None:
+    """Fail if any recorded call touched the administrative ``ir.model`` table."""
+    models = [model for model, _, _, _ in executor.calls]
+    assert "ir.model" not in models, f"ir.model must never be probed: {executor.calls}"
 
 
 class TestSearchKnowledgeArticlesQuery(unittest.TestCase):
-    """The probe precedes a single ``search_read`` with the exact OR domain."""
+    """The search issues a single ``search_read`` with the exact OR domain."""
 
-    def test_probes_then_searches_with_or_domain(self):
+    def test_searches_with_or_domain_without_probing_ir_model(self):
         client, executor = _client([_article()])
         search_knowledge_articles(client, "vat")
-        # Two read-only calls: the ir.model probe, then the article search.
-        self.assertEqual(len(executor.calls), 2)
-        self.assertEqual(executor.calls[0][:2], ("ir.model", "search_count"))
-        model, method, args, _ = executor.calls[1]
+        # A single read-only call: the article search. No ir.model probe.
+        self.assertEqual(len(executor.calls), 1)
+        _assert_never_probes_ir_model(executor)
+        model, method, args, _ = executor.calls[0]
         self.assertEqual((model, method), ("knowledge.article", "search_read"))
         self.assertEqual(args[0], _SEARCH_DOMAIN)
 
     def test_fields_order_and_default_limit(self):
         client, executor = _client([_article()])
         search_knowledge_articles(client, "vat")
-        _, _, _, kwargs = executor.calls[1]
+        _, _, _, kwargs = executor.calls[0]
         self.assertEqual(kwargs["fields"], _SEARCH_FIELDS)
         self.assertEqual(kwargs["order"], "write_date desc, id desc")
         self.assertEqual(kwargs["limit"], 10)
@@ -121,16 +121,47 @@ class TestSearchKnowledgeArticlesQuery(unittest.TestCase):
     def test_custom_limit_forwarded(self):
         client, executor = _client([_article()])
         search_knowledge_articles(client, "vat", limit=3)
-        self.assertEqual(executor.calls[1][3]["limit"], 3)
+        self.assertEqual(executor.calls[0][3]["limit"], 3)
 
-    def test_absent_model_skips_search(self):
-        client, executor = _client([_article()], model_present=False)
+
+class TestSearchKnowledgeArticlesAvailability(unittest.TestCase):
+    """Availability comes from the real query's fault, never an ir.model probe."""
+
+    def test_absent_model_raises_exact_community_message(self):
+        client, executor = _client(error=_MODEL_ABSENT_ERROR)
         with self.assertRaises(ValueError) as ctx:
             search_knowledge_articles(client, "vat")
         self.assertEqual(str(ctx.exception), KNOWLEDGE_UNAVAILABLE_MESSAGE)
-        # Only the probe ran; no knowledge.article search was issued.
+        self.assertEqual(
+            KNOWLEDGE_UNAVAILABLE_MESSAGE,
+            "knowledge.article model not available (Odoo Enterprise required)",
+        )
+        # The real query was attempted directly; ir.model was never probed.
         self.assertEqual(len(executor.calls), 1)
-        self.assertEqual(executor.calls[0][:2], ("ir.model", "search_count"))
+        self.assertEqual(executor.calls[0][:2], ("knowledge.article", "search_read"))
+        _assert_never_probes_ir_model(executor)
+
+    def test_permission_error_propagates_and_is_not_relabeled(self):
+        client, executor = _client(error=_ACCESS_ERROR)
+        # A least-privileged account's access denial must surface as-is, NOT be
+        # swallowed into the edition ValueError.
+        with self.assertRaises(OdooAccessError) as ctx:
+            search_knowledge_articles(client, "vat")
+        self.assertIs(ctx.exception, _ACCESS_ERROR)
+        self.assertNotEqual(str(ctx.exception), KNOWLEDGE_UNAVAILABLE_MESSAGE)
+        _assert_never_probes_ir_model(executor)
+
+    def test_edition_and_permission_errors_are_distinguishable(self):
+        # The edition path is a ValueError; the permission path keeps its Odoo
+        # type — the two are distinct types the MCP boundary renders separately.
+        absent_client, _ = _client(error=_MODEL_ABSENT_ERROR)
+        access_client, _ = _client(error=_ACCESS_ERROR)
+        with self.assertRaises(ValueError) as absent_ctx:
+            search_knowledge_articles(absent_client, "vat")
+        with self.assertRaises(OdooAccessError) as access_ctx:
+            search_knowledge_articles(access_client, "vat")
+        self.assertNotIsInstance(access_ctx.exception, ValueError)
+        self.assertIsInstance(absent_ctx.exception, ValueError)
 
 
 class TestSearchKnowledgeArticlesShaping(unittest.TestCase):
@@ -160,8 +191,9 @@ class TestSearchKnowledgeArticlesShaping(unittest.TestCase):
     def test_no_matches_returns_empty_list(self):
         client, executor = _client([])
         self.assertEqual(search_knowledge_articles(client, "nope"), [])
-        # Probe + search both ran even though there were no matches.
-        self.assertEqual(len(executor.calls), 2)
+        # A single search ran even though there were no matches.
+        self.assertEqual(len(executor.calls), 1)
+        _assert_never_probes_ir_model(executor)
 
 
 class TestArticleSnippet(unittest.TestCase):
@@ -215,9 +247,10 @@ class TestSearchKnowledgeArticlesCommand(unittest.TestCase):
     def test_execute_defaults_are_read_only_search(self):
         client, executor = _client([_article()])
         SearchKnowledgeArticlesCommand(client).execute("vat")
-        # A read-only probe + search_read, no writes of any kind.
+        # A single read-only search_read, no ir.model probe and no writes.
         methods = [method for _, method, _, _ in executor.calls]
-        self.assertEqual(methods, ["search_count", "search_read"])
+        self.assertEqual(methods, ["search_read"])
+        _assert_never_probes_ir_model(executor)
 
 
 class TestSearchKnowledgeArticlesToonEncoding(unittest.TestCase):
