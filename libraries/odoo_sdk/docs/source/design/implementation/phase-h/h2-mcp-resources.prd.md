@@ -2,6 +2,11 @@
 
 MCP Resources
 
+> **Historical / superseded (2026-07).** No `odoo://` MCP resources shipped. The
+> MCP surface is tools and prompts projected from the command registry, not the
+> three resource handlers described here. The implemented contract is
+> [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem

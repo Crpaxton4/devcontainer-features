@@ -2,6 +2,12 @@
 
 Phase H Guardrails
 
+> **Historical / superseded (2026-07).** This guardrail PRD locked in the original
+> Phase H contract (`odoo://` resources, nine generic ORM tools, no CLI, prompts
+> deferred). None of that shipped: the MCP server projects the command registry,
+> ships an `odoo-mcp` CLI entry point, and registers prompts. The implemented
+> contract is [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem

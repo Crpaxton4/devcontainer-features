@@ -1,5 +1,12 @@
 # Phase H MCP Contract
 
+> **Historical / superseded (2026-07).** This contract is retained as a record of
+> the original Phase H plan. It does **not** describe what shipped: there are no
+> `odoo://` resources and no generic ORM tool surface, `OdooMCPServer` wraps a
+> command `Registry` (not `OdooClient.mcp_server()`), an `odoo-mcp` CLI entry
+> point ships, and prompts are registered rather than deferred. The implemented
+> contract is [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 ## Purpose
 
 This contract is the implementation baseline for Phase H.

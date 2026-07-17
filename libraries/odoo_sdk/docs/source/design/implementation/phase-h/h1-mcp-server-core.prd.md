@@ -2,6 +2,13 @@
 
 OdooMCPServer Core
 
+> **Historical / superseded (2026-07).** This PRD describes the original Phase H
+> server shape, not what shipped. `OdooMCPServer` takes a command `Registry` (not
+> an `OdooClient`), is built on FastMCP (not `mcp`), registers no resources, and is
+> exposed via the `odoo-mcp` entry point and a lazy `odoo_sdk.OdooMCPServer`
+> import — not a `client.mcp_server()` factory. The implemented contract is
+> [ADR-004 — MCP wraps the command registry](../../architecture/ADR-004-mcp-wraps-the-command-registry.md).
+
 # Goal
 
 ## Problem
