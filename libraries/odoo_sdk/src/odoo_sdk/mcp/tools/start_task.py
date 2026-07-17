@@ -95,6 +95,30 @@ def _rollback_task_branch(branch_name: str, original_branch: Optional[str]) -> N
     _git("branch", "-D", branch_name)
 
 
+def _resolve_base_ref(base_branch: str) -> str:
+    """Fetch ``base_branch`` from ``origin`` and return the ref to fork from.
+
+    Forks must start from the *remote* tip (#454): a local base-branch pointer
+    in a long-lived devcontainer commonly drifts behind ``origin`` (observed
+    −60 commits), so forking from the local ref silently omits merged work and
+    the new branch appears to have "lost" it. We ``git fetch origin <base>``
+    (a read-only network op that leaves the working tree and untracked files
+    untouched) and fork from ``origin/<base>`` when that remote-tracking ref
+    then exists. When there is no ``origin`` remote — or the fetch/ref lookup
+    fails, e.g. offline — we fall back to the local ``base_branch`` rather than
+    hard-failing, so single-repo and disconnected setups still work.
+
+    :param base_branch: Local base branch the user chose to fork from.
+    :type base_branch: str
+    :return: ``origin/<base_branch>`` when reachable, else ``base_branch``.
+    :rtype: str
+    """
+    _git("fetch", "origin", base_branch)
+    remote_ref = f"origin/{base_branch}"
+    probe = _git("rev-parse", "--verify", "--quiet", f"refs/remotes/{remote_ref}")
+    return remote_ref if probe.returncode == 0 else base_branch
+
+
 def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     """Create or switch to ``branch_name``, preserving any local changes.
 
@@ -104,6 +128,9 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     matching ``pop`` runs only when an entry was actually pushed — a plain
     stash on an untracked-only tree saves nothing, so an unconditional ``pop``
     would fail with "No stash entries found".
+    Remote-based (#454): a freshly created branch forks from the fetched
+    ``origin/<base>`` tip (see :func:`_resolve_base_ref`), never the possibly
+    stale local base ref.
 
     :param branch_name: Target branch to end up on.
     :type branch_name: str
@@ -124,7 +151,8 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     created = not _branch_exists(branch_name)
     try:
         if created:
-            subprocess.run(["git", "checkout", "-b", branch_name, base_branch], check=True)
+            base_ref = _resolve_base_ref(base_branch)
+            subprocess.run(["git", "checkout", "-b", branch_name, base_ref], check=True)
         else:
             subprocess.run(["git", "checkout", branch_name], check=True)
     finally:
