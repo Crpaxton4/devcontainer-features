@@ -7,7 +7,7 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 
 ```json
 "features": {
-    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:3": {}
+    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:4": {}
 }
 ```
 
