@@ -25,7 +25,9 @@ from odoo_sdk.tui.app import (
     refresh,
     request_upload,
     run,
+    _draw,
     _resync_status,
+    _safe,
     _upload_sessions,
 )
 from odoo_sdk.tui.window import DateWindow
@@ -497,6 +499,55 @@ class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
         with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom):
             with self.assertRaises(RuntimeError):
                 run(_deps())
+
+
+class _NulRejectingScreen:
+    """A fake curses screen that raises ValueError on an embedded NUL, like the
+    real ``addstr`` does, so ``_draw`` is proven to tolerate NUL-bearing lines."""
+
+    def __init__(self, rows, cols):
+        self._rows, self._cols = rows, cols
+        self.written = []
+
+    def getmaxyx(self):
+        return (self._rows, self._cols)
+
+    def erase(self):
+        pass
+
+    def addstr(self, _y, _x, text):
+        if "\x00" in text:
+            raise ValueError("embedded null character")
+        self.written.append(text)
+
+    def noutrefresh(self):
+        pass
+
+
+class TestSafe(unittest.TestCase):
+    def test_strips_embedded_nul(self):
+        self.assertEqual(_safe("\x00agent"), "agent")
+
+    def test_strips_other_c0_control_chars(self):
+        self.assertEqual(_safe("a\x01b\x1fc"), "abc")
+
+    def test_preserves_tab_and_printable_text(self):
+        self.assertEqual(_safe("#101 (agent)\tdev"), "#101 (agent)\tdev")
+
+
+class TestDrawToleratesNul(unittest.TestCase):
+    def test_draw_survives_nul_in_frame_and_status(self):
+        # A raw sentinel that slipped into a rendered line must not crash the
+        # loop: _draw strips it so addstr never sees the NUL (#451).
+        screen = _NulRejectingScreen(10, 40)
+        state = AppState(window=default_window(), sessions=[], status="x\x00y")
+        fake_frame = MagicMock(rows=["\x00agent line", "clean line"])
+        with patch("odoo_sdk.tui.app._compose", return_value=fake_frame), patch(
+            "odoo_sdk.tui.app.curses.doupdate"
+        ):
+            _draw(screen, state)  # must not raise ValueError
+        self.assertIn("agent line", screen.written)
+        self.assertIn("xy", screen.written)
 
 
 if __name__ == "__main__":
