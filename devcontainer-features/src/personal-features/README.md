@@ -214,6 +214,45 @@ or, to disable it permanently, drop the `sync-claude-hooks` step from the
 Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
 untouched (and a warning printed) rather than overwritten.
 
+## Odoo consulting skills (two delivery paths)
+
+This Feature ships the owner's Odoo consulting playbook — quote drafting
+(`odoo-quote`), Fibonacci estimating (`fibonacci-estimate`), discovery capture
+(`discovery-notes`), solution design (`odoo-design-doc`), Odoo code review
+(`odoo-code-review`), and weekly client status reports (`client-status-report`).
+The source of truth for every skill's content is `skills/<name>/SKILL.md` in
+this directory (see `skills/README.md`), and the content reaches an agent by two
+independent, deliberately-parallel paths:
+
+1. **Mounted `SKILL.md` files (Claude Code only).** `install.sh` stages the
+   `skills/` tree at build time to `/usr/local/share/personal-features/skills`
+   (a path *not* under the `~/.claude` bind mount), and the feature-contributed
+   `postCreateCommand` runs `sync-claude-skills` at container-create time to copy
+   each skill into `$CLAUDE_CONFIG_DIR/skills/<name>`, where Claude Code
+   discovers user-scope skills. This preserves Claude Code's native
+   skill-discovery / slash-command UX, but only inside a live container with this
+   Feature installed and a working bind mount.
+
+2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each of the six
+   skills is *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
+   (`libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py`, one module
+   per skill, underscored — `odoo-quote` → `odoo_quote`). Each module embeds its
+   `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
+   description; the markdown body becomes the returned prompt message) and is
+   registered through the same `@builtin_prompt` decorator as `implement_task`
+   and `report_incident`. Because the prompts ship inside the SDK package, any
+   MCP client gets them for free — no mount, no `postCreateCommand`, no live
+   personal-features container required.
+
+Both paths are kept in parallel on purpose: the mount path retains Claude Code's
+skill UX, and the MCP-prompt path removes the mount fragility and reaches
+non-Claude-Code clients. The trade-off is a manual sync — the prompt modules
+embed the `SKILL.md` bodies as string literals, so **an edit to a `SKILL.md`
+must be mirrored into its prompt module** (the two are not auto-generated from
+each other). If Claude Code's mounted-skill UX is ever retired, the
+`install.sh` skill-staging block and `sync-claude-skills` can be removed and the
+MCP-prompt path becomes the sole source.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
