@@ -556,6 +556,18 @@ def _compose(state: AppState, width: int, height: int) -> Any:  # pragma: no cov
     )
 
 
+def _safe(line: str) -> str:
+    """Strip NUL and other C0 control chars so ``addstr`` can never raise.
+
+    ``curses.addstr`` raises a plain ``ValueError`` (not ``curses.error``, so the
+    render loop's guard misses it) on an embedded NUL. Reserved in-band sentinels
+    such as :data:`~odoo_sdk.state.db.AGENTLESS_REPO_SENTINEL` are meant to be
+    translated before display, but this last-ditch strip means an unanticipated
+    one can never kill the TUI (#451).
+    """
+    return "".join(ch for ch in line if ch >= " " or ch == "\t")
+
+
 def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     """Blit the composed frame for ``state`` onto the curses screen."""
     height, width = stdscr.getmaxyx()
@@ -563,12 +575,12 @@ def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
     stdscr.erase()
     for row_index, line in enumerate(frame.rows):
         try:
-            stdscr.addstr(row_index, 0, line[: width - 1])
+            stdscr.addstr(row_index, 0, _safe(line)[: width - 1])
         except curses.error:
             pass
     if state.status:
         try:
-            stdscr.addstr(height - 1, 0, state.status[: width - 1])
+            stdscr.addstr(height - 1, 0, _safe(state.status)[: width - 1])
         except curses.error:
             pass
     stdscr.noutrefresh()

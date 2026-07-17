@@ -3,7 +3,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from odoo_sdk.tui.timeline import _parse, build_timeline
+from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
+from odoo_sdk.tui.timeline import _lane_label, _parse, build_timeline
 
 
 def _session(task, start, end, *, repo="acme/web", strategy="development", events=None):
@@ -93,6 +94,28 @@ class TestBuildTimeline(unittest.TestCase):
         sessions = [_session("101", "2026-06-01T09:00:00", "2026-06-01T10:00:00")]
         grid = build_timeline(sessions, START, END, 40)
         self.assertEqual(grid.lanes[0].label, "#101 web development")
+
+    def test_agentless_sentinel_repo_never_reaches_label(self):
+        # A repo-less agent session carries the NUL-prefixed sentinel as its
+        # repo; the lane label must translate it, never emit the raw NUL that
+        # would crash curses.addstr with ValueError (#451).
+        sessions = [
+            _session(
+                "101",
+                "2026-06-01T09:00:00",
+                "2026-06-01T10:00:00",
+                repo=AGENTLESS_REPO_SENTINEL,
+            )
+        ]
+        grid = build_timeline(sessions, START, END, 40)
+        label = grid.lanes[0].label
+        self.assertNotIn("\x00", label)
+        self.assertEqual(label, "#101 (agent) development")
+
+    def test_lane_label_translates_sentinel_directly(self):
+        label = _lane_label(("101", AGENTLESS_REPO_SENTINEL, "development"))
+        self.assertNotIn("\x00", label)
+        self.assertIn("(agent)", label)
 
     def test_reversed_bounds_are_normalized(self):
         # A session whose end precedes its start still paints a bar.
