@@ -114,12 +114,18 @@ def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     therefore be forwarded as ``execute_kw`` keyword arguments; passing them as
     a trailing positional dict makes Odoo treat the dict as a positional method
     argument and raise ``TypeError`` (see issue #131).
+
+    ``body_is_html=True`` is the sanctioned RPC escape hatch that stops Odoo 18's
+    ``message_post`` from escaping a plain ``str`` body into visible source (issue
+    #453). Odoo only honours it for internal users (``_is_internal()``); a
+    portal-user deployment would silently regress to escaped text.
     """
     return client.execute(
         "project.task",
         "message_post",
         [task_id],
         body=markdown_to_html(body),
+        body_is_html=True,
         message_type="comment",
         subtype_xmlid="mail.mt_note",
     )

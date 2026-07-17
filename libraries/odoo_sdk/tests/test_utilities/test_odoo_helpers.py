@@ -45,12 +45,14 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
         ids: list[int],
         *,
         body: str = "",
+        body_is_html: bool = False,
         message_type: str = "notification",
         subtype_xmlid: str | None = None,
     ) -> int:
         self.recorded = {
             "ids": ids,
             "body": body,
+            "body_is_html": body_is_html,
             "message_type": message_type,
             "subtype_xmlid": subtype_xmlid,
         }
@@ -220,6 +222,7 @@ class TestPostChatterNote(unittest.TestCase):
             "message_post",
             [5],
             body="<p>Hello</p>",
+            body_is_html=True,
             message_type="comment",
             subtype_xmlid="mail.mt_note",
         )
@@ -243,6 +246,7 @@ class TestPostChatterNote(unittest.TestCase):
             {
                 "ids": [5],
                 "body": "<p>Hello</p>",
+                "body_is_html": True,
                 "message_type": "comment",
                 "subtype_xmlid": "mail.mt_note",
             },
