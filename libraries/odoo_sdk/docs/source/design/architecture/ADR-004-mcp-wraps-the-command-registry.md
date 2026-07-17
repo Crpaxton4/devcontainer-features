@@ -17,12 +17,12 @@ Date: 2026-07-15
 - Atomic tools are **1:1 typed wrappers over builtin commands**. Each factory in `odoo_sdk/mcp/tools/atomic.py` (registered in `ATOMIC_TOOL_FACTORIES` via the `@atomic_tool(name)` decorator) returns a plainly written function with a real, typed signature that delegates to the like-named command via `registry["..."].execute(...)`.
 - **Wire schemas are intentionally hand-written**, not reflected from `command.execute` signatures. `OdooMCPServer` (`odoo_sdk/mcp/server.py`) performs no auto-reflection: the tool surface is exactly what `explicit_tools` provides, keeping the wire schema a reviewable part of the interaction surface.
 - **Composition tools coexist with atomic tools.** `start_task` and `stop_task` (`COMPOSITION_TOOL_FACTORIES` in `odoo_sdk/mcp/tools/__init__.py`) additionally take the FastMCP `ctx` and orchestrate `ctx.elicit` interactions; `build_explicit_tools` merges the atomic and composition factories into one `explicit_tools` mapping.
-- **Prompts are registered alongside tools.** `register_builtin_prompts` (`odoo_sdk/mcp/prompts/builtin`) adds two prompts — `implement_task` and `report_incident` — to the same FastMCP instance.
+- **Prompts are registered alongside tools.** `register_builtin_prompts` (`odoo_sdk/mcp/prompts/builtin`) registers the builtin prompt set (currently 8, spanning the task-tracker prompts and the ported personal-features consulting skills) to the same FastMCP instance.
 
 ## Implementation Status
 
-- ~30 atomic tools ship in `odoo_sdk/mcp/tools/atomic.py` (e.g. `get_task`, `create_task`, `task_question`, `resume_task`, `abort_task`, `abort_run`, `discover_runs`, `resync`, `timesheet_summary`, `unbilled_hours`, `unlogged_time_report`, `query_sessions`, `search_chatter`, `search_knowledge_articles`, …), each backed by a builtin command in `odoo_sdk/commands/builtin`.
-- Two composition tools (`start_task`, `stop_task`) and two prompts (`implement_task`, `report_incident`) ship.
+- 37 atomic tools ship in `odoo_sdk/mcp/tools/atomic.py` (e.g. `get_task`, `create_task`, `task_question`, `resume_task`, `abort_task`, `abort_run`, `discover_runs`, `resync`, `timesheet_summary`, `unbilled_hours`, `unlogged_time_report`, `query_sessions`, `search_chatter`, `search_knowledge_articles`, …), each backed by a builtin command in `odoo_sdk/commands/builtin`.
+- Two composition tools (`start_task`, `stop_task`) ship. Eight prompts ship: `implement_task`, `report_incident`, and six prompts ported from personal-features consulting skills (`client_status_report`, `discovery_notes`, `fibonacci_estimate`, `odoo_code_review`, `odoo_design_doc`, `odoo_quote`) via PR #464.
 - None of the nine generic ORM tools from the Phase H PRD exist. `h3-mcp-tools.prd.md` is marked historical/superseded and points here.
 - The server is built on FastMCP (`fastmcp` dependency) and is exposed both as a library (`OdooMCPServer`, lazily importable as `odoo_sdk.OdooMCPServer`) and via the `odoo-mcp` console entry point (`odoo_sdk/mcp/__main__.py`), which builds the default registry with `register_builtins` and runs the server over stdio.
 
