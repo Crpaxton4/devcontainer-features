@@ -51,6 +51,7 @@ def _make_sp(
     dirty=False,
     dirty_kind="tracked",
     existing_branches=(),
+    remote_branches=(),
 ) -> MagicMock:
     """Fake ``subprocess`` for the git helpers in ``start_task``.
 
@@ -59,8 +60,11 @@ def _make_sp(
     :param dirty: Whether ``git status --porcelain`` reports changes.
     :param dirty_kind: ``"tracked"`` (``git stash push`` creates an entry) or
         ``"untracked"`` (only ``push -u`` creates an entry).
-    :param existing_branches: Branch names for which ``git rev-parse --verify``
-        (the ``_branch_exists`` probe) reports success.
+    :param existing_branches: Local branch names for which ``git rev-parse
+        --verify refs/heads/<b>`` (the ``_branch_exists`` probe) reports success.
+    :param remote_branches: Base names for which ``git rev-parse --verify
+        refs/remotes/origin/<b>`` reports success — i.e. an ``origin/<b>``
+        remote-tracking ref exists after ``git fetch`` (#454).
     """
     sp = MagicMock()
     state = {"stash_entries": 0}
@@ -70,8 +74,10 @@ def _make_sp(
         r.returncode = 0
         r.stdout = ""
         if args[1] == "rev-parse" and "--verify" in args:
-            ref = args[-1].rsplit("/", 1)[-1]
-            r.returncode = 0 if ref in existing_branches else 1
+            spec = args[-1]
+            ref = spec.rsplit("/", 1)[-1]
+            known = remote_branches if spec.startswith("refs/remotes/") else existing_branches
+            r.returncode = 0 if ref in known else 1
         elif args[1] == "rev-parse":
             r.stdout = f"{current_branch}\n"
         elif args[1] == "branch":
@@ -594,6 +600,51 @@ class TestCreateTaskBranch(unittest.TestCase):
             _create_task_branch("10#fix", "main")
         calls = self._calls(sp)
         self.assertFalse(any(c[:2] == ["git", "stash"] for c in calls))
+
+    def test_forks_from_remote_tip_after_fetch(self):
+        # #454: a new branch must fork from the fetched ``origin/<base>`` tip so
+        # it contains all merged work, not the possibly-stale local base ref.
+        # The fetch runs before the checkout, and the checkout uses origin/main.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(remote_branches=("main",))
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertIn(["git", "fetch", "origin", "main"], calls)
+        self.assertIn(["git", "checkout", "-b", "10#fix", "origin/main"], calls)
+        self.assertNotIn(
+            ["git", "checkout", "-b", "10#fix", "main"],
+            calls,
+            "must not fork from the stale local base ref",
+        )
+        fetch_idx = calls.index(["git", "fetch", "origin", "main"])
+        checkout_idx = calls.index(["git", "checkout", "-b", "10#fix", "origin/main"])
+        self.assertLess(fetch_idx, checkout_idx, "fetch must precede the fork")
+
+    def test_falls_back_to_local_base_when_no_remote_ref(self):
+        # No ``origin/<base>`` remote-tracking ref (single-repo / offline): the
+        # fetch is still attempted but the fork degrades to the local base ref
+        # rather than hard-failing on a missing origin/<base>.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(remote_branches=())
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertIn(["git", "fetch", "origin", "main"], calls)
+        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], calls)
+
+    def test_existing_branch_is_not_re_forked_and_skips_fetch(self):
+        # Idempotent checkout of an existing task branch never re-forks, so it
+        # must not fetch or resolve a remote base at all.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(existing_branches=("10#fix",), remote_branches=("main",))
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10#fix", "main")
+        calls = self._calls(sp)
+        self.assertNotIn(["git", "fetch", "origin", "main"], calls)
 
 
 def _sampling_ctx(*responses, supports_sampling=True) -> MagicMock:
