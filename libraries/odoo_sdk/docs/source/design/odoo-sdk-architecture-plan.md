@@ -24,6 +24,26 @@
 > "session bootstrap" mention in a transport error docstring). The implemented
 > MCP contract is recorded in
 > [ADR-004](./architecture/ADR-004-mcp-wraps-the-command-registry.md).
+>
+> **2026-07-17 pass.** Reconciled to `billing/` (added after the prior pass at
+> PR #424): it now appears in the package layout and the implementation review.
+> Added the *Task-Tracker Pipeline* diagram tying `state/`, `sessionization/`,
+> `billing/`, `mcp/`, `tui/`, and `cli/` into one system, and noted that `cli/`
+> now dispatches through the shared command `Registry` (like `mcp/`, per ADR-004).
+
+## Contents
+
+- [Discovery Summary](#discovery-summary)
+- [Architecture Style](#architecture-style)
+- [Technology Stack](#technology-stack)
+- [System Architecture](#system-architecture)
+- [Scalability Roadmap](#scalability-roadmap)
+- [Existing System Review](#existing-system-review)
+- [Best Practices & Patterns](#best-practices-patterns)
+- [Security Architecture](#security-architecture)
+- [Risks & Mitigations](#risks-mitigations)
+- [Architecture Decision Records](#architecture-decision-records)
+- [Next Steps](#next-steps)
 
 ## Discovery Summary
 > Captured requirements, constraints, and assumptions.
@@ -155,8 +175,12 @@ src/odoo_sdk/
     commands/             # Command, Registry, builtin commands
     state/                # local task-tracker state (LocalStateClient, models)
     sessionization/       # session derivation from events
+    billing/              # timesheet ETL: upload, reporting, unlogged-time
+                          #   detection — consumes sessionization output
     mcp/                  # embedded MCP server, tools, prompts (see ADR-004)
-    cli/  tui/            # command-line and terminal UIs
+    cli/                  # time-tracking CLI; dispatches through the shared
+                          #   command Registry (like mcp/, see ADR-004)
+    tui/                  # odoo-tui terminal viewer
     utilities/            # env/timesheet/prune/reap helpers
 ```
 
@@ -176,7 +200,8 @@ Current implementation review
 | `OdooExecutor` / `OdooRpcExecutor` / `OdooJson2Executor` | Transport base plus XML-RPC and JSON-2 executors; authentication and `execute_kw` | Strong transport seam worth preserving |
 | `OdooRecordset` | The recordset-first ORM-like core: ids, model identity, inline context, reads/writes, x2many, set/functional operations | The public center of the SDK |
 | `DomainExpression` | Domain algebra and serialization | Centralized domain builder |
-| `Registry` (command registry) | Consumer-side command wiring; wrapped by the MCP server | Useful integration helper and the MCP surface, but not core to ORM mirroring |
+| `Registry` (command registry) | Consumer-side command wiring; wrapped by the MCP server and dispatched through by the CLI | Useful integration helper and the MCP/CLI surface, but not core to ORM mirroring |
+| `billing/` | Timesheet ETL over `account.analytic.line`: upload orchestration, timesheet-summary / unlogged-time reporting, and the sole session-to-timesheet write layer; consumes sessionization output | Task-tracker leaf, orthogonal to the ORM core |
 
 Root architectural findings
 - The SDK models domain and recordset explicitly at the public boundary; context is carried inline on the recordset (there is no `OdooEnv` object).
@@ -257,6 +282,60 @@ The separation of concerns as shipped:
 - `OdooRecordset` owns ids, model identity, context, and fluent ORM-like behavior; it issues calls through the `OdooExecutor` tier.
 - `MetadataCache`, the field value adapters, and the x2many command helpers are the semantic additions routed through the shared core.
 - A dedicated session / transport-policy object that would own authentication, retry/timeout policy, and mapped-error behavior in one place is **proposed only** in [ADR-002](./architecture/ADR-002-session-and-transport-boundary.md) (Proposed) and is **not built** — no `OdooSession` type exists as of 2026-07. Today those concerns live on the executor tier and the error-mapping helpers.
+
+### Task-Tracker Pipeline
+
+The diagram above stops at the ORM / transport / MCP boundary. The task-tracker
+subsystem — the pipeline that turns Claude Code hook events into billed Odoo
+timesheets — layers on top of it and dominates recent work (`state/`,
+`sessionization/`, `billing/`). Every interface (`mcp/`, `cli/`, `tui/`)
+dispatches through the shared command `Registry` (ADR-004), which drives the
+pipeline stages.
+
+```mermaid
+graph TD
+    Events["Claude Code hook events (state/ events table)"]
+
+    subgraph Interfaces["Interfaces — all dispatch through the command Registry (ADR-004)"]
+        MCP["mcp/ tools: query_sessions, timesheet_summary, unbilled_hours, unlogged_time_report, …"]
+        CLI["cli/: upload, report, reap, resync, …"]
+        TUI["tui/: odoo-tui viewer"]
+    end
+
+    Registry["Command Registry (odoo_sdk/commands)"]
+
+    subgraph Pipeline["Task-Tracker Pipeline"]
+        State["state/: task FSM (RUNNING / AWAITING_ANSWERS / STOPPED), STRICT schema, SQLite"]
+        Sessionization["sessionization/: derive billable sessions from events (SQL CTE + gap windows)"]
+        Billing["billing/: reconcile + upload timesheets, timesheet-summary / unlogged-time reports"]
+    end
+
+    MCP --> Registry
+    CLI --> Registry
+    TUI --> Registry
+
+    Registry --> State
+    Registry --> Sessionization
+    Registry --> Billing
+
+    Events --> State
+    State --> Sessionization
+    Sessionization --> Billing
+    State --> Billing
+    Billing --> Odoo["Odoo account.analytic.line (timesheets)"]
+```
+
+The pipeline as shipped:
+- `state/` is the SQLite FSM store (STRICT schema, PR #463): it appends hook
+  events and owns each run's `RUNNING` / `AWAITING_ANSWERS` / `STOPPED`
+  lifecycle plus the upload ledger.
+- `sessionization/` is pure ETL: it derives billable sessions from the event
+  stream (one SQL CTE plus gap-window scoring), unaware of SQLite or Odoo.
+- `billing/` is the sole `account.analytic.line` write layer: it reconciles and
+  uploads derived sessions and produces the timesheet-summary and unlogged-time
+  reports.
+- `mcp/`, `cli/`, and `tui/` never call these stages directly — they resolve
+  commands from the shared `Registry`, which is the single integration seam.
 
 ### Data Flow Diagram
 
