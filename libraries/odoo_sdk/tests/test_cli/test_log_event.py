@@ -73,6 +73,18 @@ class TestLogEvent(unittest.TestCase):
         events = TaskStateDB().get_events()
         self.assertEqual(events[0].repo, "o/r")
 
+    def test_branch_derived_from_cwd_checkout(self) -> None:
+        # #509: the branch is resolved on the live write path, not left empty.
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/kiosk"],
+            cwd=self._repo,
+            check=True,
+            capture_output=True,
+        )
+        _run(["log-event", "--source", "claude:SessionStart"])
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].branch, "feat/kiosk")
+
     def test_repeatable_task_id(self) -> None:
         _run(
             [
@@ -189,6 +201,10 @@ class TestLogEvent(unittest.TestCase):
         self.assertEqual(events[0].task_ids, ["999"])
 
     def test_no_attach_flag_leaves_task_ids_empty(self) -> None:
+        # The attribution policy moved into LogEventCommand (#507), but the flag
+        # still selects it: without --attach-active-run this subcommand keeps
+        # its documented default of leaving the event untargeted, so the hook
+        # shim's contract is unchanged.
         db = TaskStateDB()
         db.create_run(101, "Task A", 1, "Proj")
         _run(["log-event", "--source", "claude:PreToolUse"])
@@ -219,6 +235,9 @@ class TestLogEventNonGitRepo(unittest.TestCase):
         events = TaskStateDB().get_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].repo, "")
+        # Branch resolution is best-effort on the same terms (#509): no repo
+        # means no branch, not a failed write.
+        self.assertEqual(events[0].branch, "")
 
 
 class TestLogEventMissingDb(unittest.TestCase):

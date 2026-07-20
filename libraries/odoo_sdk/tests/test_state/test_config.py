@@ -1,6 +1,8 @@
 """Tests for LocalConfig resolution precedence (File > Env > Default)."""
 
+import importlib
 import os
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +13,7 @@ from odoo_sdk.state.config import (
     LOCAL_CONFIG_ENV_VAR,
     LocalConfig,
     OdooConnectionSettings,
+    _import_toml_module,
 )
 
 
@@ -89,6 +92,82 @@ class TestLocalConfigFilePrecedence(unittest.TestCase):
                 config = LocalConfig.load(config_path=path)
         self.assertEqual(config.connection["url"], "https://ini.example.com")
         self.assertEqual(config.connection["username"], "ini-user")
+
+
+class TestTomlParserFallback(unittest.TestCase):
+    """The TOML parser must resolve on the whole supported range, 3.10 included.
+
+    ``tomllib`` is stdlib only from Python 3.11; on the 3.10 floor (shipped by
+    ``odoo:17``) the API-compatible ``tomli`` backport stands in for it. A bare
+    ``import tomllib`` there raised ``ModuleNotFoundError`` on every TOML config
+    load, and TOML is the format probed first in every discovery location.
+    """
+
+    @staticmethod
+    def _import_module_stub(missing, substitutes=None):
+        """Return an ``import_module`` stub hiding ``missing`` module names.
+
+        Every other name delegates to the real ``import_module``: the patch
+        target is the shared ``importlib`` module attribute, so a stub that
+        refused everything would also break unrelated stdlib imports made by the
+        test machinery underneath it (``patch.dict`` resolves ``os`` that way).
+        """
+        real_import = importlib.import_module
+        substitutes = substitutes or {}
+
+        def fake_import(name):
+            if name in substitutes:
+                return substitutes[name]
+            if name in missing:
+                raise ModuleNotFoundError(f"No module named {name!r}")
+            return real_import(name)
+
+        return fake_import
+
+    def test_falls_back_to_tomli_when_tomllib_is_absent(self):
+        # Simulate Python 3.10: no stdlib `tomllib`, backport present. The
+        # stdlib module stands in for the backport because the two share the
+        # `load` API and `tomli` is only installed on python_version < "3.11".
+        backport = importlib.import_module("tomllib")
+        with TemporaryDirectory() as tmp:
+            path = _write(tmp, "config.toml", _TOML)
+            with patch(
+                "odoo_sdk.state.config.importlib.import_module",
+                self._import_module_stub({"tomllib"}, {"tomli": backport}),
+            ):
+                with patch.dict("os.environ", {}, clear=True):
+                    config = LocalConfig.load(config_path=path)
+        self.assertEqual(config.connection["url"], "https://from-file.example.com")
+        self.assertEqual(config.connection["api_key"], "file-key")
+
+    @unittest.skipIf(sys.version_info < (3, 11), "stdlib tomllib needs 3.11+")
+    def test_prefers_the_stdlib_module_over_the_backport(self):
+        real_import = importlib.import_module
+        attempted: list[str] = []
+
+        def tracking_import(name):
+            attempted.append(name)
+            return real_import(name)
+
+        with patch("odoo_sdk.state.config.importlib.import_module", tracking_import):
+            module = _import_toml_module()
+        # The backport is never even probed when the stdlib module resolves.
+        self.assertEqual(attempted, ["tomllib"])
+        self.assertIs(module, real_import("tomllib"))
+
+    def test_raises_actionable_error_when_no_parser_is_importable(self):
+        with TemporaryDirectory() as tmp:
+            path = _write(tmp, "config.toml", _TOML)
+            with patch(
+                "odoo_sdk.state.config.importlib.import_module",
+                self._import_module_stub({"tomllib", "tomli"}),
+            ):
+                with patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        LocalConfig.load(config_path=path)
+        message = str(ctx.exception)
+        self.assertIn("tomli", message)
+        self.assertIn("INI", message)
 
 
 class TestLocalConfigEnvPrecedence(unittest.TestCase):

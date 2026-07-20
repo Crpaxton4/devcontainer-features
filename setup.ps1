@@ -98,6 +98,7 @@ $paths = @(
     '.config/coderabbit'
     '.config/devcontainer/shell-history'
     '.config/odoo-task-tracker'
+    '.mempalace'
 )
 
 foreach ($path in $paths) {
