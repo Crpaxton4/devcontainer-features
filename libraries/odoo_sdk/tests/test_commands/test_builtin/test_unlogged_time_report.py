@@ -56,14 +56,31 @@ def _logged_row(task_id, name, day_iso, hours):
 
 
 class _FakeClient:
-    """Minimal Odoo transport: routes the two read-only calls the report makes."""
+    """Minimal Odoo transport: routes the read-only calls the report makes.
 
-    def __init__(self, logged_rows, *, uid=42, employee_id=7, fail=False):
+    ``task_names`` backs the batched ``project.task`` name resolution (#511); ids
+    absent from it model a task the read cannot return (e.g. deleted).
+    ``name_fail`` fails only that read, leaving the logged read healthy.
+    """
+
+    def __init__(
+        self,
+        logged_rows,
+        *,
+        uid=42,
+        employee_id=7,
+        fail=False,
+        task_names=None,
+        name_fail=False,
+    ):
         self.uid = uid
         self._logged_rows = logged_rows
         self._employee_id = employee_id
         self._fail = fail
+        self._task_names = task_names or {}
+        self._name_fail = name_fail
         self.calls = []
+        self.name_reads = []
 
     def execute(self, model, method, *args, **kwargs):
         self.calls.append((model, method))
@@ -73,6 +90,16 @@ class _FakeClient:
             return [{"id": self._employee_id}]
         if model == "account.analytic.line" and method == "read_group":
             return self._logged_rows
+        if model == "project.task" and method == "search_read":
+            if self._name_fail:
+                raise OdooTransportError("connection refused")
+            ids = list(args[0][0][2])
+            self.name_reads.append(ids)
+            return [
+                {"id": task_id, "display_name": self._task_names[task_id]}
+                for task_id in ids
+                if task_id in self._task_names
+            ]
         raise AssertionError(f"unexpected call {model}.{method}")
 
 
@@ -277,6 +304,76 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(report["days"], [])
         self.assertEqual(report["total_delta_hours"], 0.0)
         self.assertEqual(report["total_derived_hours"], 0.5)
+
+    def test_derived_only_row_carries_a_resolved_task_name(self):
+        # Task 303 has derived time on July 2 and no logged line at all — the
+        # exact shape the report exists to surface, and the one that used to
+        # come back with "task": null (#511).
+        state = _state_with_sessions()
+        client = _FakeClient(
+            [_logged_row(101, "Task A", "2026-07-01", 1.0)],
+            task_names={303: "Kiosk self-service"},
+        )
+        report = _run(state, client)
+
+        days = {day["day"]: day for day in report["days"]}
+        row = days["2026-07-02"]["rows"][0]
+        self.assertEqual(row["task_id"], 303)
+        self.assertEqual(row["logged_hours"], 0)
+        self.assertEqual(row["task"], "Kiosk self-service")
+
+    def test_names_resolve_in_one_batched_read_over_the_missing_ids(self):
+        state = _state_with_sessions()
+        client = _FakeClient(
+            [_logged_row(101, "Task A", "2026-07-01", 1.0)],
+            task_names={202: "Task B", 303: "Task C"},
+        )
+        report = _run(state, client, include_all=True)
+
+        # One read, covering exactly the ids the logged side could not name.
+        self.assertEqual(client.name_reads, [[202, 303]])
+        names = {
+            row["task_id"]: row["task"]
+            for day in report["days"]
+            for row in day["rows"]
+        }
+        self.assertEqual(names[101], "Task A")  # mined from the logged m2o pair
+        self.assertEqual(names[202], "Task B")
+        self.assertEqual(names[303], "Task C")
+
+    def test_fully_logged_window_issues_no_name_read(self):
+        state = make_state_db()
+        _commit(state, 9, minute=0, day=2, task="202")
+        _commit(state, 9, minute=30, day=2, task="202")
+        client = _FakeClient(
+            [_logged_row(202, "Task B", "2026-07-02", 0.25)],
+            task_names={202: "unused"},
+        )
+        report = _run(state, client)
+        # Every task id is already named by the logged read_group's m2o pair.
+        self.assertEqual(client.name_reads, [])
+        self.assertEqual(report["days"][0]["rows"][0]["task"], "Task B")
+
+    def test_unresolvable_task_id_falls_back_to_a_null_name(self):
+        # Odoo returns no row for the id (deleted task): the report still
+        # renders, with the name absent rather than the read blowing up.
+        state = _state_with_sessions()
+        client = _FakeClient([], task_names={})
+        report = _run(state, client)
+        rows = [row for day in report["days"] for row in day["rows"]]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["task"] is None for row in rows))
+
+    def test_name_read_failure_is_the_clear_error(self):
+        state = _state_with_sessions()
+        client = _FakeClient([], name_fail=True)
+        with self.assertRaises(OdooTransportError) as ctx:
+            _run(state, client)
+        self.assertEqual(
+            str(ctx.exception),
+            "unlogged_time_report needs a reachable Odoo instance to read "
+            "logged timesheets.",
+        )
 
     def test_command_delegates_to_helper_with_all_arguments(self):
         client = MagicMock()
