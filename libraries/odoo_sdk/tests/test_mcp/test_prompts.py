@@ -188,6 +188,13 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("task_note(42", msgs[1])
         self.assertIn("stop_task(42", msgs[1])
 
+    def test_stop_step_does_not_ask_for_a_description(self):
+        # Time logging moved to the odoo-tui/ETL path (#482), so the workflow
+        # must not prompt for a timesheet-style work summary at STOP.
+        content = _build_messages(_make_task())[1]
+        self.assertIn("stop_task(42)", content)
+        self.assertNotIn('stop_task(42, description="', content)
+
     def test_second_message_gives_note_style_guidance(self):
         msgs = _build_messages(_make_task())
         content = msgs[1]

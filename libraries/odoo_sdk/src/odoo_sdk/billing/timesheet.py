@@ -73,9 +73,11 @@ def emit_agent_event(
 
     As of #326, MCP tool dispatch events are **not** emitted through here: the
     generic ``_event_emitting`` wrapper in :mod:`odoo_sdk.mcp.server` is the sole
-    producer for the MCP tool surface (it builds the ``EventRecord`` directly so
-    non-task-scoped tools can log with an empty task scope). This helper remains
-    for other callers that record a single-task event.
+    producer for the MCP tool surface, and since #427 it routes through
+    :class:`~odoo_sdk.commands.log_event.LogEventCommand` rather than building
+    the ``EventRecord`` itself, so non-task-scoped tools can log with an empty
+    task scope. This helper has no production callers left; it is retained as
+    the supported single-task-scoped entry point for future callers.
 
     Agent events are repo-less; the sessionizer groups them under its reserved
     repo-less sentinel, so no repo is threaded here.
@@ -361,11 +363,14 @@ def merge_timesheets(
     :param ids_to_merge: The rows folded into ``primary_id`` and then zeroed.
     """
     all_ids = [primary_id] + ids_to_merge
+    # #166 shape: a flat id list positionally, ``fields`` as a keyword. Wrapping
+    # the ids or trailing a ``{"fields": [...]}`` dict makes Odoo read the dict
+    # as the positional ``fields`` argument and raise "Invalid field 'fields'".
     records = client.execute(
         "account.analytic.line",
         "read",
-        [all_ids],
-        {"fields": ["id", "unit_amount", "name"]},
+        all_ids,
+        fields=["id", "unit_amount", "name"],
     )
     total_hours = sum(r["unit_amount"] for r in records)
     descriptions = list(

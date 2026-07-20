@@ -81,6 +81,9 @@ class _KeywordFieldsReadExecutor(OdooExecutor):
         return self._read(*args, **kwargs)
 
     def _read(self, ids: list[int], *, fields: list[str]) -> list[dict]:
+        if not all(isinstance(record_id, int) for record_id in ids):
+            # Odoo's ``browse`` rejects a nested id list the same way.
+            raise TypeError(f"read expects a flat id list, got {ids!r}")
         self.recorded = {"ids": ids, "fields": fields}
         return self._rows
 
@@ -267,45 +270,71 @@ class TestPostChatterNote(unittest.TestCase):
         self.assertIn("<li>one</li>", body)
 
 
-class _RecordingExecutor(OdooExecutor):
-    """Fake executor that records every ``execute`` call and services ``read``.
+class _MergeExecutor(_KeywordFieldsReadExecutor):
+    """Shape-faithful executor for ``merge_timesheets``: reads plus writes.
 
-    Real ``OdooClient`` execution runs through this so the system-wide
-    ``forbid_unlink`` guard is exercised: an ``unlink`` would raise, and any
-    call the code issues is captured in ``calls`` for assertions.
+    Inherits the Odoo-faithful ``read`` of :class:`_KeywordFieldsReadExecutor`
+    (flat positional ids, keyword-only ``fields``) so a malformed read raises
+    ``TypeError`` here exactly as it would server-side, and additionally
+    services the ``write`` calls the merge issues, recording every call in
+    ``calls``. Real ``OdooClient`` execution runs through it, so the
+    system-wide ``forbid_unlink`` guard is exercised too.
     """
 
     def __init__(self, rows: list[dict]) -> None:
-        self._rows = rows
+        super().__init__(rows)
         self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((model, method, args, kwargs))
         if method == "read":
-            return self._rows
-        return None
+            return self._read(*args, **kwargs)
+        if method == "write":
+            return True
+        raise AssertionError(f"unexpected call: {model}.{method}")
 
 
 class TestMergeTimesheets(unittest.TestCase):
-    def test_sums_hours_and_joins_descriptions(self):
-        client = _client()
-        client.execute.side_effect = [
-            # read
+    """#166/#185 regressions, driven through the shape-faithful executor so the
+    ``read`` argument shape is asserted rather than swallowed by a ``MagicMock``.
+    """
+
+    def test_reads_flat_ids_with_keyword_fields(self):
+        # #166 regression for merge_timesheets specifically: the ids go through
+        # flat and positional, the fields as a keyword — no nested list, no
+        # trailing ``{"fields": [...]}`` dict.
+        executor = _MergeExecutor(
             [
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work A"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
-            ],
-            None,  # primary write
-            None,  # zero-out write on merged-in rows
-        ]
+            ]
+        )
+        client = OdooClient(executor=executor)
+        merge_timesheets(client, primary_id=1, ids_to_merge=[2])
+        self.assertEqual(
+            executor.recorded,
+            {"ids": [1, 2], "fields": ["id", "unit_amount", "name"]},
+        )
+        model, method, args, kwargs = executor.calls[0]
+        self.assertEqual((model, method), ("account.analytic.line", "read"))
+        self.assertEqual(args, ([1, 2],))
+        self.assertEqual(kwargs, {"fields": ["id", "unit_amount", "name"]})
+
+    def test_sums_hours_and_joins_descriptions(self):
+        executor = _MergeExecutor(
+            [
+                {"id": 1, "unit_amount": 1.0, "name": "[/] Work A"},
+                {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
+            ]
+        )
+        client = OdooClient(executor=executor)
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
         # Merge is read + primary write + zero-out write of the merged-in rows;
         # the merged-in rows are kept in place (no ``unlink``).
-        self.assertEqual(client.execute.call_count, 3)
-        write_call = client.execute.call_args_list[1]
-        self.assertEqual(write_call.args[0], "account.analytic.line")
-        self.assertEqual(write_call.args[1], "write")
-        vals = write_call.args[3]
+        self.assertEqual(len(executor.calls), 3)
+        model, method, args, _ = executor.calls[1]
+        self.assertEqual((model, method), ("account.analytic.line", "write"))
+        vals = args[1]
         self.assertAlmostEqual(vals["unit_amount"], 1.5)
         self.assertIn("Work A", vals["name"])
         self.assertIn("Work B", vals["name"])
@@ -314,7 +343,7 @@ class TestMergeTimesheets(unittest.TestCase):
         # #185 regression: merged-in rows must contribute 0 hours afterwards
         # WITHOUT deletion. The primary keeps the summed hours, each source row
         # is zeroed via a single ``write``, and no ``unlink`` is ever issued.
-        executor = _RecordingExecutor(
+        executor = _MergeExecutor(
             [
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work A"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Work B"},
@@ -340,28 +369,23 @@ class TestMergeTimesheets(unittest.TestCase):
         self.assertEqual(zero_write[2][1]["unit_amount"], 0.0)
 
     def test_no_merge_when_no_others(self):
-        client = _client()
-        client.execute.side_effect = [
-            [{"id": 1, "unit_amount": 2.0, "name": "[/] Solo"}],
-            None,  # write
-        ]
+        executor = _MergeExecutor([{"id": 1, "unit_amount": 2.0, "name": "[/] Solo"}])
+        client = OdooClient(executor=executor)
         merge_timesheets(client, primary_id=1, ids_to_merge=[])
+        self.assertEqual(executor.recorded["ids"], [1])
         # Empty ids_to_merge: only read + primary write; no zero-out write.
-        self.assertEqual(client.execute.call_count, 2)
+        self.assertEqual(len(executor.calls), 2)
 
     def test_skips_in_progress_descriptions(self):
-        client = _client()
-        client.execute.side_effect = [
+        executor = _MergeExecutor(
             [
                 {"id": 1, "unit_amount": 1.0, "name": "[/] Work in progress"},
                 {"id": 2, "unit_amount": 0.5, "name": "[/] Real work"},
-            ],
-            None,  # primary write
-            None,  # zero-out write
-        ]
+            ]
+        )
+        client = OdooClient(executor=executor)
         merge_timesheets(client, primary_id=1, ids_to_merge=[2])
-        write_call = client.execute.call_args_list[1]
-        merged_name = write_call.args[3]["name"]
+        merged_name = executor.calls[1][2][1]["name"]
         self.assertNotIn("Work in progress", merged_name)
         self.assertIn("Real work", merged_name)
 
