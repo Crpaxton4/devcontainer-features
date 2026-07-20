@@ -13,6 +13,9 @@ dependencies = [
     "markitdown[docx,pdf]>=0.1.6",
     "pydantic>=2.13.4",
     "toon-format>=0.9.0b1",
+    # `tomllib` is stdlib only from 3.11; on the 3.10 floor (odoo:17) the
+    # API-compatible backport supplies the TOML config parser instead.
+    "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [dependency-groups]
@@ -65,7 +68,7 @@ target-version = ["py310"]
 [tool.coverage.run]
 branch = true
 source = ["src/odoo_sdk"]
-omit = ["*/tests/odoo_sdk/*", "*/examples/*"]
+omit = ["*/examples/*"]
 
 [tool.coverage.report]
 fail_under = 90
