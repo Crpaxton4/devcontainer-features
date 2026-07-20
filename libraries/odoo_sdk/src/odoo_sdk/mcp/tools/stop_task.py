@@ -1,11 +1,13 @@
-"""MCP ``stop_task`` tool: elicits a reviewed description, then stops the task.
+"""MCP ``stop_task`` tool: optionally reviews a description, then stops the task.
 
-The description review/edit elicitation is an MCP concern and lives here; the
-atomic :class:`StopTaskCommand` receives the confirmed description as a plain
-primitive.
+The description is optional (#482): time logging moved to the odoo-tui/ETL
+upload path, so stopping no longer needs a timesheet-style summary. When a
+caller does supply one, the review/edit elicitation is an MCP concern and lives
+here; the atomic :class:`StopTaskCommand` receives the confirmed description as
+a plain primitive.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 from fastmcp import Context
 from pydantic import BaseModel
@@ -30,23 +32,26 @@ def make_stop_task_tool(registry: Registry):
 
     async def stop_task(
         task_id: int,
-        description: str,
         ctx: Context,
+        description: Optional[str] = None,
     ) -> dict[str, Any]:
         """Stop an active task tracking session.
 
-        Presents the AI-generated work description for review before logging.
-        Updates the Odoo timesheet with elapsed hours and the confirmed
-        description prefixed with [/].
+        The work description is optional and purely informational — hours are
+        owned by the TUI/ETL upload path, so nothing is written to the Odoo
+        timesheet here. When a description is supplied it is presented for
+        review before the session is stopped; when it is omitted the session
+        stops with no prompt at all.
         """
-        review = await ctx.elicit(
-            "Review the timesheet description before logging:",
-            _ReviewDescription,
-        )
-        if review.action != "accept":
-            return {"error": "Stop task cancelled."}
-
-        confirmed_description = review.data.description or description
+        confirmed_description = description
+        if description is not None:
+            review = await ctx.elicit(
+                "Review the work description before stopping:",
+                _ReviewDescription,
+            )
+            if review.action != "accept":
+                return {"error": "Stop task cancelled."}
+            confirmed_description = review.data.description or description
         # Raise-based error contract (#223): a command failure (e.g. no active
         # session -> ``TaskNotRunningError``) is deliberately left to propagate.
         # This flow does no cleanup, so the typed exception is handed straight to

@@ -8,9 +8,11 @@ with ``TypeError``. That helper is already fixed (options are forwarded as
 (``test_drives_keyword_only_message_post_without_type_error``).
 
 These tests are *complementary*: instead of calling the helper directly, they
-drive each chatter-posting command (``start_task``, ``resume_task``,
-``task_note``, ``task_question``) end-to-end against a keyword-only
-``message_post`` fake executor. The real (un-patched) ``post_chatter_note`` runs
+drive each chatter-posting command (``task_note``, ``task_question``)
+end-to-end against a keyword-only ``message_post`` fake executor. ``start_task``
+and ``resume_task`` are no longer covered here because they post no chatter note
+at all as of #505 — the only remaining callers are the two that post genuine,
+caller-supplied content. The real (un-patched) ``post_chatter_note`` runs
 inside each command, so a regression to a positional options dict would surface
 here as a ``TypeError`` raised from the fake executor — proving every caller,
 not just the helper in isolation, drives ``message_post`` with keyword options.
@@ -114,7 +116,9 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
             },
         )
 
-    def test_start_task_drives_keyword_only_message_post(self):
+    def test_start_task_posts_no_chatter_note(self):
+        # #505: the contentless "Work started on this task." marker is gone, so
+        # the command never reaches ``message_post`` at all.
         client, executor = _keyword_client()
         db = _tmp_db()
         with patch(_START_GUARD):
@@ -124,25 +128,17 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
                 project_id=5,
                 project_name="Accounting",
             )
-        # Markdown is rendered to HTML before posting (issue #324).
-        self._assert_recorded_keyword(
-            executor, task_id=10, body="<p>Work started on this task.</p>"
-        )
+        self.assertEqual(executor.recorded, {})
 
-    def test_resume_task_drives_keyword_only_message_post(self):
+    def test_resume_task_posts_no_chatter_note(self):
+        # #505: the contentless "Resuming implementation…" marker is gone.
         client, executor = _keyword_client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
-        with (
-            patch(_RESUME_GUARD),
-        ):
+        with patch(_RESUME_GUARD):
             ResumeTaskCommand(client, state=db).execute(1)
-        self._assert_recorded_keyword(
-            executor,
-            task_id=1,
-            body="<p>Resuming implementation with received answers.</p>",
-        )
+        self.assertEqual(executor.recorded, {})
 
     def test_task_note_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
