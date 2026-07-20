@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.0...personal-features-v4.0.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* **deps:** batch dependabot updates 2026-07-20 ([#500](https://github.com/Crpaxton4/devcontainer-features/issues/500)) ([e9285a9](https://github.com/Crpaxton4/devcontainer-features/commit/e9285a98a301a4c2305c4fc10159e7422899357a))
+
 ## [4.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v3.0.0...personal-features-v4.0.0) (2026-07-17)
 
 
