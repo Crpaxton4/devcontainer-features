@@ -204,16 +204,23 @@ reference):
 
 Only a small, non-sensitive payload is forwarded (`session_id`, plus
 `tool_name`/`agent_type`/`agent_id`/`source` where present) — never prompt text
-or `tool_input` contents. Events are attributed to the active odoo-sdk run's
-task id when one exists in the current project (via `--attach-active-run`), and
-are left untargeted (session-level) otherwise.
+or `tool_input` contents. Events are attributed via `--attach-active-run` to
+**every** active odoo-sdk run, not just the current project's: there is one
+host-provisioned central `tracker.db` shared by all projects and the lookup
+applies no repo filter (#388), so a hook firing in project A also attaches
+project B's task id when both have runs in flight. Runs whose last activity
+predates the reap threshold (`ODOO_REAP_THRESHOLD_HOURS`, default 12h) are
+skipped, so a wedged orphan from a dead devcontainer stops accruing phantom
+billable wall-clock (#366). With no active run, the event is left untargeted
+(session-level).
 
-**`PreToolUse` excludes `mcp__odoo__*` tools.** The odoo-sdk MCP server already
-logs its own tool dispatches server-side, so `claude-event-hook` skips those to
-avoid double-counting. That server-side event mirrors this shim's payload
-stance: it records only the tool name and task id — never argument values (note
-bodies, questions, search queries) — so no free-text inputs are written to the
-local events store on either path.
+**`PreToolUse` excludes `mcp__odoo-sdk__*` tools** — the prefix Claude Code
+derives from the `odoo-sdk` server name `install.sh` registers. The odoo-sdk MCP
+server already logs its own tool dispatches server-side, so `claude-event-hook`
+skips those to avoid double-counting. That server-side event mirrors this shim's
+payload stance: it records only the tool name and task id — never argument
+values (note bodies, questions, search queries) — so no free-text inputs are
+written to the local events store on either path.
 
 **Never blocks a session.** `claude-event-hook` always exits 0, never writes to
 stdout (which the hooks contract could interpret as a permission decision),
@@ -282,17 +289,20 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   This is native Git config, so it applies to *every* repo on the machine with zero per-repo opt-in. A repo that sets its own `core.hooksPath` locally (e.g. via Husky) overrides this as normal Git config precedence — this only fills the gap for repos that don't.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
-- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Two manual steps are required because devcontainer Features cannot add mounts or run per-user Claude commands:
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Unlike every other bundled tool, mempalace is left half-configured after a build — two steps are still manual. That's unfinished work, not a platform limitation: the Feature already declares seven bind mounts of its own in `devcontainer-feature.json`, and `install.sh` already runs a per-user `claude mcp add --scope user`, so a Feature can do both. Folding them in is tracked in #483. Until then:
 
-  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target the container user's home (`/root` when running as root). Note the `${localEnv:HOME}${localEnv:USERPROFILE}` prefix — same reason as the Feature's own mounts, see [Windows and WSL](#windows-and-wsl):
+  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target a fixed container path and point mempalace at it with `MEMPALACE_PALACE_PATH`, rather than targeting the container user's home: that path differs between a root and a non-root `remoteUser`, so a home-targeted mount silently lands where the tool never looks. Fixed target plus an env var is the same user-agnostic pattern the Feature's own seven mounts use. Note the `${localEnv:HOME}${localEnv:USERPROFILE}` prefix — same reason as those mounts, see [Windows and WSL](#windows-and-wsl):
 
      ```jsonc
      "mounts": [
-         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace,target=/root/.mempalace,type=bind,consistency=cached"
-     ]
+         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace,target=/usr/local/share/mempalace,type=bind,consistency=cached"
+     ],
+     "containerEnv": {
+         "MEMPALACE_PALACE_PATH": "/usr/local/share/mempalace/palace"
+     }
      ```
 
-     Create the host directory once before first launch — `mkdir -p ~/.mempalace`, or `New-Item -ItemType Directory -Force "$env:USERPROFILE\.mempalace"` in PowerShell.
+     Create the host directory once before first launch — `mkdir -p ~/.mempalace`, or `New-Item -ItemType Directory -Force "$env:USERPROFILE\.mempalace"` in PowerShell. Same prerequisite the Feature's other mounts carry (see [One-time host setup](#one-time-host-setup)): a bind mount whose source is missing on the host is a hard container-create failure. If a future mempalace release stops honouring `MEMPALACE_PALACE_PATH` on the plugin-hook path, fall back to targeting the container user's home directly — and pin the target to that user, not to `/root`.
 
   2. **Plugin registration (one-time)** — inside the container, register the Claude Code plugin at user scope so its Stop/SessionEnd/PreCompact hooks fire automatically:
 
@@ -300,7 +310,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
      claude plugin install --scope user mempalace
      ```
 
-     This writes only to `~/.claude/` (user scope), never to a project directory.
+     This writes only to Claude's user-scope config dir, never to a project directory — and that dir is bind-mounted from host `~/.claude` by the Feature (see [What persists, and where](#what-persists-and-where)), so the registration survives rebuilds.
 
 
 ---

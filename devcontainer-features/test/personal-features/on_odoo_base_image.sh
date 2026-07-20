@@ -77,8 +77,12 @@ check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bas
 # LANDED carrying the trimmed --payload and still MATCHING the billing predicate
 # that keys on the `claude:` prefix. Self-contained: provisions its OWN throwaway
 # tracker DB and points the shim at it via ODOO_TASK_TRACKER_DIR, so it never
-# touches the real central DB and runs deterministically. The SDK bin dir is put
-# on PATH so the shim's bare `odoo-sdk` resolves to the real installed CLI.
+# touches the real central DB and runs deterministically. PATH is deliberately
+# left ALONE (#523): the shim invokes a bare `odoo-sdk`, so this must resolve the
+# same way it does for a real user - via the /usr/local/bin symlink install.sh
+# creates. Prepending the venv bin dir here supplied the one PATH entry
+# production was missing and turned this into a test that could only pass, which
+# is how every hook stayed silently dead in real use (#496).
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
 check "claude-event-hook drives a real PreToolUse event through --attach-active-run/--payload into a provisioned DB" bash -c '
   SDK_BIN=/usr/local/share/uv/tools/odoo-sdk/bin
@@ -90,7 +94,7 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
     || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
   subj="scenario-hook-e2e-$$"
   printf "{\"session_id\":\"s-%s\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$$" "$subj" \
-    | ODOO_TASK_TRACKER_DIR="$STATE" PATH="$SDK_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+    | ODOO_TASK_TRACKER_DIR="$STATE" /usr/local/bin/claude-event-hook PreToolUse
   # The shim fires the SDK write in a DETACHED background job, so poll the DB.
   for _ in $(seq 1 50); do
     "$SDK_BIN/python" - "$DB" "$subj" <<PY && { rm -rf "$STATE"; exit 0; }
