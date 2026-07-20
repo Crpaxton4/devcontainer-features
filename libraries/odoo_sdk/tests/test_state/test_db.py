@@ -157,6 +157,51 @@ class TestTaskStateDBGetters(unittest.TestCase):
         runs = db.get_all_runs()
         self.assertEqual(len(runs), 2)
 
+    def test_get_all_runs_excludes_closed(self):
+        # CLOSED is terminal and hidden from the default run listing (#504): a
+        # RUNNING and a STOPPED run remain visible; the CLOSED one drops out.
+        db = _tmp_db()
+        _create(db, task_id=1)  # RUNNING
+        _create(db, task_id=2)
+        db.stop_run(2)  # STOPPED
+        _create(db, task_id=3)
+        db.close_run(3)  # CLOSED
+        states = {r.task_id: r.state for r in db.get_all_runs()}
+        self.assertEqual(set(states), {1, 2})
+        self.assertNotIn(3, states)
+
+    def test_get_resumable_run_returns_latest_stopped(self):
+        db = _tmp_db()
+        _create(db, task_id=7)
+        db.stop_run(7)
+        resumable = db.get_resumable_run(7)
+        self.assertIsNotNone(resumable)
+        self.assertEqual(resumable.task_id, 7)  # type: ignore[union-attr]
+        self.assertEqual(resumable.state, TaskState.STOPPED)  # type: ignore[union-attr]
+
+    def test_get_resumable_run_none_when_running(self):
+        # A live run is not "resumable" — it is already active.
+        db = _tmp_db()
+        _create(db, task_id=7)
+        self.assertIsNone(db.get_resumable_run(7))
+
+    def test_get_resumable_run_excludes_aborted(self):
+        # An aborted STOPPED run is voided from billing and must not be reopened.
+        db = _tmp_db()
+        _create(db, task_id=7)
+        db.abort_run(7)
+        self.assertIsNone(db.get_resumable_run(7))
+
+    def test_get_resumable_run_excludes_closed(self):
+        db = _tmp_db()
+        _create(db, task_id=7)
+        db.close_run(7)
+        self.assertIsNone(db.get_resumable_run(7))
+
+    def test_get_resumable_run_none_for_unknown(self):
+        db = _tmp_db()
+        self.assertIsNone(db.get_resumable_run(999))
+
     def test_get_stopped_runs_with_timesheet(self):
         db = _tmp_db()
         _create(db, task_id=1, timesheet_id=50)
@@ -214,6 +259,82 @@ class TestTaskStateDBTransitions(unittest.TestCase):
         db = _tmp_db()
         with self.assertRaises(TaskNotRunningError):
             db.transition_to_running(999)
+
+    def test_transition_to_running_from_stopped_reopens_in_place(self):
+        # A STOPPED run is resumable (#504): resuming reopens the SAME row,
+        # preserving started_at and clearing stopped_at, so one effort stays one
+        # run instead of splitting into a second row.
+        db = _tmp_db()
+        created = _create(db, task_id=1)
+        stopped = db.stop_run(1)
+        self.assertIsNotNone(stopped.stopped_at)
+        resumed = db.transition_to_running(1)
+        self.assertEqual(resumed.id, created.id)
+        self.assertEqual(resumed.state, TaskState.RUNNING)
+        self.assertIsNone(resumed.stopped_at)
+        self.assertEqual(resumed.started_at, created.started_at)
+
+    def test_transition_to_running_from_aborted_stopped_raises(self):
+        # An aborted (voided) STOPPED run is not resumable.
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.abort_run(1)
+        with self.assertRaises(TaskNotRunningError):
+            db.transition_to_running(1)
+
+    def test_transition_to_running_from_closed_raises(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.close_run(1)
+        with self.assertRaises(TaskNotRunningError):
+            db.transition_to_running(1)
+
+    def test_close_run_from_running(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        r = db.close_run(1)
+        self.assertEqual(r.state, TaskState.CLOSED)
+        self.assertIsNotNone(r.stopped_at)
+        self.assertIsNone(db.get_active_run(1))
+
+    def test_close_run_from_awaiting(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.transition_to_awaiting(1)
+        r = db.close_run(1)
+        self.assertEqual(r.state, TaskState.CLOSED)
+
+    def test_close_run_from_stopped_keeps_stopped_at(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        stopped = db.stop_run(1)
+        r = db.close_run(1)
+        self.assertEqual(r.state, TaskState.CLOSED)
+        self.assertEqual(r.stopped_at, stopped.stopped_at)
+
+    def test_close_run_is_terminal(self):
+        # Once closed, a run is never reopened by resume or auto-resume.
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.close_run(1)
+        self.assertIsNone(db.get_resumable_run(1))
+        with self.assertRaises(TaskNotRunningError):
+            db.transition_to_running(1)
+        # A fresh start creates a NEW run rather than reopening the closed one.
+        new_run = _create(db, task_id=1)
+        self.assertEqual(new_run.state, TaskState.RUNNING)
+
+    def test_close_run_no_open_run_raises(self):
+        db = _tmp_db()
+        with self.assertRaises(TaskNotRunningError):
+            db.close_run(999)
+
+    def test_close_run_already_closed_raises(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.close_run(1)
+        with self.assertRaises(TaskNotRunningError):
+            db.close_run(1)
 
     def test_stop_running_run(self):
         db = _tmp_db()

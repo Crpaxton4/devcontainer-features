@@ -167,6 +167,7 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "get_task_attachments",
         "read_attachment",
         "create_task",
+        "close_task",
         "search_chatter",
         "search_count",
         "search_knowledge_articles",

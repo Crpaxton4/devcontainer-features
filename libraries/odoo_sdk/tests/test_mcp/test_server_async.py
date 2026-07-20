@@ -19,8 +19,10 @@ from odoo_sdk.mcp.tools import build_explicit_tools
 #: nothing about the layers above it, and MCP names its tools explicitly in
 #: ``TOOL_FACTORIES``, so registering a builtin does not expose it as a tool.
 #: ``get_employee_id`` is only needed by the unattended timesheet-export path,
-#: which runs with no LLM in the loop.
-NON_MCP_BUILTINS = {"get_employee_id"}
+#: which runs with no LLM in the loop; ``close_task`` moves a run to the terminal
+#: CLOSED state and is CLI-only by design (#504) — the agent must never see or
+#: reach it.
+NON_MCP_BUILTINS = {"get_employee_id", "close_task"}
 
 
 def _mcp_tool_names() -> set:

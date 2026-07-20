@@ -159,7 +159,8 @@ def _empty_hint(deps: TuiDeps, window: DateWindow) -> str:
 
     Reports how many events fall inside the queried window (``0`` means nothing
     happened; ``N>0`` means data exists but does not sessionize here), how many
-    task runs are on record overall, and the session gap the deriver uses.
+    task runs are on record overall (terminal ``CLOSED`` runs are excluded, #504),
+    and the session gap the deriver uses.
     """
     store = deps.store
     lo, hi = range_bounds(window.start_iso(), window.end_iso())

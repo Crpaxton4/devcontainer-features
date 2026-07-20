@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from odoo_sdk.commands.builtin.close_task import CloseTaskCommand
 from odoo_sdk.commands.builtin.get_task import GetTaskCommand
 from odoo_sdk.commands.builtin.get_task_attachments import GetTaskAttachmentsCommand
 from odoo_sdk.commands.builtin.get_task_chatter import GetTaskChatterCommand
@@ -365,6 +366,60 @@ class TestTaskQuestionCommand(unittest.TestCase):
                 _cmd_with_db(TaskQuestionCommand, _client(), db).execute(999, "?")
 
 
+# ── CloseTaskCommand ──────────────────────────────────────────────────────────
+
+class TestCloseTaskCommand(unittest.TestCase):
+    def test_closes_a_running_run(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        result = _cmd_with_db(CloseTaskCommand, client, db).execute(1)
+        self.assertTrue(result["closed"])
+        self.assertEqual(result["state"], "CLOSED")
+        self.assertEqual(result["task_id"], 1)
+        self.assertIsNotNone(result["run_id"])
+        # Terminal: the closed run vanishes from the active and default surfaces.
+        self.assertIsNone(db.get_active_run(1))
+        self.assertEqual(db.get_all_runs(), [])
+
+    def test_closes_a_stopped_run(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.stop_run(1)
+        result = _cmd_with_db(CloseTaskCommand, client, db).execute(1)
+        self.assertTrue(result["closed"])
+        self.assertEqual(result["state"], "CLOSED")
+        self.assertIsNone(db.get_resumable_run(1))
+
+    def test_reports_nothing_to_close(self):
+        client = _client()
+        db = _tmp_db()
+        result = _cmd_with_db(CloseTaskCommand, client, db).execute(999)
+        self.assertFalse(result["closed"])
+        self.assertIsNone(result["run_id"])
+        self.assertIsNone(result["state"])
+
+    def test_makes_no_odoo_call(self):
+        # Purely local FSM transition — no timesheet write, no chatter.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        _cmd_with_db(CloseTaskCommand, client, db).execute(1)
+        client.execute.assert_not_called()
+
+    def test_registered_as_builtin_but_invisible_to_mcp(self):
+        # The whole point of CLOSED (#504): close_task is a real builtin the CLI
+        # can dispatch, but it has NO tool factory, so the MCP wire surface never
+        # exposes it and the agent cannot reach the terminal state.
+        from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
+        from odoo_sdk.mcp.tools import TOOL_FACTORIES
+
+        self.assertIn("close_task", BUILTIN_COMMANDS)
+        self.assertIs(BUILTIN_COMMANDS["close_task"], CloseTaskCommand)
+        self.assertNotIn("close_task", TOOL_FACTORIES)
+
+
 # ── ResumeTaskCommand ─────────────────────────────────────────────────────────
 
 class TestResumeTaskCommand(unittest.TestCase):
@@ -399,6 +454,17 @@ class TestResumeTaskCommand(unittest.TestCase):
         ):
             with self.assertRaises(InvalidStateTransitionError):
                 _cmd_with_db(ResumeTaskCommand, _client(), db).execute(1)
+
+    def test_resumes_a_stopped_session(self):
+        # STOPPED is now resumable (#504): resume reopens the paused run.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.stop_run(1)
+        with patch(_RESUME_GUARD):
+            result = _cmd_with_db(ResumeTaskCommand, client, db).execute(1)
+        self.assertEqual(result["state"], "RUNNING")
+        self.assertIsNotNone(db.get_active_run(1))
 
 
 
@@ -532,6 +598,8 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = MagicMock()
         db.get_active_run.return_value = None
+        # No resumable stopped run, so the command takes the create path (#504).
+        db.get_resumable_run.return_value = None
         db.create_run.side_effect = RuntimeError("insert failed")
         with patch(_START_GUARD):
             with self.assertRaises(RuntimeError):
@@ -561,6 +629,31 @@ class TestStartTaskCommand(unittest.TestCase):
         with self.assertRaises(TaskAlreadyRunningError):
             self._start(client, db, **self._base_kwargs())
         self.assertEqual(len(db.get_all_runs()), 1)
+
+    def test_start_after_stop_auto_resumes_same_run(self):
+        # Auto-resume (#504): starting a task whose latest run is STOPPED reopens
+        # that SAME row (original started_at preserved) instead of inserting a
+        # second one, so one continuous effort stays one run.
+        client = _client()
+        db = _tmp_db()
+        first = self._start(client, db, **self._base_kwargs())
+        db.stop_run(10)
+        resumed = self._start(client, db, **self._base_kwargs())
+        self.assertEqual(resumed["run_id"], first["run_id"])
+        self.assertEqual(len(db.get_all_runs()), 1)
+        active = db.get_active_run(10)
+        self.assertIsNotNone(active)
+        self.assertEqual(active.state, TaskState.RUNNING)  # type: ignore[union-attr]
+
+    def test_start_after_abort_creates_fresh_run(self):
+        # An aborted (voided) run is never auto-resumed: a fresh start opens a new
+        # run so the discarded time cannot be resurrected.
+        client = _client()
+        db = _tmp_db()
+        first = self._start(client, db, **self._base_kwargs())
+        db.abort_run(10)
+        second = self._start(client, db, **self._base_kwargs())
+        self.assertNotEqual(second["run_id"], first["run_id"])
 
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────

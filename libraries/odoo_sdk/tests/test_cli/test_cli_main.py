@@ -261,6 +261,54 @@ class TestCmdNormalize(unittest.TestCase):
         self.assertIn("Merged", captured.getvalue())
 
 
+# ── cmd_close ─────────────────────────────────────────────────────────────────
+
+class TestCmdClose(unittest.TestCase):
+    def test_closes_running_run(self):
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        args = MagicMock(task_id=1)
+        captured = StringIO()
+        with (
+            patch("sys.stdout", captured),
+            patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
+        ):
+            cli.cmd_close(args)
+        self.assertIn("Closed run", captured.getvalue())
+        # CLOSED is terminal and hidden from the default listing.
+        self.assertEqual(db.get_all_runs(), [])
+        self.assertIsNone(db.get_active_run(1))
+
+    def test_reports_nothing_to_close(self):
+        db = _tmp_db()
+        args = MagicMock(task_id=999)
+        captured = StringIO()
+        with (
+            patch("sys.stdout", captured),
+            patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
+        ):
+            cli.cmd_close(args)
+        self.assertIn("No open run", captured.getvalue())
+
+
+# ── cmd_get_employee_id (U15 fold-in) ─────────────────────────────────────────
+
+_RESOLVE_EMP = "odoo_sdk.commands.builtin.get_employee_id.resolve_employee_id"
+
+
+class TestCmdGetEmployeeId(unittest.TestCase):
+    def test_prints_employee_id(self):
+        db = _tmp_db()
+        registry = _registry(db, _client())
+        captured = StringIO()
+        with (
+            patch("sys.stdout", captured),
+            patch(_RESOLVE_EMP, return_value=77),
+        ):
+            cli.cmd_get_employee_id(registry, MagicMock())
+        self.assertIn("employee_id=77", captured.getvalue())
+
+
 # ── main entrypoint ───────────────────────────────────────────────────────────
 
 class TestMain(unittest.TestCase):
@@ -325,6 +373,35 @@ class TestMain(unittest.TestCase):
         ):
             cli.main()
         self.assertIn("Stopped", captured.getvalue())
+
+    def test_close_command(self):
+        # close is local-only (no Odoo assert) and routes to cmd_close (#504).
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        captured = StringIO()
+        with (
+            patch("sys.stdout", captured),
+            patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
+            patch("sys.argv", ["odoo_sdk.cli", "close", "1"]),
+        ):
+            cli.main()
+        self.assertIn("Closed run", captured.getvalue())
+        self.assertEqual(db.get_all_runs(), [])
+
+    def test_get_employee_id_command(self):
+        # get-employee-id needs Odoo; the resolver is stubbed so no RPC happens.
+        db = _tmp_db()
+        captured = StringIO()
+        with (
+            patch("sys.stdout", captured),
+            patch(ASSERT_GUARD),
+            patch("odoo_sdk.cli.__main__.OdooClient"),
+            patch("odoo_sdk.cli.__main__.TaskStateDB", return_value=db),
+            patch(_RESOLVE_EMP, return_value=77),
+            patch("sys.argv", ["odoo_sdk.cli", "get-employee-id"]),
+        ):
+            cli.main()
+        self.assertIn("employee_id=77", captured.getvalue())
 
 
 if __name__ == "__main__":

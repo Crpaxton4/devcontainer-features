@@ -24,6 +24,13 @@ hint: a run still receiving genuine hook events is never reaped just for being
 old, and once a run crosses the threshold the attachment exclusion below freezes
 its activity so it stays reapable (idempotent — a second reap of the same state
 is a no-op because the first left every stale run ``STOPPED``).
+
+**Interaction with resumable STOPPED runs (#504).** The reaper only ever touches
+ACTIVE (``RUNNING``/``AWAITING_ANSWERS``) runs, so it never disturbs a run a user
+deliberately stopped and may later resume. And because :meth:`abort_run` stamps
+``aborted_at``, a reaped run is a *voided* ``STOPPED`` run, which
+:meth:`LocalStateClient.get_resumable_run` excludes — so ``start_task`` opens a
+fresh run for a reaped task rather than silently resuming the abandoned one.
 """
 
 import math

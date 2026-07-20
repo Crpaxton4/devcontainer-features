@@ -83,13 +83,15 @@ def _default_root() -> Path:
     return base / "odoo-task-tracker"
 
 
-#: Schema version stamped into ``PRAGMA user_version``. Bumped from the implicit
-#: ``0`` of the pre-#452 non-STRICT schema to ``1`` when the STRICT typed schema
-#: (write-time validation) was adopted. Provisioning reads this marker to tell an
-#: old-shape DB (``0`` — needs the rebuild :func:`migrate_schema`) from a current
-#: one (``1`` — idempotent no-op), which ``CREATE ... IF NOT EXISTS`` alone cannot,
-#: since it would silently skip an already-present old-shape table.
-SCHEMA_VERSION = 1
+#: Schema version stamped into ``PRAGMA user_version``. History: ``0`` was the
+#: implicit pre-#452 non-STRICT schema; ``1`` adopted the STRICT typed schema
+#: (write-time validation); ``2`` added the terminal ``CLOSED`` state to the
+#: ``task_runs.state`` CHECK (#504). Provisioning reads this marker to tell an
+#: out-of-date DB (needs the rebuild :func:`migrate_schema`) from a current one
+#: (idempotent no-op), which ``CREATE ... IF NOT EXISTS`` alone cannot — it would
+#: silently skip an already-present table whose CHECK is behind. A STRICT table's
+#: CHECK cannot be altered in place, so each bump rebuilds the affected tables.
+SCHEMA_VERSION = 2
 
 
 # Canonical schema for the central tracker DB — the ONE authoritative DDL, applied
@@ -112,11 +114,15 @@ SCHEMA_VERSION = 1
 # fails at WRITE time — ``json_valid`` guards the JSON columns (``events.task_ids``,
 # ``task_runs.notes``) and ``datetime(...) IS NOT NULL`` guards every timestamp —
 # instead of surfacing later as a ``json_each``/``julianday`` failure inside a
-# reporting query. STRICT cannot be added to an existing table in place, so an
-# old-shape (schema-version 0) DB is rebuilt by :func:`migrate_schema`; the
-# :data:`SCHEMA_VERSION` marker in ``PRAGMA user_version`` lets provisioning tell a
-# pre-STRICT DB (needs the rebuild) from a current one (idempotent no-op) rather
-# than relying on ``IF NOT EXISTS`` alone, which would silently skip an old table.
+# reporting query. The ``task_runs.state`` CHECK admits the terminal ``CLOSED``
+# state (#504) alongside the three live/paused ones. Neither STRICT nor a CHECK
+# constraint can be altered in place, so an out-of-date DB is rebuilt by
+# :func:`migrate_schema` — a pre-STRICT (schema-version 0) DB has every table
+# rebuilt, and a STRICT-but-pre-CLOSED (version 1) DB has ``task_runs`` rebuilt to
+# widen its CHECK. The :data:`SCHEMA_VERSION` marker in ``PRAGMA user_version``
+# lets provisioning tell an out-of-date DB (needs the rebuild) from a current one
+# (idempotent no-op) rather than relying on ``IF NOT EXISTS`` alone, which would
+# silently skip an already-present table whose shape is behind.
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS task_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +130,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     task_name    TEXT    NOT NULL,
     project_id   INTEGER NOT NULL,
     project_name TEXT    NOT NULL,
-    state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')),
+    state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED', 'CLOSED')),
     started_at   TEXT    NOT NULL CHECK(datetime(started_at) IS NOT NULL),
     stopped_at   TEXT             CHECK(stopped_at IS NULL OR datetime(stopped_at) IS NOT NULL),
     timesheet_id INTEGER,
@@ -184,6 +190,21 @@ class SchemaMigrationError(RuntimeError):
 # any order is correct; fixed only for deterministic abort output).
 _MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
 
+# Uppercase substrings whose ABSENCE from a table's stored ``sqlite_master`` DDL
+# means it predates a schema change and must be rebuilt from the canonical DDL.
+# ``STRICT`` (#452) applies to every table; the ``CLOSED`` state (#504) only to
+# ``task_runs``' CHECK. A marker check is used rather than an exact-SQL compare
+# because SQLite does not store the ``IF NOT EXISTS`` / whitespace verbatim, but
+# it does preserve keywords and CHECK literals — the exact tokens that change
+# between schema versions. Extend a table's tuple when a future CHECK/shape change
+# needs the same version-guarded rebuild.
+_REQUIRED_TABLE_MARKERS = {
+    "task_runs": ("STRICT", "CLOSED"),
+    "settings": ("STRICT",),
+    "events": ("STRICT",),
+    "session_uploads": ("STRICT",),
+}
+
 # Per-table write-validation predicates mirroring the SCHEMA_DDL CHECK clauses.
 # Reused at migration time to PRE-FLIGHT existing rows and build a precise abort
 # listing before any destructive rewrite. Each entry is (SQL predicate that a BAD
@@ -198,7 +219,10 @@ _ROW_VALIDATIONS = {
         ("stopped_at IS NOT NULL AND datetime(stopped_at) IS NULL", "invalid stopped_at"),
         ("aborted_at IS NOT NULL AND datetime(aborted_at) IS NULL", "invalid aborted_at"),
         ("NOT json_valid(notes)", "invalid notes JSON"),
-        ("state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')", "invalid state"),
+        (
+            "state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED', 'CLOSED')",
+            "invalid state",
+        ),
     ),
     "session_uploads": (
         ("datetime(uploaded_at) IS NULL", "invalid uploaded_at"),
@@ -253,14 +277,24 @@ def _invalid_rows(conn: sqlite3.Connection, table: str) -> list:
 
 
 def _stale_tables(conn: sqlite3.Connection) -> list:
-    """Return the existing tables still on the pre-STRICT schema, in fixed order."""
+    """Return the existing tables whose DDL predates the current schema.
+
+    A table is stale when its stored DDL is missing any of its
+    :data:`_REQUIRED_TABLE_MARKERS` — a pre-STRICT (#452) shape or a pre-CLOSED
+    (#504) ``task_runs`` CHECK — both repaired by the same canonical rebuild.
+    Missing tables (a fresh DB) are skipped. Ordered by :data:`_MIGRATION_TABLES`
+    for deterministic abort output.
+    """
     stale = []
     for table in _MIGRATION_TABLES:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
             (table,),
         ).fetchone()
-        if row is not None and "STRICT" not in row[0].upper():
+        if row is None:
+            continue
+        sql = row[0].upper()
+        if any(marker not in sql for marker in _REQUIRED_TABLE_MARKERS[table]):
             stale.append(table)
     return stale
 
@@ -286,14 +320,18 @@ def _rebuild_table(
 
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
-    """Rebuild any pre-#452 non-STRICT tables into the STRICT typed schema.
+    """Rebuild any out-of-date tables into the current STRICT typed schema.
 
-    A no-op when the DB is already at :data:`SCHEMA_VERSION` or holds no pre-STRICT
-    tables (a fresh DB — its tables are created STRICT directly by
-    :func:`create_schema`). Otherwise every offending row is listed and the
-    migration ABORTS with :class:`SchemaMigrationError` BEFORE any destructive
-    rewrite, so a DB that cannot be cleanly migrated is left exactly as it was. The
-    rebuild itself runs inside one transaction and is all-or-nothing.
+    Repairs both migrations the tracker DB has needed: a pre-#452 non-STRICT DB
+    (every table rebuilt into STRICT form) and a pre-#504 DB whose ``task_runs``
+    CHECK lacks the ``CLOSED`` state (that table rebuilt to widen the CHECK) — see
+    :data:`_REQUIRED_TABLE_MARKERS`. A no-op when the DB is already at
+    :data:`SCHEMA_VERSION` or holds no out-of-date tables (a fresh DB — its tables
+    are created current directly by :func:`create_schema`). Otherwise every
+    offending row is listed and the migration ABORTS with
+    :class:`SchemaMigrationError` BEFORE any destructive rewrite, so a DB that
+    cannot be cleanly migrated is left exactly as it was. The rebuild itself runs
+    inside one transaction and is all-or-nothing.
     """
     if conn.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
         return
@@ -821,8 +859,29 @@ class LocalStateClient:
         return run
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
+        # "Active" is the live pair RUNNING/AWAITING_ANSWERS only; STOPPED
+        # (resumable, #504) and CLOSED (terminal) are deliberately excluded, so
+        # this stays the single-live-run guard the FSM invariants rely on.
         return self._select_run(
             "WHERE task_id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS')",
+            (task_id,),
+        )
+
+    def get_resumable_run(self, task_id: int) -> Optional[TaskRun]:
+        """Return the most recent reopenable STOPPED run for a task, or None (#504).
+
+        A STOPPED run is resumable: :meth:`transition_to_running` reopens it and
+        ``start_task`` auto-resumes it instead of inserting a second row, so one
+        continuous effort stays one run. An *aborted* STOPPED run (``aborted_at``
+        stamped — deliberately voided from billing by abort/reap) is NOT resumable:
+        reopening it would resurrect time a human or the reaper chose to discard,
+        so a fresh ``start_task`` opens a new run instead. CLOSED runs are terminal
+        and never match. The newest qualifying run is returned when a task has
+        several stopped runs on record.
+        """
+        return self._select_run(
+            "WHERE task_id = ? AND state = 'STOPPED' AND aborted_at IS NULL "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
             (task_id,),
         )
 
@@ -835,7 +894,11 @@ class LocalStateClient:
         )
 
     def get_all_runs(self) -> list[TaskRun]:
-        return self._select_runs("ORDER BY started_at")
+        # Terminal CLOSED runs are hidden from the default run listing (#504): the
+        # CLI ``report``/``list`` tables and the TUI run count read through here,
+        # so a closed run drops out of every default surface. Targeted lookups
+        # (:meth:`get_run_by_id`) still see it.
+        return self._select_runs("WHERE state != 'CLOSED' ORDER BY started_at")
 
     def get_stopped_runs_with_timesheet(self) -> list[TaskRun]:
         return self._select_runs(
@@ -868,8 +931,9 @@ class LocalStateClient:
 
     def transition_to_awaiting(self, task_id: int) -> TaskRun:
         run = self._require_active_run(task_id)
-        # get_active_run only returns RUNNING/AWAITING_ANSWERS rows, so every active
-        # run may transition to AWAITING_ANSWERS; the guard cannot fire.
+        # get_active_run only returns RUNNING/AWAITING_ANSWERS rows — STOPPED
+        # (resumable) and CLOSED (terminal) are excluded — so every run reaching
+        # here may transition to AWAITING_ANSWERS; the guard cannot fire.
         assert run.state in (TaskState.RUNNING, TaskState.AWAITING_ANSWERS)
         with self._connect() as conn:
             conn.execute(
@@ -879,16 +943,60 @@ class LocalStateClient:
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
 
     def transition_to_running(self, task_id: int) -> TaskRun:
-        run = self._require_active_run(task_id)
-        if run.state != TaskState.AWAITING_ANSWERS:
+        """Resume a paused run back to RUNNING (#504).
+
+        Two predecessors resume: an ``AWAITING_ANSWERS`` run (a question was
+        answered) and a ``STOPPED`` run (work continues after a stop). A stopped
+        run is reopened IN PLACE — its ``started_at`` is preserved and its
+        ``stopped_at`` cleared, so one continuous effort stays one run instead of
+        splitting into a second row. An already-``RUNNING`` run is a no-op error
+        (:class:`InvalidStateTransitionError`); a task with no resumable run at all
+        raises :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
+        aborted stopped run is voided, so neither is returned by the lookups below.
+        """
+        run = self.get_active_run(task_id)
+        if run is not None and run.state == TaskState.RUNNING:
             raise InvalidStateTransitionError(
-                f"Cannot resume task {task_id}: expected AWAITING_ANSWERS, "
-                f"got {run.state.value}."
+                f"Cannot resume task {task_id}: it is already RUNNING."
             )
+        if run is None:
+            run = self.get_resumable_run(task_id)
+        if run is None:
+            raise TaskNotRunningError(f"No resumable session found for task {task_id}.")
         with self._connect() as conn:
             conn.execute(
-                "UPDATE task_runs SET state = 'RUNNING' WHERE id = ?",
+                "UPDATE task_runs SET state = 'RUNNING', stopped_at = NULL "
+                "WHERE id = ?",
                 (run.id,),
+            )
+        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+
+    def close_run(self, task_id: int) -> TaskRun:
+        """Move a task's open run to the terminal ``CLOSED`` state (#504, CLI-only).
+
+        Closes the task's live run (``RUNNING``/``AWAITING_ANSWERS``) or, when none
+        is live, its most recent resumable ``STOPPED`` run. ``CLOSED`` is terminal:
+        neither ``resume_task`` nor ``start_task``'s auto-resume reopens it, and it
+        is hidden from :meth:`get_all_runs` and every active query. A live run's
+        ``stopped_at`` is stamped now; an already-stopped run keeps its stamp.
+        Invisible to MCP by design — reachable only from the CLI ``close`` command.
+
+        :raises TaskNotRunningError: When the task has no live or resumable run.
+        """
+        run = self.get_active_run(task_id)
+        if run is None:
+            run = self.get_resumable_run(task_id)
+        if run is None:
+            raise TaskNotRunningError(f"No open session to close for task {task_id}.")
+        stopped_at = (
+            run.stopped_at.isoformat()
+            if run.stopped_at is not None
+            else datetime.now(timezone.utc).isoformat()
+        )
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_runs SET state = 'CLOSED', stopped_at = ? WHERE id = ?",
+                (stopped_at, run.id),
             )
         return self.get_run_by_id(run.id)  # type: ignore[return-value]
 

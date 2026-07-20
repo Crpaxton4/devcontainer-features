@@ -48,14 +48,21 @@ class StartTaskCommand(Command):
     No chatter note is posted (#505). The former fixed ``"Work started on this
     task."`` marker carried no information the event row does not already
     record; the run and its events are the tracking record.
+
+    Auto-resume (#504): when the task's most recent run is a resumable ``STOPPED``
+    one, this reopens it in place rather than inserting a second row, so work that
+    continues after a stop stays one continuous run. A live ``RUNNING``/
+    ``AWAITING_ANSWERS`` run still raises :class:`TaskAlreadyRunningError`; an
+    aborted or closed run is never reopened, so a fresh run is created instead.
     """
 
     _name = "start_task"
     _description = (
         "Begin tracking time on a resolved Odoo project.task. Takes resolved task "
         "and project identifiers (no name-search or confirmation prompts). Creates a "
-        "local tracking session; writes no Odoo timesheet and posts no chatter note "
-        "(the sessionization/ETL upload path owns all timesheet hours)."
+        "local tracking session, or resumes the task's stopped session in place "
+        "rather than starting a second one; writes no Odoo timesheet and posts no "
+        "chatter note (the sessionization/ETL upload path owns all timesheet hours)."
     )
 
     def execute(
@@ -81,8 +88,8 @@ class StartTaskCommand(Command):
         :param warning: Optional non-fatal warning to include in the result.
         :return: Session details including task name, project, and started_at
             (``timesheet_id`` is ``None`` — no anchor is created).
-        :raises TaskAlreadyRunningError: When the task already has an active
-            session.
+        :raises TaskAlreadyRunningError: When the task already has a live
+            (RUNNING/AWAITING_ANSWERS) session.
         """
         assert_odoo_devcontainer()
 
@@ -97,12 +104,18 @@ class StartTaskCommand(Command):
         # No timesheet anchor is created: the FSM performs no ``account.analytic.
         # line`` write (#325). ``timesheet_id`` stays NULL until the upload path
         # materializes the derived session.
-        run = db.create_run(
-            task_id=task_id,
-            task_name=task_name,
-            project_id=project_id,
-            project_name=project_name,
-        )
+        if db.get_resumable_run(task_id) is not None:
+            # Auto-resume (#504): reopen the task's stopped run in place so one
+            # continuous effort keeps a single run row and its original start,
+            # instead of inserting a second row for the same work.
+            run = db.transition_to_running(task_id)
+        else:
+            run = db.create_run(
+                task_id=task_id,
+                task_name=task_name,
+                project_id=project_id,
+                project_name=project_name,
+            )
         result = _build_run_result(
             run, task_id, task_name, project_name,
             branch_name=branch_name,

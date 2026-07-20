@@ -12,6 +12,8 @@ Subcommands:
     log-event               Record a Claude Code hook event into local state
     discover                List active runs in the central tracker DB
     abort <run_id>          Abort a stale run in the central tracker DB
+    close <task_id>         Close a task's run into the terminal CLOSED state
+    get-employee-id         Print the hr.employee id for the current user
     reap [--older-than 12h] Bulk-abort every stale run in the central tracker DB
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
     upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
@@ -615,6 +617,38 @@ def cmd_abort(registry: Registry, args: argparse.Namespace) -> None:
     )
 
 
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close a task's tracking run into the terminal CLOSED state (#504).
+
+    Local-only: dispatches through the shared registry's ``close_task`` command (a
+    purely local tracker transition that needs no Odoo connection). CLOSED is
+    deliberately absent from the MCP tool surface — the ``close_task`` builtin has
+    no tool factory — so this CLI ``close`` subcommand is the only way to reach it,
+    which is the point (the agent must not see or reason about the state).
+    """
+    db = TaskStateDB()
+    registry = _build_registry(_LazyOdooClient(), state=db)
+    result = registry["close_task"].execute(args.task_id)
+    if not result["closed"]:
+        print(f"No open run to close for task {args.task_id}.")
+        return
+    print(
+        f"Closed run {result['run_id']} ({result['task_name']!r}, "
+        f"task {result['task_id']}); state now {result['state']}."
+    )
+
+
+def cmd_get_employee_id(registry: Registry, _args: argparse.Namespace) -> None:
+    """Print the ``hr.employee`` id for the authenticated Odoo user (#499).
+
+    Dispatches through the shared registry's ``get_employee_id`` command — the
+    same resolver the unattended export path uses — so the CLI and that path agree
+    on "who is this?". Needs an Odoo connection to resolve the uid on a cold cache.
+    """
+    employee_id = registry["get_employee_id"].execute()
+    print(f"employee_id={employee_id}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands declared.
 
@@ -690,6 +724,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     abort_p.add_argument(
         "run_id", type=int, help="Run id (or task id) from 'discover' to abort"
+    )
+
+    close_p = subparsers.add_parser(
+        "close", help="Close a task's run into the terminal CLOSED state"
+    )
+    close_p.add_argument(
+        "task_id", type=int, help="Odoo task id whose tracking run to close"
+    )
+
+    subparsers.add_parser(
+        "get-employee-id", help="Print the hr.employee id for the current user"
     )
 
     reap_p = subparsers.add_parser(
@@ -793,8 +838,10 @@ _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
     "report": (lambda c: cmd_report(c.registry, c.args), True),
     "normalize": (lambda c: cmd_normalize(c.registry, c.args), True),
     "abort": (lambda c: cmd_abort(c.registry, c.args), True),
+    "get-employee-id": (lambda c: cmd_get_employee_id(c.registry, c.args), True),
     "reap": (lambda c: cmd_reap(c.args, c.client, c.db), True),
     "upload": (lambda c: cmd_upload(c.args, c.registry, c.client, c.db, c.config), True),
+    "close": (lambda c: cmd_close(c.args), False),
     "discover": (lambda c: cmd_discover(c.args), False),
     "resync": (lambda c: cmd_resync(c.args), False),
     "prune": (lambda c: cmd_prune(c.args), False),

@@ -6,7 +6,8 @@ module had to glob ``<state-root>/*/tasks.db`` to find it. There is now exactly
 one host-provisioned, bind-mounted central DB shared across every project's
 container, so discovery collapses to an ordinary query of that one DB: list the
 active (``RUNNING``/``AWAITING_ANSWERS``) runs and flag the stale ones so an
-operator can abort the orphans with ``abort_run``.
+operator can abort the orphans with ``abort_run``. Resumable ``STOPPED`` runs and
+terminal ``CLOSED`` runs are not active and so never appear here (#504).
 
 The DB is host-provisioned and never self-created (#369; see
 :class:`TrackerStateMissingError`), so an absent DB surfaces that error here too.
