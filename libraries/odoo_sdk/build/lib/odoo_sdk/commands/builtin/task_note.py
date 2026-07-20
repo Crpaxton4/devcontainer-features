@@ -1,0 +1,45 @@
+from typing import Any
+
+from ..command import Command, require_active_run
+from ._registration import builtin_command
+from odoo_sdk.utilities.checkpoint import checkpoint_hint
+from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+
+
+@builtin_command
+class TaskNoteCommand(Command):
+    """Post a note to a task's chatter and record it in the local session."""
+
+    _name = "task_note"
+    _description = (
+        "Post a progress note to the Odoo task chatter and append it to the "
+        "local session log. The note is written in Markdown and rendered to "
+        "HTML for the chatter, so keep it short and scannable: a one-line "
+        "summary followed by 2-4 short bullets, not long free-form prose. "
+        "Requires an active tracking session."
+    )
+
+    def execute(self, task_id: int, note: str) -> dict[str, Any]:
+        """Post a chatter note and record it locally.
+
+        :param task_id: Odoo project.task record id.
+        :param note: Note text to post.
+        :return: Confirmation with message id.
+        """
+        assert_odoo_devcontainer()
+        db = self.state
+        run = require_active_run(db, task_id)
+
+        message_id = post_chatter_note(self._client, task_id, note)
+        db.append_note(task_id, note)
+        # The MCP wrapper records THIS call's ``task_note`` event only after the
+        # command returns, so the hint reads the gap since the *previous* note
+        # (or the run start) — exactly the cadence signal #387 asks for.
+        result: dict[str, Any] = {
+            "task_name": run.task_name,
+            "message_id": message_id,
+            "note": note,
+        }
+        result.update(checkpoint_hint(db, task_id, run.started_at))
+        return result

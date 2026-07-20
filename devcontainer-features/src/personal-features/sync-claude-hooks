@@ -11,7 +11,7 @@
 #
 # The hooks call `claude-event-hook <EventName>`, which forwards each event to
 # `odoo-sdk log-event` (see that script). PreToolUse fires on every tool call;
-# the shim excludes `mcp__odoo__*` tools (the odoo-sdk MCP server logs those
+# the shim excludes `mcp__odoo-mcp__*` tools (the odoo MCP server logs those
 # server-side, #326/#340), so we register PreToolUse with a match-all matcher
 # and let the shim enforce the exclusion.
 #
@@ -64,7 +64,7 @@ mkdir -p "$CLAUDE_CONFIG_DIR"
 # only our command, so the marker-based removal below can strip exactly our
 # entries without touching user groups. All seven event names are verified
 # against the current Claude Code hooks reference; PreToolUse uses a match-all
-# matcher (the shim excludes mcp__odoo__* itself).
+# matcher (the shim excludes mcp__odoo-mcp__* itself).
 OURS="$(jq -n --arg cmd "$HOOK_CMD" '
   {
     "SessionStart":     [ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ],

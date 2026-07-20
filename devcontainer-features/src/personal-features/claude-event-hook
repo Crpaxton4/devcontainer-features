@@ -24,7 +24,7 @@
 #   * No-op cleanly when `odoo-sdk` is not installed (e.g. Python <3.10 images).
 #   * Bounded runtime so a slow/hung DB can't stall the agent.
 #
-# PreToolUse for `mcp__odoo-sdk__*` tools is skipped: the odoo-sdk MCP server
+# PreToolUse for `mcp__odoo-mcp__*` tools is skipped: the odoo MCP server
 # already logs those dispatches server-side (#326/#340), so logging them here
 # too would double-count them.
 
@@ -53,24 +53,25 @@ HAVE_JQ=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 
 # tool_name is only meaningful for the tool-call events; pull it out once so we
-# can both build the subject and enforce the mcp__odoo-sdk__* exclusion.
+# can both build the subject and enforce the mcp__odoo-mcp__* exclusion.
 TOOL_NAME=""
 if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
     TOOL_NAME="$(printf '%s' "$STDIN_JSON" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 fi
 
-# The odoo-sdk MCP server logs its own tool dispatches server-side (#326/#340).
+# The odoo MCP server logs its own tool dispatches server-side (#326/#340).
 # Skipping PreToolUse for those tools here avoids double-logging. install.sh
-# registers the server under the key `odoo-sdk`, and Claude Code namespaces MCP
-# tools as `mcp__<server-key>__<tool>` with the key's hyphens PRESERVED, so the
-# real tool names are `mcp__odoo-sdk__*` — matching on `mcp__odoo__*` (the
-# pre-#529 glob) never fired and every odoo call was double-counted. Keep this
-# prefix in lockstep with the `claude mcp add ... odoo-sdk` key in install.sh.
+# registers the server under the key `odoo-mcp` (its console-script name), and
+# Claude Code namespaces MCP tools as `mcp__<server-key>__<tool>` with the key's
+# hyphens PRESERVED, so the real tool names are `mcp__odoo-mcp__*`. Earlier globs
+# `mcp__odoo__*` (pre-#529) and `mcp__odoo-sdk__*` (#529) never fired against the
+# real `odoo-mcp` key, so every odoo call was double-counted. Keep this prefix in
+# lockstep with the `claude mcp add ... odoo-mcp` key in install.sh.
 # Belt-and-braces alongside the settings.json matcher, which matches all tools.
 case "$HOOK_NAME" in
     PreToolUse|PostToolUse)
         case "$TOOL_NAME" in
-            mcp__odoo-sdk__*) exit 0 ;;
+            mcp__odoo-mcp__*) exit 0 ;;
         esac
         ;;
 esac
