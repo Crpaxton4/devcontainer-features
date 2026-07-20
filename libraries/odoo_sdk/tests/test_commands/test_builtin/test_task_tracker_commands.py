@@ -368,24 +368,27 @@ class TestTaskQuestionCommand(unittest.TestCase):
 # ── ResumeTaskCommand ─────────────────────────────────────────────────────────
 
 class TestResumeTaskCommand(unittest.TestCase):
-    def test_transitions_and_posts_note(self):
+    def test_transitions_to_running(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
-        with (
-            patch(_RESUME_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.resume_task.post_chatter_note",
-                return_value=88,
-            ) as mock_post,
-        ):
+        with patch(_RESUME_GUARD):
             result = _cmd_with_db(ResumeTaskCommand, client, db).execute(1)
-        mock_post.assert_called_once()
-        chatter_body = mock_post.call_args.args[2]
-        self.assertIn("Resuming", chatter_body)
         self.assertEqual(result["state"], "RUNNING")
         self.assertIn("resumed_at", result)
+
+    def test_posts_no_chatter_note(self):
+        # The contentless "Resuming implementation…" marker is gone (#505):
+        # the transition and its event row are the whole record, so the
+        # command makes no Odoo call at all.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.transition_to_awaiting(1)
+        with patch(_RESUME_GUARD):
+            _cmd_with_db(ResumeTaskCommand, client, db).execute(1)
+        client.execute.assert_not_called()
 
     def test_raises_when_running(self):
         db = _tmp_db()
@@ -457,12 +460,8 @@ class TestSearchTasksCommand(unittest.TestCase):
 
 class TestStartTaskCommand(unittest.TestCase):
     def _start(self, client, db, **kwargs):
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
-        ):
-            result = _cmd_with_db(StartTaskCommand, client, db).execute(**kwargs)
-        return result, mock_note
+        with patch(_START_GUARD):
+            return _cmd_with_db(StartTaskCommand, client, db).execute(**kwargs)
 
     def _base_kwargs(self, **overrides):
         kwargs = {
@@ -477,7 +476,7 @@ class TestStartTaskCommand(unittest.TestCase):
     def test_creates_run_and_writes_no_timesheet(self):
         client = _client()
         db = _tmp_db()
-        result, mock_note = self._start(client, db, **self._base_kwargs())
+        result = self._start(client, db, **self._base_kwargs())
         self.assertEqual(result["task_id"], 10)
         self.assertEqual(result["task_name"], "Fix VAT")
         self.assertEqual(result["project_name"], "Accounting")
@@ -485,22 +484,22 @@ class TestStartTaskCommand(unittest.TestCase):
         # so timesheet_id stays None until the upload path materializes hours.
         self.assertIsNone(result["timesheet_id"])
         self.assertIn("run_id", result)
-        mock_note.assert_called_once_with(client, 10, "Work started on this task.")
         self.assertIsNotNone(db.get_active_run(10))
-        # The command body makes no Odoo call other than the chatter note (mocked).
+        # The command body makes no Odoo call at all — no timesheet write
+        # (#325) and no chatter note (#505).
         client.execute.assert_not_called()
 
     def test_response_carries_checkpoint_hint_at_zero(self):
         client = _client()
         db = _tmp_db()
-        result, _ = self._start(client, db, **self._base_kwargs())
+        result = self._start(client, db, **self._base_kwargs())
         self.assertEqual(result["minutes_since_last_note"], 0)
         self.assertFalse(result["suggest_checkpoint"])
 
     def test_echoes_branch_name_and_warning(self):
         client = _client()
         db = _tmp_db()
-        result, _ = self._start(
+        result = self._start(
             client, db, **self._base_kwargs(branch_name="10#fix-vat", warning="heads up")
         )
         self.assertEqual(result["branch_name"], "10#fix-vat")
@@ -509,7 +508,7 @@ class TestStartTaskCommand(unittest.TestCase):
     def test_no_branch_or_warning_keys_when_absent(self):
         client = _client()
         db = _tmp_db()
-        result, _ = self._start(client, db, **self._base_kwargs())
+        result = self._start(client, db, **self._base_kwargs())
         self.assertNotIn("branch_name", result)
         self.assertNotIn("warning", result)
 
@@ -529,69 +528,23 @@ class TestStartTaskCommand(unittest.TestCase):
     def test_run_insert_failure_reraises(self):
         # Record deletion (unlink) is purposefully not implemented, so a run
         # insert failure re-raises loudly rather than attempting any rollback.
-        # The chatter note is never posted because the failure short-circuits
-        # before it, and the FSM makes no Odoo call of its own (#325).
+        # The FSM makes no Odoo call of its own (#325, #505).
         client = _client()
         db = MagicMock()
         db.get_active_run.return_value = None
         db.create_run.side_effect = RuntimeError("insert failed")
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note") as mock_note,
-        ):
+        with patch(_START_GUARD):
             with self.assertRaises(RuntimeError):
                 _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-        # No account.analytic.line write is attempted, and the note is skipped.
+        # No account.analytic.line write is attempted.
         client.execute.assert_not_called()
-        mock_note.assert_not_called()
 
-    def test_order_is_run_then_note(self):
-        # The FSM creates the local run first, then best-effort posts the chatter
-        # note — no timesheet step exists between them any more (#325).
+    def test_successful_start_leaves_one_running_run(self):
+        # The run is the whole side effect: a successful start must leave
+        # exactly one RUNNING run, and it must be the one reported back.
         client = _client()
         db = _tmp_db()
-        order: list[str] = []
-        real_create_run = db.create_run
-
-        def _tracked_create_run(*args, **kwargs):
-            order.append("run")
-            return real_create_run(*args, **kwargs)
-
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
-                side_effect=lambda *a, **k: order.append("note"),
-            ),
-            patch.object(db, "create_run", side_effect=_tracked_create_run),
-        ):
-            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-        self.assertEqual(order, ["run", "note"])
-
-    def test_chatter_failure_is_best_effort_and_leaves_one_running_run(self):
-        # The chatter note is a best-effort announcement (issue #361): if the
-        # post raises after the run is already created, start_task must still
-        # return success and leave exactly one RUNNING run. A bare failure would
-        # error out with the run RUNNING, so a retry would hit
-        # TaskAlreadyRunningError and wedge the caller.
-        client = _client()
-        db = _tmp_db()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
-                side_effect=RuntimeError("Odoo unreachable"),
-            ) as mock_note,
-        ):
-            result = _cmd_with_db(StartTaskCommand, client, db).execute(
-                **self._base_kwargs()
-            )
-        mock_note.assert_called_once_with(client, 10, "Work started on this task.")
-        # The command reports success with the full run result.
-        self.assertEqual(result["task_id"], 10)
-        self.assertIsNone(result["timesheet_id"])
-        self.assertIn("run_id", result)
-        # Exactly one run exists and it is RUNNING — a retry-safe end state.
+        result = self._start(client, db, **self._base_kwargs())
         runs = db.get_all_runs()
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].state, TaskState.RUNNING)
@@ -599,25 +552,14 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertIsNotNone(active)
         self.assertEqual(active.id, result["run_id"])
 
-    def test_chatter_failure_does_not_block_retry_safety(self):
-        # After a swallowed chatter failure the run is RUNNING, so a naive retry
-        # of the same task must raise TaskAlreadyRunningError rather than create
-        # a second run — proving the swallow keeps the invariant the guard
-        # depends on.
+    def test_retry_of_running_task_creates_no_second_run(self):
+        # A naive retry of the same task raises TaskAlreadyRunningError rather
+        # than creating a second run — the guard's invariant (issue #361).
         client = _client()
         db = _tmp_db()
-        with (
-            patch(_START_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.start_task.post_chatter_note",
-                side_effect=RuntimeError("Odoo unreachable"),
-            ),
-        ):
-            _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
-            with self.assertRaises(TaskAlreadyRunningError):
-                _cmd_with_db(StartTaskCommand, client, db).execute(
-                    **self._base_kwargs()
-                )
+        self._start(client, db, **self._base_kwargs())
+        with self.assertRaises(TaskAlreadyRunningError):
+            self._start(client, db, **self._base_kwargs())
         self.assertEqual(len(db.get_all_runs()), 1)
 
 
@@ -723,10 +665,7 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
     def test_start_task_emits_no_agent_event(self):
         client = _client()
         db = _tmp_db()
-        with (
-            patch(_START_GUARD),
-            patch("odoo_sdk.commands.builtin.start_task.post_chatter_note"),
-        ):
+        with patch(_START_GUARD):
             _cmd_with_db(StartTaskCommand, client, db).execute(
                 task_id=10, task_name="Fix", project_id=5, project_name="Acct"
             )
@@ -767,10 +706,7 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.transition_to_awaiting(1)
-        with (
-            patch(_RESUME_GUARD),
-            patch("odoo_sdk.commands.builtin.resume_task.post_chatter_note", return_value=1),
-        ):
+        with patch(_RESUME_GUARD):
             _cmd_with_db(ResumeTaskCommand, client, db).execute(1)
         self._assert_no_agent_event(db)
 
