@@ -4,7 +4,8 @@ import json
 import os
 import sqlite3
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -28,11 +29,36 @@ from .models import (
 #: the normalized ``owner/repo`` label rather than a per-repo directory hash.
 TRACKER_DB_FILENAME = "tracker.db"
 
-# Repo-less agent events cannot key on a real repository, so they are grouped
-# under this reserved sentinel. It is a valid, stable group key (never a real
-# ``owner/repo``) so such events still sessionize deterministically in the
-# SQL-derived read path (:meth:`LocalStateClient.derive_sessions_overlapping`).
-AGENTLESS_REPO_SENTINEL = "\x00agent"
+# Repo-less agent events cannot key on a real repository, so their derived
+# sessions carry an ABSENT repo — the empty string — rather than an in-band
+# sentinel value (#508). The empty string is never a real ``owner/repo``, so such
+# events still group deterministically in the SQL-derived read path
+# (:meth:`LocalStateClient.derive_sessions_overlapping`), and unlike the old
+# ``"\x00agent"`` sentinel it carries no control character into JSON, MCP
+# responses, or a curses ``addstr``. It is also exactly what the in-Python
+# derivation (:mod:`odoo_sdk.sessionization.transform`) already produced, so the
+# two paths no longer diverge for the same input.
+AGENTLESS_REPO = ""
+
+#: Deprecated alias for :data:`AGENTLESS_REPO`, kept so out-of-tree callers that
+#: still compare against or filter on the old name keep working (#508). Both
+#: names are the same absent-repo value, so ``repo == AGENTLESS_REPO_SENTINEL``
+#: and ``repo=AGENTLESS_REPO_SENTINEL`` filters behave as before.
+AGENTLESS_REPO_SENTINEL = AGENTLESS_REPO
+
+#: Printable stand-in shown wherever an absent repo needs a human label.
+AGENTLESS_REPO_LABEL = "(agent)"
+
+
+def format_repo_label(repo: Optional[str]) -> str:
+    """Return the display label for a session's ``repo``.
+
+    The ONE place absent-repo display is decided (#508). Every consumer — the TUI
+    lane labels, MCP/CLI JSON renderers, exports — routes through this helper so
+    they agree, instead of each masking the absent value independently.
+    """
+    return repo if repo else AGENTLESS_REPO_LABEL
+
 
 # Max ids bound into a single ``... IN (...)`` statement (delete and series-assign).
 # Chunked to stay well under SQLite's historical 999-variable limit; each caller
@@ -355,11 +381,11 @@ _SESSION_SOURCE_PREDICATE = (
 # rounding is exact at the boundary and matches the legacy ``total_seconds()`` cut.
 #
 # Partitioning (#352): sessions partition by ``task_key`` ALONE — the repo is no
-# longer a partition key. Agent/hook/MCP events carry ``repo=""`` (the sentinel)
-# while resync commit/chatter events carry the real ``owner/repo`` label; keying
-# on repo split one task's span into two parallel lanes and billed it twice. Repo
-# survives as display metadata: ``COALESCE(MAX(NULLIF(repo,'')), :sentinel)`` per
-# group prefers the real label and falls back to the repo-less sentinel. Distinct
+# longer a partition key. Agent/hook/MCP events carry ``repo=""`` while resync
+# commit/chatter events carry the real ``owner/repo`` label; keying on repo split
+# one task's span into two parallel lanes and billed it twice. Repo survives as
+# display metadata: ``COALESCE(MAX(NULLIF(repo,'')), :agentless)`` per group
+# prefers the real label and falls back to an absent repo (#508). Distinct
 # *tasks* still partition separately, so genuine concurrent tasks bill in parallel.
 #
 # Window prefilter (#359): the ``base`` CTE bounds ``timestamp`` to the queried
@@ -423,7 +449,7 @@ numbered AS (
     FROM marked
 )
 SELECT task_key,
-       COALESCE(MAX(NULLIF(repo, '')), :sentinel) AS repo_display,
+       COALESCE(MAX(NULLIF(repo, '')), :agentless) AS repo_display,
        MIN(id)            AS session_key_id,
        MIN(timestamp)     AS started_at,
        MAX(timestamp)     AS ended_at,
@@ -487,7 +513,7 @@ def current_repo_label() -> str:
     Best-effort display metadata for events written from a working tree (#369):
     the repo no longer selects the database (there is one central DB), so a
     non-git cwd or a missing remote is not an error — it simply yields ``""``,
-    which sessionizes under the repo-less sentinel. ssh and https clones of one
+    which sessionizes as a repo-less session. ssh and https clones of one
     repo converge because :func:`_derive_repo_label` normalizes both URL shapes
     to the same ``owner/repo``.
     """
@@ -650,7 +676,8 @@ def _parse_derived_window(row: tuple) -> SessionWindow:
     The derived row carries ``(task_key, repo_display, session_key_id,
     started_at, ended_at, pr_num, has_dev, event_ids)`` where ``event_ids`` is a
     JSON array. ``repo_display`` is display-only metadata (#352): the group's real
-    ``owner/repo`` label when any event carried one, else the repo-less sentinel.
+    ``owner/repo`` label when any event carried one, else :data:`AGENTLESS_REPO`
+    (the empty string) — render it through :func:`format_repo_label` (#508).
     ``id`` is the session's minimum event id (stable under append-only tail writes).
 
     ``has_dev`` labels the window (#378 item 6): ``1`` when the group holds any
@@ -694,7 +721,54 @@ class LocalStateClient:
         """
         self._db_path = Path(db_path) if db_path is not None else tracker_db_path()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Yield a connection inside a transaction, then checkpoint and close it.
+
+        ``with self._connect() as conn:`` keeps the stdlib ``with connection:``
+        semantics every call site relies on — commit on success, rollback on
+        exception — because the inner ``with conn:`` is still what brackets the
+        body. What the wrapper adds is the *close*, which the bare-connection form
+        never did: ``with connection:`` is a transaction manager, not a closing
+        one, so connections were left for refcounting to collect (#495).
+
+        Closing matters because the WAL sidecars (``-wal``/``-shm``) are only
+        removed when the last connection closes cleanly, so they used to persist
+        at rest — and a backup that copied ``tracker.db`` alone silently dropped
+        every transaction still sitting in the WAL. ``wal_checkpoint(TRUNCATE)``
+        folds the WAL back into the main file first, so the DB is a single file at
+        rest while keeping WAL's reader/writer concurrency while it is open.
+
+        The checkpoint is best-effort: it needs a lock no concurrent writer holds,
+        and the commit has already happened by the time it runs, so a busy
+        database is swallowed exactly as the :meth:`vacuum` reclaim is.
+        A maintenance copy taken while writers are live must therefore still not
+        assume single-file state: use ``VACUUM INTO '<dest>'`` or ``sqlite3
+        .backup`` (both WAL-aware) rather than copying ``tracker.db`` on its own.
+
+        WAL itself stays on — it is load-bearing for the cross-container writers
+        documented on :meth:`_raw_connect`, so ``journal_mode=DELETE`` is NOT the
+        fix here (#495).
+        """
+        conn = self._raw_connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:  # pragma: no cover - lock contention
+                pass
+            finally:
+                conn.close()
+
+    def _raw_connect(self) -> sqlite3.Connection:
+        """Open one configured connection; the caller MUST close it.
+
+        Use :meth:`_connect` instead — it is the only sanctioned entry point and
+        the only one that closes. This raw form exists so the wrapper (and the
+        wrapper alone) owns the connection lifecycle.
+        """
         # The DB is host-provisioned; the SDK NEVER creates it (#369; see
         # :class:`TrackerStateMissingError`). ``mode=rw`` raises rather than creating
         # a missing file; the explicit existence check turns that into the single
@@ -762,19 +836,6 @@ class LocalStateClient:
 
     def get_all_runs(self) -> list[TaskRun]:
         return self._select_runs("ORDER BY started_at")
-
-    def distinct_task_ids(self) -> list[int]:
-        """Return the distinct task ids on record in ``task_runs``, ascending.
-
-        The set of Odoo tasks this project has ever tracked. The chatter resync
-        puller uses it to scope its ``mail.message`` search to only the tasks the
-        SDK actually knows about, rather than scanning every task in Odoo.
-        """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT task_id FROM task_runs ORDER BY task_id"
-            ).fetchall()
-        return [int(row[0]) for row in rows]
 
     def get_stopped_runs_with_timesheet(self) -> list[TaskRun]:
         return self._select_runs(
@@ -1115,13 +1176,13 @@ class LocalStateClient:
         ``start``/``end`` bound the overlap window (inclusive). ``task_id`` restricts
         to one task id (any id an event carries, since a multi-task event contributes
         to each). ``repo`` restricts to one *display* repo — a group's real
-        ``owner/repo`` when any event carried one, else :data:`AGENTLESS_REPO_SENTINEL`
-        (pass the sentinel to select purely repo-less sessions). Results are ordered
+        ``owner/repo`` when any event carried one, else :data:`AGENTLESS_REPO`
+        (pass ``""`` to select purely repo-less sessions). Results are ordered
         by start time.
         """
         margin = _derivation_margin(gap_secs)
         params: dict[str, object] = {
-            "sentinel": AGENTLESS_REPO_SENTINEL,
+            "agentless": AGENTLESS_REPO,
             "gap_secs": gap_secs,
             "start": _normalize_utc_isoformat(start),
             "end": _normalize_utc_isoformat(end),
@@ -1136,7 +1197,7 @@ class LocalStateClient:
             # Repo is post-aggregation display metadata (#352), so the filter
             # matches the same COALESCE(MAX(...)) display expression the SELECT
             # projects, applied in the HAVING alongside the overlap predicate.
-            extra += " AND COALESCE(MAX(NULLIF(repo, '')), :sentinel) = :repo"
+            extra += " AND COALESCE(MAX(NULLIF(repo, '')), :agentless) = :repo"
             params["repo"] = repo
         sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
         with self._connect() as conn:

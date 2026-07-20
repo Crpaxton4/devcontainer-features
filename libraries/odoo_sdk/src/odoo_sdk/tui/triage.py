@@ -9,13 +9,17 @@ in :mod:`~odoo_sdk.tui.app` owns the keystrokes and the DB writes.
 
 **Series granularity.** Calendar meetings are ingested as a *tick series*: one
 event per tick, every tick sharing a parent external-id prefix of the shape
-``<parent>:tick:<n>`` (e.g. ``gcal:<event-id>:tick:0`` … ``:tick:12``). Triage
-displays ONE row per series and assignment updates ``task_ids`` on EVERY event of
-the series, so a whole meeting is attributed in a single action and the choice
-survives a re-expansion (the ingestion side propagates ``task_ids`` across
-reconciles). The series is recognized generically off the external-id pattern —
-nothing is imported from the ingestion code — so this surface stays independent
-of how the sources are named.
+``<parent>:tick:<iso>``, where ``<iso>`` is the tick's UTC ISO-8601 timestamp
+(e.g. ``gcal:<event-id>:tick:2026-06-01T09:00:00+00:00``). That timestamp form is
+canonical: the ingestion producer (``_tick_external_id`` in
+:mod:`~odoo_sdk.adapters.external_sync`) writes it so a moved or resized meeting
+yields a different id set, and this consumer matches what the producer emits.
+Triage displays ONE row per series and assignment updates ``task_ids`` on EVERY
+event of the series, so a whole meeting is attributed in a single action and the
+choice survives a re-expansion (the ingestion side propagates ``task_ids`` across
+reconciles). The series is recognized off the external-id pattern — nothing is
+imported from the ingestion code — so this surface stays independent of how the
+sources are named.
 """
 
 from __future__ import annotations
@@ -28,10 +32,15 @@ from odoo_sdk.state import EventRecord
 
 from .frame import Frame, _fit
 
-# A tick-series member's external id is ``<parent>:tick:<n>`` where ``<n>`` is the
-# tick index. The captured group is the series key (``<parent>:tick:``) shared by
-# every tick, so grouping on it collapses a whole expanded meeting into one row.
-_SERIES_RE = re.compile(r"^(.*:tick:)\d+$")
+# A tick-series member's external id is ``<parent>:tick:<iso>`` where ``<iso>`` is
+# the tick's UTC ISO-8601 timestamp — exactly what the ingestion producer emits.
+# The suffix is matched structurally (date, time, optional fractional seconds,
+# offset) rather than as "anything after the marker", so an unrelated id that
+# merely contains ``:tick:`` is not mistaken for a series member. The captured
+# group is the series key (``<parent>:tick:``) shared by every tick, so grouping
+# on it collapses a whole expanded meeting into one row.
+_TICK_TIMESTAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+_SERIES_RE = re.compile(rf"^(.*:tick:){_TICK_TIMESTAMP}$")
 
 _TRIAGE_FOOTER = " ↑/↓ select  0-9 task id  ⏎ assign  s:skip  q:back "
 
@@ -39,7 +48,7 @@ _TRIAGE_FOOTER = " ↑/↓ select  0-9 task id  ⏎ assign  s:skip  q:back "
 def series_key(external_id: Optional[str]) -> Optional[str]:
     """Return the tick-series key for ``external_id``, or None if it is not a tick.
 
-    A tick member matches ``<parent>:tick:<n>``; its series key is the
+    A tick member matches ``<parent>:tick:<iso>``; its series key is the
     ``<parent>:tick:`` prefix every sibling tick shares. Any other external id
     (or ``None``) is not part of a series and triages as an individual event.
     """
