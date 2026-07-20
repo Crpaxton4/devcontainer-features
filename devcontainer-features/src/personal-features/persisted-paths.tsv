@@ -25,7 +25,11 @@
 #   host_source      bind-mount source, relative to the host home dir ($HOME / %USERPROFILE%)
 #   container_target bind-mount target (absolute path inside the container)
 #   env_var          containerEnv variable that points at the target, or - if none
-#   env_value        exact value of env_var in the JSON, or - when env_var is -
+#   env_value        exact value of env_var in the JSON, or - when env_var is -.
+#                    Usually identical to container_target; the mempalace row is
+#                    the exception - MEMPALACE_PALACE_PATH names the `palace`
+#                    subdirectory INSIDE the mount, because mempalace keeps the
+#                    palace under a directory it may also put other state in.
 #   mode             octal permissions applied to the path: install.sh chmods
 #                    container_target, setup.sh chmods host_source (setup.ps1
 #                    does not - NTFS has no POSIX modes, and Docker Desktop
@@ -47,7 +51,7 @@
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All seven paths are directories today.
+# distinction. All eight paths are directories today.
 #
 # name	host_source	container_target	env_var	env_value	mode	provision
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
@@ -57,3 +61,4 @@ pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATI
 coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700	container
 shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777	container
 odoo-tracker	.config/odoo-task-tracker/	/usr/local/share/odoo-task-tracker/	ODOO_TASK_TRACKER_DIR	/usr/local/share/odoo-task-tracker	0700	host
+mempalace	.mempalace/	/usr/local/share/mempalace/	MEMPALACE_PALACE_PATH	/usr/local/share/mempalace/palace	0700	container

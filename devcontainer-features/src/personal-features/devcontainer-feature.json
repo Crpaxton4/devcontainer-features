@@ -17,7 +17,7 @@
         "GH_CONFIG_DIR": "/usr/local/share/gh-cli-config",
         "DISABLE_AUTOUPDATER": "1",
         "ODOO_SDK_CONFIG": "/usr/local/share/odoo-sdk-config",
-        "MEMPAL_DIR": "/workspaces",
+        "MEMPALACE_PALACE_PATH": "/usr/local/share/mempalace/palace",
         "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation",
         "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config",
         "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker"
@@ -57,7 +57,12 @@
             "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo-task-tracker",
             "target": "/usr/local/share/odoo-task-tracker",
             "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace",
+            "target": "/usr/local/share/mempalace",
+            "type": "bind"
         }
     ],
-    "postCreateCommand": "sync-claude-skills && sync-claude-hooks"
+    "postCreateCommand": "sync-claude-skills && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir"
 }
