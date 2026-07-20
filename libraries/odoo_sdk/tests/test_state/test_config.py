@@ -104,13 +104,23 @@ class TestTomlParserFallback(unittest.TestCase):
     """
 
     @staticmethod
-    def _import_only(modules):
-        """Return an ``import_module`` stub resolving only ``modules`` by name."""
+    def _import_module_stub(missing, substitutes=None):
+        """Return an ``import_module`` stub hiding ``missing`` module names.
+
+        Every other name delegates to the real ``import_module``: the patch
+        target is the shared ``importlib`` module attribute, so a stub that
+        refused everything would also break unrelated stdlib imports made by the
+        test machinery underneath it (``patch.dict`` resolves ``os`` that way).
+        """
+        real_import = importlib.import_module
+        substitutes = substitutes or {}
 
         def fake_import(name):
-            if name in modules:
-                return modules[name]
-            raise ModuleNotFoundError(f"No module named {name!r}")
+            if name in substitutes:
+                return substitutes[name]
+            if name in missing:
+                raise ModuleNotFoundError(f"No module named {name!r}")
+            return real_import(name)
 
         return fake_import
 
@@ -123,7 +133,7 @@ class TestTomlParserFallback(unittest.TestCase):
             path = _write(tmp, "config.toml", _TOML)
             with patch(
                 "odoo_sdk.state.config.importlib.import_module",
-                self._import_only({"tomli": backport}),
+                self._import_module_stub({"tomllib"}, {"tomli": backport}),
             ):
                 with patch.dict("os.environ", {}, clear=True):
                     config = LocalConfig.load(config_path=path)
@@ -150,7 +160,7 @@ class TestTomlParserFallback(unittest.TestCase):
             path = _write(tmp, "config.toml", _TOML)
             with patch(
                 "odoo_sdk.state.config.importlib.import_module",
-                self._import_only({}),
+                self._import_module_stub({"tomllib", "tomli"}),
             ):
                 with patch.dict("os.environ", {}, clear=True):
                     with self.assertRaises(RuntimeError) as ctx:
