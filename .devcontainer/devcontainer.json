@@ -8,6 +8,13 @@
     "ghcr.io/devcontainers/features/node:1": {
       "version": "lts"
     },
+    // pandoc is required by nbsphinx to convert walkthrough.ipynb during
+    // `make html`; without it the docs build raises PandocMissing. The CI docs
+    // workflow (odoo-sdk-docs.yaml) installs pandoc separately, so this entry
+    // only covers local builds inside the devcontainer.
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+      "packages": "pandoc"
+    },
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {}
   },
   // Pinned to match DEVCONTAINERS_CLI_VERSION in .github/workflows/test.yaml.
