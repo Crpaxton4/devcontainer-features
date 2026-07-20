@@ -74,14 +74,26 @@ class TestSessionizationParity(unittest.TestCase):
         _event(self.db, "commit", 9, 20, "101")
         _event(self.db, "commit", 9, 40, "101")
         _event(self.db, "agent", 9, 50, "101")
-        # Task 202: a bursty review pass — five comments minutes apart. The SQL
-        # windows this as ONE ~12 min session; the retired FixedDurationStrategy
-        # would have over-billed it as five fixed entries.
-        for minute in (0, 3, 6, 9, 12):
-            _event(self.db, "review", 10, minute, "202", pr=7)
+        # Task 202: a bursty review pass — five review-family events minutes
+        # apart, mixing submitted ``review`` passes with authored PR ``comment``
+        # events exactly as the SQL review predicate treats them. The SQL windows
+        # this as ONE ~12 min session; the retired FixedDurationStrategy would
+        # have over-billed it as five fixed entries.
+        for minute, source in (
+            (0, "review"),
+            (3, "comment"),
+            (6, "comment"),
+            (9, "review"),
+            (12, "comment"),
+        ):
+            _event(self.db, source, 10, minute, "202", pr=7)
         # Task 303: a lone merge — a point-in-time release marker excluded from
         # windowed billing by BOTH engines.
         _event(self.db, "merge", 11, 0, "303", pr=8)
+        # Task 404: a lone ``comment`` and nothing else. Both engines must bill
+        # it as a one-event review session; the Python bridge used to raise
+        # UnknownEventSourceError here and take the whole window down with it.
+        _event(self.db, "comment", 12, 0, "404", pr=9)
         self.config = SessionizationConfig(
             start_date=date(2026, 6, 1), end_date=date(2026, 6, 1)
         )
@@ -97,9 +109,31 @@ class TestSessionizationParity(unittest.TestCase):
         self.assertNotIn("303", sql)
         self.assertNotIn("303", python)
 
+    def test_comment_source_bills_identically_in_both_engines(self):
+        # A `comment` event is review-family to the SQL derivation, so the Python
+        # bridge has to resolve it the same way. It used to raise
+        # UnknownEventSourceError, and because load_raw_events converts every
+        # event with no source filter, one comment took the whole window down.
+        sql = _sql_billed_secs_per_task(self.db, self.config)
+        python = _python_billed_secs_per_task(self.db, self.config)
+        self.assertIn("404", sql)
+        self.assertEqual(python["404"], sql["404"])
+
+    def test_lone_comment_windows_as_a_review_session(self):
+        events = load_raw_events(
+            self.db, self.config.range_start, self.config.range_end
+        )
+        entries = build_window_entries(
+            billable_events(events), self.config.session_gap_secs, self.config
+        )
+        comment = [entry for entry in entries if entry.task_id == "404"]
+        self.assertEqual(len(comment), 1)
+        self.assertEqual(comment[0].strategy_name, "review")
+
     def test_review_burst_bills_as_one_windowed_session(self):
-        # Five review comments over 12 minutes -> ONE windowed session (the
-        # retired FixedDurationStrategy would have emitted five entries).
+        # Five review-family events (reviews and comments) over 12 minutes -> ONE
+        # windowed session (the retired FixedDurationStrategy would have emitted
+        # five entries).
         events = load_raw_events(
             self.db, self.config.range_start, self.config.range_end
         )

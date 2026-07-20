@@ -17,10 +17,12 @@ nothing the second time. Each returns ``{"inserted": n}`` and tolerates its
 backing tool being absent or unauthenticated by returning ``{"skipped": reason}``
 rather than raising (the Google pullers are the exception — see below).
 
-``merge`` / ``review`` events are stored for audit but, being fixed-strategy
-sources, never appear in *derived development sessions* — that exclusion is
-intentional (see :data:`odoo_sdk.state.db._SESSION_SOURCE_PREDICATE`). ``commit``
-and ``chatter`` events do participate in derived sessions.
+``merge`` events are stored for audit only: a merge is a point-in-time release
+marker, not a work span, so it is the one ingested source excluded from derived
+sessions (see :data:`odoo_sdk.state.db._SESSION_SOURCE_PREDICATE`). Every other
+source participates — ``commit``/``chatter`` as the development family and
+``review``/``comment`` as the gap-windowed review family (#396); a window of
+purely review-family events is labeled "Review".
 """
 
 from __future__ import annotations

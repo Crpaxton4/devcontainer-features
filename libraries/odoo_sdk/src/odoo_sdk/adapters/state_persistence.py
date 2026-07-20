@@ -35,6 +35,23 @@ _SOURCE_TO_EVENT_TYPE = {
     "calendar": EventType.CALENDAR,
     "email": EventType.EMAIL,
 }
+
+# Non-canonical source strings that share an already-mapped EventType. ``comment``
+# (authored PR/issue comments, ``gh:comment:<id>``, written by
+# ``external_sync._comment_event``) is a review-family source to the SQL
+# derivation — ``_REVIEW_SOURCE_PREDICATE = "source IN ('review', 'comment')"`` —
+# so the Python engine must resolve it to the same ``REVIEW`` type or the two
+# engines diverge (a single comment event used to raise
+# :class:`UnknownEventSourceError` and poison the whole ETL window). Aliases are
+# deliberately kept OUT of the reverse map: ``REVIEW`` writes back out under its
+# canonical ``"review"`` source.
+_SOURCE_ALIASES = {
+    "comment": EventType.REVIEW,
+}
+
+# Every source string the read path accepts: canonical sources plus aliases.
+_RESOLVABLE_SOURCES = {**_SOURCE_TO_EVENT_TYPE, **_SOURCE_ALIASES}
+
 # Reverse map. ``CLAUDE_HOOK`` has no single canonical source string (its
 # sources are the open-ended ``claude:<HookName>`` family), so it is given the
 # synthetic placeholder ``"claude:hook"``. This reverse entry is only reachable
@@ -58,11 +75,12 @@ def source_to_event_type(source: str) -> EventType:
     """Resolve an :class:`EventRecord` source string to its :class:`EventType`.
 
     Known sources (``commit``/``merge``/``review``/``agent``/``chatter``) map
-    directly. Any ``claude:<HookName>`` source resolves to
-    :class:`EventType.CLAUDE_HOOK`. Anything else raises
-    :class:`UnknownEventSourceError` rather than silently defaulting to a commit.
+    directly, as does the ``comment`` alias for the review family. Any
+    ``claude:<HookName>`` source resolves to :class:`EventType.CLAUDE_HOOK`.
+    Anything else raises :class:`UnknownEventSourceError` rather than silently
+    defaulting to a commit.
     """
-    known = _SOURCE_TO_EVENT_TYPE.get(source)
+    known = _RESOLVABLE_SOURCES.get(source)
     if known is not None:
         return known
     if source.startswith(_CLAUDE_SOURCE_PREFIX):
