@@ -652,6 +652,29 @@ class TestStopTaskCommand(unittest.TestCase):
         self.assertTrue(result["description"].startswith("[/]"))
         self.assertFalse(result["description"].startswith("[/] [/]"))
 
+    def test_description_is_optional(self):
+        # Time logging moved to the odoo-tui/ETL path (#482), so a work summary
+        # is no longer required: the run still stops and reports elapsed time.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
+        with patch(_STOP_GUARD):
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
+        self.assertIsNone(result["description"])
+        self.assertIn("elapsed_hours", result)
+        client.execute.assert_not_called()
+        from odoo_sdk.state import TaskState
+        run = db.get_run_by_id(result["run_id"])
+        self.assertEqual(run.state, TaskState.STOPPED)
+
+    def test_blank_description_normalizes_to_none(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
+        with patch(_STOP_GUARD):
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "   ")
+        self.assertIsNone(result["description"])
+
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
         with patch(_STOP_GUARD):
