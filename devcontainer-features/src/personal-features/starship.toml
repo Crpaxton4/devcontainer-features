@@ -75,3 +75,6 @@ format = "[$env_value]($style) "
 
 [container]
 disabled = true
+
+[docker_context]
+disabled = true

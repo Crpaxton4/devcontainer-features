@@ -7,12 +7,19 @@ from odoo_sdk.utilities.env import assert_odoo_devcontainer
 
 @builtin_command
 class TaskStatusCommand(Command):
-    """Return all active task tracking sessions with elapsed time."""
+    """Return all active task tracking sessions with elapsed time.
+
+    Not repo-scoped: ``get_all_active_runs()`` has no repo predicate and the
+    shared state store (#388) has no repo column, so sessions started from any
+    repository are returned.
+    """
 
     _name = "task_status"
     _description = (
         "Show all actively tracked tasks (RUNNING or AWAITING_ANSWERS) "
-        "with elapsed time for this project's git repository."
+        "with elapsed time. Results are not scoped to a repository: the "
+        "shared state store has no repo column, so every active run is "
+        "returned."
     )
 
     def execute(self) -> list[dict[str, Any]]:
