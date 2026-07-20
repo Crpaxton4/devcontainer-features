@@ -8,9 +8,9 @@ version = "4.0.0"
 description = "Python SDK for Odoo XML-RPC access and command dispatch helpers."
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.4.2",
+    "fastmcp>=3.4.4",
     "markdown-it-py>=3.0.0",
-    "markitdown[docx,pdf]>=0.1.0",
+    "markitdown[docx,pdf]>=0.1.6",
     "pydantic>=2.13.4",
     "toon-format>=0.9.0b1",
 ]
@@ -32,7 +32,7 @@ docs = [
     "sphinx-autodoc-typehints>=2.0,<3.11",
 ]
 test = [
-    "coverage[toml]>=7.15.1",
+    "coverage[toml]>=7.15.2",
     "hypothesis>=6.157.1",
     "cosmic-ray>=8.4.6",
     "pyte>=0.8.2",
