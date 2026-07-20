@@ -16,6 +16,7 @@ from fastmcp.tools.tool import Tool
 
 from odoo_sdk import OdooError
 from odoo_sdk.commands import LogEventCommand, Registry
+from odoo_sdk.commands.log_event import normalize_task_ids
 from odoo_sdk.state.models import (
     TaskAlreadyRunningError,
     TaskNotRunningError,
@@ -208,11 +209,15 @@ def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
-    """Return the task-scope for an event from a call's bound arguments.
+    """Return the explicit attribution *hint* a call's bound arguments carry.
 
-    A tool that takes an int-coercible ``task_id`` attributes its event to that
-    task; every other tool (non-task-scoped) logs with an empty task scope so the
-    event still lands in the timeseries without a spurious attribution.
+    A tool that takes an int-coercible ``task_id`` names the task its event
+    belongs to; every other tool yields no hint. This is deliberately only a
+    hint, not the task scope: a tool signature that omits ``task_id`` says
+    nothing about whether work is happening on a task, and treating it as an
+    empty scope is what left inspection-only tool calls permanently unbillable
+    (#507). :meth:`~odoo_sdk.commands.log_event.LogEventCommand.resolve_task_ids`
+    owns what an unhinted event actually attributes to.
 
     :param arguments: Bound tool arguments (``ctx`` already excluded).
     :type arguments: dict[str, Any]
@@ -220,14 +225,7 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
     :rtype: list[str]
     """
 
-    task_id = arguments.get("task_id")
-    if task_id is None:
-        return []
-    try:
-        int(task_id)
-    except (TypeError, ValueError):
-        return []
-    return [str(task_id)]
+    return normalize_task_ids([arguments.get("task_id")])
 
 
 def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
@@ -250,8 +248,15 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     identifiers without prompt/``tool_input`` contents. What is *sent to Odoo*
     is unaffected; this concerns only local persistence.
 
-    An empty task scope is passed for non-task-scoped tools, so a tool that
-    takes no ``task_id`` still logs a row without a spurious attribution.
+    Neither the task scope nor the repo/branch provenance is decided here. The
+    bound ``task_id`` (when the tool has one) is handed over as an attribution
+    *hint* and the command applies the shared policy — falling back to the active
+    runs for a tool that takes no ``task_id``, so inspecting a task is attributed
+    to it exactly like mutating one (#507). ``repo`` and ``branch`` are likewise
+    left unstated so the command resolves them from the working tree; this path
+    used to hardcode ``repo=""``, which left every agent event unattributable to
+    the code that produced it and sessionized it under the repo-less sentinel
+    (#509).
 
     :param state: The local state store the event is appended to.
     :type state: Any
@@ -269,7 +274,6 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
         subject=name,
         payload={"tool": name},
         task_ids=_event_task_ids(arguments),
-        repo="",
     )
 
 
