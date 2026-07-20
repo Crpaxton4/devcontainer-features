@@ -1,5 +1,7 @@
 # Phase D Implementation Checklist
 
+> **Status: partially superseded (2026-07 audit).** D1–D4 and D6 shipped on `OdooRecordset` and `DomainExpression`. Not shipped: `with_user` (D5), `OdooEnv` alterations of any kind (the type was removed in PR #161), a `sudo()` `NotImplementedError` stub (D5), and `_read_group`'s `having` argument, which raises `NotImplementedError` (D1). Any item naming `OdooModel` or `OdooQuery` has no subject.
+
 ## Objective
 
 Implement the ORM method and recordset operation gaps that exist between the current SDK and idiomatic Odoo ORM usage. Phase D is purely additive to `OdooRecordset`, `OdooEnv`, and `DomainExpression` — no new architecture is introduced.

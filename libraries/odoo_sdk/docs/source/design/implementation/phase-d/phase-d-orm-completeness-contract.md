@@ -1,5 +1,7 @@
 # Phase D ORM Completeness Contract
 
+> **Status: partially superseded (2026-07 audit).** The recordset and domain rows of the tables below shipped. The rest is stale: `OdooModel`, `OdooQuery`, `CommandDispatcher`, and `OdooEnv` are absent from `src/odoo_sdk/` (`OdooEnv` removed in PR #161), so the `OdooEnv` gains listed here never happened and `OdooRecordset.with_user` never shipped either. `_read_group`'s `having` argument raises `NotImplementedError` because the implementation uses the public `read_group` XML-RPC method.
+
 ## Purpose
 
 This contract is the implementation baseline for Phase D.

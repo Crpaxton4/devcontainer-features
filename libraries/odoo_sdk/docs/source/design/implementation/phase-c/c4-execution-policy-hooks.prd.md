@@ -2,6 +2,8 @@
 
 Execution Policy Hooks for Tracing, Retry, Timeout, and Telemetry
 
+> **Status: never implemented (2026-07 audit).** No part of Phase C shipped. `src/odoo_sdk/` contains no plugin contract, plugin registry, typed-adapter layer, or execution-policy seam for tracing, retry, timeout, or telemetry, and there is no async facade. The `adapters/` package is unrelated to this phase: it holds `state_persistence.py` and `external_sync.py` for the task-tracker. Retained as a record of the original Phase C plan. The only policy knob that shipped is a per-request `timeout` passed straight to each executor (`src/odoo_sdk/transport/json2.py`, `rpc.py`, defaulted in `src/odoo_sdk/state/config.py`); there is no retry, tracing, or telemetry seam.
+
 # Goal
 
 ## Problem

@@ -2,6 +2,8 @@
 
 Local Live-Odoo Integration Checks for Phase B
 
+> **Status: partially superseded (2026-07 audit).** No dedicated live-check suite shipped, and there is no live-check target in the `Makefile`. Live validation is done by hand through the reference scripts under `examples/general/`, which gate live runs behind an explicit `--allow-live-production` flag. The unit suite runs in GitHub Actions (`.github/workflows/odoo-sdk-quality.yaml`), which the 'no CI' framing below predates. The x2many write check described here would need care today: `unlink` is blocked at the single transport guard (`src/odoo_sdk/transport/errors.py`).
+
 # Goal
 
 ## Problem

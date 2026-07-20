@@ -2,6 +2,8 @@
 
 OdooEnv Environment Root
 
+> **Status: superseded (2026-07 audit).** `OdooEnv` was built during Phase A and then removed again as superseded and un-exported (PR #161). No `OdooEnv` type exists in `src/odoo_sdk/`. Execution context now lives directly on `OdooRecordset`, which carries the executor, a defensively copied context dict, and the shared `MetadataCache`, and derives new recordsets through `with_context` and `with_company` (`src/odoo_sdk/records/recordset.py`). The package is named `odoo_sdk`, not `odoo_service`.
+
 # Goal
 
 ## Problem

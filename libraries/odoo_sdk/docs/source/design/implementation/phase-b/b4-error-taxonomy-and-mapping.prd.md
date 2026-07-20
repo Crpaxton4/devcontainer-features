@@ -2,6 +2,8 @@
 
 Explicit SDK Error Taxonomy and Mapping
 
+> **Status: accurate, with one addition (2026-07 audit).** The taxonomy below shipped in `src/odoo_sdk/transport/errors.py` and is exported from `src/odoo_sdk/__init__.py`. One class was added afterwards and is not listed here: `DeletionNotSupportedError`, raised by the single transport guard for every `unlink` call (PR #188).
+
 # Goal
 
 ## Problem

@@ -2,6 +2,8 @@
 
 Phase B Documentation and Local Validation Workflow
 
+> **Status: partially superseded (2026-07 audit).** The Phase B semantics documentation requirements hold, but the locations and the workflow framing are stale: design docs live under `docs/source/design/` (Sphinx, built with `-W`), not a flat `docs/` tree, and validation runs in GitHub Actions rather than local tooling only. The compatibility-surface documentation requirement no longer applies — `OdooModel` and `OdooQuery` are absent from the shipped SDK.
+
 # Goal
 
 ## Problem

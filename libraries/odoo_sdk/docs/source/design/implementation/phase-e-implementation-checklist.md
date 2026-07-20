@@ -1,5 +1,7 @@
 # Phase E Implementation Checklist
 
+> **Status: partially superseded (2026-07 audit).** E1, E2, and E3 shipped. E4 (API key management) and E5 (version endpoint) never shipped — no `generate_api_key`, `revoke_api_key`, `server_version`, or `server_version_string` exists on `OdooClient`. E6's example scripts and cross-transport smoke test were not written.
+
 ## Objective
 
 Introduce the Odoo JSON-2 API (`/json/2`) as an opt-in transport alongside the existing XML-RPC transport. Phase E keeps XML-RPC as the default and adds `OdooJson2Executor` as a drop-in alternative. The XML-RPC API is deprecated in Odoo 19 and scheduled for removal in Odoo 22; Phase E ensures the SDK has a migration path without breaking any existing consumer.

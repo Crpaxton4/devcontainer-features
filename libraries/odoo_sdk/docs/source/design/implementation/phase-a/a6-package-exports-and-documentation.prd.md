@@ -2,6 +2,8 @@
 
 Phase A Package Exports and Documentation Alignment
 
+> **Status: superseded (2026-07 audit).** The export decision recorded here no longer matches `src/odoo_sdk/__init__.py`. `DomainExpression` and `OdooRecordset` are supported public exports rather than internal primitives; `OdooEnv` no longer exists (PR #161); and `OdooModel`, `OdooQuery`, and `CommandDispatcher` are absent. The shipped `__all__` is centred on `OdooClient`, `OdooRecordset`, `Domain`/`DomainExpression`, `Record`, `Command`/`Registry`, the executors, the error taxonomy, and `OdooMCPServer` (resolved lazily via PEP 562). The docs referenced below now live under `docs/source/design/`, not a flat `docs/implementation/` tree.
+
 # Goal
 
 ## Problem

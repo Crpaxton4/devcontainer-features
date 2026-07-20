@@ -1,5 +1,7 @@
 # Phase A Architectural Contract
 
+> **Status: superseded (2026-07 audit).** The preserved-surface and responsibility tables below do not describe the shipped SDK: `OdooModel`, `OdooQuery`, and `CommandDispatcher` are absent from `src/odoo_sdk/`, and `OdooEnv` was removed in PR #161. What survived Phase A is the recordset-first core recorded in ADR-001 — `OdooClient` as facade, `DomainExpression` as the single domain boundary, `OdooRecordset` as the identity-bearing centre — with the latter two promoted to public exports rather than kept internal. Retained as a record of the original Phase A contract.
+
 ## Purpose
 
 This contract is the implementation baseline for Phase A.
