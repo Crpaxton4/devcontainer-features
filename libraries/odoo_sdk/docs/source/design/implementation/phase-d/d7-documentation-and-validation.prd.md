@@ -2,6 +2,8 @@
 
 Phase D Documentation and Validation
 
+> **Status: partially superseded (2026-07 audit).** The reference scripts shipped under `examples/general/` (`aggregate_sales_by_month.py`, `model_utility_methods.py`, `recordset_functional_ops.py`, `recordset_set_ops.py`, `environment_alterations.py`, `domain_builder.py`). The architecture plan lives at `docs/source/design/odoo-sdk-architecture-plan.md`, not the flat path assumed here. No Phase D symbol needed adding to `src/odoo_sdk/__init__.py` — the whole phase is methods on already-exported types.
+
 # Goal
 
 ## Problem

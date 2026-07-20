@@ -1,5 +1,7 @@
 # Phase A Implementation Checklist
 
+> **Status: superseded (2026-07 audit).** This checklist assumes `OdooModel`, `OdooQuery`, and `CommandDispatcher` remain usable and that `OdooEnv` is introduced. None of that describes the shipped SDK: those three types are absent from `src/odoo_sdk/` and `OdooEnv` was removed in PR #161. `DomainExpression` and `OdooRecordset` did ship and are public exports. See ADR-001 for the surviving decision.
+
 ## Objective
 
 Implement the minimum architectural changes needed to introduce `OdooEnv`, `DomainExpression`, and `OdooRecordset` while preserving the current public entry points and keeping `OdooQuery` as a compatibility layer.

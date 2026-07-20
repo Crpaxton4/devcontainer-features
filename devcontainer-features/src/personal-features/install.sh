@@ -66,8 +66,6 @@ retry() {
     done
 }
 
-CLAUDE_HOME="/usr/local/share/claude-home"
-
 # Create the fixed container-side paths that the containerEnv vars point at and
 # that the bind mounts overlay at runtime. Creating them here means the feature
 # still works in test containers where no bind mounts are active (e.g. the
@@ -246,9 +244,29 @@ if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>
         for wheel in "${_sdk_wheels[@]}"; do
             retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
         done
-        # Link the entry points once, after all wheels are installed.
-        ln -sf "$_SDK_ENV/bin/odoo-mcp" /usr/local/bin/odoo-mcp
-        ln -sf "$_SDK_ENV/bin/odoo-tui" /usr/local/bin/odoo-tui
+        # Link the entry points once, after all wheels are installed. ALL THREE
+        # console scripts must be linked: `odoo-sdk` is the CLI that
+        # claude-event-hook shells out to (it guards on `command -v odoo-sdk`
+        # and silently no-ops when it is missing, so leaving it unlinked made
+        # every feature-owned Claude Code hook a dead no-op - #496) and the only
+        # entry point to `odoo-sdk prune`. Adding an entry point to the wheel
+        # means adding it here.
+        _SDK_ENTRYPOINTS=(odoo-sdk odoo-mcp odoo-tui)
+        for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
+            ln -sf "$_SDK_ENV/bin/$_entry" "/usr/local/bin/$_entry"
+        done
+        # Verify at build time, where a broken install is cheap to catch and
+        # loud. The downstream consumers (claude-event-hook, the MCP
+        # registration below) all degrade to a *silent* no-op when an entry
+        # point is missing, so without this the failure only ever shows up as
+        # "the event table is empty" weeks later (#496).
+        for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
+            if [ ! -x "/usr/local/bin/$_entry" ] || ! command -v "$_entry" >/dev/null 2>&1; then
+                echo "ERROR: odoo_sdk console script '$_entry' is not executable on PATH after install (expected $_SDK_ENV/bin/$_entry -> /usr/local/bin/$_entry)." >&2
+                echo "The bundled wheel installed but did not provide this entry point; hooks and CLI tooling that depend on it would silently no-op, so failing the build instead." >&2
+                exit 1
+            fi
+        done
     fi
 
     # mempalace: global cross-project memory palace, auto-mined via Claude Code
@@ -264,13 +282,149 @@ else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
 fi
 
-# Register the odoo-sdk MCP server at user scope so it's available in every
-# container without users running `claude mcp add` by hand. Idempotent: skip if
-# already registered (e.g. re-provisioned container over a persisted config).
-if command -v claude >/dev/null 2>&1 && [ -x /usr/local/bin/odoo-mcp ]; then
-    CLAUDE_CONFIG_DIR="$CLAUDE_HOME" claude mcp get odoo-sdk >/dev/null 2>&1 || \
-        CLAUDE_CONFIG_DIR="$CLAUDE_HOME" claude mcp add --scope user odoo-sdk odoo-mcp
+# --- Claude Code integrations: MCP server + mempalace plugin (#486, #484) ----
+# sync-claude-mcp registers the odoo-mcp MCP server and the mempalace plugin at
+# user scope. Installed to /usr/local/bin and run at container-create time
+# (postCreateCommand), NOT here: $CLAUDE_CONFIG_DIR is shadowed at runtime by the
+# feature's bind mount of the host's ~/.claude, so a registration written during
+# the image build is discarded the moment the mount goes live. That is why the
+# previous build-time `claude mcp add` never showed up in the persisted config
+# (#486) - the write landed in the image layer the mount then covered.
+cat > /usr/local/bin/sync-claude-mcp << 'EOF'
+#!/bin/sh
+# sync-claude-mcp - register the feature-owned Claude Code integrations (the
+# odoo-mcp MCP server and the mempalace plugin) at user scope, idempotently.
+#
+# Runs from the feature's postCreateCommand, where $CLAUDE_CONFIG_DIR is the
+# LIVE bind mount of the host's ~/.claude, so what it writes actually persists
+# across rebuilds. Best-effort: a registration failure warns but must not fail
+# container create. Failures are reported rather than swallowed (#486).
+set -u
+
+: "${CLAUDE_CONFIG_DIR:=/usr/local/share/claude-home}"
+export CLAUDE_CONFIG_DIR
+
+if ! command -v claude >/dev/null 2>&1; then
+    echo "sync-claude-mcp: claude is not on PATH; nothing to register" >&2
+    exit 0
 fi
+
+# The server registers under the name of its console script: odoo-mcp. The
+# guard has to check that SAME name - it used to check `odoo-sdk`, a name
+# nothing ever registers, so it could never match and the add re-ran on every
+# provision, the exact opposite of the intended "skip if already there" (#486).
+if [ -x /usr/local/bin/odoo-mcp ]; then
+    if claude mcp get odoo-mcp >/dev/null 2>&1; then
+        echo "sync-claude-mcp: MCP server 'odoo-mcp' is already registered"
+    elif claude mcp add --scope user odoo-mcp odoo-mcp; then
+        echo "sync-claude-mcp: registered MCP server 'odoo-mcp'"
+    else
+        echo "WARNING: sync-claude-mcp: failed to register the 'odoo-mcp' MCP server" >&2
+    fi
+fi
+
+# mempalace ships its Claude Code hooks (Stop/SessionEnd/PreCompact) as a
+# plugin; without this registration the palace is installed and on PATH but
+# nothing ever mines into it (#484).
+#
+# #484 flagged "does `claude plugin install` work non-interactively at build
+# time?" as unverified. It now IS verified, and the answer is: only if a
+# marketplace publishing mempalace is already configured. On a host whose
+# ~/.claude has one (the mount makes it available here), this installs; on a
+# bare CI runner it fails with "not found in any configured marketplace". That
+# is a host-config precondition this Feature cannot satisfy for the user, so it
+# stays best-effort and says so rather than failing container create.
+if command -v mempalace >/dev/null 2>&1; then
+    if claude plugin list 2>/dev/null | grep -q mempalace; then
+        echo "sync-claude-mcp: plugin 'mempalace' is already installed"
+    elif claude plugin install --scope user mempalace; then
+        echo "sync-claude-mcp: installed plugin 'mempalace'"
+    else
+        echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
+    fi
+fi
+EOF
+chmod 0755 /usr/local/bin/sync-claude-mcp
+
+# --- mempalace mine root (#485, #484) ---------------------------------------
+# MEMPAL_DIR tells mempalace which project tree to mine. A Feature CANNOT know
+# that path at build time: the spec hands install.sh only _REMOTE_USER /
+# _CONTAINER_USER / _*_USER_HOME, and offers no ${containerWorkspaceFolder}
+# substitution in containerEnv. The old hardcoded containerEnv MEMPAL_DIR=
+# /workspaces was therefore a guess that is wrong for every container that
+# mounts its project elsewhere - and mempalace treats an unresolvable MEMPAL_DIR
+# as "mine nothing", with no diagnostic, so the failure looked exactly like
+# success (transcript capture is independent of it and kept working).
+#
+# Lifecycle commands DO execute from the workspace folder, so resolve it there
+# instead and persist the answer into an env file every shell sources (below).
+MEMPAL_ENV_FILE=/usr/local/share/personal-features/mempal-dir.sh
+mkdir -p "$(dirname "$MEMPAL_ENV_FILE")"
+# Pre-create it here and make it writable by ANY uid in the container, for the
+# same reason shell-history is mode 0777 (see persisted-paths.tsv): install.sh
+# cannot know which user will run postCreateCommand. $_REMOTE_USER is the
+# feature's best guess, but the dev container CLI runs lifecycle commands as the
+# image's remoteUser, which is frequently a different account (root at build
+# time vs `node` at create time on the javascript-node base image) - a chown to
+# the wrong one makes the resolver's write fail and, because it fails loudly by
+# design, takes container create down with it. The file holds one directory
+# path, no secret. Only the file needs to be writable: `>` truncates in place
+# and never needs write permission on the parent directory.
+: > "$MEMPAL_ENV_FILE"
+chmod 0666 "$MEMPAL_ENV_FILE"
+
+cat > /usr/local/bin/resolve-mempal-dir << 'EOF'
+#!/bin/sh
+# resolve-mempal-dir - resolve the mempalace mine root and persist it as
+# MEMPAL_DIR for every shell in this container.
+#
+# Run from the feature's postCreateCommand, whose cwd is the workspace folder.
+# Resolution order: an explicit MEMPAL_DIR override, else the enclosing git
+# worktree root, else the workspace folder itself.
+#
+# Deliberately FAILS LOUDLY (non-zero, with an actionable message) when the mine
+# root cannot be resolved. The whole point of this script is that the previous
+# behaviour - a wrong path that silently mined nothing - was indistinguishable
+# from a working install (#485).
+set -u
+
+ENV_FILE=/usr/local/share/personal-features/mempal-dir.sh
+WORKSPACE="${1:-$PWD}"
+
+if [ -n "${MEMPAL_DIR:-}" ] && [ -d "$MEMPAL_DIR" ]; then
+    # An explicit, resolvable override always wins - that is what it is for.
+    RESOLVED="$MEMPAL_DIR"
+else
+    RESOLVED="$(git -C "$WORKSPACE" rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$RESOLVED" ] || RESOLVED="$WORKSPACE"
+fi
+
+# A single quote in the path would break the quoting of the env file written
+# below, so refuse it explicitly rather than emitting a file that fails to
+# source (which would once again be a silent no-op).
+case "$RESOLVED" in *\'*) RESOLVED="" ;; esac
+
+if [ -z "$RESOLVED" ] || [ ! -d "$RESOLVED" ] || [ "$RESOLVED" = "/" ]; then
+    echo "ERROR: resolve-mempal-dir could not resolve a mempalace mine root." >&2
+    echo "  MEMPAL_DIR=${MEMPAL_DIR:-<unset>}" >&2
+    echo "  workspace=$WORKSPACE" >&2
+    echo "  resolved=${RESOLVED:-<empty>} (not a usable directory)" >&2
+    echo "Set MEMPAL_DIR to the project directory mempalace should mine, or run this from inside the workspace folder. Failing instead of mining nothing silently." >&2
+    exit 1
+fi
+
+# printf keeps this safe for paths containing spaces; single quotes are not
+# expanded by the sourcing shell (a path containing one was rejected above).
+# An unwritable env file is fatal for the same reason a wrong path is: shells
+# would keep sourcing the stale/empty value and mine nothing, quietly.
+if ! printf "export MEMPAL_DIR='%s'\n" "$RESOLVED" > "$ENV_FILE"; then
+    echo "ERROR: resolve-mempal-dir resolved MEMPAL_DIR=$RESOLVED but could not write $ENV_FILE." >&2
+    echo "Without it no shell picks the value up and mempalace mines nothing. install.sh pre-creates the file mode 0666 precisely so any lifecycle user can write it; check that it still exists and is writable." >&2
+    exit 1
+fi
+echo "resolve-mempal-dir: MEMPAL_DIR=$RESOLVED"
+EOF
+chmod 0755 /usr/local/bin/resolve-mempal-dir
 
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
@@ -568,6 +722,12 @@ export HISTFILE=/usr/local/share/shell-history/bash_history
 export HISTSIZE=10000
 export HISTFILESIZE=100000
 shopt -s histappend
+# mempalace's mine root, resolved at container-create time by
+# resolve-mempal-dir (the workspace path is unknowable at image-build time, so
+# it cannot be a containerEnv value - #485). Sourced rather than exported here
+# so every shell picks up the resolved value, and Claude Code - and hence the
+# mempalace hooks it spawns - inherits it.
+[ -r /usr/local/share/personal-features/mempal-dir.sh ] && . /usr/local/share/personal-features/mempal-dir.sh
 command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init bash)"
 command -v bat >/dev/null 2>&1 && alias cat=bat

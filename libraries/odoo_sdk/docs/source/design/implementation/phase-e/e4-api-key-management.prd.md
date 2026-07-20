@@ -2,6 +2,8 @@
 
 API Key Management Helpers
 
+> **Status: never implemented (2026-07 audit).** Neither `OdooClient.generate_api_key` nor `OdooClient.revoke_api_key` exists in `src/odoo_sdk/client/client.py`, and nothing in the source calls `res.users.apikeys`. API keys are consumed only — resolved from `ODOO_API_KEY` or the `[odoo]` INI section into `OdooConnectionSettings.api_key` and passed to `OdooJson2Executor` as a bearer token. Key rotation remains a manual, out-of-band operation. Retained as a record of the original Phase E plan.
+
 # Goal
 
 ## Problem

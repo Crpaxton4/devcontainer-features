@@ -2,6 +2,8 @@
 
 Phase A Local Validation and Release Readiness
 
+> **Status: partially superseded (2026-07 audit).** The local commands still exist: `make coverage`, `make static`, `make mutation`, and `make quality` wrap `tools/coverage.py`, `tools/static_analysis.py`, and `tools/mutation.py`. The claim that CI is not required is stale — validation now runs in GitHub Actions (`.github/workflows/odoo-sdk-quality.yaml` and `mutation.yaml`) and that is the authoritative gate. The coverage floor is 90% with branch coverage on.
+
 # Goal
 
 ## Problem

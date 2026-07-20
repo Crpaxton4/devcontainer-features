@@ -16,7 +16,7 @@ alternative has proven adequate, so the proposal is closed rather than carried
 forward. The original 2026-05-21 proposal is preserved verbatim below the line
 for historical context.
 
-### Settled state (verified 2026-07-15)
+### Settled state (verified 2026-07-15; transport facts re-verified 2026-07-20)
 
 - **No session type exists.** There is no `OdooSession` (or equivalent) anywhere
   in `src/odoo_sdk`. The only `session`-named code is the unrelated
@@ -31,10 +31,15 @@ for historical context.
   (`transport/rpc.py`) performs lazy `uid` login; `OdooJson2Executor`
   (`transport/json2.py`) sends an `Authorization: Bearer` header. There is no
   shared auth policy above them.
-- **Timeout policy lives in transport.** Each transport defines its own
-  `DEFAULT_REQUEST_TIMEOUT_SECONDS` (`transport/rpc.py`, `transport/json2.py`);
-  the XML-RPC side additionally implements `_TimeoutTransport` /
-  `_SafeTimeoutTransport` (`transport/rpc.py`) to bound socket waits.
+- **Timeout *mechanism* lives in transport; the default *value* is central.**
+  The default is defined once as `DEFAULT_TIMEOUT_SECONDS` in `state/config.py`
+  and re-exported by both transports as `DEFAULT_REQUEST_TIMEOUT_SECONDS`
+  (`transport/rpc.py`, `transport/json2.py`) rather than redefined per transport.
+  Enforcing the timeout is still transport-shaped: the XML-RPC side implements
+  `_TimeoutTransport` / `_SafeTimeoutTransport` (`transport/rpc.py`) to bound
+  socket waits, while JSON-2 passes the timeout to its HTTP call. Sharing one
+  scalar default does not amount to a policy layer, so this does not change the
+  rejection below.
 - **Error mapping lives in transport.** XML-RPC faults are mapped by
   `_mapped_call` (`transport/rpc.py`) via `transport/_fault_mapping.py`; JSON-2
   HTTP errors are mapped by `map_http_error` via
@@ -66,14 +71,12 @@ for historical context.
 ### Explicit decision on retry policy
 
 Retry / backoff policy is **deliberately not implemented** and is a non-goal at
-the current scope. Confirmed 2026-07-15: no retry, backoff, or attempt-loop
+the current scope. Re-confirmed 2026-07-20: no retry, backoff, or attempt-loop
 logic exists anywhere in `src/odoo_sdk`. Every mention of "retry" in the package
-is prose, not mechanism — the load-bearing ones are transport docstrings that
-point retry responsibility *outward* to the caller: `transport/errors.py` notes
-that `OdooTransportError` callers "often want retry or connectivity handling",
-and `transport/rpc.py` notes that a failed login is not cached so callers "may
-retry after correcting their credentials". Both describe *caller-level* retry,
-not SDK-owned retry.
+is prose, not mechanism — the load-bearing one is a transport docstring that
+points retry responsibility *outward* to the caller: `transport/rpc.py` notes
+that a failed login is not cached so callers "may retry after correcting their
+credentials". That describes *caller-level* retry, not SDK-owned retry.
 
 This is a decision, not an oversight: callers that need resilience wrap their own
 calls, and the transport error taxonomy (`OdooTransportError` distinct from
@@ -94,9 +97,6 @@ bolting a retry loop into one transport by default. At that point:
   backoff, redaction) while transports stay mechanism-only. It should not absorb
   the protocol-shaped auth, timeout, and error-mapping mechanics that correctly
   live in each transport today.
-- Note the related seam smell to clean up first: `OdooClient` subclasses
-  `OdooExecutor` (`client/client.py`), which blurs the facade/transport
-  boundary a policy layer would otherwise formalize.
 
 ---
 

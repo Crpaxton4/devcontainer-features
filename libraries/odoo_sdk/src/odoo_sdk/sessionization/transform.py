@@ -54,6 +54,11 @@ def _window_entry(
     """Build one billed :class:`TimeEntry` from a raw window and its events."""
     # A window always holds at least the event(s) that anchor its bounds.
     strategy_name, category = _session_label(window_events)
+    # Display-only metadata, mirroring the SQL derivation's
+    # ``COALESCE(MAX(NULLIF(repo, '')), :agentless)``: the greatest real label
+    # wins, and a purely repo-less window yields the absent repo
+    # (:data:`~odoo_sdk.state.db.AGENTLESS_REPO`, i.e. ``""``) that path also
+    # returns — the two derivations agree on the same input (#508).
     repo = max((event.repo for event in window_events if event.repo), default="")
     billed = billable_seconds((end_raw - start).total_seconds(), config)
     return TimeEntry(

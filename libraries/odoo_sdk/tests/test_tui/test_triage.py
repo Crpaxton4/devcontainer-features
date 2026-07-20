@@ -4,6 +4,12 @@ Covers the pure series-grouping and frame composition, and drives the real
 ``handle_key`` path end to end: a fixture central DB holding a 13-tick calendar
 series (one row) plus a lone unattributed event, opened via triage, assigned to a
 task in one transaction, and then re-derived as a billable session.
+
+Every tick external id here comes from the REAL ingestion producer
+(``_tick_external_id``/``_expand_ticks``) rather than a fabricated
+``:tick:<index>`` string. Fabricated numeric ids collapse to one row under any
+regex and so hid a producer/consumer format mismatch (issues #517, #526); driving
+the tests through the producer makes this file the contract test for that seam.
 """
 
 import curses
@@ -12,6 +18,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from odoo_sdk.adapters.external_sync import _expand_ticks, _tick_external_id
 from odoo_sdk.commands.builtin import AssignEventCommand
 from odoo_sdk.state import EventRecord, LocalStateClient
 from odoo_sdk.tui.app import (
@@ -32,6 +39,25 @@ from odoo_sdk.tui.window import DateWindow
 from tests.support import make_state_db
 
 UTC = timezone.utc
+
+# A real 09:00–10:00 meeting on the ingestion tick interval: 13 ticks.
+MEETING_START = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+MEETING_END = MEETING_START + timedelta(hours=1)
+TICK_MINS = 5
+
+
+def _tick_moments(start=MEETING_START, end=MEETING_END, tick_mins=TICK_MINS):
+    """Return the tick timestamps ingestion expands a meeting into."""
+    return _expand_ticks(start, end, tick_mins)
+
+
+def _tick_ids(series_id="gcal:evt-9", **kwargs):
+    """Return the tick external ids ingestion writes for one meeting.
+
+    Built by the production producer, so the keys under test are byte-identical
+    to what the calendar resync stores.
+    """
+    return [_tick_external_id(series_id, moment) for moment in _tick_moments(**kwargs)]
 
 
 def _rec(event_id, *, source="chatter", ts=None, subject="", external_id=None):
@@ -86,15 +112,41 @@ def _deps(store):
 
 class TestSeriesKey(unittest.TestCase):
     def test_tick_member_yields_shared_prefix(self):
-        self.assertEqual(series_key("gcal:evt-9:tick:7"), "gcal:evt-9:tick:")
+        tick = _tick_external_id("gcal:evt-9", MEETING_START)
+        self.assertEqual(tick, "gcal:evt-9:tick:2026-06-01T09:00:00+00:00")
+        self.assertEqual(series_key(tick), "gcal:evt-9:tick:")
 
     def test_every_tick_of_one_event_shares_a_key(self):
-        keys = {series_key(f"gcal:evt-9:tick:{n}") for n in range(13)}
-        self.assertEqual(keys, {"gcal:evt-9:tick:"})
+        ids = _tick_ids()
+        self.assertEqual(len(ids), 13)
+        self.assertEqual({series_key(tick) for tick in ids}, {"gcal:evt-9:tick:"})
+
+    def test_naive_and_offset_moments_are_recognized(self):
+        # The producer normalizes to UTC, so a naive moment still yields a tick
+        # id the consumer parses — no silent split into 13 lone rows.
+        east = timezone(timedelta(hours=2))
+        naive = _tick_external_id("gcal:evt-9", datetime(2026, 6, 1, 9, 0))
+        shifted = _tick_external_id(
+            "gcal:evt-9", datetime(2026, 6, 1, 11, 0, tzinfo=east)
+        )
+        self.assertEqual(series_key(naive), "gcal:evt-9:tick:")
+        self.assertEqual(series_key(shifted), "gcal:evt-9:tick:")
+
+    def test_sub_second_moment_is_recognized(self):
+        moment = MEETING_START + timedelta(microseconds=250)
+        tick = _tick_external_id("gcal:evt-9", moment)
+        self.assertEqual(series_key(tick), "gcal:evt-9:tick:")
 
     def test_non_tick_external_id_is_not_a_series(self):
         self.assertIsNone(series_key("gcal:evt-9"))
         self.assertIsNone(series_key("gh:pr:42"))
+
+    def test_non_timestamp_tick_suffix_is_not_a_series(self):
+        # The ISO-timestamp suffix is the canonical form; ingestion never emits a
+        # bare index, so an index-shaped suffix must not be read as a series.
+        self.assertIsNone(series_key("gcal:evt-9:tick:7"))
+        self.assertIsNone(series_key("gcal:evt-9:tick:"))
+        self.assertIsNone(series_key("gcal:evt-9:tick:2026-06-01"))
 
     def test_none_is_not_a_series(self):
         self.assertIsNone(series_key(None))
@@ -106,9 +158,15 @@ class TestSeriesKey(unittest.TestCase):
 
 class TestBuildTriageRows(unittest.TestCase):
     def test_series_collapses_to_one_row_covering_every_tick(self):
+        moments = _tick_moments()
         events = [
-            _rec(i + 1, external_id=f"gcal:m:tick:{i}", subject="Standup")
-            for i in range(13)
+            _rec(
+                i + 1,
+                ts=moment,
+                external_id=_tick_external_id("gcal:m", moment),
+                subject="Standup",
+            )
+            for i, moment in enumerate(moments)
         ]
         rows = build_triage_rows(events)
         self.assertEqual(len(rows), 1)
@@ -127,17 +185,27 @@ class TestBuildTriageRows(unittest.TestCase):
         self.assertEqual(rows[1].display_key, "event#2")
 
     def test_series_and_lone_together(self):
-        events = [_rec(1, external_id="gcal:m:tick:0")]
-        events += [_rec(2, external_id="gcal:m:tick:1")]
+        first, second = _tick_moments()[:2]
+        events = [_rec(1, ts=first, external_id=_tick_external_id("gcal:m", first))]
+        events += [_rec(2, ts=second, external_id=_tick_external_id("gcal:m", second))]
         events += [_rec(3, external_id=None, subject="lone")]
         rows = build_triage_rows(events)
         self.assertEqual([r.count for r in rows], [2, 1])
 
     def test_representative_is_earliest_member(self):
-        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        base = MEETING_START
         events = [
-            _rec(1, external_id="gcal:m:tick:0", ts=base, subject="first"),
-            _rec(2, external_id="gcal:m:tick:1", ts=base + timedelta(minutes=5)),
+            _rec(
+                1,
+                external_id=_tick_external_id("gcal:m", base),
+                ts=base,
+                subject="first",
+            ),
+            _rec(
+                2,
+                external_id=_tick_external_id("gcal:m", base + timedelta(minutes=5)),
+                ts=base + timedelta(minutes=5),
+            ),
         ]
         rows = build_triage_rows(events)
         self.assertEqual(rows[0].subject, "first")
@@ -190,21 +258,25 @@ class TestComposeTriageFrame(unittest.TestCase):
 
 
 def _fixture_store():
-    """A DB with a 13-tick series and one lone unattributed event on 2026-06-01."""
+    """A DB with a 13-tick series and one lone unattributed event on 2026-06-01.
+
+    The ticks are keyed exactly as the calendar resync writes them, so this
+    fixture exercises the real ingestion→triage key contract.
+    """
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     store = make_state_db(Path(tmp.name))
-    base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
-    for n in range(13):
+    base = MEETING_START
+    for moment in _tick_moments():
         store.add_event(
             EventRecord(
                 id=None,
                 source="chatter",
-                timestamp=base + timedelta(minutes=5 * n),
+                timestamp=moment,
                 task_ids=[],
                 repo="",
                 subject="Standup",
-                external_id=f"gcal:evt-9:tick:{n}",
+                external_id=_tick_external_id("gcal:evt-9", moment),
             )
         )
     store.add_event(
@@ -361,6 +433,10 @@ class TestTriageEndToEnd(unittest.TestCase):
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0].task_id, "24648")
         self.assertEqual(sessions[0].event_ids, tuple(series_ids))
+        # The whole meeting bills: one assign covered all 13 ticks, so the window
+        # spans the full hour instead of collapsing to a zero-length (min-billed)
+        # session — the under-billing #370 exists to prevent.
+        self.assertEqual(sessions[0].duration_seconds, 3600.0)
 
 
 if __name__ == "__main__":

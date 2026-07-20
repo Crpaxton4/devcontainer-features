@@ -20,6 +20,9 @@ write:
 * **Logged hours** are read with the same server-side ``read_group`` shape the
   ``timesheet_summary`` builtin uses, grouped on both the ``task_id`` and
   ``date:day`` axes at once so each (day, task) cell is summed by Odoo.
+* **Task names** are resolved once, in batch, over the union of the two sides
+  (#511), so a derived-only row — the unlogged time the report exists to
+  surface — is named like any other. See :func:`_task_names`.
 
 Each derived session is bucketed onto its start day (``started_at.date()``) —
 the same day :func:`~odoo_sdk.billing.timesheet.reconcile_session` bills it on
@@ -114,8 +117,9 @@ def _logged_hours_by_day_task(
     Uses the ``timesheet_summary`` ``read_group`` shape but over *two* group
     axes at once (``task_id`` and ``date:day``), so Odoo returns one summed cell
     per (task, day). Lines with no task cannot map to a derived session and are
-    skipped. Each bucket carries the summed ``hours`` and the task's display
-    ``task`` name. An unreachable Odoo surfaces as a single clear error.
+    skipped. Each bucket carries the summed ``hours`` and the ``[id, name]``
+    many2one pair the row grouped on, which :func:`_task_names` mines for free
+    display names. An unreachable Odoo surfaces as a single clear error.
     """
     domain = [("date", ">=", start.isoformat()), ("date", "<=", end.isoformat())]
     if only_mine:
@@ -141,11 +145,50 @@ def _logged_hours_by_day_task(
             continue
         task_id = m2o_id(task)
         cell = (day_label(row), int(task_id))
-        bucket = buckets.setdefault(
-            cell, {"hours": 0.0, "task": resolve_many2one(task)}
-        )
+        bucket = buckets.setdefault(cell, {"hours": 0.0, "task_ref": task})
         bucket["hours"] += row_hours(row)
     return buckets
+
+
+def _task_names(
+    client: Any,
+    logged: dict[tuple[str, int], dict[str, Any]],
+    task_ids: set[int],
+) -> dict[int, Optional[str]]:
+    """Resolve a display name for every task id in the report (#511).
+
+    Names are resolved once, in batch, over the *union* of derived and logged
+    task ids — derived-only rows are precisely the unlogged time the report
+    exists to surface, so they are the rows that must not come back nameless.
+
+    The logged ``read_group`` already grouped on ``task_id`` and so returns each
+    logged task as an ``[id, name]`` many2one pair; those names are mined with
+    :func:`~odoo_sdk.utilities.odoo_helpers.resolve_many2one` for free. Only the
+    ids left over — the derived-only ones — cost a read, and they cost exactly
+    one for all of them. A window whose derived tasks are all logged issues no
+    extra call at all.
+
+    Ids Odoo does not return (a deleted task) simply stay absent, so the caller's
+    lookup falls back to ``None`` rather than the read failing outright.
+    """
+    names: dict[int, Optional[str]] = {}
+    for (_, task_id), bucket in logged.items():
+        names[task_id] = resolve_many2one(bucket["task_ref"])
+    missing = sorted(task_ids - names.keys())
+    if not missing:
+        return names
+    try:
+        rows = client.execute(
+            "project.task",
+            "search_read",
+            [("id", "in", missing)],
+            fields=["display_name"],
+        )
+    except OdooTransportError as exc:
+        raise OdooTransportError(_UNREACHABLE) from exc
+    for row in rows:
+        names[int(row["id"])] = row.get("display_name")
+    return names
 
 
 def _row(
@@ -171,8 +214,13 @@ def _row(
 def _all_rows(
     derived: dict[tuple[str, int], float],
     logged: dict[tuple[str, int], dict[str, Any]],
+    names: dict[int, Optional[str]],
 ) -> list[dict[str, Any]]:
-    """Build every (day, task) row from the union of derived and logged cells."""
+    """Build every (day, task) row from the union of derived and logged cells.
+
+    Names come from the pre-resolved ``names`` map rather than the logged cell,
+    so a derived-only row (``logged_cell is None``) still carries its task name.
+    """
     rows = []
     for cell in derived.keys() | logged.keys():
         day, task_id = cell
@@ -183,7 +231,7 @@ def _all_rows(
                 task_id,
                 derived.get(cell, 0.0),
                 logged_cell["hours"] if logged_cell else 0.0,
-                logged_cell["task"] if logged_cell else None,
+                names.get(task_id),
             )
         )
     rows.sort(key=lambda row: (row["day"], row["task_id"]))
@@ -236,8 +284,9 @@ def unlogged_time_report(
 ) -> dict[str, Any]:
     """Report per (day, task) derived-vs-logged hours and their delta.
 
-    :param client: Odoo API client (read-only; only the logged-hours read hits
-        Odoo — the derived side is a local dry-run bill).
+    :param client: Odoo API client (read-only; only the logged-hours read and
+        the batched task-name resolution hit Odoo — the derived side is a local
+        dry-run bill).
     :param state: Local state client the events/sessions derive from.
     :param config: Resolved SDK settings supplying the session gap and the
         billing policy the dry-run bill applies.
@@ -259,7 +308,8 @@ def unlogged_time_report(
         client, state, config, start, end, start_date, end_date
     )
     logged = _logged_hours_by_day_task(client, start, end, only_mine)
-    rows = _all_rows(derived, logged)
+    task_ids = {cell[1] for cell in derived.keys() | logged.keys()}
+    rows = _all_rows(derived, logged, _task_names(client, logged, task_ids))
     total_derived = round(sum(row["derived_hours"] for row in rows), 2)
     total_logged = round(sum(row["logged_hours"] for row in rows), 2)
     return {

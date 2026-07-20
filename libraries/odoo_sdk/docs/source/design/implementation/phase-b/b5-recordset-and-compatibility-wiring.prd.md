@@ -2,6 +2,8 @@
 
 Recordset-Centered Wiring for Phase B Semantics
 
+> **Status: superseded (2026-07 audit).** The recordset half of this PRD holds: `OdooRecordset` is the sole owner of metadata access, field adaptation, and x2many write normalization. The compatibility half has no subject — `OdooModel` and `OdooQuery` are absent from `src/odoo_sdk/`, so there is nothing to wire or delegate. The duplication this PRD guards against cannot arise.
+
 # Goal
 
 ## Problem

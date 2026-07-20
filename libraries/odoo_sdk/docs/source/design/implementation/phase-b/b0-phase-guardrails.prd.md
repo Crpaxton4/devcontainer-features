@@ -2,6 +2,8 @@
 
 Phase B Guardrails and Semantic Growth Contract
 
+> **Status: partially superseded (2026-07 audit).** The Phase B semantics below all shipped: `MetadataCache`, the field-adaptation layer, the x2many command helpers, and the error taxonomy. Only the compatibility framing is stale — `OdooModel`, `OdooQuery`, and `CommandDispatcher` are absent from `src/odoo_sdk/`, so the requirement that compatibility surfaces route through the same internals has no subject.
+
 # Goal
 
 ## Problem

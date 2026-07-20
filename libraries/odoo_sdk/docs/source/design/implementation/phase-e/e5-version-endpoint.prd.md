@@ -2,6 +2,8 @@
 
 Server Version Endpoint
 
+> **Status: never implemented (2026-07 audit).** `OdooClient` has no `server_version()` method and no `server_version_string()` property (`src/odoo_sdk/client/client.py`), and nothing in the source calls `/web/version` or the XML-RPC `common.version()` endpoint. This gap also blocked Phase F's version fingerprint and Phase G's version-aware field stripping, neither of which shipped. Retained as a record of the original Phase E plan.
+
 # Goal
 
 ## Problem
