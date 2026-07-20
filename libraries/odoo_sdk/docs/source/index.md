@@ -1,13 +1,9 @@
 # Odoo SDK
 
-A Python SDK for talking to Odoo over its external API (XML-RPC or
-JSON-RPC2), built around an Odoo-ORM-like recordset abstraction rather than
-raw model names and row dictionaries.
+A Python SDK for Odoo's external API (XML-RPC or JSON-RPC2), built around an
+Odoo-ORM-like recordset abstraction rather than raw model names and row dicts.
 
 ## Install
-
-Environment and dependencies are managed with
-[uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync
@@ -15,10 +11,9 @@ uv sync
 
 ## Configure a connection
 
-Connection settings resolve with the following precedence: explicit
-constructor arguments, then environment variables
-(`ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`, `ODOO_API_KEY`,
-`ODOO_TRANSPORT`), then an INI file (`.odoo_sdk.ini` in the project root, or
+Settings resolve constructor arguments first, then environment (`ODOO_URL`,
+`ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`, `ODOO_API_KEY`, `ODOO_TRANSPORT`),
+then an INI file (`.odoo_sdk.ini` in the project root, or
 `~/.config/odoo_sdk/config.ini`):
 
 ```ini
@@ -49,10 +44,9 @@ for task in open_tasks:
     print(task.name)
 ```
 
-`OdooRecordset` is the core abstraction every SDK operation flows through. See
-{doc}`the API reference <api/modules>` for the full surface, starting with
-`odoo_sdk.records.recordset`, `odoo_sdk.client.client`, and
-`odoo_sdk.query.domain`.
+`OdooRecordset` is the core abstraction every operation flows through. Start the
+{doc}`API reference <api/modules>` at `odoo_sdk.records.recordset`,
+`odoo_sdk.client.client`, and `odoo_sdk.query.domain`.
 
 ```{toctree}
 :maxdepth: 2
