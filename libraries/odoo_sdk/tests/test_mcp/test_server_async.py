@@ -14,6 +14,20 @@ from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.mcp.tools import build_explicit_tools
 
 
+#: Built-ins deliberately absent from the MCP surface. Surface selection is the
+#: consumer's concern, never the producer's (#499): the command registry knows
+#: nothing about the layers above it, and MCP names its tools explicitly in
+#: ``TOOL_FACTORIES``, so registering a builtin does not expose it as a tool.
+#: ``get_employee_id`` is only needed by the unattended timesheet-export path,
+#: which runs with no LLM in the loop.
+NON_MCP_BUILTINS = {"get_employee_id"}
+
+
+def _mcp_tool_names() -> set:
+    """Return the builtin names that are expected on the MCP tool surface."""
+    return set(BUILTIN_COMMANDS) - NON_MCP_BUILTINS
+
+
 def _full_registry() -> Registry:
     return register_builtins(Registry(Mock()))
 
@@ -31,19 +45,26 @@ class TestFullToolSurface(unittest.TestCase):
     def test_every_builtin_command_has_an_explicit_tool(self):
         registry = _full_registry()
         tools = build_explicit_tools(registry)
-        self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
+        self.assertEqual(set(tools), _mcp_tool_names())
 
     def test_server_registers_all_builtin_tools(self):
         registry = _full_registry()
         added = _build(registry, build_explicit_tools(registry))
-        self.assertEqual({t.name for t in added}, set(BUILTIN_COMMANDS))
+        self.assertEqual({t.name for t in added}, _mcp_tool_names())
 
     def test_descriptions_sourced_from_commands(self):
         registry = _full_registry()
         added = _build(registry, build_explicit_tools(registry))
         by_name = {t.name for t in added if t.description}
-        # Every builtin has a non-empty description.
-        self.assertEqual(by_name, set(BUILTIN_COMMANDS))
+        # Every tool has a non-empty description.
+        self.assertEqual(by_name, _mcp_tool_names())
+
+    def test_non_mcp_builtins_are_registered_but_not_exposed(self):
+        registry = _full_registry()
+        tools = build_explicit_tools(registry)
+        for name in NON_MCP_BUILTINS:
+            self.assertIn(name, BUILTIN_COMMANDS)
+            self.assertNotIn(name, tools)
 
     def test_composition_tools_are_async(self):
         registry = _full_registry()

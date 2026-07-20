@@ -2,6 +2,8 @@
 
 Phase D Guardrails
 
+> **Status: partially superseded (2026-07 audit).** Most of Phase D shipped on `OdooRecordset` and `DomainExpression`. Two contract points are stale: the preserved- surface list names `OdooModel`, `OdooQuery`, `CommandDispatcher`, and `OdooEnv`, none of which exist in `src/odoo_sdk/` (`OdooEnv` was removed in PR #161); and the `sudo()` exclusion was never expressed as a `NotImplementedError` — no `sudo` attribute exists at all, so `.sudo()` falls through `OdooRecordset.__getattr__`, is looked up as a model field, and raises `AttributeError`.
+
 # Goal
 
 ## Problem

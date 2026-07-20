@@ -142,7 +142,12 @@ class TestBuildExplicitTools(unittest.TestCase):
 
         registry = register_builtins(Registry(MagicMock()))
         tools = build_explicit_tools(registry)
-        self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
+        # The MCP surface is a subset of the builtin surface, not a mirror of it:
+        # MCP names its tools explicitly, so a builtin the LLM has no use for
+        # (``get_employee_id``, used by the unattended export path) registers as
+        # a command without becoming a tool (#499).
+        self.assertLessEqual(set(tools), set(BUILTIN_COMMANDS))
+        self.assertNotIn("get_employee_id", tools)
         # Every tool carries a non-empty description sourced from its command,
         # so no tool ships to the MCP wire schema without documentation.
         for name, (_, description) in tools.items():
@@ -472,12 +477,18 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertIn(["git", "checkout", "main"], called)
         self.assertIn(["git", "branch", "-D", "10#fix"], called)
 
-    def test_rolls_back_and_reraises_typed_already_running(self):
+    def test_keeps_branch_and_reraises_typed_already_running(self):
         # Raise-based error contract (#223): the epic-C start command raises the
-        # typed ``TaskAlreadyRunningError`` when the task is already tracked. The
-        # composition tool must roll back the branch created this run AND let the
-        # *typed* exception propagate unchanged (for the #222 boundary to format)
-        # — it must not be caught and swallowed into a passthrough error dict.
+        # typed ``TaskAlreadyRunningError`` when the task is already tracked, and
+        # the composition tool must let the *typed* exception propagate unchanged
+        # (for the #222 boundary to format) — it must not be caught and swallowed
+        # into a passthrough error dict.
+        # Unlike every other failure, this one is *not* rolled back (#478):
+        # attaching to a session that is already RUNNING means development
+        # continues, so the task branch created this run has to stay. Deleting it
+        # here is what made branch setup look silently skipped whenever a session
+        # was already running. See ``test_start_task_branch_setup`` for the
+        # positive assertions on the branch surviving.
         from odoo_sdk.state import TaskAlreadyRunningError
 
         def _boom(**kw):
@@ -498,8 +509,9 @@ class TestStartTaskTool(unittest.TestCase):
             with self.assertRaises(TaskAlreadyRunningError):
                 _run(tool("Fix", ctx))
         called = [c.args[0] for c in sp.run.call_args_list]
-        self.assertIn(["git", "checkout", "main"], called)
-        self.assertIn(["git", "branch", "-D", "10#fix"], called)
+        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], called)
+        self.assertNotIn(["git", "checkout", "main"], called)
+        self.assertNotIn(["git", "branch", "-D", "10#fix"], called)
 
     def test_no_rollback_when_no_branch_created(self):
         # #164: when already on the task branch, no branch is created this run,
@@ -740,7 +752,7 @@ class TestStopTaskTool(unittest.TestCase):
         ctx.elicit = AsyncMock(
             return_value=_accepted(MagicMock(description="Reviewed text"))
         )
-        result = _run(make_stop_task_tool(reg)(1, "orig", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "orig"))
         self.assertEqual(result["description"], "Reviewed text")
 
     def test_falls_back_to_supplied_description(self):
@@ -749,14 +761,26 @@ class TestStopTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock(return_value=_accepted(MagicMock(description="")))
-        result = _run(make_stop_task_tool(reg)(1, "fallback", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "fallback"))
         self.assertEqual(result["description"], "fallback")
+
+    def test_description_omitted_skips_elicitation(self):
+        # Time logging moved to the odoo-tui/ETL path (#482): with no
+        # description there is nothing to review, so the tool must not prompt.
+        reg = _FakeRegistry(
+            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        result = _run(make_stop_task_tool(reg)(1, ctx))
+        ctx.elicit.assert_not_awaited()
+        self.assertIsNone(result["description"])
 
     def test_cancel_returns_error(self):
         reg = _FakeRegistry(stop_task=lambda task_id, desc: {})
         ctx = MagicMock()
         ctx.elicit = AsyncMock(return_value=_cancelled())
-        result = _run(make_stop_task_tool(reg)(1, "x", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "x"))
         self.assertEqual(result, {"error": "Stop task cancelled."})
 
     def test_command_failure_propagates_to_boundary(self):
@@ -776,7 +800,7 @@ class TestStopTaskTool(unittest.TestCase):
             return_value=_accepted(MagicMock(description="done"))
         )
         with self.assertRaises(TaskNotRunningError):
-            _run(make_stop_task_tool(reg)(1, "orig", ctx))
+            _run(make_stop_task_tool(reg)(1, ctx, "orig"))
 
 
 if __name__ == "__main__":

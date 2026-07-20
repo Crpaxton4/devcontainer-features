@@ -84,7 +84,10 @@ class _ReapEnv(unittest.TestCase):
     def _log_event(self, argv) -> None:
         with (
             patch("sys.stdout", StringIO()),
-            patch("odoo_sdk.cli.__main__.current_repo_label", return_value=""),
+            # Provenance now resolves inside LogEventCommand (#509); stub both
+            # git lookups so this test never shells out to the ambient repo.
+            patch("odoo_sdk.commands.log_event.current_repo_label", return_value=""),
+            patch("odoo_sdk.commands.log_event.current_branch_label", return_value=""),
             patch("sys.argv", ["odoo-sdk", *argv]),
         ):
             cli.main()

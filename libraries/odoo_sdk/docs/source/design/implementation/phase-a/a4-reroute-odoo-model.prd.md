@@ -2,6 +2,8 @@
 
 OdooModel Re-routing Through Phase A Primitives
 
+> **Status: never implemented (2026-07 audit).** No `OdooModel` type exists in `src/odoo_sdk/`, so the re-route described here has no subject in the shipped SDK. Model access is `client['res.partner']`, which returns an empty model-bound `OdooRecordset` (`src/odoo_sdk/client/client.py`). Retained as a record of the original Phase A plan.
+
 # Goal
 
 ## Problem

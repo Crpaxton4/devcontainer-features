@@ -1,12 +1,18 @@
-from typing import Any
+from typing import Any, Optional
 
 from ..command import Command, require_active_run
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 
 
-def _finalize_description(description: str) -> str:
-    """Ensure the timesheet description carries the ``[/]`` prefix exactly once."""
+def _finalize_description(description: Optional[str]) -> Optional[str]:
+    """Ensure the work description carries the ``[/]`` prefix exactly once.
+
+    Returns ``None`` for a missing or blank description: the summary is optional
+    (#482), so there is nothing to prefix.
+    """
+    if not description or not description.strip():
+        return None
     return description if description.startswith("[/]") else f"[/] {description}"
 
 
@@ -17,24 +23,26 @@ class StopTaskCommand(Command):
     Atomic and surface-agnostic: it takes the confirmed description directly (the
     MCP tool performs any review/edit elicitation) and never references MCP.
 
-    This command does **not** write hours to the Odoo timesheet. The 0-hour
-    ``[/] Work in progress`` anchor created at ``start_task`` is left untouched;
-    the elapsed hours and final description are written to Odoo later by the
-    TUI/ETL upload path (which owns all ``account.analytic.line`` hour writes).
-    Stop only transitions the run to STOPPED and records the local session data.
+    This command does **not** write hours to the Odoo timesheet, and ``start_task``
+    creates no timesheet anchor to close out; the elapsed hours are written to
+    Odoo later by the TUI/ETL upload path (which owns all
+    ``account.analytic.line`` hour writes). Stop only transitions the run to
+    STOPPED and records the local session data. The work ``description`` is
+    therefore optional (#482) and is echoed back for display only — nothing
+    downstream consumes it for time logging.
     """
 
     _name = "stop_task"
     _description = (
         "Stop an active task tracking session. Transitions the run to stopped and "
-        "records the confirmed work description (prefixed with [/]) locally. Does "
-        "not write hours to Odoo — the TUI/ETL upload path owns timesheet hours."
+        "echoes back an optional work description (prefixed with [/]). Does not "
+        "write hours to Odoo — the TUI/ETL upload path owns timesheet hours."
     )
 
     def execute(
         self,
         task_id: int,
-        description: str,
+        description: Optional[str] = None,
     ) -> dict[str, Any]:
         """Stop the active session for a task and record it locally.
 
@@ -43,8 +51,9 @@ class StopTaskCommand(Command):
         the TUI/ETL upload path.
 
         :param task_id: Odoo project.task record id.
-        :param description: Confirmed work summary recorded for the session.
-        :return: Summary with task name, elapsed time, and confirmed description.
+        :param description: Optional work summary echoed back for the session.
+            Omitted or blank yields a ``None`` ``description`` in the result.
+        :return: Summary with task name, elapsed time, and the description.
         """
         assert_odoo_devcontainer()
         db = self.state

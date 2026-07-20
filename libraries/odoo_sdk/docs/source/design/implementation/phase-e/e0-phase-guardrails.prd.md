@@ -2,6 +2,8 @@
 
 Phase E Guardrails
 
+> **Status: partially superseded (2026-07 audit).** E1–E3 shipped. E4 (API key management) and E5 (version endpoint) never shipped. The other contract points hold: `urllib` is still the only HTTP library (`src/odoo_sdk/transport/json2.py`), XML-RPC is still the default transport, and the `OdooExecutor` interface is unchanged.
+
 # Goal
 
 ## Problem

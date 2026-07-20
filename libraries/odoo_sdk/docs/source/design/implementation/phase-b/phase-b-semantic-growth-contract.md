@@ -1,5 +1,7 @@
 # Phase B Semantic Growth Contract
 
+> **Status: partially superseded (2026-07 audit).** The Phase B semantics this contract governs all shipped — `MetadataCache` (`src/odoo_sdk/env/metadata_cache.py`), field adaptation (`src/odoo_sdk/fields/values.py`), x2many command helpers (`src/odoo_sdk/fields/commands.py`), and the error taxonomy (`src/odoo_sdk/transport/errors.py`). The preserved-surface framing is stale: `OdooModel`, `OdooQuery`, and `CommandDispatcher` are absent from `src/odoo_sdk/`, and `OdooEnv` was removed in PR #161, so `OdooRecordset` is the only consumer of these internals. The package is named `odoo_sdk`, not `odoo_service`.
+
 ## Purpose
 
 This contract is the implementation baseline for Phase B.

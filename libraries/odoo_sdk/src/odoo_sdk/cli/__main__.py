@@ -42,7 +42,6 @@ from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.state import current_repo_label
 from odoo_sdk.utilities.env import (
     OdooDevcontainerRequiredError,
     assert_odoo_devcontainer,
@@ -50,9 +49,7 @@ from odoo_sdk.utilities.env import (
 from odoo_sdk.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
-    is_run_stale,
     reap_run,
-    resolve_env_threshold_hours,
     stale_active_runs,
     threshold_from_hours,
 )
@@ -249,57 +246,33 @@ def _parse_payload(raw: Optional[str]) -> Optional[dict]:
     return parsed
 
 
-def _resolve_task_ids(db: TaskStateDB, args: argparse.Namespace) -> list[str]:
-    """Resolve which task ids a logged event attributes to.
-
-    An explicit ``--task-id`` (repeatable) always wins. Otherwise, when
-    ``--attach-active-run`` is passed, attach every active (RUNNING /
-    AWAITING_ANSWERS) run in the central tracker DB — the natural association for
-    a hook firing while an FSM run is in progress. With no active run (or the
-    flag absent) this yields ``[]``, i.e. untargeted session-level activity,
-    matching the pre-flag default.
-
-    Stale runs are excluded (#366): a run whose last activity predates the reap
-    threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
-    :data:`~odoo_sdk.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged
-    orphan from a dead devcontainer, so attaching this event to it would only
-    accrue phantom billable wall-clock. Skipping it freezes its activity clock so
-    it stays reapable. The same staleness predicate ``reap`` uses is applied here,
-    so the two agree on exactly which runs are stale.
-    """
-    if args.task_id:
-        return [str(task_id) for task_id in args.task_id]
-    if args.attach_active_run:
-        threshold = threshold_from_hours(resolve_env_threshold_hours())
-        return [
-            str(run.task_id)
-            for run in db.get_all_active_runs()
-            if not is_run_stale(db, run, threshold)
-        ]
-    return []
-
-
 def cmd_log_event(args: argparse.Namespace) -> None:
     """Record a single Claude Code hook event into the local ``events`` table.
 
     The event write is routed through :class:`~odoo_sdk.commands.log_event.
     LogEventCommand` — the single command-layer owner of the ``events``
     append (issue #407) — so this subcommand no longer constructs an
-    ``EventRecord`` and calls ``add_event`` inline. The interface-specific
-    resolution stays here: ``--source`` validation, ``--payload`` parsing, the
-    ``--task-id`` / ``--attach-active-run`` task-scope policy, and the repo label
-    are computed from ``args`` and handed to the command.
+    ``EventRecord`` and calls ``add_event`` inline. Only the interface-specific
+    resolution stays here: ``--source`` validation and ``--payload`` parsing.
+
+    The task-scope policy that used to live in this module was folded into the
+    command (#507) so the CLI and the MCP dispatch wrapper attribute events by
+    one rule instead of two: ``--task-id`` is handed over as the explicit hint
+    and ``--attach-active-run`` selects whether an unhinted event falls back to
+    the active runs, which keeps this subcommand's documented flag semantics —
+    and the hook shim's contract — unchanged. The repo label and branch are no
+    longer resolved here either; the command resolves both from the working tree
+    (#509).
     """
     event_type = _resolve_source(args.source)
     payload = _parse_payload(args.payload)
-    db = TaskStateDB()
-    LogEventCommand(state=db).execute(
+    LogEventCommand(state=TaskStateDB()).execute(
         source=args.source,
         subject=args.subject,
         payload=payload,
-        task_ids=_resolve_task_ids(db, args),
-        repo=current_repo_label(),
+        task_ids=args.task_id,
         timestamp=args.timestamp,
+        attach_active_run=args.attach_active_run,
     )
     print(f"Logged event {args.source!r} ({event_type.name}).")
 

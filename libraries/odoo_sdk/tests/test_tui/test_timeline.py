@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
+from odoo_sdk.state.db import AGENTLESS_REPO
 from odoo_sdk.tui.timeline import _lane_label, _parse, build_timeline
 
 
@@ -95,16 +95,16 @@ class TestBuildTimeline(unittest.TestCase):
         grid = build_timeline(sessions, START, END, 40)
         self.assertEqual(grid.lanes[0].label, "#101 web development")
 
-    def test_agentless_sentinel_repo_never_reaches_label(self):
-        # A repo-less agent session carries the NUL-prefixed sentinel as its
-        # repo; the lane label must translate it, never emit the raw NUL that
-        # would crash curses.addstr with ValueError (#451).
+    def test_agentless_repo_renders_printable_stand_in(self):
+        # A repo-less agent session carries an absent repo; the lane label shows
+        # the shared printable stand-in and never a control character, which
+        # would crash curses.addstr with ValueError (#451, #508).
         sessions = [
             _session(
                 "101",
                 "2026-06-01T09:00:00",
                 "2026-06-01T10:00:00",
-                repo=AGENTLESS_REPO_SENTINEL,
+                repo=AGENTLESS_REPO,
             )
         ]
         grid = build_timeline(sessions, START, END, 40)
@@ -112,8 +112,8 @@ class TestBuildTimeline(unittest.TestCase):
         self.assertNotIn("\x00", label)
         self.assertEqual(label, "#101 (agent) development")
 
-    def test_lane_label_translates_sentinel_directly(self):
-        label = _lane_label(("101", AGENTLESS_REPO_SENTINEL, "development"))
+    def test_lane_label_translates_absent_repo_directly(self):
+        label = _lane_label(("101", AGENTLESS_REPO, "development"))
         self.assertNotIn("\x00", label)
         self.assertIn("(agent)", label)
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
+from odoo_sdk.state.db import format_repo_label
 
 Session = Mapping[str, Any]
 
@@ -26,12 +26,6 @@ _BAR = "█"
 _BAR_EDGE = "▌"
 _TICK = "╿"
 _EMPTY = " "
-
-# Repo-less agent sessions carry the reserved NUL-prefixed sentinel as their
-# ``repo`` (see :data:`AGENTLESS_REPO_SENTINEL`); it must never reach a curses
-# ``addstr`` (embedded NUL raises ``ValueError``, #451), so the lane label shows
-# this printable stand-in instead — mirroring triage's display-key translation.
-_AGENTLESS_LABEL = "(agent)"
 
 
 @dataclass(frozen=True)
@@ -158,18 +152,14 @@ def _lane_row(
 def _lane_label(key: tuple[str, str, str]) -> str:
     """Return a compact human label for a lane key.
 
-    A repo-less agent session's ``repo`` is the NUL-prefixed sentinel; it is
-    translated to a printable stand-in here so the raw sentinel never reaches
-    the screen (embedded NUL crashes ``curses.addstr`` with ``ValueError``, #451).
+    A repo-less agent session carries an absent ``repo``; it is rendered through
+    the shared :func:`~odoo_sdk.state.db.format_repo_label` helper so the TUI, MCP,
+    and CLI paths agree on one stand-in rather than each masking it locally (#508).
     """
     task_id, repo, strategy = key
-    if repo == AGENTLESS_REPO_SENTINEL:
-        repo_tail = _AGENTLESS_LABEL
-    else:
-        repo_tail = repo.rsplit("/", 1)[-1] if repo else ""
-    parts = [f"#{task_id}"]
-    if repo_tail:
-        parts.append(repo_tail)
+    # ``format_repo_label`` always yields a non-empty tail (the agentless
+    # stand-in when the repo is absent), so the repo segment is unconditional.
+    parts = [f"#{task_id}", format_repo_label(repo).rsplit("/", 1)[-1]]
     if strategy:
         parts.append(strategy)
     return " ".join(parts)

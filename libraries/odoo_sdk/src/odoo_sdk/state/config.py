@@ -32,11 +32,13 @@ persisted ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
 """
 
 import configparser
+import importlib
 import math
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Literal, Mapping, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -58,6 +60,12 @@ _BEHAVIOR_SECTION = "behavior"
 _CWD_CONFIG_BASENAMES = (".odoo_sdk.toml", ".odoo_sdk.ini")
 DEFAULT_CONFIG_DIR = "~/.config/odoo_sdk"
 _CONFIG_DIR_FILENAMES = ("config.toml", "config.ini")
+
+# TOML parser modules probed, in order, when a ``.toml`` config is read. The
+# stdlib ``tomllib`` only exists from Python 3.11; on 3.10 (the supported floor,
+# shipped by ``odoo:17``) the API-compatible ``tomli`` backport stands in for it
+# and is declared as a ``python_version < "3.11"`` dependency.
+_TOML_MODULE_NAMES = ("tomllib", "tomli")
 
 #: Default per-request transport timeout, in seconds. The single source of this
 #: number: it is the fallback for garbage or absent ``ODOO_TIMEOUT`` values and the
@@ -573,12 +581,33 @@ def _load_local_config_file(config_path: Optional[str]) -> dict[str, dict[str, A
     return _load_ini_sections(path)
 
 
+def _import_toml_module() -> ModuleType:
+    """Return a module exposing ``load(binary_file)``, tolerating Python 3.10.
+
+    ``tomllib`` is stdlib only from Python 3.11, but the supported floor is 3.10
+    (``odoo:17`` ships 3.10), where the ``tomli`` backport provides the identical
+    ``load`` API. Probed in order and imported lazily, so ``import odoo_sdk``
+    never depends on a TOML parser and INI-only hosts are unaffected.
+
+    :raises RuntimeError: When neither module is importable.
+    """
+    for module_name in _TOML_MODULE_NAMES:
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+    raise RuntimeError(
+        "Reading a TOML config file needs the stdlib 'tomllib' (Python 3.11+) or "
+        "the 'tomli' backport on Python 3.10; neither is importable. Install "
+        "'tomli' or use an INI config file instead."
+    )
+
+
 def _load_toml_sections(path: Path) -> dict[str, dict[str, Any]]:
     """Parse the ``connection`` and ``behavior`` tables from a TOML file."""
-    import tomllib
-
+    toml = _import_toml_module()
     with path.open("rb") as handle:
-        data = tomllib.load(handle)
+        data = toml.load(handle)
     return {
         "connection": dict(data.get("connection", {})),
         "behavior": dict(data.get("behavior", {})),

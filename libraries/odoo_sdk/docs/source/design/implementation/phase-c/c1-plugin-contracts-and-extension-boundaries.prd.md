@@ -2,6 +2,8 @@
 
 Plugin Contracts and Extension Boundaries
 
+> **Status: never implemented (2026-07 audit).** No part of Phase C shipped. `src/odoo_sdk/` contains no plugin contract, plugin registry, typed-adapter layer, or execution-policy seam for tracing, retry, timeout, or telemetry, and there is no async facade. The `adapters/` package is unrelated to this phase: it holds `state_persistence.py` and `external_sync.py` for the task-tracker. Retained as a record of the original Phase C plan. No plugin contract, protocol, or ABC was ever defined; `src/odoo_sdk/commands/protocols.py` is the command layer's typing surface, not a plugin seam.
+
 # Goal
 
 ## Problem

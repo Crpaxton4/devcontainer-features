@@ -2,6 +2,8 @@
 
 Client Factory Methods and Configuration Extension
 
+> **Status: accurate, with one addition (2026-07 audit).** `from_xml_rpc`, `from_json2`, the preserved constructor, and the `transport` / `api_key` settings all shipped (`src/odoo_sdk/client/client.py`, `src/odoo_sdk/state/config.py`). A third factory was added afterwards and is not listed below: `OdooClient.from_config(config: LocalConfig)`, which is the path the CLI and MCP entry points use so settings are resolved once and injected.
+
 # Goal
 
 ## Problem

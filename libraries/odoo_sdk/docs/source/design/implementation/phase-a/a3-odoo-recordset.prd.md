@@ -2,6 +2,8 @@
 
 OdooRecordset Core Identity Abstraction
 
+> **Status: partially superseded (2026-07 audit).** `OdooRecordset` shipped and is the identity-bearing core (`src/odoo_sdk/records/recordset.py`); `read`, `write`, `exists`, `browse`, `search`, and `with_context` behave as described. Three requirements below are stale: `unlink()` was later forbidden system-wide, so every `unlink` call raises `DeletionNotSupportedError` at the single transport guard (`src/odoo_sdk/transport/errors.py`; the guard was consolidated into a single transport seam in PR #188); the recordset holds the executor, context, and `MetadataCache` directly rather than an `OdooEnv`, which was removed in PR #161; and the package is named `odoo_sdk`, not `odoo_service`.
+
 # Goal
 
 ## Problem

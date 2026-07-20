@@ -6,6 +6,7 @@ from odoo_sdk.commands import Command, Registry
 from odoo_sdk.commands.builtin import (
     BUILTIN_COMMANDS,
     CreateTaskCommand,
+    GetEmployeeIdCommand,
     GetModelsCommand,
     GetTaskCommand,
     GetTaskChatterCommand,
@@ -24,6 +25,22 @@ class TestGetUidCommand(unittest.TestCase):
         client = MagicMock()
         client.uid = 42
         self.assertEqual(GetUidCommand(client).execute(), 42)
+
+
+class TestGetEmployeeIdCommand(unittest.TestCase):
+    def test_delegates_to_the_billing_resolver(self):
+        client = MagicMock()
+        state = MagicMock()
+        with patch(
+            "odoo_sdk.commands.builtin.get_employee_id.resolve_employee_id",
+            return_value=49,
+        ) as resolver:
+            result = GetEmployeeIdCommand(client, state).execute()
+
+        # Delegation, not a reimplementation: the billing writer and the export
+        # path must never disagree about who the authenticated user is (#499).
+        resolver.assert_called_once_with(client, state)
+        self.assertEqual(result, 49)
 
 
 class TestGetModelsCommand(unittest.TestCase):
@@ -140,6 +157,7 @@ class TestRegisterBuiltins(unittest.TestCase):
 EXPECTED_BUILTIN_NAMES = frozenset(
     {
         "get_uid",
+        "get_employee_id",
         "get_models",
         "get_tasks",
         "get_todo",

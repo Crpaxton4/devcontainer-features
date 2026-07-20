@@ -2,6 +2,8 @@
 
 OdooQuery Compatibility Shim
 
+> **Status: never implemented (2026-07 audit).** No `OdooQuery` type exists in `src/odoo_sdk/`. The fluent builder compatibility shim described here is not part of the shipped SDK; chaining is expressed through `OdooRecordset` methods and `DomainExpression` composition instead. Its `unlink` terminal operation would also be blocked today: `unlink` raises `DeletionNotSupportedError` at the single transport guard (`src/odoo_sdk/transport/errors.py`). Retained as a record of the original Phase A plan.
+
 # Goal
 
 ## Problem
