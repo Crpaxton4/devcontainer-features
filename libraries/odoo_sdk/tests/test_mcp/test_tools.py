@@ -142,7 +142,12 @@ class TestBuildExplicitTools(unittest.TestCase):
 
         registry = register_builtins(Registry(MagicMock()))
         tools = build_explicit_tools(registry)
-        self.assertEqual(set(tools), set(BUILTIN_COMMANDS))
+        # The MCP surface is a subset of the builtin surface, not a mirror of it:
+        # MCP names its tools explicitly, so a builtin the LLM has no use for
+        # (``get_employee_id``, used by the unattended export path) registers as
+        # a command without becoming a tool (#499).
+        self.assertLessEqual(set(tools), set(BUILTIN_COMMANDS))
+        self.assertNotIn("get_employee_id", tools)
         # Every tool carries a non-empty description sourced from its command,
         # so no tool ships to the MCP wire schema without documentation.
         for name, (_, description) in tools.items():
