@@ -1,6 +1,7 @@
 """Tests for explicit MCP tools that compose commands with ctx.elicit/sample."""
 
 import asyncio
+import os
 import unittest
 import warnings
 from types import SimpleNamespace
@@ -168,6 +169,102 @@ class TestBuildExplicitTools(unittest.TestCase):
         # Tools are still built; descriptions default to empty string.
         _, desc = tools["get_uid"]
         self.assertEqual(desc, "")
+
+
+class TestDefaultToolSurface(unittest.TestCase):
+    """`default_tool_surface` gates the narrow-context tools off by default (#512).
+
+    The lever is tool *count*: 39 exposed tools trip Claude Code's client-side
+    lazy deferral, so the everyday surface holds the maintenance/triage/introspection
+    tools back — without deleting them from the built surface.
+    """
+
+    #: The count that trips client-side lazy deferral (#512); the default surface
+    #: must stay strictly below it.
+    _DEFERRAL_TRIP_COUNT = 39
+
+    def _full(self):
+        from odoo_sdk.commands import Registry
+        from odoo_sdk.commands.builtin import register_builtins
+
+        registry = register_builtins(Registry(MagicMock()))
+        return build_explicit_tools(registry)
+
+    def test_gated_names_are_real_tools(self):
+        # Every gated name must exist in the built surface, or a rename would
+        # silently gate nothing.
+        from odoo_sdk.mcp.tools import GATED_TOOL_NAMES
+
+        self.assertTrue(GATED_TOOL_NAMES)
+        self.assertLessEqual(GATED_TOOL_NAMES, set(self._full()))
+
+    def test_default_excludes_exactly_the_gated_tools(self):
+        from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, default_tool_surface
+
+        full = self._full()
+        default = default_tool_surface(full, include_gated=False)
+        self.assertEqual(set(default), set(full) - GATED_TOOL_NAMES)
+        # None of the gated tools leak onto the default surface ...
+        self.assertEqual(set(default) & GATED_TOOL_NAMES, set())
+        # ... and every kept tool retains its (callable, description) spec.
+        for name, spec in default.items():
+            self.assertIs(spec, full[name])
+
+    def test_default_surface_is_below_the_deferral_threshold(self):
+        from odoo_sdk.mcp.tools import default_tool_surface
+
+        default = default_tool_surface(self._full(), include_gated=False)
+        self.assertLess(len(default), self._DEFERRAL_TRIP_COUNT)
+
+    def test_working_set_tools_stay_on_the_default_surface(self):
+        from odoo_sdk.mcp.tools import default_tool_surface
+
+        default = default_tool_surface(self._full(), include_gated=False)
+        # A representative slice of the everyday task/project/reporting flow,
+        # including the composition tools and the tools the status-report skill
+        # drives, must never be gated.
+        for name in (
+            "start_task",
+            "stop_task",
+            "get_task",
+            "get_tasks",
+            "task_list",
+            "task_note",
+            "task_question",
+            "resume_task",
+            "search_projects",
+            "search_tasks",
+            "search_knowledge_articles",
+            "create_task",
+            "timesheet_summary",
+            "unbilled_hours",
+            "task_aging",
+        ):
+            self.assertIn(name, default)
+
+    def test_include_gated_true_returns_the_full_surface(self):
+        from odoo_sdk.mcp.tools import default_tool_surface
+
+        full = self._full()
+        self.assertEqual(
+            set(default_tool_surface(full, include_gated=True)), set(full)
+        )
+
+    def test_env_opt_in_restores_the_full_surface(self):
+        from odoo_sdk.mcp.tools import GATED_TOOLS_ENV, default_tool_surface
+
+        full = self._full()
+        with patch.dict(os.environ, {GATED_TOOLS_ENV: "1"}):
+            # include_gated=None defers to the env flag.
+            self.assertEqual(set(default_tool_surface(full)), set(full))
+
+    def test_env_absent_gates_by_default(self):
+        from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, default_tool_surface
+
+        full = self._full()
+        with patch.dict(os.environ, {}, clear=True):
+            default = default_tool_surface(full)
+        self.assertEqual(set(default) & GATED_TOOL_NAMES, set())
 
 
 class TestStartTaskTool(unittest.TestCase):

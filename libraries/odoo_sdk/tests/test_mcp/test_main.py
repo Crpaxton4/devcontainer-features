@@ -1,8 +1,10 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.mcp import __main__ as entry
+from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, GATED_TOOLS_ENV
 
 
 class TestMainEntryPoint(unittest.TestCase):
@@ -40,6 +42,39 @@ class TestMainEntryPoint(unittest.TestCase):
             entry.main()
 
         self.assertIs(MockServer.call_args.kwargs["profiling"], True)
+
+    def test_main_exposes_reduced_default_surface(self):
+        # The server is handed the everyday working set, not all 39 tools: the
+        # gated (maintenance/triage/introspection) tools are held back so the
+        # count stays under the lazy-deferral threshold (#512).
+        with (
+            patch("odoo_sdk.mcp.__main__.OdooClient"),
+            patch("odoo_sdk.mcp.__main__.OdooMCPServer") as MockServer,
+            # Empty (falsy) value keeps the gate closed without clearing the rest
+            # of the environment the entry point's config load depends on.
+            patch.dict(os.environ, {GATED_TOOLS_ENV: ""}),
+        ):
+            entry.main()
+
+        exposed = set(MockServer.call_args.kwargs["explicit_tools"])
+        self.assertEqual(exposed & GATED_TOOL_NAMES, set())
+        self.assertLess(len(exposed), 39)
+        # The composition tools remain reachable on the default surface.
+        self.assertIn("start_task", exposed)
+        self.assertIn("stop_task", exposed)
+
+    def test_main_env_opt_in_exposes_the_gated_tools(self):
+        # Opting in restores the full surface for a session that needs the
+        # maintenance/triage tooling.
+        with (
+            patch("odoo_sdk.mcp.__main__.OdooClient"),
+            patch("odoo_sdk.mcp.__main__.OdooMCPServer") as MockServer,
+            patch.dict(os.environ, {GATED_TOOLS_ENV: "1"}),
+        ):
+            entry.main()
+
+        exposed = set(MockServer.call_args.kwargs["explicit_tools"])
+        self.assertLessEqual(GATED_TOOL_NAMES, exposed)
 
 
 if __name__ == "__main__":

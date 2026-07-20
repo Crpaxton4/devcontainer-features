@@ -10,6 +10,7 @@ implementation PRDs that drove the current codebase.
 odoo-sdk-architecture-plan
 odoo-sdk-design-patterns
 task-tracker/fsm
+task-tracker/event-record-and-payload-policy
 ```
 
 ```{toctree}
