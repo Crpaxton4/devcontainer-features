@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.2](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.1...personal-features-v4.0.2) (2026-07-20)
+
+
+### Bug Fixes
+
+* **deps:** sync uv.lock and keep it in sync across releases ([#502](https://github.com/Crpaxton4/devcontainer-features/issues/502)) ([f29d196](https://github.com/Crpaxton4/devcontainer-features/commit/f29d196c8aeaf4f5819bc5041f48b180fe696ff5))
+
 ## [4.0.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.0...personal-features-v4.0.1) (2026-07-20)
 
 
