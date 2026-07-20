@@ -39,9 +39,9 @@
 - [System Architecture](#system-architecture)
 - [Scalability Roadmap](#scalability-roadmap)
 - [Existing System Review](#existing-system-review)
-- [Best Practices & Patterns](#best-practices-patterns)
+- [Best Practices & Patterns](#best-practices--patterns)
 - [Security Architecture](#security-architecture)
-- [Risks & Mitigations](#risks-mitigations)
+- [Risks & Mitigations](#risks--mitigations)
 - [Architecture Decision Records](#architecture-decision-records)
 - [Next Steps](#next-steps)
 
