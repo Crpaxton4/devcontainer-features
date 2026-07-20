@@ -1,10 +1,14 @@
 """Tests for MCP prompt registration and the implement_task prompt."""
 
 import asyncio
+import importlib
+import pathlib
+import re
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_sdk.commands import Command, Registry
+from odoo_sdk.commands.builtin.get_task import GetTaskCommand
 from odoo_sdk.mcp.prompts.builtin.implement_task import make_implement_task_prompt
 from odoo_sdk.mcp.prompts.builtin.report_incident import report_incident
 from odoo_sdk.mcp.server import OdooMCPServer
@@ -40,17 +44,41 @@ def _make_task(**overrides) -> dict:
 
 
 def _make_get_task_cmd(return_value):
-    """Return a Command class whose execute() returns return_value."""
+    """Return a Command class whose execute() returns return_value.
+
+    Mirrors the real :class:`GetTaskCommand` contract: ``chatter`` is opt-in via
+    ``include``, so a caller that forgets it gets a task without chatter — the
+    stub cannot hide the omission the way an always-chatter stub did.
+    """
     rv = return_value
 
     class _GetTaskCmd(Command):
         _name = "get_task"
         _description = "mock get_task"
 
-        def execute(self, task_id: int):
-            return rv
+        def execute(self, task_id: int, include: list[str] | None = None):
+            if rv is None:
+                return None
+            task = dict(rv)
+            if include is None or "chatter" not in include:
+                task.pop("chatter", None)
+            return task
 
     return _GetTaskCmd
+
+
+def _tracking_get_task_cmd(calls: list):
+    """Return a get_task Command class recording each (task_id, include) call."""
+
+    class _TrackingCmd(Command):
+        _name = "get_task"
+        _description = "tracking"
+
+        def execute(self, task_id: int, include: list[str] | None = None):
+            calls.append((task_id, include))
+            return _make_task()
+
+    return _TrackingCmd
 
 
 def _registry_with_get_task(return_value) -> Registry:
@@ -101,6 +129,10 @@ class TestPromptRegistration(unittest.TestCase):
 class TestImplementTaskPromptFactory(unittest.TestCase):
     """make_implement_task_prompt factory and prompt invocation."""
 
+    def setUp(self):
+        #: (task_id, include) recorded by ``_tracking_get_task_cmd``.
+        self.calls: list[tuple[int, list[str] | None]] = []
+
     def test_raises_value_error_when_task_not_found(self):
         reg = _registry_with_get_task(None)
         fn = make_implement_task_prompt(reg)
@@ -123,20 +155,97 @@ class TestImplementTaskPromptFactory(unittest.TestCase):
 
     def test_calls_get_task_with_task_id(self):
         reg = _registry_with_get_task(_make_task())
-        captured_ids: list = []
-
-        class _TrackingCmd(Command):
-            _name = "get_task"
-            _description = "tracking"
-
-            def execute(self, task_id: int):
-                captured_ids.append(task_id)
-                return _make_task()
-
-        reg._commands["get_task"] = _TrackingCmd
+        reg._commands["get_task"] = _tracking_get_task_cmd(self.calls)
         fn = make_implement_task_prompt(reg)
         fn(task_id=42)
-        self.assertEqual(captured_ids, [42])
+        self.assertEqual([task_id for task_id, _ in self.calls], [42])
+
+    def test_opts_into_description_and_chatter(self):
+        # Both sections are opt-in on the real command; without this include the
+        # rendered prompt silently loses all chatter.
+        reg = _registry_with_get_task(_make_task())
+        reg._commands["get_task"] = _tracking_get_task_cmd(self.calls)
+        fn = make_implement_task_prompt(reg)
+        fn(task_id=42)
+        self.assertEqual(self.calls[0][1], ["description", "chatter"])
+
+    def test_rendered_prompt_contains_chatter(self):
+        reg = _registry_with_get_task(_make_task())
+        fn = make_implement_task_prompt(reg)
+        messages = fn(task_id=42)
+        self.assertIn("Please fix ASAP", messages[0])
+        self.assertNotIn("(no messages)", messages[0])
+
+
+class _FakeOdooClient:
+    """Minimal ``search_read`` client backing the real ``GetTaskCommand``.
+
+    Records every ``(model, method)`` pair so a test can assert which RPCs the
+    prompt actually triggered.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+
+    def execute(self, model: str, method: str, *args, **kwargs):
+        self.calls.append((model, method))
+        if model == "project.task":
+            return [
+                {
+                    "id": 42,
+                    "name": "Fix VAT calculation",
+                    "project_id": [3, "Accounting"],
+                    "stage_id": [7, "In Progress"],
+                    "user_ids": [],
+                    "date_deadline": "2024-12-31",
+                    "priority": "1",
+                    "tag_ids": [],
+                    "description": "<p>Correct the rounding error in VAT.</p>",
+                }
+            ]
+        if model == "mail.message":
+            return [
+                {
+                    "id": 1,
+                    "date": "2024-01-01 10:00:00",
+                    "author_id": [5, "Alice"],
+                    "message_type": "comment",
+                    "subtype_id": [1, "Discussions"],
+                    "body": "<p>Please fix ASAP.</p>",
+                }
+            ]
+        raise AssertionError(f"unexpected model {model}")  # pragma: no cover
+
+
+class TestImplementTaskPromptAgainstRealCommand(unittest.TestCase):
+    """The prompt driven through the real GetTaskCommand, not a stub.
+
+    Regression guard for the chatter drop: ``get_task`` gates chatter behind
+    ``include``, so only an end-to-end wiring proves the prompt opts in.
+    """
+
+    def _render(self):
+        client = _FakeOdooClient()
+        reg = Registry(client)
+        reg.register("get_task", GetTaskCommand)
+        messages = make_implement_task_prompt(reg)(task_id=42)
+        return client, messages
+
+    def test_rendered_prompt_includes_chatter_body(self):
+        _, messages = self._render()
+        self.assertIn("Please fix ASAP", messages[0])
+
+    def test_rendered_prompt_has_no_empty_chatter_placeholder(self):
+        _, messages = self._render()
+        self.assertNotIn("(no messages)", messages[0])
+
+    def test_chatter_rpc_is_actually_issued(self):
+        client, _ = self._render()
+        self.assertIn(("mail.message", "search_read"), client.calls)
+
+    def test_rendered_prompt_still_includes_description(self):
+        _, messages = self._render()
+        self.assertIn("Correct the rounding error", messages[0])
 
 
 class TestBuildMessages(unittest.TestCase):
@@ -496,6 +605,48 @@ class TestMigratedSkillPrompts(unittest.TestCase):
                 fn, _ = self._load(name)
                 prompt = Prompt.from_function(fn)
                 self.assertFalse(prompt.arguments)
+
+
+class TestSkillPromptParity(unittest.TestCase):
+    """Every ported prompt body still matches its SKILL.md source of truth.
+
+    The prompt modules embed the skill body *verbatim*; nothing re-derives it at
+    build time, so an edit to a SKILL.md silently leaves the shipped prompt on
+    the old text. This asserts the two are byte-identical once the frontmatter
+    and the feature-managed comment — the only parts the port strips — are
+    removed, so any future drift fails here instead of shipping.
+    """
+
+    #: Repo root: tests/test_mcp/ -> tests/ -> odoo_sdk/ -> libraries/ -> root.
+    SKILLS_DIR = (
+        pathlib.Path(__file__).resolve().parents[4]
+        / "devcontainer-features"
+        / "src"
+        / "personal-features"
+        / "skills"
+    )
+
+    def _skill_body(self, name: str) -> str:
+        """Return a SKILL.md stripped exactly as the port strips it."""
+        text = (self.SKILLS_DIR / name.replace("_", "-") / "SKILL.md").read_text()
+        text = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL)
+        text = re.sub(r"\A\s*<!--.*?-->\s*\n", "", text, flags=re.DOTALL)
+        return text.lstrip("\n")
+
+    def test_skill_sources_are_present(self):
+        # Guard the path itself: a moved skills tree must fail loudly rather
+        # than quietly skipping every parity assertion below.
+        self.assertTrue(self.SKILLS_DIR.is_dir(), f"missing {self.SKILLS_DIR}")
+
+    def test_prompt_body_matches_skill_md(self):
+        for name in TestMigratedSkillPrompts.SKILLS:
+            with self.subTest(name=name):
+                module = importlib.import_module(f"odoo_sdk.mcp.prompts.builtin.{name}")
+                self.assertEqual(
+                    getattr(module, name)()[0],
+                    self._skill_body(name),
+                    f"{name} prompt body drifted from its SKILL.md",
+                )
 
 
 if __name__ == "__main__":
