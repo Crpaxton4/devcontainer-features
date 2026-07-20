@@ -15,7 +15,7 @@ from odoo_sdk.client import OdooClient
 from odoo_sdk.commands import Registry
 from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.mcp.server import OdooMCPServer
-from odoo_sdk.mcp.tools import build_explicit_tools
+from odoo_sdk.mcp.tools import build_explicit_tools, default_tool_surface
 from odoo_sdk.state.config import LocalConfig
 
 
@@ -26,6 +26,12 @@ def main() -> None:
     setting and the ``ODOO_PROFILING`` environment variable (File > Env >
     Default) via :class:`LocalConfig`, then passed to the server.
 
+    The server exposes the default tool surface — the everyday working set — via
+    :func:`default_tool_surface`, which holds back the narrow-context tools so the
+    count stays under Claude Code's client-side lazy-deferral threshold (#512).
+    Setting ``ODOO_MCP_INCLUDE_GATED`` restores the full surface for a session
+    that needs the maintenance/triage tooling.
+
     :return: None.
     :rtype: None
     """
@@ -35,7 +41,7 @@ def main() -> None:
     registry = register_builtins(Registry(client))
     OdooMCPServer(
         registry,
-        explicit_tools=build_explicit_tools(registry),
+        explicit_tools=default_tool_surface(build_explicit_tools(registry)),
         profiling=config.profiling,
     ).run()
 
