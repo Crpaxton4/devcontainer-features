@@ -48,7 +48,8 @@ class QuerySessionsCommand(Command):
         :param start_date: Inclusive ISO start date (``YYYY-MM-DD``), or None.
         :param end_date: Inclusive ISO end date (``YYYY-MM-DD``), or None.
         :param task_id: Restrict to one task id, or None for all.
-        :param repo: Restrict to one repo, or None for all.
+        :param repo: Restrict to one repo, or None for all. Pass ``""`` to select
+            only repo-less (agentless) sessions.
         :param strategy_name: Restrict to one strategy (``development`` or
             ``review``, #378 item 6), or None for all.
         :param include_events: When True, embed each session's linked events.
@@ -74,7 +75,14 @@ class QuerySessionsCommand(Command):
         ]
 
     def _render(self, session: SessionWindow, include_events: bool) -> dict[str, Any]:
-        """Render one session (and optionally its events) as a summary dict."""
+        """Render one session (and optionally its events) as a summary dict.
+
+        ``repo`` is emitted verbatim, which is ``""`` for a repo-less agent
+        session (#508) — an absent value rather than an in-band sentinel, so no
+        control character can reach a JSON or MCP consumer. Presentation layers
+        that need a printable stand-in call
+        :func:`~odoo_sdk.state.db.format_repo_label` rather than masking locally.
+        """
         summary: dict[str, Any] = {
             "session_id": session.id,
             "session_key": session_key(session),
