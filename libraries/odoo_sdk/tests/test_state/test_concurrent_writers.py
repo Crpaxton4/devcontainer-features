@@ -112,22 +112,58 @@ class TestConcurrentWriters(unittest.TestCase):
     def test_connect_uses_wal_journal_mode(self) -> None:
         """``_connect`` must leave the DB file in WAL journal mode."""
         client = LocalStateClient(db_path=_tmp_path())
-        conn = client._connect()
-        try:
+        with client._connect() as conn:
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        finally:
-            conn.close()
         self.assertEqual(mode.lower(), "wal")
 
     def test_connect_sets_busy_timeout(self) -> None:
         """``_connect`` must set a non-zero busy timeout on every connection."""
         client = LocalStateClient(db_path=_tmp_path())
-        conn = client._connect()
-        try:
+        with client._connect() as conn:
             timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.assertEqual(timeout, 2000)
+
+    def test_connect_closes_and_leaves_no_wal_sidecars(self) -> None:
+        """Exiting ``_connect`` must close the connection and truncate the WAL.
+
+        The sidecars are only dropped when the last connection closes cleanly, so
+        their absence at rest is the observable proof the connection was closed
+        rather than left to refcounting (#495) — and the proof that a backup which
+        copies ``tracker.db`` alone cannot silently lose committed transactions.
+        """
+        db_path = _tmp_path()
+        client = LocalStateClient(db_path=db_path)
+        client.add_event(_event(0, 0))
+
+        self.assertFalse(Path(f"{db_path}-wal").exists())
+        self.assertFalse(Path(f"{db_path}-shm").exists())
+        # ...and the committed write is readable from the main file alone.
+        conn = sqlite3.connect(str(db_path))
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         finally:
             conn.close()
-        self.assertEqual(timeout, 2000)
+        self.assertEqual(count, 1)
+
+    def test_connect_rolls_back_and_closes_on_error(self) -> None:
+        """A failing body rolls back, and the connection is still closed."""
+        db_path = _tmp_path()
+        client = LocalStateClient(db_path=db_path)
+        with self.assertRaises(RuntimeError):
+            with client._connect() as conn:
+                conn.execute(
+                    "INSERT INTO events (source, timestamp) VALUES ('commit', ?)",
+                    (datetime(2026, 6, 1, tzinfo=UTC).isoformat(),),
+                )
+                raise RuntimeError("boom")
+
+        # sqlite3 raises ProgrammingError on a closed connection.
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+        with client._connect() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 0
+            )
 
 
 if __name__ == "__main__":
