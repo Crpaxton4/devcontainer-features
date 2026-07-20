@@ -299,18 +299,20 @@ check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/
 check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
 check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
 
-# The hook shim must skip PreToolUse for the odoo-sdk MCP server's own tools (it
+# The hook shim must skip PreToolUse for the odoo MCP server's own tools (it
 # logs those dispatches server-side, #326/#340) and must still log every other
 # tool. This used to be `grep -q 'mcp__odoo__\*'` against the shim text, which
 # passed *precisely because* the glob was the broken `mcp__odoo__*` and would
 # have FAILED the moment it was corrected - rubber-stamping a guard that never
-# matched a real tool name, so odoo calls were double-logged (#529/#551).
+# matched a real tool name, so odoo calls were double-logged (#529/#551). The
+# #529 correction to `mcp__odoo-sdk__*` was still wrong: the server key is
+# `odoo-mcp`, not `odoo-sdk` (#581), so the real prefix is `mcp__odoo-mcp__*`.
 #
 # Assert the emitted command line instead. `odoo-sdk` is stubbed onto PATH so the
 # shim resolves it and records the argv it built; no real SDK is needed. Claude
 # Code namespaces MCP tools as `mcp__<server-key>__<tool>` with the key's hyphens
-# preserved, and install.sh registers the key `odoo-sdk`, so
-# `mcp__odoo-sdk__get_tasks` below is a production-shaped tool name.
+# preserved, and install.sh registers the key `odoo-mcp`, so
+# `mcp__odoo-mcp__get_tasks` below is a production-shaped tool name.
 HOOK_STUB_ROOT="$(mktemp -d)"
 mkdir -p "$HOOK_STUB_ROOT/bin"
 cat > "$HOOK_STUB_ROOT/bin/odoo-sdk" <<'STUB'
@@ -324,14 +326,14 @@ export HOOK_STUB_LOG="$HOOK_STUB_ROOT/invocations"
 : > "$HOOK_STUB_LOG"
 
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
-check "claude-event-hook logs a normal tool but excludes mcp__odoo-sdk__* tools" bash -c '
+check "claude-event-hook logs a normal tool but excludes mcp__odoo-mcp__* tools" bash -c '
   emit() {
     printf "{\"session_id\":\"s1\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$1" \
       | PATH="$HOOK_STUB_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
   }
   # An EXCLUDED tool exits before the shim forks anything, so the log is settled
   # the moment emit returns. A LOGGED tool forks a detached job, so poll for it.
-  emit mcp__odoo-sdk__get_tasks
+  emit mcp__odoo-mcp__get_tasks
   emit Bash
   for _ in $(seq 1 50); do
     grep -q -- "--subject Bash" "$HOOK_STUB_LOG" && break
@@ -346,8 +348,8 @@ check "claude-event-hook logs a normal tool but excludes mcp__odoo-sdk__* tools"
     || { echo "shim never invoked odoo-sdk for a non-odoo PreToolUse tool" >&2; exit 1; }
   grep -q -- "--subject Bash" "$HOOK_STUB_LOG" \
     || { echo "shim did not forward --subject Bash" >&2; exit 1; }
-  if grep -q -- "mcp__odoo-sdk__" "$HOOK_STUB_LOG"; then
-    echo "shim logged an mcp__odoo-sdk__* tool the MCP server already logs server-side" >&2
+  if grep -q -- "mcp__odoo-mcp__" "$HOOK_STUB_LOG"; then
+    echo "shim logged an mcp__odoo-mcp__* tool the MCP server already logs server-side" >&2
     exit 1
   fi
   # Exactly one row: proves the exclusion dropped the odoo call rather than the

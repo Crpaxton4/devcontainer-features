@@ -28,7 +28,7 @@ Handled server-side; doing it by hand double-counts:
   `query_sessions` and `odoo-tui` always reflect current events.
 - **Claude Code lifecycle hooks log themselves.** In a provisioned devcontainer
   they are forwarded to `odoo-sdk log-event` as `claude:<Hook>` events.
-  `PreToolUse`/`PostToolUse` for this server's own tools (`mcp__odoo-sdk__*`,
+  `PreToolUse`/`PostToolUse` for this server's own tools (`mcp__odoo-mcp__*`,
   after its registered name) are skipped — the server already logs those
   dispatches, so they are counted once.
 

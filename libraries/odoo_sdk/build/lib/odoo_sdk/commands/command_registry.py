@@ -1,0 +1,93 @@
+from typing import Dict, Iterator, Optional, Tuple, Type
+
+from odoo_sdk.state import LocalConfig, LocalStateClient
+
+from .command import Command
+from .protocols import RpcClient
+
+
+class Registry:
+    """Register :class:`Command` classes that share their peer dependencies.
+
+    The registry keeps use-case orchestration separate from transport and state
+    details while injecting the shared SDK dependencies into each registered
+    command. Commands receive three peers: the :class:`RpcClient`, the
+    :class:`LocalStateClient` (SQLite session FSM), and the :class:`LocalConfig`
+    (resolved SDK settings). The state client and config are optional; when
+    omitted, commands resolve their own lazily on first use, preserving the
+    original single-dependency behavior.
+
+    :param client: RPC client instance shared with all registered commands.
+    :type client: RpcClient
+    :param state_client: Shared local state client, defaults to None.
+    :type state_client: Optional[LocalStateClient]
+    :param config: Shared resolved SDK configuration, defaults to None.
+    :type config: Optional[LocalConfig]
+    """
+
+    def __init__(
+        self,
+        client: RpcClient,
+        state_client: Optional[LocalStateClient] = None,
+        config: Optional[LocalConfig] = None,
+    ):
+        self._client = client
+        self._state_client = state_client
+        self._config = config
+        self._commands: Dict[str, Type[Command]] = {}
+
+    @property
+    def state_client(self) -> LocalStateClient:
+        """Return the shared local state client, creating one on first access.
+
+        Resolved lazily and cached so merely building a registry never forces the
+        SQLite database into existence; a caller may inject a fake via the
+        ``state_client`` constructor argument, which this property returns as-is.
+        """
+        if self._state_client is None:
+            self._state_client = LocalStateClient()
+        return self._state_client
+
+    def register(
+        self,
+        command_name: str,
+        command: Type[Command],
+    ) -> None:
+        """Register a command class under a stable command name."""
+        self._commands[command_name] = command
+
+    def __getitem__(self, command_name: str) -> Command:
+        """Instantiate and return the command bound to the shared dependencies.
+
+        The shared client, state client, and config are passed as constructor
+        arguments; :meth:`Command.__init__` stores each peer and lazily resolves
+        its own default when the registry passes ``None``, so omitting the
+        optional state client or config is behavior-preserving.
+
+        :param command_name: Registered command name to resolve.
+        :raises KeyError: Raised when no command is registered for the name.
+        :return: Command instance bound to the shared dependencies.
+        """
+        command_cls = self._commands[command_name]
+        # ``register`` is typed ``Type[Command]`` and every production
+        # registration is a ``Command`` subclass, so the invariant always holds.
+        assert issubclass(command_cls, Command)  # pragma: no cover
+        return command_cls(
+            self._client,
+            state=self._state_client,
+            config=self._config,
+        )
+
+    def __iter__(self) -> Iterator[Type[Command]]:
+        """Allows iteration over registered command classes."""
+        return iter(self._commands.values())
+
+    def items(self) -> Iterator[Tuple[str, Command]]:
+        """Yield ``(name, command)`` pairs, each command bound to the client.
+
+        Dynamic consumers (such as the MCP server) need the registration name
+        alongside an instantiated command, which plain iteration over the stored
+        classes does not provide.
+        """
+        for command_name in self._commands:
+            yield command_name, self[command_name]

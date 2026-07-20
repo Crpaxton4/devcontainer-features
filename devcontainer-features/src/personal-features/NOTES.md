@@ -195,8 +195,8 @@ skipped, so a wedged orphan from a dead devcontainer stops accruing phantom
 billable wall-clock (#366). With no active run, the event is left untargeted
 (session-level).
 
-**`PreToolUse` excludes `mcp__odoo-sdk__*` tools** — the prefix Claude Code
-derives from the `odoo-sdk` server name `install.sh` registers. The odoo-sdk MCP
+**`PreToolUse` excludes `mcp__odoo-mcp__*` tools** — the prefix Claude Code
+derives from the `odoo-mcp` server name `install.sh` registers. The odoo MCP
 server already logs its own tool dispatches server-side, so `claude-event-hook`
 skips those to avoid double-counting. That server-side event mirrors this shim's
 payload stance: it records only the tool name and task id — never argument
