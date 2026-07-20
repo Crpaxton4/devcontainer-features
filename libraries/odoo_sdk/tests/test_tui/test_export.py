@@ -77,18 +77,14 @@ class TestRenderers(unittest.TestCase):
     def test_csv_export_has_header_and_rows(self):
         text = export_csv(self.db, date(2026, 6, 1), date(2026, 6, 1))
         lines = text.strip().splitlines()
-        self.assertTrue(lines[0].startswith("Date,Description,Project/ID"))
+        self.assertTrue(lines[0].startswith("Date,Description,Task/ID"))
         self.assertGreater(len(lines), 1)
 
     def test_csv_export_empty_window_is_header_only(self):
         text = export_csv(self.db, date(2026, 7, 1), date(2026, 7, 1))
         self.assertEqual(
             text.strip().splitlines(),
-            [
-                "Date,Description,Project/ID,"
-                "Task/ID,Quantity,Employee/ID,Unit of Measure/ID,"
-                "Company/ID,Sales Order Item/ID"
-            ],
+            ["Date,Description,Task/ID,Quantity,Employee/ID"],
         )
 
 
