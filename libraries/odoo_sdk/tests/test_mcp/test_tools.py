@@ -745,7 +745,7 @@ class TestStopTaskTool(unittest.TestCase):
         ctx.elicit = AsyncMock(
             return_value=_accepted(MagicMock(description="Reviewed text"))
         )
-        result = _run(make_stop_task_tool(reg)(1, "orig", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "orig"))
         self.assertEqual(result["description"], "Reviewed text")
 
     def test_falls_back_to_supplied_description(self):
@@ -754,14 +754,26 @@ class TestStopTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock(return_value=_accepted(MagicMock(description="")))
-        result = _run(make_stop_task_tool(reg)(1, "fallback", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "fallback"))
         self.assertEqual(result["description"], "fallback")
+
+    def test_description_omitted_skips_elicitation(self):
+        # Time logging moved to the odoo-tui/ETL path (#482): with no
+        # description there is nothing to review, so the tool must not prompt.
+        reg = _FakeRegistry(
+            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        result = _run(make_stop_task_tool(reg)(1, ctx))
+        ctx.elicit.assert_not_awaited()
+        self.assertIsNone(result["description"])
 
     def test_cancel_returns_error(self):
         reg = _FakeRegistry(stop_task=lambda task_id, desc: {})
         ctx = MagicMock()
         ctx.elicit = AsyncMock(return_value=_cancelled())
-        result = _run(make_stop_task_tool(reg)(1, "x", ctx))
+        result = _run(make_stop_task_tool(reg)(1, ctx, "x"))
         self.assertEqual(result, {"error": "Stop task cancelled."})
 
     def test_command_failure_propagates_to_boundary(self):
@@ -781,7 +793,7 @@ class TestStopTaskTool(unittest.TestCase):
             return_value=_accepted(MagicMock(description="done"))
         )
         with self.assertRaises(TaskNotRunningError):
-            _run(make_stop_task_tool(reg)(1, "orig", ctx))
+            _run(make_stop_task_tool(reg)(1, ctx, "orig"))
 
 
 if __name__ == "__main__":

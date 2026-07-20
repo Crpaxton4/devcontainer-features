@@ -12,6 +12,11 @@ from ._registration import builtin_prompt
 
 __all__ = ["make_implement_task_prompt"]
 
+#: ``get_task`` detail sections the rendered prompt needs. Both are opt-in: with
+#: no ``include`` the command returns the description only, which would render
+#: ``<chatter>(no messages)</chatter>`` no matter what the task really holds.
+_INCLUDE = ["description", "chatter"]
+
 
 @builtin_prompt("implement_task")
 def make_implement_task_prompt(command_registry: Registry):
@@ -22,7 +27,7 @@ def make_implement_task_prompt(command_registry: Registry):
         messages containing the task data and step-by-step workflow instructions.
         Load task_tracker_system_prompt.md as your system prompt before invoking.
         """
-        task = command_registry["get_task"].execute(task_id)
+        task = command_registry["get_task"].execute(task_id, include=_INCLUDE)
         if task is None:
             raise ValueError(f"Task {task_id} not found.")
         return build_implement_task_messages(task)

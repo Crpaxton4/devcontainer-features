@@ -77,23 +77,33 @@ check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
 # (provision=host in persisted-paths.tsv), or a broken mount would masquerade as a
 # working one behind an empty container-local DB. CI runs `sh ./setup.sh` on the
 # runner before this test, so the host dir + schema exist and the mount delivers
-# them at $ODOO_TASK_TRACKER_DIR. Both checks gate on odoo-sdk like the :69 check
-# (the SDK wheel is absent on <3.10 base images).
+# them at $ODOO_TASK_TRACKER_DIR.
 #
+# #552/#533: both checks used to gate on `! command -v odoo-sdk || {...}`, but
+# install.sh symlinks only odoo-mcp/odoo-tui onto PATH - `odoo-sdk` never
+# resolves, so the guard short-circuited to a vacuous exit 0 and NEITHER body had
+# ever executed. They now gate on the real "is the SDK installed at all"
+# condition the :69 check uses (/usr/local/bin/odoo-mcp, absent on <3.10 base
+# images where the wheel is skipped) and invoke the CLI at its uv-managed venv
+# path, the same one the #411 e2e check below resolves.
+_SDK_CLI=/usr/local/share/uv/tools/odoo-sdk/bin/odoo-sdk
+
 # POSITIVE: with the mount live, `odoo-sdk log-event` writes into the central DB.
 # A missing/unmounted DB would make log-event exit non-zero (the hard error
 # below), so a successful write that lands tracker.db at the mounted path is the
-# rebuild-surviving derivation reachability of acceptance #3.
-# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+# rebuild-surviving derivation reachability of acceptance #3. No
+# --attach-active-run, so the row stays untargeted and accrues no billable time
+# against a real run if this ever runs against a host-provisioned DB.
 check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bash -c \
-  '! command -v odoo-sdk >/dev/null 2>&1 || { odoo-sdk log-event --source claude:SessionStart --subject ci-positive && test -f "$ODOO_TASK_TRACKER_DIR/tracker.db"; }'
+  "! test -x /usr/local/bin/odoo-mcp || { $_SDK_CLI log-event --source claude:SessionStart --subject ci-positive && test -f \"\$ODOO_TASK_TRACKER_DIR/tracker.db\"; }"
 
 # NEGATIVE: point the state root at an empty dir with no host-provisioned DB; the
 # SDK must refuse to self-create one and fail with the single actionable error
-# naming the expected path (acceptance #4), never exiting 0 silently.
-# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+# naming the expected path (acceptance #4), never exiting 0 silently. Chained
+# with && (not ;) so the non-zero-exit half is actually asserted: `check` runs
+# the body in a child shell that does not inherit this file's `set -e`.
 check "odoo-sdk refuses to self-create a missing central tracker DB" bash -c \
-  '! command -v odoo-sdk >/dev/null 2>&1 || { d="$(mktemp -d)"; ! ODOO_TASK_TRACKER_DIR="$d" odoo-sdk log-event --source claude:SessionStart --subject ci-negative 2>"$d/err"; grep -q "$d/tracker.db" "$d/err" && ! test -f "$d/tracker.db"; }'
+  "! test -x /usr/local/bin/odoo-mcp || { d=\"\$(mktemp -d)\"; ! ODOO_TASK_TRACKER_DIR=\"\$d\" $_SDK_CLI log-event --source claude:SessionStart --subject ci-negative 2>\"\$d/err\" && grep -q \"\$d/tracker.db\" \"\$d/err\" && ! test -f \"\$d/tracker.db\"; }"
 
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
@@ -289,11 +299,65 @@ check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/
 check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
 check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
 
-# The hook shim must skip PreToolUse for mcp__odoo__* tools (the odoo-sdk MCP
-# server already logs those server-side, #326/#340). Assert the guard is present
-# rather than relying on a live odoo-sdk being installed.
-check "claude-event-hook excludes mcp__odoo__* tools" bash -c \
-  "grep -q 'mcp__odoo__\\*' /usr/local/bin/claude-event-hook"
+# The hook shim must skip PreToolUse for the odoo-sdk MCP server's own tools (it
+# logs those dispatches server-side, #326/#340) and must still log every other
+# tool. This used to be `grep -q 'mcp__odoo__\*'` against the shim text, which
+# passed *precisely because* the glob was the broken `mcp__odoo__*` and would
+# have FAILED the moment it was corrected - rubber-stamping a guard that never
+# matched a real tool name, so odoo calls were double-logged (#529/#551).
+#
+# Assert the emitted command line instead. `odoo-sdk` is stubbed onto PATH so the
+# shim resolves it and records the argv it built; no real SDK is needed. Claude
+# Code namespaces MCP tools as `mcp__<server-key>__<tool>` with the key's hyphens
+# preserved, and install.sh registers the key `odoo-sdk`, so
+# `mcp__odoo-sdk__get_tasks` below is a production-shaped tool name.
+HOOK_STUB_ROOT="$(mktemp -d)"
+mkdir -p "$HOOK_STUB_ROOT/bin"
+cat > "$HOOK_STUB_ROOT/bin/odoo-sdk" <<'STUB'
+#!/bin/sh
+# Stand-in for the real CLI: one line per invocation, recording the whole argv.
+printf '%s\n' "$*" >> "$HOOK_STUB_LOG"
+STUB
+chmod +x "$HOOK_STUB_ROOT/bin/odoo-sdk"
+export HOOK_STUB_BIN="$HOOK_STUB_ROOT/bin"
+export HOOK_STUB_LOG="$HOOK_STUB_ROOT/invocations"
+: > "$HOOK_STUB_LOG"
+
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook logs a normal tool but excludes mcp__odoo-sdk__* tools" bash -c '
+  emit() {
+    printf "{\"session_id\":\"s1\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$1" \
+      | PATH="$HOOK_STUB_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+  }
+  # An EXCLUDED tool exits before the shim forks anything, so the log is settled
+  # the moment emit returns. A LOGGED tool forks a detached job, so poll for it.
+  emit mcp__odoo-sdk__get_tasks
+  emit Bash
+  for _ in $(seq 1 50); do
+    grep -q -- "--subject Bash" "$HOOK_STUB_LOG" && break
+    sleep 0.2
+  done
+  # Bash was emitted AFTER the odoo tool, so if a regression made the shim fork
+  # an odoo write too, that write was queued first - but it is detached, so give
+  # it a grace period to land rather than racing the negative assertion below.
+  sleep 1
+
+  grep -q -- "--source claude:PreToolUse" "$HOOK_STUB_LOG" \
+    || { echo "shim never invoked odoo-sdk for a non-odoo PreToolUse tool" >&2; exit 1; }
+  grep -q -- "--subject Bash" "$HOOK_STUB_LOG" \
+    || { echo "shim did not forward --subject Bash" >&2; exit 1; }
+  if grep -q -- "mcp__odoo-sdk__" "$HOOK_STUB_LOG"; then
+    echo "shim logged an mcp__odoo-sdk__* tool the MCP server already logs server-side" >&2
+    exit 1
+  fi
+  # Exactly one row: proves the exclusion dropped the odoo call rather than the
+  # assertions above merely failing to notice a second, differently-shaped one.
+  [ "$(wc -l < "$HOOK_STUB_LOG")" -eq 1 ] \
+    || { echo "expected exactly 1 odoo-sdk invocation, got $(wc -l < "$HOOK_STUB_LOG")" >&2; exit 1; }
+'
+rm -rf "$HOOK_STUB_ROOT"
+unset HOOK_STUB_BIN HOOK_STUB_LOG
+
 # The shim must always exit 0 and pass --attach-active-run to odoo-sdk.
 check "claude-event-hook attaches the active run" bash -c \
   "grep -q -- '--attach-active-run' /usr/local/bin/claude-event-hook"
