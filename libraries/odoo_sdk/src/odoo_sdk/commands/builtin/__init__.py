@@ -20,6 +20,7 @@ from .abort_task import AbortTaskCommand
 from .assign_event import AssignEventCommand
 from .create_task import CreateTaskCommand
 from .discover_runs import DiscoverRunsCommand
+from .get_employee_id import GetEmployeeIdCommand
 from .get_mail_status import GetMailStatusCommand
 from .get_models import GetModelsCommand
 from .get_task import GetTaskCommand

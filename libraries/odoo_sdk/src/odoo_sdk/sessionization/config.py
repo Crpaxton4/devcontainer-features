@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
+from typing import Optional
 
 from .models import (
     resolve_day_bucket_tz,
@@ -59,10 +60,19 @@ class SessionizationConfig:
     k2: float = 1.0  # optimal-zone growth rate
     k3: float = 2.0  # dishonesty exp rate
 
-    # Odoo CSV rendering identifiers.
-    odoo_employee_id: int = 49
-    odoo_uom_id: int = 6
-    odoo_company_id: int = 1
+    # Odoo CSV rendering identifier (issues #497/#498/#499). Optional override
+    # only: it defaults to *unset* rather than to a captured deployment constant,
+    # because a plausible-but-wrong employee id in a billing artifact does not
+    # surface until someone audits hours against the wrong person. The export
+    # path resolves the real id at render time (``get_employee_id``, which
+    # delegates to ``billing.resolve_employee_id``) and passes it to
+    # :func:`~odoo_sdk.sessionization.render_csv.render_odoo_csv`.
+    #
+    # The unit-of-measure and company ids that used to live here are gone: Odoo
+    # populates both itself on ``account.analytic.line`` create (the company is
+    # taken from the task and the UoM from that company's configured time mode),
+    # so supplying them was at best a no-op and at worst a wrong attribution.
+    odoo_employee_id: Optional[int] = None
 
     # Day-bucketing timezone (issue #378 item 11). Resolved from the standard
     # config resolver by default (``[behavior] day_bucket_tz``, default US
