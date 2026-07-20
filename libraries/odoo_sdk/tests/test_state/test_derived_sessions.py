@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from odoo_sdk.state import EventRecord, LocalStateClient, session_key
-from odoo_sdk.state.db import AGENTLESS_REPO_SENTINEL
+from odoo_sdk.state.db import AGENTLESS_REPO, format_repo_label
 from tests.support import make_state_db
 
 UTC = timezone.utc
@@ -109,16 +109,20 @@ class TestTaskOnlyPartition(unittest.TestCase):
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 1)
         self.assertEqual(len(windows[0].event_ids), 2)
-        # The real repo label wins as display metadata over the repo-less sentinel.
+        # The real repo label wins as display metadata over the absent repo.
         self.assertEqual(windows[0].repo, "owner/repo")
 
-    def test_repo_less_only_session_displays_sentinel(self):
+    def test_repo_less_only_session_reports_absent_repo(self):
+        # The repo-less group must carry an ABSENT repo, never an in-band
+        # sentinel: a control character here leaks into JSON/MCP output (#508).
         state = _tmp_state()
         _event(state, ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC), repo="")
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 1)
-        self.assertEqual(windows[0].repo, AGENTLESS_REPO_SENTINEL)
+        self.assertEqual(windows[0].repo, AGENTLESS_REPO)
+        self.assertEqual(windows[0].repo, "")
+        self.assertNotIn("\x00", windows[0].repo)
 
     def test_different_tasks_same_span_stay_concurrent(self):
         # Scope guard: distinct tasks in one span are intended parallel billing.
@@ -143,18 +147,38 @@ class TestTaskOnlyPartition(unittest.TestCase):
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0].task_id, "101")
 
-    def test_repo_filter_selects_sentinel_group(self):
+    def test_repo_filter_selects_agentless_group(self):
         state = _tmp_state()
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
         _event(state, ts=base, task_ids=["101"], repo="owner/repo")
         _event(state, ts=base, task_ids=["202"], repo="")
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(
-            lo, hi, gap_secs=GAP, repo=AGENTLESS_REPO_SENTINEL
+            lo, hi, gap_secs=GAP, repo=AGENTLESS_REPO
         )
         self.assertEqual(len(windows), 1)
-        self.assertEqual(windows[0].repo, AGENTLESS_REPO_SENTINEL)
+        self.assertEqual(windows[0].repo, AGENTLESS_REPO)
         self.assertEqual(windows[0].task_id, "202")
+
+
+class TestFormatRepoLabel(unittest.TestCase):
+    """The ONE shared absent-repo display helper all consumers route through (#508)."""
+
+    def test_real_label_passes_through_unchanged(self):
+        self.assertEqual(format_repo_label("owner/repo"), "owner/repo")
+
+    def test_absent_repo_becomes_printable_stand_in(self):
+        self.assertEqual(format_repo_label(AGENTLESS_REPO), "(agent)")
+        self.assertEqual(format_repo_label(""), "(agent)")
+
+    def test_none_is_treated_as_absent(self):
+        # SessionWindow.repo is a str today, but a None from a looser caller must
+        # not render as the literal "None".
+        self.assertEqual(format_repo_label(None), "(agent)")
+
+    def test_label_is_always_printable(self):
+        for repo in ("owner/repo", AGENTLESS_REPO, None):
+            self.assertNotIn("\x00", format_repo_label(repo))
 
 
 class TestSourceAndTaskFiltering(unittest.TestCase):
@@ -508,7 +532,7 @@ class TestDerivationPrefilter(unittest.TestCase):
         # EXPLAIN QUERY PLAN must show idx_events_timestamp in use, proving the
         # prefilter turned the full-table scan into an indexed range scan.
         from odoo_sdk.state.db import (
-            AGENTLESS_REPO_SENTINEL,
+            AGENTLESS_REPO,
             _DERIVE_SESSIONS_SQL,
             _derivation_margin,
             _normalize_utc_isoformat,
@@ -521,7 +545,7 @@ class TestDerivationPrefilter(unittest.TestCase):
         hi = datetime(2026, 6, 3, tzinfo=UTC)
         margin = _derivation_margin(GAP)
         params = {
-            "sentinel": AGENTLESS_REPO_SENTINEL,
+            "agentless": AGENTLESS_REPO,
             "gap_secs": GAP,
             "start": _normalize_utc_isoformat(lo),
             "end": _normalize_utc_isoformat(hi),

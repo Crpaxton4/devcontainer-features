@@ -92,5 +92,47 @@ class TestRenderers(unittest.TestCase):
         )
 
 
+class TestAgentlessRepoExport(unittest.TestCase):
+    """Exports of repo-less (agentless) sessions (#550).
+
+    Every other export test seeds ``repo="acme/web"``, so nothing exercised the
+    derivation's absent-repo branch — which is exactly how the ``\\x00``-prefixed
+    sentinel reached serialized output unnoticed (#508). These seed ``repo=""``
+    and assert the rendered documents stay free of control characters.
+    """
+
+    def setUp(self):
+        self.db = _tmp_db()
+        _commit(self.db, 9, 0, repo="")
+        _commit(self.db, 9, 20, repo="")
+        _commit(self.db, 10, 30, repo="")
+
+    def test_markdown_export_has_no_control_characters(self):
+        text = export_markdown(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        self.assertIn("## Final Time Entries", text)
+        self.assertNotIn("\x00", text)
+
+    def test_csv_export_has_no_control_characters(self):
+        text = export_csv(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        lines = text.strip().splitlines()
+        self.assertGreater(len(lines), 1)
+        self.assertNotIn("\x00", text)
+
+    def test_derived_entries_carry_an_absent_repo(self):
+        result, _ = build_result(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        self.assertTrue(result.best_gap_entries)
+        for entry in result.best_gap_entries:
+            self.assertEqual(entry.repo, "")
+
+    def test_mixed_repo_window_still_prefers_the_real_label(self):
+        # A repo-less event alongside a labeled one must not drag the entry back
+        # to the absent repo — the real label is the display metadata.
+        _commit(self.db, 9, 40, repo="acme/web")
+        result, _ = build_result(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        repos = {entry.repo for entry in result.best_gap_entries}
+        self.assertIn("acme/web", repos)
+        self.assertNotIn("\x00", "".join(repos))
+
+
 if __name__ == "__main__":
     unittest.main()
