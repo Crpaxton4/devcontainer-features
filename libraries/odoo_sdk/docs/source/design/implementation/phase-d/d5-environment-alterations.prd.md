@@ -2,6 +2,8 @@
 
 Environment Alterations and Active/Archived Handling
 
+> **Status: partially superseded (2026-07 audit).** `with_company`, `action_archive`, and `action_unarchive` shipped on `OdooRecordset` (`src/odoo_sdk/records/recordset.py`). `with_user` never shipped — no shipped type has a `with_user` method — and `OdooEnv` itself was removed in PR #161, so both `OdooEnv.with_user` and `OdooEnv.with_company` have no subject. `sudo()` is excluded, but not by raising `NotImplementedError`: no `sudo` attribute exists, so `.sudo()` is looked up as a model field by `OdooRecordset.__getattr__` and raises `AttributeError`. The docstring in `examples/general/environment_alterations.py` still advertises `with_user` and is stale.
+
 # Goal
 
 ## Problem

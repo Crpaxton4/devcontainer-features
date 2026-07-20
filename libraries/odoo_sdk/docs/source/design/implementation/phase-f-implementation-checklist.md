@@ -1,5 +1,7 @@
 # Phase F Implementation Checklist
 
+> **Status: never implemented (2026-07 audit).** No part of Phase F shipped. There is no `OdooModelRegistry`, `ModelSchema`, or `FieldSchema` anywhere in `src/odoo_sdk/`, and no `ir.model` / `ir.model.fields` reflection path. The only metadata layer that shipped is the Phase B `MetadataCache` over `fields_get` (`src/odoo_sdk/env/metadata_cache.py`), which this phase was meant to sit beside. `OdooEnv`, which every Phase F surface below hangs off, was itself removed in PR #161. Retained as a record of the original Phase F plan.
+
 ## Objective
 
 Introduce runtime model reflection by querying `ir.model` and `ir.model.fields` on the connected Odoo instance. Phase F adds an `OdooModelRegistry` that caches schema information (model names, field definitions, types, constraints) and integrates into `OdooEnv`. Discovery is lazy by default and always synchronous.

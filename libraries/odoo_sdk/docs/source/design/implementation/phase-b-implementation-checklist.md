@@ -1,5 +1,7 @@
 # Phase B Implementation Checklist
 
+> **Status: partially superseded (2026-07 audit).** Every Phase B deliverable shipped, but the compatibility-wiring items (B5) have no subject: `OdooModel` and `OdooQuery` are absent from `src/odoo_sdk/`. The package is named `odoo_sdk`, not `odoo_service`, and validation now runs in GitHub Actions rather than local tooling only.
+
 ## Objective
 
 Implement the minimum growth-phase changes needed to make recordsets useful beyond identity and transport delegation by adding metadata caching, field adaptation, x2many command helpers, explicit error mapping, and local integration checks.

@@ -2,6 +2,8 @@
 
 DomainExpression Canonical Domain Boundary
 
+> **Status: accurate, with corrections (2026-07 audit).** `DomainExpression` shipped and is the single normalization and serialization boundary (`src/odoo_sdk/query/domain.py`); unlike the Phase A export decision recorded in A6, it is now a supported public export. One requirement below no longer has a subject: `OdooModel` and `OdooQuery` are absent from the shipped SDK, so only `OdooRecordset` routes through the canonical path.
+
 # Goal
 
 ## Problem

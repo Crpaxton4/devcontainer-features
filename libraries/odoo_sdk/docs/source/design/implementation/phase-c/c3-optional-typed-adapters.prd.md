@@ -2,6 +2,8 @@
 
 Optional Typed Adapters for Stable Internal Models
 
+> **Status: never implemented (2026-07 audit).** No part of Phase C shipped. `src/odoo_sdk/` contains no plugin contract, plugin registry, typed-adapter layer, or execution-policy seam for tracing, retry, timeout, or telemetry, and there is no async facade. The `adapters/` package is unrelated to this phase: it holds `state_persistence.py` and `external_sync.py` for the task-tracker. Retained as a record of the original Phase C plan. The later Phase G type system, which would have subsumed this, also never shipped.
+
 # Goal
 
 ## Problem

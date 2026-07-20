@@ -1,5 +1,7 @@
 # Phase E JSON-2 Transport Contract
 
+> **Status: partially superseded (2026-07 audit).** The transport half of this contract shipped: `OdooJson2Executor`, the HTTP error mapping (`src/odoo_sdk/transport/_http_error_mapping.py`), and the `transport` / `api_key` settings. The two JSON-2-only client capabilities it scopes — API key management (E4) and the version endpoint (E5) — never shipped.
+
 ## Purpose
 
 This contract is the implementation baseline for Phase E.

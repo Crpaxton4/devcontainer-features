@@ -2,6 +2,8 @@
 
 OdooJson2Executor — JSON-2 HTTP Transport
 
+> **Status: accurate, with one addition (2026-07 audit).** `OdooJson2Executor` shipped as described (`src/odoo_sdk/transport/json2.py`). The constructor takes one parameter not listed below — `timeout: float`, defaulted from `odoo_sdk.state.config.DEFAULT_TIMEOUT_SECONDS` so the settings layer and both transports share one number by reference.
+
 # Goal
 
 ## Problem

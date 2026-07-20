@@ -2,6 +2,8 @@
 
 Aggregation and GroupBy — `_read_group`
 
+> **Status: partially superseded (2026-07 audit).** `OdooRecordset._read_group` shipped with the signature below (`src/odoo_sdk/records/recordset.py`), but it calls Odoo's *public* `read_group` XML-RPC method, not the internal `_read_group` ORM method, which is not reachable over XML-RPC. Consequently `having` is **not** supported: a non-empty `having` domain raises `NotImplementedError`. The granularity and aggregator specifiers listed below are passed through to the server rather than validated client-side, so the supported set is the server's, not the SDK's.
+
 # Goal
 
 ## Problem

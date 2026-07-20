@@ -2,6 +2,8 @@
 
 Phase A Guardrails and Architectural Contract
 
+> **Status: superseded (2026-07 audit).** The preserved-surface list below does not describe the shipped SDK. `OdooModel`, `OdooQuery`, and `CommandDispatcher` are absent from `src/odoo_sdk/`, and `OdooEnv` was removed as superseded and un-exported (PR #161). What survived is a recordset-first core: `OdooClient` as facade, `DomainExpression` as the single domain boundary, `OdooRecordset` as the identity-bearing centre, plus the `Command`/`Registry` command layer and the transport executors — see `src/odoo_sdk/__init__.py`. The package is named `odoo_sdk`, not `odoo_service`.
+
 # Goal
 
 ## Problem

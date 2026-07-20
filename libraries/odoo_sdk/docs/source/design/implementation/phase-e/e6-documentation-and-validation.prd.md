@@ -2,6 +2,8 @@
 
 Phase E Documentation and Validation
 
+> **Status: partially superseded (2026-07 audit).** `OdooJson2Executor` is exported from `src/odoo_sdk/__init__.py`. The rest did not happen: there is no JSON-2 example script and no API key example under `examples/` (the API key methods themselves never shipped — see E4), no cross-transport smoke test, and the architecture plan lives at `docs/source/design/odoo-sdk-architecture-plan.md`, not the flat path assumed here.
+
 # Goal
 
 ## Problem
