@@ -8,6 +8,7 @@ on:
       - 'libraries/odoo_sdk/src/**'
       - 'libraries/odoo_sdk/tests/**'
       - 'libraries/odoo_sdk/pyproject.toml'
+      - 'libraries/odoo_sdk/uv.lock'
       - 'libraries/odoo_sdk/tools/**'
       - 'libraries/odoo_sdk/cosmic-ray*.toml'
       - '.github/workflows/odoo-sdk-quality.yaml'
@@ -16,6 +17,7 @@ on:
       - 'libraries/odoo_sdk/src/**'
       - 'libraries/odoo_sdk/tests/**'
       - 'libraries/odoo_sdk/pyproject.toml'
+      - 'libraries/odoo_sdk/uv.lock'
       - 'libraries/odoo_sdk/tools/**'
       - 'libraries/odoo_sdk/cosmic-ray*.toml'
       - '.github/workflows/odoo-sdk-quality.yaml'
@@ -36,6 +38,9 @@ jobs:
         with:
           python-version: "3.13"
           enable-cache: true
+
+      - name: Check uv.lock is up to date
+        run: uv lock --check
 
       - name: Install test dependencies
         run: uv sync --group test
