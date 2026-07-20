@@ -11,8 +11,9 @@
 # every event carries `hook_event_name`, `session_id`, `cwd`; PreToolUse/
 # PostToolUse also carry `tool_name` and `tool_input`; Subagent* carry
 # `agent_type`/`agent_id`). This shim extracts a compact subject and forwards a
-# trimmed payload to the SDK, which resolves the current project's local state
-# DB from cwd and appends one row to its `events` table.
+# trimmed payload to the SDK, which resolves the HOST-provisioned CENTRAL tracker
+# DB (#369 — one DB shared by every project, located via ODOO_TASK_TRACKER_DIR)
+# and appends one row to its `events` table.
 #
 # CONTRACT — this must never disrupt a Claude Code session:
 #   * ALWAYS exit 0 (a nonzero exit, or exit 2 with stderr, is interpreted by
@@ -23,7 +24,7 @@
 #   * No-op cleanly when `odoo-sdk` is not installed (e.g. Python <3.10 images).
 #   * Bounded runtime so a slow/hung DB can't stall the agent.
 #
-# PreToolUse for `mcp__odoo__*` tools is skipped: the odoo-sdk MCP server
+# PreToolUse for `mcp__odoo-sdk__*` tools is skipped: the odoo-sdk MCP server
 # already logs those dispatches server-side (#326/#340), so logging them here
 # too would double-count them.
 
@@ -52,19 +53,24 @@ HAVE_JQ=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 
 # tool_name is only meaningful for the tool-call events; pull it out once so we
-# can both build the subject and enforce the mcp__odoo__* exclusion.
+# can both build the subject and enforce the mcp__odoo-sdk__* exclusion.
 TOOL_NAME=""
 if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
     TOOL_NAME="$(printf '%s' "$STDIN_JSON" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 fi
 
 # The odoo-sdk MCP server logs its own tool dispatches server-side (#326/#340).
-# Skipping PreToolUse for those tools here avoids double-logging. Matched on the
-# `mcp__odoo__` prefix (belt-and-braces alongside the settings.json matcher).
+# Skipping PreToolUse for those tools here avoids double-logging. install.sh
+# registers the server under the key `odoo-sdk`, and Claude Code namespaces MCP
+# tools as `mcp__<server-key>__<tool>` with the key's hyphens PRESERVED, so the
+# real tool names are `mcp__odoo-sdk__*` — matching on `mcp__odoo__*` (the
+# pre-#529 glob) never fired and every odoo call was double-counted. Keep this
+# prefix in lockstep with the `claude mcp add ... odoo-sdk` key in install.sh.
+# Belt-and-braces alongside the settings.json matcher, which matches all tools.
 case "$HOOK_NAME" in
     PreToolUse|PostToolUse)
         case "$TOOL_NAME" in
-            mcp__odoo__*) exit 0 ;;
+            mcp__odoo-sdk__*) exit 0 ;;
         esac
         ;;
 esac
@@ -95,9 +101,13 @@ if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
         2>/dev/null || true)"
 fi
 
-# Assemble args. `--attach-active-run` associates the event with the active FSM
-# run's task id when one exists in this project (issue #327 open question 1),
-# falling back to untargeted otherwise.
+# Assemble args. `--attach-active-run` associates the event with the task id of
+# EVERY non-stale active FSM run in the central tracker DB (issue #327 open
+# question 1), falling back to untargeted when there is none. Attribution is
+# CROSS-PROJECT, not per-project: since #388 the DB is shared by every project
+# and the flag applies no repo filter, so a hook firing in project A attaches to
+# an active run started in project B. That is the SDK's intended behaviour —
+# do not describe this as scoped to the current project.
 set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
 [ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
 [ -n "$PAYLOAD" ] && set -- "$@" --payload "$PAYLOAD"

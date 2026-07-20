@@ -176,6 +176,143 @@ class TestOdooJson2ExecutorRequest(unittest.TestCase):
         self.assertEqual(body["context"], {})
 
 
+class TestOdooJson2ExecutorPositionalArguments(unittest.TestCase):
+    """Cover the positional-to-named body conversion JSON-2 requires.
+
+    Every recordset op calls the executor with the XML-RPC positional convention,
+    so each case asserts the emitted body shape for one such call.
+    """
+
+    def _body_for(self, model: str, method: str, *args, **kwargs) -> dict:
+        """Return the JSON body the executor emits for one positional call."""
+        with patch("odoo_sdk.transport.json2.urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = _make_response([])
+            ex = OdooJson2Executor("https://example.com", "mydb", "key")
+            ex.execute(model, method, *args, **kwargs)
+            return json.loads(mock_urlopen.call_args[0][0].data)
+
+    def test_write_keeps_ids_and_names_vals(self) -> None:
+        body = self._body_for("res.partner", "write", [1, 2], {"name": "Bob"})
+        self.assertEqual(body["ids"], [1, 2])
+        self.assertEqual(body["vals"], {"name": "Bob"})
+
+    def test_create_names_vals_list_not_ids(self) -> None:
+        body = self._body_for("res.partner", "create", {"name": "Acme"})
+        self.assertEqual(body["vals_list"], {"name": "Acme"})
+        self.assertNotIn("ids", body)
+
+    def test_search_names_domain_not_ids(self) -> None:
+        body = self._body_for("res.partner", "search", [["name", "=", "Bob"]])
+        self.assertEqual(body["domain"], [["name", "=", "Bob"]])
+        self.assertNotIn("ids", body)
+
+    def test_search_read_names_domain_and_fields(self) -> None:
+        body = self._body_for(
+            "res.partner", "search_read", [["active", "=", True]], ["name"]
+        )
+        self.assertEqual(body["domain"], [["active", "=", True]])
+        self.assertEqual(body["fields"], ["name"])
+        self.assertNotIn("ids", body)
+
+    def test_search_count_names_domain(self) -> None:
+        body = self._body_for("res.partner", "search_count", [["active", "=", True]])
+        self.assertEqual(body["domain"], [["active", "=", True]])
+        self.assertNotIn("ids", body)
+
+    def test_read_group_names_domain_fields_and_groupby(self) -> None:
+        body = self._body_for(
+            "account.analytic.line",
+            "read_group",
+            [["task_id", "=", 7]],
+            ["unit_amount:sum"],
+            ["date:day"],
+            lazy=False,
+        )
+        self.assertEqual(body["domain"], [["task_id", "=", 7]])
+        self.assertEqual(body["fields"], ["unit_amount:sum"])
+        self.assertEqual(body["groupby"], ["date:day"])
+        self.assertIs(body["lazy"], False)
+        self.assertNotIn("ids", body)
+
+    def test_name_search_names_all_four_positionals(self) -> None:
+        body = self._body_for(
+            "project.project",
+            "name_search",
+            "Acme",
+            [["active", "=", True]],
+            "ilike",
+            5,
+        )
+        self.assertEqual(body["name"], "Acme")
+        self.assertEqual(body["domain"], [["active", "=", True]])
+        self.assertEqual(body["operator"], "ilike")
+        self.assertEqual(body["limit"], 5)
+        self.assertNotIn("ids", body)
+
+    def test_name_create_names_name(self) -> None:
+        body = self._body_for("res.partner", "name_create", "Acme")
+        self.assertEqual(body["name"], "Acme")
+        self.assertNotIn("ids", body)
+
+    def test_default_get_names_fields_list(self) -> None:
+        body = self._body_for("project.task", "default_get", ["stage_id"])
+        self.assertEqual(body["fields_list"], ["stage_id"])
+        self.assertNotIn("ids", body)
+
+    def test_fields_get_names_allfields_and_attributes(self) -> None:
+        body = self._body_for("mail.mail", "fields_get", ["state"], ["type"])
+        self.assertEqual(body["allfields"], ["state"])
+        self.assertEqual(body["attributes"], ["type"])
+        self.assertNotIn("ids", body)
+
+    def test_copy_keeps_ids_and_names_default(self) -> None:
+        body = self._body_for("project.task", "copy", 7, {"name": "Clone"})
+        self.assertEqual(body["ids"], 7)
+        self.assertEqual(body["default"], {"name": "Clone"})
+
+    def test_read_keeps_ids_and_names_fields(self) -> None:
+        body = self._body_for("res.partner", "read", [1, 2], ["name"])
+        self.assertEqual(body["ids"], [1, 2])
+        self.assertEqual(body["fields"], ["name"])
+
+    def test_get_metadata_keeps_ids(self) -> None:
+        body = self._body_for("project.task", "get_metadata", [4])
+        self.assertEqual(body["ids"], [4])
+
+    def test_unmapped_method_keeps_leading_ids(self) -> None:
+        body = self._body_for("project.task", "message_post", [9], body="hello")
+        self.assertEqual(body["ids"], [9])
+        self.assertEqual(body["body"], "hello")
+
+    def test_keyword_argument_wins_over_positional_of_same_name(self) -> None:
+        body = self._body_for("res.partner", "search", [["a", "=", 1]], domain=[])
+        self.assertEqual(body["domain"], [])
+
+    def test_context_is_still_extracted_from_positional_call(self) -> None:
+        body = self._body_for(
+            "res.partner", "write", [1], {"name": "Bob"}, context={"lang": "en_US"}
+        )
+        self.assertEqual(body["context"], {"lang": "en_US"})
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_excess_positional_args_raise_transport_error(
+        self, mock_urlopen: Mock
+    ) -> None:
+        mock_urlopen.return_value = _make_response([])
+        ex = OdooJson2Executor("https://example.com", "mydb", "key")
+        with self.assertRaises(OdooTransportError) as caught:
+            ex.execute("res.partner", "write", [1], {"name": "Bob"}, "extra")
+        self.assertIn("positional", str(caught.exception).lower())
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_excess_positional_args_send_no_request(self, mock_urlopen: Mock) -> None:
+        mock_urlopen.return_value = _make_response([])
+        ex = OdooJson2Executor("https://example.com", "mydb", "key")
+        with self.assertRaises(OdooTransportError):
+            ex.execute("project.task", "message_post", [9], "body-as-positional")
+        mock_urlopen.assert_not_called()
+
+
 class TestOdooJson2ExecutorSuccess(unittest.TestCase):
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
     def test_200_returns_parsed_json_value(self, mock_urlopen: Mock) -> None:

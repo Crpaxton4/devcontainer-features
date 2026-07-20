@@ -72,10 +72,56 @@ class TestRenderCsv(unittest.TestCase):
         )
         self.assertEqual(len(rows), len(result.best_gap_entries))
 
+    def test_columns_odoo_populates_itself_are_absent(self):
+        # Odoo derives project, company, UoM and the SO line from the task on
+        # ``account.analytic.line`` create, so emitting them is a no-op at best
+        # and a wrong attribution at worst (#498).
+        for dropped in (
+            "Project/ID",
+            "Company/ID",
+            "Unit of Measure/ID",
+            "Sales Order Item/ID",
+        ):
+            self.assertNotIn(dropped, CSV_COLUMNS)
+
+    def test_task_id_header_spelling_is_unchanged(self):
+        # ``Task/ID`` vs ``Task/.id`` is unconfirmed against a live import and
+        # is deliberately left alone; pin it so it is not changed by accident.
+        self.assertIn("Task/ID", CSV_COLUMNS)
+        self.assertNotIn("Task/.id", CSV_COLUMNS)
+
     def test_numeric_task_id_preserved_non_numeric_blank(self):
         result, cfg = _result()
+        numeric = entry_to_csv_row(result.best_gap_entries[0], cfg)
+        self.assertEqual(numeric["Task/ID"], "101")
+
+        entry = result.best_gap_entries[0]
+        entry.task_id = "not-an-id"
+        self.assertEqual(entry_to_csv_row(entry, cfg)["Task/ID"], "")
+
+    def test_employee_id_defaults_to_blank_not_a_captured_constant(self):
+        result, cfg = _result()
+        self.assertIsNone(cfg.odoo_employee_id)
         row = entry_to_csv_row(result.best_gap_entries[0], cfg)
-        self.assertEqual(row["Employee/ID"], cfg.odoo_employee_id)
+        self.assertEqual(row["Employee/ID"], "")
+
+    def test_employee_id_resolved_at_render_time_wins(self):
+        result, cfg = _result()
+        row = entry_to_csv_row(result.best_gap_entries[0], cfg, None, 7)
+        self.assertEqual(row["Employee/ID"], 7)
+
+    def test_render_stamps_resolved_employee_on_every_row(self):
+        result, cfg = _result()
+        text = render_odoo_csv(result, cfg, employee_id=7)
+        rows = list(csv.DictReader(io.StringIO(text)))
+        self.assertTrue(rows)
+        self.assertTrue(all(r["Employee/ID"] == "7" for r in rows))
+
+    def test_config_override_used_when_no_render_time_id(self):
+        result, cfg = _result()
+        cfg.odoo_employee_id = 12
+        row = entry_to_csv_row(result.best_gap_entries[0], cfg)
+        self.assertEqual(row["Employee/ID"], 12)
 
     def test_description_override_by_index(self):
         result, cfg = _result()
