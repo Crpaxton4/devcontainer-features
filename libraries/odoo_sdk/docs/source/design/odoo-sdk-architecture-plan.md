@@ -39,9 +39,9 @@
 - [System Architecture](#system-architecture)
 - [Scalability Roadmap](#scalability-roadmap)
 - [Existing System Review](#existing-system-review)
-- [Best Practices & Patterns](#best-practices--patterns)
+- [Best Practices and Patterns](#best-practices-and-patterns)
 - [Security Architecture](#security-architecture)
-- [Risks & Mitigations](#risks--mitigations)
+- [Risks and Mitigations](#risks-and-mitigations)
 - [Architecture Decision Records](#architecture-decision-records)
 - [Next Steps](#next-steps)
 
@@ -650,7 +650,7 @@ Replace or reposition
 - Replace raw record dictionaries as the default high-level abstraction with recordsets.
 - Reposition `CommandDispatcher` as optional integration support rather than core ORM surface.
 
-## Best Practices & Patterns
+## Best Practices and Patterns
 > Tailored recommendations for this specific project.
 
 Focused pattern guidance
@@ -710,7 +710,7 @@ Data handling
 - Cache field metadata freely, but treat record payload caching conservatively until invalidation semantics are clear.
 - Avoid storing sensitive record data beyond process memory unless there is a clear use case and invalidation strategy.
 
-## Risks & Mitigations
+## Risks and Mitigations
 > Top risks with mitigation strategies and owners.
 
 | Risk | Impact | Mitigation | Suggested owner |
