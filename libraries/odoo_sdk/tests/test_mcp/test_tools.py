@@ -472,12 +472,18 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertIn(["git", "checkout", "main"], called)
         self.assertIn(["git", "branch", "-D", "10#fix"], called)
 
-    def test_rolls_back_and_reraises_typed_already_running(self):
+    def test_keeps_branch_and_reraises_typed_already_running(self):
         # Raise-based error contract (#223): the epic-C start command raises the
-        # typed ``TaskAlreadyRunningError`` when the task is already tracked. The
-        # composition tool must roll back the branch created this run AND let the
-        # *typed* exception propagate unchanged (for the #222 boundary to format)
-        # — it must not be caught and swallowed into a passthrough error dict.
+        # typed ``TaskAlreadyRunningError`` when the task is already tracked, and
+        # the composition tool must let the *typed* exception propagate unchanged
+        # (for the #222 boundary to format) — it must not be caught and swallowed
+        # into a passthrough error dict.
+        # Unlike every other failure, this one is *not* rolled back (#478):
+        # attaching to a session that is already RUNNING means development
+        # continues, so the task branch created this run has to stay. Deleting it
+        # here is what made branch setup look silently skipped whenever a session
+        # was already running. See ``test_start_task_branch_setup`` for the
+        # positive assertions on the branch surviving.
         from odoo_sdk.state import TaskAlreadyRunningError
 
         def _boom(**kw):
@@ -498,8 +504,9 @@ class TestStartTaskTool(unittest.TestCase):
             with self.assertRaises(TaskAlreadyRunningError):
                 _run(tool("Fix", ctx))
         called = [c.args[0] for c in sp.run.call_args_list]
-        self.assertIn(["git", "checkout", "main"], called)
-        self.assertIn(["git", "branch", "-D", "10#fix"], called)
+        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], called)
+        self.assertNotIn(["git", "checkout", "main"], called)
+        self.assertNotIn(["git", "branch", "-D", "10#fix"], called)
 
     def test_no_rollback_when_no_branch_created(self):
         # #164: when already on the task branch, no branch is created this run,
