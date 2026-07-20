@@ -21,6 +21,47 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # release-please bumps [project].version in pyproject.toml via its `toml`
+      # extra-files updater, but it has no awareness of uv.lock, which also
+      # records the workspace member's own version. Left alone, the release PR
+      # would land with a lock file one version behind, failing `uv lock --check`
+      # on main the moment it merges. Re-lock on the release PR's own branch so
+      # it merges with a lock that's already in sync.
+      - name: "Check out release PR branch"
+        if: ${{ steps.release.outputs.pr }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+
+      - name: "Set up uv"
+        if: ${{ steps.release.outputs.pr }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: "Sync uv.lock with release-please's version bump"
+        if: ${{ steps.release.outputs.pr }}
+        working-directory: libraries/odoo_sdk
+        run: uv lock
+
+      - name: "Commit and push uv.lock if it changed"
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config --global user.email github-actions[bot]@users.noreply.github.com
+          git config --global user.name github-actions[bot]
+          git add libraries/odoo_sdk/uv.lock
+          # Skip when there is nothing staged; otherwise a failed commit aborts under `set -e`.
+          if git diff --cached --quiet; then
+              echo "uv.lock already in sync with pyproject.toml; nothing to commit."
+          else
+              git commit -m "chore(deps): sync uv.lock with release-please version bump"
+              git push origin HEAD:${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          fi
+
   publish-devcontainer:
     needs: release-please
     if: needs.release-please.outputs.releases_created == 'true'
