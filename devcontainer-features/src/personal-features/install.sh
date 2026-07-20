@@ -66,8 +66,6 @@ retry() {
     done
 }
 
-CLAUDE_HOME="/usr/local/share/claude-home"
-
 # Create the fixed container-side paths that the containerEnv vars point at and
 # that the bind mounts overlay at runtime. Creating them here means the feature
 # still works in test containers where no bind mounts are active (e.g. the
@@ -287,7 +285,7 @@ fi
 # --- Claude Code integrations: MCP server + mempalace plugin (#486, #484) ----
 # sync-claude-mcp registers the odoo-mcp MCP server and the mempalace plugin at
 # user scope. Installed to /usr/local/bin and run at container-create time
-# (postCreateCommand), NOT here: $CLAUDE_HOME is shadowed at runtime by the
+# (postCreateCommand), NOT here: $CLAUDE_CONFIG_DIR is shadowed at runtime by the
 # feature's bind mount of the host's ~/.claude, so a registration written during
 # the image build is discarded the moment the mount goes live. That is why the
 # previous build-time `claude mcp add` never showed up in the persisted config
@@ -328,13 +326,21 @@ fi
 # mempalace ships its Claude Code hooks (Stop/SessionEnd/PreCompact) as a
 # plugin; without this registration the palace is installed and on PATH but
 # nothing ever mines into it (#484).
+#
+# #484 flagged "does `claude plugin install` work non-interactively at build
+# time?" as unverified. It now IS verified, and the answer is: only if a
+# marketplace publishing mempalace is already configured. On a host whose
+# ~/.claude has one (the mount makes it available here), this installs; on a
+# bare CI runner it fails with "not found in any configured marketplace". That
+# is a host-config precondition this Feature cannot satisfy for the user, so it
+# stays best-effort and says so rather than failing container create.
 if command -v mempalace >/dev/null 2>&1; then
     if claude plugin list 2>/dev/null | grep -q mempalace; then
         echo "sync-claude-mcp: plugin 'mempalace' is already installed"
     elif claude plugin install --scope user mempalace; then
         echo "sync-claude-mcp: installed plugin 'mempalace'"
     else
-        echo "WARNING: sync-claude-mcp: failed to install the 'mempalace' plugin" >&2
+        echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
     fi
 fi
 EOF
@@ -354,11 +360,18 @@ chmod 0755 /usr/local/bin/sync-claude-mcp
 # instead and persist the answer into an env file every shell sources (below).
 MEMPAL_ENV_FILE=/usr/local/share/personal-features/mempal-dir.sh
 mkdir -p "$(dirname "$MEMPAL_ENV_FILE")"
-# Pre-create it owned by the remote user: postCreateCommand runs as that user,
-# who cannot otherwise write under /usr/local/share.
+# Pre-create it here and make it writable by ANY uid in the container, for the
+# same reason shell-history is mode 0777 (see persisted-paths.tsv): install.sh
+# cannot know which user will run postCreateCommand. $_REMOTE_USER is the
+# feature's best guess, but the dev container CLI runs lifecycle commands as the
+# image's remoteUser, which is frequently a different account (root at build
+# time vs `node` at create time on the javascript-node base image) - a chown to
+# the wrong one makes the resolver's write fail and, because it fails loudly by
+# design, takes container create down with it. The file holds one directory
+# path, no secret. Only the file needs to be writable: `>` truncates in place
+# and never needs write permission on the parent directory.
 : > "$MEMPAL_ENV_FILE"
-chown "$_REMOTE_USER" "$MEMPAL_ENV_FILE"
-chmod 0644 "$MEMPAL_ENV_FILE"
+chmod 0666 "$MEMPAL_ENV_FILE"
 
 cat > /usr/local/bin/resolve-mempal-dir << 'EOF'
 #!/bin/sh
@@ -406,7 +419,7 @@ fi
 # would keep sourcing the stale/empty value and mine nothing, quietly.
 if ! printf "export MEMPAL_DIR='%s'\n" "$RESOLVED" > "$ENV_FILE"; then
     echo "ERROR: resolve-mempal-dir resolved MEMPAL_DIR=$RESOLVED but could not write $ENV_FILE." >&2
-    echo "Without it no shell picks the value up and mempalace mines nothing. Check the file's ownership (install.sh chowns it to the remote user)." >&2
+    echo "Without it no shell picks the value up and mempalace mines nothing. install.sh pre-creates the file mode 0666 precisely so any lifecycle user can write it; check that it still exists and is writable." >&2
     exit 1
 fi
 echo "resolve-mempal-dir: MEMPAL_DIR=$RESOLVED"
