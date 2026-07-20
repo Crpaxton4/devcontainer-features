@@ -8,22 +8,27 @@ from odoo_sdk.utilities.env import assert_odoo_devcontainer
 
 @builtin_command
 class ResumeTaskCommand(Command):
-    """Resume a task session that is AWAITING_ANSWERS, transitioning it back to RUNNING.
+    """Resume a paused task session back to RUNNING.
 
-    The transition is the whole command: no chatter note is posted (#505). The
-    former fixed ``"Resuming implementation with received answers."`` marker
-    carried no information the event row does not already record, and its
-    unguarded post could raise after the state had already moved to RUNNING.
+    Two predecessors resume (#504): an ``AWAITING_ANSWERS`` session (after
+    stakeholder answers arrive) and a ``STOPPED`` session (work continues after a
+    stop) — the stopped run is reopened in place, preserving its original start so
+    one effort stays one run. The transition is the whole command: no chatter note
+    is posted (#505). The former fixed ``"Resuming implementation with received
+    answers."`` marker carried no information the event row does not already
+    record, and its unguarded post could raise after the state had already moved
+    to RUNNING.
     """
 
     _name = "resume_task"
     _description = (
-        "Resume an AWAITING_ANSWERS task session after receiving stakeholder answers. "
-        "Transitions the session back to RUNNING."
+        "Resume a paused task session back to RUNNING — either after receiving "
+        "stakeholder answers (AWAITING_ANSWERS) or to continue a stopped session "
+        "(STOPPED), which is reopened in place rather than started anew."
     )
 
     def execute(self, task_id: int) -> dict[str, Any]:
-        """Transition task from AWAITING_ANSWERS to RUNNING.
+        """Transition a task from AWAITING_ANSWERS or STOPPED to RUNNING.
 
         :param task_id: Odoo project.task record id.
         :return: Confirmation with task name and resumed_at timestamp.

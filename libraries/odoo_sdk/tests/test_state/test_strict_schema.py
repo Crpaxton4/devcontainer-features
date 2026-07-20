@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The v1 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
+#: after #452 but before #504 added the ``CLOSED`` state. Derived from the current
+#: canonical DDL by dropping the ``CLOSED`` literal so it can never drift from the
+#: real prior shape (STRICT tables, old three-state task_runs CHECK).
+_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+
 _TS = "2026-07-17T12:00:00+00:00"
 
 
@@ -140,6 +146,30 @@ class TestWriteTimeValidation(unittest.TestCase):
             self.conn.execute(
                 "INSERT INTO session_uploads (session_key, timesheet_id, hours, "
                 "uploaded_at) VALUES ('s', 1, 1.0, 'nope')"
+            )
+
+    def test_closed_state_accepted_on_write(self):
+        # The terminal CLOSED state passes the widened task_runs CHECK (#504).
+        self.conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (1, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+            (_TS,),
+        )
+        self.conn.commit()
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT state FROM task_runs WHERE task_id = 1"
+            ).fetchone()[0],
+            "CLOSED",
+        )
+
+    def test_unknown_state_still_rejected_on_write(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute(
+                "INSERT INTO task_runs (task_id, task_name, project_id, "
+                "project_name, state, started_at, notes) "
+                "VALUES (1, 'T', 1, 'P', 'BOGUS', ?, '[]')",
+                (_TS,),
             )
 
     def test_valid_rows_still_insert(self):
@@ -336,6 +366,87 @@ class TestMigrationAbort(unittest.TestCase):
         with self.assertRaises(SchemaMigrationError) as ctx:
             migrate_schema(conn)
         self.assertIn("invalid state", str(ctx.exception))
+
+
+class TestClosedStateMigration(unittest.TestCase):
+    """A v1 STRICT DB gains CLOSED via a task_runs-only rebuild (#504).
+
+    Unlike the #452 rebuild (which had to remake every table for STRICT), the
+    #504 bump only widens ``task_runs``' CHECK, so only that table is stale — the
+    other three STRICT tables are already current and are left untouched.
+    """
+
+    def _v1_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(_V1_DDL)
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'STOPPED', ?, '[]')",
+            (_TS,),
+        )
+        # Stamp the version the STRICT-but-pre-CLOSED schema shipped with, so
+        # migrate_schema actually runs instead of early-returning.
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        return conn
+
+    def test_v1_is_strict_but_rejects_closed(self):
+        conn = self._v1_conn()
+        self.assertTrue(_is_strict(conn, "task_runs"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO task_runs (task_id, task_name, project_id, "
+                "project_name, state, started_at, notes) "
+                "VALUES (6, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+                (_TS,),
+            )
+
+    def test_only_task_runs_is_stale(self):
+        from odoo_sdk.state.db import _stale_tables
+
+        conn = self._v1_conn()
+        self.assertEqual(_stale_tables(conn), ["task_runs"])
+
+    def test_migrate_widens_check_and_preserves_rows(self):
+        conn = self._v1_conn()
+        migrate_schema(conn)
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_runs'"
+        ).fetchone()[0]
+        self.assertIn("CLOSED", sql)
+        # The pre-existing STOPPED row (id included) survives the rebuild.
+        self.assertEqual(
+            conn.execute("SELECT id, task_id, state FROM task_runs").fetchall(),
+            [(1, 5, "STOPPED")],
+        )
+        # The widened CHECK now admits a CLOSED write that was rejected at v1.
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (6, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+            (_TS,),
+        )
+
+    def test_create_schema_stamps_v2_from_v1(self):
+        conn = self._v1_conn()
+        create_schema(conn)
+        self.assertEqual(
+            conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
+
+    def test_migrated_v1_matches_fresh_schema(self):
+        migrated = self._v1_conn()
+        create_schema(migrated)
+        fresh = sqlite3.connect(":memory:")
+        create_schema(fresh)
+
+        def objects(conn):
+            return sorted(
+                conn.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master"
+                ).fetchall()
+            )
+
+        self.assertEqual(objects(migrated), objects(fresh))
 
 
 if __name__ == "__main__":

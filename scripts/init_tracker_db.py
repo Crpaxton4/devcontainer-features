@@ -33,8 +33,9 @@ import sys
 from pathlib import Path
 
 #: Verbatim copy of ``odoo_sdk.state.db.SCHEMA_VERSION`` — the ``PRAGMA
-#: user_version`` marker that tells an old-shape DB (``0``) from a current one.
-SCHEMA_VERSION = 1
+#: user_version`` marker that tells an out-of-date DB from a current one. ``2``
+#: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504).
+SCHEMA_VERSION = 2
 
 # VERBATIM copy of odoo_sdk.state.db.SCHEMA_DDL — kept identical by the parity
 # test noted in the module docstring. Do not edit one without the other.
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     task_name    TEXT    NOT NULL,
     project_id   INTEGER NOT NULL,
     project_name TEXT    NOT NULL,
-    state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')),
+    state        TEXT    NOT NULL CHECK(state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED', 'CLOSED')),
     started_at   TEXT    NOT NULL CHECK(datetime(started_at) IS NOT NULL),
     stopped_at   TEXT             CHECK(stopped_at IS NULL OR datetime(stopped_at) IS NOT NULL),
     timesheet_id INTEGER,
@@ -93,6 +94,16 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 # cannot drift even though the code is duplicated.
 _MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
 
+# Mirror of odoo_sdk.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
+# absence from a table's stored DDL means it predates a schema change and must be
+# rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504).
+_REQUIRED_TABLE_MARKERS = {
+    "task_runs": ("STRICT", "CLOSED"),
+    "settings": ("STRICT",),
+    "events": ("STRICT",),
+    "session_uploads": ("STRICT",),
+}
+
 _ROW_VALIDATIONS = {
     "events": (
         ("datetime(timestamp) IS NULL", "invalid timestamp"),
@@ -103,7 +114,10 @@ _ROW_VALIDATIONS = {
         ("stopped_at IS NOT NULL AND datetime(stopped_at) IS NULL", "invalid stopped_at"),
         ("aborted_at IS NOT NULL AND datetime(aborted_at) IS NULL", "invalid aborted_at"),
         ("NOT json_valid(notes)", "invalid notes JSON"),
-        ("state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')", "invalid state"),
+        (
+            "state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED', 'CLOSED')",
+            "invalid state",
+        ),
     ),
     "session_uploads": (
         ("datetime(uploaded_at) IS NULL", "invalid uploaded_at"),
@@ -159,14 +173,22 @@ def _invalid_rows(conn, table):
 
 
 def _stale_tables(conn):
-    """Return the existing tables still on the pre-STRICT schema, in fixed order."""
+    """Return the existing tables whose DDL predates the current schema.
+
+    Mirror of ``odoo_sdk.state.db._stale_tables``: a table is stale when its
+    stored DDL is missing any of its :data:`_REQUIRED_TABLE_MARKERS` (pre-STRICT,
+    #452, or a pre-CLOSED task_runs CHECK, #504). Missing tables are skipped.
+    """
     stale = []
     for table in _MIGRATION_TABLES:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
             (table,),
         ).fetchone()
-        if row is not None and "STRICT" not in row[0].upper():
+        if row is None:
+            continue
+        sql = row[0].upper()
+        if any(marker not in sql for marker in _REQUIRED_TABLE_MARKERS[table]):
             stale.append(table)
     return stale
 

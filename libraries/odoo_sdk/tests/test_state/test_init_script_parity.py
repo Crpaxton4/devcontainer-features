@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The v1 STRICT schema (post-#452, pre-#504): the shape a real user's
+#: ``tracker.db`` has on disk after STRICT was adopted but before the ``CLOSED``
+#: state widened the task_runs CHECK. Derived from the canonical DDL by dropping
+#: the ``CLOSED`` literal so it tracks the true prior shape without a hand-copy.
+_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+
 _TS = "2026-07-17T12:00:00+00:00"
 
 
@@ -150,6 +156,32 @@ def _fresh_sdk_db(tmp: Path) -> Path:
     create_schema(conn)
     conn.commit()
     conn.close()
+    return path
+
+
+def _v1_db(tmp: Path) -> Path:
+    """Provision a v1 STRICT (pre-#504, pre-CLOSED) tracker.db and return its path."""
+    path = tmp / "tracker.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(_V1_DDL)
+        conn.execute(
+            "INSERT INTO events (id, source, timestamp, task_ids, repo, pr_num, "
+            "branch, subject, payload, external_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            _EVENT_ROW,
+        )
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'STOPPED', ?, '[]')",
+            (_TS,),
+        )
+        # The STRICT schema shipped with user_version 1; leaving it there is what
+        # makes the host script's migrate_schema run the CLOSED-widening rebuild.
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+    finally:
+        conn.close()
+    assert _user_version(path) == 1
     return path
 
 
@@ -335,6 +367,63 @@ class TestMigrationParity(unittest.TestCase):
             code = self.init.main(["init_tracker_db.py", str(legacy)])
         self.assertEqual(code, 1)
         self.assertIn("invalid timestamp", stderr.getvalue())
+
+
+class TestClosedStateMigrationParity(unittest.TestCase):
+    """The host script's v1→v2 rebuild matches a fresh v2 init (#504).
+
+    Mirrors :class:`TestMigrationParity` for the newer schema step: a fresh DB
+    early-returns from ``migrate_schema``, so only an OLD-shape DB exercises the
+    host copy of the CLOSED-widening rebuild. A v1 STRICT DB (pre-CLOSED) is
+    migrated by the host script and must be indistinguishable from a fresh v2 init.
+    """
+
+    def setUp(self):
+        self.init = _load_init_script()
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_migrated_v1_matches_fresh_init(self):
+        v1 = _v1_db(self.tmp)
+        self.init.init_tracker_db(v1)
+
+        fresh = _fresh_sdk_db(self.tmp)
+        self.assertEqual(_schema_objects(v1), _schema_objects(fresh))
+        self.assertEqual(_user_version(v1), SCHEMA_VERSION)
+
+    def test_migrated_task_runs_admits_closed(self):
+        v1 = _v1_db(self.tmp)
+        self.init.init_tracker_db(v1)
+        conn = sqlite3.connect(str(v1))
+        try:
+            sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND "
+                "name='task_runs'"
+            ).fetchone()[0]
+            self.assertIn("CLOSED", sql)
+            # A CLOSED write is accepted post-migration; the STOPPED row survives.
+            conn.execute(
+                "INSERT INTO task_runs (task_id, task_name, project_id, "
+                "project_name, state, started_at, notes) "
+                "VALUES (6, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+                (_TS,),
+            )
+            conn.commit()
+            self.assertEqual(
+                conn.execute(
+                    "SELECT task_id, state FROM task_runs ORDER BY task_id"
+                ).fetchall(),
+                [(5, "STOPPED"), (6, "CLOSED")],
+            )
+        finally:
+            conn.close()
+
+    def test_second_run_over_migrated_v1_is_a_noop(self):
+        v1 = _v1_db(self.tmp)
+        self.init.init_tracker_db(v1)
+        before = _schema_objects(v1)
+        self.init.init_tracker_db(v1)
+        self.assertEqual(_schema_objects(v1), before)
+        self.assertEqual(_user_version(v1), SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

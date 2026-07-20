@@ -7,9 +7,18 @@ from typing import Optional
 
 
 class TaskState(str, Enum):
+    #: Actively being worked; the only state that accrues fresh wall clock.
     RUNNING = "RUNNING"
+    #: Paused waiting on a stakeholder answer; resumes to RUNNING (#504).
     AWAITING_ANSWERS = "AWAITING_ANSWERS"
+    #: Not being worked right now but **resumable** — ``resume_task`` reopens it
+    #: and ``start_task`` auto-resumes it instead of inserting a second run row,
+    #: so one continuous effort stays one run rather than splitting (#504).
     STOPPED = "STOPPED"
+    #: Terminal: a finished run that is never reopened by resume/auto-resume and
+    #: is hidden from the default run queries. CLI-only and invisible to MCP by
+    #: design — the agent cannot reach or reason about it (#504).
+    CLOSED = "CLOSED"
 
 
 class TrackerStateMissingError(RuntimeError):
