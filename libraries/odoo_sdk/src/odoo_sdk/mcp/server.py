@@ -5,6 +5,7 @@ import functools
 import inspect
 import logging
 import os
+import subprocess
 import tempfile
 import time
 import zipfile
@@ -171,16 +172,20 @@ def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
 #: Exceptions the MCP error boundary renders as a structured payload. Every
 #: entry is a caller-actionable failure — a classified Odoo fault
 #: (:class:`~odoo_sdk.transport.errors.OdooError` and its subclasses), a
-#: session-state violation, the devcontainer environment guard, or invalid
-#: input (``ValueError``) — a shape an LLM can reason about and retry. Anything
-#: not listed (``KeyError``, ``AttributeError``, ...) is a programming error and
-#: is deliberately left to propagate as an unhandled traceback.
+#: session-state violation, the devcontainer environment guard, a failed git
+#: invocation from the ``start_task`` branch setup
+#: (``subprocess.CalledProcessError``, #541 — it used to escape as a stack
+#: trace), or invalid input (``ValueError``) — a shape an LLM can reason about
+#: and retry. Anything not listed (``KeyError``, ``AttributeError``, ...) is a
+#: programming error and is deliberately left to propagate as an unhandled
+#: traceback.
 _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     OdooError,
     TaskNotRunningError,
     TaskAlreadyRunningError,
     TrackerStateMissingError,
     OdooDevcontainerRequiredError,
+    subprocess.CalledProcessError,
     ValueError,
 )
 

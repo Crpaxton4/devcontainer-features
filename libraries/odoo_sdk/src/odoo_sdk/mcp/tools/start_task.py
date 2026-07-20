@@ -18,8 +18,20 @@ from mcp.types import ClientCapabilities, SamplingCapability
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.state import TaskAlreadyRunningError
 
 from .composition import composition_tool
+
+
+class _BranchSetupError(RuntimeError):
+    """Raised when task-branch setup failed *and* the repo was restored (#542).
+
+    Carries a caller-facing message describing where the user's work ended up.
+    :func:`_setup_task_branch` converts it into the flow's ordinary error string
+    rather than letting it escape: by the time it is raised the working tree is
+    back on the original branch, so there is nothing left for the caller's
+    rollback path to undo.
+    """
 
 
 class _SelectIndex(BaseModel):
@@ -119,6 +131,55 @@ def _resolve_base_ref(base_branch: str) -> str:
     return remote_ref if probe.returncode == 0 else base_branch
 
 
+def _unwind_failed_pop(
+    branch_name: str, created: bool, original_branch: Optional[str]
+) -> str:
+    """Put the repo back where it started after ``git stash pop`` failed (#542).
+
+    Forking from ``origin/<base>`` (#454) can bring in a *tracked* file at the
+    same path as a local *untracked* one; the auto-stash pop then aborts with a
+    collision, leaving the user on the task branch looking at origin's version
+    of their file while their own copy survives only in ``stash@{0}`` — the
+    "my work disappeared" symptom of #454.
+
+    A failed pop never drops its stash entry, so every local change is still
+    recorded there and ``git checkout --force`` can safely discard whatever the
+    partial pop left behind. We switch back, delete the branch when this run
+    created it, and re-pop on the original branch, where the colliding path is
+    untracked again and the pop applies cleanly.
+
+    :param branch_name: Task branch that was checked out when the pop failed.
+    :type branch_name: str
+    :param created: Whether this run created ``branch_name`` (only then is it
+        deleted — a pre-existing branch must survive).
+    :type created: bool
+    :param original_branch: Branch to return to; skipped when ``None``.
+    :type original_branch: Optional[str]
+    :return: Caller-facing message naming where the user's work now lives.
+    :rtype: str
+    """
+    undone = False
+    if original_branch is not None:
+        _git("checkout", "--force", original_branch)
+        # ``git branch -D`` refuses to delete the branch you are standing on, so
+        # this only runs once the checkout above has moved us off it.
+        undone = not created or _git("branch", "-D", branch_name).returncode == 0
+    if _git("stash", "pop").returncode == 0:
+        where = "your work is back in the working tree"
+    else:
+        where = "your work is kept in 'stash@{0}' — recover it with `git stash pop`"
+    left = (
+        f"the repository is back on {original_branch!r}"
+        if undone
+        else f"branch {branch_name!r} could not be cleaned up"
+    )
+    return (
+        f"Could not set up branch {branch_name!r}: local changes collide with "
+        f"files already tracked on the base branch. Now {left} and {where}. "
+        f"Commit or move the conflicting files, then retry."
+    )
+
+
 def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     """Create or switch to ``branch_name``, preserving any local changes.
 
@@ -131,6 +192,8 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     Remote-based (#454): a freshly created branch forks from the fetched
     ``origin/<base>`` tip (see :func:`_resolve_base_ref`), never the possibly
     stale local base ref.
+    Atomic (#542): a pop that fails on the new branch is unwound by
+    :func:`_unwind_failed_pop` rather than stranding the user mid-switch.
 
     :param branch_name: Target branch to end up on.
     :type branch_name: str
@@ -139,7 +202,10 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     :return: ``True`` when a new branch was created, ``False`` when an existing
         one was merely checked out — lets callers roll back only fresh branches.
     :rtype: bool
+    :raises _BranchSetupError: When the auto-stash could not be re-applied; the
+        repo has been returned to ``original_branch`` before it is raised.
     """
+    original_branch = _current_branch()
     stashed = False
     if _is_dirty():
         before = _stash_count()
@@ -155,9 +221,20 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
             subprocess.run(["git", "checkout", "-b", branch_name, base_ref], check=True)
         else:
             subprocess.run(["git", "checkout", branch_name], check=True)
-    finally:
+    except BaseException:
+        # The checkout itself failed, so we are still on the original branch:
+        # a best-effort pop (never ``check=True``, which would mask the real
+        # git error behind a second one) puts the stashed work straight back
+        # where it came from. Should even that fail, the entry stays on the
+        # stash and the original error — now a boundary error (#541) — is what
+        # the caller sees.
         if stashed:
-            subprocess.run(["git", "stash", "pop"], check=True)
+            _git("stash", "pop")
+        raise
+    if stashed and _git("stash", "pop").returncode != 0:
+        raise _BranchSetupError(
+            _unwind_failed_pop(branch_name, created, original_branch)
+        )
     return created
 
 
@@ -233,7 +310,12 @@ async def _setup_task_branch(
     description = await _generate_branch_description(ctx, task["name"], project["name"])
     branch_name = f"{task_id}#{description}"
 
-    created = _create_task_branch(branch_name, base_branch)
+    try:
+        created = _create_task_branch(branch_name, base_branch)
+    except _BranchSetupError as exc:
+        # Already unwound (#542): report it as an ordinary flow error so the
+        # caller sees an actionable message instead of a git stack trace.
+        return None, False, str(exc)
     return branch_name, created, None
 
 
@@ -395,11 +477,19 @@ def make_start_task_tool(registry: Registry):
             return {"error": "Task start cancelled."}
 
         original_branch = _current_branch()
-        branch_name, branch_created, branch_err = await _setup_task_branch(ctx, task, project)
-        if branch_err:
-            return {"error": branch_err}
+        branch_name: Optional[str] = None
+        branch_created = False
 
         try:
+            # Branch setup lives *inside* the rollback scope (#541): running it
+            # outside meant a failure between ``checkout -b`` and the auto-stash
+            # pop left the user on a dangling task branch with no cleanup.
+            branch_name, branch_created, branch_err = await _setup_task_branch(
+                ctx, task, project
+            )
+            if branch_err:
+                return {"error": branch_err}
+
             return registry["start_task"].execute(
                 task_id=task["id"],
                 task_name=task["name"],
@@ -408,14 +498,23 @@ def make_start_task_tool(registry: Registry):
                 branch_name=branch_name,
                 warning=warning,
             )
+        except TaskAlreadyRunningError:
+            # Attaching to an already-RUNNING session is not a branch failure
+            # (#478): the caller goes on to develop the task, so the branch it
+            # just created must stay created and checked out. Rolling it back
+            # here is what made branch setup look silently skipped whenever a
+            # session was already running. The typed error still propagates so
+            # the caller learns the session was pre-existing.
+            raise
         except Exception:
             # Raise-based error contract (#223): the start command raises on
-            # failure (e.g. an active session -> ``TaskAlreadyRunningError``, or
-            # an Odoo fault -> ``OdooError``). This flow needs cleanup before the
-            # failure surfaces, so it catches to roll back only a branch freshly
-            # created this run (#164), then re-raises the *original typed*
-            # exception unchanged for the MCP ``_error_boundary`` (#222) to format
-            # — it is not swallowed into an ``{"error": ...}`` dict here.
+            # failure (e.g. an Odoo fault -> ``OdooError``), as does git when a
+            # checkout is impossible (``CalledProcessError``). This flow needs
+            # cleanup before the failure surfaces, so it catches to roll back
+            # only a branch freshly created this run (#164), then re-raises the
+            # *original typed* exception unchanged for the MCP
+            # ``_error_boundary`` (#222) to format — it is not swallowed into an
+            # ``{"error": ...}`` dict here.
             if branch_created and branch_name is not None:
                 _rollback_task_branch(branch_name, original_branch)
             raise
