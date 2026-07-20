@@ -20,6 +20,11 @@ from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.state import LocalStateClient
 from tests.support import make_state_db
 
+#: Patch targets for the best-effort git lookups ``LogEventCommand`` performs
+#: when a caller leaves ``repo``/``branch`` unstated (#509).
+REPO_LABEL = "odoo_sdk.commands.log_event.current_repo_label"
+BRANCH_LABEL = "odoo_sdk.commands.log_event.current_branch_label"
+
 
 def _tmp_db() -> LocalStateClient:
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -61,7 +66,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # other argument value is deliberately withheld from local persistence.
         self.assertEqual(event.payload, {"tool": "do_thing"})
 
-    def test_tool_without_task_id_has_empty_task_ids(self):
+    def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
 
@@ -78,6 +83,62 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # Subject is the bare tool name; the "message" arg is not persisted.
         self.assertEqual(events[0].subject, "ping")
         self.assertEqual(events[0].payload, {"tool": "ping"})
+
+    def test_tool_without_task_id_attributes_to_the_active_run(self):
+        # Regression for #507: attribution used to key on whether the tool's
+        # signature happened to contain a parameter named ``task_id``, so an
+        # inspection-only tool called mid-run wrote an event with an empty
+        # ``task_ids`` -- permanently excluded from session derivation, and
+        # therefore permanently unbillable. All interaction with a task is
+        # active work on it, so the active run now claims the event.
+        db = _tmp_db()
+        db.create_run(101, "Task A", 1, "Proj")
+        registry = Registry(Mock(), state_client=db)
+
+        def report_runs(since: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"report_runs": report_runs})
+        tools["report_runs"].fn(since="today")
+
+        self.assertEqual(db.get_events()[0].task_ids, ["101"])
+
+    def test_explicit_task_id_still_wins_over_the_active_run(self):
+        db = _tmp_db()
+        db.create_run(101, "Task A", 1, "Proj")
+        registry = Registry(Mock(), state_client=db)
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        tools["do_thing"].fn(task_id=999)
+
+        self.assertEqual(db.get_events()[0].task_ids, ["999"])
+
+    def test_provenance_is_resolved_not_hardcoded_empty(self):
+        # Regression for #509: this path passed ``repo=""``, so no agent event
+        # could ever be traced to the code that produced it and every derived
+        # session fell back to the repo-less sentinel.
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def ping() -> str:
+            """Fake tool."""
+            return "pong"
+
+        tools = _build_tools(registry, {"ping": ping})
+        with (
+            patch(REPO_LABEL, return_value="o/r"),
+            patch(BRANCH_LABEL, return_value="feat/kiosk"),
+        ):
+            tools["ping"].fn()
+
+        event = db.get_events()[0]
+        self.assertEqual(event.repo, "o/r")
+        self.assertEqual(event.branch, "feat/kiosk")
 
     def test_free_text_arg_values_are_not_persisted(self):
         # Regression for #365: chatter note bodies, questions, and search
