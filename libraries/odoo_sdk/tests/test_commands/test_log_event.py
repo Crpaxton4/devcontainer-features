@@ -21,6 +21,7 @@ from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.commands.log_event import (
     current_branch_label,
     normalize_task_ids,
+    task_ids_from_branch,
 )
 from odoo_sdk.reap import REAP_THRESHOLD_ENV
 from tests.support import make_state_db, make_state_db_path
@@ -135,6 +136,42 @@ class TestNormalizeTaskIds(unittest.TestCase):
         self.assertEqual(normalize_task_ids(["abc", None, object(), 7]), ["7"])
 
 
+class TestTaskIdsFromBranch(unittest.TestCase):
+    """Recover a task id from the ``<task-id>#<slug>`` session branch (#574)."""
+
+    def test_canonical_branch_yields_its_task_id(self) -> None:
+        # The exact form start_task writes: f"{task_id}#{slug}".
+        self.assertEqual(task_ids_from_branch("28788#hook-attribution"), ["28788"])
+
+    def test_slash_prefixed_branch_still_matches(self) -> None:
+        # A path-style prefix (feature/28788#slug) is anchored on the '/'.
+        self.assertEqual(task_ids_from_branch("feature/28788#slug"), ["28788"])
+
+    def test_none_and_empty_are_empty(self) -> None:
+        self.assertEqual(task_ids_from_branch(None), [])
+        self.assertEqual(task_ids_from_branch(""), [])
+
+    def test_ordinary_branch_names_have_no_task_id(self) -> None:
+        for branch in ("main", "master", "feat/kiosk", "fix/wc1-hook"):
+            self.assertEqual(task_ids_from_branch(branch), [], branch)
+
+    def test_short_number_is_not_a_task_id(self) -> None:
+        # Fewer than the shared 4-digit floor: a stray number, not a task id, so
+        # a hook event and the commit it accompanies never split lanes (#378).
+        self.assertEqual(task_ids_from_branch("123#x"), [])
+
+    def test_trailing_hash_reference_is_not_read_as_an_id(self) -> None:
+        # '#28788' is a GitHub-style ref (id AFTER the '#'), not the branch
+        # convention (id BEFORE it), so it must not attribute.
+        self.assertEqual(task_ids_from_branch("fixes-#28788"), [])
+
+    def test_zero_padded_id_is_canonicalized(self) -> None:
+        self.assertEqual(task_ids_from_branch("0028788#slug"), ["28788"])
+
+    def test_duplicate_ids_are_deduped_first_seen(self) -> None:
+        self.assertEqual(task_ids_from_branch("28788#a/28788#b"), ["28788"])
+
+
 class TestCurrentBranchLabel(unittest.TestCase):
     """Branch resolution is best-effort: it never raises on the write path."""
 
@@ -221,6 +258,60 @@ class TestAttributionPolicy(unittest.TestCase):
         self._backdate(stale.id, 30)
         os.environ[REAP_THRESHOLD_ENV] = "48"
         self.assertEqual(self.command.resolve_task_ids(), ["202"])
+
+    def test_branch_recovers_task_id_when_no_active_run(self) -> None:
+        # The #574 fix: a session bound to a task branch but never start_task-ed
+        # (so no FSM run exists) still attributes to that task, not triage.
+        self.assertEqual(
+            self.command.resolve_task_ids(branch="28788#hook-fix"), ["28788"]
+        )
+
+    def test_active_run_wins_over_branch(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.assertEqual(
+            self.command.resolve_task_ids(branch="28788#hook-fix"), ["101"]
+        )
+
+    def test_explicit_hint_wins_over_branch(self) -> None:
+        self.assertEqual(
+            self.command.resolve_task_ids([999], branch="28788#hook-fix"), ["999"]
+        )
+
+    def test_branch_without_task_id_stays_untargeted(self) -> None:
+        self.assertEqual(self.command.resolve_task_ids(branch="main"), [])
+
+    def test_attach_disabled_ignores_branch(self) -> None:
+        # attach_active_run=False keeps its documented "leave untargeted"
+        # contract: the branch-recovery fallback is gated with the active-run one.
+        self.assertEqual(
+            self.command.resolve_task_ids(
+                attach_active_run=False, branch="28788#hook-fix"
+            ),
+            [],
+        )
+
+    def test_execute_recovers_task_from_stated_branch(self) -> None:
+        # End to end: the hook vector (no active run, a stated task branch) lands
+        # a billable, sessionizable row instead of an untargeted triage one.
+        result = self.command.execute(
+            source="claude:PostToolUse", subject="Bash", branch="28788#hook-fix"
+        )
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, ["28788"])
+        # The branch is also recorded verbatim as provenance.
+        self.assertEqual(event.branch, "28788#hook-fix")
+        self.assertEqual(result["task_ids"], ["28788"])
+
+    def test_execute_does_not_recover_from_cwd_resolved_branch(self) -> None:
+        # Provenance is best-effort from the working tree, but attribution is not:
+        # a branch the caller did NOT state (only the cwd fallback saw) must not
+        # silently re-attribute. Here the patched cwd branch names a task, yet the
+        # event stays untargeted because nothing stated it.
+        with patch(BRANCH_LABEL, return_value="28788#ambient"):
+            self.command.execute(source="claude:Stop")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(event.branch, "28788#ambient")
 
     def test_execute_persists_the_active_run_fallback(self) -> None:
         # The end-to-end shape the MCP dispatch path now takes: a tool call with

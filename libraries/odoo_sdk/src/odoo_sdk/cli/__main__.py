@@ -262,9 +262,15 @@ def cmd_log_event(args: argparse.Namespace) -> None:
     one rule instead of two: ``--task-id`` is handed over as the explicit hint
     and ``--attach-active-run`` selects whether an unhinted event falls back to
     the active runs, which keeps this subcommand's documented flag semantics —
-    and the hook shim's contract — unchanged. The repo label and branch are no
-    longer resolved here either; the command resolves both from the working tree
+    and the hook shim's contract — unchanged. The repo label is no
+    longer resolved here either; the command resolves it from the working tree
     (#509).
+
+    ``--branch`` is passed through when the hook shim states it: the shim reads it
+    from the session's authoritative cwd so the command can recover the task id
+    from the ``<task-id>#<slug>`` convention and stop hook events landing in
+    triage (#574/#575). Omitting it leaves the command to resolve the branch from
+    the cwd for the provenance column only, with no attribution recovery.
     """
     event_type = _resolve_source(args.source)
     payload = _parse_payload(args.payload)
@@ -273,6 +279,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
         subject=args.subject,
         payload=payload,
         task_ids=args.task_id,
+        branch=args.branch,
         timestamp=args.timestamp,
         attach_active_run=args.attach_active_run,
     )
@@ -697,6 +704,14 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="attach_active_run",
         help="Attach the event to any active run's task id when no explicit "
         "--task-id is given (default: leave untargeted)",
+    )
+    log_p.add_argument(
+        "--branch",
+        default=None,
+        help="Session branch (e.g. '<task-id>#<slug>'). Recorded as the event's "
+        "provenance and, via the '<task-id>#' convention, used to recover the "
+        "task attribution when no --task-id and no active run name it (#574). "
+        "Default: resolve from the cwd checkout for provenance only.",
     )
     log_p.add_argument(
         "--payload", default=None, help="Optional JSON object string of extra fields"
