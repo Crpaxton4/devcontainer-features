@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.3...personal-features-v4.1.0) (2026-07-21)
+
+
+### Features
+
+* **state:** add CLOSED terminal state and make STOPPED resumable in tracker FSM ([#593](https://github.com/Crpaxton4/devcontainer-features/issues/593)) ([27b6d47](https://github.com/Crpaxton4/devcontainer-features/commit/27b6d475d8fddd901a1c17029107bf4908a6c6d1))
+
+
+### Bug Fixes
+
+* **billing:** isolate per-session upload faults and close adopt double-bill ([#594](https://github.com/Crpaxton4/devcontainer-features/issues/594)) ([a9a232c](https://github.com/Crpaxton4/devcontainer-features/commit/a9a232c085d7187ff5aba4d07d6d2094cfa43071)), closes [#576](https://github.com/Crpaxton4/devcontainer-features/issues/576) [#582](https://github.com/Crpaxton4/devcontainer-features/issues/582)
+* **personal-features:** correct hook MCP exclusion glob to mcp__odoo-mcp__* ([#589](https://github.com/Crpaxton4/devcontainer-features/issues/589)) ([ef4b949](https://github.com/Crpaxton4/devcontainer-features/commit/ef4b94964d3e81e2014ed9a2576ba8a48bf03610)), closes [#581](https://github.com/Crpaxton4/devcontainer-features/issues/581) [#580](https://github.com/Crpaxton4/devcontainer-features/issues/580)
+* **state:** attribute hook events via session branch + carry context ([fc6c03e](https://github.com/Crpaxton4/devcontainer-features/commit/fc6c03ef67963bb780826dad286955c42bc2886b)), closes [#574](https://github.com/Crpaxton4/devcontainer-features/issues/574) [#575](https://github.com/Crpaxton4/devcontainer-features/issues/575)
+* **state:** attribute hook events via session branch + carry payload context ([#595](https://github.com/Crpaxton4/devcontainer-features/issues/595)) ([fc6c03e](https://github.com/Crpaxton4/devcontainer-features/commit/fc6c03ef67963bb780826dad286955c42bc2886b))
+
 ## [4.0.3](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.2...personal-features-v4.0.3) (2026-07-20)
 
 
