@@ -1,3 +1,4 @@
+import re
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -64,6 +65,51 @@ def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:
     return normalized
 
 
+# Minimum digit count for a task id recovered from a branch, mirroring the resync
+# puller (``adapters.external_sync._MIN_TASK_ID_DIGITS``): a shorter run is almost
+# always a stray number, and using the same floor keeps a hook event and the
+# commit it accompanies on the SAME task lane rather than splitting them (#378).
+_MIN_TASK_ID_DIGITS = 4
+
+# The ``<task-id>#<slug>`` branch convention ``start_task`` writes (id BEFORE the
+# ``#``), anchored to a token start (``^`` or a ``/`` path separator) so a
+# trailing ``#123`` GitHub-style reference is never read as a task id. Kept in
+# lockstep with the same ``(\d+)#`` form in
+# ``adapters.external_sync._TASK_ID_PATTERNS`` so hook and resync attribution
+# agree on a session branch.
+_BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})#")
+
+
+def task_ids_from_branch(branch: Optional[str]) -> list[str]:
+    """Recover the task ids named by a ``<task-id>#<slug>`` session branch.
+
+    :func:`odoo_sdk.mcp.tools.start_task` names each task branch
+    ``f"{task_id}#{slug}"``, so the task identity is derivable from the branch
+    even when the session was never ``start_task``-ed through the FSM and thus has
+    no active run to attribute an event to (#574). This is the last attribution
+    signal consulted before an unhinted event falls through to untargeted triage.
+
+    Returns the distinct ids in first-seen order, canonicalized through ``int`` so
+    a zero-padded ``0028788#…`` records as ``"28788"``. A branch that does not
+    match the convention — a ``main``/``feat/x`` branch, a detached HEAD's ``""``,
+    ``None`` — yields ``[]``.
+
+    :param branch: The session branch, or ``None``/`""` when there is none.
+    :type branch: Optional[str]
+    :return: The recovered task ids as canonical id strings, first-seen order.
+    :rtype: list[str]
+    """
+
+    if not branch:
+        return []
+    ids: list[str] = []
+    for raw in _BRANCH_TASK_ID_PATTERN.findall(branch):
+        canonical = str(int(raw))
+        if canonical not in ids:
+            ids.append(canonical)
+    return ids
+
+
 class LogEventCommand(Command):
     """Append one row to the local ``events`` timeseries via the command layer.
 
@@ -86,7 +132,8 @@ class LogEventCommand(Command):
       attribution *hint* its interface happens to expose (``--task-id`` from the
       CLI, a bound ``task_id`` argument from the MCP dispatch wrapper), not a
       resolved scope. When the hint names no task the command falls back to the
-      active runs, because an event that lands with an empty ``task_ids`` is
+      active runs, and then to the ``<task-id>#<slug>`` session branch the caller
+      states (#574) — because an event that lands with an empty ``task_ids`` is
       excluded from session derivation permanently and can therefore never bill.
     * **Provenance** (``repo`` / ``branch``). Resolved from the working tree at
       write time unless the caller states them explicitly, so no frontend can
@@ -167,6 +214,7 @@ class LogEventCommand(Command):
         self,
         task_ids: Optional[Iterable[Any]] = None,
         attach_active_run: bool = True,
+        branch: Optional[str] = None,
     ) -> list[str]:
         """Resolve which tasks an event attributes to — the one attribution rule.
 
@@ -183,15 +231,31 @@ class LogEventCommand(Command):
         2. Otherwise the event attributes to every non-stale active run, because
            all interaction with a task — read-only inspection included — is
            active work on it.
-        3. With no active run (or with ``attach_active_run`` disabled) the scope
-           is empty: untargeted session-level activity.
+        3. With no active run, the ``<task-id>#<slug>`` convention of the
+           caller-stated ``branch`` recovers the task id (#574): a session bound
+           to a task branch but never ``start_task``-ed through the FSM still
+           attributes its hook events to that task instead of triage.
+        4. With none of the above (or with ``attach_active_run`` disabled) the
+           scope is empty: untargeted session-level activity.
+
+        Steps 2–3 are the "attribute an unhinted event from context" fallback the
+        ``attach_active_run`` flag gates as a unit, so a caller that opts out of
+        it keeps the documented "leave untargeted" contract. Only the branch the
+        caller *states* is consulted (the hook shim reads it from the session's
+        authoritative cwd); the working-tree branch :meth:`execute` resolves for
+        the provenance column is deliberately not, so an incidental checkout never
+        silently re-attributes an event that was never bound to that task.
 
         :param task_ids: Explicit attribution hint; non-task values are dropped.
         :type task_ids: Optional[Iterable[Any]]
-        :param attach_active_run: Whether to fall back to the active runs when
-            the hint names no task. The CLI passes its ``--attach-active-run``
-            flag through here to preserve the documented hook-shim contract.
+        :param attach_active_run: Whether to fall back to the active runs and then
+            the session branch when the hint names no task. The CLI passes its
+            ``--attach-active-run`` flag through here to preserve the documented
+            hook-shim contract.
         :type attach_active_run: bool
+        :param branch: The caller-stated ``<task-id>#<slug>`` session branch to
+            recover a task id from when nothing else attributes; ``None`` skips it.
+        :type branch: Optional[str]
         :return: The task ids the event attributes to, as id strings.
         :rtype: list[str]
         """
@@ -201,7 +265,10 @@ class LogEventCommand(Command):
             return explicit
         if not attach_active_run:
             return []
-        return self._active_run_task_ids()
+        active = self._active_run_task_ids()
+        if active:
+            return active
+        return task_ids_from_branch(branch)
 
     def execute(
         self,
@@ -240,7 +307,11 @@ class LogEventCommand(Command):
             resolves it from the cwd's git remote, ``""`` records none.
         :type repo: Optional[str]
         :param branch: Branch the event originated from; ``None`` resolves it
-            from the cwd's checked-out HEAD, ``""`` records none.
+            from the cwd's checked-out HEAD for the provenance column, ``""``
+            records none. A stated ``<task-id>#<slug>`` branch additionally
+            recovers the event's task attribution when nothing else names it
+            (#574); the cwd-resolved fallback does not (see
+            :meth:`resolve_task_ids`).
         :type branch: Optional[str]
         :param pr_num: Pull-request number the event belongs to, ``0`` for none.
             Never inferred: identifying the PR for a branch costs a forge API
@@ -261,13 +332,18 @@ class LogEventCommand(Command):
         :rtype: dict[str, Any]
         """
 
+        # Provenance for the column is best-effort from the working tree when the
+        # caller leaves it unstated; attribution recovery, in contrast, consults
+        # only the branch the caller explicitly states (see resolve_task_ids), so
+        # ``branch`` — not the resolved fallback — is what is handed to it.
+        resolved_branch = current_branch_label() if branch is None else branch
         record = EventRecord(
             id=None,
             source=source,
             timestamp=timestamp or datetime.now(timezone.utc),
-            task_ids=self.resolve_task_ids(task_ids, attach_active_run),
+            task_ids=self.resolve_task_ids(task_ids, attach_active_run, branch),
             repo=current_repo_label() if repo is None else repo,
-            branch=current_branch_label() if branch is None else branch,
+            branch=resolved_branch,
             pr_num=pr_num,
             subject=subject,
             payload=payload,

@@ -97,6 +97,16 @@ class TestShimPinnedFlags(unittest.TestCase):
     def test_shim_references_payload(self) -> None:
         self.assertIn("--payload", _shim_text())
 
+    def test_shim_references_branch(self) -> None:
+        # #574: the shim forwards the session branch so the CLI can recover the
+        # task id from the <task-id>#<slug> convention.
+        self.assertIn("--branch", _shim_text())
+
+    def test_shim_forwards_hook_event_type_in_payload(self) -> None:
+        # #575: the hook event type must ride in the payload (it has no column),
+        # keyed on hook_event_name.
+        self.assertIn("hook_event_name", _shim_text())
+
     def test_cli_accepts_the_exact_flags_the_shim_emits(self) -> None:
         parser = cli._build_parser()
         namespace = parser.parse_args(
@@ -107,12 +117,17 @@ class TestShimPinnedFlags(unittest.TestCase):
                 "--attach-active-run",
                 "--subject",
                 "Bash",
+                "--branch",
+                "28788#hook-fix",
                 "--payload",
-                '{"session_id": "s-1"}',
+                '{"session_id": "s-1", "hook_event_name": "PreToolUse"}',
             ]
         )
         self.assertTrue(namespace.attach_active_run)
-        self.assertEqual(namespace.payload, '{"session_id": "s-1"}')
+        self.assertEqual(namespace.branch, "28788#hook-fix")
+        self.assertEqual(
+            namespace.payload, '{"session_id": "s-1", "hook_event_name": "PreToolUse"}'
+        )
         self.assertEqual(namespace.source, "claude:PreToolUse")
 
 
@@ -187,6 +202,41 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(count, 1)
+
+    def test_stated_branch_recovers_task_without_an_active_run(self) -> None:
+        # #574 end to end: with no active run, the shim's --branch lets the CLI
+        # recover the task id from the <task-id>#<slug> convention, so the row
+        # bills against the task instead of landing untargeted in triage. The cwd
+        # is non-git (repo/branch resolve empty), proving attribution rides on the
+        # STATED branch, not the working tree.
+        argv = [
+            "odoo-sdk",
+            "log-event",
+            "--source",
+            f"{_CLAUDE_SOURCE_PREFIX}PostToolUse",
+            "--attach-active-run",
+            "--subject",
+            "Bash",
+            "--branch",
+            "28788#hook-fix",
+            "--payload",
+            '{"session_id": "s-1", "hook_event_name": "PostToolUse"}',
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch("sys.stderr", StringIO()),
+            patch("sys.stdout", StringIO()),
+        ):
+            cli.main()
+
+        events = TaskStateDB().get_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.task_ids, ["28788"])
+        self.assertEqual(event.branch, "28788#hook-fix")
+        self.assertEqual(
+            event.payload, {"session_id": "s-1", "hook_event_name": "PostToolUse"}
+        )
 
 
 if __name__ == "__main__":

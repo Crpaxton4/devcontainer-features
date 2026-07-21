@@ -200,6 +200,40 @@ class TestLogEvent(unittest.TestCase):
         events = TaskStateDB().get_events()
         self.assertEqual(events[0].task_ids, ["999"])
 
+    def test_branch_flag_recovers_task_id_when_no_active_run(self) -> None:
+        # #574: the shim passes the session's <task-id>#<slug> branch, so a hook
+        # event with no active run attributes to the task instead of triage.
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PostToolUse",
+                "--attach-active-run",
+                "--branch",
+                "28788#hook-fix",
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, ["28788"])
+        # The stated branch also overrides the cwd-derived provenance column.
+        self.assertEqual(events[0].branch, "28788#hook-fix")
+
+    def test_branch_flag_active_run_still_wins(self) -> None:
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PostToolUse",
+                "--attach-active-run",
+                "--branch",
+                "28788#hook-fix",
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].task_ids, ["101"])
+
     def test_no_attach_flag_leaves_task_ids_empty(self) -> None:
         # The attribution policy moved into LogEventCommand (#507), but the flag
         # still selects it: without --attach-active-run this subcommand keeps
