@@ -200,6 +200,33 @@ def _create_session_line(
     return _scalar_id(client.execute("account.analytic.line", "create", vals))
 
 
+def _record_upload(
+    state: LocalStateClient,
+    session_key: str,
+    timesheet_id: int,
+    hours: float,
+    task_id: int,
+    started_at: datetime,
+    ended_at: datetime,
+) -> None:
+    """Upsert the idempotency-ledger mapping for one reconciled session.
+
+    Ties the session's stable ``session_key`` to the single
+    ``account.analytic.line`` id it was reconciled onto (plus the hours,
+    ``task_id`` and window bounds the orphan sweep keys on). Recording is
+    idempotent, so it is safe to write before the Odoo row is touched — the
+    adopt path relies on this ordering to stay double-bill-safe (#582).
+    """
+    state.record_session_upload(
+        session_key,
+        timesheet_id,
+        hours,
+        task_id=str(task_id),
+        started_at=started_at,
+        ended_at=ended_at,
+    )
+
+
 # Marker written onto an orphaned upload row the sweep zeroes (#353). Distinct
 # from every other anchor marker so a superseded row is unmistakable in Odoo and
 # is never re-adopted by a later reconcile via :func:`_find_anchor`.
@@ -244,26 +271,34 @@ def reconcile_session(
     if mapped is not None:
         timesheet_id = mapped["timesheet_id"]
         _write_line(client, timesheet_id, {"unit_amount": hours, "name": description})
-    else:
-        anchor = _find_anchor(client, task_id)
-        if anchor is not None:
-            timesheet_id = anchor
-            _write_line(
-                client,
-                timesheet_id,
-                {"unit_amount": hours, "name": description, "date": day.isoformat()},
-            )
-        else:
-            timesheet_id = _create_session_line(
-                client, state, task_id, description, hours, day
-            )
-    state.record_session_upload(
-        session_key,
-        timesheet_id,
-        hours,
-        task_id=str(task_id),
-        started_at=started_at,
-        ended_at=ended_at,
+        _record_upload(
+            state, session_key, timesheet_id, hours, task_id, started_at, ended_at
+        )
+        return timesheet_id
+    anchor = _find_anchor(client, task_id)
+    if anchor is not None:
+        # #582 idempotency: record the ledger mapping BEFORE renaming the adopted
+        # anchor. The write rewrites the anchor's name away from ``ANCHOR_NAME``,
+        # so :func:`_find_anchor` can no longer re-adopt it. Were the mapping
+        # recorded only after the write (the old order), a crash landing between
+        # the two steps would leave a retry with neither a mapping nor an
+        # adoptable anchor — and the create branch below would bill a SECOND
+        # line (double-bill). Recording first makes any retry re-find the row
+        # through the mapped branch and rewrite it in place.
+        _record_upload(
+            state, session_key, anchor, hours, task_id, started_at, ended_at
+        )
+        _write_line(
+            client,
+            anchor,
+            {"unit_amount": hours, "name": description, "date": day.isoformat()},
+        )
+        return anchor
+    timesheet_id = _create_session_line(
+        client, state, task_id, description, hours, day
+    )
+    _record_upload(
+        state, session_key, timesheet_id, hours, task_id, started_at, ended_at
     )
     return timesheet_id
 

@@ -16,6 +16,7 @@ from typing import Any
 
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalStateClient
+from odoo_sdk.transport.errors import OdooServerError
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.billing.timesheet import (
     ORPHANED_UPLOAD_NAME,
@@ -223,6 +224,68 @@ class TestReconcileSession(unittest.TestCase):
         last_write = executor.by_method("write")[-1]
         self.assertEqual(last_write[2][0], [500])
         self.assertEqual(last_write[2][1]["unit_amount"], 2.5)
+
+    def test_adopt_records_mapping_before_renaming_anchor(self):
+        # #582 idempotency: the ledger mapping must be recorded BEFORE the adopted
+        # anchor is renamed. Otherwise a crash between the write (which renames the
+        # anchor out of _find_anchor's reach) and the record leaves a retry unable
+        # to re-find the row, and the create branch double-bills. We assert the
+        # ordering directly: at the instant the anchor rewrite hits the wire, the
+        # mapping already exists.
+        db = _tmp_db()
+        observed = {}
+
+        class _OrderingExecutor(_SessionExecutor):
+            def execute(self, model, method, *args, **kwargs):
+                if method == "write":
+                    observed["mapping_at_write"] = db.get_session_upload("10|1")
+                return super().execute(model, method, *args, **kwargs)
+
+        executor = _OrderingExecutor(anchors=[{"id": 88}])
+        reconcile_session(
+            OdooClient(executor=executor), db, task_id=10, session_key="10|1",
+            description="[/] done", hours=2.0,
+            started_at=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 7, 2, 10, 0, tzinfo=UTC),
+        )
+        self.assertIsNotNone(observed["mapping_at_write"])  # recorded first
+        self.assertEqual(observed["mapping_at_write"]["timesheet_id"], 88)
+
+    def test_adopt_crash_before_ledger_does_not_double_bill_on_retry(self):
+        # #582: the legacy-adopt path records the mapping BEFORE renaming the
+        # anchor, so a fault mid-step (here the anchor rewrite crashes) still
+        # leaves a persisted mapping. A retry re-finds the row via the mapped
+        # branch and rewrites it in place — it never bills a SECOND line.
+        db = _tmp_db()
+        start = datetime(2026, 7, 2, 9, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 2, 10, 0, tzinfo=UTC)
+
+        class _CrashOnWrite(_SessionExecutor):
+            def execute(self, model, method, *args, **kwargs):
+                if method == "write":
+                    raise OdooServerError("crash mid anchor rename")
+                return super().execute(model, method, *args, **kwargs)
+
+        crashing = _CrashOnWrite(anchors=[{"id": 88}])
+        with self.assertRaises(OdooServerError):
+            reconcile_session(
+                OdooClient(executor=crashing), db, task_id=10, session_key="10|1",
+                description="[/] done", hours=2.0, started_at=start, ended_at=end,
+            )
+        # Mapping persisted before the failing rename: the retry is recoverable.
+        self.assertEqual(db.get_session_upload("10|1")["timesheet_id"], 88)
+
+        # Retry: the anchor can no longer be adopted (renamed / absent), but the
+        # mapping routes to the mapped branch — a rewrite of row 88, not a create.
+        retry = _SessionExecutor(anchors=[], new_id=999)
+        tid = reconcile_session(
+            OdooClient(executor=retry), db, task_id=10, session_key="10|1",
+            description="[/] done", hours=2.0, started_at=start, ended_at=end,
+        )
+        self.assertEqual(tid, 88)  # same row, never the would-be new 999
+        self.assertEqual(retry.by_method("create"), [])  # no second line billed
+        self.assertEqual(retry.by_method("search_read"), [])  # mapped: no anchor lookup
+        self.assertEqual(retry.by_method("write")[-1][2][0], [88])
 
     def test_write_ids_are_flat_scalars_not_nested_lists(self):
         # Regression for #193 (resurfaced #176/#167): the upload path's

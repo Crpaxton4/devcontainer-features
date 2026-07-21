@@ -30,6 +30,7 @@ from typing import Any, Callable, Optional
 from odoo_sdk.commands import Registry
 from odoo_sdk.commands.protocols import RpcClient
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
+from odoo_sdk.transport.errors import OdooError
 from odoo_sdk.utilities.logged_lines import logged_hours_by_task_day
 from odoo_sdk.billing.upload import range_bounds, upload_sessions
 
@@ -220,36 +221,82 @@ def request_upload(state: AppState) -> AppState:
 
 
 def confirm_upload(state: AppState, deps: TuiDeps, confirmed: bool) -> AppState:
-    """Resolve the confirm gate: on ``confirmed`` run the upload, else cancel."""
+    """Resolve the confirm gate: on ``confirmed`` run the upload, else cancel.
+
+    The upload is fully guarded (#576): a server fault that escapes the loop
+    (e.g. the sweep faulting, or the connection dropping) is caught and rendered
+    on the status line rather than propagating out of curses and killing the
+    app. Per-session faults never even reach here — the shared loop isolates them
+    (#582) into ``failed`` rows, which are summarised in the status alongside the
+    billed count so a partial upload is visible instead of silent.
+    """
     if not confirmed:
         return replace(state, pending_upload=False, status="upload cancelled")
-    uploaded, retired = _upload_sessions(deps, state.sessions, state.window)
-    status = f"uploaded {uploaded} session(s)"
-    if retired:
-        status += f", retired {retired} orphaned upload(s)"
-    return replace(state, pending_upload=False, status=status)
+    try:
+        result = _run_upload(deps, state.sessions, state.window)
+    except OdooError as exc:
+        return replace(
+            state, pending_upload=False, status=f"upload failed: {exc}"
+        )
+    return replace(state, pending_upload=False, status=_upload_status(result))
 
 
-def _upload_sessions(
+def _run_upload(
     deps: TuiDeps, sessions: list[dict[str, Any]], window: DateWindow
-) -> tuple[int, int]:
+) -> dict[str, Any]:
     """Bill the derived sessions through the shared upload loop (#354).
 
     The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
     :func:`~odoo_sdk.billing.upload.upload_sessions` path: idempotent per
     ``session_key`` (a re-run never double-bills) plus a window-scoped orphan
-    sweep (#353) scoped to the inclusive dates forwarded here.
-
-    :return: ``(uploaded, retired)`` counts for the status line.
+    sweep (#353) scoped to the inclusive dates forwarded here. Returns the full
+    summary dict so the driver can surface partial failures (#582) in-app.
     """
-    result = upload_sessions(
+    return upload_sessions(
         deps.client,
         deps.store,
         sessions,
         start_date=window.start_iso(),
         end_date=window.end_iso(),
     )
+
+
+def _upload_sessions(
+    deps: TuiDeps, sessions: list[dict[str, Any]], window: DateWindow
+) -> tuple[int, int]:
+    """Return the shared upload loop's ``(uploaded, retired)`` counts (#354).
+
+    The thin two-count view of :func:`_run_upload`, kept as the surface the
+    TUI/CLI billing-parity tests assert against (both entry points bill the
+    identical rows through the one loop).
+    """
+    result = _run_upload(deps, sessions, window)
     return int(result["uploaded"]), int(result["retired"])
+
+
+def _upload_status(result: dict[str, Any]) -> str:
+    """Render the post-upload status line: billed, retired, and failed counts.
+
+    Failures (#582) are summarised with the first fault's reason so a partial
+    upload is never silent — the user sees how many sessions billed, how many
+    orphan mappings were retired, and how many sessions faulted (and why).
+    """
+    parts = [f"uploaded {int(result['uploaded'])} session(s)"]
+    retired = int(result.get("retired", 0))
+    if retired:
+        parts.append(f"retired {retired} orphaned upload(s)")
+    failed = result.get("failed", [])
+    if failed:
+        parts.append(_failed_summary(failed))
+    return ", ".join(parts)
+
+
+def _failed_summary(failed: list[dict[str, Any]]) -> str:
+    """Summarise the failed-session rows for the one-line status (#582/#576)."""
+    reason = failed[0].get("error") or "unknown error"
+    if len(failed) == 1:
+        return f"1 failed ({reason})"
+    return f"{len(failed)} failed (first: {reason})"
 
 
 def _source_summary(outcome: dict[str, Any]) -> str:
