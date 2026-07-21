@@ -36,6 +36,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
+from odoo_sdk.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
 
@@ -214,6 +215,24 @@ def _upload_one(
     }
 
 
+def _failure_row(
+    session: dict[str, Any], task_id: int, exc: OdooError
+) -> dict[str, Any]:
+    """Build a structured per-session failure row from a caught Odoo fault (#582).
+
+    Isolates one session's server-side fault (e.g. the #576 "At least one
+    analytic account must be set" ``UserError`` raised when a project/task has no
+    analytic account) into a summary row naming the session and task, so the rest
+    of the batch still bills and the caller can surface exactly which session was
+    skipped and why instead of aborting on a raw traceback.
+    """
+    return {
+        "session_key": session.get("session_key", ""),
+        "task_id": task_id,
+        "error": str(exc),
+    }
+
+
 def upload_sessions(
     client: OdooClient,
     state: LocalStateClient,
@@ -250,15 +269,18 @@ def upload_sessions(
         environment overrides automatically.
     :return: A summary dict with ``uploaded`` (billable session count),
         ``skipped`` (non-numeric-task sessions), ``excluded`` (sessions inside an
-        aborted run's window, never billed — #356), ``retired`` (orphan mappings
-        swept), ``dry_run``, and ``rows`` (one ``{task_id, session_key, hours,
-        timesheet_id}`` per billable session; ``hours`` is the policy-adjusted
-        billed hours; ``timesheet_id`` is None on a dry run).
+        aborted run's window, never billed — #356), ``failed`` (per-session
+        ``{session_key, task_id, error}`` rows for sessions whose Odoo write
+        faulted — #582/#576, the batch continued past them), ``retired`` (orphan
+        mappings swept), ``dry_run``, and ``rows`` (one ``{task_id, session_key,
+        hours, timesheet_id}`` per successfully-billed session; ``hours`` is the
+        policy-adjusted billed hours; ``timesheet_id`` is None on a dry run).
     """
     config = config or LocalConfig.load()
     minimum = config.min_session_hours
     step = config.round_session_hours
     rows: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     skipped = excluded = 0
     aborted_windows = _aborted_windows(state)
     selected: list[dict[str, Any]] = []
@@ -271,9 +293,16 @@ def upload_sessions(
         if task_id is None:
             skipped += 1
             continue
-        rows.append(
-            _upload_one(client, state, task_id, session, dry_run, minimum, step)
-        )
+        # Per-session isolation (#582): one session's server fault (e.g. the #576
+        # missing-analytic-account UserError) must not abort the batch or skip
+        # the orphan sweep. Its key stays in ``selected`` so the sweep never
+        # zeroes a partially-billed row for it.
+        try:
+            rows.append(
+                _upload_one(client, state, task_id, session, dry_run, minimum, step)
+            )
+        except OdooError as exc:
+            failed.append(_failure_row(session, task_id, exc))
     retired = 0
     if not dry_run:
         window_lo, window_hi = range_bounds(start_date, end_date)
@@ -295,6 +324,7 @@ def upload_sessions(
         "uploaded": len(rows),
         "skipped": skipped,
         "excluded": excluded,
+        "failed": failed,
         "retired": retired,
         "dry_run": dry_run,
         "rows": rows,

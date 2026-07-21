@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_sdk.state import EventRecord
 from odoo_sdk.state.config import LocalConfig
+from odoo_sdk.transport.errors import OdooServerError, OdooTransportError
 from odoo_sdk.billing.upload import (
     range_bounds,
     upload_sessions,
@@ -151,6 +152,88 @@ class TestUploadSessionsLoop(unittest.TestCase):
         self.assertEqual(result["uploaded"], 2)  # still counts the billable set
         self.assertEqual(result["retired"], 0)
         self.assertIsNone(result["rows"][0]["timesheet_id"])  # nothing written
+
+
+class TestPerSessionIsolation(unittest.TestCase):
+    """#582/#576: one failing session must not abort the batch or skip the sweep.
+
+    The historical bug: ``reconcile_session`` raised out of the plain ``for``
+    loop, so the first server fault (e.g. #576's "At least one analytic account
+    must be set" ``UserError``) aborted every remaining session AND skipped the
+    orphan sweep, leaving a silent partial upload. The loop now isolates each
+    session, collects a structured ``failed`` row, and still runs the sweep.
+    """
+
+    def _analytic_fault(self, bad_key: str):
+        """A reconcile side effect that faults for one session key, else bills."""
+
+        def _reconcile(client, state, task_id, key, *rest):
+            if key == bad_key:
+                raise OdooServerError(
+                    "At least one analytic account must be set",
+                    model="account.analytic.line",
+                    method="create",
+                )
+            return 500
+
+        return _reconcile
+
+    def test_one_fault_does_not_abort_the_batch(self):
+        sessions = _sessions(3)  # keys 100|0, 101|1, 102|2
+        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
+            _SWEEP, return_value=0
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        # The two healthy sessions still billed despite the middle one faulting.
+        self.assertEqual(result["uploaded"], 2)
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertEqual({r["session_key"] for r in result["rows"]}, {"100|0", "102|2"})
+
+    def test_fault_is_captured_as_a_structured_failure_row(self):
+        sessions = _sessions(2)  # keys 100|0, 101|1
+        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
+            _SWEEP, return_value=0
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        self.assertEqual(len(result["failed"]), 1)
+        failure = result["failed"][0]
+        self.assertEqual(failure["session_key"], "101|1")
+        self.assertEqual(failure["task_id"], 101)
+        self.assertEqual(failure["error"], "At least one analytic account must be set")
+
+    def test_sweep_still_runs_and_keeps_the_failed_key(self):
+        # #582: the sweep must still run over the successfully-processed keys, and
+        # the failed session's key stays in ``derived_keys`` so a partially-billed
+        # row for it is never zeroed as an orphan.
+        sessions = _sessions(2)
+        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
+            _SWEEP, return_value=3
+        ) as sweep:
+            result = upload_sessions(
+                MagicMock(), MagicMock(), sessions,
+                start_date="2026-06-01", end_date="2026-06-03",
+            )
+        self.assertEqual(result["retired"], 3)
+        sweep.assert_called_once()
+        derived_keys = sweep.call_args.kwargs["derived_keys"]
+        self.assertIn("100|0", derived_keys)  # the billed one
+        self.assertIn("101|1", derived_keys)  # the failed one — not swept
+
+    def test_all_sessions_faulting_returns_partial_not_raises(self):
+        sessions = _sessions(2)
+        with patch(
+            _RECONCILE, side_effect=OdooTransportError("connection reset")
+        ), patch(_SWEEP, return_value=0):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        self.assertEqual(result["uploaded"], 0)
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(len(result["failed"]), 2)
+        self.assertTrue(all("connection reset" in f["error"] for f in result["failed"]))
+
+    def test_no_failures_leaves_failed_list_empty(self):
+        with patch(_RECONCILE, return_value=1), patch(_SWEEP, return_value=0):
+            result = upload_sessions(MagicMock(), MagicMock(), _sessions(2))
+        self.assertEqual(result["failed"], [])
 
 
 class TestSharedPathWithTui(unittest.TestCase):
