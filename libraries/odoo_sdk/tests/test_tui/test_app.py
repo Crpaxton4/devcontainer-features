@@ -30,6 +30,7 @@ from odoo_sdk.tui.app import (
     _safe,
     _upload_sessions,
 )
+from odoo_sdk.transport.errors import OdooServerError
 from odoo_sdk.tui.window import DateWindow
 
 
@@ -312,6 +313,50 @@ class TestUploadGate(unittest.TestCase):
             resolved = confirm_upload(state, deps, confirmed=True)
         self.assertIn("uploaded 1", resolved.status)
         self.assertIn("retired 2 orphaned upload(s)", resolved.status)
+
+    def test_confirm_surfaces_partial_failures(self):
+        # #582/#576: a session that faulted server-side is isolated by the shared
+        # loop into a ``failed`` row; the TUI surfaces it (count + reason) next to
+        # the billed count so a partial upload is never silent.
+        deps = _deps()
+        state = AppState(
+            window=default_window(), sessions=_sessions(3), pending_upload=True
+        )
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={
+                "uploaded": 2,
+                "retired": 0,
+                "failed": [
+                    {
+                        "session_key": "101|1",
+                        "task_id": 101,
+                        "error": "At least one analytic account must be set",
+                    }
+                ],
+            },
+        ):
+            resolved = confirm_upload(state, deps, confirmed=True)
+        self.assertFalse(resolved.pending_upload)
+        self.assertIn("uploaded 2", resolved.status)
+        self.assertIn("1 failed", resolved.status)
+        self.assertIn("analytic account", resolved.status)
+
+    def test_confirm_catches_upload_error_without_crashing(self):
+        # #576: a fault that escapes the loop (e.g. the connection dropping) must
+        # be caught and rendered on the status line, never propagate out of curses.
+        deps = _deps()
+        state = AppState(
+            window=default_window(), sessions=_sessions(1), pending_upload=True
+        )
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            side_effect=OdooServerError("connection lost"),
+        ):
+            resolved = confirm_upload(state, deps, confirmed=True)  # must not raise
+        self.assertFalse(resolved.pending_upload)
+        self.assertIn("upload failed", resolved.status)
+        self.assertIn("connection lost", resolved.status)
 
 
 class TestUploadSessions(unittest.TestCase):
