@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=3.4.4",
     "markdown-it-py>=3.0.0",
-    "markitdown[docx,pdf]>=0.1.6",
+    "markitdown[docx,pdf]>=0.1.7",
     "pydantic>=2.13.4",
     "toon-format>=0.9.0b1",
     # `tomllib` is stdlib only from 3.11; on the 3.10 floor (odoo:17) the
