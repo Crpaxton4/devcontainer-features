@@ -8,6 +8,7 @@ from odoo_sdk.utilities.odoo_helpers import (
     _task_related_stages,
     _task_subtasks,
     _task_timesheets,
+    count_chatter_messages_after,
     get_employee_id,
     get_task_chatter,
     get_task_detail,
@@ -439,6 +440,8 @@ class TestGetTaskChatter(unittest.TestCase):
         }
 
     def test_correct_search_read_call(self):
+        # #624: newest-first fetch (``date desc``) with the limit, so a long
+        # chatter keeps its most recent messages rather than its oldest.
         client = _client()
         client.execute.return_value = []
         get_task_chatter(client, task_id=42)
@@ -447,7 +450,7 @@ class TestGetTaskChatter(unittest.TestCase):
             "search_read",
             [("model", "=", "project.task"), ("res_id", "=", 42)],
             fields=["id", "date", "author_id", "message_type", "subtype_id", "body"],
-            order="date asc",
+            order="date desc, id desc",
             limit=100,
         )
 
@@ -456,6 +459,50 @@ class TestGetTaskChatter(unittest.TestCase):
         client.execute.return_value = []
         get_task_chatter(client, task_id=1, limit=5)
         self.assertEqual(client.execute.call_args.kwargs["limit"], 5)
+
+    def test_desc_fetch_is_reversed_to_chronological(self):
+        # The wire returns newest-first; the helper reverses in memory so the
+        # caller-visible order stays oldest-first (#624).
+        client = _client()
+        newest_first = [
+            {**self._make_message(), "id": 3, "date": "2026-06-22T10:00:00"},
+            {**self._make_message(), "id": 2, "date": "2026-06-21T10:00:00"},
+            {**self._make_message(), "id": 1, "date": "2026-06-20T10:00:00"},
+        ]
+        client.execute.return_value = newest_first
+        result = get_task_chatter(client, task_id=1)
+        self.assertEqual([m["id"] for m in result], [1, 2, 3])
+        self.assertEqual(
+            [m["date"] for m in result],
+            ["2026-06-20T10:00:00", "2026-06-21T10:00:00", "2026-06-22T10:00:00"],
+        )
+
+    def test_since_message_id_cursor_filters_by_id(self):
+        # An int ``since`` is a message-id cursor: strictly newer ids only.
+        client = _client()
+        client.execute.return_value = []
+        get_task_chatter(client, task_id=42, since=17)
+        domain = client.execute.call_args.args[2]
+        self.assertIn(("id", ">", 17), domain)
+        self.assertNotIn(("date", ">", 17), domain)
+
+    def test_since_date_cursor_filters_by_date(self):
+        # A str ``since`` is a date cursor, mirroring search_chatter's
+        # ``date_from`` precedent.
+        client = _client()
+        client.execute.return_value = []
+        get_task_chatter(client, task_id=42, since="2026-06-20 10:30:00")
+        domain = client.execute.call_args.args[2]
+        self.assertIn(("date", ">", "2026-06-20 10:30:00"), domain)
+
+    def test_no_since_leaves_domain_unfiltered(self):
+        client = _client()
+        client.execute.return_value = []
+        get_task_chatter(client, task_id=42)
+        self.assertEqual(
+            client.execute.call_args.args[2],
+            [("model", "=", "project.task"), ("res_id", "=", 42)],
+        )
 
     def test_extracts_display_names_from_tuples(self):
         client = _client()
@@ -483,6 +530,32 @@ class TestGetTaskChatter(unittest.TestCase):
         client = _client()
         client.execute.return_value = []
         self.assertEqual(get_task_chatter(client, task_id=99), [])
+
+
+class TestCountChatterMessagesAfter(unittest.TestCase):
+    """The answer-watermark count primitive (#625)."""
+
+    def test_counts_messages_with_id_above_watermark(self):
+        client = _client()
+        client.execute.return_value = 3
+        result = count_chatter_messages_after(client, task_id=42, message_id=77)
+        self.assertEqual(result, 3)
+        client.execute.assert_called_once_with(
+            "mail.message",
+            "search_count",
+            [
+                ("model", "=", "project.task"),
+                ("res_id", "=", 42),
+                ("id", ">", 77),
+            ],
+        )
+
+    def test_zero_when_nothing_newer(self):
+        client = _client()
+        client.execute.return_value = 0
+        self.assertEqual(
+            count_chatter_messages_after(client, task_id=1, message_id=99), 0
+        )
 
 
 class TestGetTaskDetail(unittest.TestCase):
