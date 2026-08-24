@@ -66,8 +66,9 @@ class DateWindow:
 
 
 # Arrow-key action names mapped to the DateWindow move they invoke. Keeping this
-# as data (not a curses keymap) lets the controller be driven and tested without
-# a terminal; the driver translates real curses key codes to these names.
+# as data (not a terminal keymap) lets the controller be driven and tested
+# without a terminal; the Textual driver generates its arrow-key BINDINGS
+# directly from these names.
 WINDOW_ACTIONS = {
     "left": "move_start_earlier",
     "right": "move_start_later",

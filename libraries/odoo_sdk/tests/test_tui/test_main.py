@@ -1,8 +1,8 @@
 """Tests for the ``odoo-tui`` console entry point.
 
-The entry point wires the default registry and hands it to the curses driver; the
-driver itself is patched out so the test never opens a terminal. This mirrors the
-MCP ``__main__`` entry-point test and covers the module's imports.
+The entry point wires the default registry and hands it to the Textual driver;
+the driver itself is patched out so the test never opens a terminal. This mirrors
+the MCP ``__main__`` entry-point test and covers the module's imports.
 """
 
 import unittest

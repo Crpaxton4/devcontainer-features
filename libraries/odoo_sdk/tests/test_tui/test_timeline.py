@@ -97,8 +97,8 @@ class TestBuildTimeline(unittest.TestCase):
 
     def test_agentless_repo_renders_printable_stand_in(self):
         # A repo-less agent session carries an absent repo; the lane label shows
-        # the shared printable stand-in and never a control character, which
-        # would crash curses.addstr with ValueError (#451, #508).
+        # the shared printable stand-in and never a raw control character, so no
+        # in-band sentinel ever reaches the rendered screen (#451, #508).
         sessions = [
             _session(
                 "101",

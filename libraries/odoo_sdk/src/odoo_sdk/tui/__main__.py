@@ -1,6 +1,6 @@
 """Console entry point for the btop-style Odoo session TUI.
 
-Running ``odoo-tui`` or ``python -m odoo_sdk.tui`` opens the curses TUI that
+Running ``odoo-tui`` or ``python -m odoo_sdk.tui`` opens the Textual TUI that
 explores global sessions over a date window. It builds the same default command
 registry the MCP server uses — the client, the local state store, and the
 resolved config are injected once and shared with every command the TUI composes
@@ -21,7 +21,7 @@ from .app import TuiDeps, run
 
 
 def main() -> None:  # pragma: no cover
-    """Build the default registry and dependencies, then run the curses TUI.
+    """Build the default registry and dependencies, then run the Textual TUI.
 
     The client, the local state store, and the resolved config are created once
     and injected — into the registry (shared with every command) and into the

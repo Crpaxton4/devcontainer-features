@@ -3,9 +3,11 @@
 An event ingested with an empty ``task_ids`` array is invisible to billing (the
 derivation requires ``json_array_length(task_ids) > 0``), so an unattributed
 meeting or email silently never bills. This module turns the raw unattributed
-events for a window into the rows the TUI's triage mode displays, and composes
-the triage screen. Both are pure functions tested without a terminal; the driver
-in :mod:`~odoo_sdk.tui.app` owns the keystrokes and the DB writes.
+events for a window into the rows the TUI's triage mode displays, and renders
+them as the plain-text lines the triage screen shows. Both are pure functions
+tested without a terminal; the transitions in :mod:`~odoo_sdk.tui.app` own the
+DB writes and the Textual screen in :mod:`~odoo_sdk.tui.textual_app` owns the
+keystrokes.
 
 **Series granularity.** Calendar meetings are ingested as a *tick series*: one
 event per tick, every tick sharing a parent external-id prefix of the shape
@@ -30,8 +32,6 @@ from typing import Optional, Sequence
 
 from odoo_sdk.state import EventRecord
 
-from .frame import Frame, _fit
-
 # A tick-series member's external id is ``<parent>:tick:<iso>`` where ``<iso>`` is
 # the tick's UTC ISO-8601 timestamp — exactly what the ingestion producer emits.
 # The suffix is matched structurally (date, time, optional fractional seconds,
@@ -41,8 +41,6 @@ from .frame import Frame, _fit
 # on it collapses a whole expanded meeting into one row.
 _TICK_TIMESTAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
 _SERIES_RE = re.compile(rf"^(.*:tick:){_TICK_TIMESTAMP}$")
-
-_TRIAGE_FOOTER = " ↑/↓ select  0-9 task id  ⏎ assign  s:skip  q:back "
 
 
 def series_key(external_id: Optional[str]) -> Optional[str]:
@@ -128,45 +126,21 @@ def build_triage_rows(events: Sequence[EventRecord]) -> list[TriageRow]:
     return rows
 
 
-def _row_line(row: TriageRow, selected: bool, width: int) -> str:
+def row_line(row: TriageRow, selected: bool) -> str:
     """Render one triage row: a marker, source, count, timestamp, and subject."""
     marker = ">" if selected else " "
     count = f"x{row.count}" if row.count > 1 else "  "
     subject = row.subject or row.display_key
-    line = f"{marker} {row.source:<8} {count:<3} {row.timestamp[:19]}  {subject}"
-    return _fit(line, width)
+    return f"{marker} {row.source:<8} {count:<3} {row.timestamp[:19]}  {subject}"
 
 
-def compose_triage_frame(
-    rows: Sequence[TriageRow],
-    selected: int,
-    task_input: str,
-    width: int,
-    height: int,
-) -> Frame:
-    """Compose the triage screen: a header, the row list, an input line, a footer.
+def triage_body_lines(rows: Sequence[TriageRow], selected: int) -> list[str]:
+    """Render the triage row list (one line per series/lone event).
 
-    The transient status/confirmation line is deliberately NOT rendered here: the
-    driver's ``_draw`` paints ``state.status`` on the bottom screen row for every
-    mode, exactly as it does for the timeline view, so composing it into the frame
-    too would print it twice on adjacent lines.
-
-    :param rows: The triage rows to list (one per series or lone event).
-    :param selected: Index of the highlighted row.
-    :param task_input: The task id being typed (digits only), shown live.
-    :param width: Terminal column count.
-    :param height: Terminal row count.
-    :return: A :class:`Frame` of exactly ``height`` rows each ``width`` wide.
+    The header, the live task-id input echo, and the transient status line are
+    separate widgets on the Textual triage screen, so only the body rows are
+    composed here. An empty queue renders its explanatory placeholder instead.
     """
-    header = _fit(f" triage — {len(rows)} unattributed item(s)", width)
-    footer = _fit(_TRIAGE_FOOTER, width)
-    prompt = _fit(f" task id > {task_input}", width)
-    # Body rows are everything between the header and the pinned prompt/footer.
-    body_height = max(0, height - 3)
-    if rows:
-        body = [_row_line(row, i == selected, width) for i, row in enumerate(rows)]
-    else:
-        body = [_fit(" nothing to triage — every event in window is attributed", width)]
-    body = body[:body_height] + [_fit("", width)] * (body_height - len(body))
-    composed = [header, *body, prompt, footer]
-    return Frame(rows=composed[:height], width=width, height=height)
+    if not rows:
+        return [" nothing to triage — every event in window is attributed"]
+    return [row_line(row, index == selected) for index, row in enumerate(rows)]

@@ -6,9 +6,10 @@ cross-task overlap). The main list stays terse; the selected card's full
 evidence — citations, overlaps, and the logged-hours detail — expands into a
 pane beneath the list on demand, so every card is not crammed with detail.
 
-Pure frame composition, tested without a terminal. The driver in
-:mod:`~odoo_sdk.tui.app` owns the keystrokes, the store reads that build the
-cards, and the best-effort Odoo read; nothing here writes or uploads.
+Pure line composition, tested without a terminal. The transitions in
+:mod:`~odoo_sdk.tui.app` own the store reads that build the cards and the
+best-effort Odoo read; the Textual screen in :mod:`~odoo_sdk.tui.textual_app`
+owns the keystrokes; nothing here writes or uploads.
 """
 
 from __future__ import annotations
@@ -16,9 +17,6 @@ from __future__ import annotations
 from typing import Sequence
 
 from .evidence import Overlap, ReviewCard
-from .frame import Frame, _fit
-
-_REVIEW_FOOTER = " ↑/↓ select  e/⏎ evidence  q:back "
 
 
 def _overlap_badge(overlaps: tuple[Overlap, ...]) -> str:
@@ -45,14 +43,14 @@ def _card_badges(card: ReviewCard) -> str:
     return ("  " + "  ".join(badges)) if badges else ""
 
 
-def _card_line(card: ReviewCard, selected: bool, width: int) -> str:
+def card_line(card: ReviewCard, selected: bool) -> str:
     """Render one session card: marker, task, hours, confidence, and badges."""
     marker = ">" if selected else " "
     head = f"{marker} task {card.task_id:<7} {card.hours:>5.1f}h  [{card.confidence}]"
-    return _fit(head + _card_badges(card), width)
+    return head + _card_badges(card)
 
 
-def _evidence_lines(card: ReviewCard, width: int) -> list[str]:
+def evidence_lines(card: ReviewCard) -> list[str]:
     """Return the expanded evidence pane for the selected card.
 
     Lists the logged-hours detail (item 7), every cross-task overlap (item 8), and
@@ -60,71 +58,38 @@ def _evidence_lines(card: ReviewCard, width: int) -> list[str]:
     sees exactly what the confidence class was computed from.
     """
     lines = [
-        _fit(
-            f" evidence — task {card.task_id}"
-            f"  {card.started_at[:19]} → {card.ended_at[:19]}",
-            width,
-        )
+        f" evidence — task {card.task_id}"
+        f"  {card.started_at[:19]} → {card.ended_at[:19]}"
     ]
     if card.logged_flag:
         lines.append(
-            _fit(
-                f"   already logged {card.logged_hours:.2f}h on this task today"
-                f" ({card.logged_flag} overlap)",
-                width,
-            )
+            f"   already logged {card.logged_hours:.2f}h on this task today"
+            f" ({card.logged_flag} overlap)"
         )
     for overlap in card.overlaps:
-        lines.append(
-            _fit(f"   overlaps task {overlap.task_id} by {overlap.minutes}m", width)
-        )
+        lines.append(f"   overlaps task {overlap.task_id} by {overlap.minutes}m")
     if card.unvalidated:
-        lines.append(_fit("   ! task id unvalidated (flagged weak)", width))
+        lines.append("   ! task id unvalidated (flagged weak)")
     if card.citations:
-        lines.extend(_fit(f"   • {citation}", width) for citation in card.citations)
+        lines.extend(f"   • {citation}" for citation in card.citations)
     else:
-        lines.append(_fit("   (no linked events)", width))
+        lines.append("   (no linked events)")
     return lines
 
 
-def _body_lines(
-    cards: Sequence[ReviewCard], selected: int, expanded: bool, width: int
+def review_body_lines(
+    cards: Sequence[ReviewCard], selected: int, expanded: bool
 ) -> list[str]:
-    """Return the card list, plus the evidence pane for the selection when open."""
-    if not cards:
-        return [_fit(" no sessions in window to review", width)]
-    lines = [_card_line(card, i == selected, width) for i, card in enumerate(cards)]
-    if expanded:
-        lines.append(_fit("", width))
-        lines.extend(_evidence_lines(cards[selected], width))
-    return lines
+    """Render the card list, plus the evidence pane for the selection when open.
 
-
-def compose_review_frame(
-    cards: Sequence[ReviewCard],
-    selected: int,
-    expanded: bool,
-    width: int,
-    height: int,
-) -> Frame:
-    """Compose the review screen: a header, the card list, an evidence pane, footer.
-
-    Like the triage frame, the transient status line is left to the driver's
-    ``_draw`` (painted on the bottom screen row for every mode), so it is not
-    composed here. The body is clipped and padded to exactly fill the space
-    between the header and the pinned footer.
-
-    :param cards: The review cards to list (one per derived session).
-    :param selected: Index of the highlighted card.
-    :param expanded: Whether the selected card's evidence pane is open.
-    :param width: Terminal column count.
-    :param height: Terminal row count.
-    :return: A :class:`Frame` of exactly ``height`` rows each ``width`` wide.
+    The header and the transient status line are separate widgets on the Textual
+    review screen, so only the body is composed here. An empty window renders its
+    explanatory placeholder instead.
     """
-    header = _fit(f" review — {len(cards)} session(s)", width)
-    footer = _fit(_REVIEW_FOOTER, width)
-    body_height = max(0, height - 2)
-    body = _body_lines(cards, selected, expanded, width)
-    body = body[:body_height] + [_fit("", width)] * (body_height - len(body))
-    composed = [header, *body, footer]
-    return Frame(rows=composed[:height], width=width, height=height)
+    if not cards:
+        return [" no sessions in window to review"]
+    lines = [card_line(card, index == selected) for index, card in enumerate(cards)]
+    if expanded:
+        lines.append("")
+        lines.extend(evidence_lines(cards[selected]))
+    return lines

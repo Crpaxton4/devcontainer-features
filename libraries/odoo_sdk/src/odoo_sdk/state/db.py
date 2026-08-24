@@ -35,7 +35,7 @@ TRACKER_DB_FILENAME = "tracker.db"
 # events still group deterministically in the SQL-derived read path
 # (:meth:`LocalStateClient.derive_sessions_overlapping`), and unlike the old
 # ``"\x00agent"`` sentinel it carries no control character into JSON, MCP
-# responses, or a curses ``addstr``. It is also exactly what the in-Python
+# responses, or a rendered TUI screen. It is also exactly what the in-Python
 # derivation (:mod:`odoo_sdk.sessionization.transform`) already produced, so the
 # two paths no longer diverge for the same input.
 AGENTLESS_REPO = ""

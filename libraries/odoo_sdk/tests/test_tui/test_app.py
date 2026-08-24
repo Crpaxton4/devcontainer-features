@@ -1,13 +1,13 @@
-"""Tests for the TUI driver's pure command-composition and key handling.
+"""Tests for the TUI's pure command-composition and state transitions.
 
-The curses render loop itself is excluded from coverage; these tests exercise the
-pure state transitions and the command composition through a fake registry, so no
-terminal and no live Odoo are involved. The driver receives its dependencies as an
-injected :class:`~odoo_sdk.tui.app.TuiDeps` bundle (client, store, config, and the
-command registry) rather than harvesting them off command instances.
+The Textual driver itself is exercised headlessly in ``test_textual_app``; these
+tests cover the pure transitions and the command composition through a fake
+registry, so no terminal and no live Odoo are involved. The transitions receive
+their dependencies as an injected :class:`~odoo_sdk.tui.app.TuiDeps` bundle
+(client, store, config, and the command registry) rather than harvesting them
+off command instances.
 """
 
-import curses
 import unittest
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
@@ -19,18 +19,24 @@ from odoo_sdk.tui.app import (
     default_window,
     do_export,
     do_resync,
-    handle_key,
+    erase_triage_digit,
+    exit_review,
+    exit_triage,
+    move_review_selection,
+    move_triage_selection,
     move_window,
     query_sessions,
     refresh,
     request_upload,
     run,
-    _draw,
+    toggle_evidence,
+    type_triage_digit,
     _resync_status,
-    _safe,
     _upload_sessions,
 )
 from odoo_sdk.transport.errors import OdooServerError
+from odoo_sdk.tui.evidence import WEAK, ReviewCard
+from odoo_sdk.tui.triage import TriageRow
 from odoo_sdk.tui.window import DateWindow
 
 
@@ -342,9 +348,29 @@ class TestUploadGate(unittest.TestCase):
         self.assertIn("1 failed", resolved.status)
         self.assertIn("analytic account", resolved.status)
 
+    def test_confirm_summarises_multiple_failures_with_first_reason(self):
+        deps = _deps()
+        state = AppState(
+            window=default_window(), sessions=_sessions(3), pending_upload=True
+        )
+        with patch(
+            "odoo_sdk.tui.app.upload_sessions",
+            return_value={
+                "uploaded": 1,
+                "retired": 0,
+                "failed": [
+                    {"session_key": "101|1", "error": "boom"},
+                    {"session_key": "102|2", "error": "later"},
+                ],
+            },
+        ):
+            resolved = confirm_upload(state, deps, confirmed=True)
+        self.assertIn("2 failed (first: boom)", resolved.status)
+
     def test_confirm_catches_upload_error_without_crashing(self):
         # #576: a fault that escapes the loop (e.g. the connection dropping) must
-        # be caught and rendered on the status line, never propagate out of curses.
+        # be caught and rendered on the status line, never propagate out of the
+        # driver and kill the app.
         deps = _deps()
         state = AppState(
             window=default_window(), sessions=_sessions(1), pending_upload=True
@@ -382,89 +408,6 @@ class TestUploadSessions(unittest.TestCase):
             start_date="2026-06-01",
             end_date="2026-06-03",
         )
-
-
-class TestHandleKey(unittest.TestCase):
-    def _state(self, **kw):
-        base = dict(
-            window=DateWindow(date(2026, 6, 3), date(2026, 6, 5)),
-            sessions=_sessions(2),
-        )
-        base.update(kw)
-        return AppState(**base)
-
-    def _writer(self):
-        return lambda content, name: f"/out/{name}"
-
-    def test_quit_key_returns_should_quit(self):
-        deps = _deps()
-        _, should_quit = handle_key(
-            deps, self._state(), ord("q"), writer=self._writer()
-        )
-        self.assertTrue(should_quit)
-
-    def test_escape_key_quits(self):
-        deps = _deps()
-        _, should_quit = handle_key(deps, self._state(), 27, writer=self._writer())
-        self.assertTrue(should_quit)
-
-    def test_arrow_key_moves_window(self):
-        deps = _deps()
-        state, should_quit = handle_key(
-            deps, self._state(), curses.KEY_LEFT, writer=self._writer()
-        )
-        self.assertFalse(should_quit)
-        self.assertEqual(state.window.start, date(2026, 6, 2))
-
-    def test_upload_key_arms_gate(self):
-        deps = _deps()
-        state, _ = handle_key(deps, self._state(), ord("u"), writer=self._writer())
-        self.assertTrue(state.pending_upload)
-
-    def test_pending_upload_consumes_confirm_key(self):
-        deps = _deps()
-        state = self._state(pending_upload=True)
-        with patch(
-            "odoo_sdk.tui.app.upload_sessions",
-            return_value={"uploaded": 2, "retired": 0},
-        ):
-            resolved, should_quit = handle_key(
-                deps, state, ord("y"), writer=self._writer()
-            )
-        self.assertFalse(should_quit)
-        self.assertFalse(resolved.pending_upload)
-        self.assertIn("uploaded", resolved.status)
-
-    def test_pending_upload_cancels_on_other_key(self):
-        deps = _deps()
-        state = self._state(pending_upload=True)
-        resolved, _ = handle_key(deps, state, ord("n"), writer=self._writer())
-        self.assertIn("cancelled", resolved.status)
-
-    def test_unknown_key_is_noop(self):
-        deps = _deps()
-        state = self._state()
-        result, should_quit = handle_key(
-            deps, state, ord("z"), writer=self._writer()
-        )
-        self.assertFalse(should_quit)
-        self.assertEqual(result, state)
-
-    def test_export_key_triggers_export(self):
-        store = MagicMock()
-        store.get_events.return_value = []
-        deps = _deps(store=store)
-        state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
-        result, _ = handle_key(deps, state, ord("e"), writer=self._writer())
-        self.assertIn("exported markdown", result.status)
-
-    def test_csv_export_key_triggers_csv_export(self):
-        store = MagicMock()
-        store.get_events.return_value = []
-        deps = _deps(store=store)
-        state = self._state(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)))
-        result, _ = handle_key(deps, state, ord("c"), writer=self._writer())
-        self.assertIn("exported csv", result.status)
 
 
 class TestResync(unittest.TestCase):
@@ -509,90 +452,128 @@ class TestResync(unittest.TestCase):
         self.assertIn("github: skipped (no gh)", result.status)
         self.assertFalse(result.pending_upload)
 
-    def test_resync_key_dispatches(self):
-        deps = self._resync_deps({"git": {"inserted": 1}})
-        state = AppState(
-            window=DateWindow(date(2026, 6, 3), date(2026, 6, 5)), sessions=[]
+
+def _triage_state(rows, **kw):
+    base = dict(
+        window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)),
+        sessions=[],
+        mode="triage",
+        triage_rows=rows,
+    )
+    base.update(kw)
+    return AppState(**base)
+
+
+def _triage_rows(n=3):
+    return [
+        TriageRow(f"gcal:evt-{i}", (i,), "chatter", "2026-06-01T09:00:00", f"m{i}")
+        for i in range(n)
+    ]
+
+
+class TestTriageTransitions(unittest.TestCase):
+    """The pure triage-mode transitions the Textual bindings dispatch to."""
+
+    def test_type_digit_appends(self):
+        state = _triage_state(_triage_rows(), triage_input="24")
+        self.assertEqual(type_triage_digit(state, "6").triage_input, "246")
+
+    def test_erase_digit_trims_and_is_safe_on_empty(self):
+        state = _triage_state(_triage_rows(), triage_input="246")
+        self.assertEqual(erase_triage_digit(state).triage_input, "24")
+        empty = _triage_state(_triage_rows(), triage_input="")
+        self.assertEqual(erase_triage_digit(empty).triage_input, "")
+
+    def test_move_selection_clamps_and_discards_input(self):
+        state = _triage_state(_triage_rows(3), triage_selected=0, triage_input="9")
+        moved = move_triage_selection(state, 1)
+        self.assertEqual(moved.triage_selected, 1)
+        self.assertEqual(moved.triage_input, "")
+        self.assertEqual(move_triage_selection(moved, -5).triage_selected, 0)
+        self.assertEqual(move_triage_selection(moved, 5).triage_selected, 2)
+
+    def test_move_selection_on_empty_queue_is_noop(self):
+        state = _triage_state([])
+        self.assertEqual(move_triage_selection(state, 1), state)
+
+    def test_exit_returns_to_main_and_clears_input(self):
+        state = _triage_state(_triage_rows(), triage_input="12", status="x")
+        left = exit_triage(state)
+        self.assertEqual(left.mode, "main")
+        self.assertEqual(left.triage_input, "")
+        self.assertEqual(left.status, "")
+
+
+def _review_state(cards, **kw):
+    base = dict(
+        window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)),
+        sessions=[],
+        mode="review",
+        review_cards=cards,
+    )
+    base.update(kw)
+    return AppState(**base)
+
+
+def _review_cards(n=3):
+    return [
+        ReviewCard(
+            i, str(100 + i), "2026-06-01T09:00:00", "2026-06-01T10:00:00",
+            1.0, WEAK, 0.0, "", (), (), False,
         )
-        result, should_quit = handle_key(
-            deps, state, ord("r"), writer=lambda c, n: n
-        )
-        self.assertFalse(should_quit)
-        self.assertIn("resync", result.status)
-        self.assertEqual(len(deps.registry["resync"].calls), 1)
+        for i in range(n)
+    ]
+
+
+class TestReviewTransitions(unittest.TestCase):
+    """The pure review-mode transitions the Textual bindings dispatch to."""
+
+    def test_move_selection_clamps_and_collapses_pane(self):
+        state = _review_state(_review_cards(3), review_expanded=True)
+        moved = move_review_selection(state, 1)
+        self.assertEqual(moved.review_selected, 1)
+        self.assertFalse(moved.review_expanded)
+        self.assertEqual(move_review_selection(moved, -5).review_selected, 0)
+        self.assertEqual(move_review_selection(moved, 5).review_selected, 2)
+
+    def test_move_selection_on_empty_cards_is_noop(self):
+        state = _review_state([])
+        self.assertEqual(move_review_selection(state, 1), state)
+
+    def test_toggle_evidence_flips_and_guards_empty(self):
+        state = _review_state(_review_cards())
+        opened = toggle_evidence(state)
+        self.assertTrue(opened.review_expanded)
+        self.assertFalse(toggle_evidence(opened).review_expanded)
+        empty = _review_state([])
+        self.assertEqual(toggle_evidence(empty), empty)
+
+    def test_exit_returns_to_main_and_collapses(self):
+        state = _review_state(_review_cards(), review_expanded=True, status="x")
+        left = exit_review(state)
+        self.assertEqual(left.mode, "main")
+        self.assertFalse(left.review_expanded)
+        self.assertEqual(left.status, "")
 
 
 class TestRunHandlesKeyboardInterrupt(unittest.TestCase):
-    """``Ctrl+C`` at the blocking ``getch`` must exit cleanly (issue #125)."""
+    """``Ctrl+C`` in the Textual loop must exit cleanly (issue #125)."""
 
     def test_run_swallows_keyboard_interrupt(self):
-        # ``curses.wrapper`` restores the terminal, then re-raises Ctrl+C as a
-        # KeyboardInterrupt; ``run`` must treat it as a normal quit.
-        def boom(*_args, **_kwargs):
-            raise KeyboardInterrupt
-
-        with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom) as wrapper:
+        # Textual restores the terminal on shutdown; ``run`` must treat a Ctrl+C
+        # surfacing as KeyboardInterrupt as a normal quit.
+        with patch("odoo_sdk.tui.textual_app.OdooTuiApp") as MockApp:
+            MockApp.return_value.run.side_effect = KeyboardInterrupt
             run(_deps())  # must not raise
-
-        wrapper.assert_called_once()
+        MockApp.assert_called_once()
+        MockApp.return_value.run.assert_called_once_with()
 
     def test_run_propagates_other_errors(self):
         # Only KeyboardInterrupt is a normal quit; real errors still surface.
-        def boom(*_args, **_kwargs):
-            raise RuntimeError("curses exploded")
-
-        with patch("odoo_sdk.tui.app.curses.wrapper", side_effect=boom):
+        with patch("odoo_sdk.tui.textual_app.OdooTuiApp") as MockApp:
+            MockApp.return_value.run.side_effect = RuntimeError("driver exploded")
             with self.assertRaises(RuntimeError):
                 run(_deps())
-
-
-class _NulRejectingScreen:
-    """A fake curses screen that raises ValueError on an embedded NUL, like the
-    real ``addstr`` does, so ``_draw`` is proven to tolerate NUL-bearing lines."""
-
-    def __init__(self, rows, cols):
-        self._rows, self._cols = rows, cols
-        self.written = []
-
-    def getmaxyx(self):
-        return (self._rows, self._cols)
-
-    def erase(self):
-        pass
-
-    def addstr(self, _y, _x, text):
-        if "\x00" in text:
-            raise ValueError("embedded null character")
-        self.written.append(text)
-
-    def noutrefresh(self):
-        pass
-
-
-class TestSafe(unittest.TestCase):
-    def test_strips_embedded_nul(self):
-        self.assertEqual(_safe("\x00agent"), "agent")
-
-    def test_strips_other_c0_control_chars(self):
-        self.assertEqual(_safe("a\x01b\x1fc"), "abc")
-
-    def test_preserves_tab_and_printable_text(self):
-        self.assertEqual(_safe("#101 (agent)\tdev"), "#101 (agent)\tdev")
-
-
-class TestDrawToleratesNul(unittest.TestCase):
-    def test_draw_survives_nul_in_frame_and_status(self):
-        # A raw sentinel that slipped into a rendered line must not crash the
-        # loop: _draw strips it so addstr never sees the NUL (#451).
-        screen = _NulRejectingScreen(10, 40)
-        state = AppState(window=default_window(), sessions=[], status="x\x00y")
-        fake_frame = MagicMock(rows=["\x00agent line", "clean line"])
-        with patch("odoo_sdk.tui.app._compose", return_value=fake_frame), patch(
-            "odoo_sdk.tui.app.curses.doupdate"
-        ):
-            _draw(screen, state)  # must not raise ValueError
-        self.assertIn("agent line", screen.written)
-        self.assertIn("xy", screen.written)
 
 
 if __name__ == "__main__":

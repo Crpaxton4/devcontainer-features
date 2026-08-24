@@ -1,28 +1,29 @@
-"""Curses driver for the btop-style TUI.
+"""Pure application state and transitions for the Textual TUI.
 
-This is the one impure surface: it owns the ``curses`` loop, parses keystrokes,
-calls commands through a :class:`~odoo_sdk.commands.Registry`, and blits the rows
-returned by the pure frame composer. It holds no business logic — session
-detection is the ``query_sessions`` command's job, export reuses the #105
-renderers, upload delegates to the timesheet commands behind a confirm gate, and
-the triage write delegates to the ``assign_event`` command.
+This module owns the terminal-agnostic half of the TUI: the injected
+:class:`TuiDeps` bundle, the serializable :class:`AppState`, and every state
+transition (refresh, window moves, export, the upload confirm gate, resync,
+triage, and review). It holds no business logic — session detection is the
+``query_sessions`` command's job, export reuses the #105 renderers, upload
+delegates to the shared billing loop behind a confirm gate, and the triage
+write delegates to the ``assign_event`` command.
 
 Its dependencies — the RPC client, the local state store, and the resolved
 config, plus the command registry it composes — are injected once at
 construction as a :class:`TuiDeps` bundle (``tui/__main__`` has all of them in
-hand). The driver never harvests them off command instances (no reaching into a
-command's private ``._client`` or its ``.state`` / ``.config``); every state
-mutation goes through a command, so MCP and CLI can share the same operations.
+hand). The transitions never harvest them off command instances (no reaching
+into a command's private ``._client`` or its ``.state`` / ``.config``); every
+state mutation goes through a command, so MCP and CLI can share the same
+operations.
 
-The genuinely terminal-bound parts (the render loop, raw ``addstr`` blitting, and
-the console entry) are marked ``# pragma: no cover``; the command composition,
-key handling, and window/session state transitions are pure functions tested
-without a terminal.
+The genuinely terminal-bound half — the Textual :class:`~textual.app.App`, its
+screens, and their key bindings — lives in :mod:`~odoo_sdk.tui.textual_app` and
+calls back into these pure transitions, so everything here is tested without a
+terminal.
 """
 
 from __future__ import annotations
 
-import curses
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import Any, Callable, Optional
@@ -36,30 +37,11 @@ from odoo_sdk.billing.upload import range_bounds, upload_sessions
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
-from .frame import compose_frame
-from .review import compose_review_frame
-from .triage import TriageRow, build_triage_rows, compose_triage_frame
+from .triage import TriageRow, build_triage_rows
 from .window import DateWindow, apply_action
 
-# Real curses key codes mapped to the window controller's action names.
-_KEY_ACTIONS = {
-    curses.KEY_LEFT: "left",
-    curses.KEY_RIGHT: "right",
-    curses.KEY_UP: "up",
-    curses.KEY_DOWN: "down",
-}
-
-_EXPORT_MD_KEY = ord("e")
-_EXPORT_CSV_KEY = ord("c")
-_UPLOAD_KEY = ord("u")
-_RESYNC_KEY = ord("r")
-_TRIAGE_KEY = ord("t")
-_REVIEW_KEY = ord("v")
-_SKIP_KEY = ord("s")
-_QUIT_KEYS = (ord("q"), 27)  # q or ESC
-_CONFIRM_KEYS = (ord("y"), ord("Y"))
-_ENTER_KEYS = (ord("\n"), ord("\r"), curses.KEY_ENTER)
-_BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
+# Keys (Textual key names) that answer the upload confirm gate affirmatively.
+_CONFIRM_KEYS = ("y", "Y")
 
 _MODE_MAIN = "main"
 _MODE_TRIAGE = "triage"
@@ -225,7 +207,7 @@ def confirm_upload(state: AppState, deps: TuiDeps, confirmed: bool) -> AppState:
 
     The upload is fully guarded (#576): a server fault that escapes the loop
     (e.g. the sweep faulting, or the connection dropping) is caught and rendered
-    on the status line rather than propagating out of curses and killing the
+    on the status line rather than propagating out of the driver and killing the
     app. Per-session faults never even reach here — the shared loop isolates them
     (#582) into ``failed`` rows, which are summarised in the status alongside the
     billed count so a partial upload is visible instead of silent.
@@ -357,17 +339,27 @@ def enter_triage(deps: TuiDeps, state: AppState) -> AppState:
     )
 
 
-def _exit_triage(state: AppState) -> AppState:
+def exit_triage(state: AppState) -> AppState:
     """Leave the triage queue and return to the timeline view."""
     return replace(state, mode=_MODE_MAIN, triage_input="", status="")
 
 
-def _move_triage_selection(state: AppState, delta: int) -> AppState:
+def move_triage_selection(state: AppState, delta: int) -> AppState:
     """Move the triage highlight by ``delta``, clamped, discarding a typed id."""
     if not state.triage_rows:
         return state
     target = max(0, min(state.triage_selected + delta, len(state.triage_rows) - 1))
     return replace(state, triage_selected=target, triage_input="")
+
+
+def type_triage_digit(state: AppState, digit: str) -> AppState:
+    """Append one typed digit to the triage task-id input."""
+    return replace(state, triage_input=state.triage_input + digit)
+
+
+def erase_triage_digit(state: AppState) -> AppState:
+    """Erase the last typed digit of the triage task-id input."""
+    return replace(state, triage_input=state.triage_input[:-1])
 
 
 def _parse_task_id(text: str) -> Optional[int]:
@@ -407,27 +399,6 @@ def assign_triage(deps: TuiDeps, state: AppState) -> AppState:
         triage_input="",
         status=f"assigned {updated} events of series {row.display_key} to task {task_id}",
     )
-
-
-def handle_triage_key(deps: TuiDeps, state: AppState, key: int) -> AppState:
-    """Advance triage-mode state for one keypress (never quits the app).
-
-    ``q``/ESC returns to the timeline; up/down move the highlight; ``s`` skips to
-    the next row; digits build the task id; backspace edits it; Enter assigns.
-    """
-    if key in _QUIT_KEYS:
-        return _exit_triage(state)
-    if key == curses.KEY_UP:
-        return _move_triage_selection(state, -1)
-    if key == curses.KEY_DOWN or key == _SKIP_KEY:
-        return _move_triage_selection(state, 1)
-    if key in _BACKSPACE_KEYS:
-        return replace(state, triage_input=state.triage_input[:-1])
-    if key in _ENTER_KEYS:
-        return assign_triage(deps, state)
-    if ord("0") <= key <= ord("9"):
-        return replace(state, triage_input=state.triage_input + chr(key))
-    return state
 
 
 def _member_events(
@@ -491,12 +462,12 @@ def enter_review(deps: TuiDeps, state: AppState) -> AppState:
     )
 
 
-def _exit_review(state: AppState) -> AppState:
+def exit_review(state: AppState) -> AppState:
     """Leave the review surface and return to the timeline view."""
     return replace(state, mode=_MODE_MAIN, review_expanded=False, status="")
 
 
-def _move_review_selection(state: AppState, delta: int) -> AppState:
+def move_review_selection(state: AppState, delta: int) -> AppState:
     """Move the review highlight by ``delta``, clamped, collapsing the pane."""
     if not state.review_cards:
         return state
@@ -504,72 +475,11 @@ def _move_review_selection(state: AppState, delta: int) -> AppState:
     return replace(state, review_selected=target, review_expanded=False)
 
 
-def _toggle_evidence(state: AppState) -> AppState:
+def toggle_evidence(state: AppState) -> AppState:
     """Toggle the selected card's evidence pane (no-op with no cards)."""
     if not state.review_cards:
         return state
     return replace(state, review_expanded=not state.review_expanded)
-
-
-def handle_review_key(state: AppState, key: int) -> AppState:
-    """Advance review-mode state for one keypress (never quits the app).
-
-    ``q``/ESC returns to the timeline; up/down move the highlight (collapsing the
-    open pane); ``e``/Enter toggles the selected card's evidence pane. The cards
-    are read-only — no key here trims hours or uploads.
-    """
-    if key in _QUIT_KEYS:
-        return _exit_review(state)
-    if key == curses.KEY_UP:
-        return _move_review_selection(state, -1)
-    if key == curses.KEY_DOWN:
-        return _move_review_selection(state, 1)
-    if key == _EXPORT_MD_KEY or key in _ENTER_KEYS:
-        return _toggle_evidence(state)
-    return state
-
-
-def handle_key(
-    deps: TuiDeps,
-    state: AppState,
-    key: int,
-    *,
-    writer: Callable[[str, str], str],
-) -> tuple[AppState, bool]:
-    """Advance the app state for one keypress; return ``(state, should_quit)``.
-
-    Pure w.r.t. the terminal: it only calls commands (through ``deps``) and the
-    injected ``writer``. In triage mode every key is routed to the triage handler
-    (which never quits the app). Otherwise the confirm gate takes precedence so an
-    armed upload consumes the next key as its yes/no answer.
-    """
-    if state.mode == _MODE_TRIAGE:
-        return handle_triage_key(deps, state, key), False
-    if state.mode == _MODE_REVIEW:
-        return handle_review_key(state, key), False
-    if state.pending_upload:
-        return (
-            confirm_upload(state=state, deps=deps, confirmed=key in _CONFIRM_KEYS),
-            False,
-        )
-    if key in _QUIT_KEYS:
-        return state, True
-    action = _KEY_ACTIONS.get(key)
-    if action is not None:
-        return move_window(deps, state, action), False
-    if key == _EXPORT_MD_KEY:
-        return do_export(state, deps, "markdown", writer), False
-    if key == _EXPORT_CSV_KEY:
-        return do_export(state, deps, "csv", writer), False
-    if key == _UPLOAD_KEY:
-        return request_upload(state), False
-    if key == _RESYNC_KEY:
-        return do_resync(deps, state), False
-    if key == _TRIAGE_KEY:
-        return enter_triage(deps, state), False
-    if key == _REVIEW_KEY:
-        return enter_review(deps, state), False
-    return state, False
 
 
 def _file_writer(content: str, name: str) -> str:  # pragma: no cover
@@ -581,83 +491,16 @@ def _file_writer(content: str, name: str) -> str:  # pragma: no cover
     return str(path)
 
 
-def _compose(state: AppState, width: int, height: int) -> Any:  # pragma: no cover
-    """Compose the frame for ``state`` — triage, review, or the timeline."""
-    if state.mode == _MODE_TRIAGE:
-        return compose_triage_frame(
-            state.triage_rows,
-            state.triage_selected,
-            state.triage_input,
-            width,
-            height,
-        )
-    if state.mode == _MODE_REVIEW:
-        return compose_review_frame(
-            state.review_cards,
-            state.review_selected,
-            state.review_expanded,
-            width,
-            height,
-        )
-    return compose_frame(
-        state.sessions, state.window, width, height, empty_hint=state.empty_hint
-    )
+def run(deps: TuiDeps) -> None:
+    """Start the Textual TUI bound to ``deps`` and run until quit.
 
-
-def _safe(line: str) -> str:
-    """Strip NUL and other C0 control chars so ``addstr`` can never raise.
-
-    ``curses.addstr`` raises a plain ``ValueError`` (not ``curses.error``, so the
-    render loop's guard misses it) on an embedded NUL. Reserved in-band sentinels
-    such as :data:`~odoo_sdk.state.db.AGENTLESS_REPO_SENTINEL` are meant to be
-    translated before display, but this last-ditch strip means an unanticipated
-    one can never kill the TUI (#451).
+    ``Ctrl+C`` at the input loop surfaces as ``KeyboardInterrupt``; treat it as a
+    normal quit. Textual already restores the terminal on shutdown, so swallowing
+    the interrupt just avoids a noisy traceback.
     """
-    return "".join(ch for ch in line if ch >= " " or ch == "\t")
+    from .textual_app import OdooTuiApp
 
-
-def _draw(stdscr: Any, state: AppState) -> None:  # pragma: no cover
-    """Blit the composed frame for ``state`` onto the curses screen."""
-    height, width = stdscr.getmaxyx()
-    frame = _compose(state, width, max(height - 1, 0))
-    stdscr.erase()
-    for row_index, line in enumerate(frame.rows):
-        try:
-            stdscr.addstr(row_index, 0, _safe(line)[: width - 1])
-        except curses.error:
-            pass
-    if state.status:
-        try:
-            stdscr.addstr(height - 1, 0, _safe(state.status)[: width - 1])
-        except curses.error:
-            pass
-    stdscr.noutrefresh()
-    curses.doupdate()
-
-
-def _loop(stdscr: Any, deps: TuiDeps) -> None:  # pragma: no cover
-    """Run the interactive render/read loop until the user quits."""
-    curses.curs_set(0)
-    stdscr.keypad(True)
-    state = refresh(deps, AppState(window=default_window(), sessions=[]))
-    while True:
-        _draw(stdscr, state)
-        key = stdscr.getch()
-        if key == curses.KEY_RESIZE:
-            continue
-        state, should_quit = handle_key(deps, state, key, writer=_file_writer)
-        if should_quit:
-            break
-
-
-def run(deps: TuiDeps) -> None:  # pragma: no cover
-    """Start the curses TUI bound to ``deps`` and run until quit.
-
-    ``Ctrl+C`` at the blocking ``getch`` surfaces as ``KeyboardInterrupt``; treat
-    it as a normal quit. ``curses.wrapper`` already restores the terminal in its
-    own ``finally``, so swallowing the interrupt just avoids a noisy traceback.
-    """
     try:
-        curses.wrapper(_loop, deps)
+        OdooTuiApp(deps).run()
     except KeyboardInterrupt:
         pass  # Ctrl+C is a normal quit; the terminal is already restored.

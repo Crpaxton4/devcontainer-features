@@ -21,8 +21,9 @@ about the window, not a missing build step (see
 odoo-tui          # or: python -m odoo_sdk.tui
 ```
 
-A curses view: header (date window, session/task/event/hour counts), a
-**timeline** panel beside a **stats** panel, and a keybind footer.
+A [Textual](https://textual.textualize.io/) view: header (date window,
+session/task/event/hour counts), a **timeline** panel beside a **stats** panel,
+and a keybind footer.
 
 ## The timeline and window model
 
