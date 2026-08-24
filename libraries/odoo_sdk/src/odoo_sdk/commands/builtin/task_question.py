@@ -1,6 +1,11 @@
 from typing import Any
 
-from ..command import Command, require_active_run
+from ..command import (
+    MAX_CHATTER_BODY_CHARS,
+    Command,
+    enforce_chatter_body_limit,
+    require_active_run,
+)
 from ._registration import builtin_command
 from odoo_sdk.utilities.env import assert_odoo_devcontainer
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
@@ -13,8 +18,10 @@ class TaskQuestionCommand(Command):
 
     _name = "task_question"
     _description = (
-        "Post a question (prefixed with [?]) to the Odoo task chatter. "
-        "Transitions the session from RUNNING to AWAITING_ANSWERS. "
+        "Post a question (prefixed with [?]) to the Odoo task chatter. The "
+        f"question is limited to {MAX_CHATTER_BODY_CHARS} characters (longer "
+        "questions are rejected, not truncated), so keep it simple, direct, "
+        "and plain. Transitions the session from RUNNING to AWAITING_ANSWERS. "
         "Multiple questions are allowed (self-loop on AWAITING_ANSWERS)."
     )
 
@@ -22,10 +29,12 @@ class TaskQuestionCommand(Command):
         """Post a question and update session state.
 
         :param task_id: Odoo project.task record id.
-        :param question: Question text to post.
+        :param question: Question text to post (max ``MAX_CHATTER_BODY_CHARS``
+            chars).
         :return: Confirmation with message id and new state.
         """
         assert_odoo_devcontainer()
+        enforce_chatter_body_limit(question, "question")
         db = self.state
         run = require_active_run(db, task_id)
 

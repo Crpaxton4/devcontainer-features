@@ -1017,6 +1017,55 @@ def make_get_task_tool_reg():
     return make_get_task_tool(_Reg())
 
 
+class TestTaskNoteToolSchema(unittest.TestCase):
+    """The task_note tool's wire schema after #604 (attachments) and #610 (cap)."""
+
+    def _make(self):
+        from odoo_sdk.mcp.tools.atomic import make_task_note_tool
+
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
+                return cmd
+
+        return make_task_note_tool(_Reg())
+
+    def _schema(self):
+        from fastmcp.tools.tool import Tool
+
+        return Tool.from_function(self._make(), name="task_note").parameters
+
+    def test_attachments_in_input_schema(self):
+        self.assertIn("attachments", self._schema()["properties"])
+
+    def test_attachments_optional_and_defaults_to_none(self):
+        schema = self._schema()
+        # ``task_id`` and ``note`` stay the only required properties, so an
+        # attachment-less call remains schema-valid (backwards compatibility).
+        self.assertEqual(schema["required"], ["task_id", "note"])
+        self.assertEqual(
+            schema["properties"]["attachments"].get("default"), None
+        )
+
+    def test_docstring_names_the_300_char_limit(self):
+        # MCP callers must see the #610 cap up front, in the tool itself as
+        # well as in the command-sourced description.
+        self.assertIn("300", self._make().__doc__)
+
+    def test_attachments_forwarded_to_command(self):
+        fn = self._make()
+        specs = [{"path": "/tmp/report.csv"}]
+        result = fn(5, "note", specs)
+        self.assertEqual(result["args"], (5, "note"))
+        self.assertEqual(result["kwargs"], {"attachments": specs})
+
+    def test_plain_call_forwards_none_attachments(self):
+        fn = self._make()
+        result = fn(5, "note")
+        self.assertEqual(result["kwargs"], {"attachments": None})
+
+
 class TestCompositionToolDecorator(unittest.TestCase):
     """``@composition_tool("name")`` populates ``COMPOSITION_TOOL_FACTORIES``."""
 

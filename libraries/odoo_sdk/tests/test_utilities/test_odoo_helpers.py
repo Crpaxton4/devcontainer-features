@@ -48,6 +48,7 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
         body_is_html: bool = False,
         message_type: str = "notification",
         subtype_xmlid: str | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> int:
         self.recorded = {
             "ids": ids,
@@ -56,6 +57,10 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
             "message_type": message_type,
             "subtype_xmlid": subtype_xmlid,
         }
+        # Recorded only when sent, mirroring how the helper omits the option
+        # entirely for a plain note (#604) — plain-note assertions stay exact.
+        if attachment_ids is not None:
+            self.recorded["attachment_ids"] = attachment_ids
         return 777
 
 
@@ -254,6 +259,38 @@ class TestPostChatterNote(unittest.TestCase):
                 "subtype_xmlid": "mail.mt_note",
             },
         )
+
+    def test_attachment_ids_forwarded_as_keyword_option(self):
+        # #604: attachment ids ride to ``message_post`` as a keyword option,
+        # exactly like the other keyword-only message options (#131).
+        executor = _KeywordOnlyMessagePostExecutor()
+        client = OdooClient(executor=executor)
+        result = post_chatter_note(
+            client, task_id=5, body="Hello", attachment_ids=[11, 12]
+        )
+        self.assertEqual(result, 777)
+        self.assertEqual(executor.recorded["attachment_ids"], [11, 12])
+        self.assertEqual(executor.recorded["ids"], [5])
+        self.assertEqual(executor.recorded["body"], "<p>Hello</p>")
+
+    def test_attachment_ids_is_keyword_only(self):
+        # The keyword-only convention (#131) covers the new parameter too: a
+        # positional attachment list must be rejected at the call site.
+        client = _client()
+        with self.assertRaises(TypeError):
+            post_chatter_note(client, 5, "Hello", [11, 12])  # type: ignore[misc]
+        client.execute.assert_not_called()
+
+    def test_plain_note_wire_call_omits_attachment_ids(self):
+        # ``attachment_ids=None`` (and ``[]``) must leave the wire call
+        # byte-for-byte identical to the pre-#604 shape.
+        for empty in (None, []):
+            client = _client()
+            client.execute.return_value = 1
+            post_chatter_note(client, task_id=5, body="Hello", attachment_ids=empty)
+            self.assertNotIn(
+                "attachment_ids", client.execute.call_args.kwargs
+            )
 
     def test_markdown_body_is_rendered_to_html(self):
         # Regression for #324: a Markdown body must reach ``message_post`` as

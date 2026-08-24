@@ -7,10 +7,17 @@ deduped by attachment id, with the raw ``datas`` bytes gated behind
 ``execute`` call and the assembled result shape are checked directly.
 """
 
+import base64
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
-from odoo_sdk.utilities.attachments import get_task_attachments
+from odoo_sdk.utilities.attachments import (
+    create_attachment,
+    create_attachments,
+    get_task_attachments,
+)
 
 _METADATA_FIELDS = ["name", "mimetype", "file_size", "create_date"]
 _CONTENT_FIELDS = _METADATA_FIELDS + ["datas"]
@@ -170,6 +177,202 @@ class TestGetTaskAttachments(unittest.TestCase):
     def test_returns_empty_list_when_no_attachments(self):
         client = _client_with([], [], [])
         self.assertEqual(get_task_attachments(client, task_id=99), [])
+
+
+# --------------------------------------------------------------------------- #
+# create_attachment / create_attachments (#604): the upload path.
+# --------------------------------------------------------------------------- #
+
+_B64_HELLO = base64.b64encode(b"hello world").decode("ascii")
+
+
+def _create_client(create_result=101):
+    """MagicMock client that only answers ``ir.attachment`` ``create`` calls."""
+    client = MagicMock()
+
+    def _execute(model, method, *args, **kwargs):
+        if (model, method) == ("ir.attachment", "create"):
+            return create_result
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+    client.execute.side_effect = _execute
+    return client
+
+
+class TestCreateAttachment(unittest.TestCase):
+    def _tmp_file(self, name="report.csv", payload=b"a,b\n1,2\n") -> str:
+        tmp_dir = tempfile.mkdtemp()
+        path = Path(tmp_dir) / name
+        path.write_bytes(payload)
+        return str(path)
+
+    def test_content_spec_creates_ir_attachment(self):
+        client = _create_client(create_result=42)
+        result = create_attachment(
+            client,
+            content=_B64_HELLO,
+            name="findings.md",
+            mimetype="text/markdown",
+        )
+        client.execute.assert_called_once_with(
+            "ir.attachment",
+            "create",
+            {
+                "name": "findings.md",
+                "datas": _B64_HELLO,
+                "mimetype": "text/markdown",
+            },
+        )
+        self.assertEqual(result, 42)
+
+    def test_path_spec_reads_and_base64_encodes_file(self):
+        path = self._tmp_file(payload=b"hello world")
+        client = _create_client()
+        create_attachment(client, path=path)
+        values = client.execute.call_args.args[2]
+        self.assertEqual(values["name"], "report.csv")
+        self.assertEqual(base64.b64decode(values["datas"]), b"hello world")
+
+    def test_mimetype_guessed_from_filename(self):
+        client = _create_client()
+        create_attachment(client, content=_B64_HELLO, name="notes.txt")
+        values = client.execute.call_args.args[2]
+        self.assertEqual(values["mimetype"], "text/plain")
+
+    def test_mimetype_falls_back_to_octet_stream(self):
+        client = _create_client()
+        create_attachment(client, content=_B64_HELLO, name="blob.unknownext")
+        values = client.execute.call_args.args[2]
+        self.assertEqual(values["mimetype"], "application/octet-stream")
+
+    def test_explicit_name_overrides_path_basename(self):
+        path = self._tmp_file()
+        client = _create_client()
+        create_attachment(client, path=path, name="renamed.csv")
+        values = client.execute.call_args.args[2]
+        self.assertEqual(values["name"], "renamed.csv")
+
+    def test_res_model_and_res_id_link_the_record(self):
+        client = _create_client()
+        create_attachment(
+            client,
+            content=_B64_HELLO,
+            name="a.txt",
+            res_model="project.task",
+            res_id=7,
+        )
+        values = client.execute.call_args.args[2]
+        self.assertEqual(values["res_model"], "project.task")
+        self.assertEqual(values["res_id"], 7)
+
+    def test_unlinked_create_omits_res_fields(self):
+        client = _create_client()
+        create_attachment(client, content=_B64_HELLO, name="a.txt")
+        values = client.execute.call_args.args[2]
+        self.assertNotIn("res_model", values)
+        self.assertNotIn("res_id", values)
+
+    def test_list_wrapped_create_result_is_unwrapped_to_int(self):
+        # Odoo answers a batch-shaped create with ``[id]``; callers must always
+        # get a scalar int either way.
+        client = _create_client(create_result=[55])
+        self.assertEqual(
+            create_attachment(client, content=_B64_HELLO, name="a.txt"), 55
+        )
+
+    def test_rejects_both_path_and_content(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachment(
+                _create_client(), path="/tmp/x", content=_B64_HELLO, name="a"
+            )
+        self.assertIn("exactly one", str(ctx.exception))
+
+    def test_rejects_neither_path_nor_content(self):
+        with self.assertRaises(ValueError):
+            create_attachment(_create_client(), name="a.txt")
+
+    def test_rejects_content_without_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachment(_create_client(), content=_B64_HELLO)
+        self.assertIn("name", str(ctx.exception))
+
+    def test_rejects_invalid_base64_content(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachment(
+                _create_client(), content="not base64!!", name="a.txt"
+            )
+        self.assertIn("base64", str(ctx.exception))
+
+    def test_rejects_unreadable_path(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachment(_create_client(), path="/no/such/file.bin")
+        self.assertIn("not a readable file", str(ctx.exception))
+
+    def test_validation_failure_issues_no_rpc_call(self):
+        client = _create_client()
+        with self.assertRaises(ValueError):
+            create_attachment(client, content="not base64!!", name="a.txt")
+        client.execute.assert_not_called()
+
+
+class TestCreateAttachments(unittest.TestCase):
+    def test_creates_one_record_per_spec_in_order(self):
+        ids = iter([11, 12])
+        client = MagicMock()
+
+        def _execute(model, method, *args, **kwargs):
+            self.assertEqual((model, method), ("ir.attachment", "create"))
+            return next(ids)
+
+        client.execute.side_effect = _execute
+        result = create_attachments(
+            client,
+            [
+                {"content": _B64_HELLO, "name": "one.txt"},
+                {"content": _B64_HELLO, "name": "two.txt"},
+            ],
+            res_model="project.task",
+            res_id=9,
+        )
+        self.assertEqual(result, [11, 12])
+        self.assertEqual(client.execute.call_count, 2)
+        names = [call.args[2]["name"] for call in client.execute.call_args_list]
+        self.assertEqual(names, ["one.txt", "two.txt"])
+        for call in client.execute.call_args_list:
+            self.assertEqual(call.args[2]["res_model"], "project.task")
+            self.assertEqual(call.args[2]["res_id"], 9)
+
+    def test_rejects_empty_file_list(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachments(_create_client(), [])
+        self.assertIn("at least one", str(ctx.exception))
+
+    def test_rejects_non_dict_spec(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachments(_create_client(), ["/tmp/file.txt"])
+        self.assertIn("#1", str(ctx.exception))
+
+    def test_rejects_unknown_spec_keys(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_attachments(
+                _create_client(),
+                [{"content": _B64_HELLO, "filename": "typo.txt"}],
+            )
+        self.assertIn("filename", str(ctx.exception))
+
+    def test_one_bad_spec_creates_nothing(self):
+        # Every spec is validated before the first record is created, so a
+        # malformed second spec never leaves a partial batch behind.
+        client = _create_client()
+        with self.assertRaises(ValueError):
+            create_attachments(
+                client,
+                [
+                    {"content": _B64_HELLO, "name": "good.txt"},
+                    {"content": "not base64!!", "name": "bad.txt"},
+                ],
+            )
+        client.execute.assert_not_called()
 
 
 if __name__ == "__main__":

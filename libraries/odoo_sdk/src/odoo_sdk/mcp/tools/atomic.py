@@ -273,9 +273,18 @@ def make_task_status_tool(registry: Registry):
 
 @atomic_tool("task_note")
 def make_task_note_tool(registry: Registry):
-    def task_note(task_id: int, note: str) -> Dict[str, Any]:
-        """Post a free-form note to the task chatter and the local session log."""
-        return registry["task_note"].execute(task_id, note)
+    def task_note(
+        task_id: int,
+        note: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Post a note (max 300 chars) to the task chatter, optionally with files.
+
+        Each attachment spec is ``{"path": <local file>}`` or
+        ``{"content": <base64>, "name": <filename>}`` plus optional
+        ``"mimetype"``.
+        """
+        return registry["task_note"].execute(task_id, note, attachments=attachments)
 
     return task_note
 
@@ -313,7 +322,7 @@ def make_task_aging_tool(registry: Registry):
 @atomic_tool("task_question")
 def make_task_question_tool(registry: Registry):
     def task_question(task_id: int, question: str) -> Dict[str, Any]:
-        """Post a question to the task chatter; transitions to AWAITING_ANSWERS."""
+        """Post a question (max 300 chars) to the task chatter; transitions to AWAITING_ANSWERS."""
         return registry["task_question"].execute(task_id, question)
 
     return task_question

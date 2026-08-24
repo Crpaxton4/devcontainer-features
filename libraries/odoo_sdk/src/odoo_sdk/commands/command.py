@@ -10,6 +10,30 @@ from odoo_sdk.state import (
 
 from .protocols import RpcClient
 
+#: Maximum characters allowed in a chatter message/note body posted by the SDK
+#: (#610). Enforced at the command layer — transport-agnostic per ADR-004 — so
+#: every consumer (MCP tools, CLI, library callers) inherits the same cap.
+MAX_CHATTER_BODY_CHARS = 300
+
+
+def enforce_chatter_body_limit(body: str, label: str) -> None:
+    """Reject a chatter ``body`` over :data:`MAX_CHATTER_BODY_CHARS` (#610).
+
+    Shared by the chatter-posting builtin commands (``task_note``,
+    ``task_question``). Over-limit content is *rejected* with a
+    :class:`ValueError` telling the caller to shorten it — never silently
+    truncated, which would post content the caller did not write.
+
+    :param body: The caller-supplied message text to validate.
+    :param label: Parameter name used in the error message (e.g. ``"note"``).
+    """
+    if len(body) > MAX_CHATTER_BODY_CHARS:
+        raise ValueError(
+            f"{label} is {len(body)} characters, over the "
+            f"{MAX_CHATTER_BODY_CHARS}-character limit for posted chatter "
+            "content. Shorten the message: keep notes simple, direct, plain."
+        )
+
 
 def require_active_run(db: LocalStateClient, task_id: int) -> TaskRun:
     """Return the active run for ``task_id`` or raise ``TaskNotRunningError``.
