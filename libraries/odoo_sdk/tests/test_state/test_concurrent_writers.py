@@ -1,4 +1,4 @@
-"""Concurrency tests for the SQLite WAL + busy_timeout pragmas (issue #357).
+"""Concurrency tests for the tracker DB write layer (issues #357 and #628).
 
 Before ``_connect`` enabled WAL and a busy timeout, two simultaneous
 ``add_event`` writers against one DB file raced on the default rollback journal
@@ -6,6 +6,14 @@ with a 0ms lock timeout: the loser got an immediate ``database is locked`` and
 its event was silently dropped by the swallowing callers (hook ``|| true``, MCP
 ``try/except pass``). These tests prove both writers now persist every event and
 that the DB file is actually in WAL mode.
+
+#628 extends the guarantee from "no dropped events" to "no torn logical
+operations": every run mutation runs its check AND its write inside ONE
+``BEGIN IMMEDIATE`` transaction on ONE connection, with CAS-guarded UPDATEs.
+The race tests here hammer the FSM write layer from threads (each with its own
+client, as the documented cross-container writers have) and assert the
+acceptance criteria: exactly one racer wins, every loser gets the deterministic
+existing state error, and the DB never holds an invalid state.
 """
 
 import sqlite3
@@ -15,7 +23,14 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from odoo_sdk.state import EventRecord, LocalStateClient
+from odoo_sdk.state import (
+    EventRecord,
+    InvalidStateTransitionError,
+    LocalStateClient,
+    TaskAlreadyRunningError,
+    TaskNotRunningError,
+)
+from odoo_sdk.state.db import _cas_update
 from tests.support import make_state_db_path
 
 UTC = timezone.utc
@@ -164,6 +179,193 @@ class TestConcurrentWriters(unittest.TestCase):
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 0
             )
+
+
+def _race(count: int, target) -> list:
+    """Run ``target(worker_index)`` on ``count`` barrier-synchronized threads.
+
+    Returns the per-worker outcomes: the return value, or the raised exception.
+    A transient ``database is locked`` (possible when coverage instrumentation
+    outlasts the 2s busy timeout under maximal contention) is retried with the
+    same bounded backoff as the event-writer hammer above, so only genuine
+    state errors reach the outcome list.
+    """
+    barrier = threading.Barrier(count)
+    outcomes: list = [None] * count
+
+    def runner(idx: int) -> None:
+        barrier.wait()  # maximize contention: release all racers together
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                outcomes[idx] = target(idx)
+                return
+            except sqlite3.OperationalError as exc:  # pragma: no cover - timing
+                if "locked" not in str(exc).lower() or attempt == _RETRY_ATTEMPTS - 1:
+                    outcomes[idx] = exc
+                    return
+                time.sleep(_RETRY_BACKOFF_SECS)
+            except Exception as exc:  # noqa: BLE001 - outcome under assertion
+                outcomes[idx] = exc
+                return
+
+    threads = [threading.Thread(target=runner, args=(i,)) for i in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return outcomes
+
+
+def _run_states(db_path: Path, task_id: int) -> list:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return [
+            row[0]
+            for row in conn.execute(
+                "SELECT state FROM task_runs WHERE task_id = ?", (task_id,)
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+class TestAtomicRunMutations(unittest.TestCase):
+    """#628 acceptance: one winner, deterministic loser errors, valid DB state."""
+
+    def test_concurrent_create_run_single_winner(self) -> None:
+        """Two racing ``create_run`` for one task: one row, one winner."""
+        db_path = _tmp_path()
+
+        def create(idx: int):
+            client = LocalStateClient(db_path=db_path)
+            return client.create_run(1, "Bug", 10, "Proj")
+
+        outcomes = _race(2, create)
+        losers = [o for o in outcomes if isinstance(o, Exception)]
+        self.assertEqual(len(losers), 1, outcomes)
+        self.assertIsInstance(losers[0], TaskAlreadyRunningError)
+        # The invariant, not the interleaving: exactly one active row exists.
+        self.assertEqual(_run_states(db_path, 1), ["RUNNING"])
+
+    def test_concurrent_stop_run_single_winner(self) -> None:
+        """Two racing ``stop_run``: one wins, the loser gets the state error."""
+        db_path = _tmp_path()
+        LocalStateClient(db_path=db_path).create_run(1, "Bug", 10, "Proj")
+
+        def stop(idx: int):
+            return LocalStateClient(db_path=db_path).stop_run(1)
+
+        outcomes = _race(2, stop)
+        losers = [o for o in outcomes if isinstance(o, Exception)]
+        self.assertEqual(len(losers), 1, outcomes)
+        self.assertIsInstance(losers[0], TaskNotRunningError)
+        self.assertEqual(str(losers[0]), "No active session for task 1.")
+        self.assertEqual(_run_states(db_path, 1), ["STOPPED"])
+
+    def test_concurrent_resume_single_winner(self) -> None:
+        """Two racing resumes of a STOPPED run: the loser sees already-RUNNING."""
+        db_path = _tmp_path()
+        seed = LocalStateClient(db_path=db_path)
+        seed.create_run(1, "Bug", 10, "Proj")
+        seed.stop_run(1)
+
+        def resume(idx: int):
+            return LocalStateClient(db_path=db_path).transition_to_running(1)
+
+        outcomes = _race(2, resume)
+        losers = [o for o in outcomes if isinstance(o, Exception)]
+        self.assertEqual(len(losers), 1, outcomes)
+        self.assertIsInstance(losers[0], InvalidStateTransitionError)
+        self.assertEqual(_run_states(db_path, 1), ["RUNNING"])
+
+    def test_concurrent_abort_single_winner(self) -> None:
+        """Two racing ``abort_run``: one stamps ``aborted_at``, one errors."""
+        db_path = _tmp_path()
+        LocalStateClient(db_path=db_path).create_run(1, "Bug", 10, "Proj")
+
+        def abort(idx: int):
+            return LocalStateClient(db_path=db_path).abort_run(1)
+
+        outcomes = _race(2, abort)
+        losers = [o for o in outcomes if isinstance(o, Exception)]
+        self.assertEqual(len(losers), 1, outcomes)
+        self.assertIsInstance(losers[0], TaskNotRunningError)
+        self.assertEqual(_run_states(db_path, 1), ["STOPPED"])
+
+    def test_concurrent_appends_all_land(self) -> None:
+        """N racing writers x M notes each: every note lands (no lost update).
+
+        This is the #627 lost-update window: the old read-modify-write of the
+        notes JSON let one writer clobber another's append. The single-UPDATE
+        ``json_insert`` append serializes inside SQLite, so all writers' notes
+        must be present afterwards.
+        """
+        db_path = _tmp_path()
+        LocalStateClient(db_path=db_path).create_run(1, "Bug", 10, "Proj")
+        writers, notes_each = 4, 10
+
+        def append_many(idx: int):
+            client = LocalStateClient(db_path=db_path)
+            for seq in range(notes_each):
+                _with_lock_retry(client.append_note, 1, f"w{idx}-n{seq}")
+
+        outcomes = _race(writers, append_many)
+        self.assertEqual([o for o in outcomes if isinstance(o, Exception)], [])
+        run = LocalStateClient(db_path=db_path).get_active_run(1)
+        assert run is not None
+        expected = {f"w{w}-n{s}" for w in range(writers) for s in range(notes_each)}
+        self.assertEqual(len(run.notes), writers * notes_each)
+        self.assertEqual(set(run.notes), expected)
+
+    def test_write_txn_holds_the_write_lock(self) -> None:
+        """``_write_txn`` must hold an IMMEDIATE transaction for its whole body.
+
+        The lock is the atomicity mechanism (#628): while one logical operation
+        is inside ``_write_txn``, a second writer cannot even BEGIN IMMEDIATE,
+        so no check-then-write sequence can interleave with it.
+        """
+        db_path = _tmp_path()
+        client = LocalStateClient(db_path=db_path)
+        with client._write_txn() as conn:
+            self.assertTrue(conn.in_transaction)
+            rival = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True)
+            try:
+                rival.execute("PRAGMA busy_timeout=0")
+                with self.assertRaises(sqlite3.OperationalError):
+                    rival.execute("BEGIN IMMEDIATE")
+            finally:
+                rival.close()
+
+    def test_cas_update_maps_lost_race_to_given_error(self) -> None:
+        """A CAS UPDATE matching no row raises exactly the mapped error."""
+        db_path = _tmp_path()
+        client = LocalStateClient(db_path=db_path)
+        run = client.create_run(1, "Bug", 10, "Proj")
+        sentinel = TaskNotRunningError("lost the race")
+        with self.assertRaises(TaskNotRunningError) as ctx:
+            with client._write_txn() as conn:
+                _cas_update(
+                    conn,
+                    "UPDATE task_runs SET state = 'STOPPED' "
+                    "WHERE id = ? AND state IN ('AWAITING_ANSWERS')",
+                    (run.id,),
+                    sentinel,
+                )
+        self.assertIs(ctx.exception, sentinel)
+        # The error propagated through _write_txn (rollback path); untouched run.
+        self.assertEqual(_run_states(db_path, 1), ["RUNNING"])
+
+
+def _with_lock_retry(fn, *args) -> None:
+    """Call ``fn`` retrying a transient ``database is locked`` (test-only)."""
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            fn(*args)
+            return
+        except sqlite3.OperationalError as exc:  # pragma: no cover - timing
+            if "locked" not in str(exc).lower() or attempt == _RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_RETRY_BACKOFF_SECS)
 
 
 if __name__ == "__main__":

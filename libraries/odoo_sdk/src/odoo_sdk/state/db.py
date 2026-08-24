@@ -574,6 +574,69 @@ _TASK_RUN_COLUMNS = (
     "started_at, stopped_at, timesheet_id, notes, aborted_at"
 )
 
+# The two live/paused states an "active" run may be in. "Active" is the live
+# pair RUNNING/AWAITING_ANSWERS only; STOPPED (resumable, #504) and CLOSED
+# (terminal) are deliberately excluded, so every lookup and CAS guard built on
+# this literal stays the single-live-run guard the FSM invariants rely on.
+_ACTIVE_STATES_SQL = "('RUNNING', 'AWAITING_ANSWERS')"
+
+# WHERE clause selecting a task's single active run (see _ACTIVE_STATES_SQL).
+_ACTIVE_RUN_WHERE = f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}"
+
+# WHERE clause selecting a task's most recent reopenable STOPPED run (#504):
+# aborted stopped runs (``aborted_at`` stamped) are voided from billing and NOT
+# resumable; CLOSED runs are terminal and never match.
+_RESUMABLE_RUN_WHERE = (
+    "WHERE task_id = ? AND state = 'STOPPED' AND aborted_at IS NULL "
+    "ORDER BY started_at DESC, id DESC LIMIT 1"
+)
+
+
+def _no_active_session_error(task_id: int) -> TaskNotRunningError:
+    """Return THE no-active-session error — one implementation, one message.
+
+    Every surface that guards on "an active session must exist" — the command
+    layer's ``require_active_run``, :meth:`LocalStateClient.require_active_run`,
+    and the CAS write paths below — raises this same error with this same
+    message (#627), so callers and tests never see divergent wordings for the
+    same condition.
+    """
+    return TaskNotRunningError(f"No active session for task {task_id}.")
+
+
+def _fetch_run(
+    conn: sqlite3.Connection, where: str, params: tuple
+) -> Optional[TaskRun]:
+    """Return the single matching task_run using an EXISTING connection, or None.
+
+    The in-transaction sibling of :meth:`LocalStateClient._select_run`: write
+    paths that must read-decide-write atomically (#628) fetch through this on
+    the one connection holding their ``BEGIN IMMEDIATE`` transaction, so the
+    row they decide on cannot change under them.
+    """
+    row = conn.execute(
+        f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
+    ).fetchone()
+    return _parse_run(row) if row else None
+
+
+def _cas_update(
+    conn: sqlite3.Connection, sql: str, params: tuple, error: Exception
+) -> None:
+    """Execute a compare-and-swap UPDATE; raise ``error`` when no row matched.
+
+    State transitions guard their UPDATE with ``WHERE id = ? AND state IN
+    (...)`` (#628): a row already moved out of the admissible states by a
+    concurrent writer matches nothing, and the rowcount-0 outcome maps to the
+    same state error the pre-check raises — never a new exception type — so a
+    lost race is a deterministic, familiar failure rather than a silent
+    overwrite. Under :meth:`LocalStateClient._write_txn`'s ``BEGIN IMMEDIATE``
+    the in-transaction pre-check already holds, making this the belt to that
+    suspender; it fires on its own when a caller CASes without a pre-read.
+    """
+    if conn.execute(sql, params).rowcount == 0:
+        raise error
+
 
 def _parse_run(row: tuple) -> TaskRun:
     (
@@ -835,6 +898,26 @@ class LocalStateClient:
         # The current schema declares no foreign keys.
         return conn
 
+    @contextmanager
+    def _write_txn(self) -> Iterator[sqlite3.Connection]:
+        """One immediate-mode write transaction on one connection (#628).
+
+        The write layer's entry point: every logical mutation (create, state
+        transition, note append) runs its checks AND its writes inside a single
+        ``BEGIN IMMEDIATE`` transaction on a single connection. ``IMMEDIATE``
+        acquires SQLite's write lock up front, so with the documented concurrent
+        writers (the claude-event-hook shim, MCP ``_emit_tool_event``, the TUI —
+        see :meth:`_raw_connect`) a read-decide-write sequence in the body can
+        never interleave with another writer: whatever the body reads still
+        holds when its UPDATE lands. A concurrent writer waits on the
+        ``busy_timeout`` rather than seeing intermediate state. Commit on clean
+        exit, rollback on exception, and close-with-checkpoint all come from
+        :meth:`_connect`.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+
     def _select_runs(self, where: str, params: tuple = ()) -> list[TaskRun]:
         """Run ``SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}`` and parse rows."""
         with self._connect() as conn:
@@ -846,26 +929,23 @@ class LocalStateClient:
     def _select_run(self, where: str, params: tuple) -> Optional[TaskRun]:
         """Return the single matching task_run, or None."""
         with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
-            ).fetchone()
-        return _parse_run(row) if row else None
+            return _fetch_run(conn, where, params)
 
-    def _require_active_run(self, task_id: int) -> TaskRun:
-        """Return the active run for ``task_id`` or raise :class:`TaskNotRunningError`."""
+    def require_active_run(self, task_id: int) -> TaskRun:
+        """Return the active run for ``task_id`` or raise :class:`TaskNotRunningError`.
+
+        The ONE active-session guard (#627): the command layer's
+        ``require_active_run`` delegates here, so every surface (MCP tools, CLI,
+        library callers) raises the same error with the same message.
+        """
         run = self.get_active_run(task_id)
         if run is None:
-            raise TaskNotRunningError(f"No active session found for task {task_id}.")
+            raise _no_active_session_error(task_id)
         return run
 
     def get_active_run(self, task_id: int) -> Optional[TaskRun]:
-        # "Active" is the live pair RUNNING/AWAITING_ANSWERS only; STOPPED
-        # (resumable, #504) and CLOSED (terminal) are deliberately excluded, so
-        # this stays the single-live-run guard the FSM invariants rely on.
-        return self._select_run(
-            "WHERE task_id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS')",
-            (task_id,),
-        )
+        # See _ACTIVE_STATES_SQL for why STOPPED/CLOSED are excluded.
+        return self._select_run(_ACTIVE_RUN_WHERE, (task_id,))
 
     def get_resumable_run(self, task_id: int) -> Optional[TaskRun]:
         """Return the most recent reopenable STOPPED run for a task, or None (#504).
@@ -879,11 +959,7 @@ class LocalStateClient:
         and never match. The newest qualifying run is returned when a task has
         several stopped runs on record.
         """
-        return self._select_run(
-            "WHERE task_id = ? AND state = 'STOPPED' AND aborted_at IS NULL "
-            "ORDER BY started_at DESC, id DESC LIMIT 1",
-            (task_id,),
-        )
+        return self._select_run(_RESUMABLE_RUN_WHERE, (task_id,))
 
     def get_run_by_id(self, run_id: int) -> Optional[TaskRun]:
         return self._select_run("WHERE id = ?", (run_id,))
@@ -913,34 +989,46 @@ class LocalStateClient:
         project_name: str,
         timesheet_id: Optional[int] = None,
     ) -> TaskRun:
-        existing = self.get_active_run(task_id)
-        if existing is not None:
-            raise TaskAlreadyRunningError(
-                f"Task {task_id!r} ({task_name!r}) already has an active session "
-                f"(id={existing.id}, state={existing.state.value})."
-            )
         started_at = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        # Check and insert share one BEGIN IMMEDIATE transaction (#628): a
+        # concurrent create for the same task waits on the write lock and then
+        # sees this row, so exactly one create wins the single-active-run
+        # invariant instead of two check-then-insert sequences both passing.
+        with self._write_txn() as conn:
+            existing = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if existing is not None:
+                raise TaskAlreadyRunningError(
+                    f"Task {task_id!r} ({task_name!r}) already has an active session "
+                    f"(id={existing.id}, state={existing.state.value})."
+                )
             cursor = conn.execute(
                 "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
                 "state, started_at, timesheet_id, notes) VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, '[]')",
                 (task_id, task_name, project_id, project_name, started_at, timesheet_id),
             )
-            run_id = cursor.lastrowid
-        return self.get_run_by_id(run_id)  # type: ignore[return-value]
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (cursor.lastrowid,)
+            )
 
     def transition_to_awaiting(self, task_id: int) -> TaskRun:
-        run = self._require_active_run(task_id)
-        # get_active_run only returns RUNNING/AWAITING_ANSWERS rows — STOPPED
-        # (resumable) and CLOSED (terminal) are excluded — so every run reaching
-        # here may transition to AWAITING_ANSWERS; the guard cannot fire.
-        assert run.state in (TaskState.RUNNING, TaskState.AWAITING_ANSWERS)
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET state = 'AWAITING_ANSWERS' WHERE id = ?",
+        with self._write_txn() as conn:
+            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if run is None:
+                raise _no_active_session_error(task_id)
+            # The active lookup only returns RUNNING/AWAITING_ANSWERS rows —
+            # STOPPED (resumable) and CLOSED (terminal) are excluded — so every
+            # run read above may transition to AWAITING_ANSWERS, and under this
+            # transaction's write lock no other writer can move it first.
+            _cas_update(
+                conn,
+                "UPDATE task_runs SET state = 'AWAITING_ANSWERS' "
+                f"WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
                 (run.id,),
+                _no_active_session_error(task_id),
             )
-        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (run.id,)
+            )
 
     def transition_to_running(self, task_id: int) -> TaskRun:
         """Resume a paused run back to RUNNING (#504).
@@ -954,22 +1042,32 @@ class LocalStateClient:
         raises :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
         aborted stopped run is voided, so neither is returned by the lookups below.
         """
-        run = self.get_active_run(task_id)
-        if run is not None and run.state == TaskState.RUNNING:
-            raise InvalidStateTransitionError(
-                f"Cannot resume task {task_id}: it is already RUNNING."
-            )
-        if run is None:
-            run = self.get_resumable_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(f"No resumable session found for task {task_id}.")
-        with self._connect() as conn:
-            conn.execute(
+        with self._write_txn() as conn:
+            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if run is not None and run.state == TaskState.RUNNING:
+                raise InvalidStateTransitionError(
+                    f"Cannot resume task {task_id}: it is already RUNNING."
+                )
+            if run is None:
+                run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
+            if run is None:
+                raise TaskNotRunningError(
+                    f"No resumable session found for task {task_id}."
+                )
+            # A lost CAS could only mean another writer resumed the run first,
+            # so rowcount 0 maps to the same already-RUNNING error as above.
+            _cas_update(
+                conn,
                 "UPDATE task_runs SET state = 'RUNNING', stopped_at = NULL "
-                "WHERE id = ?",
+                "WHERE id = ? AND state IN ('AWAITING_ANSWERS', 'STOPPED')",
                 (run.id,),
+                InvalidStateTransitionError(
+                    f"Cannot resume task {task_id}: it is already RUNNING."
+                ),
             )
-        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (run.id,)
+            )
 
     def close_run(self, task_id: int) -> TaskRun:
         """Move a task's open run to the terminal ``CLOSED`` state (#504, CLI-only).
@@ -983,34 +1081,49 @@ class LocalStateClient:
 
         :raises TaskNotRunningError: When the task has no live or resumable run.
         """
-        run = self.get_active_run(task_id)
-        if run is None:
-            run = self.get_resumable_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(f"No open session to close for task {task_id}.")
-        stopped_at = (
-            run.stopped_at.isoformat()
-            if run.stopped_at is not None
-            else datetime.now(timezone.utc).isoformat()
-        )
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET state = 'CLOSED', stopped_at = ? WHERE id = ?",
-                (stopped_at, run.id),
+        with self._write_txn() as conn:
+            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if run is None:
+                run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
+            if run is None:
+                raise TaskNotRunningError(
+                    f"No open session to close for task {task_id}."
+                )
+            stopped_at = (
+                run.stopped_at.isoformat()
+                if run.stopped_at is not None
+                else datetime.now(timezone.utc).isoformat()
             )
-        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+            _cas_update(
+                conn,
+                "UPDATE task_runs SET state = 'CLOSED', stopped_at = ? "
+                "WHERE id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')",
+                (stopped_at, run.id),
+                TaskNotRunningError(f"No open session to close for task {task_id}."),
+            )
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (run.id,)
+            )
 
     def stop_run(self, task_id: int, timesheet_id: Optional[int] = None) -> TaskRun:
-        run = self._require_active_run(task_id)
         stopped_at = datetime.now(timezone.utc).isoformat()
-        tid = timesheet_id if timesheet_id is not None else run.timesheet_id
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, timesheet_id = ? "
-                "WHERE id = ?",
-                (stopped_at, tid, run.id),
+        with self._write_txn() as conn:
+            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if run is None:
+                raise _no_active_session_error(task_id)
+            # COALESCE keeps the run's stored timesheet_id when no override is
+            # given, without re-reading the row outside the transaction.
+            _cas_update(
+                conn,
+                "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, "
+                "timesheet_id = COALESCE(?, timesheet_id) "
+                f"WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
+                (stopped_at, timesheet_id, run.id),
+                _no_active_session_error(task_id),
             )
-        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (run.id,)
+            )
 
     def abort_run(self, task_id: int) -> TaskRun:
         """Force-close the active run to STOPPED and stamp ``aborted_at`` (#356).
@@ -1026,15 +1139,21 @@ class LocalStateClient:
 
         :raises TaskNotRunningError: When there is no active run to abort.
         """
-        run = self._require_active_run(task_id)
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
-            conn.execute(
+        with self._write_txn() as conn:
+            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
+            if run is None:
+                raise _no_active_session_error(task_id)
+            _cas_update(
+                conn,
                 "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, "
-                "aborted_at = ? WHERE id = ?",
+                f"aborted_at = ? WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
                 (now, now, run.id),
+                _no_active_session_error(task_id),
             )
-        return self.get_run_by_id(run.id)  # type: ignore[return-value]
+            return _fetch_run(  # type: ignore[return-value]
+                conn, "WHERE id = ?", (run.id,)
+            )
 
     def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]:
         """Return the most recent event timestamp attributed to ``task_id``, or None.
@@ -1075,15 +1194,23 @@ class LocalStateClient:
             )
 
     def append_note(self, task_id: int, note: str) -> None:
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise TaskNotRunningError(f"No active session for task {task_id}.")
-        updated_notes = json.dumps(run.notes + [note])
+        """Append ``note`` to the active run's notes JSON in ONE statement (#627).
+
+        ``json_insert`` with the ``'$[#]'`` append path grows the array in
+        place, so the session check (the WHERE clause) and the append are a
+        single UPDATE on a single connection: two concurrent appends serialize
+        inside SQLite and BOTH land (no read-modify-write lost update), and a
+        session stopped mid-call matches no row and raises instead of silently
+        resurrecting the note onto a stopped run.
+        """
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET notes = ? WHERE id = ?",
-                (updated_notes, run.id),
+            cursor = conn.execute(
+                "UPDATE task_runs SET notes = json_insert(notes, '$[#]', ?) "
+                f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}",
+                (note, task_id),
             )
+            if cursor.rowcount == 0:
+                raise _no_active_session_error(task_id)
 
     def remap_timesheet_id(self, old_timesheet_id: int, new_timesheet_id: int) -> None:
         with self._connect() as conn:
