@@ -16,6 +16,7 @@ Bind-mounts a host 'second brain' knowledge-base directory - taken from the host
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
 
+
 ## Contents
 
 - [One-time host setup](#one-time-host-setup)
