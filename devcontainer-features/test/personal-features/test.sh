@@ -124,6 +124,12 @@ check "lazygit is installed" bash -c "test -x \"\$(command -v lazygit)\" && lazy
 # secret scanning
 check "gitleaks is installed" gitleaks version
 
+# GitHub CLI (#597: hard dependsOn on ghcr.io/devcontainers/features/github-cli -
+# the feature ships gh-dependent tooling like create-pr and the mounted
+# GH_CONFIG_DIR, so a built container must always have gh on PATH. Presence
+# check only: CI has no token, so no auth assertions here.)
+check "gh is installed" gh --version
+
 # create-pr (config-driven gh pr create wrapper)
 check "create-pr is installed and executable" bash -c "test -x /usr/local/bin/create-pr"
 check "create-pr passes shell syntax check" bash -c "sh -n /usr/local/bin/create-pr"
@@ -471,6 +477,18 @@ check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" b
   "before=\$(cat \"$HK_C/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_C\" /usr/local/bin/sync-claude-hooks; rc=\$?; [ \$rc -eq 0 ] && [ \"\$before\" = \"\$(cat \"$HK_C/settings.json\")\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
+
+# --- mempalace palace root symlink (#596) -------------------------------------
+# Upstream mempalace's hooks CLI hardcodes ~/.mempalace as its palace root and
+# treats its absence as the user-removed kill-switch, while the MCP server uses
+# the bind mount at /usr/local/share/mempalace - so without this link every
+# plugin hook fire silently no-oped. install.sh symlinks the home path onto the
+# mount so both sides agree on one root.
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
+check "~/.mempalace is a symlink" bash -c "test -L \"\$HOME/.mempalace\""
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
+check "~/.mempalace points at the bind-mounted palace root" bash -c \
+  "[ \"\$(readlink \"\$HOME/.mempalace\")\" = '/usr/local/share/mempalace' ]"
 
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
