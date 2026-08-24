@@ -841,63 +841,44 @@ class TestBranchDescriptionSampling(unittest.TestCase):
 
 
 class TestStopTaskTool(unittest.TestCase):
-    def test_reviews_and_stops(self):
-        reg = _FakeRegistry(
-            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
-        )
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(
-            return_value=_accepted(MagicMock(description="Reviewed text"))
-        )
-        result = _run(make_stop_task_tool(reg)(1, ctx, "orig"))
-        self.assertEqual(result["description"], "Reviewed text")
+    def test_stops_with_no_elicitation(self):
+        # The description review elicit was a no-op human gate (#623): the tool
+        # must stop the session with no prompt of any kind.
+        calls = []
 
-    def test_falls_back_to_supplied_description(self):
-        reg = _FakeRegistry(
-            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
-        )
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(return_value=_accepted(MagicMock(description="")))
-        result = _run(make_stop_task_tool(reg)(1, ctx, "fallback"))
-        self.assertEqual(result["description"], "fallback")
+        def _stop(task_id):
+            calls.append(task_id)
+            return {"run_id": 7, "task_id": task_id, "run_summary": "actions: x"}
 
-    def test_description_omitted_skips_elicitation(self):
-        # Time logging moved to the odoo-tui/ETL path (#482): with no
-        # description there is nothing to review, so the tool must not prompt.
-        reg = _FakeRegistry(
-            stop_task=lambda task_id, desc: {"task_id": task_id, "description": desc}
-        )
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock()
-        result = _run(make_stop_task_tool(reg)(1, ctx))
-        ctx.elicit.assert_not_awaited()
-        self.assertIsNone(result["description"])
+        reg = _FakeRegistry(stop_task=_stop)
+        result = _run(make_stop_task_tool(reg)(1))
+        self.assertEqual(calls, [1])
+        self.assertEqual(result["run_id"], 7)
+        self.assertEqual(result["run_summary"], "actions: x")
 
-    def test_cancel_returns_error(self):
-        reg = _FakeRegistry(stop_task=lambda task_id, desc: {})
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(return_value=_cancelled())
-        result = _run(make_stop_task_tool(reg)(1, ctx, "x"))
-        self.assertEqual(result, {"error": "Stop task cancelled."})
+    def test_schema_has_no_description_parameter(self):
+        # #623 acceptance: the wire schema exposes only ``task_id`` — no
+        # ``description`` parameter (and no ``ctx``, so nothing can elicit).
+        import inspect
+
+        tool = make_stop_task_tool(_FakeRegistry(stop_task=lambda task_id: {}))
+        parameters = list(inspect.signature(tool).parameters)
+        self.assertEqual(parameters, ["task_id"])
 
     def test_command_failure_propagates_to_boundary(self):
-        # Raise-based error contract (#223): after the description review is
-        # accepted, a stop command failure (no active session) raises the typed
-        # ``TaskNotRunningError``. This flow does no cleanup, so the exception is
-        # deliberately left to propagate to the #222 boundary rather than being
-        # caught and re-wrapped into an ``{"error": ...}`` dict.
+        # Raise-based error contract (#223): a stop command failure (no active
+        # session) raises the typed ``TaskNotRunningError``. This flow does no
+        # cleanup, so the exception is deliberately left to propagate to the
+        # #222 boundary rather than being caught and re-wrapped into an
+        # ``{"error": ...}`` dict.
         from odoo_sdk.state import TaskNotRunningError
 
-        def _boom(task_id, desc):
+        def _boom(task_id):
             raise TaskNotRunningError(f"No active session for task {task_id}.")
 
         reg = _FakeRegistry(stop_task=_boom)
-        ctx = MagicMock()
-        ctx.elicit = AsyncMock(
-            return_value=_accepted(MagicMock(description="done"))
-        )
         with self.assertRaises(TaskNotRunningError):
-            _run(make_stop_task_tool(reg)(1, ctx, "orig"))
+            _run(make_stop_task_tool(reg)(1))
 
 
 if __name__ == "__main__":

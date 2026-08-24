@@ -36,6 +36,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
+from odoo_sdk.state.summary import summarize_run_activity
 from odoo_sdk.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
@@ -170,6 +171,58 @@ def range_bounds(
     return lo, datetime.combine(end + timedelta(days=1), time.min)
 
 
+def _overlapping_run_summaries(
+    state: LocalStateClient, task_id: int, started: datetime, ended: datetime
+) -> list[str]:
+    """Return the stored run summaries of the task's runs overlapping a window.
+
+    The stop-time derivation (#626) already wrote each run's machine-derived
+    narrative onto its row; a session's description is the summaries of every
+    run of the same task whose ``[started_at, stopped_at]`` span overlaps the
+    session window (a still-open run overlaps through "now"). CLOSED runs are
+    included — closing hides a run from default listings, not from billing.
+    """
+    summaries = []
+    for run in state.get_runs_for_task(task_id):
+        if not run.run_summary:
+            continue
+        run_started = as_utc(run.started_at)
+        run_ended = as_utc(run.stopped_at) if run.stopped_at else None
+        if run_started <= ended and (run_ended is None or run_ended >= started):
+            summaries.append(run.run_summary)
+    return summaries
+
+
+def _derived_description(
+    state: LocalStateClient, task_id: int, session: dict[str, Any]
+) -> str:
+    """Derive the timesheet entry's description for one session (#626).
+
+    Preference order: the stored run summaries of the task's runs overlapping
+    the session window (the stop-time derivation), else a fresh
+    :func:`summarize_run_activity` over the session window's events (covers
+    resync'd history that never passed through the FSM), else the bare
+    ``[/] session {key}`` fallback. Derived text is internal/local and carries
+    NO length cap — the 300-character limit applies only to posted chatter
+    bodies, never to timesheet names.
+
+    Best-effort by design: the description is display metadata, so a derivation
+    fault must never block billing the hours — any failure falls back to the
+    session-key name, mirroring the telemetry stance of the MCP event emitter.
+    """
+    fallback = f"[/] session {session.get('session_key', '')}"
+    try:
+        started = as_utc(datetime.fromisoformat(session["started_at"]))
+        ended = as_utc(datetime.fromisoformat(session["ended_at"]))
+        summaries = _overlapping_run_summaries(state, task_id, started, ended)
+        text = "; ".join(summaries) or summarize_run_activity(
+            state.get_task_events(str(task_id), started, ended), []
+        )
+    except Exception:
+        return fallback
+    return f"[/] {text}" if text else fallback
+
+
 def _upload_one(
     client: OdooClient,
     state: LocalStateClient,
@@ -189,8 +242,11 @@ def _upload_one(
     (:func:`_billable_hours`, issue #355) first, so the minimum and rounding
     apply to whatever is actually billed — and, because the same billed hours
     populate the summary row, a dry-run preview shows exactly what a real run
-    would write. Idempotent per session key. On a dry run nothing is written and
-    the row's ``timesheet_id`` is None.
+    would write. The entry's name is the machine-derived description
+    (:func:`_derived_description`, #626) — fully automatic, never a human gate —
+    with the session key as the fallback when nothing derives. Idempotent per
+    session key. On a dry run nothing is written and the row's ``timesheet_id``
+    is None.
     """
     raw_hours = float(session.get("duration_secs", 0)) / 3600
     hours = _billable_hours(raw_hours, minimum, step)
@@ -202,7 +258,7 @@ def _upload_one(
             state,
             task_id,
             key,
-            f"[/] session {key}",
+            _derived_description(state, task_id, session),
             hours,
             datetime.fromisoformat(session["started_at"]),
             datetime.fromisoformat(session["ended_at"]),

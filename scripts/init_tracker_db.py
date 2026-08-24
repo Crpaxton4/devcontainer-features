@@ -34,8 +34,9 @@ from pathlib import Path
 
 #: Verbatim copy of ``odoo_sdk.state.db.SCHEMA_VERSION`` — the ``PRAGMA
 #: user_version`` marker that tells an out-of-date DB from a current one. ``2``
-#: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504).
-SCHEMA_VERSION = 2
+#: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504);
+#: ``3`` adds the nullable ``task_runs.run_summary`` column (#626).
+SCHEMA_VERSION = 3
 
 # VERBATIM copy of odoo_sdk.state.db.SCHEMA_DDL — kept identical by the parity
 # test noted in the module docstring. Do not edit one without the other.
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     stopped_at   TEXT             CHECK(stopped_at IS NULL OR datetime(stopped_at) IS NOT NULL),
     timesheet_id INTEGER,
     notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
-    aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL)
+    aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL),
+    run_summary  TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -96,9 +98,10 @@ _MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
 
 # Mirror of odoo_sdk.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
 # absence from a table's stored DDL means it predates a schema change and must be
-# rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504).
+# rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504, the
+# ``RUN_SUMMARY`` column for #626).
 _REQUIRED_TABLE_MARKERS = {
-    "task_runs": ("STRICT", "CLOSED"),
+    "task_runs": ("STRICT", "CLOSED", "RUN_SUMMARY"),
     "settings": ("STRICT",),
     "events": ("STRICT",),
     "session_uploads": ("STRICT",),
@@ -193,6 +196,19 @@ def _stale_tables(conn):
     return stale
 
 
+def _ensure_run_summary_column(conn):
+    """Additive pre-step for the #626 rebuild: append ``run_summary`` if absent.
+
+    Mirror of ``odoo_sdk.state.db._ensure_run_summary_column``: the canonical
+    rebuild copies rows with ``SELECT *``, so an older ``task_runs`` (which
+    lacks the trailing ``run_summary`` column) is brought to the 12-column
+    shape by a single ``ALTER TABLE ADD COLUMN`` first. Idempotent.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
+    if columns and "run_summary" not in columns:
+        conn.execute("ALTER TABLE task_runs ADD COLUMN run_summary TEXT")
+
+
 def _rebuild_table(conn, table, create_sql, index_sqls):
     """Rebuild one table into its STRICT form, preserving rows and ids."""
     old = f"{table}__pre_strict"
@@ -229,6 +245,8 @@ def migrate_schema(conn):
     conn.commit()
     conn.execute("BEGIN")
     try:
+        if "task_runs" in stale:
+            _ensure_run_summary_column(conn)
         for table in stale:
             create_sql, index_sqls = schema[table]
             _rebuild_table(conn, table, create_sql, index_sqls)

@@ -377,6 +377,92 @@ class TestTaskStateDBNotes(unittest.TestCase):
             db.append_note(999, "note")
 
 
+class TestRunSummaryStorage(unittest.TestCase):
+    """Run-summary storage and its per-task retrieval (#626)."""
+
+    def test_new_run_has_no_summary(self):
+        db = _tmp_db()
+        run = _create(db)
+        self.assertIsNone(run.run_summary)
+
+    def test_set_and_read_back_run_summary(self):
+        db = _tmp_db()
+        run = _create(db)
+        db.stop_run(1)
+        db.set_run_summary(run.id, "actions: task_note x3; branch 1#fix")
+        self.assertEqual(
+            db.get_run_by_id(run.id).run_summary,
+            "actions: task_note x3; branch 1#fix",
+        )
+
+    def test_run_summary_has_no_length_cap(self):
+        # Length policy (#626): the stored summary is internal text; nothing
+        # truncates or rejects it at any length.
+        db = _tmp_db()
+        run = _create(db)
+        long_summary = "narrative " * 500
+        db.set_run_summary(run.id, long_summary)
+        self.assertEqual(db.get_run_by_id(run.id).run_summary, long_summary)
+
+    def test_get_runs_for_task_includes_closed_runs(self):
+        db = _tmp_db()
+        first = _create(db, task_id=1)
+        db.stop_run(1)
+        db.close_run(1)
+        second = _create(db, task_id=1)
+        _create(db, task_id=2)  # another task, excluded
+        runs = db.get_runs_for_task(1)
+        self.assertEqual([r.id for r in runs], [first.id, second.id])
+
+
+class TestGetTaskEvents(unittest.TestCase):
+    """Per-task audit event reads with inclusive window bounds (#626)."""
+
+    def _add(self, db, task_ids, ts, subject="tool"):
+        from odoo_sdk.state.models import EventRecord
+
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=ts,
+                task_ids=task_ids,
+                repo="",
+                subject=subject,
+            )
+        )
+
+    def test_returns_only_the_tasks_events_in_order(self):
+        db = _tmp_db()
+        self._add(db, ["1"], datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc), "b")
+        self._add(db, ["1"], datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), "a")
+        self._add(db, ["2"], datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc), "other")
+        events = db.get_task_events("1")
+        self.assertEqual([e.subject for e in events], ["a", "b"])
+
+    def test_window_bounds_are_inclusive(self):
+        db = _tmp_db()
+        start = datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+        self._add(db, ["1"], start, "on-start")
+        self._add(db, ["1"], end, "on-end")
+        self._add(db, ["1"], datetime(2026, 8, 1, 8, 59, tzinfo=timezone.utc), "before")
+        self._add(db, ["1"], datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc), "after")
+        events = db.get_task_events("1", start=start, end=end)
+        self.assertEqual([e.subject for e in events], ["on-start", "on-end"])
+
+    def test_multi_task_event_matches_each_task_once(self):
+        db = _tmp_db()
+        ts = datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc)
+        self._add(db, ["1", "2", "1"], ts, "shared")
+        self.assertEqual(len(db.get_task_events("1")), 1)
+        self.assertEqual(len(db.get_task_events("2")), 1)
+
+    def test_no_events_returns_empty_list(self):
+        db = _tmp_db()
+        self.assertEqual(db.get_task_events("404"), [])
+
+
 class TestTaskStateDBSettings(unittest.TestCase):
     def test_set_and_get_setting(self):
         db = _tmp_db()

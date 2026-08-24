@@ -130,7 +130,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
             TaskNoteCommand(client, state=db).execute(24648, "made progress")
 
         with patch(_STOP_GUARD):
-            StopTaskCommand(client, state=db).execute(24648, "finished the VAT fix")
+            StopTaskCommand(client, state=db).execute(24648)
 
         # (a) the FSM issues ZERO account.analytic.line creates or writes across
         # the whole lifecycle (#325) — timesheet hours are the upload path's job;
@@ -156,7 +156,7 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         db = _tmp_db()
         self._start(client, db, **self._kwargs())
         with patch(_STOP_GUARD):
-            StopTaskCommand(client, state=db).execute(24648, "done")
+            StopTaskCommand(client, state=db).execute(24648)
         # No anchor exists, so reconcile creates the billed row (Create tier).
         reconcile_session(
             client,

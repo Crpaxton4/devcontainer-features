@@ -59,11 +59,19 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The trailing ``run_summary`` column added by #626 (schema v3), removable as a
+#: single substring so the historical v1/v2 shapes derive from the canonical DDL.
+_RUN_SUMMARY_COLUMN = ",\n    run_summary  TEXT"
+
+#: The v2 schema (post-#504, pre-#626): STRICT + CLOSED, no ``run_summary``.
+_V2_DDL = SCHEMA_DDL.replace(_RUN_SUMMARY_COLUMN, "")
+
 #: The v1 STRICT schema (post-#452, pre-#504): the shape a real user's
 #: ``tracker.db`` has on disk after STRICT was adopted but before the ``CLOSED``
-#: state widened the task_runs CHECK. Derived from the canonical DDL by dropping
-#: the ``CLOSED`` literal so it tracks the true prior shape without a hand-copy.
-_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+#: state widened the task_runs CHECK (and before #626's ``run_summary`` column).
+#: Derived from the canonical DDL by dropping both newer tokens so it tracks the
+#: true prior shape without a hand-copy.
+_V1_DDL = _V2_DDL.replace(", 'CLOSED'", "")
 
 _TS = "2026-07-17T12:00:00+00:00"
 
@@ -424,6 +432,99 @@ class TestClosedStateMigrationParity(unittest.TestCase):
         self.init.init_tracker_db(v1)
         self.assertEqual(_schema_objects(v1), before)
         self.assertEqual(_user_version(v1), SCHEMA_VERSION)
+
+
+def _v2_db(tmp: Path) -> Path:
+    """Provision a v2 (pre-#626, no ``run_summary``) tracker.db, return its path."""
+    path = tmp / "tracker.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(_V2_DDL)
+        conn.execute(
+            "INSERT INTO events (id, source, timestamp, task_ids, repo, pr_num, "
+            "branch, subject, payload, external_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            _EVENT_ROW,
+        )
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+            (_TS,),
+        )
+        # The CLOSED-era schema shipped with user_version 2; leaving it there is
+        # what makes the host script's migrate_schema run the #626 rebuild.
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+    finally:
+        conn.close()
+    assert _user_version(path) == 2
+    return path
+
+
+class TestRunSummaryMigrationParity(unittest.TestCase):
+    """The host script's v2→v3 rebuild matches a fresh v3 init (#626).
+
+    Mirrors the earlier migration-parity classes for the run_summary schema
+    step: a fresh DB early-returns from ``migrate_schema``, so only an old-shape
+    DB exercises the host copy of the additive-column + rebuild path. A v2 DB
+    (STRICT + CLOSED, no ``run_summary``) migrated by the host script must be
+    indistinguishable from a fresh v3 init.
+    """
+
+    def setUp(self):
+        self.init = _load_init_script()
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_v2_ddl_derivation_actually_removed_the_column(self):
+        # Guard against a silent formatting drift making _V2_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v2 parity coverage below.
+        self.assertNotEqual(_V2_DDL, SCHEMA_DDL)
+        self.assertNotIn("run_summary", _V2_DDL)
+
+    def test_migrated_v2_matches_fresh_init(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+
+        fresh = _fresh_sdk_db(self.tmp)
+        self.assertEqual(_schema_objects(v2), _schema_objects(fresh))
+        self.assertEqual(_user_version(v2), SCHEMA_VERSION)
+
+    def test_migration_preserves_rows_and_column_accepts_writes(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+        conn = sqlite3.connect(str(v2))
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT task_id, state, run_summary FROM task_runs"
+                ).fetchall(),
+                [(5, "CLOSED", None)],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT id, source, timestamp, task_ids, repo, pr_num, branch, "
+                    "subject, payload, external_id FROM events"
+                ).fetchall(),
+                [_EVENT_ROW],
+            )
+            conn.execute(
+                "UPDATE task_runs SET run_summary = 'derived narrative' "
+                "WHERE task_id = 5"
+            )
+            conn.commit()
+            self.assertEqual(
+                conn.execute("SELECT run_summary FROM task_runs").fetchone()[0],
+                "derived narrative",
+            )
+        finally:
+            conn.close()
+
+    def test_second_run_over_migrated_v2_is_a_noop(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+        before = _schema_objects(v2)
+        self.init.init_tracker_db(v2)
+        self.assertEqual(_schema_objects(v2), before)
+        self.assertEqual(_user_version(v2), SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,9 @@
 Every MCP tool is defined explicitly here — one factory per tool — instead of
 auto-reflecting a command's ``execute`` signature. Atomic tools (see
 :mod:`.atomic`) are typed wrappers that delegate to a single command; composition
-tools (``start_task``, ``stop_task``) additionally orchestrate ``ctx.elicit`` /
-``ctx.sample`` before delegating.
+tools (``start_task``, ``stop_task``) may additionally orchestrate ``ctx.elicit``
+/ ``ctx.sample`` before delegating (``start_task`` does; ``stop_task`` is fully
+automatic since #623 — its description elicitation was removed as a no-op gate).
 
 ``TOOL_FACTORIES`` maps a public tool name to a factory
 ``(registry) -> tool callable``. ``build_explicit_tools`` instantiates every tool

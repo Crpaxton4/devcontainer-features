@@ -12,6 +12,12 @@ from .protocols import RpcClient
 #: Maximum characters allowed in a chatter message/note body posted by the SDK
 #: (#610). Enforced at the command layer — transport-agnostic per ADR-004 — so
 #: every consumer (MCP tools, CLI, library callers) inherits the same cap.
+#:
+#: Scope (maintainer decision, #626): this cap applies ONLY to chatter bodies
+#: posted to Odoo (``task_note`` / ``task_question``). Internal/local text —
+#: derived run summaries, event payloads, timesheet entry names — carries NO
+#: length limit and must never be routed through
+#: :func:`enforce_chatter_body_limit`.
 MAX_CHATTER_BODY_CHARS = 300
 
 

@@ -11,7 +11,7 @@ path runs against a mocked transport in ``tests/test_cli/test_upload.py``.
 """
 
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from odoo_sdk.commands.builtin.query_sessions import QuerySessionsCommand
@@ -21,6 +21,7 @@ from odoo_sdk.transport.errors import OdooServerError, OdooTransportError
 from odoo_sdk.billing.upload import (
     range_bounds,
     upload_sessions,
+    _derived_description,
     _numeric_task_id,
 )
 from tests.support import make_state_db
@@ -103,14 +104,19 @@ class TestUploadSessionsLoop(unittest.TestCase):
                 "ended_at": "2026-06-01T11:00:00+00:00",
             }
         ]
+        state = MagicMock()
+        # No runs and no events on record: the derived description (#626) has
+        # nothing to tell, so the session-key fallback name is used.
+        state.get_runs_for_task.return_value = []
+        state.get_task_events.return_value = []
         with patch(_RECONCILE, return_value=77) as reconcile, patch(
             _SWEEP, return_value=0
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+            result = upload_sessions(MagicMock(), state, sessions)
         args = reconcile.call_args.args
         self.assertEqual(args[2], 100)  # numeric task id
         self.assertEqual(args[3], "100|5")  # stable session key
-        self.assertEqual(args[4], "[/] session 100|5")  # description
+        self.assertEqual(args[4], "[/] session 100|5")  # fallback description
         self.assertEqual(args[5], 2.0)  # 7200s -> 2.0h
         self.assertEqual(args[6], datetime.fromisoformat("2026-06-01T09:00:00+00:00"))
         self.assertEqual(args[7], datetime.fromisoformat("2026-06-01T11:00:00+00:00"))
@@ -152,6 +158,106 @@ class TestUploadSessionsLoop(unittest.TestCase):
         self.assertEqual(result["uploaded"], 2)  # still counts the billable set
         self.assertEqual(result["retired"], 0)
         self.assertIsNone(result["rows"][0]["timesheet_id"])  # nothing written
+
+
+class TestDerivedDescription(unittest.TestCase):
+    """The billing upload attaches the machine-derived description (#626)."""
+
+    def _session(self, task_id, started, ended, key="100|5"):
+        return {
+            "session_key": key,
+            "task_id": str(task_id),
+            "duration_secs": 3600,
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
+        }
+
+    def _window(self):
+        now = datetime.now(timezone.utc)
+        return now - timedelta(hours=1), now + timedelta(hours=1)
+
+    def test_uses_stored_run_summary_of_overlapping_run(self):
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "actions: task_note x3; branch 100#fix-vat")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(
+            description, "[/] actions: task_note x3; branch 100#fix-vat"
+        )
+
+    def test_closed_run_summary_still_attaches(self):
+        # Closing hides a run from default listings, not from billing (#626).
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "closed-run narrative")
+        db.close_run(100)
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] closed-run narrative")
+
+    def test_falls_back_to_event_summary_without_run_summary(self):
+        # Resync'd history that never passed through the FSM still derives a
+        # narrative from the session window's events.
+        db = make_state_db()
+        started, ended = self._window()
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="commit",
+                timestamp=datetime.now(timezone.utc),
+                task_ids=["100"],
+                repo="o/r",
+                branch="100#fix-vat",
+                subject="fix VAT rounding",
+                external_id="git:abc1234def999",
+            )
+        )
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertIn("commits: abc1234de fix VAT rounding", description)
+        self.assertTrue(description.startswith("[/] "))
+
+    def test_falls_back_to_session_key_when_nothing_derives(self):
+        db = make_state_db()
+        started, ended = self._window()
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] session 100|5")
+
+    def test_derivation_fault_falls_back_and_never_blocks_billing(self):
+        # Description is display metadata: a raising state store must not
+        # abort the hours write, mirroring the telemetry stance.
+        state = MagicMock()
+        state.get_runs_for_task.side_effect = RuntimeError("db down")
+        started, ended = self._window()
+        description = _derived_description(state, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] session 100|5")
+
+    def test_non_overlapping_run_summary_is_ignored(self):
+        db = make_state_db()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "other window's work")
+        # A session window that ended long before this run started.
+        started = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        ended = datetime(2020, 1, 2, tzinfo=timezone.utc)
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] session 100|5")
+
+    def test_upload_passes_derived_description_to_reconciler(self):
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "derived narrative")
+        session = self._session(100, started, ended)
+        session["duration_secs"] = 7200
+        with patch(_RECONCILE, return_value=9) as reconcile, patch(
+            _SWEEP, return_value=0
+        ):
+            upload_sessions(MagicMock(), db, [session])
+        self.assertEqual(reconcile.call_args.args[4], "[/] derived narrative")
 
 
 class TestPerSessionIsolation(unittest.TestCase):

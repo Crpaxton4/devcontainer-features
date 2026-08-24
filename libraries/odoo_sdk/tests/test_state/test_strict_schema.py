@@ -48,11 +48,19 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The trailing ``run_summary`` column added by #626 (schema v3), removable as a
+#: single substring so the historical v1/v2 shapes derive from the canonical DDL.
+_RUN_SUMMARY_COLUMN = ",\n    run_summary  TEXT"
+
+#: The v2 schema (post-#504, pre-#626): STRICT with the CLOSED state but no
+#: ``run_summary`` column. Derived from the canonical DDL so it cannot drift.
+_V2_DDL = SCHEMA_DDL.replace(_RUN_SUMMARY_COLUMN, "")
+
 #: The v1 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
-#: after #452 but before #504 added the ``CLOSED`` state. Derived from the current
-#: canonical DDL by dropping the ``CLOSED`` literal so it can never drift from the
-#: real prior shape (STRICT tables, old three-state task_runs CHECK).
-_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+#: after #452 but before #504 added the ``CLOSED`` state (and before the #626
+#: ``run_summary`` column). Derived from the current canonical DDL by dropping
+#: both newer tokens so it can never drift from the real prior shape.
+_V1_DDL = _V2_DDL.replace(", 'CLOSED'", "")
 
 _TS = "2026-07-17T12:00:00+00:00"
 
@@ -447,6 +455,71 @@ class TestClosedStateMigration(unittest.TestCase):
             )
 
         self.assertEqual(objects(migrated), objects(fresh))
+
+
+class TestRunSummaryMigration(unittest.TestCase):
+    """A v2 DB gains ``run_summary`` via a task_runs-only rebuild (#626)."""
+
+    def _v2_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(_V2_DDL)
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'STOPPED', ?, '[]')",
+            (_TS,),
+        )
+        # The v2 schema shipped with user_version 2; leaving it there is what
+        # makes migrate_schema run the run_summary rebuild.
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        return conn
+
+    def test_v2_ddl_derivation_actually_removed_the_column(self):
+        # Guard against a silent formatting drift making _V2_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v2 migration coverage below.
+        self.assertNotEqual(_V2_DDL, SCHEMA_DDL)
+        self.assertNotIn("run_summary", _V2_DDL)
+
+    def test_only_task_runs_is_stale_at_v2(self):
+        from odoo_sdk.state.db import _stale_tables
+
+        self.assertEqual(_stale_tables(self._v2_conn()), ["task_runs"])
+
+    def test_migrate_adds_column_and_preserves_rows(self):
+        conn = self._v2_conn()
+        migrate_schema(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
+        self.assertIn("run_summary", columns)
+        self.assertEqual(
+            conn.execute(
+                "SELECT id, task_id, state, run_summary FROM task_runs"
+            ).fetchall(),
+            [(1, 5, "STOPPED", None)],
+        )
+        # The migrated table accepts a run_summary write.
+        conn.execute("UPDATE task_runs SET run_summary = 'derived' WHERE id = 1")
+        self.assertEqual(
+            conn.execute("SELECT run_summary FROM task_runs").fetchone()[0],
+            "derived",
+        )
+
+    def test_migrated_v2_matches_fresh_schema(self):
+        migrated = self._v2_conn()
+        create_schema(migrated)
+        fresh = sqlite3.connect(":memory:")
+        create_schema(fresh)
+
+        def objects(conn):
+            return sorted(
+                conn.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master"
+                ).fetchall()
+            )
+
+        self.assertEqual(objects(migrated), objects(fresh))
+        self.assertEqual(
+            migrated.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
 
 
 if __name__ == "__main__":

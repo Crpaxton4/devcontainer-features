@@ -104,12 +104,13 @@ resume_task(task_id=1234)
 
 ## 5. Stop the task — no hours are written here
 
-`stop_task` elicits a review/edit of the work description (the human's
-checkpoint), moves the run `→ STOPPED`, and records the confirmed description
-(prefixed `[/]`) locally:
+`stop_task` moves the run `→ STOPPED` with no prompt at all (#623) and stores a
+machine-derived run summary — computed from the run's recorded events and notes
+(#626) — on the run row, where the billing upload picks it up as the timesheet
+entry's description:
 
 ```text
-stop_task(task_id=1234, description="Fixed null-coupon crash in checkout; added regression test.")
+stop_task(task_id=1234)
 ```
 
 **`stop_task` writes no timesheet hours.** Elapsed hours are computed and
@@ -141,7 +142,7 @@ task_note ...         checkpoints (needs an active run; no state change)
         ├─ task_question → AWAITING_ANSWERS ─ resume_task → RUNNING ─┐
         │                                                            │
         ▼                                                            │
-stop_task             → STOPPED  (records description; writes NO hours)
+stop_task             → STOPPED  (derives the run summary; writes NO hours)
 ```
 
 - Every mutating tool after `start_task` needs an active run, else

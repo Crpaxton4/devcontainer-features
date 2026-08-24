@@ -66,6 +66,16 @@ class TaskRun:
     run's leftover events never bill. A normally stopped run leaves this ``None``.
     """
 
+    run_summary: Optional[str] = None
+    """Machine-derived narrative of the run's work, else ``None`` (#626).
+
+    Written by ``stop_task`` from the run's recorded events and notes
+    (:func:`odoo_sdk.state.summary.summarize_run_activity`), never elicited from
+    a human. Internal/local text with NO length cap — the 300-character chatter
+    limit applies only to chatter bodies posted to Odoo. The billing upload
+    attaches this narrative to the session's timesheet entry.
+    """
+
     @property
     def elapsed_seconds(self) -> float:
         end = self.stopped_at or datetime.now(timezone.utc)

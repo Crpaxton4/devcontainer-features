@@ -86,12 +86,14 @@ def _default_root() -> Path:
 #: Schema version stamped into ``PRAGMA user_version``. History: ``0`` was the
 #: implicit pre-#452 non-STRICT schema; ``1`` adopted the STRICT typed schema
 #: (write-time validation); ``2`` added the terminal ``CLOSED`` state to the
-#: ``task_runs.state`` CHECK (#504). Provisioning reads this marker to tell an
-#: out-of-date DB (needs the rebuild :func:`migrate_schema`) from a current one
-#: (idempotent no-op), which ``CREATE ... IF NOT EXISTS`` alone cannot — it would
-#: silently skip an already-present table whose CHECK is behind. A STRICT table's
-#: CHECK cannot be altered in place, so each bump rebuilds the affected tables.
-SCHEMA_VERSION = 2
+#: ``task_runs.state`` CHECK (#504); ``3`` added the nullable
+#: ``task_runs.run_summary`` column holding the machine-derived run narrative
+#: (#626). Provisioning reads this marker to tell an out-of-date DB (needs the
+#: rebuild :func:`migrate_schema`) from a current one (idempotent no-op), which
+#: ``CREATE ... IF NOT EXISTS`` alone cannot — it would silently skip an
+#: already-present table whose CHECK is behind. A STRICT table's CHECK cannot be
+#: altered in place, so each bump rebuilds the affected tables.
+SCHEMA_VERSION = 3
 
 
 # Canonical schema for the central tracker DB — the ONE authoritative DDL, applied
@@ -135,7 +137,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     stopped_at   TEXT             CHECK(stopped_at IS NULL OR datetime(stopped_at) IS NOT NULL),
     timesheet_id INTEGER,
     notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
-    aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL)
+    aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL),
+    run_summary  TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -192,14 +195,15 @@ _MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
 
 # Uppercase substrings whose ABSENCE from a table's stored ``sqlite_master`` DDL
 # means it predates a schema change and must be rebuilt from the canonical DDL.
-# ``STRICT`` (#452) applies to every table; the ``CLOSED`` state (#504) only to
-# ``task_runs``' CHECK. A marker check is used rather than an exact-SQL compare
-# because SQLite does not store the ``IF NOT EXISTS`` / whitespace verbatim, but
-# it does preserve keywords and CHECK literals — the exact tokens that change
-# between schema versions. Extend a table's tuple when a future CHECK/shape change
-# needs the same version-guarded rebuild.
+# ``STRICT`` (#452) applies to every table; the ``CLOSED`` state (#504) and the
+# ``RUN_SUMMARY`` column (#626) only to ``task_runs``. A marker check is used
+# rather than an exact-SQL compare because SQLite does not store the ``IF NOT
+# EXISTS`` / whitespace verbatim, but it does preserve keywords, identifiers, and
+# CHECK literals — the exact tokens that change between schema versions. Extend a
+# table's tuple when a future CHECK/shape change needs the same version-guarded
+# rebuild.
 _REQUIRED_TABLE_MARKERS = {
-    "task_runs": ("STRICT", "CLOSED"),
+    "task_runs": ("STRICT", "CLOSED", "RUN_SUMMARY"),
     "settings": ("STRICT",),
     "events": ("STRICT",),
     "session_uploads": ("STRICT",),
@@ -299,6 +303,20 @@ def _stale_tables(conn: sqlite3.Connection) -> list:
     return stale
 
 
+def _ensure_run_summary_column(conn: sqlite3.Connection) -> None:
+    """Additive pre-step for the #626 rebuild: append ``run_summary`` if absent.
+
+    The canonical rebuild copies rows with ``SELECT *``, which requires the old
+    and new column lists to line up. ``run_summary`` is the canonical DDL's LAST
+    column precisely so an older ``task_runs`` (v0/v1/v2 — all lacking it) can be
+    brought to the 12-column shape by a single ``ALTER TABLE ADD COLUMN`` before
+    the rebuild. Idempotent: a table already carrying the column is untouched.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
+    if columns and "run_summary" not in columns:
+        conn.execute("ALTER TABLE task_runs ADD COLUMN run_summary TEXT")
+
+
 def _rebuild_table(
     conn: sqlite3.Connection, table: str, create_sql: str, index_sqls: list
 ) -> None:
@@ -322,10 +340,12 @@ def _rebuild_table(
 def migrate_schema(conn: sqlite3.Connection) -> None:
     """Rebuild any out-of-date tables into the current STRICT typed schema.
 
-    Repairs both migrations the tracker DB has needed: a pre-#452 non-STRICT DB
-    (every table rebuilt into STRICT form) and a pre-#504 DB whose ``task_runs``
-    CHECK lacks the ``CLOSED`` state (that table rebuilt to widen the CHECK) — see
-    :data:`_REQUIRED_TABLE_MARKERS`. A no-op when the DB is already at
+    Repairs every migration the tracker DB has needed: a pre-#452 non-STRICT DB
+    (every table rebuilt into STRICT form), a pre-#504 DB whose ``task_runs``
+    CHECK lacks the ``CLOSED`` state, and a pre-#626 DB whose ``task_runs``
+    lacks the ``run_summary`` column (added additively, then normalized by the
+    same canonical rebuild) — see :data:`_REQUIRED_TABLE_MARKERS`. A no-op when
+    the DB is already at
     :data:`SCHEMA_VERSION` or holds no out-of-date tables (a fresh DB — its tables
     are created current directly by :func:`create_schema`). Otherwise every
     offending row is listed and the migration ABORTS with
@@ -350,6 +370,8 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     conn.execute("BEGIN")
     try:
+        if "task_runs" in stale:
+            _ensure_run_summary_column(conn)
         for table in stale:
             create_sql, index_sqls = schema[table]
             _rebuild_table(conn, table, create_sql, index_sqls)
@@ -571,7 +593,7 @@ def current_repo_label() -> str:
 # Columns selected for every task_run read, in _parse_run order.
 _TASK_RUN_COLUMNS = (
     "id, task_id, task_name, project_id, project_name, state, "
-    "started_at, stopped_at, timesheet_id, notes, aborted_at"
+    "started_at, stopped_at, timesheet_id, notes, aborted_at, run_summary"
 )
 
 # The two live/paused states an "active" run may be in. "Active" is the live
@@ -651,6 +673,7 @@ def _parse_run(row: tuple) -> TaskRun:
         timesheet_id,
         notes_json,
         aborted_at,
+        run_summary,
     ) = row
     return TaskRun(
         id=id_,
@@ -664,6 +687,7 @@ def _parse_run(row: tuple) -> TaskRun:
         timesheet_id=timesheet_id,
         notes=json.loads(notes_json),
         aborted_at=datetime.fromisoformat(aborted_at) if aborted_at else None,
+        run_summary=run_summary,
     )
 
 
@@ -1186,6 +1210,33 @@ class LocalStateClient:
         """
         return self._select_runs("WHERE aborted_at IS NOT NULL ORDER BY started_at")
 
+    def set_run_summary(self, run_id: int, summary: str) -> None:
+        """Store the machine-derived run summary on a run row (#626).
+
+        The summary is computed by ``stop_task`` from the run's recorded events
+        and notes (:func:`odoo_sdk.state.summary.summarize_run_activity`) and is
+        internal/local text: it is deliberately NOT subject to the 300-character
+        chatter cap (``enforce_chatter_body_limit``), which applies only to
+        chatter bodies posted to Odoo (``task_note`` / ``task_question``).
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_runs SET run_summary = ? WHERE id = ?",
+                (summary, run_id),
+            )
+
+    def get_runs_for_task(self, task_id: int) -> list[TaskRun]:
+        """Return every run recorded for ``task_id`` (CLOSED included), by start.
+
+        A targeted per-task lookup for run-summary consumers (#626): the billing
+        upload needs the derived summaries of runs overlapping a session window
+        even after a run reached the terminal ``CLOSED`` state, so — unlike
+        :meth:`get_all_runs` — closed runs are included here.
+        """
+        return self._select_runs(
+            "WHERE task_id = ? ORDER BY started_at, id", (task_id,)
+        )
+
     def update_timesheet_id(self, run_id: int, timesheet_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1321,6 +1372,42 @@ class LocalStateClient:
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT {_EVENT_COLUMNS} FROM events{where} ORDER BY timestamp",
+                tuple(params),
+            ).fetchall()
+        return [_parse_event(r) for r in rows]
+
+    def get_task_events(
+        self,
+        task_id: str,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[EventRecord]:
+        """Return events attributed to ``task_id`` in ``[start, end]``, in order.
+
+        The per-task audit read (#626): fans each event out over its ``task_ids``
+        JSON array with ``json_each`` (so a multi-task event still matches) and
+        bounds the window INCLUSIVELY on both edges — a run/session's boundary
+        events belong to its narrative, so the half-open ``[start, end)``
+        convention of :meth:`get_events` is deliberately not used here. Bounds
+        are normalized to the uniform stored UTC isoformat, so the string
+        comparison is exact. ``DISTINCT`` collapses a task id duplicated within
+        one event's array. Ordered by timestamp then id.
+        """
+        clauses = ["task_each.value = ?"]
+        params: list[str] = [str(task_id)]
+        if start is not None:
+            clauses.append("events.timestamp >= ?")
+            params.append(_normalize_utc_isoformat(start))
+        if end is not None:
+            clauses.append("events.timestamp <= ?")
+            params.append(_normalize_utc_isoformat(end))
+        columns = ", ".join(f"events.{c}" for c in _EVENT_COLUMNS.split(", "))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT {columns} "
+                "FROM events, json_each(events.task_ids) AS task_each "
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY events.timestamp, events.id",
                 tuple(params),
             ).fetchall()
         return [_parse_event(r) for r in rows]
