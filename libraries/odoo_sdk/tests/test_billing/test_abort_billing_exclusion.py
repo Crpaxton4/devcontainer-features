@@ -180,8 +180,10 @@ class TestAbortRunStateMethod(unittest.TestCase):
         db = _tmp_db()
         with self.assertRaises(TaskNotRunningError) as ctx:
             db.abort_run(999)
+        # One guard implementation, one message (#627): the db layer raises the
+        # same canonical wording as the command layer.
         self.assertEqual(
-            str(ctx.exception), "No active session found for task 999."
+            str(ctx.exception), "No active session for task 999."
         )
 
 

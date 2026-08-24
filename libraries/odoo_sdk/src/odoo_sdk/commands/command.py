@@ -4,7 +4,6 @@ from typing import Any, Optional
 from odoo_sdk.state import (
     LocalConfig,
     LocalStateClient,
-    TaskNotRunningError,
     TaskRun,
 )
 
@@ -39,13 +38,12 @@ def require_active_run(db: LocalStateClient, task_id: int) -> TaskRun:
     """Return the active run for ``task_id`` or raise ``TaskNotRunningError``.
 
     Shared by the session-mutating builtin commands (``task_question``,
-    ``task_note``, ``abort_task``, ``stop_task``), which all guard on the same
-    "no active session" precondition with an identical message.
+    ``task_note``, ``abort_task``, ``stop_task``). A thin delegate to
+    :meth:`LocalStateClient.require_active_run` — the ONE guard implementation
+    and message (#627) — kept here so the command layer retains a single,
+    stable import site for the precondition.
     """
-    run = db.get_active_run(task_id)
-    if run is None:
-        raise TaskNotRunningError(f"No active session for task {task_id}.")
-    return run
+    return db.require_active_run(task_id)
 
 
 class Command(ABC):

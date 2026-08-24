@@ -399,6 +399,103 @@ class TestTaskNoteCommand(unittest.TestCase):
         self.assertEqual(result["minutes_since_last_note"], 25)
         self.assertTrue(result["suggest_checkpoint"])
 
+    def test_local_append_commits_before_chatter_post(self):
+        # #627 ordering: by the time the chatter post fires, the note is
+        # already committed locally — a note visible in Odoo therefore always
+        # implies a note present in the session log.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        notes_at_post_time: list = []
+
+        def capture_local_state(*args, **kwargs):
+            run = db.get_active_run(1)
+            notes_at_post_time.extend(run.notes)  # type: ignore[union-attr]
+            return 55
+
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                side_effect=capture_local_state,
+            ),
+        ):
+            _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Ordered note")
+        self.assertEqual(notes_at_post_time, ["Ordered note"])
+
+    def test_failed_post_keeps_local_note_and_raises(self):
+        # #627 documented tradeoff: when the chatter post fails AFTER the local
+        # append committed, the error surfaces to the caller (detectable, they
+        # retry) and the local note remains — a benign duplicate on retry beats
+        # a chatter note missing from the session log.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                side_effect=RuntimeError("odoo unreachable"),
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Kept note")
+        run = db.get_active_run(1)
+        self.assertEqual(run.notes, ["Kept note"])  # type: ignore[union-attr]
+
+    def test_session_stopped_mid_call_blocks_chatter_post(self):
+        # #627 session-stop race: the session dies between the entry guard and
+        # the local append (simulated inside the attachment step). The append's
+        # own single-UPDATE check detects it, so the call fails BEFORE anything
+        # posts to chatter — never chatter-posted-but-locally-lost.
+        client = _client()
+        db = _tmp_db()
+        created = db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+
+        def stop_session_then_return_ids(*args, **kwargs):
+            db.stop_run(1)
+            return [91]
+
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.create_attachments",
+                side_effect=stop_session_then_return_ids,
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note"
+            ) as mock_post,
+        ):
+            with self.assertRaises(TaskNotRunningError):
+                _cmd_with_db(TaskNoteCommand, client, db).execute(
+                    1, "Raced note", attachments=[{"path": "/tmp/a.md"}]
+                )
+        mock_post.assert_not_called()
+        stopped = db.get_run_by_id(created.id)
+        self.assertEqual(stopped.notes, [])  # type: ignore[union-attr]
+
+
+# ── Unified active-session guard (#627) ───────────────────────────────────────
+
+class TestUnifiedActiveSessionGuard(unittest.TestCase):
+    def test_command_and_db_guards_share_one_message(self):
+        from odoo_sdk.commands.command import require_active_run
+
+        db = _tmp_db()
+        with self.assertRaises(TaskNotRunningError) as cmd_ctx:
+            require_active_run(db, 999)
+        with self.assertRaises(TaskNotRunningError) as db_ctx:
+            db.require_active_run(999)
+        self.assertEqual(str(cmd_ctx.exception), str(db_ctx.exception))
+        self.assertEqual(str(cmd_ctx.exception), "No active session for task 999.")
+
+    def test_guard_returns_the_active_run(self):
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        run = db.require_active_run(1)
+        self.assertEqual(run.task_id, 1)
+        self.assertEqual(run.state, TaskState.RUNNING)
+
 
 # ── TaskQuestionCommand ───────────────────────────────────────────────────────
 

@@ -36,7 +36,12 @@ class TaskNoteCommand(Command):
         note: str,
         attachments: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        """Post a chatter note (optionally with attachments) and record it locally.
+        """Record a note locally, then post it (with optional attachments) to chatter.
+
+        The local append commits before the Odoo post (#627): a note that made
+        it to the chatter is guaranteed to be in the local session log, and a
+        session stopped between the guard and the append raises before any
+        chatter post happens.
 
         :param task_id: Odoo project.task record id.
         :param note: Note text to post (max ``MAX_CHATTER_BODY_CHARS`` chars).
@@ -64,10 +69,18 @@ class TaskNoteCommand(Command):
                 res_id=task_id,
             )
 
+        # Ordering (#627): the local append COMMITS before the chatter post, so
+        # a note visible in Odoo always implies the note is present locally.
+        # ``append_note`` re-checks the session inside its own single UPDATE, so
+        # a session stopped after the guard above fails HERE — detectably,
+        # before anything reaches the chatter. The inverse failure (local note
+        # recorded, then the post raises) surfaces the post error to the caller
+        # to retry; a duplicate local note on retry is benign, while a chatter
+        # note missing from the session log would silently corrupt it.
+        db.append_note(task_id, note)
         message_id = post_chatter_note(
             self._client, task_id, note, attachment_ids=attachment_ids
         )
-        db.append_note(task_id, note)
         # The MCP wrapper records THIS call's ``task_note`` event only after the
         # command returns, so the hint reads the gap since the *previous* note
         # (or the run start) — exactly the cadence signal #387 asks for.
