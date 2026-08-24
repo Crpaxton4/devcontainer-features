@@ -48,11 +48,20 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
-#: The v1 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
-#: after #452 but before #504 added the ``CLOSED`` state. Derived from the current
-#: canonical DDL by dropping the ``CLOSED`` literal so it can never drift from the
-#: real prior shape (STRICT tables, old three-state task_runs CHECK).
-_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+#: The v2 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
+#: after #504 (CLOSED state) but before v3 added the ``question_message_id``
+#: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
+#: the current canonical DDL by dropping exactly those v3 additions so it can
+#: never drift from the real prior shape.
+_V2_DDL = SCHEMA_DDL[
+    : SCHEMA_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
+].replace(",\n    question_message_id INTEGER", "")
+assert "question_message_id" not in _V2_DDL
+assert "chatter_dedupe" not in _V2_DDL
+
+#: The v1 STRICT schema (post-#452, pre-#504): the v2 shape without the
+#: ``CLOSED`` literal in the task_runs CHECK.
+_V1_DDL = _V2_DDL.replace(", 'CLOSED'", "")
 
 _TS = "2026-07-17T12:00:00+00:00"
 
@@ -435,6 +444,89 @@ class TestClosedStateMigration(unittest.TestCase):
 
     def test_migrated_v1_matches_fresh_schema(self):
         migrated = self._v1_conn()
+        create_schema(migrated)
+        fresh = sqlite3.connect(":memory:")
+        create_schema(fresh)
+
+        def objects(conn):
+            return sorted(
+                conn.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master"
+                ).fetchall()
+            )
+
+        self.assertEqual(objects(migrated), objects(fresh))
+
+
+class TestWatermarkMigration(unittest.TestCase):
+    """A v2 STRICT DB gains the #625 watermark column via a task_runs rebuild.
+
+    The v3 bump is additive: ``task_runs`` is rebuilt to carry
+    ``question_message_id`` (existing rows land NULL — the shared-column copy in
+    ``_rebuild_table`` makes the positional-mismatch case work), and the new
+    ``chatter_dedupe`` table (#631) is created by the ``IF NOT EXISTS`` DDL
+    rather than a rebuild.
+    """
+
+    def _v2_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(_V2_DDL)
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'RUNNING', ?, '[]')",
+            (_TS,),
+        )
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        return conn
+
+    def test_v2_lacks_watermark_column_and_dedupe_table(self):
+        conn = self._v2_conn()
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(task_runs)")]
+        self.assertNotIn("question_message_id", columns)
+        self.assertIsNone(
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'chatter_dedupe'"
+            ).fetchone()
+        )
+
+    def test_only_task_runs_is_stale(self):
+        from odoo_sdk.state.db import _stale_tables
+
+        conn = self._v2_conn()
+        self.assertEqual(_stale_tables(conn), ["task_runs"])
+
+    def test_migrate_adds_column_and_preserves_rows(self):
+        conn = self._v2_conn()
+        migrate_schema(conn)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(task_runs)")]
+        self.assertIn("question_message_id", columns)
+        # The pre-existing row survives with id intact and a NULL watermark.
+        self.assertEqual(
+            conn.execute(
+                "SELECT id, task_id, state, question_message_id FROM task_runs"
+            ).fetchall(),
+            [(1, 5, "RUNNING", None)],
+        )
+
+    def test_create_schema_adds_dedupe_table_and_stamps_v3(self):
+        conn = self._v2_conn()
+        create_schema(conn)
+        self.assertEqual(
+            conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
+        self.assertTrue(_is_strict(conn, "chatter_dedupe"))
+        idx = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'chatter_dedupe' AND sql IS NOT NULL"
+            )
+        }
+        self.assertEqual(idx, {"idx_chatter_dedupe_key"})
+
+    def test_migrated_v2_matches_fresh_schema(self):
+        migrated = self._v2_conn()
         create_schema(migrated)
         fresh = sqlite3.connect(":memory:")
         create_schema(fresh)
