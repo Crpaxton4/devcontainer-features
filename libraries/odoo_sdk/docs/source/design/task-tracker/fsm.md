@@ -16,7 +16,9 @@ stateDiagram-v2
     RUNNING --> AWAITING_ANSWERS : task_question
     AWAITING_ANSWERS --> AWAITING_ANSWERS : task_question
 
-    AWAITING_ANSWERS --> RUNNING : resume_task
+    RUNNING --> RUNNING : start_task / resume_task (no-op)
+    AWAITING_ANSWERS --> RUNNING : start_task / resume_task
+    STOPPED --> RUNNING : start_task / resume_task (non-aborted)
 
     RUNNING --> STOPPED : stop_task (records session)
     AWAITING_ANSWERS --> STOPPED : stop_task (records session)
@@ -54,10 +56,12 @@ Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the DB ha
 
 | From               | Event                     | To                 | Guard                                      |
 |--------------------|---------------------------|--------------------|--------------------------------------------|
-| (absent)           | `start_task`              | `RUNNING`          | No active session for this task_id; writes no timesheet |
+| (absent)           | `start_task`              | `RUNNING`          | Creates a new run (also after an aborted or closed run); writes no timesheet |
+| `STOPPED`          | `start_task` / `resume_task` | `RUNNING`       | Non-aborted stopped run is reopened in place (same row, original `started_at`) |
+| `AWAITING_ANSWERS` | `start_task` / `resume_task` | `RUNNING`       | Session exists in AWAITING_ANSWERS state   |
+| `RUNNING`          | `start_task` / `resume_task` | `RUNNING`       | No-op success (#621) — `start_task` returns the existing run with `already_running: true` |
 | `RUNNING`          | `task_question`           | `AWAITING_ANSWERS` | Session exists in RUNNING state            |
 | `AWAITING_ANSWERS` | `task_question`           | `AWAITING_ANSWERS` | Self-loop: additional questions allowed    |
-| `AWAITING_ANSWERS` | `resume_task`             | `RUNNING`          | Session exists in AWAITING_ANSWERS state   |
 | `RUNNING`          | `stop_task`               | `STOPPED`          | Session exists in RUNNING state; records session, writes no hours |
 | `AWAITING_ANSWERS` | `stop_task`               | `STOPPED`          | Answers indicate no changes needed; records session, writes no hours |
 | `RUNNING` / `AWAITING_ANSWERS` | `abort_task`  | `STOPPED`          | Active run exists; stamps `aborted_at`, logs no hours |
@@ -69,7 +73,9 @@ Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the DB ha
 Guards are enforced by `LocalStateClient` in `odoo_sdk/state/db.py`; the typed
 exceptions live in `odoo_sdk/state/models.py`:
 
-- `TaskAlreadyRunningError` — `start_task` called when an active session exists
+- `TaskAlreadyRunningError` — raised only by the low-level `create_run` insert when
+  an active session exists (a lost create race); `start_task` itself is idempotent
+  (#621) and converts it into an `already_running: true` no-op result
 - `TaskNotRunningError` — operation requires an active session but none found
 - `InvalidStateTransitionError` — transition not permitted from current state
 - `TrackerStateMissingError` — the central DB is absent; it is host-provisioned and never self-created, so this single actionable error propagates rather than silently creating a fresh timeline

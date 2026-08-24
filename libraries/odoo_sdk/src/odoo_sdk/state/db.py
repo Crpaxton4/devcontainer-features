@@ -1031,38 +1031,40 @@ class LocalStateClient:
             )
 
     def transition_to_running(self, task_id: int) -> TaskRun:
-        """Resume a paused run back to RUNNING (#504).
+        """Ensure the task's run is RUNNING, resuming a paused one (#504, #621).
 
         Two predecessors resume: an ``AWAITING_ANSWERS`` run (a question was
         answered) and a ``STOPPED`` run (work continues after a stop). A stopped
         run is reopened IN PLACE — its ``started_at`` is preserved and its
         ``stopped_at`` cleared, so one continuous effort stays one run instead of
-        splitting into a second row. An already-``RUNNING`` run is a no-op error
-        (:class:`InvalidStateTransitionError`); a task with no resumable run at all
-        raises :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
+        splitting into a second row. An already-``RUNNING`` run is a NO-OP
+        success (#621): the run is returned unchanged, so idempotent automation
+        (``start_task``/``resume_task`` retries, racing resumers) never errors on
+        "already running". A task with no resumable run at all raises
+        :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
         aborted stopped run is voided, so neither is returned by the lookups below.
         """
         with self._write_txn() as conn:
             run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
             if run is not None and run.state == TaskState.RUNNING:
-                raise InvalidStateTransitionError(
-                    f"Cannot resume task {task_id}: it is already RUNNING."
-                )
+                # No-op path (#621): RUNNING → RUNNING is success, not an error.
+                return run
             if run is None:
                 run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
             if run is None:
                 raise TaskNotRunningError(
                     f"No resumable session found for task {task_id}."
                 )
-            # A lost CAS could only mean another writer resumed the run first,
-            # so rowcount 0 maps to the same already-RUNNING error as above.
+            # Defense in depth: under BEGIN IMMEDIATE the state read above still
+            # holds, so this CAS cannot lose; a rowcount of 0 would mean the
+            # transaction contract itself broke.
             _cas_update(
                 conn,
                 "UPDATE task_runs SET state = 'RUNNING', stopped_at = NULL "
                 "WHERE id = ? AND state IN ('AWAITING_ANSWERS', 'STOPPED')",
                 (run.id,),
                 InvalidStateTransitionError(
-                    f"Cannot resume task {task_id}: it is already RUNNING."
+                    f"Cannot resume task {task_id}: its state changed mid-transition."
                 ),
             )
             return _fetch_run(  # type: ignore[return-value]

@@ -10,7 +10,6 @@ from odoo_sdk.state.db import (
     tracker_db_path,
 )
 from odoo_sdk.state.models import (
-    InvalidStateTransitionError,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskRun,
@@ -249,11 +248,19 @@ class TestTaskStateDBTransitions(unittest.TestCase):
         r = db.transition_to_running(1)
         self.assertEqual(r.state, TaskState.RUNNING)
 
-    def test_transition_to_running_from_running_raises(self):
+    def test_transition_to_running_from_running_is_a_noop_success(self):
+        # #621: RUNNING -> RUNNING is idempotent — the existing run is returned
+        # unchanged instead of raising InvalidStateTransitionError, so retry-safe
+        # automation (start_task/resume_task) never errors on "already running".
         db = _tmp_db()
-        _create(db, task_id=1)
-        with self.assertRaises(InvalidStateTransitionError):
-            db.transition_to_running(1)
+        created = _create(db, task_id=1)
+        result = db.transition_to_running(1)
+        self.assertEqual(result.id, created.id)
+        self.assertEqual(result.state, TaskState.RUNNING)
+        self.assertEqual(result.started_at, created.started_at)
+        self.assertIsNone(result.stopped_at)
+        # The no-op writes nothing: the run row is byte-identical on re-read.
+        self.assertEqual(db.get_active_run(1), created)
 
     def test_transition_to_running_no_run_raises(self):
         db = _tmp_db()

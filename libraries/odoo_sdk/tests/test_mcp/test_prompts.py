@@ -289,7 +289,10 @@ class TestBuildMessages(unittest.TestCase):
     def test_second_message_mentions_guard_conditions(self):
         msgs = _build_messages(_make_task())
         content = msgs[1]
-        self.assertIn("TaskAlreadyRunningError", content)
+        # #621: start_task is idempotent, so the prompt documents the
+        # already_running flag instead of a TaskAlreadyRunningError guard.
+        self.assertNotIn("TaskAlreadyRunningError", content)
+        self.assertIn("already_running", content)
         self.assertIn("TaskNotRunningError", content)
 
     def test_second_message_embeds_task_id_in_tool_calls(self):

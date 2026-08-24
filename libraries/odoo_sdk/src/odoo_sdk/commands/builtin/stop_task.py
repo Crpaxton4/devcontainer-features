@@ -34,8 +34,10 @@ class StopTaskCommand(Command):
 
     _name = "stop_task"
     _description = (
-        "Stop an active task tracking session. Transitions the run to stopped and "
-        "echoes back an optional work description (prefixed with [/]). Does not "
+        "Stop an active task tracking session. Session state machine: RUNNING or "
+        "AWAITING_ANSWERS -> STOPPED; a non-aborted STOPPED session stays "
+        "resumable, so a later start_task or resume_task reopens it in place. "
+        "Echoes back an optional work description (prefixed with [/]). Does not "
         "write hours to Odoo — the TUI/ETL upload path owns timesheet hours."
     )
 

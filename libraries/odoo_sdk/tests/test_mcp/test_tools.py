@@ -3,7 +3,6 @@
 import asyncio
 import os
 import unittest
-import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,24 +24,9 @@ def _accepted(data) -> MagicMock:
     return r
 
 
-def _confirmed() -> MagicMock:
-    """A data-less accepted elicitation (pure confirm via the ``_ConfirmGate``
-    fieldless schema — the accept action itself is the answer)."""
-    r = MagicMock()
-    r.action = "accept"
-    r.data = None
-    return r
-
-
 def _cancelled() -> MagicMock:
     r = MagicMock()
     r.action = "cancel"
-    return r
-
-
-def _declined() -> MagicMock:
-    r = MagicMock()
-    r.action = "decline"
     return r
 
 
@@ -53,6 +37,7 @@ def _make_sp(
     dirty_kind="tracked",
     existing_branches=(),
     remote_branches=(),
+    origin_head="",
 ) -> MagicMock:
     """Fake ``subprocess`` for the git helpers in ``start_task``.
 
@@ -66,6 +51,10 @@ def _make_sp(
     :param remote_branches: Base names for which ``git rev-parse --verify
         refs/remotes/origin/<b>`` reports success — i.e. an ``origin/<b>``
         remote-tracking ref exists after ``git fetch`` (#454).
+    :param origin_head: Value returned by ``git symbolic-ref --short
+        refs/remotes/origin/HEAD`` (e.g. ``"origin/main"``); empty means the
+        remote default branch is unknown, so ``_default_base_branch`` falls back
+        to the current branch.
     """
     sp = MagicMock()
     state = {"stash_entries": 0}
@@ -74,7 +63,10 @@ def _make_sp(
         r = MagicMock()
         r.returncode = 0
         r.stdout = ""
-        if args[1] == "rev-parse" and "--verify" in args:
+        if args[1] == "symbolic-ref":
+            r.stdout = f"{origin_head}\n" if origin_head else ""
+            r.returncode = 0 if origin_head else 1
+        elif args[1] == "rev-parse" and "--verify" in args:
             spec = args[-1]
             ref = spec.rsplit("/", 1)[-1]
             known = remote_branches if spec.startswith("refs/remotes/") else existing_branches
@@ -104,11 +96,30 @@ def _make_sp(
     return sp
 
 
+def _idle_state() -> MagicMock:
+    """A fake LocalStateClient reporting no session for any task."""
+    state = MagicMock()
+    state.get_active_run.return_value = None
+    return state
+
+
+def _running_state(run_id=1) -> MagicMock:
+    """A fake LocalStateClient reporting an already-RUNNING session (#621)."""
+    from odoo_sdk.state import TaskState
+
+    state = MagicMock()
+    state.get_active_run.return_value = SimpleNamespace(
+        id=run_id, state=TaskState.RUNNING
+    )
+    return state
+
+
 class _FakeRegistry:
     """Minimal registry: maps command name -> object with execute()."""
 
-    def __init__(self, client=None, **commands):
+    def __init__(self, client=None, state=None, **commands):
         self._client = client if client is not None else MagicMock()
+        self._state = state if state is not None else _idle_state()
         self._commands = {}
         for name, fn in commands.items():
             self._commands[name] = fn
@@ -118,6 +129,7 @@ class _FakeRegistry:
         impl = self._commands[name]
         cmd.execute.side_effect = impl
         cmd._client = self._client
+        cmd.state = self._state
         return cmd
 
 
@@ -268,122 +280,45 @@ class TestDefaultToolSurface(unittest.TestCase):
 
 
 class TestStartTaskTool(unittest.TestCase):
-    def _registry(self, *, projects, tasks, start_result):
+    def _registry(self, *, projects, tasks, start_result, state=None):
         return _FakeRegistry(
+            state=state,
             search_projects=lambda query, limit=10: projects,
             search_tasks=lambda query, project_id, limit=10: tasks,
             start_task=lambda **kw: {**start_result, **kw},
         )
 
-    def test_single_project_and_task_confirmed(self):
+    def test_single_project_and_task_starts_without_confirmation(self):
+        # #621: no confirmation gate — the only elicitation on the name path is
+        # the base-branch pick.
         reg = self._registry(
             projects=[{"id": 5, "name": "Accounting"}],
             tasks=[{"id": 10, "name": "Fix VAT"}],
             start_result={"run_id": 1, "task_id": 10},
         )
-        ctx = _ctx(
-            _confirmed(),  # confirm
-            _accepted(MagicMock(selection=1)),  # branch pick
-        )
+        ctx = _ctx(_accepted(MagicMock(selection=1)))  # branch pick
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("VAT", ctx, "Accounting"))
+            result = _run(tool(ctx, "VAT", "Accounting"))
         self.assertEqual(result["task_id"], 10)
         self.assertEqual(result["project_name"], "Accounting")
+        self.assertEqual(ctx.elicit.await_count, 1)
+        prompt = ctx.elicit.await_args_list[0].args[0]
+        self.assertIn("base branch", prompt)
+
+    def test_missing_task_id_and_query_errors(self):
+        reg = self._registry(projects=[], tasks=[], start_result={})
+        result = _run(make_start_task_tool(reg)(MagicMock()))
+        self.assertIn("error", result)
+        self.assertIn("task_id", result["error"])
 
     def test_no_projects_returns_error(self):
         reg = self._registry(projects=[], tasks=[], start_result={})
         tool = make_start_task_tool(reg)
-        result = _run(tool("x", MagicMock(), "Nope"))
+        result = _run(tool(MagicMock(), "x", "Nope"))
         self.assertIn("error", result)
         self.assertIn("No projects", result["error"])
-
-    def test_declined_confirmation_cancels(self):
-        reg = self._registry(
-            projects=[{"id": 5, "name": "Acct"}],
-            tasks=[{"id": 10, "name": "T"}],
-            start_result={},
-        )
-        ctx = _ctx(_declined())
-        tool = make_start_task_tool(reg)
-        result = _run(tool("T", ctx))
-        self.assertEqual(result, {"error": "Task start cancelled."})
-
-    def test_cancelled_confirmation_cancels(self):
-        reg = self._registry(
-            projects=[{"id": 5, "name": "Acct"}],
-            tasks=[{"id": 10, "name": "T"}],
-            start_result={},
-        )
-        ctx = _ctx(_cancelled())
-        tool = make_start_task_tool(reg)
-        result = _run(tool("T", ctx))
-        self.assertEqual(result, {"error": "Task start cancelled."})
-
-    def test_confirmation_is_a_dataless_gate(self):
-        # The confirm prompt must be a single accept/decline checkpoint, not a
-        # form with a ``confirmed`` field: it is elicited with the fieldless
-        # ``_ConfirmGate`` schema and accepting proceeds even though ``data``
-        # carries no user-entered value (issue #121).
-        reg = self._registry(
-            projects=[{"id": 5, "name": "Acct"}],
-            tasks=[{"id": 10, "name": "Fix"}],
-            start_result={"run_id": 1, "task_id": 10},
-        )
-        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
-        tool = make_start_task_tool(reg)
-        with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("Fix", ctx))
-        self.assertEqual(result["task_id"], 10)
-        confirm_call = ctx.elicit.await_args_list[0]
-        schema_cls = confirm_call.args[1]
-        # Confirm gate uses the fieldless _ConfirmGate schema, not response_type=None.
-        self.assertEqual(schema_cls.__name__, "_ConfirmGate")
-        self.assertIsNone(confirm_call.kwargs.get("response_type"))
-        # The schema exposes no properties the user must fill (single Accept/Decline).
-        self.assertEqual(schema_cls.model_json_schema().get("properties", {}), {})
-        self.assertNotIn("required", schema_cls.model_json_schema())
-
-    def test_confirmation_schema_emits_no_deprecation_warning(self):
-        # Driving the real Context.elicit with the confirm gate's schema must
-        # NOT trigger the FastMCPDeprecationWarning that response_type=None does
-        # in FastMCP 3.4.x. This guards the exact schema start_task passes.
-        from fastmcp.exceptions import FastMCPDeprecationWarning
-        from fastmcp.server.context import Context
-        from odoo_sdk.mcp.tools.start_task import _ConfirmGate
-
-        session = MagicMock()
-        session.elicit = AsyncMock(
-            return_value=SimpleNamespace(action="accept", content={})
-        )
-        ctx = MagicMock(spec=Context)
-        ctx.is_background_task = False
-        ctx.request_id = "1"
-        ctx.session = session
-
-        def _deprecations(coro):
-            with warnings.catch_warnings(record=True) as recorded:
-                warnings.simplefilter("always")
-                result = _run(coro)
-            return result, [
-                w
-                for w in recorded
-                if issubclass(w.category, FastMCPDeprecationWarning)
-            ]
-
-        gate_result, gate_deprecations = _deprecations(
-            Context.elicit(ctx, "Confirm?", _ConfirmGate)
-        )
-        _, none_deprecations = _deprecations(Context.elicit(ctx, "Confirm?", None))
-
-        self.assertEqual(gate_result.action, "accept")
-        # The confirm gate schema raises no deprecation warning ...
-        self.assertEqual(gate_deprecations, [])
-        # ... while the deprecated response_type=None sentinel still does,
-        # proving the test would catch a regression back to it.
-        self.assertTrue(none_deprecations, "response_type=None should still warn")
 
     def test_disambiguates_multiple_projects(self):
         reg = self._registry(
@@ -393,13 +328,12 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = _ctx(
             _accepted(MagicMock(selection=2)),  # pick project
-            _confirmed(),  # confirm
             _accepted(MagicMock(selection=1)),  # branch pick
         )
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("VAT", ctx))
+            result = _run(tool(ctx, "VAT"))
         self.assertEqual(result["task_id"], 10)
 
     def test_cancelled_project_selection_errors(self):
@@ -410,7 +344,7 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = _ctx(_cancelled())
         tool = make_start_task_tool(reg)
-        result = _run(tool("x", ctx))
+        result = _run(tool(ctx, "x"))
         self.assertIn("error", result)
 
     def test_no_tasks_returns_error(self):
@@ -419,10 +353,12 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         tool = make_start_task_tool(reg)
-        result = _run(tool("x", ctx))
+        result = _run(tool(ctx, "x"))
         self.assertIn("error", result)
 
-    def test_task_id_bypasses_name_search(self):
+    def test_task_id_only_is_headless_with_zero_search_calls(self):
+        # #614: with a task_id the tool performs ZERO name-search calls and
+        # ZERO elicitations — no task_name_query is needed at all.
         client = MagicMock()
         client.execute.return_value = [
             {"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}
@@ -439,47 +375,98 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=_search,
             start_task=lambda **kw: {"run_id": 1, **kw},
         )
-        ctx = _ctx(
-            _confirmed(),
-            _accepted(MagicMock(selection=1)),
-        )
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.session.check_client_capability.return_value = False
+        ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("Fix VAT", ctx, task_id=10))
+            result = _run(tool(ctx, task_id=10))
         self.assertFalse(called["search"])
+        ctx.elicit.assert_not_awaited()
+        ctx.sample.assert_not_called()
         self.assertEqual(result["project_name"], "Accounting")
+        # Deterministic slug + hyphenated convention (#622).
+        self.assertEqual(result["branch_name"], "10-fix-vat")
 
-    def test_task_id_not_found_no_query_errors(self):
+    def test_task_id_not_found_errors_without_search_fallback(self):
+        # #614: an unknown id is an error — never a fuzzy name-search fallback
+        # that could land on the wrong task, even when a name query was given.
         client = MagicMock()
         client.execute.return_value = []
+        called = {"search": False}
+
+        def _search(*a, **k):
+            called["search"] = True
+            return [{"id": 10, "name": "Fix"}]
+
         reg = _FakeRegistry(
             client=client,
-            search_projects=lambda *a, **k: [],
-            search_tasks=lambda *a, **k: [],
+            search_projects=_search,
+            search_tasks=_search,
             start_task=lambda **kw: {},
         )
-        result = _run(make_start_task_tool(reg)("", MagicMock(), task_id=999))
+        result = _run(make_start_task_tool(reg)(MagicMock(), "Fix", task_id=999))
         self.assertIn("999", result["error"])
+        self.assertFalse(called["search"])
 
-    def test_task_id_fallback_to_name_search_warns(self):
+    def test_already_running_short_circuits_with_zero_side_effects(self):
+        # #621: pre-flight state check fires BEFORE any side effect — a RUNNING
+        # session yields the command's no-op result with no git call and no
+        # elicitation at all.
         client = MagicMock()
-        client.execute.return_value = []  # id lookup fails
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
         reg = _FakeRegistry(
             client=client,
-            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
-            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
-            start_task=lambda **kw: {"run_id": 1, **kw},
+            state=_running_state(),
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"run_id": 1, "already_running": True, **kw},
         )
-        ctx = _ctx(
-            _confirmed(),
-            _accepted(MagicMock(selection=1)),
-        )
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.sample = AsyncMock()
+        sp = _make_sp()
         tool = make_start_task_tool(reg)
-        with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("Fix", ctx, task_id=99))
-        self.assertIn("warning", result)
+        with patch(_SP_PATCH, sp):
+            result = _run(tool(ctx, task_id=10))
+        self.assertTrue(result["already_running"])
+        self.assertNotIn("branch_name", result)
+        ctx.elicit.assert_not_awaited()
+        ctx.sample.assert_not_called()
+        sp.run.assert_not_called()
+
+    def test_awaiting_answers_proceeds_to_the_command(self):
+        # #621: a non-RUNNING active session (AWAITING_ANSWERS) is not the
+        # no-op path — the command is invoked to transition it back to RUNNING.
+        from odoo_sdk.state import TaskState
+
+        state = MagicMock()
+        state.get_active_run.return_value = SimpleNamespace(
+            id=1, state=TaskState.AWAITING_ANSWERS
+        )
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            state=state,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"run_id": 1, "already_running": False, **kw},
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.session.check_client_capability.return_value = False
+        ctx.sample = AsyncMock()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp(current_branch="10-fix")):
+            result = _run(tool(ctx, task_id=10))
+        self.assertFalse(result["already_running"])
+        self.assertEqual(result["run_id"], 1)
 
     def test_skips_branch_when_already_on_task_branch(self):
         client = MagicMock()
@@ -492,13 +479,14 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=lambda *a, **k: [],
             start_task=lambda **kw: {"run_id": 1, **kw},
         )
-        ctx = _ctx(_confirmed())
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
         ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
-        with patch(_SP_PATCH, _make_sp(current_branch="10#x")):
-            result = _run(tool("Fix", ctx, task_id=10))
+        with patch(_SP_PATCH, _make_sp(current_branch="10-x")):
+            result = _run(tool(ctx, task_id=10))
         ctx.sample.assert_not_called()
-        self.assertEqual(ctx.elicit.call_count, 1)
+        ctx.elicit.assert_not_awaited()
         self.assertIsNone(result.get("branch_name"))
 
     def test_branch_selection_cancelled(self):
@@ -507,11 +495,11 @@ class TestStartTaskTool(unittest.TestCase):
             tasks=[{"id": 10, "name": "Fix"}],
             start_result={},
         )
-        ctx = _ctx(_confirmed(), _cancelled())
+        ctx = _ctx(_cancelled())
         ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("Fix", ctx))
+            result = _run(tool(ctx, "Fix"))
         self.assertEqual(result, {"error": "Branch selection cancelled."})
 
     def test_no_branches_available_errors(self):
@@ -520,11 +508,51 @@ class TestStartTaskTool(unittest.TestCase):
             tasks=[{"id": 10, "name": "Fix"}],
             start_result={},
         )
-        ctx = _ctx(_confirmed())
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp(branches=())):
-            result = _run(tool("Fix", ctx))
+            result = _run(tool(ctx, "Fix"))
         self.assertIn("No local git branches", result["error"])
+
+    def test_task_branches_are_excluded_from_the_base_pick(self):
+        # #622: the base-branch picker never offers a ``<id>-<slug>`` task
+        # branch as a fork base.
+        from odoo_sdk.mcp.tools.start_task import _list_local_branches
+
+        sp = _make_sp(branches=("main", "10-fix-vat", "feat/x", "28788-slug"))
+        with patch(_SP_PATCH, sp):
+            self.assertEqual(_list_local_branches(), ["main", "feat/x"])
+
+    def test_headless_base_prefers_the_remote_default_branch(self):
+        # #621 headless path: with origin/HEAD known, the fork base is the
+        # remote default branch — no elicitation involved.
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"run_id": 1, **kw},
+        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.session.check_client_capability.return_value = False
+        ctx.sample = AsyncMock()
+        sp = _make_sp(
+            current_branch="feature/other",
+            origin_head="origin/develop",
+            remote_branches=("develop",),
+        )
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["branch_name"], "10-fix")
+        called = [c.args[0] for c in sp.run.call_args_list]
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/develop"], called)
+        ctx.elicit.assert_not_awaited()
 
     def test_auto_stashes_dirty_tree(self):
         client = MagicMock()
@@ -537,15 +565,13 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=lambda *a, **k: [],
             start_task=lambda **kw: {"run_id": 1, **kw},
         )
-        ctx = _ctx(
-            _confirmed(),
-            _accepted(MagicMock(selection=1)),
-        )
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _make_sp(dirty=True)
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
-            _run(tool("Fix", ctx, task_id=10))
+            _run(tool(ctx, task_id=10))
         called = [c.args[0] for c in sp.run.call_args_list]
         # push must carry untracked files (-u) so the balanced pop has an entry.
         self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in called))
@@ -562,53 +588,17 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
             start_task=_boom,
         )
-        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
+        ctx = _ctx(_accepted(MagicMock(selection=1)))
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _make_sp(current_branch="main")
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
             with self.assertRaises(RuntimeError):
-                _run(tool("Fix", ctx))
+                _run(tool(ctx, "Fix"))
         called = [c.args[0] for c in sp.run.call_args_list]
         # Switched back to the original branch, then deleted the task branch.
         self.assertIn(["git", "checkout", "main"], called)
-        self.assertIn(["git", "branch", "-D", "10#fix"], called)
-
-    def test_keeps_branch_and_reraises_typed_already_running(self):
-        # Raise-based error contract (#223): the epic-C start command raises the
-        # typed ``TaskAlreadyRunningError`` when the task is already tracked, and
-        # the composition tool must let the *typed* exception propagate unchanged
-        # (for the #222 boundary to format) — it must not be caught and swallowed
-        # into a passthrough error dict.
-        # Unlike every other failure, this one is *not* rolled back (#478):
-        # attaching to a session that is already RUNNING means development
-        # continues, so the task branch created this run has to stay. Deleting it
-        # here is what made branch setup look silently skipped whenever a session
-        # was already running. See ``test_start_task_branch_setup`` for the
-        # positive assertions on the branch surviving.
-        from odoo_sdk.state import TaskAlreadyRunningError
-
-        def _boom(**kw):
-            raise TaskAlreadyRunningError(
-                "Task 'Fix' already has an active session (id=1, state=running)."
-            )
-
-        reg = _FakeRegistry(
-            search_projects=lambda *a, **k: [{"id": 5, "name": "Acct"}],
-            search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
-            start_task=_boom,
-        )
-        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
-        sp = _make_sp(current_branch="main")
-        tool = make_start_task_tool(reg)
-        with patch(_SP_PATCH, sp):
-            with self.assertRaises(TaskAlreadyRunningError):
-                _run(tool("Fix", ctx))
-        called = [c.args[0] for c in sp.run.call_args_list]
-        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], called)
-        self.assertNotIn(["git", "checkout", "main"], called)
-        self.assertNotIn(["git", "branch", "-D", "10#fix"], called)
+        self.assertIn(["git", "branch", "-D", "10-fix"], called)
 
     def test_no_rollback_when_no_branch_created(self):
         # #164: when already on the task branch, no branch is created this run,
@@ -626,13 +616,14 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=lambda *a, **k: [],
             start_task=_boom,
         )
-        ctx = _ctx(_confirmed())
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
         ctx.sample = AsyncMock()
-        sp = _make_sp(current_branch="10#x")
+        sp = _make_sp(current_branch="10-x")
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
             with self.assertRaises(RuntimeError):
-                _run(tool("Fix", ctx, task_id=10))
+                _run(tool(ctx, task_id=10))
         called = [c.args[0] for c in sp.run.call_args_list]
         self.assertFalse(any(c[:2] == ["git", "branch"] and "-D" in c for c in called))
 
@@ -647,15 +638,38 @@ class TestStartTaskTool(unittest.TestCase):
             search_tasks=lambda *a, **k: [{"id": 10, "name": "Fix"}],
             start_task=_boom,
         )
-        ctx = _ctx(_confirmed(), _accepted(MagicMock(selection=1)))
+        ctx = _ctx(_accepted(MagicMock(selection=1)))
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
-        sp = _make_sp(current_branch="main", existing_branches=("10#fix",))
+        sp = _make_sp(current_branch="main", existing_branches=("10-fix",))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
             with self.assertRaises(RuntimeError):
-                _run(tool("Fix", ctx))
+                _run(tool(ctx, "Fix"))
         called = [c.args[0] for c in sp.run.call_args_list]
         self.assertFalse(any(c[:2] == ["git", "branch"] and "-D" in c for c in called))
+
+
+class TestStartTaskToolSchema(unittest.TestCase):
+    """The start_task wire schema after #614: task_id alone must suffice."""
+
+    def _schema(self):
+        from fastmcp.tools.tool import Tool
+
+        fn = make_start_task_tool(MagicMock())
+        return Tool.from_function(fn, name="start_task").parameters
+
+    def test_task_name_query_is_not_required(self):
+        # #614: the schema no longer forces a name query onto ID-holding
+        # automation — nothing is schema-required (validation is runtime).
+        self.assertEqual(self._schema().get("required", []), [])
+
+    def test_task_id_and_queries_are_all_in_the_schema(self):
+        props = self._schema()["properties"]
+        for name in ("task_id", "task_name_query", "project_name_query"):
+            self.assertIn(name, props)
+
+    def test_ctx_not_in_schema(self):
+        self.assertNotIn("ctx", self._schema()["properties"])
 
 
 class TestCreateTaskBranch(unittest.TestCase):
@@ -670,20 +684,20 @@ class TestCreateTaskBranch(unittest.TestCase):
 
         sp = _make_sp()
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
-        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], calls)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "main"], calls)
 
     def test_checks_out_existing_branch_idempotently(self):
         # #149: a re-run where the target branch already exists must not
         # `checkout -b` (git exit 128); it checks out the existing branch.
         from odoo_sdk.mcp.tools.start_task import _create_task_branch
 
-        sp = _make_sp(existing_branches=("10#fix",))
+        sp = _make_sp(existing_branches=("10-fix",))
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
-        self.assertIn(["git", "checkout", "10#fix"], calls)
+        self.assertIn(["git", "checkout", "10-fix"], calls)
         self.assertFalse(
             any(c[:3] == ["git", "checkout", "-b"] for c in calls),
             "must not recreate an existing branch",
@@ -696,7 +710,7 @@ class TestCreateTaskBranch(unittest.TestCase):
 
         sp = _make_sp(dirty=True, dirty_kind="untracked")
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")  # must not raise
+            _create_task_branch("10-fix", "main")  # must not raise
         calls = self._calls(sp)
         self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in calls))
         self.assertIn(["git", "stash", "pop"], calls)
@@ -706,7 +720,7 @@ class TestCreateTaskBranch(unittest.TestCase):
 
         sp = _make_sp(dirty=False)
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
         self.assertFalse(any(c[:2] == ["git", "stash"] for c in calls))
 
@@ -718,17 +732,17 @@ class TestCreateTaskBranch(unittest.TestCase):
 
         sp = _make_sp(remote_branches=("main",))
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
         self.assertIn(["git", "fetch", "origin", "main"], calls)
-        self.assertIn(["git", "checkout", "-b", "10#fix", "origin/main"], calls)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/main"], calls)
         self.assertNotIn(
-            ["git", "checkout", "-b", "10#fix", "main"],
+            ["git", "checkout", "-b", "10-fix", "main"],
             calls,
             "must not fork from the stale local base ref",
         )
         fetch_idx = calls.index(["git", "fetch", "origin", "main"])
-        checkout_idx = calls.index(["git", "checkout", "-b", "10#fix", "origin/main"])
+        checkout_idx = calls.index(["git", "checkout", "-b", "10-fix", "origin/main"])
         self.assertLess(fetch_idx, checkout_idx, "fetch must precede the fork")
 
     def test_falls_back_to_local_base_when_no_remote_ref(self):
@@ -739,19 +753,19 @@ class TestCreateTaskBranch(unittest.TestCase):
 
         sp = _make_sp(remote_branches=())
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
         self.assertIn(["git", "fetch", "origin", "main"], calls)
-        self.assertIn(["git", "checkout", "-b", "10#fix", "main"], calls)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "main"], calls)
 
     def test_existing_branch_is_not_re_forked_and_skips_fetch(self):
         # Idempotent checkout of an existing task branch never re-forks, so it
         # must not fetch or resolve a remote base at all.
         from odoo_sdk.mcp.tools.start_task import _create_task_branch
 
-        sp = _make_sp(existing_branches=("10#fix",), remote_branches=("main",))
+        sp = _make_sp(existing_branches=("10-fix",), remote_branches=("main",))
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
         self.assertNotIn(["git", "fetch", "origin", "main"], calls)
 
@@ -826,17 +840,13 @@ class TestBranchDescriptionSampling(unittest.TestCase):
             search_tasks=lambda *a, **k: [],
             start_task=lambda **kw: {"run_id": 1, **kw},
         )
-        ctx = _sampling_ctx(
-            _accepted(MagicMock(confirmed=True)),
-            _accepted(MagicMock(selection=1)),
-            supports_sampling=False,
-        )
+        ctx = _sampling_ctx(supports_sampling=False)
         ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
-            result = _run(tool("Fix VAT", ctx, "Accounting", task_id=10))
+            result = _run(tool(ctx, "Fix VAT", "Accounting", task_id=10))
         self.assertEqual(result["run_id"], 1)
-        self.assertEqual(result["branch_name"], "10#fix-vat")
+        self.assertEqual(result["branch_name"], "10-fix-vat")
         ctx.sample.assert_not_called()
 
 

@@ -660,15 +660,15 @@ class TestResumeTaskCommand(unittest.TestCase):
             _cmd_with_db(ResumeTaskCommand, client, db).execute(1)
         client.execute.assert_not_called()
 
-    def test_raises_when_running(self):
+    def test_running_is_a_noop_success(self):
+        # #621: resuming an already-RUNNING session is idempotent — the command
+        # reports the RUNNING session instead of raising.
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        from odoo_sdk.state import InvalidStateTransitionError
-        with (
-            patch(_RESUME_GUARD),
-        ):
-            with self.assertRaises(InvalidStateTransitionError):
-                _cmd_with_db(ResumeTaskCommand, _client(), db).execute(1)
+        with patch(_RESUME_GUARD):
+            result = _cmd_with_db(ResumeTaskCommand, _client(), db).execute(1)
+        self.assertEqual(result["state"], "RUNNING")
+        self.assertEqual(len(db.get_all_runs()), 1)
 
     def test_resumes_a_stopped_session(self):
         # STOPPED is now resumable (#504): resume reopens the paused run.
@@ -781,9 +781,9 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         result = self._start(
-            client, db, **self._base_kwargs(branch_name="10#fix-vat", warning="heads up")
+            client, db, **self._base_kwargs(branch_name="10-fix-vat", warning="heads up")
         )
-        self.assertEqual(result["branch_name"], "10#fix-vat")
+        self.assertEqual(result["branch_name"], "10-fix-vat")
         self.assertEqual(result["warning"], "heads up")
 
     def test_no_branch_or_warning_keys_when_absent(self):
@@ -793,18 +793,57 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertNotIn("branch_name", result)
         self.assertNotIn("warning", result)
 
-    def test_raises_when_already_active(self):
+    def test_running_session_is_a_noop_with_already_running_flag(self):
+        # #621: start on an already-RUNNING session is a no-op success — the
+        # existing run comes back flagged, with zero writes and no second row.
         client = _client()
         db = _tmp_db()
         db.create_run(10, "Fix VAT", 5, "Accounting", timesheet_id=1)
         existing = db.get_active_run(10)
-        with self.assertRaises(TaskAlreadyRunningError) as ctx:
-            self._start(client, db, **self._base_kwargs())
-        self.assertEqual(
-            str(ctx.exception),
-            f"Task 'Fix VAT' already has an active session "
-            f"(id={existing.id}, state={existing.state.value}).",
-        )
+        result = self._start(client, db, **self._base_kwargs())
+        self.assertTrue(result["already_running"])
+        self.assertEqual(result["run_id"], existing.id)
+        self.assertEqual(result["state"], "RUNNING")
+        self.assertEqual(result["started_at"], existing.started_at.isoformat())
+        self.assertEqual(len(db.get_all_runs()), 1)
+        client.execute.assert_not_called()
+
+    def test_awaiting_answers_session_transitions_to_running(self):
+        # #621: start on an AWAITING_ANSWERS session resumes it to RUNNING
+        # in place (no error, no second row, not flagged already_running).
+        client = _client()
+        db = _tmp_db()
+        first = self._start(client, db, **self._base_kwargs())
+        db.transition_to_awaiting(10)
+        result = self._start(client, db, **self._base_kwargs())
+        self.assertFalse(result["already_running"])
+        self.assertEqual(result["run_id"], first["run_id"])
+        self.assertEqual(result["state"], "RUNNING")
+        self.assertEqual(len(db.get_all_runs()), 1)
+        active = db.get_active_run(10)
+        self.assertEqual(active.state, TaskState.RUNNING)
+
+    def test_lost_create_race_reports_already_running(self):
+        # #621: when the insert loses a create race (create_run raises the typed
+        # error), the command still succeeds idempotently against the surviving
+        # session instead of propagating the race to the caller.
+        client = _client()
+        db = MagicMock()
+        db.get_active_run.return_value = None
+        db.get_resumable_run.return_value = None
+        db.create_run.side_effect = TaskAlreadyRunningError("raced")
+        won = MagicMock()
+        won.id = 7
+        won.state = TaskState.RUNNING
+        won.timesheet_id = None
+        db.transition_to_running.return_value = won
+        with patch(_START_GUARD):
+            result = _cmd_with_db(StartTaskCommand, client, db).execute(
+                **self._base_kwargs()
+            )
+        self.assertTrue(result["already_running"])
+        self.assertEqual(result["run_id"], 7)
+        db.transition_to_running.assert_called_once_with(10)
 
     def test_run_insert_failure_reraises(self):
         # Record deletion (unlink) is purposefully not implemented, so a run
@@ -836,13 +875,15 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertEqual(active.id, result["run_id"])
 
     def test_retry_of_running_task_creates_no_second_run(self):
-        # A naive retry of the same task raises TaskAlreadyRunningError rather
-        # than creating a second run — the guard's invariant (issue #361).
+        # A naive retry of the same task is a no-op success (#621) rather than
+        # creating a second run — the single-active-run invariant (issue #361)
+        # now holds without surfacing an error to the retry-safe entry point.
         client = _client()
         db = _tmp_db()
-        self._start(client, db, **self._base_kwargs())
-        with self.assertRaises(TaskAlreadyRunningError):
-            self._start(client, db, **self._base_kwargs())
+        first = self._start(client, db, **self._base_kwargs())
+        retried = self._start(client, db, **self._base_kwargs())
+        self.assertTrue(retried["already_running"])
+        self.assertEqual(retried["run_id"], first["run_id"])
         self.assertEqual(len(db.get_all_runs()), 1)
 
     def test_start_after_stop_auto_resumes_same_run(self):
@@ -854,6 +895,7 @@ class TestStartTaskCommand(unittest.TestCase):
         first = self._start(client, db, **self._base_kwargs())
         db.stop_run(10)
         resumed = self._start(client, db, **self._base_kwargs())
+        self.assertFalse(resumed["already_running"])
         self.assertEqual(resumed["run_id"], first["run_id"])
         self.assertEqual(len(db.get_all_runs()), 1)
         active = db.get_active_run(10)

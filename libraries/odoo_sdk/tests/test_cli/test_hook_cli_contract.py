@@ -99,7 +99,7 @@ class TestShimPinnedFlags(unittest.TestCase):
 
     def test_shim_references_branch(self) -> None:
         # #574: the shim forwards the session branch so the CLI can recover the
-        # task id from the <task-id>#<slug> convention.
+        # task id from the <task-id>-<slug> convention.
         self.assertIn("--branch", _shim_text())
 
     def test_shim_forwards_hook_event_type_in_payload(self) -> None:
@@ -118,13 +118,13 @@ class TestShimPinnedFlags(unittest.TestCase):
                 "--subject",
                 "Bash",
                 "--branch",
-                "28788#hook-fix",
+                "28788-hook-fix",
                 "--payload",
                 '{"session_id": "s-1", "hook_event_name": "PreToolUse"}',
             ]
         )
         self.assertTrue(namespace.attach_active_run)
-        self.assertEqual(namespace.branch, "28788#hook-fix")
+        self.assertEqual(namespace.branch, "28788-hook-fix")
         self.assertEqual(
             namespace.payload, '{"session_id": "s-1", "hook_event_name": "PreToolUse"}'
         )
@@ -205,7 +205,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
 
     def test_stated_branch_recovers_task_without_an_active_run(self) -> None:
         # #574 end to end: with no active run, the shim's --branch lets the CLI
-        # recover the task id from the <task-id>#<slug> convention, so the row
+        # recover the task id from the <task-id>-<slug> convention, so the row
         # bills against the task instead of landing untargeted in triage. The cwd
         # is non-git (repo/branch resolve empty), proving attribution rides on the
         # STATED branch, not the working tree.
@@ -218,7 +218,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             "--subject",
             "Bash",
             "--branch",
-            "28788#hook-fix",
+            "28788-hook-fix",
             "--payload",
             '{"session_id": "s-1", "hook_event_name": "PostToolUse"}',
         ]
@@ -233,7 +233,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event.task_ids, ["28788"])
-        self.assertEqual(event.branch, "28788#hook-fix")
+        self.assertEqual(event.branch, "28788-hook-fix")
         self.assertEqual(
             event.payload, {"session_id": "s-1", "hook_event_name": "PostToolUse"}
         )

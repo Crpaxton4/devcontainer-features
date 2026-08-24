@@ -71,26 +71,27 @@ def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:
 # commit it accompanies on the SAME task lane rather than splitting them (#378).
 _MIN_TASK_ID_DIGITS = 4
 
-# The ``<task-id>#<slug>`` branch convention ``start_task`` writes (id BEFORE the
-# ``#``), anchored to a token start (``^`` or a ``/`` path separator) so a
-# trailing ``#123`` GitHub-style reference is never read as a task id. Kept in
-# lockstep with the same ``(\d+)#`` form in
+# The ``<task-id>-<slug>`` branch convention ``start_task`` writes (#622: id
+# BEFORE the ``-``), anchored to a token start (``^`` or a ``/`` path separator)
+# so a digit run buried mid-token (e.g. ``fixes-1234-x``) is never read as a
+# task id. Kept in lockstep with the same ``(\d+)-`` form in
 # ``adapters.external_sync._TASK_ID_PATTERNS`` so hook and resync attribution
 # agree on a session branch.
-_BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})#")
+_BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})-")
 
 
 def task_ids_from_branch(branch: Optional[str]) -> list[str]:
-    """Recover the task ids named by a ``<task-id>#<slug>`` session branch.
+    """Recover the task ids named by a ``<task-id>-<slug>`` session branch.
 
     :func:`odoo_sdk.mcp.tools.start_task` names each task branch
-    ``f"{task_id}#{slug}"``, so the task identity is derivable from the branch
-    even when the session was never ``start_task``-ed through the FSM and thus has
-    no active run to attribute an event to (#574). This is the last attribution
-    signal consulted before an unhinted event falls through to untargeted triage.
+    ``f"{task_id}-{slug}"`` (#622), so the task identity is derivable from the
+    branch even when the session was never ``start_task``-ed through the FSM and
+    thus has no active run to attribute an event to (#574). This is the last
+    attribution signal consulted before an unhinted event falls through to
+    untargeted triage.
 
     Returns the distinct ids in first-seen order, canonicalized through ``int`` so
-    a zero-padded ``0028788#…`` records as ``"28788"``. A branch that does not
+    a zero-padded ``0028788-…`` records as ``"28788"``. A branch that does not
     match the convention — a ``main``/``feat/x`` branch, a detached HEAD's ``""``,
     ``None`` — yields ``[]``.
 
@@ -132,7 +133,7 @@ class LogEventCommand(Command):
       attribution *hint* its interface happens to expose (``--task-id`` from the
       CLI, a bound ``task_id`` argument from the MCP dispatch wrapper), not a
       resolved scope. When the hint names no task the command falls back to the
-      active runs, and then to the ``<task-id>#<slug>`` session branch the caller
+      active runs, and then to the ``<task-id>-<slug>`` session branch the caller
       states (#574) — because an event that lands with an empty ``task_ids`` is
       excluded from session derivation permanently and can therefore never bill.
     * **Provenance** (``repo`` / ``branch``). Resolved from the working tree at
@@ -231,7 +232,7 @@ class LogEventCommand(Command):
         2. Otherwise the event attributes to every non-stale active run, because
            all interaction with a task — read-only inspection included — is
            active work on it.
-        3. With no active run, the ``<task-id>#<slug>`` convention of the
+        3. With no active run, the ``<task-id>-<slug>`` convention of the
            caller-stated ``branch`` recovers the task id (#574): a session bound
            to a task branch but never ``start_task``-ed through the FSM still
            attributes its hook events to that task instead of triage.
@@ -253,7 +254,7 @@ class LogEventCommand(Command):
             ``--attach-active-run`` flag through here to preserve the documented
             hook-shim contract.
         :type attach_active_run: bool
-        :param branch: The caller-stated ``<task-id>#<slug>`` session branch to
+        :param branch: The caller-stated ``<task-id>-<slug>`` session branch to
             recover a task id from when nothing else attributes; ``None`` skips it.
         :type branch: Optional[str]
         :return: The task ids the event attributes to, as id strings.
@@ -308,7 +309,7 @@ class LogEventCommand(Command):
         :type repo: Optional[str]
         :param branch: Branch the event originated from; ``None`` resolves it
             from the cwd's checked-out HEAD for the provenance column, ``""``
-            records none. A stated ``<task-id>#<slug>`` branch additionally
+            records none. A stated ``<task-id>-<slug>`` branch additionally
             recovers the event's task attribution when nothing else names it
             (#574); the cwd-resolved fallback does not (see
             :meth:`resolve_task_ids`).
