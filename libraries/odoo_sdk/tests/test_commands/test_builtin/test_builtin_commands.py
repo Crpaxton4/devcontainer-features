@@ -79,6 +79,93 @@ class TestGetTasksCommand(unittest.TestCase):
 
         tasks.search.assert_called_once_with(domain, limit=5)
 
+    def test_omitted_include_never_touches_the_detail_helper(self):
+        # #630: without ``include`` the summary-only behavior is unchanged —
+        # no per-task detail fetch happens at all.
+        client = MagicMock()
+        tasks = client.__getitem__.return_value
+        tasks.search.return_value.read.return_value = [{"name": "T"}]
+
+        with patch(
+            "odoo_sdk.commands.builtin.get_tasks.get_task_detail"
+        ) as detail:
+            result = GetTasksCommand(client).execute()
+
+        detail.assert_not_called()
+        tasks.search.return_value.read.assert_called_once_with(TASK_FIELDS)
+        self.assertEqual(result, [{"name": "T"}])
+
+    def test_include_expands_each_result_via_get_task_detail(self):
+        # #630: ``include`` reuses get_task's detail fetch per matched task,
+        # so a batch of descriptions costs one get_tasks call.
+        client = MagicMock()
+        tasks = client.__getitem__.return_value
+        tasks.search.return_value.ids = (7, 8)
+        details = {
+            7: {"task_id": 7, "description": "seven"},
+            8: {"task_id": 8, "description": "eight"},
+        }
+
+        with patch(
+            "odoo_sdk.commands.builtin.get_tasks.get_task_detail",
+            side_effect=lambda client, task_id, include: details[task_id],
+        ) as detail:
+            result = GetTasksCommand(client).execute(include=["description"])
+
+        self.assertEqual(detail.call_count, 2)
+        detail.assert_any_call(client, 7, include=["description"])
+        detail.assert_any_call(client, 8, include=["description"])
+        self.assertEqual(result, [details[7], details[8]])
+        # The summary-only read path is bypassed entirely.
+        tasks.search.return_value.read.assert_not_called()
+
+    def test_include_path_still_honors_domain_and_limit(self):
+        client = MagicMock()
+        tasks = client.__getitem__.return_value
+        tasks.search.return_value.ids = ()
+        domain = [("stage_id", "=", 3)]
+
+        result = GetTasksCommand(client).execute(
+            domain=domain, limit=5, include=["description"]
+        )
+
+        tasks.search.assert_called_once_with(domain, limit=5)
+        self.assertEqual(result, [])
+
+    def test_include_drops_tasks_deleted_mid_batch(self):
+        # A task deleted between the search and the per-task read yields None
+        # from get_task_detail; the batch result must not contain holes.
+        client = MagicMock()
+        tasks = client.__getitem__.return_value
+        tasks.search.return_value.ids = (7, 8)
+        surviving = {"task_id": 8, "description": "eight"}
+
+        with patch(
+            "odoo_sdk.commands.builtin.get_tasks.get_task_detail",
+            side_effect=lambda client, task_id, include: (
+                surviving if task_id == 8 else None
+            ),
+        ):
+            result = GetTasksCommand(client).execute(include=["description"])
+
+        self.assertEqual(result, [surviving])
+
+    def test_empty_include_routes_through_the_detail_path(self):
+        # ``include=[]`` mirrors get_task's contract: base identity fields
+        # only, but shaped by the detail fetch — not the summary read.
+        client = MagicMock()
+        tasks = client.__getitem__.return_value
+        tasks.search.return_value.ids = (7,)
+
+        with patch(
+            "odoo_sdk.commands.builtin.get_tasks.get_task_detail",
+            return_value={"task_id": 7},
+        ) as detail:
+            result = GetTasksCommand(client).execute(include=[])
+
+        detail.assert_called_once_with(client, 7, include=[])
+        self.assertEqual(result, [{"task_id": 7}])
+
 
 class TestGetTodoCommand(unittest.TestCase):
     def test_returns_first_record_when_found(self):
