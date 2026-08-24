@@ -471,6 +471,27 @@ async def _resolve_task_and_project(
     return task, project, None
 
 
+def _missing_selector_error(
+    task_id: Optional[int], task_name_query: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """Return the selector error dict when neither selector was supplied (#614)."""
+    if task_id is None and not task_name_query:
+        return {"error": "Provide task_id or task_name_query."}
+    return None
+
+
+def _running_run(db, task_id: int):
+    """Return the task's session iff it is already RUNNING, else ``None``.
+
+    Pre-flight for the #621 dispatch, kept out of the tool body so the
+    already-running short-circuit reads as one condition there.
+    """
+    active = db.get_active_run(task_id)
+    if active is not None and getattr(active, "state", None) is TaskState.RUNNING:
+        return active
+    return None
+
+
 @composition_tool("start_task")
 def make_start_task_tool(registry: Registry):
     """Build the async ``start_task`` MCP tool bound to ``registry``.
@@ -506,8 +527,9 @@ def make_start_task_tool(registry: Registry):
         prompts. Writes no Odoo timesheet and posts no chatter note (hours are
         derived by the sessionization upload path).
         """
-        if task_id is None and not task_name_query:
-            return {"error": "Provide task_id or task_name_query."}
+        selector_error = _missing_selector_error(task_id, task_name_query)
+        if selector_error is not None:
+            return selector_error
 
         task, project, error = await _resolve_task_and_project(
             ctx, registry, task_name_query, project_name_query, task_id
@@ -521,8 +543,7 @@ def make_start_task_tool(registry: Registry):
         # resumable STOPPED, aborted/CLOSED/none) proceeds to branch setup and
         # the command's idempotent dispatch.
         db = registry["start_task"].state
-        active = db.get_active_run(task["id"])
-        if active is not None and getattr(active, "state", None) is TaskState.RUNNING:
+        if _running_run(db, task["id"]) is not None:
             return registry["start_task"].execute(
                 task_id=task["id"],
                 task_name=task["name"],
