@@ -124,6 +124,12 @@ check "lazygit is installed" bash -c "test -x \"\$(command -v lazygit)\" && lazy
 # secret scanning
 check "gitleaks is installed" gitleaks version
 
+# GitHub CLI (#597: hard dependsOn on ghcr.io/devcontainers/features/github-cli -
+# the feature ships gh-dependent tooling like create-pr and the mounted
+# GH_CONFIG_DIR, so a built container must always have gh on PATH. Presence
+# check only: CI has no token, so no auth assertions here.)
+check "gh is installed" gh --version
+
 # create-pr (config-driven gh pr create wrapper)
 check "create-pr is installed and executable" bash -c "test -x /usr/local/bin/create-pr"
 check "create-pr passes shell syntax check" bash -c "sh -n /usr/local/bin/create-pr"
