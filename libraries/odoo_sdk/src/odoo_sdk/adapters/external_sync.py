@@ -57,16 +57,16 @@ _MIN_TASK_ID_DIGITS = 4
 #   ``#<id>``          GitHub-style reference
 #   ``odoo-<id>``      branch convention (case-insensitive)
 #   ``[<id>]``         bracketed
-#   ``<id>#slug``      branch-prefix convention used on client branches (id BEFORE
-#                      the ``#``); anchored to a token start so ``#189`` never
-#                      reads its digits as an id
+#   ``<id>-slug``      branch-prefix convention used on client branches (#622:
+#                      id BEFORE the ``-``); anchored to a token start so a
+#                      digit run buried mid-token never reads as an id
 #   ``task <id>``      PR-title form ``(task NNNNN)`` (optional space/hyphen)
 #   ``(<id>)``         trailing ``(NNNNN)`` in a PR title (NOT ``(#NNNNN)``)
 _TASK_ID_PATTERNS = (
     re.compile(rf"#(\d{{{_MIN_TASK_ID_DIGITS},}})"),
     re.compile(rf"odoo-(\d{{{_MIN_TASK_ID_DIGITS},}})", re.IGNORECASE),
     re.compile(rf"\[(\d{{{_MIN_TASK_ID_DIGITS},}})\]"),
-    re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})#"),
+    re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})-"),
     re.compile(rf"\btask[ -]?(\d{{{_MIN_TASK_ID_DIGITS},}})\b", re.IGNORECASE),
     re.compile(rf"\((\d{{{_MIN_TASK_ID_DIGITS},}})\)"),
 )

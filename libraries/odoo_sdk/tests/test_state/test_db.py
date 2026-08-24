@@ -10,7 +10,6 @@ from odoo_sdk.state.db import (
     tracker_db_path,
 )
 from odoo_sdk.state.models import (
-    InvalidStateTransitionError,
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TaskRun,
@@ -249,11 +248,19 @@ class TestTaskStateDBTransitions(unittest.TestCase):
         r = db.transition_to_running(1)
         self.assertEqual(r.state, TaskState.RUNNING)
 
-    def test_transition_to_running_from_running_raises(self):
+    def test_transition_to_running_from_running_is_a_noop_success(self):
+        # #621: RUNNING -> RUNNING is idempotent — the existing run is returned
+        # unchanged instead of raising InvalidStateTransitionError, so retry-safe
+        # automation (start_task/resume_task) never errors on "already running".
         db = _tmp_db()
-        _create(db, task_id=1)
-        with self.assertRaises(InvalidStateTransitionError):
-            db.transition_to_running(1)
+        created = _create(db, task_id=1)
+        result = db.transition_to_running(1)
+        self.assertEqual(result.id, created.id)
+        self.assertEqual(result.state, TaskState.RUNNING)
+        self.assertEqual(result.started_at, created.started_at)
+        self.assertIsNone(result.stopped_at)
+        # The no-op writes nothing: the run row is byte-identical on re-read.
+        self.assertEqual(db.get_active_run(1), created)
 
     def test_transition_to_running_no_run_raises(self):
         db = _tmp_db()
@@ -389,10 +396,10 @@ class TestRunSummaryStorage(unittest.TestCase):
         db = _tmp_db()
         run = _create(db)
         db.stop_run(1)
-        db.set_run_summary(run.id, "actions: task_note x3; branch 1#fix")
+        db.set_run_summary(run.id, "actions: task_note x3; branch 1-fix")
         self.assertEqual(
             db.get_run_by_id(run.id).run_summary,
-            "actions: task_note x3; branch 1#fix",
+            "actions: task_note x3; branch 1-fix",
         )
 
     def test_run_summary_has_no_length_cap(self):
@@ -461,6 +468,102 @@ class TestGetTaskEvents(unittest.TestCase):
     def test_no_events_returns_empty_list(self):
         db = _tmp_db()
         self.assertEqual(db.get_task_events("404"), [])
+
+
+class TestQuestionWatermark(unittest.TestCase):
+    """The answer-detection watermark on the active run (#625)."""
+
+    def test_new_run_has_no_watermark(self):
+        db = _tmp_db()
+        run = _create(db, task_id=1)
+        self.assertIsNone(run.question_message_id)
+
+    def test_set_watermark_persists_on_active_run(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.set_question_watermark(1, 77)
+        run = db.get_active_run(1)
+        self.assertEqual(run.question_message_id, 77)  # type: ignore[union-attr]
+
+    def test_set_watermark_overwrites_previous(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.set_question_watermark(1, 77)
+        db.set_question_watermark(1, 91)
+        run = db.get_active_run(1)
+        self.assertEqual(run.question_message_id, 91)  # type: ignore[union-attr]
+
+    def test_set_watermark_on_awaiting_run(self):
+        # The AWAITING_ANSWERS self-loop posts further questions, so the
+        # watermark must be writable on both active states.
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.transition_to_awaiting(1)
+        db.set_question_watermark(1, 77)
+        run = db.get_active_run(1)
+        self.assertEqual(run.question_message_id, 77)  # type: ignore[union-attr]
+
+    def test_set_watermark_no_active_run_raises(self):
+        db = _tmp_db()
+        with self.assertRaises(TaskNotRunningError):
+            db.set_question_watermark(999, 77)
+
+    def test_set_watermark_on_stopped_run_raises(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.stop_run(1)
+        with self.assertRaises(TaskNotRunningError):
+            db.set_question_watermark(1, 77)
+
+    def test_watermark_survives_stop_and_resume(self):
+        db = _tmp_db()
+        _create(db, task_id=1)
+        db.set_question_watermark(1, 77)
+        db.stop_run(1)
+        resumed = db.transition_to_running(1)
+        self.assertEqual(resumed.question_message_id, 77)
+
+
+class TestChatterDedupe(unittest.TestCase):
+    """The unique-index-backed chatter idempotency store (#631)."""
+
+    def test_unseen_key_returns_none(self):
+        db = _tmp_db()
+        self.assertIsNone(db.get_chatter_dedupe(1, "missing"))
+
+    def test_record_then_get_round_trips(self):
+        db = _tmp_db()
+        self.assertTrue(db.record_chatter_dedupe(1, "k", 55))
+        self.assertEqual(db.get_chatter_dedupe(1, "k"), 55)
+
+    def test_duplicate_record_keeps_first_mapping(self):
+        # INSERT OR IGNORE against the unique index: the first mapping wins and
+        # the loser is told so via the False return.
+        db = _tmp_db()
+        self.assertTrue(db.record_chatter_dedupe(1, "k", 55))
+        self.assertFalse(db.record_chatter_dedupe(1, "k", 99))
+        self.assertEqual(db.get_chatter_dedupe(1, "k"), 55)
+
+    def test_keys_scoped_per_task(self):
+        db = _tmp_db()
+        db.record_chatter_dedupe(1, "k", 55)
+        self.assertIsNone(db.get_chatter_dedupe(2, "k"))
+        self.assertTrue(db.record_chatter_dedupe(2, "k", 66))
+        self.assertEqual(db.get_chatter_dedupe(1, "k"), 55)
+        self.assertEqual(db.get_chatter_dedupe(2, "k"), 66)
+
+    def test_unique_index_enforced_at_sql_level(self):
+        # The store is index-backed, not application-guessed: a raw duplicate
+        # INSERT violates ``idx_chatter_dedupe_key``.
+        db = _tmp_db()
+        db.record_chatter_dedupe(1, "k", 55)
+        with sqlite3.connect(str(db._db_path)) as conn:
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO chatter_dedupe "
+                    "(task_id, dedupe_key, message_id, created_at) "
+                    "VALUES (1, 'k', 99, '2026-07-17T12:00:00+00:00')"
+                )
 
 
 class TestTaskStateDBSettings(unittest.TestCase):

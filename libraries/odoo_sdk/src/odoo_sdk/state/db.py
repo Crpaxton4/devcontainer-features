@@ -86,14 +86,16 @@ def _default_root() -> Path:
 #: Schema version stamped into ``PRAGMA user_version``. History: ``0`` was the
 #: implicit pre-#452 non-STRICT schema; ``1`` adopted the STRICT typed schema
 #: (write-time validation); ``2`` added the terminal ``CLOSED`` state to the
-#: ``task_runs.state`` CHECK (#504); ``3`` added the nullable
+#: ``task_runs.state`` CHECK (#504); ``3`` added the additive
+#: ``task_runs.question_message_id`` answer watermark (#625) and the
+#: ``chatter_dedupe`` idempotency table (#631); ``4`` added the nullable
 #: ``task_runs.run_summary`` column holding the machine-derived run narrative
 #: (#626). Provisioning reads this marker to tell an out-of-date DB (needs the
 #: rebuild :func:`migrate_schema`) from a current one (idempotent no-op), which
 #: ``CREATE ... IF NOT EXISTS`` alone cannot — it would silently skip an
 #: already-present table whose CHECK is behind. A STRICT table's CHECK cannot be
 #: altered in place, so each bump rebuilds the affected tables.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 # Canonical schema for the central tracker DB — the ONE authoritative DDL, applied
@@ -112,7 +114,15 @@ SCHEMA_VERSION = 3
 # idempotent. Sessions are still derived from ``events`` at query time (see
 # ``_DERIVE_SESSIONS_SQL``); there is no materialized ``sessions`` table.
 #
-# All four tables are ``STRICT`` with CHECK constraints (#452) so malformed data
+# The ``chatter_dedupe`` table (#631) is the idempotency store for chatter posts:
+# one row per ``(task_id, dedupe_key)`` — enforced by its unique index, the same
+# pattern as the ``events(external_id)`` dedupe index — mapping a caller-supplied
+# key to the chatter message it first produced, so a retried ``task_note`` /
+# ``task_question`` returns the existing message instead of double-posting. The
+# additive ``task_runs.question_message_id`` column (#625) is the answer-detection
+# watermark stamped by ``task_question``.
+#
+# All tables are ``STRICT`` with CHECK constraints (#452) so malformed data
 # fails at WRITE time — ``json_valid`` guards the JSON columns (``events.task_ids``,
 # ``task_runs.notes``) and ``datetime(...) IS NOT NULL`` guards every timestamp —
 # instead of surfacing later as a ``json_each``/``julianday`` failure inside a
@@ -138,6 +148,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     timesheet_id INTEGER,
     notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
     aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL),
+    question_message_id INTEGER,
     run_summary  TEXT
 ) STRICT;
 
@@ -173,6 +184,16 @@ CREATE TABLE IF NOT EXISTS session_uploads (
     started_at   TEXT          CHECK(started_at IS NULL OR datetime(started_at) IS NOT NULL),
     ended_at     TEXT          CHECK(ended_at IS NULL OR datetime(ended_at) IS NOT NULL)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS chatter_dedupe (
+    task_id    INTEGER NOT NULL,
+    dedupe_key TEXT    NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at TEXT    NOT NULL CHECK(datetime(created_at) IS NOT NULL)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chatter_dedupe_key
+    ON chatter_dedupe(task_id, dedupe_key);
 """
 
 
@@ -191,22 +212,30 @@ class SchemaMigrationError(RuntimeError):
 
 # Tables rebuilt by the STRICT migration, in a fixed order (no foreign keys, so
 # any order is correct; fixed only for deterministic abort output).
-_MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
+_MIGRATION_TABLES = (
+    "task_runs",
+    "settings",
+    "events",
+    "session_uploads",
+    "chatter_dedupe",
+)
 
 # Uppercase substrings whose ABSENCE from a table's stored ``sqlite_master`` DDL
 # means it predates a schema change and must be rebuilt from the canonical DDL.
 # ``STRICT`` (#452) applies to every table; the ``CLOSED`` state (#504) and the
-# ``RUN_SUMMARY`` column (#626) only to ``task_runs``. A marker check is used
-# rather than an exact-SQL compare because SQLite does not store the ``IF NOT
-# EXISTS`` / whitespace verbatim, but it does preserve keywords, identifiers, and
-# CHECK literals — the exact tokens that change between schema versions. Extend a
+# ``question_message_id`` watermark column (#625) and the ``run_summary``
+# narrative column (#626) only to ``task_runs``. A marker check is used rather
+# than an exact-SQL compare because SQLite does not store the ``IF NOT EXISTS``
+# / whitespace verbatim, but it does preserve keywords, CHECK literals, and
+# column names — the exact tokens that change between schema versions. Extend a
 # table's tuple when a future CHECK/shape change needs the same version-guarded
 # rebuild.
 _REQUIRED_TABLE_MARKERS = {
-    "task_runs": ("STRICT", "CLOSED", "RUN_SUMMARY"),
+    "task_runs": ("STRICT", "CLOSED", "QUESTION_MESSAGE_ID", "RUN_SUMMARY"),
     "settings": ("STRICT",),
     "events": ("STRICT",),
     "session_uploads": ("STRICT",),
+    "chatter_dedupe": ("STRICT",),
 }
 
 # Per-table write-validation predicates mirroring the SCHEMA_DDL CHECK clauses.
@@ -233,10 +262,18 @@ _ROW_VALIDATIONS = {
         ("started_at IS NOT NULL AND datetime(started_at) IS NULL", "invalid started_at"),
         ("ended_at IS NOT NULL AND datetime(ended_at) IS NULL", "invalid ended_at"),
     ),
+    "chatter_dedupe": (
+        ("datetime(created_at) IS NULL", "invalid created_at"),
+    ),
 }
 
 # Column used to identify an offending row of each table in the abort message.
-_ROW_KEY = {"events": "id", "task_runs": "id", "session_uploads": "session_key"}
+_ROW_KEY = {
+    "events": "id",
+    "task_runs": "id",
+    "session_uploads": "session_key",
+    "chatter_dedupe": "dedupe_key",
+}
 
 
 def _ddl_statements() -> list:
@@ -303,35 +340,33 @@ def _stale_tables(conn: sqlite3.Connection) -> list:
     return stale
 
 
-def _ensure_run_summary_column(conn: sqlite3.Connection) -> None:
-    """Additive pre-step for the #626 rebuild: append ``run_summary`` if absent.
-
-    The canonical rebuild copies rows with ``SELECT *``, which requires the old
-    and new column lists to line up. ``run_summary`` is the canonical DDL's LAST
-    column precisely so an older ``task_runs`` (v0/v1/v2 — all lacking it) can be
-    brought to the 12-column shape by a single ``ALTER TABLE ADD COLUMN`` before
-    the rebuild. Idempotent: a table already carrying the column is untouched.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
-    if columns and "run_summary" not in columns:
-        conn.execute("ALTER TABLE task_runs ADD COLUMN run_summary TEXT")
+def _table_columns(conn: sqlite3.Connection, table: str) -> list:
+    """Return ``table``'s column names in declaration order."""
+    return [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')]
 
 
 def _rebuild_table(
     conn: sqlite3.Connection, table: str, create_sql: str, index_sqls: list
 ) -> None:
-    """Rebuild one table into its STRICT form, preserving rows and ids.
+    """Rebuild one table into its current canonical form, preserving rows and ids.
 
     The canonical SQLite table rebuild: rename the old table aside, create the new
-    typed table from the SAME DDL a fresh provision uses, copy every row (``SELECT
-    *`` — column order is identical, so ids and all values carry over), drop the
-    old table (freeing its index names), then recreate the indexes. The caller has
-    already pre-flighted every row, so the copy cannot fail on data.
+    typed table from the SAME DDL a fresh provision uses, copy every row over the
+    columns the two shapes SHARE (named explicitly, so an additive bump such as
+    the #625 ``question_message_id`` column simply lands NULL for pre-existing
+    rows instead of breaking a positional ``SELECT *`` copy — ids and all shared
+    values carry over), drop the old table (freeing its index names), then
+    recreate the indexes. The caller has already pre-flighted every row, so the
+    copy cannot fail on data.
     """
     old = f"{table}__pre_strict"
     conn.execute(f'ALTER TABLE "{table}" RENAME TO "{old}"')
     conn.execute(create_sql)
-    conn.execute(f'INSERT INTO "{table}" SELECT * FROM "{old}"')
+    new_columns = _table_columns(conn, table)
+    shared = ", ".join(
+        f'"{column}"' for column in _table_columns(conn, old) if column in new_columns
+    )
+    conn.execute(f'INSERT INTO "{table}" ({shared}) SELECT {shared} FROM "{old}"')
     conn.execute(f'DROP TABLE "{old}"')
     for index_sql in index_sqls:
         conn.execute(index_sql)
@@ -342,10 +377,13 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
 
     Repairs every migration the tracker DB has needed: a pre-#452 non-STRICT DB
     (every table rebuilt into STRICT form), a pre-#504 DB whose ``task_runs``
-    CHECK lacks the ``CLOSED`` state, and a pre-#626 DB whose ``task_runs``
-    lacks the ``run_summary`` column (added additively, then normalized by the
-    same canonical rebuild) — see :data:`_REQUIRED_TABLE_MARKERS`. A no-op when
-    the DB is already at
+    CHECK lacks the ``CLOSED`` state (that table rebuilt to widen the CHECK), a
+    pre-#625 DB whose ``task_runs`` lacks the ``question_message_id`` watermark
+    column, and a pre-#626 DB whose ``task_runs`` lacks the ``run_summary``
+    narrative column (that table rebuilt; existing rows land NULL for the added
+    columns) — see :data:`_REQUIRED_TABLE_MARKERS`. The ``chatter_dedupe`` table
+    (#631) needs no rebuild: absent tables are created by the ``IF NOT EXISTS``
+    DDL that follows in :func:`create_schema`. A no-op when the DB is already at
     :data:`SCHEMA_VERSION` or holds no out-of-date tables (a fresh DB — its tables
     are created current directly by :func:`create_schema`). Otherwise every
     offending row is listed and the migration ABORTS with
@@ -370,8 +408,6 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     conn.execute("BEGIN")
     try:
-        if "task_runs" in stale:
-            _ensure_run_summary_column(conn)
         for table in stale:
             create_sql, index_sqls = schema[table]
             _rebuild_table(conn, table, create_sql, index_sqls)
@@ -593,7 +629,8 @@ def current_repo_label() -> str:
 # Columns selected for every task_run read, in _parse_run order.
 _TASK_RUN_COLUMNS = (
     "id, task_id, task_name, project_id, project_name, state, "
-    "started_at, stopped_at, timesheet_id, notes, aborted_at, run_summary"
+    "started_at, stopped_at, timesheet_id, notes, aborted_at, "
+    "question_message_id, run_summary"
 )
 
 # The two live/paused states an "active" run may be in. "Active" is the live
@@ -673,6 +710,7 @@ def _parse_run(row: tuple) -> TaskRun:
         timesheet_id,
         notes_json,
         aborted_at,
+        question_message_id,
         run_summary,
     ) = row
     return TaskRun(
@@ -687,6 +725,7 @@ def _parse_run(row: tuple) -> TaskRun:
         timesheet_id=timesheet_id,
         notes=json.loads(notes_json),
         aborted_at=datetime.fromisoformat(aborted_at) if aborted_at else None,
+        question_message_id=question_message_id,
         run_summary=run_summary,
     )
 
@@ -1055,38 +1094,40 @@ class LocalStateClient:
             )
 
     def transition_to_running(self, task_id: int) -> TaskRun:
-        """Resume a paused run back to RUNNING (#504).
+        """Ensure the task's run is RUNNING, resuming a paused one (#504, #621).
 
         Two predecessors resume: an ``AWAITING_ANSWERS`` run (a question was
         answered) and a ``STOPPED`` run (work continues after a stop). A stopped
         run is reopened IN PLACE — its ``started_at`` is preserved and its
         ``stopped_at`` cleared, so one continuous effort stays one run instead of
-        splitting into a second row. An already-``RUNNING`` run is a no-op error
-        (:class:`InvalidStateTransitionError`); a task with no resumable run at all
-        raises :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
+        splitting into a second row. An already-``RUNNING`` run is a NO-OP
+        success (#621): the run is returned unchanged, so idempotent automation
+        (``start_task``/``resume_task`` retries, racing resumers) never errors on
+        "already running". A task with no resumable run at all raises
+        :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
         aborted stopped run is voided, so neither is returned by the lookups below.
         """
         with self._write_txn() as conn:
             run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
             if run is not None and run.state == TaskState.RUNNING:
-                raise InvalidStateTransitionError(
-                    f"Cannot resume task {task_id}: it is already RUNNING."
-                )
+                # No-op path (#621): RUNNING → RUNNING is success, not an error.
+                return run
             if run is None:
                 run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
             if run is None:
                 raise TaskNotRunningError(
                     f"No resumable session found for task {task_id}."
                 )
-            # A lost CAS could only mean another writer resumed the run first,
-            # so rowcount 0 maps to the same already-RUNNING error as above.
+            # Defense in depth: under BEGIN IMMEDIATE the state read above still
+            # holds, so this CAS cannot lose; a rowcount of 0 would mean the
+            # transaction contract itself broke.
             _cas_update(
                 conn,
                 "UPDATE task_runs SET state = 'RUNNING', stopped_at = NULL "
                 "WHERE id = ? AND state IN ('AWAITING_ANSWERS', 'STOPPED')",
                 (run.id,),
                 InvalidStateTransitionError(
-                    f"Cannot resume task {task_id}: it is already RUNNING."
+                    f"Cannot resume task {task_id}: its state changed mid-transition."
                 ),
             )
             return _fetch_run(  # type: ignore[return-value]
@@ -1262,6 +1303,58 @@ class LocalStateClient:
             )
             if cursor.rowcount == 0:
                 raise _no_active_session_error(task_id)
+
+    def set_question_watermark(self, task_id: int, message_id: int) -> None:
+        """Stamp ``message_id`` as the active run's answer watermark (#625).
+
+        Mirrors :meth:`append_note`: the session check (the WHERE clause) and
+        the write are ONE statement, so a session stopped mid-call matches no
+        row and raises instead of stamping a watermark onto a stopped run. A
+        later question overwrites the previous watermark, so the count exposed
+        by ``task_status`` always measures replies to the newest question.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE task_runs SET question_message_id = ? "
+                f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}",
+                (message_id, task_id),
+            )
+            if cursor.rowcount == 0:
+                raise _no_active_session_error(task_id)
+
+    def get_chatter_dedupe(self, task_id: int, dedupe_key: str) -> Optional[int]:
+        """Return the chatter message id recorded for ``dedupe_key``, or None.
+
+        The read half of the #631 idempotency store: keys are scoped per task
+        (the unique index covers ``(task_id, dedupe_key)``), so re-using one key
+        on two different tasks never returns the other task's message.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT message_id FROM chatter_dedupe "
+                "WHERE task_id = ? AND dedupe_key = ?",
+                (task_id, dedupe_key),
+            ).fetchone()
+        return row[0] if row else None
+
+    def record_chatter_dedupe(
+        self, task_id: int, dedupe_key: str, message_id: int
+    ) -> bool:
+        """Map ``dedupe_key`` to a posted chatter message; True iff newly written.
+
+        ``INSERT OR IGNORE`` against the ``(task_id, dedupe_key)`` unique index
+        — the same idempotency primitive as :meth:`add_event_dedup` — so two
+        racing posts serialize inside SQLite and the FIRST mapping wins; the
+        loser's ``False`` return means the key was already claimed.
+        """
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO chatter_dedupe "
+                "(task_id, dedupe_key, message_id, created_at) VALUES (?, ?, ?, ?)",
+                (task_id, dedupe_key, message_id, created_at),
+            )
+            return cursor.rowcount == 1
 
     def remap_timesheet_id(self, old_timesheet_id: int, new_timesheet_id: int) -> None:
         with self._connect() as conn:

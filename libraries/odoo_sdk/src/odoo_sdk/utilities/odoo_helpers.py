@@ -177,17 +177,63 @@ def shape_chatter_message(message: dict) -> dict:
     }
 
 
-def get_task_chatter(client: OdooClient, task_id: int, limit: int = 100) -> list[dict]:
-    """Fetch chatter messages for a task, sorted oldest-first."""
+def get_task_chatter(
+    client: OdooClient,
+    task_id: int,
+    limit: int = 100,
+    since: int | str | None = None,
+) -> list[dict]:
+    """Fetch the NEWEST chatter messages for a task, returned oldest-first.
+
+    The fetch orders ``date desc`` and applies ``limit``, then reverses in
+    memory, so a chatter longer than ``limit`` keeps its most recent messages —
+    exactly the stakeholder answers callers need — instead of silently dropping
+    them as the old ``date asc`` + limit fetch did (#624). ``id desc`` breaks
+    same-second ties so the newest-N cut is deterministic.
+
+    ``since`` is an optional cursor that restricts the fetch to strictly newer
+    messages: an ``int`` is a message-id cursor (``id > since`` — pass the last
+    seen entry's ``id``), a ``str`` is a date cursor (``date > since``, Odoo
+    datetime format, mirroring :func:`search_chatter`'s ``date_from``).
+    """
+    domain: list[tuple[str, str, Any]] = [
+        ("model", "=", "project.task"),
+        ("res_id", "=", task_id),
+    ]
+    if since is not None:
+        cursor_field = "id" if isinstance(since, int) else "date"
+        domain.append((cursor_field, ">", since))
     messages = client.execute(
         "mail.message",
         "search_read",
-        [("model", "=", "project.task"), ("res_id", "=", task_id)],
+        domain,
         fields=_CHATTER_MESSAGE_FIELDS,
-        order="date asc",
+        order="date desc, id desc",
         limit=limit,
     )
-    return [shape_chatter_message(m) for m in messages]
+    return [shape_chatter_message(m) for m in reversed(messages)]
+
+
+def count_chatter_messages_after(
+    client: OdooClient, task_id: int, message_id: int
+) -> int:
+    """Count a task's chatter messages strictly newer than ``message_id``.
+
+    The read primitive behind ``task_status``'s ``new_messages_since_question``
+    (#625): ``mail.message`` ids are monotonic, so ``id > watermark`` is exactly
+    "posted after the question". A single ``search_count`` — no bodies fetched.
+    """
+    return int(
+        client.execute(
+            "mail.message",
+            "search_count",
+            [
+                ("model", "=", "project.task"),
+                ("res_id", "=", task_id),
+                ("id", ">", message_id),
+            ],
+        )
+    )
 
 
 def search_chatter(

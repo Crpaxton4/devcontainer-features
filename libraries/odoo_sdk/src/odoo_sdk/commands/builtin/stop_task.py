@@ -27,10 +27,12 @@ class StopTaskCommand(Command):
 
     _name = "stop_task"
     _description = (
-        "Stop an active task tracking session. Transitions the run to stopped "
-        "and stores a machine-derived run summary computed from the run's "
-        "recorded events and notes. Does not write hours to Odoo — the TUI/ETL "
-        "upload path owns timesheet hours."
+        "Stop an active task tracking session. Session state machine: RUNNING or "
+        "AWAITING_ANSWERS -> STOPPED; a non-aborted STOPPED session stays "
+        "resumable, so a later start_task or resume_task reopens it in place. "
+        "Stores a machine-derived run summary computed from the run's recorded "
+        "events and notes. Does not write hours to Odoo — the TUI/ETL upload "
+        "path owns timesheet hours."
     )
 
     def execute(self, task_id: int) -> dict[str, Any]:

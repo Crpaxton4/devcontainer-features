@@ -83,10 +83,10 @@ class TestForksFromRemoteTip(unittest.TestCase):
             self.remote_tip, self.stale_local_tip, "origin/main must be ahead of local"
         )
 
-        created = _create_task_branch("10#fix", "main")
+        created = _create_task_branch("10-fix", "main")
 
         self.assertTrue(created, "a fresh branch must be reported as created")
-        self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "10#fix")
+        self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "10-fix")
         # The new branch sits on the remote tip, so the merged file is present.
         self.assertEqual(_git(self.local, "rev-parse", "HEAD"), self.remote_tip)
         self.assertTrue(
@@ -99,7 +99,7 @@ class TestForksFromRemoteTip(unittest.TestCase):
         # matters here; the stash+pop cycle re-creates them, which is separate).
         (self.local / "scratch.txt").write_text("keep me\n")
 
-        _create_task_branch("10#fix", "main")
+        _create_task_branch("10-fix", "main")
 
         self.assertTrue((self.local / "scratch.txt").exists())
         self.assertEqual((self.local / "scratch.txt").read_text(), "keep me\n")

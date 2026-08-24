@@ -40,10 +40,12 @@ Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the datab
 
 | From               | Event           | To                 | Guard                                   |
 |--------------------|-----------------|--------------------|-----------------------------------------|
-| (absent)           | `start_task`    | `RUNNING`          | No active session for this task_id      |
+| (absent)           | `start_task`    | `RUNNING`          | Creates a new run (also after an aborted or closed run) |
+| `STOPPED`          | `start_task` / `resume_task` | `RUNNING` | Non-aborted stopped run is reopened in place |
+| `AWAITING_ANSWERS` | `start_task` / `resume_task` | `RUNNING` | Answers received; session unblocked     |
+| `RUNNING`          | `start_task` / `resume_task` | `RUNNING` | No-op success — `start_task` returns the existing run with `already_running: true` |
 | `RUNNING`          | `task_question` | `AWAITING_ANSWERS` | Session exists in RUNNING state         |
 | `AWAITING_ANSWERS` | `task_question` | `AWAITING_ANSWERS` | Self-loop: additional questions allowed |
-| `AWAITING_ANSWERS` | `resume_task`   | `RUNNING`          | Session exists in AWAITING_ANSWERS      |
 | `RUNNING`          | `stop_task`     | `STOPPED`          | Session exists in RUNNING state         |
 | `AWAITING_ANSWERS` | `stop_task`     | `STOPPED`          | Answers indicate no changes needed      |
 
@@ -51,18 +53,17 @@ Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the datab
 
 | Tool            | FSM Transition              | When to Call                                              |
 |-----------------|-----------------------------|-----------------------------------------------------------|
-| `start_task`    | (absent) → `RUNNING`        | First action of every session, before writing any code    |
+| `start_task`    | any state → `RUNNING` (idempotent) | First action of every session, before writing any code — safe to re-call in any state |
 | `task_note`     | no state change             | Progress checkpoints during implementation                |
 | `task_question` | `RUNNING` → `AWAITING_ANSWERS` | Blocked on clarification only a stakeholder can give   |
-| `resume_task`   | `AWAITING_ANSWERS` → `RUNNING` | After receiving answers; unblocked and continuing      |
+| `resume_task`   | `AWAITING_ANSWERS` / `STOPPED` → `RUNNING` | After receiving answers; unblocked and continuing |
 | `stop_task`     | active → `STOPPED`          | Implementation complete or session ending                 |
 | `task_status`   | no state change             | Inspect current FSM state before any operation            |
 
 ## Guard Condition Handling
 
-When the FSM guards fire, they raise typed exceptions. Handle them as follows:
+`start_task` is idempotent and never errors on an existing session — its result carries `already_running: true` when the session was already RUNNING. When the remaining FSM guards fire, they raise typed exceptions. Handle them as follows:
 
-- **`TaskAlreadyRunningError`** — `start_task` called when an active session already exists. Call `task_status` to inspect the existing session, then decide whether to continue it or stop it first.
 - **`TaskNotRunningError`** — operation requires an active session but none found. Ensure `start_task` was called successfully first.
 - **`InvalidStateTransitionError`** — transition not permitted from the current state. Inspect `task_status` and follow the transition table above.
 

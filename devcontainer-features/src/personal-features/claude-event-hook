@@ -110,7 +110,7 @@ if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
 fi
 
 # Resolve the session branch so the event can be attributed to its task (#574).
-# The session branch follows the `<task-id>#<slug>` convention start_task writes,
+# The session branch follows the `<task-id>-<slug>` convention start_task writes,
 # so the SDK recovers the task id from it when no FSM run is active — otherwise
 # the event falls through to triage. Read it from the hook JSON's `cwd` (the
 # authoritative session directory, which the agent may have cd'd into, away from

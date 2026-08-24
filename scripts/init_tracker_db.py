@@ -35,8 +35,10 @@ from pathlib import Path
 #: Verbatim copy of ``odoo_sdk.state.db.SCHEMA_VERSION`` — the ``PRAGMA
 #: user_version`` marker that tells an out-of-date DB from a current one. ``2``
 #: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504);
-#: ``3`` adds the nullable ``task_runs.run_summary`` column (#626).
-SCHEMA_VERSION = 3
+#: ``3`` adds the additive ``task_runs.question_message_id`` answer watermark
+#: (#625) and the ``chatter_dedupe`` idempotency table (#631); ``4`` adds the
+#: nullable ``task_runs.run_summary`` column (#626).
+SCHEMA_VERSION = 4
 
 # VERBATIM copy of odoo_sdk.state.db.SCHEMA_DDL — kept identical by the parity
 # test noted in the module docstring. Do not edit one without the other.
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     timesheet_id INTEGER,
     notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
     aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL),
+    question_message_id INTEGER,
     run_summary  TEXT
 ) STRICT;
 
@@ -88,23 +91,41 @@ CREATE TABLE IF NOT EXISTS session_uploads (
     started_at   TEXT          CHECK(started_at IS NULL OR datetime(started_at) IS NOT NULL),
     ended_at     TEXT          CHECK(ended_at IS NULL OR datetime(ended_at) IS NOT NULL)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS chatter_dedupe (
+    task_id    INTEGER NOT NULL,
+    dedupe_key TEXT    NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at TEXT    NOT NULL CHECK(datetime(created_at) IS NOT NULL)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chatter_dedupe_key
+    ON chatter_dedupe(task_id, dedupe_key);
 """
 
 # Migration mirror of odoo_sdk.state.db (stdlib-only host copy). The tables,
 # validation predicates, and rebuild pattern below are logically identical to the
 # SDK's; the parity test asserts the resulting schema/version match, so behaviour
 # cannot drift even though the code is duplicated.
-_MIGRATION_TABLES = ("task_runs", "settings", "events", "session_uploads")
+_MIGRATION_TABLES = (
+    "task_runs",
+    "settings",
+    "events",
+    "session_uploads",
+    "chatter_dedupe",
+)
 
 # Mirror of odoo_sdk.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
 # absence from a table's stored DDL means it predates a schema change and must be
 # rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504, the
-# ``RUN_SUMMARY`` column for #626).
+# ``question_message_id`` watermark column for #625, the ``run_summary``
+# narrative column for #626).
 _REQUIRED_TABLE_MARKERS = {
-    "task_runs": ("STRICT", "CLOSED", "RUN_SUMMARY"),
+    "task_runs": ("STRICT", "CLOSED", "QUESTION_MESSAGE_ID", "RUN_SUMMARY"),
     "settings": ("STRICT",),
     "events": ("STRICT",),
     "session_uploads": ("STRICT",),
+    "chatter_dedupe": ("STRICT",),
 }
 
 _ROW_VALIDATIONS = {
@@ -127,9 +148,17 @@ _ROW_VALIDATIONS = {
         ("started_at IS NOT NULL AND datetime(started_at) IS NULL", "invalid started_at"),
         ("ended_at IS NOT NULL AND datetime(ended_at) IS NULL", "invalid ended_at"),
     ),
+    "chatter_dedupe": (
+        ("datetime(created_at) IS NULL", "invalid created_at"),
+    ),
 }
 
-_ROW_KEY = {"events": "id", "task_runs": "id", "session_uploads": "session_key"}
+_ROW_KEY = {
+    "events": "id",
+    "task_runs": "id",
+    "session_uploads": "session_key",
+    "chatter_dedupe": "dedupe_key",
+}
 
 
 class SchemaMigrationError(RuntimeError):
@@ -196,25 +225,27 @@ def _stale_tables(conn):
     return stale
 
 
-def _ensure_run_summary_column(conn):
-    """Additive pre-step for the #626 rebuild: append ``run_summary`` if absent.
-
-    Mirror of ``odoo_sdk.state.db._ensure_run_summary_column``: the canonical
-    rebuild copies rows with ``SELECT *``, so an older ``task_runs`` (which
-    lacks the trailing ``run_summary`` column) is brought to the 12-column
-    shape by a single ``ALTER TABLE ADD COLUMN`` first. Idempotent.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
-    if columns and "run_summary" not in columns:
-        conn.execute("ALTER TABLE task_runs ADD COLUMN run_summary TEXT")
+def _table_columns(conn, table):
+    """Return ``table``'s column names in declaration order."""
+    return [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')]
 
 
 def _rebuild_table(conn, table, create_sql, index_sqls):
-    """Rebuild one table into its STRICT form, preserving rows and ids."""
+    """Rebuild one table into its current canonical form, preserving rows and ids.
+
+    Rows are copied over the columns the old and new shapes SHARE (named
+    explicitly, mirroring the SDK copy), so an additive bump such as the #625
+    ``question_message_id`` column lands NULL for pre-existing rows instead of
+    breaking a positional ``SELECT *`` copy.
+    """
     old = f"{table}__pre_strict"
     conn.execute(f'ALTER TABLE "{table}" RENAME TO "{old}"')
     conn.execute(create_sql)
-    conn.execute(f'INSERT INTO "{table}" SELECT * FROM "{old}"')
+    new_columns = _table_columns(conn, table)
+    shared = ", ".join(
+        f'"{column}"' for column in _table_columns(conn, old) if column in new_columns
+    )
+    conn.execute(f'INSERT INTO "{table}" ({shared}) SELECT {shared} FROM "{old}"')
     conn.execute(f'DROP TABLE "{old}"')
     for index_sql in index_sqls:
         conn.execute(index_sql)
@@ -245,8 +276,6 @@ def migrate_schema(conn):
     conn.commit()
     conn.execute("BEGIN")
     try:
-        if "task_runs" in stale:
-            _ensure_run_summary_column(conn)
         for table in stale:
             create_sql, index_sqls = schema[table]
             _rebuild_table(conn, table, create_sql, index_sqls)

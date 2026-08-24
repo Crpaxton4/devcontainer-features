@@ -55,24 +55,29 @@ get_task(task_id=1234, include=["description", "chatter"])
 
 ## 2. Start the task
 
-First mutating call, and the only one that opens a run. `task_id` skips
-name-search disambiguation:
+The idempotent lifecycle entry point (#621), and the only call that opens a
+run. `task_id` alone is sufficient and skips name-search disambiguation and
+every prompt (headless-safe):
 
 ```text
-start_task(task_name_query="checkout bug", project_name_query="Website", task_id=1234)
+start_task(task_id=1234)
+start_task(task_name_query="checkout bug", project_name_query="Website")
 ```
 
-Under supervision it elicits confirmations (task pick when ambiguous, a "start?"
-gate, the base git branch), then atomically:
+On the name path it elicits disambiguation (project/task pick when ambiguous,
+the base git branch), then atomically dispatches on the session state:
 
-- **Enforces one active run per task.** A `RUNNING` or `AWAITING_ANSWERS` run on
-  the task raises `TaskAlreadyRunningError` — call `task_status` first if unsure.
+- **Idempotent per task.** Already `RUNNING` → no-op success returning the
+  existing run with `already_running: true` (zero side effects);
+  `AWAITING_ANSWERS` → back to `RUNNING`; non-aborted `STOPPED` → resumed in
+  place; aborted/closed/none → a fresh run.
 - **Writes no timesheet.** No `account.analytic.line` row; the former 0-hour
   `"[/] Work in progress"` anchor is gone (#325). All hours derive from captured
   events via the TUI upload path (step 6), the sole timesheet writer.
-- Posts a `"Work started on this task."` chatter note and records the run locally.
+- Posts no chatter note; the run and its events are the tracking record.
 
-Returns `run_id`, `task_id`, `started_at`, `timesheet_id` (`null` — no anchor).
+Returns `run_id`, `task_id`, `state`, `already_running`, `started_at`,
+`timesheet_id` (`null` — no anchor).
 
 ## 3. Work, leaving `task_note` checkpoints
 
@@ -122,7 +127,7 @@ TUI upload path (`odoo-tui`, key `u`; see {doc}`the TUI quickstart
 
 Lists every active run (`RUNNING` or `AWAITING_ANSWERS`) for the current repo
 with elapsed time. It changes nothing — the right first call when state is
-unclear, such as after a `TaskAlreadyRunningError`:
+unclear:
 
 ```text
 task_status()  -> [{run_id, task_id, task_name, state, started_at, elapsed}, ...]
@@ -147,7 +152,8 @@ stop_task             → STOPPED  (derives the run summary; writes NO hours)
 
 - Every mutating tool after `start_task` needs an active run, else
   `TaskNotRunningError`.
-- `start_task` refuses a second concurrent run (`TaskAlreadyRunningError`).
+- `start_task` is idempotent (#621): a second call on a `RUNNING` task no-ops
+  with `already_running: true` instead of erroring.
 - Besides `start_task`/`stop_task`, only `task_question` and `resume_task`
   change state; `task_note` and `task_status` never do.
 - Errors return `{"error": {"type", "message"}}` — branch on `type`.

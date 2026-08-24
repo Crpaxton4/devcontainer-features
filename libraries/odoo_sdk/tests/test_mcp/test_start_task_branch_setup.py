@@ -9,8 +9,8 @@ Four independent failure modes are covered here, each previously observable as
   ``_BOUNDARY_ERRORS`` and escaped the MCP tool as a stack trace.
 * #542 — forking from ``origin/<base>`` (#454) makes the auto-stash pop collide
   whenever a local *untracked* file shares a path tracked on the base branch.
-* #478 — attaching to an already-RUNNING session rolled the freshly created
-  branch straight back, so development continued on the shared branch.
+* #621 — an already-RUNNING session must short-circuit before any branch side
+  effect (superseding the #478 attach-and-keep-branch behaviour).
 
 The real-git repository fixture mirrors ``test_start_task_remote_base``: the
 stash-pop collision only reproduces against genuine git, since it depends on
@@ -31,11 +31,10 @@ from odoo_sdk.mcp.tools.start_task import (
     _create_task_branch,
     make_start_task_tool,
 )
-from odoo_sdk.state import TaskAlreadyRunningError
 
 # Reuse the shared fakes so these tests stay faithful to the real git contract
 # encoded in ``_make_sp`` rather than reinventing a divergent stub.
-from tests.test_mcp.test_tools import _accepted, _confirmed, _make_sp
+from tests.test_mcp.test_tools import _accepted, _make_sp, _running_state
 
 _SP_PATCH = "odoo_sdk.mcp.tools.start_task.subprocess"
 
@@ -90,8 +89,9 @@ def _never_pops_sp(**kwargs):
 class _Reg:
     """Registry whose ``start_task`` command raises ``error`` (or succeeds)."""
 
-    def __init__(self, error=None):
+    def __init__(self, error=None, state=None):
         self._error = error
+        self._state = state
         self.client = MagicMock()
         self.client.execute.return_value = [
             {"id": 10, "name": "Fix", "project_id": [5, "Acct"]}
@@ -100,6 +100,8 @@ class _Reg:
     def __getitem__(self, name):
         cmd = MagicMock()
         cmd._client = self.client
+        if self._state is not None:
+            cmd.state = self._state
         if name == "start_task" and self._error is not None:
             cmd.execute.side_effect = self._error
         else:
@@ -108,9 +110,9 @@ class _Reg:
 
 
 def _ctx():
-    """A ctx that confirms the start, then picks base branch #1."""
+    """A ctx able to pick base branch #1 (unused on the headless id-only path)."""
     ctx = MagicMock()
-    ctx.elicit = AsyncMock(side_effect=[_confirmed(), _accepted(MagicMock(selection=1))])
+    ctx.elicit = AsyncMock(side_effect=[_accepted(MagicMock(selection=1))])
     ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
     return ctx
 
@@ -124,7 +126,7 @@ class TestGitFailuresAreCallerActionable(unittest.TestCase):
     def test_boundary_renders_git_failure_instead_of_raising(self):
         # Before the fix this escaped ``_error_boundary`` as a raw traceback.
         def _tool():
-            raise subprocess.CalledProcessError(128, ["git", "checkout", "-b", "10#fix"])
+            raise subprocess.CalledProcessError(128, ["git", "checkout", "-b", "10-fix"])
 
         payload = _error_boundary(_tool)()
         self.assertEqual(payload["error"]["type"], "CalledProcessError")
@@ -141,7 +143,7 @@ class TestSetupFailureLeavesNoDanglingBranch(unittest.TestCase):
         sp = _failing_sp(["git", "checkout", "-b"], dirty=True)
         with patch(_SP_PATCH, sp):
             with self.assertRaises(subprocess.CalledProcessError):
-                _create_task_branch("10#fix", "main")
+                _create_task_branch("10-fix", "main")
         self.assertIn(["git", "stash", "pop"], _calls(sp))
 
     def test_setup_failure_propagates_typed_through_the_tool(self):
@@ -151,41 +153,52 @@ class TestSetupFailureLeavesNoDanglingBranch(unittest.TestCase):
         tool = make_start_task_tool(_Reg())
         with patch(_SP_PATCH, sp):
             with self.assertRaises(subprocess.CalledProcessError):
-                _run(tool("Fix", _ctx(), task_id=10))
+                _run(tool(_ctx(), task_id=10))
         # No branch was ever created, so nothing may be force-deleted either.
         self.assertNotIn("-D", [arg for call in _calls(sp) for arg in call])
 
     def test_command_failure_still_rolls_back_a_created_branch(self):
-        # Regression guard for the new ``except TaskAlreadyRunningError`` clause
-        # sitting ahead of the generic one: every *other* failure must keep the
-        # #164 rollback behaviour.
+        # A command failure downstream of branch setup must keep the #164
+        # rollback behaviour (the branch created this run is deleted again).
         sp = _make_sp()
         tool = make_start_task_tool(_Reg(error=RuntimeError("odoo exploded")))
         with patch(_SP_PATCH, sp):
             with self.assertRaises(RuntimeError):
-                _run(tool("Fix", _ctx(), task_id=10))
-        self.assertIn(["git", "branch", "-D", "10#fix"], _calls(sp))
+                _run(tool(_ctx(), task_id=10))
+        self.assertIn(["git", "branch", "-D", "10-fix"], _calls(sp))
 
 
-class TestBranchSurvivesAttachToRunningSession(unittest.TestCase):
-    """#478: attaching to a RUNNING session keeps the new task branch."""
+class TestRunningSessionIsANoOp(unittest.TestCase):
+    """#621: a RUNNING session short-circuits before any branch side effect.
 
-    def test_running_session_does_not_roll_the_branch_back(self):
+    This supersedes the #478 attach-and-keep-branch behaviour: the pre-flight
+    state check now fires before branch setup, so an already-RUNNING session
+    performs zero git mutations and returns the existing run instead of raising
+    ``TaskAlreadyRunningError`` through the tool.
+    """
+
+    def test_running_session_makes_no_git_call_and_returns_the_run(self):
         sp = _make_sp()
-        running = TaskAlreadyRunningError("Task 'Fix' already has an active session")
-        tool = make_start_task_tool(_Reg(error=running))
+        tool = make_start_task_tool(_Reg(state=_running_state()))
         with patch(_SP_PATCH, sp):
-            with self.assertRaises(TaskAlreadyRunningError):
-                _run(tool("Fix", _ctx(), task_id=10))
-        calls = _calls(sp)
-        # The branch was created and checked out ...
-        self.assertTrue(
-            any(c[:3] == ["git", "checkout", "-b"] and c[3] == "10#fix" for c in calls),
-            "the task branch must still be created when a session is running",
-        )
-        # ... and, unlike every other failure, left in place.
-        self.assertNotIn(["git", "branch", "-D", "10#fix"], calls)
-        self.assertNotIn(["git", "checkout", "main"], calls)
+            result = _run(tool(_ctx(), task_id=10))
+        self.assertEqual(result["run_id"], 1)
+        self.assertNotIn("branch_name", result)
+        self.assertEqual(_calls(sp), [], "no git side effect on the no-op path")
+
+    def test_second_call_is_a_pure_no_op_after_a_successful_start(self):
+        # Acceptance (#621): start_task called twice in a row — the second call
+        # performs zero side effects (no elicit, no git call) and returns the
+        # existing run via the command's already_running result.
+        sp = _make_sp()
+        ctx = _ctx()
+        tool = make_start_task_tool(_Reg(state=_running_state()))
+        with patch(_SP_PATCH, sp):
+            result = _run(tool(ctx, task_id=10))
+        ctx.elicit.assert_not_awaited()
+        ctx.sample.assert_not_called()
+        sp.run.assert_not_called()
+        self.assertNotIn("error", result)
 
 
 class TestUnrecoverablePopKeepsTheStash(unittest.TestCase):
@@ -195,13 +208,13 @@ class TestUnrecoverablePopKeepsTheStash(unittest.TestCase):
         sp = _never_pops_sp(dirty=True)
         with patch(_SP_PATCH, sp):
             with self.assertRaises(_BranchSetupError) as caught:
-                _create_task_branch("10#fix", "main")
+                _create_task_branch("10-fix", "main")
         self.assertIn("stash@{0}", str(caught.exception))
         # The branch is still torn down and the original checked out — the stash
         # entry is the only thing left for the user to deal with.
         calls = _calls(sp)
         self.assertIn(["git", "checkout", "--force", "main"], calls)
-        self.assertIn(["git", "branch", "-D", "10#fix"], calls)
+        self.assertIn(["git", "branch", "-D", "10-fix"], calls)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -274,12 +287,12 @@ class TestStashPopCollisionIsUnwound(unittest.TestCase):
 
     def test_collision_reports_an_actionable_error(self):
         with self.assertRaises(_BranchSetupError) as caught:
-            _create_task_branch("10#fix", "main")
-        self.assertIn("10#fix", str(caught.exception))
+            _create_task_branch("10-fix", "main")
+        self.assertIn("10-fix", str(caught.exception))
 
     def test_user_work_is_back_on_disk_on_the_original_branch(self):
         with self.assertRaises(_BranchSetupError):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
 
         self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "main")
         self.assertEqual(_git(self.local, "rev-parse", "HEAD"), self.local_tip)
@@ -291,14 +304,14 @@ class TestStashPopCollisionIsUnwound(unittest.TestCase):
 
     def test_no_half_created_branch_is_left_behind(self):
         with self.assertRaises(_BranchSetupError):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         self.assertNotIn(
-            "10#fix", _git(self.local, "branch", "--format=%(refname:short)").split()
+            "10-fix", _git(self.local, "branch", "--format=%(refname:short)").split()
         )
 
     def test_nothing_is_left_parked_in_the_stash(self):
         with self.assertRaises(_BranchSetupError):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         self.assertEqual(
             _git(self.local, "stash", "list"),
             "",
@@ -310,9 +323,9 @@ class TestStashPopCollisionIsUnwound(unittest.TestCase):
         # a git traceback, and never reaches the start command.
         reg = _Reg()
         tool = make_start_task_tool(reg)
-        result = _run(tool("Fix", _ctx(), task_id=10))
+        result = _run(tool(_ctx(), task_id=10))
         self.assertIn("error", result)
-        self.assertIn("10#fix", result["error"])
+        self.assertIn("10-fix", result["error"])
         self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "main")
 
 

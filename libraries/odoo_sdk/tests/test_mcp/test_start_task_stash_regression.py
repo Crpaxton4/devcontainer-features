@@ -23,7 +23,7 @@ from odoo_sdk.mcp.tools.start_task import make_start_task_tool
 
 # Reuse the shared fakes so this file stays faithful to the real git contract
 # encoded in ``_make_sp`` rather than reinventing a divergent stub.
-from tests.test_mcp.test_tools import _accepted, _confirmed, _make_sp
+from tests.test_mcp.test_tools import _make_sp
 
 _SP_PATCH = "odoo_sdk.mcp.tools.start_task.subprocess"
 
@@ -77,7 +77,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
 
         sp = _recording_sp(dirty=True, dirty_kind="untracked")
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")  # must not raise
+            _create_task_branch("10-fix", "main")  # must not raise
         net = sum(
             1 for argv, rc in sp.recorded if argv[1:3] == ["stash", "push"] and rc == 0
         ) - sum(
@@ -95,7 +95,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
 
         sp = _make_sp(dirty=True, dirty_kind="untracked")
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         calls = _calls(sp)
         pushes = [c for c in calls if c[1:3] == ["stash", "push"]]
         pops = [c for c in calls if c[1:3] == ["stash", "pop"]]
@@ -115,7 +115,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
 
         sp = _recording_sp(dirty=True, dirty_kind="untracked")
         with patch(_SP_PATCH, sp):
-            _create_task_branch("10#fix", "main")
+            _create_task_branch("10-fix", "main")
         pop_codes = _returncodes_for(sp, ["git", "stash", "pop"])
         self.assertTrue(pop_codes, "a balancing pop must run")
         self.assertTrue(
@@ -125,7 +125,7 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
 
     def test_tool_flow_pops_balanced_on_untracked_tree(self):
         # End-to-end through the ``start_task`` tool (not just the helper): a
-        # dirty untracked tree drives the confirm + branch-pick elicitations and
+        # dirty untracked tree on the headless id-only path (#621: no prompts)
         # must still finish with a balanced, error-free pop and reach start_task.
         client = MagicMock()
         client.execute.return_value = [
@@ -140,14 +140,12 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
                 return cmd
 
         ctx = MagicMock()
-        ctx.elicit = AsyncMock(
-            side_effect=[_confirmed(), _accepted(MagicMock(selection=1))]
-        )
+        ctx.elicit = AsyncMock()
         ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _recording_sp(dirty=True, dirty_kind="untracked")
         tool = make_start_task_tool(_Reg())
         with patch(_SP_PATCH, sp):
-            result = _run(tool("Fix", ctx, task_id=10))
+            result = _run(tool(ctx, task_id=10))
         self.assertEqual(result["run_id"], 1)
         pop_codes = _returncodes_for(sp, ["git", "stash", "pop"])
         self.assertTrue(pop_codes and all(rc == 0 for rc in pop_codes))

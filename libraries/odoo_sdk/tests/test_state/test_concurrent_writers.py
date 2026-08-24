@@ -25,7 +25,6 @@ from pathlib import Path
 
 from odoo_sdk.state import (
     EventRecord,
-    InvalidStateTransitionError,
     LocalStateClient,
     TaskAlreadyRunningError,
     TaskNotRunningError,
@@ -262,11 +261,16 @@ class TestAtomicRunMutations(unittest.TestCase):
         self.assertEqual(str(losers[0]), "No active session for task 1.")
         self.assertEqual(_run_states(db_path, 1), ["STOPPED"])
 
-    def test_concurrent_resume_single_winner(self) -> None:
-        """Two racing resumes of a STOPPED run: the loser sees already-RUNNING."""
+    def test_concurrent_resume_both_succeed_idempotently(self) -> None:
+        """Two racing resumes of a STOPPED run: both succeed (#621).
+
+        The loser's transition finds the run already RUNNING and no-ops to the
+        same row instead of raising — resume/start is an idempotent ensure, so
+        a race never surfaces an "already running" error to either caller.
+        """
         db_path = _tmp_path()
         seed = LocalStateClient(db_path=db_path)
-        seed.create_run(1, "Bug", 10, "Proj")
+        created = seed.create_run(1, "Bug", 10, "Proj")
         seed.stop_run(1)
 
         def resume(idx: int):
@@ -274,8 +278,8 @@ class TestAtomicRunMutations(unittest.TestCase):
 
         outcomes = _race(2, resume)
         losers = [o for o in outcomes if isinstance(o, Exception)]
-        self.assertEqual(len(losers), 1, outcomes)
-        self.assertIsInstance(losers[0], InvalidStateTransitionError)
+        self.assertEqual(len(losers), 0, outcomes)
+        self.assertEqual({run.id for run in outcomes}, {created.id})
         self.assertEqual(_run_states(db_path, 1), ["RUNNING"])
 
     def test_concurrent_abort_single_winner(self) -> None:
