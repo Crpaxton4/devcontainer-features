@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.1.0...personal-features-v4.1.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **personal-features:** declare github-cli as hard dependency and gate gh presence in CI ([#611](https://github.com/Crpaxton4/devcontainer-features/issues/611)) ([02f0fd0](https://github.com/Crpaxton4/devcontainer-features/commit/02f0fd08b55fb45e17a2a25647ecfa1d9a969dbd)), closes [#597](https://github.com/Crpaxton4/devcontainer-features/issues/597)
+* **personal-features:** symlink ~/.mempalace to mounted palace so plugin hooks stop silently no-oping ([#612](https://github.com/Crpaxton4/devcontainer-features/issues/612)) ([24992ed](https://github.com/Crpaxton4/devcontainer-features/commit/24992edd96f4c0acb7e06bd21d55d5151b387990)), closes [#596](https://github.com/Crpaxton4/devcontainer-features/issues/596)
+
 ## [4.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.3...personal-features-v4.1.0) (2026-07-21)
 
 
