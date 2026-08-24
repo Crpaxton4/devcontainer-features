@@ -266,10 +266,84 @@ class TestTaskNoteCommand(unittest.TestCase):
             ) as mock_post,
         ):
             result = _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Note text")
-        mock_post.assert_called_once_with(client, 1, "Note text")
+        mock_post.assert_called_once_with(client, 1, "Note text", attachment_ids=None)
         self.assertEqual(result["message_id"], 55)
+        self.assertNotIn("attachment_ids", result)
         run = db.get_active_run(1)
         self.assertIn("Note text", run.notes)  # type: ignore[union-attr]
+
+    def test_attachments_created_and_linked_to_post(self):
+        # #604: file specs become ir.attachment records linked to the task,
+        # and their ids ride to ``post_chatter_note`` / the result payload.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        specs = [{"content": "aGk=", "name": "a.md"}, {"path": "/tmp/b.csv"}]
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.create_attachments",
+                return_value=[91, 92],
+            ) as mock_create,
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=55,
+            ) as mock_post,
+        ):
+            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
+                1, "Deliverables attached", attachments=specs
+            )
+        mock_create.assert_called_once_with(
+            client, specs, res_model="project.task", res_id=1
+        )
+        mock_post.assert_called_once_with(
+            client, 1, "Deliverables attached", attachment_ids=[91, 92]
+        )
+        self.assertEqual(result["attachment_ids"], [91, 92])
+        self.assertEqual(result["message_id"], 55)
+
+    def test_rejects_note_over_300_chars(self):
+        # #610: an over-limit note is rejected — nothing is uploaded, posted,
+        # or appended to the local session log.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note"
+            ) as mock_post,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                _cmd_with_db(TaskNoteCommand, client, db).execute(1, "x" * 301)
+        message = str(ctx.exception)
+        self.assertIn("301", message)
+        self.assertIn("300", message)
+        self.assertIn("simple, direct, plain", message)
+        mock_post.assert_not_called()
+        run = db.get_active_run(1)
+        self.assertNotIn("x" * 301, run.notes or "")  # type: ignore[union-attr]
+
+    def test_accepts_note_of_exactly_300_chars(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        note = "y" * 300
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note",
+                return_value=56,
+            ) as mock_post,
+        ):
+            result = _cmd_with_db(TaskNoteCommand, client, db).execute(1, note)
+        mock_post.assert_called_once_with(client, 1, note, attachment_ids=None)
+        self.assertEqual(result["message_id"], 56)
+
+    def test_description_advertises_the_300_char_limit(self):
+        # The limit must be visible to MCP callers up front: the command
+        # description (which becomes the tool description) names it.
+        self.assertIn("300", TaskNoteCommand._description)
 
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
@@ -364,6 +438,50 @@ class TestTaskQuestionCommand(unittest.TestCase):
         ):
             with self.assertRaises(TaskNotRunningError):
                 _cmd_with_db(TaskQuestionCommand, _client(), db).execute(999, "?")
+
+    def test_rejects_question_over_300_chars(self):
+        # #610: an over-limit question is rejected before anything is posted
+        # and before the session leaves RUNNING.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_QUESTION_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_question.post_chatter_note"
+            ) as mock_post,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                _cmd_with_db(TaskQuestionCommand, client, db).execute(
+                    1, "q" * 301
+                )
+        message = str(ctx.exception)
+        self.assertIn("300", message)
+        self.assertIn("simple, direct, plain", message)
+        mock_post.assert_not_called()
+        run = db.get_active_run(1)
+        self.assertEqual(run.state, TaskState.RUNNING)  # type: ignore[union-attr]
+
+    def test_accepts_question_of_exactly_300_chars(self):
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        question = "q" * 300
+        with (
+            patch(_QUESTION_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_question.post_chatter_note",
+                return_value=79,
+            ) as mock_post,
+        ):
+            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
+                1, question
+            )
+        mock_post.assert_called_once_with(client, 1, f"[?] {question}")
+        self.assertEqual(result["state"], "AWAITING_ANSWERS")
+
+    def test_description_advertises_the_300_char_limit(self):
+        self.assertIn("300", TaskQuestionCommand._description)
 
 
 # ── CloseTaskCommand ──────────────────────────────────────────────────────────

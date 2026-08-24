@@ -101,7 +101,13 @@ def get_employee_id(client: OdooClient, uid: int) -> int:
     return records[0]["id"]
 
 
-def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
+def post_chatter_note(
+    client: OdooClient,
+    task_id: int,
+    body: str,
+    *,
+    attachment_ids: Optional[list[int]] = None,
+) -> int:
     """Post a chatter note on project.task and return the message id.
 
     ``mail.message.body`` is an HTML field, so the caller-supplied Markdown
@@ -119,15 +125,25 @@ def post_chatter_note(client: OdooClient, task_id: int, body: str) -> int:
     ``message_post`` from escaping a plain ``str`` body into visible source (issue
     #453). Odoo only honours it for internal users (``_is_internal()``); a
     portal-user deployment would silently regress to escaped text.
+
+    ``attachment_ids`` (keyword-only, like every message option) links existing
+    ``ir.attachment`` records to the posted message (#604); it is forwarded to
+    ``message_post`` only when non-empty so the wire call for a plain note stays
+    byte-for-byte what it was before attachments existed.
     """
+    options: dict[str, Any] = {
+        "body": markdown_to_html(body),
+        "body_is_html": True,
+        "message_type": "comment",
+        "subtype_xmlid": "mail.mt_note",
+    }
+    if attachment_ids:
+        options["attachment_ids"] = list(attachment_ids)
     return client.execute(
         "project.task",
         "message_post",
         [task_id],
-        body=markdown_to_html(body),
-        body_is_html=True,
-        message_type="comment",
-        subtype_xmlid="mail.mt_note",
+        **options,
     )
 
 

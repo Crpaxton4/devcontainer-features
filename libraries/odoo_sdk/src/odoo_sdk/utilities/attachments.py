@@ -1,8 +1,13 @@
-"""Odoo API helpers for reading a task's attachments (list + single read).
+"""Odoo API helpers for a task's attachments (list, single read, create).
 
 The single owner of the task-attachment read path. The full two-source /
 dedupe / opt-in-``datas`` story lives on :func:`get_task_attachments`;
 :func:`read_attachment` reads one already-stored ``ir.attachment`` by id.
+
+The write path (#604) is :func:`create_attachment` / :func:`create_attachments`:
+upload one or more files (local path or base64 content) as ``ir.attachment``
+records so chatter posts can link them via ``message_post``'s
+``attachment_ids``. The read helpers above stay strictly read-only.
 """
 
 import base64
@@ -314,3 +319,165 @@ def read_attachment(
     if mode == "raw":
         return _raw_result(metadata, record, attachment_id)
     return _text_result(metadata, record)
+
+
+# --------------------------------------------------------------------------- #
+# create_attachment(s): upload files as ir.attachment records (#604).
+# --------------------------------------------------------------------------- #
+
+#: The keys a file spec dict handed to :func:`create_attachments` may carry.
+#: Anything else (e.g. a ``filename`` typo for ``name``) is rejected up front so
+#: a mis-keyed spec cannot silently drop its payload or metadata.
+_FILE_SPEC_KEYS = frozenset({"path", "content", "name", "mimetype"})
+
+#: Fallback mimetype when neither the caller nor ``mimetypes.guess_type`` can
+#: classify the file. Odoo would sniff one server-side, but sending an explicit
+#: value keeps the created record deterministic across transports.
+_DEFAULT_MIMETYPE = "application/octet-stream"
+
+
+def _scalar_create_id(result: Any) -> int:
+    """Unwrap a possibly list-wrapped Odoo ``create`` result to a scalar int.
+
+    Odoo answers a batch (list-of-dicts) ``create`` with ``[id]`` and a single
+    (dict) call with a scalar ``id``; unwrapping here guarantees callers always
+    get a plain int (same defence as ``odoo_sdk.billing.timesheet._scalar_id``).
+    """
+    if isinstance(result, (list, tuple)):
+        return int(result[0])
+    return int(result)
+
+
+def _resolve_payload(
+    path: Optional[str], content: Optional[str], name: Optional[str]
+) -> tuple[str, str]:
+    """Resolve a file spec to its ``(base64 payload, filename)`` pair.
+
+    Pure validation/IO helper shared by the create path: exactly one of
+    ``path`` / ``content`` must be given. A ``path`` is read from disk and
+    base64-encoded (``name`` defaults to its basename); a ``content`` payload
+    must already be valid base64 and requires an explicit ``name``. Every
+    failure raises :class:`ValueError` with an actionable message.
+    """
+    if (path is None) == (content is None):
+        raise ValueError(
+            "Provide exactly one of 'path' (a readable file) or 'content' "
+            "(base64-encoded bytes) per attachment."
+        )
+    if path is not None:
+        if not os.path.isfile(path):
+            raise ValueError(f"Attachment path {path!r} is not a readable file.")
+        with open(path, "rb") as handle:
+            payload = base64.b64encode(handle.read()).decode("ascii")
+        return payload, name or os.path.basename(path)
+    if not name:
+        raise ValueError(
+            "Attachment 'name' (the filename) is required when passing "
+            "base64 'content'."
+        )
+    try:
+        base64.b64decode(content, validate=True)
+    except Exception as exc:
+        raise ValueError(
+            f"Attachment 'content' for {name!r} is not valid base64: {exc}"
+        ) from exc
+    return content, name  # type: ignore[return-value]  # content is not None here
+
+
+def _attachment_values(
+    path: Optional[str],
+    content: Optional[str],
+    name: Optional[str],
+    mimetype: Optional[str],
+    res_model: Optional[str],
+    res_id: Optional[int],
+) -> dict[str, Any]:
+    """Build the validated ``ir.attachment`` create values for one file."""
+    payload, filename = _resolve_payload(path, content, name)
+    values: dict[str, Any] = {
+        "name": filename,
+        "datas": payload,
+        "mimetype": mimetype
+        or mimetypes.guess_type(filename)[0]
+        or _DEFAULT_MIMETYPE,
+    }
+    if res_model is not None:
+        values["res_model"] = res_model
+    if res_id is not None:
+        values["res_id"] = res_id
+    return values
+
+
+def create_attachment(
+    client: OdooClient,
+    *,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    name: Optional[str] = None,
+    mimetype: Optional[str] = None,
+    res_model: Optional[str] = None,
+    res_id: Optional[int] = None,
+) -> int:
+    """Create one ``ir.attachment`` record and return its id (#604).
+
+    The file arrives either as ``path`` (a readable local file, read and
+    base64-encoded here; ``name`` defaults to the basename) or as ``content``
+    (already-base64 bytes, requiring an explicit ``name``) — exactly one of the
+    two. ``mimetype`` defaults to a guess from the filename, falling back to
+    ``application/octet-stream``. ``res_model`` / ``res_id`` optionally link the
+    attachment to a record (e.g. ``project.task``) so it shows on that record
+    and can be handed to ``message_post`` via ``attachment_ids``.
+
+    Raises :class:`ValueError` for a missing/ambiguous payload, an unreadable
+    path, invalid base64 content, or a content payload without a name.
+    """
+    values = _attachment_values(path, content, name, mimetype, res_model, res_id)
+    return _scalar_create_id(client.execute("ir.attachment", "create", values))
+
+
+def create_attachments(
+    client: OdooClient,
+    files: list[dict[str, Any]],
+    *,
+    res_model: Optional[str] = None,
+    res_id: Optional[int] = None,
+) -> list[int]:
+    """Create one ``ir.attachment`` per file spec, returning the ids in order.
+
+    Each spec is a dict with ``path`` *or* ``content`` (+ ``name``), plus an
+    optional ``mimetype`` — the same contract as :func:`create_attachment`,
+    which documents the per-file rules. All specs are validated (payloads
+    resolved) *before* the first record is created, so one malformed spec never
+    leaves a partial batch behind. An empty list and unknown spec keys raise
+    :class:`ValueError`.
+    """
+    if not files:
+        raise ValueError("Provide at least one attachment file spec.")
+    for index, spec in enumerate(files):
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"Attachment spec #{index + 1} must be a dict with 'path' or "
+                f"'content' + 'name', got {type(spec).__name__}."
+            )
+        unknown = set(spec) - _FILE_SPEC_KEYS
+        if unknown:
+            raise ValueError(
+                f"Attachment spec #{index + 1} has unknown key(s) "
+                f"{sorted(unknown)}; allowed keys are "
+                f"{sorted(_FILE_SPEC_KEYS)}."
+            )
+    all_values = [
+        _attachment_values(
+            spec.get("path"),
+            spec.get("content"),
+            spec.get("name"),
+            spec.get("mimetype"),
+            res_model,
+            res_id,
+        )
+        for spec in files
+    ]
+    return [
+        _scalar_create_id(client.execute("ir.attachment", "create", values))
+        for values in all_values
+    ]

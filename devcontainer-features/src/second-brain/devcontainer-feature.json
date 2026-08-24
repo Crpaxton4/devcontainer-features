@@ -1,0 +1,18 @@
+{
+    "name": "Second Brain",
+    "id": "second-brain",
+    "version": "1.0.0",
+    "description": "Bind-mounts a host 'second brain' knowledge-base directory - taken from the host environment variable SECOND_BRAIN_DIR - into the container at /mnt/second-brain, so session-derived knowledge (notes, decisions, environment quirks) survives container rebuilds and is editable from both host and container. The variable MUST be set on the host: when it is unset or empty the container build fails fast with a clear error instead of silently mounting nothing. The Feature enforces no content conventions - structure and the skills that read/write the knowledge base come separately.",
+    "options": {},
+    "containerEnv": {
+        "SECOND_BRAIN_DIR": "/mnt/second-brain"
+    },
+    "mounts": [
+        {
+            "source": "${localEnv:SECOND_BRAIN_DIR}",
+            "target": "/mnt/second-brain",
+            "type": "bind"
+        }
+    ],
+    "onCreateCommand": "second-brain-verify"
+}
