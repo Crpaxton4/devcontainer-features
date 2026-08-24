@@ -53,11 +53,17 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
 
     def __init__(self) -> None:
         self.recorded: dict[str, Any] = {}
+        self.created_attachments: list[dict[str, Any]] = []
         # Real executors expose ``uid``; ``start_task`` reads ``client.uid`` when
         # resolving the employee id, so the fake must carry one too.
         self.uid = 7
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        # ``task_note`` with attachments (#604) first creates the
+        # ``ir.attachment`` records it then links via ``attachment_ids``.
+        if (model, method) == ("ir.attachment", "create"):
+            self.created_attachments.append(args[0])
+            return 400 + len(self.created_attachments)
         if (model, method) != ("project.task", "message_post"):
             raise AssertionError(f"unexpected call: {model}.{method}")
         return self._message_post(*args, **kwargs)
@@ -70,6 +76,7 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
         body_is_html: bool = False,
         message_type: str = "notification",
         subtype_xmlid: str | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> int:
         self.recorded = {
             "ids": ids,
@@ -78,6 +85,10 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
             "message_type": message_type,
             "subtype_xmlid": subtype_xmlid,
         }
+        # Recorded only when sent, mirroring how ``post_chatter_note`` omits the
+        # option for a plain note (#604) — plain-note assertions stay exact.
+        if attachment_ids is not None:
+            self.recorded["attachment_ids"] = attachment_ids
         return 777
 
 
@@ -163,6 +174,47 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>[?] Which approach?</p>"
         )
+
+    def test_task_note_with_attachments_drives_keyword_only_message_post(self):
+        # #604 end-to-end: the un-patched ``create_attachments`` +
+        # ``post_chatter_note`` pipeline runs inside the command, and the
+        # resulting ``attachment_ids`` must reach the keyword-only
+        # ``message_post`` as a keyword option like every other message option.
+        import base64
+
+        client, executor = _keyword_client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        content = base64.b64encode(b"findings").decode("ascii")
+        with (
+            patch(_NOTE_GUARD),
+        ):
+            result = TaskNoteCommand(client, state=db).execute(
+                1,
+                "Note with file",
+                attachments=[{"content": content, "name": "findings.md"}],
+            )
+        self.assertEqual(len(executor.created_attachments), 1)
+        self.assertEqual(
+            executor.created_attachments[0]["name"], "findings.md"
+        )
+        self.assertEqual(executor.recorded["attachment_ids"], [401])
+        self.assertEqual(executor.recorded["body"], "<p>Note with file</p>")
+        self.assertEqual(result["attachment_ids"], [401])
+
+    def test_over_limit_note_posts_nothing(self):
+        # #610: an over-limit note is rejected at the command layer, so the
+        # fake executor never sees a ``message_post`` (or any) call.
+        client, executor = _keyword_client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+        ):
+            with self.assertRaises(ValueError):
+                TaskNoteCommand(client, state=db).execute(1, "x" * 301)
+        self.assertEqual(executor.recorded, {})
+        self.assertEqual(executor.created_attachments, [])
 
 
 if __name__ == "__main__":
