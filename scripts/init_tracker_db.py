@@ -36,8 +36,9 @@ from pathlib import Path
 #: user_version`` marker that tells an out-of-date DB from a current one. ``2``
 #: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504);
 #: ``3`` adds the additive ``task_runs.question_message_id`` answer watermark
-#: (#625) and the ``chatter_dedupe`` idempotency table (#631).
-SCHEMA_VERSION = 3
+#: (#625) and the ``chatter_dedupe`` idempotency table (#631); ``4`` adds the
+#: nullable ``task_runs.run_summary`` column (#626).
+SCHEMA_VERSION = 4
 
 # VERBATIM copy of odoo_sdk.state.db.SCHEMA_DDL — kept identical by the parity
 # test noted in the module docstring. Do not edit one without the other.
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     timesheet_id INTEGER,
     notes        TEXT    NOT NULL DEFAULT '[]' CHECK(json_valid(notes)),
     aborted_at   TEXT             CHECK(aborted_at IS NULL OR datetime(aborted_at) IS NOT NULL),
-    question_message_id INTEGER
+    question_message_id INTEGER,
+    run_summary  TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -116,9 +118,10 @@ _MIGRATION_TABLES = (
 # Mirror of odoo_sdk.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
 # absence from a table's stored DDL means it predates a schema change and must be
 # rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504, the
-# ``question_message_id`` watermark column for #625).
+# ``question_message_id`` watermark column for #625, the ``run_summary``
+# narrative column for #626).
 _REQUIRED_TABLE_MARKERS = {
-    "task_runs": ("STRICT", "CLOSED", "QUESTION_MESSAGE_ID"),
+    "task_runs": ("STRICT", "CLOSED", "QUESTION_MESSAGE_ID", "RUN_SUMMARY"),
     "settings": ("STRICT",),
     "events": ("STRICT",),
     "session_uploads": ("STRICT",),

@@ -48,6 +48,24 @@ def _cmd_with_db(cmd_cls, client, db):
     return cmd_cls(client, state=db)
 
 
+def _add_agent_event(db, task_id, subject, timestamp=None):
+    """Record one attributed agent event for the run-summary derivation (#626)."""
+    from datetime import datetime, timezone
+
+    from odoo_sdk.state import EventRecord
+
+    db.add_event(
+        EventRecord(
+            id=None,
+            source="agent",
+            timestamp=timestamp or datetime.now(timezone.utc),
+            task_ids=[task_id],
+            repo="",
+            subject=subject,
+        )
+    )
+
+
 # ── GetTaskChatterCommand ─────────────────────────────────────────────────────
 
 class TestGetTaskChatterCommand(unittest.TestCase):
@@ -1179,57 +1197,94 @@ class TestStopTaskCommand(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with patch(_STOP_GUARD):
-            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "Fixed the bug")
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
         # stop_task no longer writes hours to Odoo (#325): the anchor is left for
         # the TUI/ETL upload path to close out, so the command touches no
         # account.analytic.line row at all.
         client.execute.assert_not_called()
-        # The result shape is unchanged: elapsed hours are still computed and
-        # returned for callers/tests to display.
+        # Elapsed hours are still computed and returned for callers to display.
         self.assertIn("elapsed", result)
         self.assertIn("elapsed_hours", result)
-        self.assertIn("[/]", result["description"])
         from odoo_sdk.state import TaskState
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
 
-    def test_description_not_double_prefixed(self):
-        client = _client()
-        db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
-        with patch(_STOP_GUARD):
-            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "[/] Already prefixed")
-        self.assertTrue(result["description"].startswith("[/]"))
-        self.assertFalse(result["description"].startswith("[/] [/]"))
+    def test_takes_no_description_parameter(self):
+        # #623: the description parameter was a no-op gate with zero downstream
+        # consumers; the command signature is task_id alone.
+        import inspect
 
-    def test_description_is_optional(self):
-        # Time logging moved to the odoo-tui/ETL path (#482), so a work summary
-        # is no longer required: the run still stops and reports elapsed time.
+        parameters = list(inspect.signature(StopTaskCommand.execute).parameters)
+        self.assertEqual(parameters, ["self", "task_id"])
+
+    def test_derives_and_stores_run_summary_from_events_and_notes(self):
+        # #626: the run narrative is machine-derived from the run's recorded
+        # events + notes and stored on the run row, never asked of a human.
         client = _client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
+        created = db.create_run(1, "Bug", 10, "Project A")
+        db.append_note(1, "Implementation plan: fix the rounding")
+        _add_agent_event(db, task_id="1", subject="task_note")
+        _add_agent_event(db, task_id="1", subject="task_note")
         with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
-        self.assertIsNone(result["description"])
-        self.assertIn("elapsed_hours", result)
-        client.execute.assert_not_called()
-        from odoo_sdk.state import TaskState
-        run = db.get_run_by_id(result["run_id"])
-        self.assertEqual(run.state, TaskState.STOPPED)
+        self.assertIn("task_note x2", result["run_summary"])
+        self.assertIn("Implementation plan: fix the rounding", result["run_summary"])
+        stored = db.get_run_by_id(created.id)
+        self.assertEqual(stored.run_summary, result["run_summary"])
 
-    def test_blank_description_normalizes_to_none(self):
+    def test_run_summary_none_when_nothing_recorded(self):
+        # No events and no notes -> nothing to tell; the row stays NULL so the
+        # billing upload applies its own fallback name.
         client = _client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
+        created = db.create_run(1, "Bug", 10, "Project A")
         with patch(_STOP_GUARD):
-            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "   ")
-        self.assertIsNone(result["description"])
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
+        self.assertIsNone(result["run_summary"])
+        self.assertIsNone(db.get_run_by_id(created.id).run_summary)
+
+    def test_run_summary_has_no_length_cap(self):
+        # Length policy (#626): derived summaries are internal/local text and
+        # are NOT subject to the 300-char chatter cap.
+        from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
+
+        client = _client()
+        db = _tmp_db()
+        created = db.create_run(1, "Bug", 10, "Project A")
+        long_note = "checkpoint " * 60  # well over 300 chars on its own
+        db.append_note(1, long_note)
+        with patch(_STOP_GUARD):
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
+        self.assertGreater(len(result["run_summary"]), MAX_CHATTER_BODY_CHARS)
+        stored = db.get_run_by_id(created.id)
+        self.assertEqual(stored.run_summary, result["run_summary"])
+
+    def test_summary_scoped_to_the_run_window(self):
+        # An event recorded BEFORE the run started (a previous run's work) must
+        # not leak into this run's narrative.
+        from datetime import datetime, timezone
+
+        client = _client()
+        db = _tmp_db()
+        _add_agent_event(
+            db,
+            task_id="1",
+            subject="old_tool",
+            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        db.create_run(1, "Bug", 10, "Project A")
+        _add_agent_event(db, task_id="1", subject="task_note")
+        with patch(_STOP_GUARD):
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
+        self.assertIn("task_note", result["run_summary"])
+        self.assertNotIn("old_tool", result["run_summary"])
 
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
         with patch(_STOP_GUARD):
             with self.assertRaises(TaskNotRunningError):
-                _cmd_with_db(StopTaskCommand, _client(), db).execute(999, "desc")
+                _cmd_with_db(StopTaskCommand, _client(), db).execute(999)
 
     def test_stop_from_awaiting_answers(self):
         client = _client()
@@ -1237,7 +1292,7 @@ class TestStopTaskCommand(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         db.transition_to_awaiting(1)
         with patch(_STOP_GUARD):
-            result = _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
+            result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
         from odoo_sdk.state import TaskState
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
@@ -1249,7 +1304,7 @@ class TestStopTaskCommand(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=None)
         with patch(_STOP_GUARD):
-            _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
+            _cmd_with_db(StopTaskCommand, client, db).execute(1)
         client.execute.assert_not_called()
 
 
@@ -1284,7 +1339,7 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with patch(_STOP_GUARD):
-            _cmd_with_db(StopTaskCommand, client, db).execute(1, "done")
+            _cmd_with_db(StopTaskCommand, client, db).execute(1)
         self._assert_no_agent_event(db)
 
     def test_task_note_emits_no_agent_event(self):

@@ -59,13 +59,22 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The trailing ``run_summary`` column added by #626 (schema v4), removable as a
+#: single substring so the historical shapes derive from the canonical DDL.
+_RUN_SUMMARY_COLUMN = ",\n    run_summary  TEXT"
+
+#: The v3 STRICT schema (post-#625/#631, pre-#626): the canonical DDL without
+#: the ``run_summary`` narrative column.
+_V3_DDL = SCHEMA_DDL.replace(_RUN_SUMMARY_COLUMN, "")
+assert "run_summary" not in _V3_DDL
+
 #: The v2 STRICT schema (post-#504, pre-v3): the shape a real user's
 #: ``tracker.db`` has on disk before v3 added the ``question_message_id``
 #: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
-#: the canonical DDL by dropping exactly those additions so it tracks the true
+#: the v3 shape by dropping exactly those additions so it tracks the true
 #: prior shape without a hand-copy.
-_V2_DDL = SCHEMA_DDL[
-    : SCHEMA_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
+_V2_DDL = _V3_DDL[
+    : _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
 ].replace(",\n    question_message_id INTEGER", "")
 assert "question_message_id" not in _V2_DDL
 assert "chatter_dedupe" not in _V2_DDL
@@ -437,18 +446,23 @@ class TestClosedStateMigrationParity(unittest.TestCase):
 
 
 def _v2_db(tmp: Path) -> Path:
-    """Provision a v2 STRICT (pre-watermark, pre-dedupe) tracker.db on disk."""
+    """Provision a v2 STRICT (pre-watermark, pre-dedupe, pre-summary) tracker.db."""
     path = tmp / "tracker.db"
     conn = sqlite3.connect(str(path))
     try:
         conn.executescript(_V2_DDL)
         conn.execute(
+            "INSERT INTO events (id, source, timestamp, task_ids, repo, pr_num, "
+            "branch, subject, payload, external_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            _EVENT_ROW,
+        )
+        conn.execute(
             "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
-            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'RUNNING', ?, '[]')",
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'CLOSED', ?, '[]')",
             (_TS,),
         )
-        # The CLOSED schema shipped with user_version 2; leaving it there is
-        # what makes the host script's migrate_schema run the v3 rebuild.
+        # The CLOSED-era schema shipped with user_version 2; leaving it there is
+        # what makes the host script's migrate_schema run the task_runs rebuild.
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
     finally:
@@ -457,17 +471,57 @@ def _v2_db(tmp: Path) -> Path:
     return path
 
 
-class TestWatermarkMigrationParity(unittest.TestCase):
-    """The host script's v2→v3 rebuild matches a fresh v3 init (#625/#631).
+def _v3_db(tmp: Path) -> Path:
+    """Provision a v3 (post-#625/#631, pre-#626) tracker.db and return its path."""
+    path = tmp / "tracker.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(_V3_DDL)
+        conn.execute(
+            "INSERT INTO events (id, source, timestamp, task_ids, repo, pr_num, "
+            "branch, subject, payload, external_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            _EVENT_ROW,
+        )
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'CLOSED', ?, '[]')",
+            (_TS,),
+        )
+        conn.execute(
+            "INSERT INTO chatter_dedupe (task_id, dedupe_key, message_id, "
+            "created_at) VALUES (5, 'k', 77, ?)",
+            (_TS,),
+        )
+        # The v3 schema shipped with user_version 3; leaving it there is what
+        # makes the host script's migrate_schema run the #626 rebuild.
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+    finally:
+        conn.close()
+    assert _user_version(path) == 3
+    return path
 
-    Mirrors the earlier migration-parity classes for the newest schema step: a
-    v2 STRICT DB (pre ``question_message_id``, no ``chatter_dedupe``) migrated
-    by the host script must be indistinguishable from a fresh init.
+
+class TestWatermarkMigrationParity(unittest.TestCase):
+    """The host script's v2→current rebuild matches a fresh init (#625/#631/#626).
+
+    Mirrors the earlier migration-parity classes for the newest schema steps: a
+    v2 STRICT DB (pre ``question_message_id``, no ``chatter_dedupe``, no
+    ``run_summary``) migrated by the host script must be indistinguishable from
+    a fresh init.
     """
 
     def setUp(self):
         self.init = _load_init_script()
         self.tmp = Path(tempfile.mkdtemp())
+
+    def test_v2_ddl_derivation_actually_removed_the_additions(self):
+        # Guard against a silent formatting drift making _V2_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v2 parity coverage below.
+        self.assertNotEqual(_V2_DDL, SCHEMA_DDL)
+        self.assertNotIn("question_message_id", _V2_DDL)
+        self.assertNotIn("chatter_dedupe", _V2_DDL)
+        self.assertNotIn("run_summary", _V2_DDL)
 
     def test_migrated_v2_matches_fresh_init(self):
         v2 = _v2_db(self.tmp)
@@ -477,18 +531,27 @@ class TestWatermarkMigrationParity(unittest.TestCase):
         self.assertEqual(_schema_objects(v2), _schema_objects(fresh))
         self.assertEqual(_user_version(v2), SCHEMA_VERSION)
 
-    def test_migrated_rows_carry_null_watermark(self):
+    def test_migrated_rows_carry_null_additions(self):
         v2 = _v2_db(self.tmp)
         self.init.init_tracker_db(v2)
         conn = sqlite3.connect(str(v2))
         try:
             self.assertEqual(
                 conn.execute(
-                    "SELECT id, task_id, state, question_message_id FROM task_runs"
+                    "SELECT id, task_id, state, question_message_id, run_summary "
+                    "FROM task_runs"
                 ).fetchall(),
-                [(1, 5, "RUNNING", None)],
+                [(1, 5, "CLOSED", None, None)],
             )
-            # The new dedupe store exists, is empty, and enforces its index.
+            # The distinct-valued events row survives the rebuild column-for-column.
+            self.assertEqual(
+                conn.execute(
+                    "SELECT id, source, timestamp, task_ids, repo, pr_num, branch, "
+                    "subject, payload, external_id FROM events"
+                ).fetchall(),
+                [_EVENT_ROW],
+            )
+            # The new dedupe store exists and is empty.
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM chatter_dedupe").fetchone()[0],
                 0,
@@ -503,6 +566,82 @@ class TestWatermarkMigrationParity(unittest.TestCase):
         self.init.init_tracker_db(v2)
         self.assertEqual(_schema_objects(v2), before)
         self.assertEqual(_user_version(v2), SCHEMA_VERSION)
+
+
+class TestRunSummaryMigrationParity(unittest.TestCase):
+    """The host script's v3→v4 rebuild matches a fresh v4 init (#626).
+
+    A fresh DB early-returns from ``migrate_schema``, so only an old-shape DB
+    exercises the host copy of the additive-column + rebuild path. A v3 DB
+    (watermark and dedupe already present, no ``run_summary``) migrated by the
+    host script must be indistinguishable from a fresh v4 init.
+    """
+
+    def setUp(self):
+        self.init = _load_init_script()
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_v3_ddl_derivation_actually_removed_the_column(self):
+        # Guard against a silent formatting drift making _V3_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v3 parity coverage below.
+        self.assertNotEqual(_V3_DDL, SCHEMA_DDL)
+        self.assertNotIn("run_summary", _V3_DDL)
+        self.assertIn("question_message_id", _V3_DDL)
+        self.assertIn("chatter_dedupe", _V3_DDL)
+
+    def test_migrated_v3_matches_fresh_init(self):
+        v3 = _v3_db(self.tmp)
+        self.init.init_tracker_db(v3)
+
+        fresh = _fresh_sdk_db(self.tmp)
+        self.assertEqual(_schema_objects(v3), _schema_objects(fresh))
+        self.assertEqual(_user_version(v3), SCHEMA_VERSION)
+
+    def test_migration_preserves_rows_and_column_accepts_writes(self):
+        v3 = _v3_db(self.tmp)
+        self.init.init_tracker_db(v3)
+        conn = sqlite3.connect(str(v3))
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT task_id, state, run_summary FROM task_runs"
+                ).fetchall(),
+                [(5, "CLOSED", None)],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT id, source, timestamp, task_ids, repo, pr_num, branch, "
+                    "subject, payload, external_id FROM events"
+                ).fetchall(),
+                [_EVENT_ROW],
+            )
+            # The pre-existing dedupe mapping is not collateral damage of the
+            # task_runs rebuild.
+            self.assertEqual(
+                conn.execute(
+                    "SELECT task_id, dedupe_key, message_id FROM chatter_dedupe"
+                ).fetchall(),
+                [(5, "k", 77)],
+            )
+            conn.execute(
+                "UPDATE task_runs SET run_summary = 'derived narrative' "
+                "WHERE task_id = 5"
+            )
+            conn.commit()
+            self.assertEqual(
+                conn.execute("SELECT run_summary FROM task_runs").fetchone()[0],
+                "derived narrative",
+            )
+        finally:
+            conn.close()
+
+    def test_second_run_over_migrated_v3_is_a_noop(self):
+        v3 = _v3_db(self.tmp)
+        self.init.init_tracker_db(v3)
+        before = _schema_objects(v3)
+        self.init.init_tracker_db(v3)
+        self.assertEqual(_schema_objects(v3), before)
+        self.assertEqual(_user_version(v3), SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

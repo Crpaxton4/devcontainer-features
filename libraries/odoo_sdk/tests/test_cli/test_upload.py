@@ -41,6 +41,7 @@ def _seed_db() -> LocalStateClient:
                 timestamp=base + timedelta(seconds=offset),
                 task_ids=["101"],
                 repo="",
+                subject="task_note",
             )
         )
     return db
@@ -120,7 +121,10 @@ class TestCmdUpload(unittest.TestCase):
         self.assertEqual(vals["project_id"], 9)
         self.assertEqual(vals["employee_id"], 3)
         self.assertEqual(vals["unit_amount"], 1.0)  # 3600s span -> 1.0h
-        self.assertEqual(vals["name"], "[/] session 101|1")
+        # The entry's name is the machine-derived narrative of the session's
+        # events (#626) — the hardcoded "[/] session {key}" is now only the
+        # fallback for sessions where nothing derives.
+        self.assertEqual(vals["name"], "[/] actions: task_note x2")
         self.assertEqual(vals["date"], "2026-06-01")
         # The idempotency ledger maps the stable key to the created row.
         self.assertEqual(db.get_session_upload("101|1")["timesheet_id"], 500)

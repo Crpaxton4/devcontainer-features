@@ -99,7 +99,13 @@ class QuerySessionsCommand(Command):
         return summary
 
     def _events_for(self, event_ids: tuple[int, ...]) -> list[dict[str, Any]]:
-        """Return the derived session's events as summary dicts, in order."""
+        """Return the derived session's events as audit dicts, in order.
+
+        Carries the reconstructable substance (#626) — ``subject``, ``branch``,
+        ``pr_num``, and the enriched ``payload`` — alongside the identity
+        fields, so one ``query_sessions`` call yields a chronological audit of
+        what happened in the session, not just when.
+        """
         return [
             {
                 "event_id": record.id,
@@ -107,6 +113,10 @@ class QuerySessionsCommand(Command):
                 "timestamp": record.timestamp.isoformat(),
                 "task_ids": record.task_ids,
                 "repo": record.repo,
+                "branch": record.branch,
+                "pr_num": record.pr_num,
+                "subject": record.subject,
+                "payload": record.payload,
             }
             for record in self.state.get_events_by_ids(list(event_ids))
         ]

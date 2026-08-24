@@ -48,13 +48,25 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The trailing ``run_summary`` column added by #626 (schema v4), removable as a
+#: single substring so the historical shapes derive from the canonical DDL.
+_RUN_SUMMARY_COLUMN = ",\n    run_summary  TEXT"
+
+#: The v3 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
+#: after #625/#631 (``question_message_id`` watermark + ``chatter_dedupe``) but
+#: before v4 added the ``run_summary`` narrative column (#626). Derived from the
+#: current canonical DDL by dropping exactly the v4 addition so it can never
+#: drift from the real prior shape.
+_V3_DDL = SCHEMA_DDL.replace(_RUN_SUMMARY_COLUMN, "")
+assert "run_summary" not in _V3_DDL
+
 #: The v2 STRICT schema, i.e. the shape a real user's ``tracker.db`` has on disk
 #: after #504 (CLOSED state) but before v3 added the ``question_message_id``
 #: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
-#: the current canonical DDL by dropping exactly those v3 additions so it can
-#: never drift from the real prior shape.
-_V2_DDL = SCHEMA_DDL[
-    : SCHEMA_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
+#: the v3 shape by dropping exactly those v3 additions so it can never drift
+#: from the real prior shape.
+_V2_DDL = _V3_DDL[
+    : _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
 ].replace(",\n    question_message_id INTEGER", "")
 assert "question_message_id" not in _V2_DDL
 assert "chatter_dedupe" not in _V2_DDL
@@ -459,13 +471,13 @@ class TestClosedStateMigration(unittest.TestCase):
 
 
 class TestWatermarkMigration(unittest.TestCase):
-    """A v2 STRICT DB gains the #625 watermark column via a task_runs rebuild.
+    """A v2 STRICT DB gains the v3 and v4 task_runs columns in one rebuild.
 
-    The v3 bump is additive: ``task_runs`` is rebuilt to carry
-    ``question_message_id`` (existing rows land NULL — the shared-column copy in
-    ``_rebuild_table`` makes the positional-mismatch case work), and the new
-    ``chatter_dedupe`` table (#631) is created by the ``IF NOT EXISTS`` DDL
-    rather than a rebuild.
+    Both bumps are additive: ``task_runs`` is rebuilt to carry
+    ``question_message_id`` (#625) and ``run_summary`` (#626) — existing rows
+    land NULL, which the shared-column copy in ``_rebuild_table`` makes work
+    despite the positional mismatch — and the new ``chatter_dedupe`` table
+    (#631) is created by the ``IF NOT EXISTS`` DDL rather than a rebuild.
     """
 
     def _v2_conn(self) -> sqlite3.Connection:
@@ -476,14 +488,25 @@ class TestWatermarkMigration(unittest.TestCase):
             "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'RUNNING', ?, '[]')",
             (_TS,),
         )
+        # The v2 schema shipped with user_version 2; leaving it there is what
+        # makes migrate_schema run the task_runs rebuild.
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
         return conn
+
+    def test_v2_ddl_derivation_actually_removed_the_additions(self):
+        # Guard against a silent formatting drift making _V2_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v2 migration coverage below.
+        self.assertNotEqual(_V2_DDL, SCHEMA_DDL)
+        self.assertNotIn("question_message_id", _V2_DDL)
+        self.assertNotIn("chatter_dedupe", _V2_DDL)
+        self.assertNotIn("run_summary", _V2_DDL)
 
     def test_v2_lacks_watermark_column_and_dedupe_table(self):
         conn = self._v2_conn()
         columns = [r[1] for r in conn.execute("PRAGMA table_info(task_runs)")]
         self.assertNotIn("question_message_id", columns)
+        self.assertNotIn("run_summary", columns)
         self.assertIsNone(
             conn.execute(
                 "SELECT name FROM sqlite_master WHERE name = 'chatter_dedupe'"
@@ -496,20 +519,24 @@ class TestWatermarkMigration(unittest.TestCase):
         conn = self._v2_conn()
         self.assertEqual(_stale_tables(conn), ["task_runs"])
 
-    def test_migrate_adds_column_and_preserves_rows(self):
+    def test_migrate_adds_both_columns_and_preserves_rows(self):
+        # A v2 DB skips straight to v4: the rebuild is marker-driven, so the
+        # single pass adds the v3 watermark and the v4 summary together.
         conn = self._v2_conn()
         migrate_schema(conn)
         columns = [r[1] for r in conn.execute("PRAGMA table_info(task_runs)")]
         self.assertIn("question_message_id", columns)
-        # The pre-existing row survives with id intact and a NULL watermark.
+        self.assertIn("run_summary", columns)
+        # The pre-existing row survives with id intact and both additions NULL.
         self.assertEqual(
             conn.execute(
-                "SELECT id, task_id, state, question_message_id FROM task_runs"
+                "SELECT id, task_id, state, question_message_id, run_summary "
+                "FROM task_runs"
             ).fetchall(),
-            [(1, 5, "RUNNING", None)],
+            [(1, 5, "RUNNING", None, None)],
         )
 
-    def test_create_schema_adds_dedupe_table_and_stamps_v3(self):
+    def test_create_schema_adds_dedupe_table_and_stamps_current(self):
         conn = self._v2_conn()
         create_schema(conn)
         self.assertEqual(
@@ -539,6 +566,82 @@ class TestWatermarkMigration(unittest.TestCase):
             )
 
         self.assertEqual(objects(migrated), objects(fresh))
+        self.assertEqual(
+            migrated.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
+
+
+class TestRunSummaryMigration(unittest.TestCase):
+    """A v3 DB gains ``run_summary`` via a task_runs-only rebuild (#626).
+
+    This is the incremental step a DB provisioned after #625/#631 but before
+    #626 takes: ``chatter_dedupe`` and the watermark column already exist, so
+    only ``task_runs`` is stale.
+    """
+
+    def _v3_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(_V3_DDL)
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'STOPPED', ?, '[]')",
+            (_TS,),
+        )
+        # The v3 schema shipped with user_version 3; leaving it there is what
+        # makes migrate_schema run the run_summary rebuild.
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        return conn
+
+    def test_v3_ddl_derivation_actually_removed_the_column(self):
+        # Guard against a silent formatting drift making _V3_DDL == SCHEMA_DDL,
+        # which would quietly skip the whole v3 migration coverage below.
+        self.assertNotEqual(_V3_DDL, SCHEMA_DDL)
+        self.assertNotIn("run_summary", _V3_DDL)
+        # The v3 shape keeps everything #625/#631 added.
+        self.assertIn("question_message_id", _V3_DDL)
+        self.assertIn("chatter_dedupe", _V3_DDL)
+
+    def test_only_task_runs_is_stale_at_v3(self):
+        from odoo_sdk.state.db import _stale_tables
+
+        self.assertEqual(_stale_tables(self._v3_conn()), ["task_runs"])
+
+    def test_migrate_adds_column_and_preserves_rows(self):
+        conn = self._v3_conn()
+        migrate_schema(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(task_runs)")}
+        self.assertIn("run_summary", columns)
+        self.assertEqual(
+            conn.execute(
+                "SELECT id, task_id, state, run_summary FROM task_runs"
+            ).fetchall(),
+            [(1, 5, "STOPPED", None)],
+        )
+        # The migrated table accepts a run_summary write.
+        conn.execute("UPDATE task_runs SET run_summary = 'derived' WHERE id = 1")
+        self.assertEqual(
+            conn.execute("SELECT run_summary FROM task_runs").fetchone()[0],
+            "derived",
+        )
+
+    def test_migrated_v3_matches_fresh_schema(self):
+        migrated = self._v3_conn()
+        create_schema(migrated)
+        fresh = sqlite3.connect(":memory:")
+        create_schema(fresh)
+
+        def objects(conn):
+            return sorted(
+                conn.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master"
+                ).fetchall()
+            )
+
+        self.assertEqual(objects(migrated), objects(fresh))
+        self.assertEqual(
+            migrated.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
 
 
 if __name__ == "__main__":

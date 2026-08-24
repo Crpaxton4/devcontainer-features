@@ -29,7 +29,7 @@ consumes.
 | `branch` | `str` | resolved from the working tree (#509) | provenance |
 | `pr_num` | `int` | always `0` (never inferred) | provenance |
 | `subject` | `str` | the tool name for agent events | human-readable label |
-| `payload` | `dict?` | `{"tool": name}` for agent events | extra fields |
+| `payload` | `dict?` | `{"tool", "args", "outcome", ...identifier fields}` for agent events (#626) | reconstructable extra fields |
 | `external_id` | `str?` | always `None` for local writes | idempotency key |
 
 All ten fields are written by one owner: `LogEventCommand.execute`
@@ -62,8 +62,11 @@ flowchart LR
   The `--task-id` hint and `--attach-active-run` flag pass straight through to the
   command, preserving the hook shim's documented contract.
 - **MCP dispatch** (`odoo_sdk/mcp/server.py`, `_emit_tool_event`) records exactly
-  one `source="agent"` row per *successful* tool call, with `subject=name` and
-  `payload={"tool": name}`.
+  one `source="agent"` row per *successful* tool call, with `subject=name` and a
+  reconstructable payload (#626): the tool name, the call's argument *names*
+  (shape, not content), a one-line `outcome`, and the allowlisted
+  identifier/outcome fields lifted from the result (`_RESULT_PAYLOAD_KEYS`:
+  run/branch/PR/test identifiers and the machine-derived `run_summary`).
 
 ## Attribution & traceability
 
@@ -126,19 +129,17 @@ part in typing, attribution, or billing — they are pure human-facing metadata.
 The payload-minimalism stance is stated in `_emit_tool_event`'s docstring
 (`odoo_sdk/mcp/server.py`) and is correct as a default:
 
-> The persisted record carries only the tool name (as both subject and payload)
-> and the task scope derived from `task_id` — never any argument *values*.
-> Chatter note bodies, stakeholder questions, search queries, and other free-text
-> inputs are deliberately not written to the local events store, matching the
-> `claude-event-hook` shim's stance of recording tool identifiers without
+> Chatter note bodies, stakeholder questions, search queries, and other
+> free-text *inputs* are still never written to the local events store, matching
+> the `claude-event-hook` shim's stance of recording tool identifiers without
 > prompt / `tool_input` contents.
 
 Excluding argument *values* is a firm non-goal of any change here (see
-[Non-goals](#non-goals)). The gap this review names is narrower: the policy was
-defined as "record identifiers, not contents", but what agent events implement is
-"record the identifier, *twice*". Between free text and nothing there is a middle
-ground — argument *names*, the resolved scope, the attribution basis — that leaks
-shape, not content, and was never considered.
+[Non-goals](#non-goals)). The gap this review named — the policy was defined as
+"record identifiers, not contents", but agent events implemented "record the
+identifier, *twice*" — was closed by #626: the payload now carries the middle
+ground (argument *names*, a one-line outcome, and identifier fields lifted from
+the result) that leaks shape, not content.
 
 ## What the payload carries today
 
@@ -153,9 +154,32 @@ events:
   so the gap-sweep can exclude them from its raw-event population without
   excluding them from session derivation.
 - **CLI hook events** carry whatever `--payload` JSON object the shim supplies.
-- **Agent events** carry `{"tool": name}` — and `subject` is that same `name`.
-  The payload restates the subject and adds nothing. This is the case #510 asks
-  us to decide.
+- **Agent events** carry `{"tool", "args", "outcome", ...}` plus the allowlisted
+  identifier fields lifted from the tool result (#626) — argument *names* and
+  identifiers, never free-text argument values. The former `{"tool": name}`
+  subject-duplicate (the case #510 raised) was replaced by this reconstructable
+  shape.
+
+### Length policy (#626)
+
+The 300-character cap (`enforce_chatter_body_limit`, `odoo_sdk/commands/command.py`)
+applies ONLY to chatter bodies posted to Odoo (`task_note` / `task_question`).
+Event payloads, derived run summaries (`task_runs.run_summary`), and timesheet
+entry names are internal/local text and carry NO length limit — none of them may
+be routed through the chatter limit.
+
+### Derived run summaries (#626)
+
+`stop_task` computes a machine-derived narrative of the run — tool-activity
+tally, commits (short sha + subject), branch/PR provenance, recorded test
+result, and the run's checkpoint notes — via
+`odoo_sdk.state.summary.summarize_run_activity` and stores it on the run row
+(`task_runs.run_summary`, schema v3). The billing upload attaches that narrative
+(or, for FSM-less resync'd history, a fresh summary over the session window's
+events) as the timesheet entry's description, falling back to
+`[/] session {key}` when nothing derives. Capture is fully automatic — the
+former `stop_task` description elicitation was removed as a no-op human gate
+(#623).
 
 ## Recommended policy
 
@@ -192,9 +216,10 @@ already a free-form JSON object.
 
 Listed, not fixed here. Each is a candidate for its own issue.
 
-1. **Payload duplicates subject on agent events.** `_emit_tool_event` writes
-   `payload={"tool": name}` with `subject=name`. Resolve per
-   [Recommended policy](#recommended-policy) question 3. *(the core of #510.)*
+1. **Payload duplicates subject on agent events.** *(Resolved by #626.)*
+   `_emit_tool_event` now writes the reconstructable
+   `{"tool", "args", "outcome", ...identifier fields}` shape in place of the
+   former `{"tool": name}` subject-duplicate. *(was the core of #510.)*
 2. **Attribution basis is not recorded.** `resolve_task_ids` returns the scope
    but not whether it came from an explicit hint or the active-run fallback, so
    the #507 decision is invisible in the row. A payload field would make it

@@ -62,9 +62,19 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # Only the tool name is persisted as subject; no argument values.
         self.assertEqual(event.subject, "do_thing")
         self.assertEqual(event.task_ids, ["42"])
-        # Payload is the tool name alone -- the task_name ("Fix VAT") and every
-        # other argument value is deliberately withheld from local persistence.
-        self.assertEqual(event.payload, {"tool": "do_thing"})
+        # The payload is reconstructable (#626): the tool name, the argument
+        # NAMES (shape, not content -- the task_name value "Fix VAT" is
+        # withheld), a one-line outcome, and the allowlisted identifier fields
+        # lifted from the result.
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "do_thing",
+                "args": ["task_id", "task_name"],
+                "outcome": "ok",
+                "task_id": 42,
+            },
+        )
 
     def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
         db = _tmp_db()
@@ -80,9 +90,13 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         events = db.get_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].task_ids, [])
-        # Subject is the bare tool name; the "message" arg is not persisted.
+        # Subject is the bare tool name; the "message" VALUE is not persisted
+        # (only its name), and a non-dict result lifts no fields.
         self.assertEqual(events[0].subject, "ping")
-        self.assertEqual(events[0].payload, {"tool": "ping"})
+        self.assertEqual(
+            events[0].payload,
+            {"tool": "ping", "args": ["message"], "outcome": "ok"},
+        )
 
     def test_tool_without_task_id_attributes_to_the_active_run(self):
         # Regression for #507: attribution used to key on whether the tool's
@@ -159,7 +173,16 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event.subject, "task_question")
-        self.assertEqual(event.payload, {"tool": "task_question"})
+        # The payload carries argument NAMES only -- the question body never
+        # reaches local persistence (#365), even in the enriched shape (#626).
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "task_question",
+                "args": ["question", "task_id"],
+                "outcome": "ok",
+            },
+        )
         self.assertEqual(event.task_ids, ["1234"])
         self.assertNotIn(secret, event.subject)
         self.assertNotIn(secret, repr(event.payload))
@@ -197,9 +220,14 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         events = db.get_events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].task_ids, ["7"])
-        # The note body ("working") is not persisted -- subject is the tool name.
+        # The note body ("working") is not persisted -- subject is the tool name
+        # and the payload carries only names/outcome ("ok" is unlisted, so no
+        # field is lifted).
         self.assertEqual(events[0].subject, "do_async")
-        self.assertEqual(events[0].payload, {"tool": "do_async"})
+        self.assertEqual(
+            events[0].payload,
+            {"tool": "do_async", "args": ["note", "task_id"], "outcome": "ok"},
+        )
 
     def test_emit_failure_does_not_break_tool(self):
         class BoomState:
@@ -245,6 +273,91 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         registry._state_client = db
         tools["do_thing"].fn(task_id=9)
         self.assertEqual(len(db.get_events()), 1)
+
+
+class TestPayloadEnrichment(unittest.TestCase):
+    """The #626 payload shape: reconstructable identifiers, never free text."""
+
+    def test_identifier_fields_lifted_from_result(self):
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def stop_task(task_id: int) -> dict:
+            """Fake tool."""
+            return {
+                "run_id": 12,
+                "elapsed_hours": 0.5,
+                "branch_name": "4242#fix-vat",
+                "pr_url": "https://github.com/o/r/pull/9",
+                "test_result": "passed",
+                "run_summary": "actions: task_note x2; branch 4242#fix-vat",
+                "chatter": "free text that must NOT be lifted",
+            }
+
+        tools = _build_tools(registry, {"stop_task": stop_task})
+        tools["stop_task"].fn(task_id=4242)
+
+        payload = db.get_events()[0].payload
+        self.assertEqual(payload["tool"], "stop_task")
+        self.assertEqual(payload["args"], ["task_id"])
+        self.assertEqual(payload["outcome"], "ok")
+        self.assertEqual(payload["run_id"], 12)
+        self.assertEqual(payload["elapsed_hours"], 0.5)
+        self.assertEqual(payload["branch_name"], "4242#fix-vat")
+        self.assertEqual(payload["pr_url"], "https://github.com/o/r/pull/9")
+        self.assertEqual(payload["test_result"], "passed")
+        # The machine-derived run summary is internal text with NO length cap
+        # and rides along as the event's one-line outcome narrative.
+        self.assertEqual(
+            payload["run_summary"], "actions: task_note x2; branch 4242#fix-vat"
+        )
+        # Unlisted result keys (free text) never reach the payload.
+        self.assertNotIn("chatter", payload)
+
+    def test_none_and_non_scalar_result_fields_are_omitted(self):
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {"run_id": None, "pr_url": ["not", "a", "scalar"], "state": "RUNNING"}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        tools["do_thing"].fn(task_id=1)
+
+        payload = db.get_events()[0].payload
+        self.assertNotIn("run_id", payload)
+        self.assertNotIn("pr_url", payload)
+        self.assertEqual(payload["state"], "RUNNING")
+
+    def test_structured_error_result_records_error_outcome(self):
+        # The wrapper only fires on a successful dispatch, but a tool handing
+        # back a structured {"error": ...} payload is an outcome worth auditing.
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {"error": {"type": "ValueError", "message": "bad input"}}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        tools["do_thing"].fn(task_id=1)
+
+        self.assertEqual(db.get_events()[0].payload["outcome"], "error: bad input")
+
+    def test_outcome_line_variants(self):
+        self.assertEqual(server_mod._outcome_line({"ok": True}), "ok")
+        self.assertEqual(server_mod._outcome_line("plain string"), "ok")
+        self.assertEqual(server_mod._outcome_line(None), "ok")
+        self.assertEqual(
+            server_mod._outcome_line({"error": "boom"}), "error: boom"
+        )
+        self.assertEqual(server_mod._outcome_line({"error": {}}), "error")
+
+    def test_result_payload_fields_ignores_non_dict(self):
+        self.assertEqual(server_mod._result_payload_fields(None), {})
+        self.assertEqual(server_mod._result_payload_fields([1, 2]), {})
+        self.assertEqual(server_mod._result_payload_fields("x"), {})
 
 
 class TestEventHelpers(unittest.TestCase):

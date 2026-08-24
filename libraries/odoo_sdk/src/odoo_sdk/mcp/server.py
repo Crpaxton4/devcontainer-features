@@ -99,7 +99,7 @@ def _wrap_tool(
     on_result: Callable[[Any], Any] = lambda result: result,
     catch: Tuple[type[BaseException], ...] = (),
     on_error: Optional[Callable[[BaseException], Any]] = None,
-    on_success: Optional[Callable[[tuple, dict], None]] = None,
+    on_success: Optional[Callable[[Any, tuple, dict], None]] = None,
     setup: Optional[Callable[[], Any]] = None,
     teardown: Optional[Callable[[Any], None]] = None,
 ) -> Callable[..., Any]:
@@ -109,9 +109,11 @@ def _wrap_tool(
     coroutine-vs-plain branch and the ``functools.wraps`` scaffold once, so each
     decorator supplies only the hooks it needs — ``on_result`` transforms a
     successful result, ``catch``/``on_error`` map a caught exception to a return
-    value, ``on_success`` fires a side effect after a successful call, and
-    ``setup``/``teardown`` bracket every dispatch (teardown runs in ``finally``,
-    so it still fires when the tool raises). ``functools.wraps`` sets
+    value, ``on_success`` fires a side effect after a successful call (receiving
+    the transformed result and the call's args/kwargs, so the event emitter can
+    derive an outcome payload from it — #626), and ``setup``/``teardown``
+    bracket every dispatch (teardown runs in ``finally``, so it still fires when
+    the tool raises). ``functools.wraps`` sets
     ``__wrapped__``, which ``inspect.signature`` follows, so FastMCP builds the
     same wire schema (including any ``ctx`` parameter) without an explicit
     ``__signature__`` assignment.
@@ -125,7 +127,7 @@ def _wrap_tool(
     def _finish(result: Any, args: tuple, kwargs: dict) -> Any:
         result = on_result(result)
         if on_success is not None:
-            on_success(args, kwargs)
+            on_success(result, args, kwargs)
         return result
 
     @contextlib.contextmanager
@@ -233,7 +235,64 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
     return normalize_task_ids([arguments.get("task_id")])
 
 
-def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
+#: Identifier-shaped result fields lifted into the agent-event payload (#626).
+#: Every key names an identifier, provenance marker, or machine-derived outcome
+#: (``run_summary`` is the automatic narrative ``stop_task`` computes) — never a
+#: caller-supplied free-text input. Payloads are internal/local text with NO
+#: length limit; the 300-character cap (``enforce_chatter_body_limit``) applies
+#: only to chatter bodies posted to Odoo.
+_RESULT_PAYLOAD_KEYS = (
+    "run_id",
+    "task_id",
+    "state",
+    "elapsed",
+    "elapsed_hours",
+    "branch_name",
+    "pr_url",
+    "pr_num",
+    "commit_sha",
+    "test_result",
+    "timesheet_id",
+    "message_id",
+    "run_summary",
+)
+
+
+def _result_payload_fields(result: Any) -> dict[str, Any]:
+    """Lift the allowlisted identifier/outcome fields from a tool result (#626).
+
+    Only scalar values are taken so the payload stays a flat, queryable record;
+    absent and ``None`` fields are simply omitted. Anything outside the
+    allowlist — chatter bodies, task descriptions, search hits — never reaches
+    the local events store.
+    """
+    if not isinstance(result, dict):
+        return {}
+    return {
+        key: result[key]
+        for key in _RESULT_PAYLOAD_KEYS
+        if isinstance(result.get(key), (str, int, float, bool))
+    }
+
+
+def _outcome_line(result: Any) -> str:
+    """One-line outcome of a dispatch: ``"ok"`` or the error the tool reported.
+
+    The event wrapper only fires on a *successful* dispatch (an exception
+    propagates past the emit), but a tool may still hand back a structured
+    ``{"error": ...}`` payload — e.g. a declined elicitation — which is an
+    outcome worth auditing distinctly from a plain success.
+    """
+    if isinstance(result, dict) and "error" in result:
+        error = result["error"]
+        message = error.get("message", "") if isinstance(error, dict) else str(error)
+        return f"error: {message}" if message else "error"
+    return "ok"
+
+
+def _emit_tool_event(
+    state: Any, name: str, arguments: dict[str, Any], result: Any = None
+) -> None:
     """Append one ``source="agent"`` event describing a successful dispatch.
 
     The write is routed through :class:`~odoo_sdk.commands.log_event.
@@ -245,13 +304,17 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     emission does not depend on ``log_event`` being registered on the server's
     registry.
 
-    The persisted record carries only the tool name (as both subject and
-    payload) and the task scope derived from ``task_id`` — never any argument
-    *values*. Chatter note bodies, stakeholder questions, search queries, and
-    other free-text inputs are deliberately not written to the local events
-    store, matching the ``claude-event-hook`` shim's stance of recording tool
-    identifiers without prompt/``tool_input`` contents. What is *sent to Odoo*
-    is unaffected; this concerns only local persistence.
+    The persisted payload is reconstructable (#626) without leaking free text:
+    the tool name, the call's argument *names* (shape, not content — the safe
+    middle ground the event-record policy review recommended for #510), a
+    one-line ``outcome``, and the allowlisted identifier fields lifted from the
+    result (:data:`_RESULT_PAYLOAD_KEYS` — run/branch/PR/test identifiers and
+    the machine-derived ``run_summary``). Chatter note bodies, stakeholder
+    questions, search queries, and other free-text *inputs* are still never
+    written to the local events store, matching the ``claude-event-hook`` shim's
+    stance of recording tool identifiers without prompt/``tool_input``
+    contents. What is *sent to Odoo* is unaffected; this concerns only local
+    persistence.
 
     Neither the task scope nor the repo/branch provenance is decided here. The
     bound ``task_id`` (when the tool has one) is handed over as an attribution
@@ -267,17 +330,27 @@ def _emit_tool_event(state: Any, name: str, arguments: dict[str, Any]) -> None:
     :type state: Any
     :param name: Public tool name.
     :type name: str
-    :param arguments: Bound tool arguments (``ctx`` already excluded); used only
-        to derive the task scope, never persisted as values.
+    :param arguments: Bound tool arguments (``ctx`` already excluded); used to
+        derive the task scope and the argument-*name* list, never persisted as
+        values.
     :type arguments: dict[str, Any]
+    :param result: The tool's (post-``on_result``) return value; only the
+        allowlisted identifier fields and a one-line outcome are persisted.
+    :type result: Any
     :return: None.
     :rtype: None
     """
 
+    payload: dict[str, Any] = {
+        "tool": name,
+        "args": sorted(arguments),
+        "outcome": _outcome_line(result),
+        **_result_payload_fields(result),
+    }
     LogEventCommand(state=state).execute(
         source="agent",
         subject=name,
-        payload={"tool": name},
+        payload=payload,
         task_ids=_event_task_ids(arguments),
     )
 
@@ -307,10 +380,13 @@ def _event_emitting(
     """
     signature = inspect.signature(tool_fn)
 
-    def emit(args: tuple, kwargs: dict) -> None:
+    def emit(result: Any, args: tuple, kwargs: dict) -> None:
         try:
             _emit_tool_event(
-                registry.state_client, name, _bound_arguments(signature, args, kwargs)
+                registry.state_client,
+                name,
+                _bound_arguments(signature, args, kwargs),
+                result,
             )
         except Exception:
             # Telemetry is best-effort: a failing state store (or any hiccup

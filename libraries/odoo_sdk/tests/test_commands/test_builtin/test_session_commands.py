@@ -61,6 +61,33 @@ class TestQuerySessionsCommand(unittest.TestCase):
         self.assertEqual(session["session_key"], "101|1")  # task|min_event_id
         self.assertEqual(session["strategy_name"], "development")
 
+    def test_embedded_events_carry_audit_substance(self):
+        # #626: one query yields a chronological audit with enough substance to
+        # reconstruct the work -- subject, branch, PR, and the enriched payload
+        # ride along with the identity fields.
+        state = _tmp_state()
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
+                task_ids=["101"],
+                repo="o/r",
+                branch="101#fix-vat",
+                pr_num=7,
+                subject="stop_task",
+                payload={"tool": "stop_task", "outcome": "ok", "run_id": 3},
+            )
+        )
+        session = self._query(state).execute()[0]
+        event = session["events"][0]
+        self.assertEqual(event["subject"], "stop_task")
+        self.assertEqual(event["branch"], "101#fix-vat")
+        self.assertEqual(event["pr_num"], 7)
+        self.assertEqual(
+            event["payload"], {"tool": "stop_task", "outcome": "ok", "run_id": 3}
+        )
+
     def test_include_events_toggle(self):
         state = _tmp_state()
         _commit(state, 0)
