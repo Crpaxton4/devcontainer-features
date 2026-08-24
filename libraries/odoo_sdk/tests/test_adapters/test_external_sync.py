@@ -91,7 +91,7 @@ class TestExtractTaskIds(unittest.TestCase):
     def test_extraction_table(self) -> None:
         cases = [
             # New dominant conventions.
-            ("", "24648#send-print", ["24648"]),  # branch prefix NNNNN#slug
+            ("", "24648-send-print", ["24648"]),  # branch prefix NNNNN-slug (#622)
             ("feat (task 24648)", "", ["24648"]),  # PR-title (task NNNNN)
             ("feat task-24648", "", ["24648"]),  # hyphen form
             ("done (24648)", "", ["24648"]),  # trailing (NNNNN)
@@ -102,6 +102,7 @@ class TestExtractTaskIds(unittest.TestCase):
             ("ODOO-24648 done", "", ["24648"]),  # case-insensitive
             ("#24648 and #24648 again", "", ["24648"]),  # de-duped
             # False positives that must now mint NOTHING.
+            ("", "24648#send-print", []),  # retired legacy NNNNN#slug (#622 cutover)
             ("#31 - Hardcode Checks", "", []),  # short client-side number
             ("cross ref (#189)", "", []),  # PR cross-reference
             ("bumped to v2", "main", []),  # nothing extractable
@@ -304,10 +305,10 @@ class TestSyncGithub(unittest.TestCase):
     _PRS = (
         '[{"number": 7, "title": "PR (task 24648)", "state": "MERGED",'
         ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-        ' "headRefName": "24648#feat"},'
+        ' "headRefName": "24648-feat"},'
         ' {"number": 8, "title": "Open PR (task 55555)", "state": "OPEN",'
         ' "mergedAt": null, "createdAt": "2026-07-03T09:00:00Z",'
-        ' "headRefName": "55555#wip"}]'
+        ' "headRefName": "55555-wip"}]'
     )
     _OWN_REVIEWS = (
         '[{"id": 55, "user": {"login": "octocat"}, "submitted_at": "2026-07-02T10:00:00Z"},'
@@ -376,10 +377,10 @@ class TestSyncGithub(unittest.TestCase):
         prs_for = {
             "octo-a": '[{"number": 1, "title": "A (task 24648)", "state": "MERGED",'
             ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "24648#a"}]',
+            ' "headRefName": "24648-a"}]',
             "octo-b": '[{"number": 2, "title": "B (task 55555)", "state": "MERGED",'
             ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "55555#b"}]',
+            ' "headRefName": "55555-b"}]',
         }
         routes = [
             (_has("api", "user"), "octo-a"),
@@ -443,7 +444,7 @@ class TestSyncGithub(unittest.TestCase):
         prs = (
             '[{"number": 7, "title": "PR (task 24648)", "state": "MERGED",'
             ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "24648#feat"}]'
+            ' "headRefName": "24648-feat"}]'
         )
         routes = [
             (_has("api", "user"), "octocat"),

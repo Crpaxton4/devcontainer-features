@@ -2,7 +2,7 @@
 # create-pr — automated, config-driven PR creation.
 #
 # Resolves the current repo from `git remote`, derives the PR title from the
-# branch name (`<num>#<slug>` -> `<num>: <slug words>`), applies global +
+# branch name (`<num>-<slug>` -> `<num>: <slug words>`), applies global +
 # per-project YAML config (base branch, reviewers, PR template mapping), and
 # runs `gh pr create --fill --assignee @me`. If a PR already exists for the
 # branch, it updates the title/reviewers but leaves an existing body intact.
@@ -66,7 +66,7 @@ REPO_PATH="${REPO_PATH%.git}"        # drop trailing .git
 [ -n "$REPO_PATH" ] || die "could not derive OWNER/REPO from remote: $REMOTE_URL"
 
 # --- Derive PR title from the branch name ----------------------------------
-# `<num>#<slug>` -> `<num>: <slug words>`; otherwise leave title empty so
+# `<num>-<slug>` -> `<num>: <slug words>`; otherwise leave title empty so
 # `gh pr create --fill` uses the commit subject.
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
@@ -75,9 +75,9 @@ fi
 
 PR_TITLE=""
 case "$BRANCH" in
-    *#*)
-        _num="${BRANCH%%#*}"
-        _slug="${BRANCH#*#}"
+    *-*)
+        _num="${BRANCH%%-*}"
+        _slug="${BRANCH#*-}"
         # Only treat a leading all-digits segment as a task number.
         case "$_num" in
             ''|*[!0-9]*) : ;;  # not purely numeric — leave title empty

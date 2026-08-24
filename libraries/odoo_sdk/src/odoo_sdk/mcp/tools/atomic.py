@@ -224,7 +224,13 @@ def make_search_tasks_tool(registry: Registry):
 @atomic_tool("resume_task")
 def make_resume_task_tool(registry: Registry):
     def resume_task(task_id: int) -> Dict[str, Any]:
-        """Resume an AWAITING_ANSWERS session, transitioning it back to RUNNING."""
+        """Ensure the task's session is RUNNING (thin alias of start_task's resume path).
+
+        State machine: AWAITING_ANSWERS -> RUNNING; STOPPED (non-aborted) ->
+        RUNNING (reopened in place); already RUNNING -> no-op success. Errors
+        only when no resumable session exists (aborted/CLOSED/none) — use
+        start_task to create one.
+        """
         return registry["resume_task"].execute(task_id)
 
     return resume_task

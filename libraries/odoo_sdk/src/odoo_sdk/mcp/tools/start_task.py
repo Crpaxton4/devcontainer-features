@@ -1,12 +1,19 @@
 """MCP ``start_task`` tool: interaction surface composing search + start commands.
 
 This module owns all MCP-specific concerns for starting a task — argument
-elicitation (project/task disambiguation, confirmation), git branch setup, and
-optional AI branch-name generation via ``ctx.sample`` (gated on the client
-advertising the ``sampling`` capability, with a deterministic slug fallback) —
-and then delegates the actual Odoo/state mutation to the atomic
-:class:`StartTaskCommand`. Commands never see
-the FastMCP ``ctx``; primitives resolved here are passed to the command.
+elicitation (project/task disambiguation on the name-search path only), git
+branch setup, and optional AI branch-name generation via ``ctx.sample`` (gated
+on the client advertising the ``sampling`` capability, with a deterministic
+slug fallback) — and then delegates the actual Odoo/state mutation to the
+atomic :class:`StartTaskCommand`. Commands never see the FastMCP ``ctx``;
+primitives resolved here are passed to the command.
+
+Idempotent lifecycle entry point (#621): the current session state is checked
+BEFORE any side effect, and an already-RUNNING session short-circuits to a
+no-op result (``already_running: true``) with no branch mutation and no
+prompts. There is no confirmation gate, and the ``task_id``-only path performs
+zero name searches and zero elicitations (#614), so automation can call this
+headless in any state.
 """
 
 import re
@@ -18,7 +25,7 @@ from mcp.types import ClientCapabilities, SamplingCapability
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.state import TaskAlreadyRunningError
+from odoo_sdk.state import TaskState
 
 from .composition import composition_tool
 
@@ -40,14 +47,10 @@ class _SelectIndex(BaseModel):
     selection: int
 
 
-class _ConfirmGate(BaseModel):
-    """Fieldless schema for a pure confirmation.
-
-    An empty object schema (no properties, nothing required) makes FastMCP
-    render a single Accept/Decline with no form field — the accept/decline
-    action itself is the answer. Unlike ``response_type=None`` this is not
-    deprecated in FastMCP 3.4.x, so it emits no ``FastMCPDeprecationWarning``.
-    """
+#: Task-branch naming convention (#622): ``<task-id>-<slug>``. Kept in lockstep
+#: with the branch parsers in ``commands.log_event`` and
+#: ``adapters.external_sync``.
+_TASK_BRANCH_RE = re.compile(r"\d+-")
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
@@ -62,10 +65,15 @@ def _current_branch() -> Optional[str]:
 
 
 def _list_local_branches() -> list[str]:
+    """List local branches eligible as a fork base (task branches excluded)."""
     result = _git("branch", "--format=%(refname:short)")
     if result.returncode != 0:
         return []
-    branches = [b.strip() for b in result.stdout.splitlines() if b.strip() and "#" not in b]
+    branches = [
+        b.strip()
+        for b in result.stdout.splitlines()
+        if b.strip() and not _TASK_BRANCH_RE.match(b.strip())
+    ]
     return sorted(branches, key=lambda b: (len(b), b))
 
 
@@ -283,32 +291,54 @@ async def _generate_branch_description(ctx: Any, task_name: str, project_name: s
     return _slugify(response.text.strip()) or fallback
 
 
+def _default_base_branch() -> Optional[str]:
+    """Resolve a base branch without prompting (headless automation path, #621).
+
+    Prefers the remote's default branch (``origin/HEAD``), falling back to the
+    branch currently checked out. Returns ``None`` only when neither can be
+    determined (e.g. not a git repo, detached HEAD with no origin).
+    """
+    result = _git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    name = result.stdout.strip()
+    if result.returncode == 0 and name:
+        # ``origin/main`` -> ``main``; _resolve_base_ref re-derives the remote ref.
+        return name.split("/", 1)[-1]
+    return _current_branch()
+
+
 async def _setup_task_branch(
-    ctx: Any, task: dict, project: dict
+    ctx: Any, task: dict, project: dict, *, interactive: bool
 ) -> tuple[Optional[str], bool, Optional[str]]:
     task_id = task["id"]
     current = _current_branch()
-    if current and current.startswith(f"{task_id}#"):
+    if current and current.startswith(f"{task_id}-"):
         return None, False, None
 
-    branches = _list_local_branches()
-    if not branches:
-        return None, False, "No local git branches found. Ensure the working directory is a git repo."
+    if interactive:
+        branches = _list_local_branches()
+        if not branches:
+            return None, False, "No local git branches found. Ensure the working directory is a git repo."
 
-    numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
-    result = await ctx.elicit(
-        f"Select base branch to fork from:\n{numbered}\nSelect number:",
-        _SelectIndex,
-    )
-    if result.action != "accept":
-        return None, False, "Branch selection cancelled."
-    idx = result.data.selection - 1
-    if not (0 <= idx < len(branches)):
-        return None, False, "Invalid branch selection."
-    base_branch = branches[idx]
+        numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
+        result = await ctx.elicit(
+            f"Select base branch to fork from:\n{numbered}\nSelect number:",
+            _SelectIndex,
+        )
+        if result.action != "accept":
+            return None, False, "Branch selection cancelled."
+        idx = result.data.selection - 1
+        if not (0 <= idx < len(branches)):
+            return None, False, "Invalid branch selection."
+        base_branch = branches[idx]
+    else:
+        # The task_id-only path is headless (#614/#621): no base-branch
+        # elicitation — fork from the remote default (or current) branch.
+        base_branch = _default_base_branch()
+        if base_branch is None:
+            return None, False, "No base branch found. Ensure the working directory is a git repo."
 
     description = await _generate_branch_description(ctx, task["name"], project["name"])
-    branch_name = f"{task_id}#{description}"
+    branch_name = f"{task_id}-{description}"
 
     try:
         created = _create_task_branch(branch_name, base_branch)
@@ -411,32 +441,34 @@ async def _resolve_task(
 async def _resolve_task_and_project(
     ctx: Any,
     registry: Registry,
-    task_name_query: str,
+    task_name_query: Optional[str],
     project_name_query: Optional[str],
     task_id: Optional[int],
-) -> tuple[Optional[dict], Optional[dict], Optional[str], Optional[dict]]:
-    """Resolve (task, project, warning, error) from ids or name search."""
-    client = registry["search_projects"]._client
+) -> tuple[Optional[dict], Optional[dict], Optional[dict]]:
+    """Resolve (task, project, error) from a task id or a name search.
+
+    A supplied ``task_id`` is authoritative (#614): it is looked up directly and
+    NO name search runs — an unknown id is an error, never a fuzzy fallback that
+    could land on the wrong task. Only the name-query path searches and may
+    elicit disambiguation.
+    """
     if task_id is not None:
+        client = registry["search_projects"]._client
         found = _lookup_task_by_id(client, task_id)
-        if found is not None:
-            task, project = found
-            return task, project, None, None
-        if not task_name_query:
-            return None, None, None, {"error": f"Task {task_id} not found."}
-        warning = f"Task ID {task_id} not found; falling back to name search."
-    else:
-        warning = None
+        if found is None:
+            return None, None, {"error": f"Task {task_id} not found."}
+        task, project = found
+        return task, project, None
 
     project, err = await _resolve_project(ctx, registry, project_name_query or "")
     if err:
-        return None, None, None, {"error": err}
+        return None, None, {"error": err}
     task, err = await _resolve_task(
-        ctx, registry, task_name_query, project["id"], project["name"]
+        ctx, registry, task_name_query or "", project["id"], project["name"]
     )
     if err:
-        return None, None, None, {"error": err}
-    return task, project, warning, None
+        return None, None, {"error": err}
+    return task, project, None
 
 
 @composition_tool("start_task")
@@ -449,32 +481,54 @@ def make_start_task_tool(registry: Registry):
     """
 
     async def start_task(
-        task_name_query: str,
         ctx: Context,
+        task_name_query: Optional[str] = None,
         project_name_query: Optional[str] = None,
         task_id: Optional[int] = None,
     ) -> dict[str, Any]:
-        """Begin tracking time on an Odoo project.task.
+        """Idempotently ensure a RUNNING tracking session on an Odoo project.task.
 
-        When task_id is supplied, looks up the task directly and skips name-search
-        disambiguation. Without task_id, searches by task_name_query and
-        project_name_query with disambiguation prompts. Always asks for confirmation
-        before starting. Records a local tracking session and posts a chatter note;
-        writes no Odoo timesheet (hours are derived by the sessionization upload).
+        THE single lifecycle entry point (start / ensure / resume) — safe to
+        call from automation in any session state. Dispatches on the task's
+        current session state BEFORE any side effect: already RUNNING -> no-op
+        success returning the existing run with already_running=true (no branch
+        mutation, no prompts); AWAITING_ANSWERS -> transitions back to RUNNING;
+        STOPPED (non-aborted) -> resumes the stopped run in place; aborted /
+        CLOSED / no session -> creates a new run. resume_task is a thin alias
+        for the resume transitions; stop_task moves an active session to
+        STOPPED.
+
+        task_id alone is sufficient and authoritative: it is looked up directly
+        with zero name searches and zero elicitation prompts (headless-safe),
+        and a git task branch (<task-id>-<slug>) is set up from the remote
+        default branch when one is needed. Without task_id, searches by
+        task_name_query (and optional project_name_query) with disambiguation
+        prompts. Writes no Odoo timesheet and posts no chatter note (hours are
+        derived by the sessionization upload path).
         """
-        task, project, warning, error = await _resolve_task_and_project(
+        if task_id is None and not task_name_query:
+            return {"error": "Provide task_id or task_name_query."}
+
+        task, project, error = await _resolve_task_and_project(
             ctx, registry, task_name_query, project_name_query, task_id
         )
         if error is not None:
             return error
 
-        confirm = await ctx.elicit(
-            f"Start tracking time on task:\n  Task: {task['name']}\n"
-            f"  Project: {project['name']}\n\nConfirm?",
-            _ConfirmGate,
-        )
-        if confirm.action != "accept":
-            return {"error": "Task start cancelled."}
+        # Pre-flight state check (#621) BEFORE any side effect: an already-
+        # RUNNING session short-circuits to the command's no-op result with no
+        # branch setup and no elicitation. Every other state (AWAITING_ANSWERS,
+        # resumable STOPPED, aborted/CLOSED/none) proceeds to branch setup and
+        # the command's idempotent dispatch.
+        db = registry["start_task"].state
+        active = db.get_active_run(task["id"])
+        if active is not None and getattr(active, "state", None) is TaskState.RUNNING:
+            return registry["start_task"].execute(
+                task_id=task["id"],
+                task_name=task["name"],
+                project_id=project["id"],
+                project_name=project["name"],
+            )
 
         original_branch = _current_branch()
         branch_name: Optional[str] = None
@@ -485,7 +539,7 @@ def make_start_task_tool(registry: Registry):
             # outside meant a failure between ``checkout -b`` and the auto-stash
             # pop left the user on a dangling task branch with no cleanup.
             branch_name, branch_created, branch_err = await _setup_task_branch(
-                ctx, task, project
+                ctx, task, project, interactive=task_id is None
             )
             if branch_err:
                 return {"error": branch_err}
@@ -496,16 +550,7 @@ def make_start_task_tool(registry: Registry):
                 project_id=project["id"],
                 project_name=project["name"],
                 branch_name=branch_name,
-                warning=warning,
             )
-        except TaskAlreadyRunningError:
-            # Attaching to an already-RUNNING session is not a branch failure
-            # (#478): the caller goes on to develop the task, so the branch it
-            # just created must stay created and checked out. Rolling it back
-            # here is what made branch setup look silently skipped whenever a
-            # session was already running. The typed error still propagates so
-            # the caller learns the session was pre-existing.
-            raise
         except Exception:
             # Raise-based error contract (#223): the start command raises on
             # failure (e.g. an Odoo fault -> ``OdooError``), as does git when a

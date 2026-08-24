@@ -268,7 +268,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
 
     ``--branch`` is passed through when the hook shim states it: the shim reads it
     from the session's authoritative cwd so the command can recover the task id
-    from the ``<task-id>#<slug>`` convention and stop hook events landing in
+    from the ``<task-id>-<slug>`` convention and stop hook events landing in
     triage (#574/#575). Omitting it leaves the command to resolve the branch from
     the cwd for the provenance column only, with no attribution recovery.
     """
@@ -708,8 +708,8 @@ def _build_parser() -> argparse.ArgumentParser:
     log_p.add_argument(
         "--branch",
         default=None,
-        help="Session branch (e.g. '<task-id>#<slug>'). Recorded as the event's "
-        "provenance and, via the '<task-id>#' convention, used to recover the "
+        help="Session branch (e.g. '<task-id>-<slug>'). Recorded as the event's "
+        "provenance and, via the '<task-id>-' convention, used to recover the "
         "task attribution when no --task-id and no active run name it (#574). "
         "Default: resolve from the cwd checkout for provenance only.",
     )

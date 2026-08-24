@@ -26,7 +26,7 @@ from unittest.mock import patch
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.stop_task import StopTaskCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
-from odoo_sdk.state import LocalStateClient, TaskAlreadyRunningError
+from odoo_sdk.state import LocalStateClient
 from tests.support import make_state_db
 
 _START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
@@ -118,13 +118,14 @@ class TestTimesheetUnificationE2E(unittest.TestCase):
         client = _RecordingClient()
         db = _tmp_db()
 
-        # start_task twice: the second call short-circuits on the active session.
+        # start_task twice: the second call no-ops on the active session (#621).
         # Neither call writes an anchor — the FSM makes no analytic.line call.
         first = self._start(client, db, **self._kwargs())
         self.assertIn("run_id", first)
         self.assertIsNone(first["timesheet_id"])  # no anchor is created (#325)
-        with self.assertRaises(TaskAlreadyRunningError):
-            self._start(client, db, **self._kwargs())
+        second = self._start(client, db, **self._kwargs())
+        self.assertTrue(second["already_running"])
+        self.assertEqual(second["run_id"], first["run_id"])
 
         with patch(_NOTE_GUARD):
             TaskNoteCommand(client, state=db).execute(24648, "made progress")
