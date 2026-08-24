@@ -11,8 +11,9 @@
 
 # Extensionless executables - covered by the catch-all above, but pinned
 # explicitly so the intent survives future edits to it.
-devcontainer-features/src/personal-features/create-pr text eol=lf
-.husky/commit-msg                                     text eol=lf
+devcontainer-features/src/personal-features/create-pr  text eol=lf
+devcontainer-features/src/second-brain/second-brain-verify text eol=lf
+.husky/commit-msg                                      text eol=lf
 
 # Never line-ending-convert.
 *.whl binary

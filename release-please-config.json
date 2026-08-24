@@ -4,6 +4,10 @@
         ".": {
             "release-type": "simple",
             "component": "personal-features",
+            "exclude-paths": [
+                "devcontainer-features/src/second-brain",
+                "devcontainer-features/test/second-brain"
+            ],
             "extra-files": [
                 {
                     "type": "json",
@@ -14,6 +18,17 @@
                     "type": "toml",
                     "path": "libraries/odoo_sdk/pyproject.toml",
                     "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "devcontainer-features/src/second-brain": {
+            "release-type": "simple",
+            "component": "second-brain",
+            "extra-files": [
+                {
+                    "type": "json",
+                    "path": "devcontainer-feature.json",
+                    "jsonpath": "$.version"
                 }
             ]
         }
