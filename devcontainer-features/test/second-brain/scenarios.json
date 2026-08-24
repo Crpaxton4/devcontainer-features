@@ -1,0 +1,9 @@
+{
+    "with_kb_mounted": {
+        "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "features": {
+            "second-brain": {}
+        },
+        "remoteUser": "vscode"
+    }
+}
