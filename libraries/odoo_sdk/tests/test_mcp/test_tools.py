@@ -1106,6 +1106,13 @@ class TestTaskNoteToolSchema(unittest.TestCase):
             schema["properties"]["attachments"].get("default"), None
         )
 
+    def test_dedupe_key_optional_and_defaults_to_none(self):
+        # #631: the idempotency key is opt-in and never required.
+        schema = self._schema()
+        self.assertIn("dedupe_key", schema["properties"])
+        self.assertEqual(schema["required"], ["task_id", "note"])
+        self.assertEqual(schema["properties"]["dedupe_key"].get("default"), None)
+
     def test_docstring_names_the_300_char_limit(self):
         # MCP callers must see the #610 cap up front, in the tool itself as
         # well as in the command-sourced description.
@@ -1116,12 +1123,98 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         specs = [{"path": "/tmp/report.csv"}]
         result = fn(5, "note", specs)
         self.assertEqual(result["args"], (5, "note"))
-        self.assertEqual(result["kwargs"], {"attachments": specs})
+        self.assertEqual(
+            result["kwargs"], {"attachments": specs, "dedupe_key": None}
+        )
+
+    def test_dedupe_key_forwarded_to_command(self):
+        fn = self._make()
+        result = fn(5, "note", None, "note-abc")
+        self.assertEqual(
+            result["kwargs"], {"attachments": None, "dedupe_key": "note-abc"}
+        )
 
     def test_plain_call_forwards_none_attachments(self):
         fn = self._make()
         result = fn(5, "note")
-        self.assertEqual(result["kwargs"], {"attachments": None})
+        self.assertEqual(
+            result["kwargs"], {"attachments": None, "dedupe_key": None}
+        )
+
+
+class TestGetTaskChatterToolSchema(unittest.TestCase):
+    """The get_task_chatter tool's wire schema after the #624 since-cursor."""
+
+    def _make(self):
+        from odoo_sdk.mcp.tools.atomic import make_get_task_chatter_tool
+
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
+                return cmd
+
+        return make_get_task_chatter_tool(_Reg())
+
+    def _schema(self):
+        from fastmcp.tools.tool import Tool
+
+        return Tool.from_function(self._make(), name="get_task_chatter").parameters
+
+    def test_since_optional_and_defaults_to_none(self):
+        schema = self._schema()
+        self.assertIn("since", schema["properties"])
+        # ``task_id`` stays the sole required property (backwards compat).
+        self.assertEqual(schema["required"], ["task_id"])
+        self.assertEqual(schema["properties"]["since"].get("default"), None)
+
+    def test_since_forwarded_to_command(self):
+        fn = self._make()
+        result = fn(5, 20, 77)
+        self.assertEqual(result["args"], (5,))
+        self.assertEqual(result["kwargs"], {"limit": 20, "since": 77})
+
+    def test_plain_call_forwards_none_since(self):
+        fn = self._make()
+        result = fn(5)
+        self.assertEqual(result["kwargs"], {"limit": 100, "since": None})
+
+
+class TestTaskQuestionToolSchema(unittest.TestCase):
+    """The task_question tool's wire schema after the #631 dedupe key."""
+
+    def _make(self):
+        from odoo_sdk.mcp.tools.atomic import make_task_question_tool
+
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
+                return cmd
+
+        return make_task_question_tool(_Reg())
+
+    def _schema(self):
+        from fastmcp.tools.tool import Tool
+
+        return Tool.from_function(self._make(), name="task_question").parameters
+
+    def test_dedupe_key_optional_and_defaults_to_none(self):
+        schema = self._schema()
+        self.assertIn("dedupe_key", schema["properties"])
+        self.assertEqual(schema["required"], ["task_id", "question"])
+        self.assertEqual(schema["properties"]["dedupe_key"].get("default"), None)
+
+    def test_dedupe_key_forwarded_to_command(self):
+        fn = self._make()
+        result = fn(5, "q?", "q-abc")
+        self.assertEqual(result["args"], (5, "q?"))
+        self.assertEqual(result["kwargs"], {"dedupe_key": "q-abc"})
+
+    def test_plain_call_forwards_none_dedupe_key(self):
+        fn = self._make()
+        result = fn(5, "q?")
+        self.assertEqual(result["kwargs"], {"dedupe_key": None})
 
 
 class TestCompositionToolDecorator(unittest.TestCase):

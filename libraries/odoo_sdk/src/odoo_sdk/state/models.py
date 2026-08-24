@@ -65,6 +65,16 @@ class TaskRun:
     run's ``[started_at, aborted_at]`` window for the same task, so an aborted
     run's leftover events never bill. A normally stopped run leaves this ``None``.
     """
+    question_message_id: Optional[int] = None
+    """Chatter message id of the run's most recent posted question, else ``None``.
+
+    The answer-detection watermark (#625): ``task_question`` stamps the
+    ``message_post`` return id here, and ``task_status`` reports how many chatter
+    messages are newer than it (``new_messages_since_question``) so orchestration
+    can poll "answered?" deterministically. A later question on the same run
+    overwrites the watermark (self-loop on AWAITING_ANSWERS); a run that never
+    asked a question leaves it ``None``.
+    """
 
     @property
     def elapsed_seconds(self) -> float:

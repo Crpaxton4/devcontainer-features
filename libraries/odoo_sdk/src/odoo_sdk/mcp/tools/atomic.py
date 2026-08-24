@@ -6,7 +6,7 @@ rather than reflecting ``command.execute`` via ``inspect.signature`` — keeps t
 MCP wire schema an intentional, reviewable part of the interaction surface.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from odoo_sdk.commands import Registry
 
@@ -102,9 +102,18 @@ def make_get_task_tool(registry: Registry):
 
 @atomic_tool("get_task_chatter")
 def make_get_task_chatter_tool(registry: Registry):
-    def get_task_chatter(task_id: int, limit: int = 100) -> List[dict]:
-        """Fetch all chatter messages for a task, sorted oldest-first."""
-        return registry["get_task_chatter"].execute(task_id, limit=limit)
+    def get_task_chatter(
+        task_id: int,
+        limit: int = 100,
+        since: Optional[Union[int, str]] = None,
+    ) -> List[dict]:
+        """Fetch a task's newest chatter messages, returned oldest-first.
+
+        Over-limit chatters keep the NEWEST messages. ``since`` fetches only
+        messages after a cursor: an int is a message-id cursor, a string an
+        Odoo datetime cursor.
+        """
+        return registry["get_task_chatter"].execute(task_id, limit=limit, since=since)
 
     return get_task_chatter
 
@@ -287,14 +296,19 @@ def make_task_note_tool(registry: Registry):
         task_id: int,
         note: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        dedupe_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Post a note (max 300 chars) to the task chatter, optionally with files.
 
         Each attachment spec is ``{"path": <local file>}`` or
         ``{"content": <base64>, "name": <filename>}`` plus optional
-        ``"mimetype"``.
+        ``"mimetype"``. ``dedupe_key`` makes the call idempotent: a retried
+        call with an already-seen key skips the post and returns the existing
+        message id.
         """
-        return registry["task_note"].execute(task_id, note, attachments=attachments)
+        return registry["task_note"].execute(
+            task_id, note, attachments=attachments, dedupe_key=dedupe_key
+        )
 
     return task_note
 
@@ -331,9 +345,19 @@ def make_task_aging_tool(registry: Registry):
 
 @atomic_tool("task_question")
 def make_task_question_tool(registry: Registry):
-    def task_question(task_id: int, question: str) -> Dict[str, Any]:
-        """Post a question (max 300 chars) to the task chatter; transitions to AWAITING_ANSWERS."""
-        return registry["task_question"].execute(task_id, question)
+    def task_question(
+        task_id: int, question: str, dedupe_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Post a question (max 300 chars) to the task chatter; transitions to AWAITING_ANSWERS.
+
+        Records the message id as an answer watermark for task_status's
+        ``new_messages_since_question``. ``dedupe_key`` makes the call
+        idempotent: a retried call with an already-seen key skips the post and
+        returns the existing message id.
+        """
+        return registry["task_question"].execute(
+            task_id, question, dedupe_key=dedupe_key
+        )
 
     return task_question
 

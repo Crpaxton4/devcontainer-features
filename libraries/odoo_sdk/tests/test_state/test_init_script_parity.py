@@ -59,11 +59,21 @@ CREATE TABLE IF NOT EXISTS session_uploads (
 );
 """
 
+#: The v2 STRICT schema (post-#504, pre-v3): the shape a real user's
+#: ``tracker.db`` has on disk before v3 added the ``question_message_id``
+#: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
+#: the canonical DDL by dropping exactly those additions so it tracks the true
+#: prior shape without a hand-copy.
+_V2_DDL = SCHEMA_DDL[
+    : SCHEMA_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
+].replace(",\n    question_message_id INTEGER", "")
+assert "question_message_id" not in _V2_DDL
+assert "chatter_dedupe" not in _V2_DDL
+
 #: The v1 STRICT schema (post-#452, pre-#504): the shape a real user's
 #: ``tracker.db`` has on disk after STRICT was adopted but before the ``CLOSED``
-#: state widened the task_runs CHECK. Derived from the canonical DDL by dropping
-#: the ``CLOSED`` literal so it tracks the true prior shape without a hand-copy.
-_V1_DDL = SCHEMA_DDL.replace(", 'CLOSED'", "")
+#: state widened the task_runs CHECK — the v2 shape without ``CLOSED``.
+_V1_DDL = _V2_DDL.replace(", 'CLOSED'", "")
 
 _TS = "2026-07-17T12:00:00+00:00"
 
@@ -226,7 +236,7 @@ class TestInitScriptParity(unittest.TestCase):
             ).fetchall()
         finally:
             conn.close()
-        self.assertEqual(len(table_sql), 4)
+        self.assertEqual(len(table_sql), 5)
         for name, sql in table_sql:
             self.assertIn("STRICT", sql.upper(), f"{name} is not STRICT")
 
@@ -277,7 +287,7 @@ class TestMigrationParity(unittest.TestCase):
             ).fetchall()
         finally:
             conn.close()
-        self.assertEqual(len(table_sql), 4)
+        self.assertEqual(len(table_sql), 5)
         for name, sql in table_sql:
             self.assertIn("STRICT", sql.upper(), f"{name} was not migrated")
 
@@ -424,6 +434,75 @@ class TestClosedStateMigrationParity(unittest.TestCase):
         self.init.init_tracker_db(v1)
         self.assertEqual(_schema_objects(v1), before)
         self.assertEqual(_user_version(v1), SCHEMA_VERSION)
+
+
+def _v2_db(tmp: Path) -> Path:
+    """Provision a v2 STRICT (pre-watermark, pre-dedupe) tracker.db on disk."""
+    path = tmp / "tracker.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(_V2_DDL)
+        conn.execute(
+            "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
+            "state, started_at, notes) VALUES (5, 'T', 1, 'P', 'RUNNING', ?, '[]')",
+            (_TS,),
+        )
+        # The CLOSED schema shipped with user_version 2; leaving it there is
+        # what makes the host script's migrate_schema run the v3 rebuild.
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+    finally:
+        conn.close()
+    assert _user_version(path) == 2
+    return path
+
+
+class TestWatermarkMigrationParity(unittest.TestCase):
+    """The host script's v2→v3 rebuild matches a fresh v3 init (#625/#631).
+
+    Mirrors the earlier migration-parity classes for the newest schema step: a
+    v2 STRICT DB (pre ``question_message_id``, no ``chatter_dedupe``) migrated
+    by the host script must be indistinguishable from a fresh init.
+    """
+
+    def setUp(self):
+        self.init = _load_init_script()
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_migrated_v2_matches_fresh_init(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+
+        fresh = _fresh_sdk_db(self.tmp)
+        self.assertEqual(_schema_objects(v2), _schema_objects(fresh))
+        self.assertEqual(_user_version(v2), SCHEMA_VERSION)
+
+    def test_migrated_rows_carry_null_watermark(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+        conn = sqlite3.connect(str(v2))
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT id, task_id, state, question_message_id FROM task_runs"
+                ).fetchall(),
+                [(1, 5, "RUNNING", None)],
+            )
+            # The new dedupe store exists, is empty, and enforces its index.
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM chatter_dedupe").fetchone()[0],
+                0,
+            )
+        finally:
+            conn.close()
+
+    def test_second_run_over_migrated_v2_is_a_noop(self):
+        v2 = _v2_db(self.tmp)
+        self.init.init_tracker_db(v2)
+        before = _schema_objects(v2)
+        self.init.init_tracker_db(v2)
+        self.assertEqual(_schema_objects(v2), before)
+        self.assertEqual(_user_version(v2), SCHEMA_VERSION)
 
 
 if __name__ == "__main__":
