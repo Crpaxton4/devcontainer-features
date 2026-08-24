@@ -1,5 +1,7 @@
 import http.client
 import socket
+import threading
+import time
 import unittest
 import xmlrpc.client
 from unittest.mock import Mock, patch
@@ -31,6 +33,50 @@ class TestOdooRpcExecutor(unittest.TestCase):
 
         self.assertEqual(executor.uid, 7)
         self.assertEqual(executor.uid, 7)
+        common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_concurrent_first_access_authenticates_once(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        # Regression test for the check-then-lock race: with the uid cache only
+        # checked OUTSIDE the lock, every thread that queued behind the winner
+        # would re-run the login handshake on wake-up. The slow authenticate stub
+        # widens the race window so all threads reach the lock while the first
+        # handshake is still in flight; double-checked locking must collapse them
+        # into exactly one authenticate call.
+        common_proxy = Mock()
+        object_proxy = Mock()
+
+        def slow_authenticate(*args: object) -> int:
+            time.sleep(0.05)
+            return 7
+
+        common_proxy.authenticate.side_effect = slow_authenticate
+        mock_server_proxy.side_effect = [common_proxy, object_proxy]
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        thread_count = 8
+        start_line = threading.Barrier(thread_count)
+        results: list[int] = []
+        errors: list[BaseException] = []
+
+        def read_uid() -> None:
+            try:
+                start_line.wait(timeout=5.0)
+                results.append(executor.uid)
+            except BaseException as exc:  # pragma: no cover - defensive capture
+                errors.append(exc)
+
+        threads = [threading.Thread(target=read_uid) for _ in range(thread_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [7] * thread_count)
         common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
