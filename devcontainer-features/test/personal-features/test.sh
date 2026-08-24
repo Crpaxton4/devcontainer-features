@@ -478,6 +478,18 @@ check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" b
 
 rm -rf "$HOOKS_TEST_ROOT"
 
+# --- mempalace palace root symlink (#596) -------------------------------------
+# Upstream mempalace's hooks CLI hardcodes ~/.mempalace as its palace root and
+# treats its absence as the user-removed kill-switch, while the MCP server uses
+# the bind mount at /usr/local/share/mempalace - so without this link every
+# plugin hook fire silently no-oped. install.sh symlinks the home path onto the
+# mount so both sides agree on one root.
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
+check "~/.mempalace is a symlink" bash -c "test -L \"\$HOME/.mempalace\""
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
+check "~/.mempalace points at the bind-mounted palace root" bash -c \
+  "[ \"\$(readlink \"\$HOME/.mempalace\")\" = '/usr/local/share/mempalace' ]"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from
