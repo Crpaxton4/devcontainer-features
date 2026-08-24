@@ -12,6 +12,7 @@ dependencies = [
     "markdown-it-py>=3.0.0",
     "markitdown[docx,pdf]>=0.1.6",
     "pydantic>=2.13.4",
+    "textual>=1.0.0",
     "toon-format>=0.9.0b1",
     # `tomllib` is stdlib only from 3.11; on the 3.10 floor (odoo:17) the
     # API-compatible backport supplies the TOML config parser instead.
@@ -38,7 +39,6 @@ test = [
     "coverage[toml]>=7.15.2",
     "hypothesis>=6.157.1",
     "cosmic-ray>=8.4.6",
-    "pyte>=0.8.2",
 ]
 dev = [
     {include-group = "static-analysis"},

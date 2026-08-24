@@ -1,15 +1,15 @@
-"""Tests for the TUI review surface: frame + driver (#378 items 7-9).
+"""Tests for the TUI review surface: lines + transitions (#378 items 7-9).
 
-Covers the pure ``compose_review_frame`` and drives the real ``handle_key`` path
-end to end over a fixture central DB and a mocked Odoo transport: a session whose
-task/day already carries manual Odoo lines shows the already-logged partial badge;
-two cross-task sessions overlapping 40m badge each other; a single-event weak and
-a multi-event strong session classify correctly; the evidence pane lists the
-member-event citations; and an offline transport still renders, just without the
-logged badge. Everything here only informs the reviewer — no key trims or uploads.
+Covers the pure ``review_body_lines`` composer and drives the real transition
+path end to end over a fixture central DB and a mocked Odoo transport: a session
+whose task/day already carries manual Odoo lines shows the already-logged partial
+badge; two cross-task sessions overlapping 40m badge each other; a single-event
+weak and a multi-event strong session classify correctly; the evidence pane lists
+the member-event citations; and an offline transport still renders, just without
+the logged badge. Everything here only informs the reviewer — no transition trims
+or uploads.
 """
 
-import curses
 import unittest
 from datetime import date, datetime, timezone
 
@@ -18,11 +18,12 @@ from odoo_sdk.tui.app import (
     AppState,
     TuiDeps,
     enter_review,
-    handle_key,
-    handle_review_key,
+    exit_review,
+    move_review_selection,
+    toggle_evidence,
 )
 from odoo_sdk.tui.evidence import STRONG, WEAK, Overlap, ReviewCard
-from odoo_sdk.tui.review import compose_review_frame
+from odoo_sdk.tui.review import review_body_lines
 from odoo_sdk.tui.window import DateWindow
 from tests.support import make_state_db
 
@@ -136,7 +137,7 @@ def _state(store, sessions):
     )
 
 
-# ── Frame composition ───────────────────────────────────────────────────────
+# ── Line composition ────────────────────────────────────────────────────────
 
 
 def _cards():
@@ -148,72 +149,67 @@ def _cards():
     ]
 
 
-class TestComposeReviewFrame(unittest.TestCase):
-    def test_frame_is_exactly_sized(self):
-        frame = compose_review_frame(_cards(), 0, False, 80, 20)
-        self.assertEqual(len(frame.rows), 20)
-        self.assertTrue(all(len(r) == 80 for r in frame.rows))
-
-    def test_header_counts_sessions(self):
-        frame = compose_review_frame(_cards(), 0, False, 80, 20)
-        self.assertIn("2 session(s)", frame.rows[0])
+class TestReviewBodyLines(unittest.TestCase):
+    def test_one_line_per_card_when_collapsed(self):
+        lines = review_body_lines(_cards(), 0, False)
+        self.assertEqual(len(lines), 2)
 
     def test_card_shows_task_confidence_and_logged_badge(self):
-        body = "\n".join(compose_review_frame(_cards(), 0, False, 80, 20).rows)
+        body = "\n".join(review_body_lines(_cards(), 0, False))
         self.assertIn("task 24648", body)
         self.assertIn("[STRONG]", body)
         self.assertIn("logged 2.0h (partial)", body)
 
     def test_selected_marker_and_overlap_badge(self):
-        body = "\n".join(compose_review_frame(_cards(), 1, False, 80, 20).rows)
+        body = "\n".join(review_body_lines(_cards(), 1, False))
         self.assertIn("> task 55555", body)
         self.assertIn("[WEAK]", body)
         self.assertIn("overlaps task 70002 by 40m", body)
 
     def test_evidence_pane_hidden_until_expanded(self):
-        collapsed = "\n".join(compose_review_frame(_cards(), 0, False, 80, 20).rows)
+        collapsed = "\n".join(review_body_lines(_cards(), 0, False))
         self.assertNotIn("PR #189", collapsed)
-        expanded = "\n".join(compose_review_frame(_cards(), 0, True, 80, 20).rows)
+        expanded = "\n".join(review_body_lines(_cards(), 0, True))
         self.assertIn("evidence — task 24648", expanded)
         self.assertIn("commit deadbee", expanded)
         self.assertIn("PR #189", expanded)
 
-    def test_footer_shows_keys(self):
-        frame = compose_review_frame(_cards(), 0, False, 80, 20)
-        self.assertIn("evidence", frame.rows[-1])
+    def test_pane_shows_logged_detail(self):
+        body = "\n".join(review_body_lines(_cards(), 0, True))
+        self.assertIn("already logged 2.00h on this task today (partial overlap)", body)
 
     def test_empty_message(self):
-        frame = compose_review_frame([], 0, False, 80, 20)
-        self.assertIn("no sessions in window to review", "\n".join(frame.rows))
+        lines = review_body_lines([], 0, False)
+        self.assertIn("no sessions in window to review", "\n".join(lines))
 
     def test_multi_overlap_collapses_to_count(self):
         card = ReviewCard(1, "24648", "2026-07-01T09:00:00", "2026-07-01T12:00:00",
                           3.0, WEAK, 0.0, "", (Overlap("a", 10), Overlap("b", 20)),
                           (), False)
-        body = "\n".join(compose_review_frame([card], 0, False, 80, 20).rows)
+        body = "\n".join(review_body_lines([card], 0, False))
         self.assertIn("overlaps 2 sessions", body)
 
     def test_overlap_detail_listed_in_pane(self):
         card = ReviewCard(1, "24648", "2026-07-01T09:00:00", "2026-07-01T12:00:00",
                           3.0, WEAK, 0.0, "", (Overlap("70002", 40),),
                           ("commit abc1234",), False)
-        body = "\n".join(compose_review_frame([card], 0, True, 80, 20).rows)
+        body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("overlaps task 70002 by 40m", body)
 
     def test_unvalidated_shown_in_pane(self):
         card = ReviewCard(1, "999", "2026-07-01T09:00:00", "2026-07-01T10:00:00",
                           1.0, WEAK, 0.0, "", (), ("commit abc1234",), True)
-        body = "\n".join(compose_review_frame([card], 0, True, 80, 20).rows)
+        body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("task id unvalidated", body)
 
     def test_pane_notes_no_linked_events(self):
         card = ReviewCard(1, "999", "2026-07-01T09:00:00", "2026-07-01T10:00:00",
                           1.0, WEAK, 0.0, "", (), (), False)
-        body = "\n".join(compose_review_frame([card], 0, True, 80, 20).rows)
+        body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("no linked events", body)
 
 
-# ── Driver: entering review and the badges it computes ──────────────────────
+# ── Entering review and the badges it computes ──────────────────────────────
 
 
 class TestEnterReview(unittest.TestCase):
@@ -250,57 +246,43 @@ class TestEnterReview(unittest.TestCase):
         self.assertEqual(by_task["24648"].confidence, STRONG)
 
 
-# ── Driver: key handling ────────────────────────────────────────────────────
+# ── Transitions ─────────────────────────────────────────────────────────────
 
 
-class TestReviewKeyHandling(unittest.TestCase):
+class TestReviewTransitionsOverFixture(unittest.TestCase):
     def _opened(self):
         store, sessions = _fixture()
         deps = _deps(store, FakeClient())
         state = enter_review(deps, _state(store, sessions))
         return deps, state
 
-    def test_v_key_from_main_opens_review(self):
-        store, sessions = _fixture()
-        deps = _deps(store, FakeClient())
-        state, quit_ = handle_key(
-            deps, _state(store, sessions), ord("v"), writer=lambda c, n: n
-        )
-        self.assertFalse(quit_)
-        self.assertEqual(state.mode, "review")
-
     def test_down_up_move_selection_and_collapse_pane(self):
         _, state = self._opened()
-        state = handle_review_key(state, curses.KEY_DOWN)
+        state = move_review_selection(state, 1)
         self.assertEqual(state.review_selected, 1)
-        state = handle_review_key(state, ord("e"))  # open pane
+        state = toggle_evidence(state)  # open pane
         self.assertTrue(state.review_expanded)
-        state = handle_review_key(state, curses.KEY_UP)  # move collapses it
+        state = move_review_selection(state, -1)  # move collapses it
         self.assertEqual(state.review_selected, 0)
         self.assertFalse(state.review_expanded)
 
-    def test_enter_toggles_evidence(self):
+    def test_toggle_flips_evidence(self):
         _, state = self._opened()
-        state = handle_review_key(state, ord("\n"))
+        state = toggle_evidence(state)
         self.assertTrue(state.review_expanded)
-        state = handle_review_key(state, ord("\n"))
+        state = toggle_evidence(state)
         self.assertFalse(state.review_expanded)
 
-    def test_quit_returns_to_main(self):
+    def test_exit_returns_to_main(self):
         _, state = self._opened()
-        state = handle_review_key(state, ord("q"))
+        state = exit_review(state)
         self.assertEqual(state.mode, "main")
         self.assertFalse(state.review_expanded)
 
     def test_up_clamps_at_top(self):
         _, state = self._opened()
-        state = handle_review_key(state, curses.KEY_UP)
+        state = move_review_selection(state, -1)
         self.assertEqual(state.review_selected, 0)
-
-    def test_unknown_key_is_noop(self):
-        _, state = self._opened()
-        result = handle_review_key(state, ord("Z"))
-        self.assertEqual(result, state)
 
     def test_move_and_toggle_on_empty_cards_are_noops(self):
         state = AppState(
@@ -309,17 +291,8 @@ class TestReviewKeyHandling(unittest.TestCase):
             mode="review",
             review_cards=[],
         )
-        self.assertEqual(handle_review_key(state, curses.KEY_DOWN), state)
-        self.assertEqual(handle_review_key(state, ord("e")), state)
-
-    def test_review_mode_routes_all_keys_through_handler(self):
-        _, state = self._opened()
-        # In review mode a bare 'q' must not quit the app; it returns to main.
-        state2, quit_ = handle_key(
-            None, state, ord("q"), writer=lambda c, n: n
-        )
-        self.assertFalse(quit_)
-        self.assertEqual(state2.mode, "main")
+        self.assertEqual(move_review_selection(state, 1), state)
+        self.assertEqual(toggle_evidence(state), state)
 
 
 if __name__ == "__main__":

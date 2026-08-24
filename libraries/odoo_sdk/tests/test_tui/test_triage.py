@@ -1,7 +1,7 @@
 """Tests for the TUI triage queue (issue #370, acceptance item 9).
 
-Covers the pure series-grouping and frame composition, and drives the real
-``handle_key`` path end to end: a fixture central DB holding a 13-tick calendar
+Covers the pure series-grouping and line composition, and drives the real
+transition path end to end: a fixture central DB holding a 13-tick calendar
 series (one row) plus a lone unattributed event, opened via triage, assigned to a
 task in one transaction, and then re-derived as a billable session.
 
@@ -12,7 +12,6 @@ regex and so hid a producer/consumer format mismatch (issues #517, #526); drivin
 the tests through the producer makes this file the contract test for that seam.
 """
 
-import curses
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -20,20 +19,23 @@ from pathlib import Path
 
 from odoo_sdk.adapters.external_sync import _expand_ticks, _tick_external_id
 from odoo_sdk.commands.builtin import AssignEventCommand
-from odoo_sdk.state import EventRecord, LocalStateClient
+from odoo_sdk.state import EventRecord
 from odoo_sdk.tui.app import (
     AppState,
     TuiDeps,
     assign_triage,
     enter_triage,
-    handle_key,
-    handle_triage_key,
+    erase_triage_digit,
+    exit_triage,
+    move_triage_selection,
+    type_triage_digit,
 )
 from odoo_sdk.tui.triage import (
     TriageRow,
     build_triage_rows,
-    compose_triage_frame,
+    row_line,
     series_key,
+    triage_body_lines,
 )
 from odoo_sdk.tui.window import DateWindow
 from tests.support import make_state_db
@@ -212,49 +214,46 @@ class TestBuildTriageRows(unittest.TestCase):
         self.assertEqual(rows[0].timestamp, base.isoformat())
 
 
-# ── Frame composition ───────────────────────────────────────────────────────
+# ── Line composition ────────────────────────────────────────────────────────
 
 
-class TestComposeTriageFrame(unittest.TestCase):
+class TestTriageBodyLines(unittest.TestCase):
     def _rows(self):
         return [
             TriageRow("gcal:m:tick:", (1, 2, 3), "chatter", "2026-06-01T09:00:00", "Standup"),
             TriageRow("gcal:solo", (4,), "chatter", "2026-06-01T10:00:00", "1:1"),
         ]
 
-    def test_frame_is_exactly_sized(self):
-        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
-        self.assertEqual(len(frame.rows), 20)
-        self.assertTrue(all(len(r) == 80 for r in frame.rows))
-
-    def test_header_counts_rows(self):
-        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
-        self.assertIn("2 unattributed", frame.rows[0])
+    def test_one_line_per_row(self):
+        lines = triage_body_lines(self._rows(), 0)
+        self.assertEqual(len(lines), 2)
 
     def test_selected_row_marked(self):
-        frame = compose_triage_frame(self._rows(), 1, "", 80, 20)
-        body = "\n".join(frame.rows)
+        body = "\n".join(triage_body_lines(self._rows(), 1))
         self.assertIn("> chatter", body)  # the marker sits on the selected row
         self.assertIn("Standup", body)
+        # Only the selected row carries the marker.
+        self.assertEqual(body.count(">"), 1)
 
     def test_series_count_shown(self):
-        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
-        self.assertIn("x3", "\n".join(frame.rows))
+        body = "\n".join(triage_body_lines(self._rows(), 0))
+        self.assertIn("x3", body)
 
-    def test_typed_task_id_echoed(self):
-        frame = compose_triage_frame(self._rows(), 0, "24648", 80, 20)
-        self.assertIn("task id > 24648", "\n".join(frame.rows))
+    def test_lone_row_shows_no_count(self):
+        line = row_line(self._rows()[1], False)
+        self.assertNotIn("x1", line)
+        self.assertIn("1:1", line)
 
-    def test_footer_shows_keys(self):
-        frame = compose_triage_frame(self._rows(), 0, "", 80, 20)
-        self.assertIn("assign", frame.rows[-1])
+    def test_display_key_stands_in_for_missing_subject(self):
+        row = TriageRow("gcal:solo", (4,), "chatter", "2026-06-01T10:00:00", "")
+        self.assertIn("gcal:solo", row_line(row, False))
 
     def test_empty_queue_message(self):
-        frame = compose_triage_frame([], 0, "", 80, 20)
-        self.assertIn("nothing to triage", "\n".join(frame.rows))
+        lines = triage_body_lines([], 0)
+        self.assertIn("nothing to triage", "\n".join(lines))
 
 
-# ── Key handling (pure, over a fixture DB) ──────────────────────────────────
+# ── Transitions (pure, over a fixture DB) ───────────────────────────────────
 
 
 def _fixture_store():
@@ -293,7 +292,7 @@ def _fixture_store():
     return store
 
 
-class TestTriageKeyHandling(unittest.TestCase):
+class TestTriageTransitionsOverFixture(unittest.TestCase):
     def _state(self):
         return AppState(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[])
 
@@ -307,54 +306,34 @@ class TestTriageKeyHandling(unittest.TestCase):
         self.assertEqual(series.count, 13)
         self.assertEqual(series.display_key, "gcal:evt-9:tick:")
 
-    def test_t_key_from_main_opens_triage(self):
-        deps = _deps(_fixture_store())
-        state, quit_ = handle_key(
-            deps, self._state(), ord("t"), writer=lambda c, n: n
-        )
-        self.assertFalse(quit_)
-        self.assertEqual(state.mode, "triage")
-
     def test_digits_build_input_and_backspace_edits(self):
         deps = _deps(_fixture_store())
         state = enter_triage(deps, self._state())
         for ch in "2464":
-            state = handle_triage_key(deps, state, ord(ch))
+            state = type_triage_digit(state, ch)
         self.assertEqual(state.triage_input, "2464")
-        state = handle_triage_key(deps, state, curses.KEY_BACKSPACE)
+        state = erase_triage_digit(state)
         self.assertEqual(state.triage_input, "246")
 
     def test_down_moves_selection_and_clears_input(self):
         deps = _deps(_fixture_store())
         state = enter_triage(deps, self._state())
-        state = handle_triage_key(deps, state, ord("9"))
-        state = handle_triage_key(deps, state, curses.KEY_DOWN)
+        state = type_triage_digit(state, "9")
+        state = move_triage_selection(state, 1)
         self.assertEqual(state.triage_selected, 1)
         self.assertEqual(state.triage_input, "")
-
-    def test_skip_key_moves_selection(self):
-        deps = _deps(_fixture_store())
-        state = enter_triage(deps, self._state())
-        state = handle_triage_key(deps, state, ord("s"))
-        self.assertEqual(state.triage_selected, 1)
 
     def test_up_clamps_at_top(self):
         deps = _deps(_fixture_store())
         state = enter_triage(deps, self._state())
-        state = handle_triage_key(deps, state, curses.KEY_UP)
+        state = move_triage_selection(state, -1)
         self.assertEqual(state.triage_selected, 0)
 
-    def test_quit_returns_to_main(self):
+    def test_exit_returns_to_main(self):
         deps = _deps(_fixture_store())
         state = enter_triage(deps, self._state())
-        state = handle_triage_key(deps, state, ord("q"))
+        state = exit_triage(state)
         self.assertEqual(state.mode, "main")
-
-    def test_unknown_key_is_noop(self):
-        deps = _deps(_fixture_store())
-        state = enter_triage(deps, self._state())
-        result = handle_triage_key(deps, state, ord("Z"))
-        self.assertEqual(result, state)
 
     def test_move_on_empty_queue_is_noop(self):
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -362,23 +341,23 @@ class TestTriageKeyHandling(unittest.TestCase):
         empty = make_state_db(Path(tmp.name))
         deps = _deps(empty)
         state = enter_triage(deps, self._state())
-        result = handle_triage_key(deps, state, curses.KEY_DOWN)
+        result = move_triage_selection(state, 1)
         self.assertEqual(result, state)
 
     def test_invalid_task_id_reports_and_does_not_assign(self):
         store = _fixture_store()
         deps = _deps(store)
         state = enter_triage(deps, self._state())
-        # No digits typed → Enter is rejected.
-        state = handle_triage_key(deps, state, ord("\n"))
+        # No digits typed → assign is rejected.
+        state = assign_triage(deps, state)
         self.assertIn("invalid task id", state.status)
         self.assertEqual(len(state.triage_rows), 2)  # nothing dropped out
 
     def test_zero_is_not_a_valid_task_id(self):
         deps = _deps(_fixture_store())
         state = enter_triage(deps, self._state())
-        state = handle_triage_key(deps, state, ord("0"))
-        state = handle_triage_key(deps, state, curses.KEY_ENTER)
+        state = type_triage_digit(state, "0")
+        state = assign_triage(deps, state)
         self.assertIn("invalid task id", state.status)
 
     def test_assign_on_empty_queue_is_guarded(self):
@@ -408,15 +387,15 @@ class TestTriageEndToEnd(unittest.TestCase):
         state = AppState(window=window, sessions=[])
 
         # Open triage: one row for the series, one for the lone event.
-        state, _ = handle_key(deps, state, ord("t"), writer=lambda c, n: n)
+        state = enter_triage(deps, state)
         self.assertEqual(len(state.triage_rows), 2)
         series_ids = list(state.triage_rows[0].event_ids)
         self.assertEqual(len(series_ids), 13)
 
         # Type the task id and assign the whole series in one transaction.
         for ch in "24648":
-            state, _ = handle_key(deps, state, ord(ch), writer=lambda c, n: n)
-        state, _ = handle_key(deps, state, ord("\n"), writer=lambda c, n: n)
+            state = type_triage_digit(state, ch)
+        state = assign_triage(deps, state)
 
         self.assertIn("assigned 13 events of series gcal:evt-9:tick: to task 24648", state.status)
         # All 13 ticks now carry the task id.
