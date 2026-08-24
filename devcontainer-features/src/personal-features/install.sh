@@ -282,6 +282,26 @@ else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
 fi
 
+# --- mempalace palace root symlink (#596) ------------------------------------
+# Upstream mempalace's hooks CLI hardcodes its palace root to ~/.mempalace and
+# treats its absence as the user-removed kill-switch, while the MCP server
+# writes to the bind mount at /usr/local/share/mempalace (MEMPALACE_PALACE_PATH,
+# see persisted-paths.tsv). In a fresh container ~/.mempalace does not exist, so
+# every plugin hook fire (Stop/SessionEnd/PreCompact) short-circuited silently -
+# a no-op indistinguishable from a working install, the same failure class as
+# #485. Symlink the home path onto the mount so both sides agree on ONE root and
+# hook state/logs persist across rebuilds. The mount target dir already exists:
+# the persisted-paths loop above created it (mempalace row). Only create the
+# link when the path is absent so a real user dir/file (or an existing symlink)
+# is never clobbered. `-h` chowns the link itself, not the (root-owned) target.
+echo "Linking $_REMOTE_USER_HOME/.mempalace to the mounted palace root"
+if [ ! -e "$_REMOTE_USER_HOME/.mempalace" ] && [ ! -L "$_REMOTE_USER_HOME/.mempalace" ]; then
+    ln -s /usr/local/share/mempalace "$_REMOTE_USER_HOME/.mempalace"
+    chown -h "$_REMOTE_USER" "$_REMOTE_USER_HOME/.mempalace"
+else
+    echo "WARNING: $_REMOTE_USER_HOME/.mempalace already exists; leaving it untouched (mempalace plugin hooks may write to a container-local root)" >&2
+fi
+
 # --- Claude Code integrations: MCP server + mempalace plugin (#486, #484) ----
 # sync-claude-mcp registers the odoo-mcp MCP server and the mempalace plugin at
 # user scope. Installed to /usr/local/bin and run at container-create time
