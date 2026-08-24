@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.1.0...personal-features-v4.2.0) (2026-08-24)
+
+
+### Features
+
+* **odoo-sdk:** chatter attachments and 300-char note cap ([#617](https://github.com/Crpaxton4/devcontainer-features/issues/617)) ([6b5658c](https://github.com/Crpaxton4/devcontainer-features/commit/6b5658ccb06c142c013eeafb7549a8d189e823f6)), closes [#604](https://github.com/Crpaxton4/devcontainer-features/issues/604) [#610](https://github.com/Crpaxton4/devcontainer-features/issues/610)
+* **odoo-sdk:** chatter since-cursor, answer watermarks, and dedupe keys ([#637](https://github.com/Crpaxton4/devcontainer-features/issues/637)) ([c93545b](https://github.com/Crpaxton4/devcontainer-features/commit/c93545b2fa5d88dbbe3bd6fd6bf2052e342abaf6)), closes [#624](https://github.com/Crpaxton4/devcontainer-features/issues/624) [#625](https://github.com/Crpaxton4/devcontainer-features/issues/625) [#631](https://github.com/Crpaxton4/devcontainer-features/issues/631)
+* **odoo-sdk:** event-derived run summaries; remove stop_task description gate ([#639](https://github.com/Crpaxton4/devcontainer-features/issues/639)) ([33a489d](https://github.com/Crpaxton4/devcontainer-features/commit/33a489d9f446a92a85b71790621ff177de6d2fae))
+* **odoo-sdk:** get_tasks include passthrough for batch detail fetch ([#635](https://github.com/Crpaxton4/devcontainer-features/issues/635)) ([619b896](https://github.com/Crpaxton4/devcontainer-features/commit/619b896556d9c113f6190604247b6bcffcdf8d50)), closes [#630](https://github.com/Crpaxton4/devcontainer-features/issues/630)
+* **odoo-sdk:** idempotent start_task lifecycle and hyphenated branch naming ([#638](https://github.com/Crpaxton4/devcontainer-features/issues/638)) ([87df93a](https://github.com/Crpaxton4/devcontainer-features/commit/87df93a16d13992dea351f5654376d46cfda608b)), closes [#621](https://github.com/Crpaxton4/devcontainer-features/issues/621) [#614](https://github.com/Crpaxton4/devcontainer-features/issues/614) [#615](https://github.com/Crpaxton4/devcontainer-features/issues/615) [#622](https://github.com/Crpaxton4/devcontainer-features/issues/622)
+* **odoo-sdk:** reimplement odoo-tui on Textual ([#620](https://github.com/Crpaxton4/devcontainer-features/issues/620)) ([2dac4b6](https://github.com/Crpaxton4/devcontainer-features/commit/2dac4b636723fc467fc5638a4623277991caaea1)), closes [#605](https://github.com/Crpaxton4/devcontainer-features/issues/605)
+* **second-brain:** mount host knowledge base into devcontainer ([#616](https://github.com/Crpaxton4/devcontainer-features/issues/616)) ([c2c4c6a](https://github.com/Crpaxton4/devcontainer-features/commit/c2c4c6a88b73e3abfccdbc15e50a35b8aabcd6a3)), closes [#607](https://github.com/Crpaxton4/devcontainer-features/issues/607)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** atomic tracker.db writes and ordered task_note persistence ([#636](https://github.com/Crpaxton4/devcontainer-features/issues/636)) ([76eefab](https://github.com/Crpaxton4/devcontainer-features/commit/76eefab49d7d13792da2976651001e6de5d550d3)), closes [#627](https://github.com/Crpaxton4/devcontainer-features/issues/627) [#628](https://github.com/Crpaxton4/devcontainer-features/issues/628)
+* **odoo-sdk:** double-checked auth lock and optional RPC concurrency cap ([#634](https://github.com/Crpaxton4/devcontainer-features/issues/634)) ([e4b919a](https://github.com/Crpaxton4/devcontainer-features/commit/e4b919a337a4a6f1e041ae3c7decf2cb98d38356)), closes [#629](https://github.com/Crpaxton4/devcontainer-features/issues/629)
+* **odoo-sdk:** reduce start_task tool cognitive complexity below the static gate ([#640](https://github.com/Crpaxton4/devcontainer-features/issues/640)) ([3e50913](https://github.com/Crpaxton4/devcontainer-features/commit/3e5091322638cd2211f94a87aa3095cc533a256c))
+* **personal-features:** declare github-cli as hard dependency and gate gh presence in CI ([#611](https://github.com/Crpaxton4/devcontainer-features/issues/611)) ([02f0fd0](https://github.com/Crpaxton4/devcontainer-features/commit/02f0fd08b55fb45e17a2a25647ecfa1d9a969dbd)), closes [#597](https://github.com/Crpaxton4/devcontainer-features/issues/597)
+* **personal-features:** symlink ~/.mempalace to mounted palace so plugin hooks stop silently no-oping ([#612](https://github.com/Crpaxton4/devcontainer-features/issues/612)) ([24992ed](https://github.com/Crpaxton4/devcontainer-features/commit/24992edd96f4c0acb7e06bd21d55d5151b387990)), closes [#596](https://github.com/Crpaxton4/devcontainer-features/issues/596)
+
 ## [4.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.0.3...personal-features-v4.1.0) (2026-07-21)
 
 
