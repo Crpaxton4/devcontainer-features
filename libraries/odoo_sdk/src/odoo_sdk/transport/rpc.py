@@ -122,14 +122,18 @@ class OdooRpcExecutor(OdooExecutor):
         """Authenticate lazily and return the Odoo user id.
 
         A successful login caches the real user id; a rejected login is never cached
-        so callers may retry after correcting their credentials.
+        so callers may retry after correcting their credentials. The cache is
+        re-checked inside the lock (double-checked locking) so concurrent first
+        callers perform exactly one login handshake: without the inner check, a
+        thread that queued behind the winner would re-authenticate on wake-up.
 
         :raises OdooAuthenticationError: When Odoo rejects the credentials.
         :raises OdooTransportError: On a protocol, timeout, or connectivity failure.
         """
         if self._uid is None:
             with self._lock:
-                self._uid = self._authenticate()
+                if self._uid is None:
+                    self._uid = self._authenticate()
         return self._uid
 
     def _authenticate(self) -> int:

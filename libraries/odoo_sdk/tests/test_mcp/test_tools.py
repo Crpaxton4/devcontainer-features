@@ -1017,6 +1017,54 @@ def make_get_task_tool_reg():
     return make_get_task_tool(_Reg())
 
 
+class TestGetTasksToolSchema(unittest.TestCase):
+    """The get_tasks tool's wire schema and include passthrough (#630)."""
+
+    def _make(self):
+        from odoo_sdk.mcp.tools.atomic import make_get_tasks_tool
+
+        class _Reg:
+            def __getitem__(self, name):
+                cmd = MagicMock()
+                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
+                return cmd
+
+        return make_get_tasks_tool(_Reg())
+
+    def _schema(self):
+        from fastmcp.tools.tool import Tool
+
+        return Tool.from_function(self._make(), name="get_tasks").parameters
+
+    def test_include_selector_in_input_schema(self):
+        self.assertIn("include", self._schema()["properties"])
+
+    def test_include_optional_and_defaults_to_none(self):
+        schema = self._schema()
+        # No property becomes required: a bare get_tasks() call stays
+        # schema-valid (backwards compatibility).
+        self.assertEqual(schema.get("required", []), [])
+        self.assertEqual(schema["properties"]["include"].get("default"), None)
+
+    def test_include_forwarded_to_command(self):
+        fn = self._make()
+        domain = [("stage_id", "=", 3)]
+        result = fn(domain=domain, limit=5, include=["description"])
+        self.assertEqual(
+            result["kwargs"],
+            {"domain": domain, "limit": 5, "include": ["description"]},
+        )
+
+    def test_plain_call_forwards_none_include(self):
+        # Omitted ``include`` reaches the command as None, keeping the
+        # summary-only behavior unchanged.
+        fn = self._make()
+        result = fn()
+        self.assertEqual(
+            result["kwargs"], {"domain": None, "limit": 10, "include": None}
+        )
+
+
 class TestTaskNoteToolSchema(unittest.TestCase):
     """The task_note tool's wire schema after #604 (attachments) and #610 (cap)."""
 

@@ -69,9 +69,13 @@ def make_get_tasks_tool(registry: Registry):
     def get_tasks(
         domain: Optional[List[Tuple[str, str, Any]]] = None,
         limit: int = 10,
+        include: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """List project tasks with an optional Odoo domain filter."""
-        return registry["get_tasks"].execute(domain=domain, limit=limit)
+        """List project tasks with an optional Odoo domain filter and
+        opt-in per-task detail (``include``, same contract as get_task)."""
+        return registry["get_tasks"].execute(
+            domain=domain, limit=limit, include=include
+        )
 
     return get_tasks
 
