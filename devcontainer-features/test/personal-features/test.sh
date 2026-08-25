@@ -581,6 +581,52 @@ check "mempalace-repair is a no-op on an agreeing config.json" bash -c \
 check "mempalace-repair leaves a corrupt config.json untouched and exits 0" bash -c \
   "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{ not json ' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" 2>/dev/null; rc=\$?; [ \$rc -eq 0 ] && [ \"\$(cat \"\$d/mount/config.json\")\" = '{ not json ' ]"
 
+# --- mempalace workspace init, run-once (#643 follow-up) ----------------------
+# `mempalace init` writes the rooms list the miner routes files by; without it
+# everything lands in a single `general` room. It is wired into
+# postCreateCommand, which `devcontainer features test` does not run, so the
+# guards are driven by hand here. MEMPALACE_INIT_CMD substitutes a stub for the
+# real binary so these assert the run-once policy, not mempalace's detector.
+check "mempalace-init-workspace is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-init-workspace"
+
+# A stub that records that it was invoked, and with what.
+_INIT_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\" \"\$d/repo\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\";"
+
+# The whole point: an existing mempalace.yaml is the user's curated file and
+# init must never be re-run over it (init overwrites rather than merges).
+check "mempalace-init-workspace never re-runs over an existing mempalace.yaml" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && ! test -e \"\$d/bin/stub.calls\" && [ \"\$(cat \"\$d/repo/mempalace.yaml\")\" = 'wing: mine' ]"
+
+check "mempalace-init-workspace runs init when mempalace.yaml is absent" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && grep -q 'init' \"\$d/bin/stub.calls\""
+
+# Non-interactive and offline, or it hangs//errors in postCreateCommand.
+check "mempalace-init-workspace passes --yes and --no-llm" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && grep -q -- '--yes' \"\$d/bin/stub.calls\" && grep -q -- '--no-llm' \"\$d/bin/stub.calls\""
+
+# --auto-mine would double-mine: the plugin hooks already drive mining.
+check "mempalace-init-workspace does not pass --auto-mine" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && ! grep -q -- '--auto-mine' \"\$d/bin/stub.calls\""
+
+check "MEMPALACE_SKIP_INIT opts out entirely" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_SKIP_INIT=1 MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && ! test -e \"\$d/bin/stub.calls\""
+
+# Never block container creation: a missing mine root, a missing binary and a
+# failing init are all warnings, because mining still works via the `general`
+# fallback. (An unresolvable MEMPAL_DIR means mining NOTHING, and that is
+# resolve-mempal-dir's job to fail loudly on - see #485.)
+check "mempalace-init-workspace exits 0 when the mine root does not exist" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/nonexistent\" 2>/dev/null"
+check "mempalace-init-workspace exits 0 when mempalace is not on PATH" bash -c \
+  "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=definitely-not-a-real-binary /usr/local/bin/mempalace-init-workspace \"\$d/repo\" 2>/dev/null && ! test -e \"\$d/repo/mempalace.yaml\""
+check "mempalace-init-workspace exits 0 when init itself fails" bash -c \
+  "$_INIT_STUB_SETUP printf '#!/bin/sh\nexit 1\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" 2>/dev/null"
+
+# With no argument it falls back to the MEMPAL_DIR resolve-mempal-dir persisted.
+check "mempalace-init-workspace falls back to the persisted MEMPAL_DIR" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: already\n' > \"\$d/repo/mempalace.yaml\"; MEMPAL_DIR=\"\$d/repo\" MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace | grep -q 'already exists'"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from

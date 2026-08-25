@@ -585,6 +585,89 @@ echo "resolve-mempal-dir: MEMPAL_DIR=$RESOLVED"
 EOF
 chmod 0755 /usr/local/bin/resolve-mempal-dir
 
+# --- mempalace workspace init (run-once) -------------------------------------
+# `mempalace init` is what gives a project real room decomposition: the `rooms`
+# list it writes into <project>/mempalace.yaml is what the miner routes files by.
+# Without it every mined file lands in a single `general` room. #643 made init's
+# project-local artifacts ignorable machine-wide (core.excludesfile above), which
+# removed the reason NOT to run it - but nothing actually ran it, so every
+# container still mined into the flat fallback.
+#
+# RUN-ONCE, NEVER CLOBBER. Re-running init is overwrite, not merge: save_config()
+# in room_detector_local.py rebuilds mempalace.yaml from freshly detected rooms
+# and writes it with mode "w", and cmd_init writes entities.json the same way.
+# Any hand-tuned room name, description or keyword list would be destroyed. So
+# this inits only when mempalace.yaml is ABSENT; once the file exists it is the
+# user's to curate, and re-detecting is an explicit `rm mempalace.yaml` away.
+# That is also why --auto-mine is NOT passed: the plugin's own hooks already
+# drive mining, and adding it here would mine twice on every container create.
+cat > /usr/local/bin/mempalace-init-workspace << 'MEMPALACE_INIT_WORKSPACE'
+#!/bin/sh
+set -u
+# mempalace-init-workspace [DIR] - give the workspace repo a room structure,
+# once, without ever overwriting one that already exists.
+#
+# DIR defaults to the MEMPAL_DIR that resolve-mempal-dir persisted, which is
+# already "the enclosing git worktree root, else the workspace folder" - exactly
+# the primary workspace repo - so the resolution logic is not duplicated here.
+# Set MEMPALACE_SKIP_INIT=1 to opt out entirely. MEMPALACE_INIT_CMD overrides the
+# binary so the feature test can drive the guards against a stub.
+
+ENV_FILE=/usr/local/share/personal-features/mempal-dir.sh
+INIT_CMD="${MEMPALACE_INIT_CMD:-mempalace}"
+
+if [ -n "${MEMPALACE_SKIP_INIT:-}" ]; then
+    echo "mempalace-init-workspace: MEMPALACE_SKIP_INIT is set, skipping"
+    exit 0
+fi
+
+TARGET="${1:-}"
+if [ -z "$TARGET" ]; then
+    # An explicit MEMPAL_DIR already in the environment wins over the persisted
+    # file, matching resolve-mempal-dir's own precedence ("an explicit,
+    # resolvable override always wins"). Sourcing unconditionally would let the
+    # generated file silently beat the override, inverting that contract.
+    if [ -z "${MEMPAL_DIR:-}" ] && [ -f "$ENV_FILE" ]; then
+        # shellcheck source=/dev/null  # generated at container-create time by resolve-mempal-dir
+        . "$ENV_FILE"
+    fi
+    TARGET="${MEMPAL_DIR:-}"
+fi
+
+# Unlike resolve-mempal-dir, every failure below is a WARNING, not a hard error.
+# An unresolvable MEMPAL_DIR means mining nothing at all, which must fail loudly
+# (#485); a missing room structure only means mining into the `general` fallback,
+# which still works. Blocking container creation over an enhancement is the wrong
+# trade, so this never exits non-zero.
+if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
+    echo "WARNING: mempalace-init-workspace: no usable mine root (MEMPAL_DIR=${TARGET:-<unset>}); skipping room detection, mining will use the flat 'general' fallback" >&2
+    exit 0
+fi
+
+if ! command -v "$INIT_CMD" >/dev/null 2>&1; then
+    echo "WARNING: mempalace-init-workspace: '$INIT_CMD' is not on PATH (its install is best-effort); skipping room detection" >&2
+    exit 0
+fi
+
+if [ -e "$TARGET/mempalace.yaml" ]; then
+    echo "mempalace-init-workspace: $TARGET/mempalace.yaml already exists, leaving it untouched"
+    exit 0
+fi
+
+# --yes  : auto-accept detected entities; init prompts otherwise and would hang
+#          a postCreateCommand, which has no interactive stdin.
+# --no-llm: init defaults to an Ollama provider that is not running in this
+#          container. Heuristics-only keeps it offline and quiet.
+echo "mempalace-init-workspace: detecting rooms for $TARGET"
+if "$INIT_CMD" init "$TARGET" --yes --no-llm; then
+    echo "mempalace-init-workspace: wrote $TARGET/mempalace.yaml"
+else
+    echo "WARNING: mempalace-init-workspace: '$INIT_CMD init' failed; mining will use the flat 'general' fallback" >&2
+fi
+exit 0
+MEMPALACE_INIT_WORKSPACE
+chmod 0755 /usr/local/bin/mempalace-init-workspace
+
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
 # config, not a general-purpose toolkit, so none of this is optional. If a
