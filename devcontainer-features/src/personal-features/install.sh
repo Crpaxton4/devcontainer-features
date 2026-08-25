@@ -611,10 +611,12 @@ set -u
 # already "the enclosing git worktree root, else the workspace folder" - exactly
 # the primary workspace repo - so the resolution logic is not duplicated here.
 # Set MEMPALACE_SKIP_INIT=1 to opt out entirely. MEMPALACE_INIT_CMD overrides the
-# binary so the feature test can drive the guards against a stub.
+# binary and MEMPALACE_INIT_TIMEOUT the backstop, so the feature test can drive
+# the guards against a stub.
 
 ENV_FILE=/usr/local/share/personal-features/mempal-dir.sh
 INIT_CMD="${MEMPALACE_INIT_CMD:-mempalace}"
+INIT_TIMEOUT="${MEMPALACE_INIT_TIMEOUT:-300}"
 
 if [ -n "${MEMPALACE_SKIP_INIT:-}" ]; then
     echo "mempalace-init-workspace: MEMPALACE_SKIP_INIT is set, skipping"
@@ -654,15 +656,86 @@ if [ -e "$TARGET/mempalace.yaml" ]; then
     exit 0
 fi
 
-# --yes  : auto-accept detected entities; init prompts otherwise and would hang
-#          a postCreateCommand, which has no interactive stdin.
-# --no-llm: init defaults to an Ollama provider that is not running in this
-#          container. Heuristics-only keeps it offline and quiet.
+# `mempalace init` appends its own two-line block to <repo>/.gitignore (upstream
+# issue #185, cli.py _ensure_mempalace_files_gitignored). That is exactly the
+# per-repo dirtying the machine-wide core.excludesfile (#643) exists to avoid:
+# the same two names are already ignored globally, so the append is redundant
+# here AND leaves an uncommitted diff in the user's workspace on every fresh
+# container. Snapshot .gitignore and put it back afterwards.
+GITIGNORE="$TARGET/.gitignore"
+GI_BACKUP=""
+if [ -f "$GITIGNORE" ]; then
+    GI_BACKUP="$(mktemp 2>/dev/null || echo '')"
+    [ -n "$GI_BACKUP" ] && cp -p "$GITIGNORE" "$GI_BACKUP"
+fi
+
+# restore_gitignore(): undo init's append. When .gitignore existed, restore the
+# exact bytes. When init CREATED it, delete it - but only after confirming every
+# meaningful line is one mempalace put there, so a file some other process wrote
+# concurrently is never destroyed.
+restore_gitignore() {
+    if [ -n "$GI_BACKUP" ] && [ -f "$GI_BACKUP" ]; then
+        if ! cmp -s "$GI_BACKUP" "$GITIGNORE" 2>/dev/null; then
+            cp -p "$GI_BACKUP" "$GITIGNORE" \
+                && echo "mempalace-init-workspace: reverted init's .gitignore append (already covered by core.excludesfile, #643)"
+        fi
+        rm -f "$GI_BACKUP"
+    elif [ -f "$GITIGNORE" ]; then
+        if [ -z "$(grep -vE '^[[:space:]]*($|#|mempalace\.yaml$|entities\.json$)' "$GITIGNORE")" ]; then
+            rm -f "$GITIGNORE" \
+                && echo "mempalace-init-workspace: removed the .gitignore init created (already covered by core.excludesfile, #643)"
+        else
+            echo "WARNING: mempalace-init-workspace: $GITIGNORE gained unexpected content during init; leaving it untouched" >&2
+        fi
+    fi
+}
+
+# HEADLESS CONTRACT. Three independent guards, because upstream has narrowed
+# --yes before (issue #179) and scopes it deliberately narrowly today:
+#
+#   --yes      bypasses the entity-confirmation AND room-approval prompts
+#              (entity_detector.confirm_entities / room_detector_local
+#              .get_user_approval). Neither guards EOFError, so --yes is what
+#              keeps them from raising on a closed stdin.
+#   --no-llm   skips provider acquisition and the external-LLM consent gate
+#              entirely; init defaults to an Ollama provider that is not running
+#              here.
+#   < /dev/null  the post-init "Mine this directory now? [Y/n]" prompt is NOT
+#              covered by --yes (upstream scopes --yes to entity auto-accept and
+#              says so in _maybe_run_mine_after_init's docstring). It does catch
+#              EOFError and treats it as decline, so an immediately-EOF stdin
+#              answers it deterministically.
+#
+# Deliberately NOT `yes | mempalace init ...`. Verified against MemPalace 3.7.1:
+# a `yes` pipe answers "y" to that mine prompt and runs a full synchronous mine
+# inside postCreateCommand - minutes on a real corpus, and duplicated work since
+# the plugin's own hooks already mine. Worse, `yes` never closes the pipe, so if
+# any prompt ever escapes --yes again the "Name (or enter to stop):" loop in
+# entity_detector consumes "y" forever and never terminates - reproduced here as
+# a runaway that had to be killed. EOF is the only input that cannot say yes to
+# something expensive and cannot fail to terminate a loop.
+#
+# `timeout` is the backstop for whatever this analysis missed: a wedged init
+# degrades to a warning instead of hanging container creation. Absent on a
+# minimal image, so it is used only when present.
 echo "mempalace-init-workspace: detecting rooms for $TARGET"
-if "$INIT_CMD" init "$TARGET" --yes --no-llm; then
+if command -v timeout >/dev/null 2>&1; then
+    set -- timeout "$INIT_TIMEOUT" "$INIT_CMD" init "$TARGET" --yes --no-llm
+else
+    set -- "$INIT_CMD" init "$TARGET" --yes --no-llm
+fi
+
+if "$@" < /dev/null; then
+    restore_gitignore
     echo "mempalace-init-workspace: wrote $TARGET/mempalace.yaml"
 else
-    echo "WARNING: mempalace-init-workspace: '$INIT_CMD init' failed; mining will use the flat 'general' fallback" >&2
+    rc=$?
+    restore_gitignore
+    if [ "$rc" = 124 ]; then
+        echo "WARNING: mempalace-init-workspace: '$INIT_CMD init' exceeded ${INIT_TIMEOUT}s and was killed; mining will use the flat 'general' fallback" >&2
+    else
+        echo "WARNING: mempalace-init-workspace: '$INIT_CMD init' failed (exit $rc); mining will use the flat 'general' fallback" >&2
+    fi
 fi
 exit 0
 MEMPALACE_INIT_WORKSPACE

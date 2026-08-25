@@ -627,6 +627,36 @@ check "mempalace-init-workspace exits 0 when init itself fails" bash -c \
 check "mempalace-init-workspace falls back to the persisted MEMPAL_DIR" bash -c \
   "$_INIT_STUB_SETUP printf 'wing: already\n' > \"\$d/repo/mempalace.yaml\"; MEMPAL_DIR=\"\$d/repo\" MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace | grep -q 'already exists'"
 
+# Headless contract (upstream issue #179; verified against MemPalace 3.7.1).
+# --yes covers the entity + room prompts, --no-llm the provider consent gate,
+# and an EOF stdin the post-init mine prompt that --yes deliberately does NOT
+# cover. A `yes` pipe is the wrong tool here: it answers Y to that mine prompt
+# (a full synchronous mine inside postCreateCommand) and never closes, so any
+# prompt escaping --yes loops forever.
+check "mempalace-init-workspace feeds init an EOF stdin, not a yes-pipe" bash -c \
+  "$_INIT_STUB_SETUP printf '#!/bin/sh\nhead -c 1 > \"\$0.stdin\"\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1; test ! -s \"\$d/bin/stub.stdin\""
+# A wedged init must degrade to a warning, never hang container creation.
+check "mempalace-init-workspace kills an init that exceeds its timeout" bash -c \
+  "$_INIT_STUB_SETUP printf '#!/bin/sh\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; s=\$(date +%s); MEMPALACE_INIT_CMD=\"\$d/bin/stub\" MEMPALACE_INIT_TIMEOUT=2 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" 2>&1 | grep -q 'exceeded 2s'; rc=\$?; e=\$((\$(date +%s)-s)); [ \$rc -eq 0 ] && [ \$e -lt 20 ]"
+
+# init appends its own block to <repo>/.gitignore (upstream #185). The same two
+# names are already ignored machine-wide by core.excludesfile (#643), so that
+# append is redundant AND leaves an uncommitted diff in the user's workspace.
+_GI_STUB="printf '#!/bin/sh\nprintf \"\\\\n# MemPalace per-project files (issue #185)\\\\nmempalace.yaml\\\\nentities.json\\\\n\" >> \"\$2/.gitignore\"\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\";"
+check "mempalace-init-workspace reverts init's append to an existing .gitignore" bash -c \
+  "$_INIT_STUB_SETUP $_GI_STUB printf 'node_modules/\n*.log\n' > \"\$d/repo/.gitignore\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1; [ \"\$(cat \"\$d/repo/.gitignore\")\" = \"\$(printf 'node_modules/\n*.log')\" ]"
+check "mempalace-init-workspace removes a .gitignore that init created" bash -c \
+  "$_INIT_STUB_SETUP $_GI_STUB MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1; ! test -e \"\$d/repo/.gitignore\""
+# ...but never destroys one carrying real user content.
+check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash -c \
+  "$_INIT_STUB_SETUP printf '#!/bin/sh\nprintf \"secrets.env\\\\n\" >> \"\$2/.gitignore\"\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1; grep -q 'secrets.env' \"\$d/repo/.gitignore\""
+
+# End-to-end against the REAL binary: init must complete headless, with an
+# isolated HOME so the container's own palace is untouched. Bounded so a
+# regression here fails the suite instead of wedging it.
+check "real mempalace init completes headless and writes rooms" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from
