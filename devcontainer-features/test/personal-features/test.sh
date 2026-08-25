@@ -153,6 +153,34 @@ check "git core.pager is set to delta" bash -c \
 check "git interactive.diffFilter uses delta" bash -c \
   "[ \"\$(git config --system --get interactive.diffFilter)\" = 'delta --color-only' ]"
 
+# --- machine-wide git excludes (#643) ----------------------------------------
+# mempalace `init` writes entities.json / mempalace.yaml / .mempalace/ into
+# whatever project it is pointed at and offers no way to redirect them, so they
+# are ignored machine-wide at --system scope instead of via a per-repo
+# .gitignore append. Assert the wiring AND the behaviour it exists for.
+check "git core.excludesfile points at the shipped excludes file" bash -c \
+  "[ \"\$(git config --system --get core.excludesfile)\" = '/usr/local/share/git-excludes/gitignore' ]"
+check "the shipped global excludes file exists" bash -c \
+  "test -f /usr/local/share/git-excludes/gitignore"
+for _pattern in mempalace.yaml entities.json .mempalace/ chroma.sqlite3 \
+                knowledge_graph.sqlite3 hallways.json known_entities.json \
+                hook_state/ wal/ locks/; do
+  check "global excludes file ignores $_pattern" bash -c \
+    "grep -qxF '$_pattern' /usr/local/share/git-excludes/gitignore"
+done
+
+# The assertion that actually matters: a real repo, real files, empty status.
+check "mempalace init artifacts are invisible to git status in a fresh repo" bash -c \
+  "d=\"\$(mktemp -d)\"; cd \"\$d\" && git init -q . && touch mempalace.yaml entities.json && mkdir -p .mempalace && touch .mempalace/config.json && [ -z \"\$(git status --porcelain)\" ]"
+# Negative control - without it the check above would also pass if git status
+# were broken or the repo were somehow not a repo at all.
+check "an unrelated untracked file is still reported by git status" bash -c \
+  "d=\"\$(mktemp -d)\"; cd \"\$d\" && git init -q . && touch some-real-file.txt && [ -n \"\$(git status --porcelain)\" ]"
+# Tradeoff-1 escape hatch: a repo that genuinely tracks one of these generic
+# filenames gets it back with a negation in its own .gitignore.
+check "a repo can negate a global exclude in its own .gitignore" bash -c \
+  "d=\"\$(mktemp -d)\"; cd \"\$d\" && git init -q . && printf '!entities.json\n' > .gitignore && touch entities.json && git status --porcelain | grep -q 'entities.json'"
+
 # shell enhancements
 check "starship is installed" starship --version
 check "shell history dir exists" bash -c "test -d /usr/local/share/shell-history"
@@ -478,7 +506,7 @@ check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" b
 
 rm -rf "$HOOKS_TEST_ROOT"
 
-# --- mempalace palace root symlink (#596) -------------------------------------
+# --- mempalace palace root symlink (#596, #643) -------------------------------
 # Upstream mempalace's hooks CLI hardcodes ~/.mempalace as its palace root and
 # treats its absence as the user-removed kill-switch, while the MCP server uses
 # the bind mount at /usr/local/share/mempalace - so without this link every
@@ -489,6 +517,69 @@ check "~/.mempalace is a symlink" bash -c "test -L \"\$HOME/.mempalace\""
 # shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
 check "~/.mempalace points at the bind-mounted palace root" bash -c \
   "[ \"\$(readlink \"\$HOME/.mempalace\")\" = '/usr/local/share/mempalace' ]"
+
+# The env var the whole arrangement is keyed on. Nothing asserted this before,
+# so a typo in devcontainer-feature.json's containerEnv would have gone unnoticed
+# until mempalace quietly wrote to its upstream default instead (#643).
+check "MEMPALACE_PALACE_PATH points into the bind-mounted palace root" bash -c \
+  "[ \"\$MEMPALACE_PALACE_PATH\" = '/usr/local/share/mempalace/palace' ]"
+
+# #643 regression path: the original guard only created the link when the path
+# was ABSENT, so a build that found a real directory there warned and gave up -
+# and everything mempalace then wrote under it lived outside the mount and was
+# discarded on the next rebuild. mempalace-repair must migrate such a
+# directory onto the mount and replace it with the link. MEMPALACE_MOUNT points
+# the repair at a sandbox so the real palace is never touched.
+check "mempalace-repair is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-repair"
+
+check "mempalace-repair creates the link when the path is absent" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$(readlink \"\$d/home/.mempalace\")\" = \"\$d/mount\" ]"
+
+check "mempalace-repair replaces a real directory with the link (#643)" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home/.mempalace/hook_state\" \"\$d/mount\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && test -L \"\$d/home/.mempalace\" && [ \"\$(readlink \"\$d/home/.mempalace\")\" = \"\$d/mount\" ]"
+
+check "mempalace-repair migrates the directory's contents onto the mount" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home/.mempalace/wal\" \"\$d/mount\"; printf 'stranded\n' > \"\$d/home/.mempalace/wal/entry.jsonl\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$(cat \"\$d/mount/wal/entry.jsonl\")\" = 'stranded' ]"
+
+# The mount is the surviving root, so its copy of a colliding file wins.
+check "mempalace-repair does not clobber files already on the mount" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home/.mempalace\" \"\$d/mount\"; printf 'local\n' > \"\$d/home/.mempalace/config.json\"; printf 'mounted\n' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$(cat \"\$d/mount/config.json\")\" = 'mounted' ]"
+
+# A regular file there is a user artifact and must survive untouched.
+check "mempalace-repair leaves a regular file at the path untouched" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf 'mine\n' > \"\$d/home/.mempalace\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$(cat \"\$d/home/.mempalace\")\" = 'mine' ] && ! test -L \"\$d/home/.mempalace\""
+
+check "mempalace-repair is idempotent over an already correct link" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$(readlink \"\$d/home/.mempalace\")\" = \"\$d/mount\" ]"
+
+# The stray `~` artifact (#643): mempalace's MCP server abspath()s a literal
+# `~/...` --palace without expanduser(), so a real directory named `~` can appear
+# at the palace root, stranding memories where nothing will ever read them.
+# mempalace-repair removes exactly that shape and nothing else.
+check "no stray '~' directory at the palace root" bash -c \
+  "! test -e '/usr/local/share/mempalace/~'"
+check "mempalace-repair removes a stray '~' directory at the mount root" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount/~/.mempalace/palace\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && ! test -e \"\$d/mount/~\""
+# Narrowly matched: real palace data next to it must survive.
+check "mempalace-repair leaves the rest of the mount alone" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount/~\" \"\$d/mount/palace\"; printf 'keep\n' > \"\$d/mount/hallways.json\"; MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\" && test -d \"\$d/mount/palace\" && [ \"\$(cat \"\$d/mount/hallways.json\")\" = 'keep' ]"
+
+# palace_path reconciliation (#643): Config.palace_path returns on the env
+# branch before consulting config.json and never reports the disagreement, so a
+# config.json carried in on the mount can name a host path that does not exist
+# here. mempalace-repair rewrites ONLY that key.
+check "mempalace-repair rewrites a disagreeing palace_path" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{\"palace_path\": \"/home/someone-else/.mempalace/palace\"}' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" && python3 -c \"import json,sys;print(json.load(open(sys.argv[1]))['palace_path'])\" \"\$d/mount/config.json\" | grep -qx \"\$d/mount/palace\""
+# topic_wings / hall_keywords are user content and must survive verbatim.
+check "mempalace-repair preserves other config.json keys" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{\"palace_path\": \"/nope\", \"topic_wings\": [\"emotions\"], \"hall_keywords\": {\"emotions\": [\"scared\"]}}' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" && python3 -c \"import json,sys;c=json.load(open(sys.argv[1]));assert c['topic_wings']==['emotions'];assert c['hall_keywords']=={'emotions':['scared']}\" \"\$d/mount/config.json\""
+# A config that already agrees must be left byte-identical.
+check "mempalace-repair is a no-op on an agreeing config.json" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{\"palace_path\":\"PLACEHOLDER\"}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; before=\"\$(cat \"\$d/mount/config.json\")\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" && [ \"\$before\" = \"\$(cat \"\$d/mount/config.json\")\" ]"
+# A corrupt config.json must never abort the repair or be destroyed.
+check "mempalace-repair leaves a corrupt config.json untouched and exits 0" bash -c \
+  "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{ not json ' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" 2>/dev/null; rc=\$?; [ \$rc -eq 0 ] && [ \"\$(cat \"\$d/mount/config.json\")\" = '{ not json ' ]"
 
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
