@@ -4,7 +4,7 @@ from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskAlreadyRunningError, TaskState
 from odoo_sdk.utilities.checkpoint import checkpoint_hint
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 
 
 def _build_run_result(
@@ -106,7 +106,7 @@ class StartTaskCommand(Command):
             and ``already_running`` (``timesheet_id`` is ``None`` — no anchor is
             created).
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
 
         db = self.state
         already_running = False

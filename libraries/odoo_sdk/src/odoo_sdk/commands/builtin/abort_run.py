@@ -3,7 +3,7 @@ from typing import Any, Optional
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import LocalStateClient, TaskNotRunningError, TaskRun, TaskState
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.billing.timesheet import close_anchor
 
 
@@ -51,7 +51,7 @@ class AbortRunCommand(Command):
         :raises TrackerStateMissingError: When the central DB is not
             host-provisioned at its expected path.
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         db = self.state
         run = _find_target_run(db, run_id_or_task_id)
         if run is None:

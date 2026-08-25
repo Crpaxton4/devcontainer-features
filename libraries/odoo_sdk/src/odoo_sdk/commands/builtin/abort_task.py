@@ -2,7 +2,7 @@ from typing import Any
 
 from ..command import Command, require_active_run
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.billing.timesheet import close_anchor
 
 
@@ -35,7 +35,7 @@ class AbortTaskCommand(Command):
             closed.
         :raises TaskNotRunningError: When there is no active session to abort.
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         db = self.state
         require_active_run(db, task_id)
 

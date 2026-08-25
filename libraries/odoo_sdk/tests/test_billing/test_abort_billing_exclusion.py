@@ -39,7 +39,7 @@ from tests.support import make_state_db
 
 UTC = timezone.utc
 GAP = 3600
-_ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
+_ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_sdk_configured"
 
 T_START = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
 T_ABORT = datetime(2026, 6, 1, 9, 30, tzinfo=UTC)

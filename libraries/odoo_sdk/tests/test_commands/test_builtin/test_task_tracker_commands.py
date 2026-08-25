@@ -22,13 +22,13 @@ from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError, TaskState
 from tests.support import make_state_db
 
-_LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_odoo_devcontainer"
-_STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_odoo_devcontainer"
-_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
-_QUESTION_GUARD = "odoo_sdk.commands.builtin.task_question.assert_odoo_devcontainer"
-_RESUME_GUARD = "odoo_sdk.commands.builtin.resume_task.assert_odoo_devcontainer"
-_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
-_STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
+_LIST_GUARD = "odoo_sdk.commands.builtin.task_list.assert_sdk_configured"
+_STATUS_GUARD = "odoo_sdk.commands.builtin.task_status.assert_sdk_configured"
+_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_sdk_configured"
+_QUESTION_GUARD = "odoo_sdk.commands.builtin.task_question.assert_sdk_configured"
+_RESUME_GUARD = "odoo_sdk.commands.builtin.resume_task.assert_sdk_configured"
+_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_sdk_configured"
+_STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_sdk_configured"
 
 
 def _tmp_db() -> TaskStateDB:

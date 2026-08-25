@@ -603,6 +603,29 @@ def tracker_db_path(root: Optional[Path] = None) -> Path:
     return base / TRACKER_DB_FILENAME
 
 
+def assert_tracker_db_present(path: Optional[Path] = None) -> None:
+    """Raise :class:`TrackerStateMissingError` when the tracker DB is absent.
+
+    The DB is host-provisioned and the SDK NEVER creates it (#369), so its
+    absence is a setup failure with a fixed remedy rather than something to
+    recover from. This is the single definition of that check and of its
+    message: :meth:`LocalStateClient._raw_connect` calls it just before opening a
+    connection, and :func:`~odoo_sdk.utilities.env.assert_sdk_configured` calls
+    it up front so a command fails on its precondition rather than mid-body
+    (#642).
+
+    ``path`` defaults to :func:`tracker_db_path`, which creates no directories.
+    """
+    db_path = Path(path) if path is not None else tracker_db_path()
+    if not db_path.exists():
+        raise TrackerStateMissingError(
+            f"No tracker database at {db_path}. This database is "
+            "provisioned on the host and bind-mounted into the container; it is "
+            "not created automatically. Run setup.sh on the host, then rebuild "
+            "the container."
+        )
+
+
 def current_repo_label() -> str:
     """Return the normalized ``owner/repo`` label for the cwd's git remote, or ''.
 
@@ -936,14 +959,9 @@ class LocalStateClient:
         # The DB is host-provisioned; the SDK NEVER creates it (#369; see
         # :class:`TrackerStateMissingError`). ``mode=rw`` raises rather than creating
         # a missing file; the explicit existence check turns that into the single
-        # named error every entry point surfaces.
-        if not self._db_path.exists():
-            raise TrackerStateMissingError(
-                f"No tracker database at {self._db_path}. This database is "
-                "provisioned on the host and bind-mounted into the container; it is "
-                "not created automatically. Run setup.sh on the host, then rebuild "
-                "the container."
-            )
+        # named error every entry point surfaces — shared with the up-front
+        # capability guard so both report it identically (#642).
+        assert_tracker_db_present(self._db_path)
         conn = sqlite3.connect(f"file:{self._db_path}?mode=rw", uri=True)
         # WAL lets a writer and readers proceed concurrently, and a 2s busy
         # timeout makes a second writer wait for the lock instead of failing

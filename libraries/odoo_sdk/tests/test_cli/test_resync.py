@@ -2,7 +2,7 @@
 
 The pullers themselves are unit-tested against faked tools elsewhere; here they
 are patched so the tests assert only the CLI's wiring: source selection, the
-lazy env-guarded Odoo path, and the per-source output lines.
+lazily capability-guarded Odoo path, and the per-source output lines.
 """
 
 import unittest
@@ -10,7 +10,7 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
-from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
+from odoo_sdk.state import TrackerStateMissingError
 
 _MOD = "odoo_sdk.cli.__main__"
 
@@ -31,7 +31,7 @@ class TestCmdResync(unittest.TestCase):
             sync_git_log=MagicMock(return_value={"inserted": 2}),
             sync_github=MagicMock(return_value={"inserted": 1}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 3}),
-            assert_odoo_devcontainer=MagicMock(),
+            assert_sdk_configured=MagicMock(),
             OdooClient=MagicMock(),
         )
         self.assertIn("git: inserted 2", out)
@@ -46,18 +46,31 @@ class TestCmdResync(unittest.TestCase):
         git.assert_called_once()
         gh.assert_not_called()
 
-    def test_odoo_skipped_when_env_assert_fails(self):
+    def test_odoo_skipped_when_tracker_db_missing(self):
         odoo = MagicMock()
         out = self._run(
             ["resync", "--sources", "odoo"],
             sync_odoo_chatter=odoo,
-            assert_odoo_devcontainer=MagicMock(
-                side_effect=OdooDevcontainerRequiredError("nope")
+            assert_sdk_configured=MagicMock(
+                side_effect=TrackerStateMissingError("no tracker database")
             ),
         )
         # The odoo puller is never built/run, and the command does not crash.
         odoo.assert_not_called()
-        self.assertIn("odoo: skipped (odoo devcontainer not configured)", out)
+        self.assertIn("odoo: skipped (odoo sdk not configured)", out)
+
+    def test_odoo_skipped_when_connection_settings_missing(self):
+        """The guard's other failure (#642) degrades to the same skip notice."""
+        odoo = MagicMock()
+        out = self._run(
+            ["resync", "--sources", "odoo"],
+            sync_odoo_chatter=odoo,
+            assert_sdk_configured=MagicMock(
+                side_effect=ValueError("Missing Odoo connection settings: url")
+            ),
+        )
+        odoo.assert_not_called()
+        self.assertIn("odoo: skipped (odoo sdk not configured)", out)
 
     def test_skip_reason_line_formatting(self):
         out = self._run(
@@ -67,8 +80,8 @@ class TestCmdResync(unittest.TestCase):
         self.assertEqual(out.strip(), "github: skipped (gh unavailable)")
 
     def test_resync_is_local_only(self):
-        # resync must skip the global Odoo env assert so git/github work outside a
-        # devcontainer; the guard lives in the odoo path only.
+        # resync must skip the global capability assert so git/github work on an
+        # unconfigured SDK; the guard lives in the odoo path only.
         self.assertIn("resync", cli._LOCAL_ONLY)
 
     def test_google_sources_opt_in_only(self):
@@ -80,7 +93,7 @@ class TestCmdResync(unittest.TestCase):
             sync_git_log=git,
             sync_github=MagicMock(return_value={"inserted": 0}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 0}),
-            assert_odoo_devcontainer=MagicMock(),
+            assert_sdk_configured=MagicMock(),
             OdooClient=MagicMock(),
             sync_google_calendar=cal,
         )

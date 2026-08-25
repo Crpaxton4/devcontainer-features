@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from odoo_sdk.state.db import (
     LocalStateClient as TaskStateDB,
+    assert_tracker_db_present,
     tracker_db_path,
 )
 from odoo_sdk.state.models import (
@@ -638,6 +639,45 @@ class TestMissingStateRaises(unittest.TestCase):
         self.assertIn(str(missing), str(ctx.exception))
         # The SDK must NOT have created the file as a side effect.
         self.assertFalse(missing.exists())
+
+
+class TestAssertTrackerDbPresent(unittest.TestCase):
+    """The extracted existence check (#642) shared by ``_raw_connect`` and the
+    up-front capability guard, so both report an absent DB identically."""
+
+    def test_absent_explicit_path_raises_with_remedy(self):
+        missing = Path(tempfile.mkdtemp()) / "absent" / "tracker.db"
+        with self.assertRaises(TrackerStateMissingError) as ctx:
+            assert_tracker_db_present(missing)
+        message = str(ctx.exception)
+        self.assertIn(str(missing), message)
+        self.assertIn("setup.sh", message)
+        # Checking must never materialize the file (#369).
+        self.assertFalse(missing.exists())
+
+    def test_present_explicit_path_passes(self):
+        present = Path(tempfile.mkdtemp()) / "tracker.db"
+        make_state_db(present)
+        self.assertIsNone(assert_tracker_db_present(present))
+
+    def test_defaults_to_tracker_db_path(self):
+        """With no argument the central location is consulted, not the cwd."""
+        root = Path(tempfile.mkdtemp()) / "state-root"
+        with patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": str(root)}):
+            with self.assertRaises(TrackerStateMissingError) as ctx:
+                assert_tracker_db_present()
+        self.assertIn(str(root / "tracker.db"), str(ctx.exception))
+        # No directory is created as a side effect of resolving the path (#369).
+        self.assertFalse(root.exists())
+
+    def test_message_matches_the_connect_time_error(self):
+        """One definition, one message — a caller cannot tell the two apart."""
+        missing = Path(tempfile.mkdtemp()) / "absent" / "tracker.db"
+        with self.assertRaises(TrackerStateMissingError) as guard:
+            assert_tracker_db_present(missing)
+        with self.assertRaises(TrackerStateMissingError) as connect:
+            TaskStateDB(db_path=missing).get_all_active_runs()
+        self.assertEqual(str(guard.exception), str(connect.exception))
 
 
 if __name__ == "__main__":

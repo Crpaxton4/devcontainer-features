@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.utilities.odoo_helpers import name_search_projects
 
 
@@ -29,7 +29,7 @@ class TaskListCommand(Command):
         :param limit: Maximum number of tasks to return.
         :return: List of matching task records.
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         uid = self._client.uid
         domain: list[Any] = [("user_ids", "in", [uid])]
 

@@ -6,7 +6,7 @@ only primitives; the remaining thin Odoo wrappers issue a single client call so
 command bodies stay at one altitude.
 """
 
-from .env import OdooDevcontainerRequiredError, assert_odoo_devcontainer
+from .env import assert_sdk_configured
 from .html import html_to_markdown
 from .odoo_helpers import (
     format_chatter,
@@ -20,8 +20,7 @@ from .odoo_helpers import (
 )
 
 __all__ = [
-    "assert_odoo_devcontainer",
-    "OdooDevcontainerRequiredError",
+    "assert_sdk_configured",
     "html_to_markdown",
     "resolve_many2one",
     "format_chatter",

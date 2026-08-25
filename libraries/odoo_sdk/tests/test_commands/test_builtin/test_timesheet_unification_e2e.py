@@ -29,9 +29,9 @@ from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.state import LocalStateClient
 from tests.support import make_state_db
 
-_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
-_STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
-_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
+_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_sdk_configured"
+_STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_sdk_configured"
+_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_sdk_configured"
 
 
 def _tmp_db() -> LocalStateClient:

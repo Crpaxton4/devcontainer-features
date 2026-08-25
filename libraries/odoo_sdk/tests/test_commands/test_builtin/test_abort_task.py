@@ -11,7 +11,7 @@ from odoo_sdk.state import TaskNotRunningError, TaskState
 from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
 from tests.support import make_state_db
 
-_ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_odoo_devcontainer"
+_ABORT_GUARD = "odoo_sdk.commands.builtin.abort_task.assert_sdk_configured"
 
 
 def _tmp_db() -> TaskStateDB:

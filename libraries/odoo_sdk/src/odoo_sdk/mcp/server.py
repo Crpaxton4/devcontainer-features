@@ -23,7 +23,6 @@ from odoo_sdk.state.models import (
     TaskNotRunningError,
     TrackerStateMissingError,
 )
-from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
 log = logging.getLogger(__name__)
 
@@ -175,7 +174,7 @@ def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
 #: Exceptions the MCP error boundary renders as a structured payload. Every
 #: entry is a caller-actionable failure — a classified Odoo fault
 #: (:class:`~odoo_sdk.transport.errors.OdooError` and its subclasses), a
-#: session-state violation, the devcontainer environment guard, a failed git
+#: session-state violation, an absent host-provisioned tracker DB, a failed git
 #: invocation from the ``start_task`` branch setup
 #: (``subprocess.CalledProcessError``, #541 — it used to escape as a stack
 #: trace), or invalid input (``ValueError``) — a shape an LLM can reason about
@@ -187,7 +186,6 @@ _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     TaskNotRunningError,
     TaskAlreadyRunningError,
     TrackerStateMissingError,
-    OdooDevcontainerRequiredError,
     subprocess.CalledProcessError,
     ValueError,
 )

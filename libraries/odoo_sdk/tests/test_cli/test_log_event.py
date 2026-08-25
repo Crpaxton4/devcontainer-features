@@ -21,7 +21,7 @@ from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state.db import tracker_db_path
 from tests.support import provision_schema
 
-ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
+ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_sdk_configured"
 
 
 def _run(argv: list[str]) -> StringIO:

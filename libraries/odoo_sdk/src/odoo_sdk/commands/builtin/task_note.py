@@ -9,7 +9,7 @@ from ..command import (
 from ._registration import builtin_command
 from odoo_sdk.utilities.attachments import create_attachments
 from odoo_sdk.utilities.checkpoint import checkpoint_hint
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.utilities.odoo_helpers import post_chatter_note
 
 
@@ -60,7 +60,7 @@ class TaskNoteCommand(Command):
         :return: Confirmation with message id (and attachment ids when files
             were attached).
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         enforce_chatter_body_limit(note, "note")
         db = self.state
         run = require_active_run(db, task_id)

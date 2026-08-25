@@ -13,8 +13,8 @@ from odoo_sdk.state import TaskState
 from tests.support import make_state_db
 
 
-ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
-STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_odoo_devcontainer"
+ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_sdk_configured"
+STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_sdk_configured"
 
 
 def _tmp_db() -> TaskStateDB:
@@ -43,15 +43,22 @@ NORMALIZE_MERGE = "odoo_sdk.commands.builtin.normalize_timesheets.merge_timeshee
 # ── _assert_env ───────────────────────────────────────────────────────────────
 
 class TestAssertEnv(unittest.TestCase):
-    def test_exits_when_not_devcontainer(self):
-        from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
+    def test_exits_when_tracker_db_missing(self):
+        from odoo_sdk.state import TrackerStateMissingError
 
-        with patch(ASSERT_GUARD, side_effect=OdooDevcontainerRequiredError("bad env")):
+        with patch(ASSERT_GUARD, side_effect=TrackerStateMissingError("no db")):
             with self.assertRaises(SystemExit) as ctx:
                 cli._assert_env()
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_passes_in_devcontainer(self):
+    def test_exits_when_connection_settings_missing(self):
+        # The guard's second failure mode (#642) must exit 1 the same way.
+        with patch(ASSERT_GUARD, side_effect=ValueError("Missing Odoo connection")):
+            with self.assertRaises(SystemExit) as ctx:
+                cli._assert_env()
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_passes_when_sdk_configured(self):
         with patch(ASSERT_GUARD):
             cli._assert_env()  # must not raise
 

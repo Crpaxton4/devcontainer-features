@@ -33,10 +33,10 @@ from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.transport.executor import OdooExecutor
 from tests.support import make_state_db
 
-_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_odoo_devcontainer"
-_QUESTION_GUARD = "odoo_sdk.commands.builtin.task_question.assert_odoo_devcontainer"
-_RESUME_GUARD = "odoo_sdk.commands.builtin.resume_task.assert_odoo_devcontainer"
-_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_odoo_devcontainer"
+_NOTE_GUARD = "odoo_sdk.commands.builtin.task_note.assert_sdk_configured"
+_QUESTION_GUARD = "odoo_sdk.commands.builtin.task_question.assert_sdk_configured"
+_RESUME_GUARD = "odoo_sdk.commands.builtin.resume_task.assert_sdk_configured"
+_START_GUARD = "odoo_sdk.commands.builtin.start_task.assert_sdk_configured"
 
 
 class _KeywordOnlyMessagePostExecutor(OdooExecutor):

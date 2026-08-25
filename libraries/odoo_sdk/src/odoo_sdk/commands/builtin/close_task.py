@@ -17,7 +17,7 @@ class CloseTaskCommand(Command):
     reaches the MCP wire surface — the agent cannot see or reason about ``CLOSED``
     (issue #504's explicit non-goal). A purely local tracker transition: it writes
     no ``account.analytic.line`` hours and makes no Odoo call, so it needs no
-    devcontainer/Odoo connection.
+    Odoo connection.
 
     It closes the task's live run (``RUNNING``/``AWAITING_ANSWERS``) or, when none
     is live, its most recent resumable ``STOPPED`` run, and reports a run that has
