@@ -282,7 +282,7 @@ else
     echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
 fi
 
-# --- mempalace palace root symlink (#596) ------------------------------------
+# --- mempalace palace root reconciliation (#596, #643) -----------------------
 # Upstream mempalace's hooks CLI hardcodes its palace root to ~/.mempalace and
 # treats its absence as the user-removed kill-switch, while the MCP server
 # writes to the bind mount at /usr/local/share/mempalace (MEMPALACE_PALACE_PATH,
@@ -291,16 +291,155 @@ fi
 # a no-op indistinguishable from a working install, the same failure class as
 # #485. Symlink the home path onto the mount so both sides agree on ONE root and
 # hook state/logs persist across rebuilds. The mount target dir already exists:
-# the persisted-paths loop above created it (mempalace row). Only create the
-# link when the path is absent so a real user dir/file (or an existing symlink)
-# is never clobbered. `-h` chowns the link itself, not the (root-owned) target.
-echo "Linking $_REMOTE_USER_HOME/.mempalace to the mounted palace root"
-if [ ! -e "$_REMOTE_USER_HOME/.mempalace" ] && [ ! -L "$_REMOTE_USER_HOME/.mempalace" ]; then
-    ln -s /usr/local/share/mempalace "$_REMOTE_USER_HOME/.mempalace"
-    chown -h "$_REMOTE_USER" "$_REMOTE_USER_HOME/.mempalace"
+# the persisted-paths loop above created it (mempalace row).
+#
+# The link is load-bearing for far more than the hooks CLI: a whole class of
+# mempalace state ignores MEMPALACE_PALACE_PATH and is hardcoded under
+# $HOME/.mempalace - config.json and people_map.json (config.py), locks/
+# (palace.py), wal/ (wal.py), hook_state/ (hooks_cli.py) and known_entities.json
+# (miner.py). Without the link every one of those is container-local and lost on
+# the next rebuild.
+#
+# Installed as a script and run from BOTH here and postCreateCommand, because
+# the two passes see different filesystems. At image-build time the bind mount
+# is not attached yet, so /usr/local/share/mempalace is still the empty dir the
+# persisted-paths loop made and the mount-inspecting steps below have nothing to
+# look at; the host's palace only appears at container-create time. Creating the
+# symlink early is still worth doing (it resolves lazily, and it is baked into
+# the image), and every step is idempotent, so running it twice is free. The
+# script also makes the repair exercisable by the feature test - which is the
+# only way to test it, since `devcontainer features test` runs no
+# postCreateCommand.
+cat > /usr/local/bin/mempalace-repair << 'MEMPALACE_REPAIR'
+#!/bin/sh
+set -eu
+# mempalace-repair [HOME_DIR] - reconcile mempalace's several disagreeing ideas
+# of where the palace lives (#596, #643):
+#
+#   1. point <HOME_DIR>/.mempalace at the palace mount, migrating a
+#      container-local directory left there by an earlier build;
+#   2. remove the stray `~` directory an unexpanded --palace argument creates at
+#      the mount root;
+#   3. rewrite config.json's palace_path to agree with MEMPALACE_PALACE_PATH.
+#
+# HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root and
+# MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; both exist so
+# the feature test can drive this against a sandbox instead of the real palace.
+# Every step is idempotent and none is fatal on its own.
+
+HOME_DIR="${1:-${HOME:?HOME is unset and no directory argument was given}}"
+MOUNT="${MEMPALACE_MOUNT:-/usr/local/share/mempalace}"
+LINK="$HOME_DIR/.mempalace"
+
+link_it() {
+    ln -s "$MOUNT" "$LINK"
+    if [ -n "${MEMPALACE_LINK_OWNER:-}" ]; then
+        # -h chowns the link itself, not the (root-owned) target.
+        chown -h "$MEMPALACE_LINK_OWNER" "$LINK"
+    fi
+}
+
+# --- 1. home symlink ---------------------------------------------------------
+# #643: the original guard was absent-only (`[ ! -e ] && [ ! -L ]`), so a run
+# that found a REAL directory at ~/.mempalace took the else branch and merely
+# warned - silently reintroducing exactly the data loss #596 existed to fix, and
+# observed in the wild with live hook_state/, locks/ and wal/ stranded off the
+# mount. Migrate such a directory onto the mount instead of giving up. Anything
+# that is neither a directory nor a symlink is a user artifact and is left alone.
+if [ -L "$LINK" ]; then
+    if [ "$(readlink "$LINK")" = "$MOUNT" ]; then
+        echo "mempalace-repair: $LINK already points at $MOUNT"
+    else
+        echo "WARNING: $LINK is a symlink to $(readlink "$LINK"), not $MOUNT; leaving it untouched (mempalace state may not persist across rebuilds)" >&2
+    fi
+elif [ ! -e "$LINK" ]; then
+    link_it
+    echo "mempalace-repair: linked $LINK to $MOUNT"
+elif [ -d "$LINK" ]; then
+    # Merge onto the mount rather than over it: `-n` keeps the mount's copy of
+    # any file present on both sides. The mount is the surviving root and holds
+    # what previous rebuilds accumulated; the container-local directory only ever
+    # holds writes made since this image was built.
+    echo "mempalace-repair: migrating $LINK onto $MOUNT (#643)"
+    mkdir -p "$MOUNT"
+    if cp -a -n "$LINK/." "$MOUNT/"; then
+        rm -rf "${LINK:?}"
+        link_it
+        echo "mempalace-repair: migrated and linked $LINK to $MOUNT"
+    else
+        echo "WARNING: failed to migrate $LINK onto $MOUNT; leaving it untouched (mempalace state will not persist across rebuilds)" >&2
+    fi
 else
-    echo "WARNING: $_REMOTE_USER_HOME/.mempalace already exists; leaving it untouched (mempalace plugin hooks may write to a container-local root)" >&2
+    echo "WARNING: $LINK exists and is neither a directory nor a symlink; leaving it untouched (mempalace plugin hooks may write to a container-local root)" >&2
 fi
+
+# --- 2. stray `~` artifact ---------------------------------------------------
+# mempalace's MCP server resolves --palace with os.path.abspath() but WITHOUT
+# os.path.expanduser() (mcp_server.py), unlike its CLI sibling. A literal `~/...`
+# argument therefore resolves against the process cwd instead of $HOME, and the
+# chroma backend then makedirs() it - producing a real directory named `~` under
+# whatever root the server was started in. One such artifact exists on the mount
+# in the wild (`<mount>/~/.mempalace/palace/`), stranding memories where nothing
+# will ever read them.
+#
+# Nothing in this container passes --palace, so this removes existing damage
+# rather than working around a live bug. Matched narrowly on that exact shape -
+# an entry literally named `~` at the mount root that is a real directory, never
+# a symlink - so a blanket delete can never reach real palace data.
+if [ -d "$MOUNT/~" ] && [ ! -L "$MOUNT/~" ]; then
+    echo "mempalace-repair: removing stray '~' directory under $MOUNT (#643)"
+    rm -rf "$MOUNT/~"
+fi
+
+# --- 3. config.json palace_path ----------------------------------------------
+# Three sources name the palace root and they disagree: MEMPALACE_PALACE_PATH
+# (devcontainer-feature.json, persisted-paths.tsv) points at the mount, while a
+# config.json carried in on the mount from another machine may name a host path
+# that does not exist here. mempalace's Config.palace_path returns on the env
+# branch BEFORE consulting config.json (config.py) and says nothing about the
+# disagreement, so the stale value sits there indefinitely - misleading anyone
+# who reads the file, and silently deciding the answer for any code path that
+# reads config.json directly instead of going through Config.
+#
+# Rewrite ONLY the palace_path key so it agrees with the env var. topic_wings
+# and hall_keywords in the same file are user content and are never touched; the
+# rewrite preserves every other key and is a no-op when the two already agree.
+# python3 is already a hard dependency of the mempalace install (jq is not).
+if [ -n "${MEMPALACE_PALACE_PATH:-}" ] && [ -f "$LINK/config.json" ]; then
+    python3 - "$LINK/config.json" "$MEMPALACE_PALACE_PATH" <<'MEMPALACE_RECONCILE_PY' || echo "WARNING: failed to reconcile mempalace palace_path, skipping" >&2
+import json
+import os
+import sys
+
+config_file, expected = sys.argv[1], os.path.abspath(os.path.expanduser(sys.argv[2]))
+try:
+    with open(config_file, encoding="utf-8") as handle:
+        config = json.load(handle)
+except (OSError, ValueError) as exc:
+    print(f"WARNING: cannot read {config_file} ({exc}); leaving it untouched", file=sys.stderr)
+    sys.exit(0)
+if not isinstance(config, dict):
+    print(f"WARNING: {config_file} is not a JSON object; leaving it untouched", file=sys.stderr)
+    sys.exit(0)
+
+# Expand before comparing so a config that already agrees, but spells the path
+# with a `~`, is recognised as agreeing and left byte-identical.
+current = config.get("palace_path")
+if current is not None and os.path.abspath(os.path.expanduser(str(current))) == expected:
+    sys.exit(0)
+
+config["palace_path"] = expected
+with open(config_file, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=4)
+    handle.write("\n")
+print(f"mempalace-repair: palace_path {current!r} -> {expected!r} (#643)")
+MEMPALACE_RECONCILE_PY
+fi
+MEMPALACE_REPAIR
+chmod 0755 /usr/local/bin/mempalace-repair
+
+echo "Reconciling the mempalace palace root for $_REMOTE_USER_HOME"
+MEMPALACE_LINK_OWNER="$_REMOTE_USER" /usr/local/bin/mempalace-repair "$_REMOTE_USER_HOME"
 
 # --- Claude Code integrations: MCP server + mempalace plugin (#486, #484) ----
 # sync-claude-mcp registers the odoo-mcp MCP server and the mempalace plugin at
@@ -683,6 +822,57 @@ git config --system core.hooksPath "$GIT_HOOKS_DIR"
 # installed, and the feature test asserts these exact config values.
 git config --system core.pager delta
 git config --system interactive.diffFilter "delta --color-only"
+
+# --- Machine-wide git excludes (#643) ---------------------------------------
+# mempalace's `init` writes project-local artifacts into whatever repo it is
+# pointed at - entities.json, mempalace.yaml, and a .mempalace/ dir - and none of
+# them can be redirected: `init` resolves them from its --dir argument
+# (cli.py, room_detector_local.py) and exposes no --output/--central/--palace-path
+# option, no config.json key and no MEMPALACE_* env var moves them. Upstream's own
+# answer is to append a 2-line block to each project's .gitignore, which does not
+# scale across a tree of working repos and dirties every one of them.
+#
+# So ignore them machine-wide instead, at the same --system scope (and for the
+# same "these tools are always installed" reason) as core.hooksPath and
+# core.pager above. `init` is worth supporting: its mempalace.yaml `rooms` list
+# is what routes mined files into rooms (miner.py); without it, mining collapses
+# into a single `general` room, and config.json's topic_wings/hall_keywords are
+# a keyword-to-hall map, not a substitute. The palace artifact names are listed
+# too, so a palace root that ever lands inside a repo stays untracked.
+#
+# TRADEOFF 1 - these are generic filenames. entities.json, hallways.json and
+# known_entities.json could plausibly be real tracked files in an unrelated repo.
+# Ignore rules never affect ALREADY-TRACKED files, so this can only ever hide a
+# NEW one; a repo that needs one back negates it in its own .gitignore
+# (`!entities.json`) or uses `git add -f`.
+#
+# TRADEOFF 2 - setting core.excludesfile shadows git's default
+# ~/.config/git/ignore, which only applies when core.excludesfile is unset at
+# every scope. A user who wants their own global excludes should set
+# `git config --global core.excludesfile <path>` (--global beats --system) and
+# copy these entries into it.
+echo "Configuring machine-wide git excludes (core.excludesfile)"
+GIT_EXCLUDES_DIR="/usr/local/share/git-excludes"
+mkdir -p "$GIT_EXCLUDES_DIR"
+cat > "$GIT_EXCLUDES_DIR/gitignore" << 'EOF'
+# Machine-wide git excludes, installed by the personal-features devcontainer
+# feature (#643). See install.sh for the rationale and the two tradeoffs.
+
+# mempalace `init` project-local artifacts
+mempalace.yaml
+entities.json
+.mempalace/
+
+# mempalace palace artifacts, in case a palace root ever lands inside a repo
+chroma.sqlite3
+knowledge_graph.sqlite3
+hallways.json
+known_entities.json
+hook_state/
+wal/
+locks/
+EOF
+git config --system core.excludesfile "$GIT_EXCLUDES_DIR/gitignore"
 
 echo "Installing shell enhancements (Starship prompt, aliases, persisted history)"
 # --version pins the release; the installer then builds a direct
