@@ -44,10 +44,7 @@ from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
-from odoo_sdk.utilities.env import (
-    OdooDevcontainerRequiredError,
-    assert_odoo_devcontainer,
-)
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
@@ -59,8 +56,8 @@ from odoo_sdk.billing.upload import upload_sessions
 
 def _assert_env() -> None:
     try:
-        assert_odoo_devcontainer()
-    except OdooDevcontainerRequiredError as exc:
+        assert_sdk_configured()
+    except (TrackerStateMissingError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -351,17 +348,21 @@ def _resync_google(puller: Callable[..., dict], db: TaskStateDB) -> dict:
 
 
 def _resync_odoo(db: TaskStateDB) -> dict:
-    """Run the Odoo chatter puller, or skip cleanly when the env assert fails.
+    """Run the Odoo chatter puller, or skip cleanly when the capability check fails.
 
     The git/github pullers never need Odoo, so a resync that also requests
-    ``odoo`` outside a configured devcontainer must degrade to a skip notice
-    rather than aborting the whole command. The :class:`OdooClient` is built only
-    after the assert passes, honoring the lazy-client contract.
+    ``odoo`` where the SDK is unconfigured must degrade to a skip notice rather
+    than aborting the whole command. The :class:`OdooClient` is built only after
+    the assert passes, honoring the lazy-client contract.
+
+    The two failures :func:`~odoo_sdk.utilities.env.assert_sdk_configured` raises
+    are caught by name (#642). Catching a bare ``ValueError`` matches the sibling
+    :func:`_resync_google`, which already treats one as a skip reason.
     """
     try:
-        assert_odoo_devcontainer()
-    except OdooDevcontainerRequiredError:
-        return {"skipped": "odoo devcontainer not configured"}
+        assert_sdk_configured()
+    except (TrackerStateMissingError, ValueError):
+        return {"skipped": "odoo sdk not configured"}
     return sync_odoo_chatter(OdooClient(), db, LocalConfig.load())
 
 
@@ -840,11 +841,11 @@ class _Ctx(NamedTuple):
 
 
 # The single routing table: command name -> (handler, needs_odoo). A
-# ``needs_odoo=False`` command skips the devcontainer assert and builds no
+# ``needs_odoo=False`` command skips the capability assert and builds no
 # OdooClient because it touches only local tracker state — ``log-event`` writes
 # it, ``discover`` / ``prune`` read it, and ``resync`` is local-first (its
 # git/github pullers never touch Odoo and it constructs an OdooClient lazily,
-# behind its own env assert, only when ``odoo`` is requested). Adding a
+# behind its own capability assert, only when ``odoo`` is requested). Adding a
 # subcommand means one entry here (plus its parser).
 _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
     "list": (lambda c: cmd_list(c.registry, c.args), True),

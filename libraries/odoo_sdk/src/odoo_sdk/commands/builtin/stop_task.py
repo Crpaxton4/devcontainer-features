@@ -3,7 +3,7 @@ from typing import Any
 from ..command import Command, require_active_run
 from ._registration import builtin_command
 from odoo_sdk.state.summary import summarize_run_activity
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 
 
 @builtin_command
@@ -47,7 +47,7 @@ class StopTaskCommand(Command):
         :return: Summary with task name, elapsed time, and the derived
             ``run_summary`` (``None`` when the run recorded no events or notes).
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         db = self.state
         run = require_active_run(db, task_id)
         elapsed_hours = run.elapsed_hours

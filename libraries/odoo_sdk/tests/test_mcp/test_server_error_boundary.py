@@ -18,9 +18,12 @@ from unittest.mock import MagicMock, Mock, patch
 from odoo_sdk.commands.command_registry import Registry
 from odoo_sdk.mcp import server
 from odoo_sdk.mcp.server import OdooMCPServer, _error_boundary, _error_payload
-from odoo_sdk.state.models import TaskAlreadyRunningError, TaskNotRunningError
+from odoo_sdk.state.models import (
+    TaskAlreadyRunningError,
+    TaskNotRunningError,
+    TrackerStateMissingError,
+)
 from odoo_sdk.transport.errors import OdooError, OdooValidationError
-from odoo_sdk.utilities.env import OdooDevcontainerRequiredError
 
 # Each caught type paired with the exact payload the boundary must produce. The
 # amendment to #222 uses TaskAlreadyRunningError in place of ActiveSessionError.
@@ -33,9 +36,9 @@ _CAUGHT_CASES = [
         "session already active",
     ),
     (
-        OdooDevcontainerRequiredError("not a devcontainer"),
-        "OdooDevcontainerRequiredError",
-        "not a devcontainer",
+        TrackerStateMissingError("no tracker database at /x/tracker.db"),
+        "TrackerStateMissingError",
+        "no tracker database at /x/tracker.db",
     ),
     (ValueError("bad input"), "ValueError", "bad input"),
 ]

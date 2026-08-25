@@ -23,7 +23,7 @@ from odoo_sdk.reap import REAP_THRESHOLD_ENV
 from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
 from tests.support import provision_schema
 
-ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
+ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_sdk_configured"
 
 
 def _central_db(root: Path) -> LocalStateClient:

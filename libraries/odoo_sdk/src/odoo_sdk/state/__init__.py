@@ -9,6 +9,7 @@ from .config import LocalConfig, OdooConnectionSettings
 from .db import (
     LocalStateClient,
     SCHEMA_DDL,
+    assert_tracker_db_present,
     create_schema,
     current_repo_label,
     tracker_db_path,
@@ -35,6 +36,7 @@ __all__ = [
     "SessionWindow",
     "session_key",
     "SCHEMA_DDL",
+    "assert_tracker_db_present",
     "create_schema",
     "current_repo_label",
     "tracker_db_path",

@@ -19,8 +19,8 @@ from odoo_sdk.state.db import tracker_db_path
 from odoo_sdk.billing.timesheet import ANCHOR_NAME
 from tests.support import provision_schema
 
-ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_odoo_devcontainer"
-CMD_ASSERT_GUARD = "odoo_sdk.commands.builtin.abort_run.assert_odoo_devcontainer"
+ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_sdk_configured"
+CMD_ASSERT_GUARD = "odoo_sdk.commands.builtin.abort_run.assert_sdk_configured"
 
 
 def _central_db(root: Path) -> LocalStateClient:

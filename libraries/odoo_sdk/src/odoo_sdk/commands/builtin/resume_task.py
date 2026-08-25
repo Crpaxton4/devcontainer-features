@@ -3,7 +3,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 
 
 @builtin_command
@@ -38,7 +38,7 @@ class ResumeTaskCommand(Command):
         :param task_id: Odoo project.task record id.
         :return: Confirmation with task name and resumed_at timestamp.
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         db = self.state
         run = db.transition_to_running(task_id)
         resumed_at = datetime.now(timezone.utc).isoformat()

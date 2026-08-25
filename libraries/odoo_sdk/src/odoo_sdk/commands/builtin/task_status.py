@@ -3,7 +3,7 @@ from typing import Any
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskRun
-from odoo_sdk.utilities.env import assert_odoo_devcontainer
+from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.utilities.odoo_helpers import count_chatter_messages_after
 
 
@@ -32,7 +32,7 @@ class TaskStatusCommand(Command):
 
         :return: List of active session dicts.
         """
-        assert_odoo_devcontainer()
+        assert_sdk_configured()
         db = self.state
         runs = db.get_all_active_runs()
         return [self._entry(run) for run in runs]
