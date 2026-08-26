@@ -7,7 +7,7 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 
 ```json
 "features": {
-    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:4": {}
+    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:5": {}
 }
 ```
 
@@ -288,29 +288,51 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
   - `pre-commit` — runs `gitleaks protect --staged`.
 
   This is native Git config, so it applies to *every* repo on the machine with zero per-repo opt-in. A repo that sets its own `core.hooksPath` locally (e.g. via Husky) overrides this as normal Git config precedence — this only fills the gap for repos that don't.
+
+  Also set `--system`, for the same reason: `core.pager`/`interactive.diffFilter` (so `delta` renders every diff), and `core.excludesfile` pointing at `/usr/local/share/git-excludes/gitignore`, which keeps `mempalace init`'s project-local artifacts out of every repo on the machine — see the `mempalace` bullet below for the rationale and its two tradeoffs.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
-- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR=/workspaces` is set in `containerEnv`, so once the Claude Code plugin is registered its hooks auto-mine `/workspaces` in the background; nothing is ever written to a project directory (no `mempalace init`). Unlike every other bundled tool, mempalace is left half-configured after a build — two steps are still manual. That's unfinished work, not a platform limitation: the Feature already declares seven bind mounts of its own in `devcontainer-feature.json`, and `install.sh` already runs a per-user `claude mcp add --scope user`, so a Feature can do both. Folding them in is tracked in #483. Until then:
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
-  1. **Host mount** — add a bind mount for `~/.mempalace` to your `devcontainer.json` so the palace, config, and hook state persist across rebuilds and are shared across projects. Target a fixed container path and point mempalace at it with `MEMPALACE_PALACE_PATH`, rather than targeting the container user's home: that path differs between a root and a non-root `remoteUser`, so a home-targeted mount silently lands where the tool never looks. Fixed target plus an env var is the same user-agnostic pattern the Feature's own seven mounts use. Note the `${localEnv:HOME}${localEnv:USERPROFILE}` prefix — same reason as those mounts, see [Windows and WSL](#windows-and-wsl):
+  Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 
-     ```jsonc
-     "mounts": [
-         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace,target=/usr/local/share/mempalace,type=bind,consistency=cached"
-     ],
-     "containerEnv": {
-         "MEMPALACE_PALACE_PATH": "/usr/local/share/mempalace/palace"
-     }
-     ```
+  **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things:
 
-     Create the host directory once before first launch — `mkdir -p ~/.mempalace`, or `New-Item -ItemType Directory -Force "$env:USERPROFILE\.mempalace"` in PowerShell. Same prerequisite the Feature's other mounts carry (see [One-time host setup](#one-time-host-setup)): a bind mount whose source is missing on the host is a hard container-create failure. If a future mempalace release stops honouring `MEMPALACE_PALACE_PATH` on the plugin-hook path, fall back to targeting the container user's home directly — and pin the target to that user, not to `/root`.
+  1. **Symlinks `~/.mempalace` onto the mount.** A large class of mempalace state ignores `MEMPALACE_PALACE_PATH` and is hardcoded under `$HOME/.mempalace` — `config.json` and `people_map.json`, `locks/`, `wal/`, `hook_state/`, `known_entities.json` — and the hooks CLI additionally treats an absent `~/.mempalace` as the user's kill-switch. If it finds a **real directory** there (left by an earlier build, whose contents would otherwise be discarded on the next rebuild — the exact failure #596 fixed and #643 found reintroduced) it migrates the contents onto the mount, never clobbering a file the mount already has, and replaces it with the link. A regular file at that path is a user artifact and is left untouched with a warning.
+  2. **Removes the stray `~` directory.** mempalace's MCP server `abspath()`s a literal `~/…` `--palace` argument without `expanduser()`, unlike its CLI sibling, so it resolves against the process cwd and the chroma backend then creates a real directory *named* `~` at the palace root, stranding memories where nothing will ever read them. Matched narrowly on that exact shape, so real palace data is never at risk.
+  3. **Reconciles `config.json`'s `palace_path` with `MEMPALACE_PALACE_PATH`.** `Config.palace_path` returns on the env-var branch *before* consulting `config.json` and says nothing when the two disagree, so a `config.json` carried in on the mount from another machine can name a host path that does not exist here and sit there indefinitely — misleading anyone who reads the file, and silently deciding the answer for any code path that reads it directly. Only that key is rewritten; `topic_wings` and `hall_keywords` in the same file are user content and are never touched.
 
-  2. **Plugin registration (one-time)** — inside the container, register the Claude Code plugin at user scope so its Stop/SessionEnd/PreCompact hooks fire automatically:
+  **`mempalace init` runs once per workspace, and its artifacts are ignored machine-wide (#643).** `init` is worth running: the `rooms` list in the `mempalace.yaml` it writes is what routes mined files into rooms, and without it mining collapses into a single `general` room. (`config.json`'s `topic_wings`/`hall_keywords` are a keyword→hall map, not a substitute.) But `init`'s artifacts **cannot be redirected** — it resolves `entities.json`, `mempalace.yaml` and `.mempalace/` from its `--dir` argument, and exposes no `--output`/`--central`/`--palace-path` option, no `config.json` key, and no `MEMPALACE_*` env var that moves them. Upstream's own answer is appending a two-line block to each project's `.gitignore`, which dirties every repo it touches and does not scale across a tree of working repos.
 
-     ```sh
-     claude plugin install --scope user mempalace
-     ```
+  So the Feature ignores them **machine-wide** instead, at the same `--system` scope as `core.hooksPath` and `core.pager`:
 
-     This writes only to Claude's user-scope config dir, never to a project directory — and that dir is bind-mounted from host `~/.claude` by the Feature (see [What persists, and where](#what-persists-and-where)), so the registration survives rebuilds.
+  ```sh
+  git config --system core.excludesfile /usr/local/share/git-excludes/gitignore
+  ```
+
+  That file lists `init`'s project artifacts (`mempalace.yaml`, `entities.json`, `.mempalace/`) plus the palace artifact names (`chroma.sqlite3`, `knowledge_graph.sqlite3`, `hallways.json`, `known_entities.json`, `hook_state/`, `wal/`, `locks/`), so a palace root that ever lands inside a repo stays untracked too. Two tradeoffs come with it, and both are real:
+
+  1. **These are generic filenames.** `entities.json`, `hallways.json` and `known_entities.json` could plausibly be genuinely tracked files in an unrelated repo, and a global ignore would keep a *new* one out of `git status`. Ignore rules never affect **already-tracked** files, so this can only ever mask a file that isn't committed yet. A repo that needs one back negates it in its own `.gitignore` (`!entities.json`) or uses `git add -f`.
+  2. **Setting `core.excludesfile` shadows Git's default `~/.config/git/ignore`.** That default applies only when `core.excludesfile` is unset at *every* scope. If you want your own global excludes, set `git config --global core.excludesfile <path>` — `--global` beats `--system` — and copy these entries into it.
+
+  With the artifacts contained, `mempalace-init-workspace` actually runs it. From `postCreateCommand`, after `resolve-mempal-dir`, it inits **the primary workspace repo** — the `MEMPAL_DIR` that script already resolved (enclosing git worktree root, else the workspace folder), so the resolution logic is not duplicated.
+
+  **The headless contract.** `init` is interactive by default and `postCreateCommand` has no usable stdin, so three independent guards are needed (verified against MemPalace 3.7.1):
+
+  | Guard | Covers |
+  |---|---|
+  | `--yes` | The entity-confirmation and room-approval prompts. Neither catches `EOFError`, so this — not stdin handling — is what keeps them from raising. (Room approval was only fixed upstream in [#179](https://github.com/MemPalace/mempalace/issues/179); `--yes` did not always cover it.) |
+  | `--no-llm` | Provider acquisition and the external-LLM consent gate. `init` defaults to an Ollama provider that isn't running here. |
+  | `< /dev/null` | The post-init `Mine this directory now? [Y/n]` prompt, which `--yes` deliberately does **not** cover — upstream scopes `--yes` to entity auto-accept and says so. It *does* catch `EOFError` and treats it as decline, so an immediately-EOF stdin answers it deterministically. |
+
+  **Why not `yes | mempalace init …`.** Two reasons, both reproduced against 3.7.1. It answers `y` to the mine prompt, running a full synchronous mine inside `postCreateCommand` — minutes on a real corpus, and duplicated work since the plugin hooks already mine. And a `yes` pipe never closes, so if a prompt ever escapes `--yes` again (as one did before #179) the `Name (or enter to stop):` loop consumes `y` forever: a local repro produced 160 MB of output in 20 s and had to be killed. EOF is the only input that can neither say yes to something expensive nor fail to terminate a loop. A `timeout` backstop (`MEMPALACE_INIT_TIMEOUT`, default 300 s) covers whatever this analysis missed — a wedged `init` degrades to a warning instead of hanging container creation.
+
+  `--auto-mine` is likewise not passed: the plugin's own hooks already drive mining.
+
+  **`init`'s `.gitignore` append is reverted.** `init` appends its own two-line block to `<repo>/.gitignore` ([upstream #185](https://github.com/MemPalace/mempalace/issues/185)) — exactly the per-repo dirtying the machine-wide `core.excludesfile` above exists to avoid. Those two names are already ignored globally, so the append is redundant *and* leaves an uncommitted diff in your workspace on every fresh container. The script snapshots `.gitignore` and restores it afterwards; if `init` created the file, it is removed — but only after confirming every meaningful line is one MemPalace put there, so a `.gitignore` carrying real content is never destroyed.
+
+  **It is run-once, and never clobbers.** Re-running `init` is *overwrite, not merge* — `save_config()` rebuilds `mempalace.yaml` from freshly detected rooms and writes it `"w"`, and `entities.json` is written the same way, so any hand-tuned room name, description or keyword list would be destroyed. So it inits only when `mempalace.yaml` is **absent**. Once the file exists it is yours to curate, and re-detection is an explicit `rm mempalace.yaml` away. The consequence is the honest tradeoff: **new top-level folders are not picked up automatically** — that is the price of hand-edits surviving. `MEMPALACE_SKIP_INIT=1` opts out entirely.
+
+  Every failure here is a **warning, never fatal**: a missing mine root, a missing binary or a failing `init` all exit 0, because mining still works via the flat `general` fallback. (Contrast `resolve-mempal-dir`, which fails loudly — an unresolvable `MEMPAL_DIR` means mining *nothing*, see #485.)
 
 
 ---
