@@ -1,32 +1,68 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Asserts that the second-brain knowledge base is actually bind-mounted at the
-# Feature's fixed container target. Wired as the Feature's onCreateCommand -
+# Asserts that the second-brain knowledge base is bind-mounted FROM THE HOST at
+# the Feature's fixed container target. Wired as the Feature's onCreateCommand -
 # the earliest lifecycle hook that runs inside the created container, where
 # runtime mounts are first observable (install.sh runs at image build time and
 # can see neither the host environment nor the mounts).
 #
-# The check is "is the target a real mountpoint", not "does the directory
-# exist": if SECOND_BRAIN_DIR was unset/empty on the host, Docker normally
-# refuses to create the container at all (empty bind source), but any tooling
-# path that instead drops the mount would otherwise leave a plain, empty
-# directory here - silently mounting nothing is exactly what this Feature must
-# never do.
+# "Is the target a mountpoint" is not enough. The mount source is
+# ${localEnv:SECOND_BRAIN_DIR}; when that variable is empty in the environment
+# that ran the dev container CLI, what happens depends on the runtime path:
+#
+#   - docker run (image/Dockerfile configs): Docker refuses the empty bind
+#     source - hard error, the container never exists.
+#   - dockerComposeFile configs: the CLI writes the Feature mount into a
+#     generated compose override as the short syntax "- /mnt/second-brain"
+#     (no source), which compose satisfies with an ANONYMOUS VOLUME - a real
+#     mountpoint that is empty and contains nothing from the host. No error.
+#
+# So this script inspects WHERE the mount comes from, not just whether it
+# exists: field 4 of /proc/self/mountinfo (the mount root, i.e. the path of
+# the mounted subtree relative to its source filesystem) reveals a container
+# volume by its <...>/volumes/<name>/_data shape - Docker, rootless Docker and
+# Podman all keep volumes under such a directory, while a host bind shows the
+# host directory itself.
+#
+# Overrides exist so the Feature's tests can exercise every branch against
+# fixture files without provisioning a container per case.
 
-TARGET="/mnt/second-brain"
+TARGET="${SECOND_BRAIN_VERIFY_TARGET:-/mnt/second-brain}"
+MOUNTINFO="${SECOND_BRAIN_VERIFY_MOUNTINFO:-/proc/self/mountinfo}"
 
 fail() {
-    echo "ERROR: SECOND_BRAIN_DIR is not set on the host; export it to the knowledge-base directory before building" >&2
+    printf '%s\n' "$@" >&2
     exit 1
 }
 
-if command -v mountpoint >/dev/null 2>&1; then
-    mountpoint -q -- "$TARGET" || fail
-else
-    # Minimal images may lack util-linux's mountpoint(1); field 5 of
-    # /proc/self/mountinfo is the mount point path.
-    awk -v t="$TARGET" '$5 == t { found = 1 } END { exit !found }' /proc/self/mountinfo || fail
+# Field 5 is the mount point, field 4 the mount root. The LAST matching line
+# wins: a later mount on the same target over-mounts the earlier one.
+root_escaped="$(awk -v t="$TARGET" '$5 == t { root = $4 } END { print root }' "$MOUNTINFO")"
+
+[ -n "$root_escaped" ] || fail \
+    "ERROR: SECOND_BRAIN_DIR is not set on the host; export it to the knowledge-base directory before building"
+
+# mountinfo escapes space, tab, newline and backslash as \040 \011 \012 \134.
+root="$(printf '%b' "$root_escaped")"
+
+# Loose anchor on purpose: /var/lib/docker may be its own filesystem, in which
+# case the root is /volumes/<name>/_data rather than the full host path.
+if [[ "$root" =~ (^|/)volumes/([^/]+)/_data$ ]]; then
+    name="${BASH_REMATCH[2]}"
+    if [[ "$name" =~ ^[0-9a-f]{64}$ ]]; then
+        fail \
+            "ERROR: $TARGET is an anonymous container volume, not the host knowledge base." \
+            "SECOND_BRAIN_DIR was empty in the environment that ran the dev container CLI; on compose-based configs the CLI silently turns an empty bind source into an anonymous volume. Set SECOND_BRAIN_DIR and rebuild."
+    fi
+    fail "ERROR: $TARGET is a container volume ($name), not a host bind mount."
 fi
 
-echo "second-brain: knowledge base mounted at $TARGET"
+echo "second-brain: knowledge base mounted at $TARGET (mount root: $root)"
+
+# Non-fatal: the Feature has no content conventions, and compose's short
+# syntax auto-creates a missing host path - a typo'd SECOND_BRAIN_DIR yields a
+# real but empty bind that mount inspection cannot tell from a fresh vault.
+if [ -d "$TARGET" ] && [ -z "$(ls -A -- "$TARGET")" ]; then
+    echo "WARNING: $TARGET is empty" >&2
+fi
