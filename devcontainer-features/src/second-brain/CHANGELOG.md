@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Crpaxton4/devcontainer-features/compare/second-brain-v1.1.0...second-brain-v1.1.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* **second-brain:** reject volume-backed mounts and correct compose fail-fast notes ([#649](https://github.com/Crpaxton4/devcontainer-features/issues/649)) ([eeeda02](https://github.com/Crpaxton4/devcontainer-features/commit/eeeda02f3550fa37a4c665d29f945aabe24678dd))
+
 ## [1.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/second-brain-v1.0.0...second-brain-v1.1.0) (2026-08-24)
 
 
