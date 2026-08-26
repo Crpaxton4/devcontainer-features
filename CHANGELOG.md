@@ -1,5 +1,26 @@
 # Changelog
 
+## [5.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.2.0...personal-features-v5.0.0) (2026-08-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-sdk:** `odoo_sdk.utilities` no longer exports `assert_odoo_devcontainer` or `OdooDevcontainerRequiredError`. Use `assert_sdk_configured`, which raises the pre-existing `ValueError` / `TrackerStateMissingError` instead.
+
+### Features
+
+* **personal-features:** initialise the workspace palace once at container create ([#647](https://github.com/Crpaxton4/devcontainer-features/issues/647)) ([b61427b](https://github.com/Crpaxton4/devcontainer-features/commit/b61427b565e6e68b5cd243cc9d7e49c6b63995ef))
+
+
+### Bug Fixes
+
+* **personal-features:** contain MemPalace artifacts and reconcile the palace root ([#645](https://github.com/Crpaxton4/devcontainer-features/issues/645)) ([22c1a49](https://github.com/Crpaxton4/devcontainer-features/commit/22c1a49537970ec38a4b2e70bf6615df807eff31)), closes [#643](https://github.com/Crpaxton4/devcontainer-features/issues/643)
+
+
+### Code Refactoring
+
+* **odoo-sdk:** gate tracker commands on SDK capability, not the Odoo devcontainer ([#644](https://github.com/Crpaxton4/devcontainer-features/issues/644)) ([df6b234](https://github.com/Crpaxton4/devcontainer-features/commit/df6b234af436bfbfcc3ec5baf1c14f928e437e98)), closes [#642](https://github.com/Crpaxton4/devcontainer-features/issues/642)
+
 ## [4.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.1.0...personal-features-v4.2.0) (2026-08-24)
 
 
