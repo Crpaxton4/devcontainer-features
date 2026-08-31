@@ -8,7 +8,9 @@ version = "5.0.0"
 description = "Python SDK for Odoo XML-RPC access and command dispatch helpers."
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.4.4",
+    # fastmcp 4.0.0 removed fastmcp/tools/tool.py, breaking the MCP server at
+    # import time; stay on 3.x until the port in #664 lands.
+    "fastmcp>=3.4.4,<4",
     "markdown-it-py>=3.0.0",
     "markitdown[docx,pdf]>=0.1.6",
     "pydantic>=2.13.4",
