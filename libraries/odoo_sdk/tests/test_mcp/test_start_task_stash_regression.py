@@ -141,7 +141,6 @@ class TestUntrackedStashPopIsBalanced(unittest.TestCase):
 
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _recording_sp(dirty=True, dirty_kind="untracked")
         tool = make_start_task_tool(_Reg())
         with patch(_SP_PATCH, sp):

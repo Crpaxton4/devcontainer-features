@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Union
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool
+from fastmcp.tools import Tool
 
 from odoo_sdk import OdooError
 from odoo_sdk.commands import LogEventCommand, Registry

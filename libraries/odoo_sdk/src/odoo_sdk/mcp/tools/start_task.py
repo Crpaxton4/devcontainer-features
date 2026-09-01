@@ -2,11 +2,23 @@
 
 This module owns all MCP-specific concerns for starting a task — argument
 elicitation (project/task disambiguation on the name-search path only), git
-branch setup, and optional AI branch-name generation via ``ctx.sample`` (gated
-on the client advertising the ``sampling`` capability, with a deterministic
-slug fallback) — and then delegates the actual Odoo/state mutation to the
-atomic :class:`StartTaskCommand`. Commands never see the FastMCP ``ctx``;
+branch setup, and optional AI branch-name generation via fastmcp 4's two-phase
+sampling flow (SEP-2322) — and then delegates the actual Odoo/state mutation to
+the atomic :class:`StartTaskCommand`. Commands never see the FastMCP ``ctx``;
 primitives resolved here are passed to the command.
+
+Sampling flow (#664): fastmcp 4 removed the imperative ``ctx.sample`` back-
+channel. When the client advertises the ``sampling`` capability *and* the
+connection negotiated a protocol era that carries multi-round-trip results
+(2026-07-28+), the first invocation returns an
+:class:`~mcp.types.InputRequiredResult` holding one ``CreateMessageRequest``
+keyed ``branch_description`` — side-effect free: no run row, no branch
+mutation. The client fulfills it and re-invokes the tool with
+``ctx.input_responses`` populated; the continuation slugifies the sampled text
+and executes the full start flow exactly once. Whenever sampling is
+unavailable (no capability, handshake-era connection, empty/garbage response)
+the deterministic ``_slugify(task_name)`` fallback is used instead, so the
+flow never hard-fails on this optional capability.
 
 Idempotent lifecycle entry point (#621): the current session state is checked
 BEFORE any side effect, and an already-RUNNING session short-circuits to a
@@ -18,10 +30,19 @@ headless in any state.
 
 import re
 import subprocess
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from fastmcp import Context
-from mcp.types import ClientCapabilities, SamplingCapability
+from mcp.types import (
+    ClientCapabilities,
+    CreateMessageRequest,
+    CreateMessageRequestParams,
+    InputRequiredResult,
+    SamplingCapability,
+    SamplingMessage,
+    TextContent,
+)
+from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
@@ -251,12 +272,20 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:45]
 
 
+#: Key under which the branch-description sampling request travels through the
+#: multi-round-trip guard channel (SEP-2322): it names the entry in the
+#: ``input_requests`` map the first invocation returns and the matching entry in
+#: ``ctx.input_responses`` the continuation reads back.
+_BRANCH_DESCRIPTION_KEY = "branch_description"
+
+
 def _client_supports_sampling(ctx: Any) -> bool:
     """True only when the MCP client advertised the ``sampling`` capability.
 
-    Sampling (server->client LLM completion) is optional; clients like Claude
-    Code do not advertise it. Probing here lets us degrade gracefully instead
-    of hard-failing inside ``ctx.sample``.
+    Sampling (a client-fulfilled LLM completion) is optional; clients like
+    Claude Code do not advertise it. Probing here lets us degrade gracefully
+    to the deterministic slug instead of minting a ``CreateMessageRequest``
+    the client would never fulfill.
     """
     try:
         return bool(
@@ -268,27 +297,77 @@ def _client_supports_sampling(ctx: Any) -> bool:
         return False
 
 
-async def _generate_branch_description(ctx: Any, task_name: str, project_name: str) -> str:
-    """Return a branch-name suffix, preferring an LLM-sampled slug.
+def _connection_supports_input_required(ctx: Any) -> bool:
+    """True when this connection can carry an input-required tool result.
 
-    Falls back to a deterministic slug derived from ``task_name`` whenever the
-    client cannot sample or sampling yields nothing, so the ``start_task`` flow
+    The multi-round-trip result type (SEP-2322) only exists on 2026-07-28+
+    protocol connections; fastmcp refuses to serialize it on a handshake-era
+    connection. Those connections also lost the ``ctx.sample`` back-channel in
+    fastmcp 4 (#664), so a handshake-era client takes the deterministic slug
+    fallback even when it advertises the ``sampling`` capability.
+    """
+    try:
+        rc = ctx.request_context
+        return rc is not None and rc.protocol_version in MODERN_PROTOCOL_VERSIONS
+    except Exception:
+        return False
+
+
+def _sampling_available(ctx: Any) -> bool:
+    """True when the two-phase sampling flow can complete on this connection."""
+    return _connection_supports_input_required(ctx) and _client_supports_sampling(ctx)
+
+
+def _branch_description_request(
+    task_name: str, project_name: str
+) -> InputRequiredResult:
+    """Build the input-required leg asking the client to sample a branch suffix.
+
+    Returned verbatim from the tool body; fastmcp wraps it so it reaches the
+    client as ``resultType: "input_required"``. The client fulfills the
+    ``CreateMessageRequest`` and re-invokes ``start_task`` with the result
+    available under :data:`_BRANCH_DESCRIPTION_KEY` in ``ctx.input_responses``.
+    """
+    prompt = (
+        f"Generate a git branch name suffix for this task.\n"
+        f"Rules: lowercase only, hyphens instead of spaces/special chars, max 45 chars, no leading/trailing hyphens.\n"
+        f"Output ONLY the suffix text, nothing else.\n"
+        f"Task: {task_name}\nProject: {project_name}"
+    )
+    request = CreateMessageRequest(
+        params=CreateMessageRequestParams(
+            messages=[
+                SamplingMessage(
+                    role="user", content=TextContent(type="text", text=prompt)
+                )
+            ],
+            max_tokens=30,
+        )
+    )
+    return InputRequiredResult(input_requests={_BRANCH_DESCRIPTION_KEY: request})
+
+
+def _resolve_branch_description(ctx: Any, task_name: str) -> str:
+    """Return the branch-name suffix for this invocation.
+
+    On a continuation leg the client's ``CreateMessageResult`` (keyed
+    :data:`_BRANCH_DESCRIPTION_KEY` in ``ctx.input_responses``) is sanitized
+    through the same :func:`_slugify` the old ``ctx.sample`` path applied.
+    Everything else — non-sampling client, missing/mismatched response,
+    non-text content, or sampled text that slugifies to nothing — falls back
+    to the deterministic ``_slugify(task_name)``, so the ``start_task`` flow
     never hard-fails on this optional capability.
     """
     fallback = _slugify(task_name)
-    if not _client_supports_sampling(ctx):
-        return fallback
     try:
-        response = await ctx.sample(
-            f"Generate a git branch name suffix for this task.\n"
-            f"Rules: lowercase only, hyphens instead of spaces/special chars, max 45 chars, no leading/trailing hyphens.\n"
-            f"Output ONLY the suffix text, nothing else.\n"
-            f"Task: {task_name}\nProject: {project_name}",
-            max_tokens=30,
-        )
+        responses = ctx.input_responses or {}
+        response = responses.get(_BRANCH_DESCRIPTION_KEY)
     except Exception:
         return fallback
-    return _slugify(response.text.strip()) or fallback
+    text = getattr(getattr(response, "content", None), "text", None)
+    if not isinstance(text, str):
+        return fallback
+    return _slugify(text.strip()) or fallback
 
 
 def _default_base_branch() -> Optional[str]:
@@ -306,12 +385,40 @@ def _default_base_branch() -> Optional[str]:
     return _current_branch()
 
 
+def _on_task_branch(task_id: int) -> bool:
+    """True when the working tree is already on this task's branch."""
+    current = _current_branch()
+    return bool(current and current.startswith(f"{task_id}-"))
+
+
+def _should_request_branch_description(ctx: Any, task_id: int) -> bool:
+    """True when this invocation must return the sampling input-required leg.
+
+    Only the *first* invocation of a sampling-capable flow asks (an empty /
+    absent ``ctx.input_responses`` marks it); a continuation, a non-sampling
+    client, or a handshake-era connection proceeds directly. A working tree
+    already on the task branch never asks: no new branch name will be minted,
+    so a sampling round-trip would be pure waste. This check is read-only —
+    the first leg stays side-effect free (no run row, no branch mutation) so
+    the continuation can execute the full start flow exactly once. The cheap
+    in-process capability gates run before the ``git`` probe so a non-sampling
+    client (the common case) never pays for the extra subprocess.
+    """
+    if not _sampling_available(ctx):
+        return False
+    try:
+        if ctx.input_responses:
+            return False
+    except Exception:
+        return False
+    return not _on_task_branch(task_id)
+
+
 async def _setup_task_branch(
-    ctx: Any, task: dict, project: dict, *, interactive: bool
+    ctx: Any, task: dict, *, interactive: bool, description: str
 ) -> tuple[Optional[str], bool, Optional[str]]:
     task_id = task["id"]
-    current = _current_branch()
-    if current and current.startswith(f"{task_id}-"):
+    if _on_task_branch(task_id):
         return None, False, None
 
     if interactive:
@@ -337,7 +444,6 @@ async def _setup_task_branch(
         if base_branch is None:
             return None, False, "No base branch found. Ensure the working directory is a git repo."
 
-    description = await _generate_branch_description(ctx, task["name"], project["name"])
     branch_name = f"{task_id}-{description}"
 
     try:
@@ -506,7 +612,7 @@ def make_start_task_tool(registry: Registry):
         task_name_query: Optional[str] = None,
         project_name_query: Optional[str] = None,
         task_id: Optional[int] = None,
-    ) -> dict[str, Any]:
+    ) -> Union[dict[str, Any], InputRequiredResult]:
         """Idempotently ensure a RUNNING tracking session on an Odoo project.task.
 
         THE single lifecycle entry point (start / ensure / resume) — safe to
@@ -551,6 +657,15 @@ def make_start_task_tool(registry: Registry):
                 project_name=project["name"],
             )
 
+        # Two-phase sampling (SEP-2322, #664): a sampling-capable flow's first
+        # invocation returns the input-required leg here — after resolution and
+        # the RUNNING fastpath, before ANY mutation — so the continuation
+        # re-runs the same read-only steps and executes the start flow exactly
+        # once. Non-sampling clients skip straight to the deterministic slug.
+        if _should_request_branch_description(ctx, task["id"]):
+            return _branch_description_request(task["name"], project["name"])
+        description = _resolve_branch_description(ctx, task["name"])
+
         original_branch = _current_branch()
         branch_name: Optional[str] = None
         branch_created = False
@@ -560,7 +675,7 @@ def make_start_task_tool(registry: Registry):
             # outside meant a failure between ``checkout -b`` and the auto-stash
             # pop left the user on a dangling task branch with no cleanup.
             branch_name, branch_created, branch_err = await _setup_task_branch(
-                ctx, task, project, interactive=task_id is None
+                ctx, task, interactive=task_id is None, description=description
             )
             if branch_err:
                 return {"error": branch_err}
