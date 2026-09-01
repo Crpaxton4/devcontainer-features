@@ -62,6 +62,14 @@ _MIN_TASK_ID_DIGITS = 4
 #                      digit run buried mid-token never reads as an id
 #   ``task <id>``      PR-title form ``(task NNNNN)`` (optional space/hyphen)
 #   ``(<id>)``         trailing ``(NNNNN)`` in a PR title (NOT ``(#NNNNN)``)
+#   ``<id> title``     bare leading id at SUBJECT start (space/``#``/``:``/``-``
+#                      after the digits). The ``^`` anchor is safe because
+#                      ``_extract_task_ids`` scans ``f"{subject} {branch}"``, so
+#                      the branch is never at string start (an empty subject
+#                      still yields a leading space); a branch-leading
+#                      ``24648-slug`` is already covered by the ``<id>-slug``
+#                      form above. A subject leading with ``12345-x`` matches
+#                      both that form and this one — dedupe makes it harmless.
 _TASK_ID_PATTERNS = (
     re.compile(rf"#(\d{{{_MIN_TASK_ID_DIGITS},}})"),
     re.compile(rf"odoo-(\d{{{_MIN_TASK_ID_DIGITS},}})", re.IGNORECASE),
@@ -69,6 +77,7 @@ _TASK_ID_PATTERNS = (
     re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})-"),
     re.compile(rf"\btask[ -]?(\d{{{_MIN_TASK_ID_DIGITS},}})\b", re.IGNORECASE),
     re.compile(rf"\((\d{{{_MIN_TASK_ID_DIGITS},}})\)"),
+    re.compile(rf"^(\d{{{_MIN_TASK_ID_DIGITS},}})[\s#:-]"),
 )
 
 # ASCII unit separator used to delimit git-log fields (never appears in text).

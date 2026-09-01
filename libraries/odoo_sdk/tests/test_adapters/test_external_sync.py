@@ -106,6 +106,15 @@ class TestExtractTaskIds(unittest.TestCase):
             ("#31 - Hardcode Checks", "", []),  # short client-side number
             ("cross ref (#189)", "", []),  # PR cross-reference
             ("bumped to v2", "main", []),  # nothing extractable
+            # Bare leading id at subject start (issue #654).
+            ("24648 rtv process", "", ["24648"]),
+            ("24648 Display Payment Token on Invoice", "", ["24648"]),
+            ("24648 bugfix case count", "", ["24648"]),
+            ("24648#OdooMeetingRecordingModel", "", ["24648"]),
+            ("24648: follow-up fix", "", ["24648"]),  # colon delimiter
+            ("333:IMP repo-local numbering", "", []),  # below _MIN_TASK_ID_DIGITS
+            ("fix 24648 later", "", []),  # mid-string bare number stays unmatched
+            ("", "24648 rtv process", []),  # bare id as BRANCH never sits at string start
         ]
         for subject, branch, expected in cases:
             with self.subTest(subject=subject, branch=branch):
