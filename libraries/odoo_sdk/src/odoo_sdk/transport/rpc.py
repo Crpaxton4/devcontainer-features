@@ -277,12 +277,23 @@ class OdooRpcExecutor(OdooExecutor):
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        """Issue one ``execute_kw`` call with the given uid and current credentials."""
+        """Issue one ``execute_kw`` call with the given uid and current credentials.
+
+        The proxy, database, and password are snapshotted together under the lock
+        (``_apply_settings`` mutates them under the same lock), so one request can
+        never mix fields from two settings generations — e.g. a fresh password
+        sent through a stale endpoint proxy — even when another thread refreshes
+        concurrently. The network call itself runs outside the lock.
+        """
+        with self._lock:
+            object_proxy = self._object
+            db = self.db
+            password = self._password
         return _mapped_call(
-            lambda: self._object.execute_kw(
-                self.db,
+            lambda: object_proxy.execute_kw(
+                db,
                 uid,
-                self._password,
+                password,
                 model,
                 method,
                 list(args),

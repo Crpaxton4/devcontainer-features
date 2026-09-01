@@ -488,6 +488,33 @@ class TestOdooJson2ExecutorCredentialRefresh(unittest.TestCase):
         refresh.assert_called_once_with()
 
     @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_retry_uses_rotated_url_and_key_together(self, mock_urlopen: Mock) -> None:
+        # One settings generation per request: the retry must combine the new
+        # URL with the new key, never mix generations.
+        mock_urlopen.side_effect = [_make_401(), _make_response([1])]
+        refresh = Mock(
+            return_value=OdooConnectionSettings(
+                url="https://new.example.com",
+                db="mydb",
+                transport="json2",
+                api_key="newkey",
+            )
+        )
+        ex = OdooJson2Executor(
+            "https://example.com", "mydb", "oldkey", credentials_refresh=refresh
+        )
+
+        result = ex.execute("res.partner", "search", domain=[])
+
+        self.assertEqual(result, [1])
+        retry_request = mock_urlopen.call_args_list[1].args[0]
+        self.assertEqual(
+            retry_request.full_url,
+            "https://new.example.com/json/2/res.partner/search",
+        )
+        self.assertEqual(retry_request.get_header("Authorization"), "Bearer newkey")
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
     def test_second_401_despite_rotated_key_propagates_plain(
         self, mock_urlopen: Mock
     ) -> None:

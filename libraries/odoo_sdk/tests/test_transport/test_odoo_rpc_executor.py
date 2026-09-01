@@ -598,6 +598,47 @@ class TestOdooRpcExecutorCredentialRefresh(unittest.TestCase):
         refresh.assert_called_once_with()
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_retry_uses_fresh_proxy_db_and_password_together(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        # One settings generation per request: the retried execute_kw must go
+        # through the rebuilt object proxy with the new database and password,
+        # never mixing generations.
+        stale_common = Mock()
+        stale_object = Mock()
+        fresh_common = Mock()
+        fresh_object = Mock()
+        stale_common.authenticate.return_value = 3
+        stale_object.execute_kw.side_effect = xmlrpc.client.Fault(
+            4, "odoo.exceptions.AccessDenied: Access Denied"
+        )
+        fresh_common.authenticate.return_value = 5
+        fresh_object.execute_kw.return_value = [{"id": 1}]
+        mock_server_proxy.side_effect = [
+            stale_common,
+            stale_object,
+            fresh_common,
+            fresh_object,
+        ]
+        refresh = Mock(
+            return_value=_fresh_settings(
+                url="https://new.example.com", db="new-db", password="new"
+            )
+        )
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "old", credentials_refresh=refresh
+        )
+
+        result = executor.execute("res.partner", "search", [])
+
+        self.assertEqual(result, [{"id": 1}])
+        stale_object.execute_kw.assert_called_once()
+        fresh_object.execute_kw.assert_called_once_with(
+            "new-db", 5, "new", "res.partner", "search", [[]], {}
+        )
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
     def test_execute_unchanged_settings_raise_hinted_error_and_drop_uid(
         self, mock_server_proxy: Mock
     ) -> None:
