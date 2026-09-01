@@ -347,7 +347,9 @@ def _resync_google(puller: Callable[..., dict], db: TaskStateDB) -> dict:
         return {"skipped": str(exc)}
 
 
-def _resync_odoo(db: TaskStateDB) -> dict:
+def _resync_odoo(
+    db: TaskStateDB, start: Optional[date] = None, end: Optional[date] = None
+) -> dict:
     """Run the Odoo chatter puller, or skip cleanly when the capability check fails.
 
     The git/github pullers never need Odoo, so a resync that also requests
@@ -363,38 +365,75 @@ def _resync_odoo(db: TaskStateDB) -> dict:
         assert_sdk_configured()
     except (TrackerStateMissingError, ValueError):
         return {"skipped": "odoo sdk not configured"}
-    return sync_odoo_chatter(OdooClient(), db, LocalConfig.load())
+    return sync_odoo_chatter(OdooClient(), db, LocalConfig.load(), start=start, end=end)
+
+
+def _found_suffix(result: dict) -> str:
+    """Render a success line's coverage parenthetical from the summary counters."""
+    if "found" not in result:
+        return ""
+    suffix = f"found {result['found']}"
+    if "repos" in result:
+        suffix += f" in {result['repos']} repos"
+    if result.get("failed_repos"):
+        suffix += f"; {result['failed_repos']} failed"
+    return suffix
 
 
 def _format_resync_line(source: str, result: dict) -> str:
-    """Format one per-source resync result line for the CLI."""
+    """Format one per-source resync result line for the CLI.
+
+    ``error`` (tooling entirely unusable, #652) and ``skipped`` (optional source
+    absent) render distinctly; a success line carries the per-source coverage
+    counters and flags reviews that resolved no task id (#653).
+    """
+    if "error" in result:
+        return f"{source}: error ({result['error']})"
     if "skipped" in result:
         return f"{source}: skipped ({result['skipped']})"
-    return f"{source}: inserted {result['inserted']}"
+    line = f"{source}: inserted {result['inserted']}"
+    suffix = _found_suffix(result)
+    if suffix:
+        line += f" ({suffix})"
+    unattributed = result.get("unattributed_reviews") or []
+    if unattributed:
+        line += f"; WARNING: {len(unattributed)} review event(s) resolved no task id"
+    return line
 
 
 def cmd_resync(args: argparse.Namespace) -> None:
-    """Reconcile local event state against git/GitHub/Odoo for the current repo.
+    """Reconcile local event state against git/GitHub/Odoo, directory-agnostic.
 
-    Local-first: the git and github pullers read only the local repo/CLI, while
-    the odoo puller is guarded and constructed lazily. Each puller is idempotent
-    and prints a per-source inserted count or skip reason.
+    Local-first: the git puller discovers every repo under the cwd, the github
+    puller searches account-wide, and the odoo puller is guarded and constructed
+    lazily. ``--start``/``--end`` bound the git/github/odoo capture window
+    (gcal/gmail keep their ``google_sync_window_days`` window). Each puller is
+    idempotent and prints a per-source line; after ALL lines print, any
+    ``error`` result exits nonzero so scripted callers see the failure.
     """
     sources = _parse_resync_sources(args.sources)
+    start = date.fromisoformat(args.start) if args.start else None
+    end = date.fromisoformat(args.end) if args.end else None
     db = TaskStateDB()
     config = LocalConfig.load()
     runners = {
         # git/github stay local-only in the CLI (no Odoo client, so task-id
         # validation is skipped); config supplies the resync window/authors.
-        "git": lambda db: sync_git_log(db, config),
-        "github": lambda db: sync_github(db, config),
-        "odoo": _resync_odoo,
+        "git": lambda db: sync_git_log(db, config, start=start, end=end),
+        "github": lambda db: sync_github(db, config, start=start, end=end),
+        "odoo": lambda db: _resync_odoo(db, start=start, end=end),
         "gcal": lambda db: _resync_google(sync_google_calendar, db),
         "gmail": lambda db: _resync_google(sync_gmail, db),
     }
+    failed = False
     for source in sources:
         result = runners[source](db)
         print(_format_resync_line(source, result))
+        for label in result.get("unattributed_reviews", []):
+            print(f"unattributed review: {label}", file=sys.stderr)
+        failed = failed or "error" in result
+    if failed:
+        sys.exit(1)
 
 
 def _print_upload_summary(result: dict, dry_run: bool) -> None:
@@ -781,6 +820,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "Comma-separated subset of git,github,odoo,gcal,gmail "
             "(default: git,github,odoo; gcal/gmail are opt-in Google sources)"
         ),
+    )
+    resync_p.add_argument(
+        "--start",
+        type=_parse_iso_date,
+        default=None,
+        help="Inclusive ISO start date (YYYY-MM-DD) for the git/github/odoo "
+        "capture window (gcal/gmail keep the google_sync_window_days window)",
+    )
+    resync_p.add_argument(
+        "--end",
+        type=_parse_iso_date,
+        default=None,
+        help="Inclusive ISO end date (YYYY-MM-DD) for the git/github/odoo "
+        "capture window (gcal/gmail keep the google_sync_window_days window)",
     )
 
     upload_p = subparsers.add_parser(

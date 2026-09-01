@@ -1,21 +1,31 @@
 """Idempotent resync pullers reconciling local event state with external history.
 
-Small, current-repo-scoped pullers write into the unified ``events`` table so
+Small, directory-agnostic pullers write into the unified ``events`` table so
 that sessions — derived from events at query time — reflect work that happened
 outside the live hook/agent stream: local git commits, GitHub PRs / reviews /
 comments, Odoo task chatter, and (opt-in) Google Calendar meetings and sent
-Gmail. Two issues drive this surface: **#378** widened resync capture (commits
+Gmail. Three issues drive this surface: **#378** widened resync capture (commits
 across all branches, opened as well as merged PRs, reviews on others' PRs, and
 author-wide chatter, with a batched ``project.task`` existence check that keeps
-well-formed-but-nonexistent ids from minting phantom session lanes), and
-**#370** added the Google sources.
+well-formed-but-nonexistent ids from minting phantom session lanes), **#370**
+added the Google sources, and **#652**/**#653** made capture location-independent:
+the git puller recursively discovers every checkout under the current directory
+(any depth, including the cwd itself), the GitHub puller searches the account
+(``gh search prs --author``) instead of the current repo, and review events
+carry their PR's real ``headRefName`` so branch-encoded task ids attribute.
 
-Every puller is idempotent: each event carries a stable ``external_id`` written
-through :meth:`LocalStateClient.add_event_dedup` (``INSERT OR IGNORE`` against
-the partial unique index on ``events(external_id)``), so re-running inserts
-nothing the second time. Each returns ``{"inserted": n}`` and tolerates its
-backing tool being absent or unauthenticated by returning ``{"skipped": reason}``
-rather than raising (the Google pullers are the exception — see below).
+Every puller accepts optional inclusive ``start``/``end`` dates that override
+the rolling ``resync_window_days`` window (mirroring the upload command's range
+semantics), and is idempotent: each event carries a stable ``external_id``
+written through :meth:`LocalStateClient.add_event_dedup` (``INSERT OR IGNORE``
+against the partial unique index on ``events(external_id)``), so re-running
+inserts nothing the second time. The error-vs-skip contract (#652): a source
+whose tooling is entirely unusable (no git identity, zero repos, unauthenticated
+gh, a failed account-wide search) returns ``{"error": reason}`` so callers can
+fail loudly, while a partial degradation (one unreadable repo, one missing PR
+detail) is tolerated and reported in the summary counters. ``{"skipped": ...}``
+remains for the genuinely optional paths (an unconfigured Odoo). The Google
+pullers instead raise — see below.
 
 ``merge`` events are stored for audit only: a merge is a point-in-time release
 marker, not a work span, so it is the one ingested source excluded from derived
@@ -38,7 +48,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
@@ -195,7 +205,9 @@ def _current_repo_label(state: LocalStateClient) -> str:
     """Return the current repo's ``owner/repo`` label, or empty string.
 
     Prefers the identity persisted into the DB (``repo_label``, stamped per #331);
-    falls back to deriving it from the ``origin`` remote.
+    falls back to deriving it from the ``origin`` remote. Used only by the Odoo
+    chatter puller since #652 — the git puller labels each discovered repo from
+    its OWN origin via :func:`_repo_label_for`, never this cwd-scoped value.
     """
     label = state.get_setting("repo_label")
     if label:
@@ -235,12 +247,41 @@ def _window_start(config: Optional[LocalConfig], now: Optional[datetime]) -> dat
     return moment - timedelta(days=days)
 
 
+def _window_bounds(
+    config: Optional[LocalConfig],
+    now: Optional[datetime],
+    start: Optional[date],
+    end: Optional[date],
+) -> tuple[datetime, datetime]:
+    """Resolve one resync run's half-open ``[since, until)`` capture window.
+
+    An explicit inclusive ``start``/``end`` date overrides the rolling default,
+    matching :func:`odoo_sdk.billing.upload.range_bounds`'s semantics: ``since``
+    is UTC midnight of ``start`` and ``until`` is UTC midnight of the day AFTER
+    ``end`` (so the whole end day is covered). Without them, ``since`` falls back
+    to :func:`_window_start` and ``until`` to ``now``.
+    """
+    since = (
+        datetime.combine(start, time.min, tzinfo=timezone.utc)
+        if start
+        else _window_start(config, now)
+    )
+    until = (
+        datetime.combine(end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        if end
+        else (now or datetime.now(timezone.utc))
+    )
+    return since, until
+
+
 def _git_author_emails(config: Optional[LocalConfig]) -> list[str]:
     """Return the git author emails to filter commits by (issue #378 item 4).
 
     The configured identities that look like emails; when none are configured,
     falls back to the single ``git user.email``. Multiple emails are OR-ed by
-    ``git log`` via repeated ``--author`` flags.
+    ``git log`` via repeated ``--author`` flags. Resolved ONCE per resync, not
+    per discovered repo: global git config resolves outside any checkout, so a
+    per-repo lookup would only repeat the same answer.
     """
     configured = [a for a in (config.resync_authors if config else []) if "@" in a]
     if configured:
@@ -249,17 +290,63 @@ def _git_author_emails(config: Optional[LocalConfig]) -> list[str]:
     return [email] if email else []
 
 
-def _git_log(emails: list[str], since: datetime) -> Optional[str]:
-    """Return commits by ``emails`` across ALL branches since ``since``.
+# Directories the repo discovery never descends into: the VCS dir itself and
+# obviously-vendored/generated trees. Deliberately minimal (user decision on
+# #652): a nested checkout anywhere ELSE — at any depth, including below
+# another repo root — is a real repo and is discovered.
+_PRUNE_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__"})
 
-    ``--all`` (issue #378 item 2) makes unmerged branch work visible — the work
-    most likely to be unlogged — while ``git:<sha>`` external ids dedupe the
-    branch overlap ``--all`` introduces.
+
+def _discover_git_repos(root: Path) -> list[Path]:
+    """Return every git checkout at or under ``root`` (any depth), sorted (#652).
+
+    A directory is a repo root when it contains a ``.git`` entry — a directory
+    for a plain clone, or a *gitfile* for worktrees/submodules (``.exists()``
+    covers both). Descent prunes only :data:`_PRUNE_DIRS`; discovery keeps
+    walking below repo roots, so nested checkouts are found too (the branch
+    overlap this can introduce dedupes on the ``git:<sha>`` unique index).
+    ``followlinks=False`` guards against symlink loops. When ``root`` itself is
+    a lone checkout the result is exactly ``[root]`` — the prior single-repo
+    behavior.
+    """
+    repos: list[Path] = []
+    for dirpath, dirnames, _filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+        if (Path(dirpath) / ".git").exists():
+            repos.append(Path(dirpath))
+    return sorted(repos)
+
+
+def _git_log(
+    root: Path, emails: list[str], since: datetime, until: datetime
+) -> Optional[str]:
+    """Return commits by ``emails`` across ALL branches of the repo at ``root``.
+
+    ``-C root`` scopes the read to one discovered checkout regardless of the
+    process cwd (#652). ``--all`` (issue #378 item 2) makes unmerged branch work
+    visible — the work most likely to be unlogged — while ``git:<sha>`` external
+    ids dedupe the branch overlap ``--all`` introduces. The full-ISO
+    ``--since``/``--until`` pair applies the resolved window exactly.
     """
     pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%D"))
-    cmd = ["git", "log", "--all", f"--pretty={pretty}", f"--since={since.date().isoformat()}"]
+    cmd = [
+        "git", "-C", str(root), "log", "--all", f"--pretty={pretty}",
+        f"--since={since.isoformat()}", f"--until={until.isoformat()}",
+    ]
     cmd.extend(f"--author={email}" for email in emails)
     return _run_capture(cmd)
+
+
+def _repo_label_for(root: Path) -> str:
+    """Derive one discovered repo's ``owner/repo`` label from its own origin.
+
+    Deliberately does NOT consult the DB ``repo_label`` setting: that is a
+    single global value, and stamping it onto every discovered repo would label
+    them all identically. Each repo's label comes from its OWN ``origin`` remote
+    (empty when it has none).
+    """
+    remote = _run_capture(["git", "-C", str(root), "remote", "get-url", "origin"])
+    return _derive_repo_label(remote) if remote else ""
 
 
 def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
@@ -286,46 +373,84 @@ def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
     )
 
 
+def _repo_commit_events(
+    root: Path, emails: list[str], since: datetime, until: datetime
+) -> Optional[list[EventRecord]]:
+    """Read one discovered repo's commits as events, or None when its log fails."""
+    log = _git_log(root, emails, since, until)
+    if log is None:
+        return None
+    label = _repo_label_for(root)
+    return [
+        event
+        for line in log.splitlines()
+        if line
+        if (event := _build_commit_event(line, label)) is not None
+    ]
+
+
 def sync_git_log(
     state: LocalStateClient,
     config: Optional[LocalConfig] = None,
     client: Any = None,
     *,
     now: Optional[datetime] = None,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
 ) -> dict[str, Any]:
-    """Reconcile authored commits across all branches into the ``events`` table.
+    """Reconcile authored commits from every repo under the cwd (#378, #652).
 
-    Reads ``git log --all --since=<window>`` filtered to the configured author
-    emails (issue #378 items 2 & 4) and stores each commit as a ``commit`` event
-    keyed ``git:<sha>``, validating task ids in one batch when ``client`` is
-    supplied. Idempotent. Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
+    Recursively discovers git checkouts at/below the current directory and reads
+    each one's ``git log --all`` over the resolved window, filtered to the
+    configured author emails and labeled from each repo's OWN origin remote.
+    Commits store as ``commit`` events keyed ``git:<sha>`` (task ids validated
+    in one batch when ``client`` is supplied). Idempotent. Entirely-unusable git
+    — no author identity, zero repos, or every repo's log failing — is a hard
+    ``{"error": reason}``; a single failing repo only counts in
+    ``failed_repos``. ``found`` vs ``inserted`` distinguishes "nothing to
+    capture" from "captured nothing new" (#652 item 4).
     """
     emails = _git_author_emails(config)
     if not emails:
-        return {"skipped": "git unavailable or user.email unset"}
-    log = _git_log(emails, _window_start(config, now))
-    if log is None:
-        return {"skipped": "git log failed"}
-    label = _current_repo_label(state)
-    pending = [
-        event
-        for line in log.splitlines()
-        if line
-        if (event := _build_commit_event(line, label)) is not None
-    ]
-    return {"inserted": _store_pending(state, pending, client)}
+        return {"error": "git unavailable or user.email unset"}
+    repos = _discover_git_repos(Path.cwd())
+    if not repos:
+        return {"error": f"no git repositories under {Path.cwd()}"}
+    since, until = _window_bounds(config, now, start, end)
+    pending: list[EventRecord] = []
+    failed = 0
+    for root in repos:
+        events = _repo_commit_events(root, emails, since, until)
+        if events is None:
+            failed += 1
+        else:
+            pending.extend(events)
+    if failed == len(repos):
+        return {"error": f"git log failed in all {len(repos)} repositories"}
+    result: dict[str, Any] = {
+        "inserted": _store_pending(state, pending, client),
+        "found": len(pending),
+        "repos": len(repos),
+    }
+    if failed:
+        result["failed_repos"] = failed
+    return result
 
 
 # ── GitHub merged PRs and authored reviews ──────────────────────────────────
 
 
 @dataclass(frozen=True)
-class _GithubCtx:
-    """Per-resync GitHub context (current repo label + gh slug + window start)."""
+class _Window:
+    """The resolved half-open ``[since, until)`` window for one GitHub resync.
 
-    label: str
-    slug: Optional[str]
+    Slim on purpose (#652): the old per-resync context also carried the current
+    repo's label/slug, but an account-wide capture derives every event's repo
+    from its own PR's ``repository.nameWithOwner`` instead.
+    """
+
     since: datetime
+    until: datetime
 
 
 def _gh_login() -> Optional[str]:
@@ -342,13 +467,6 @@ def _gh_json(cmd: list[str]) -> Optional[Any]:
         return json.loads(out)
     except json.JSONDecodeError:
         return None
-
-
-def _gh_repo_slug() -> Optional[str]:
-    """Return the current repo's ``owner/repo`` slug for gh api paths, or None."""
-    return _run_capture(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
-    ) or None
 
 
 def _github_logins(config: Optional[LocalConfig], active: str) -> list[str]:
@@ -371,42 +489,70 @@ def _repo_of(item: dict) -> str:
     return (item.get("repository") or {}).get("nameWithOwner", "")
 
 
-def _ts_in_window(ts_str: Optional[str], since: datetime) -> Optional[datetime]:
-    """Parse an ISO timestamp and return it if at/after ``since``, else None."""
+def _ts_in_window(
+    ts_str: Optional[str], since: datetime, until: datetime
+) -> Optional[datetime]:
+    """Parse an ISO timestamp; return it when ``since <= ts < until``, else None."""
     if not ts_str:
         return None
     try:
         parsed = _parse_iso_utc(ts_str)
     except ValueError:
         return None
-    return parsed if parsed >= since else None
+    return parsed if since <= parsed < until else None
 
 
-def _gh_authored_prs(login: str) -> Optional[list[dict]]:
-    """Return ALL PRs authored by ``login`` in the current repo (issue #378 #3).
+def _gh_authored_prs(login: str, window: _Window) -> Optional[list[dict]]:
+    """Return PRs ``login`` authored across ALL repos within the window (#652).
 
-    ``--state all`` captures opened as well as merged PRs — the opened PRs were
-    invisible when only ``merged`` was listed.
+    Account-wide ``gh search prs --author`` replaces the repo-scoped
+    ``gh pr list``, so the same PRs are captured wherever resync runs;
+    ``--created`` bounds the search server-side (the window's exclusive upper
+    bound converts to the range's inclusive last day). The search JSON carries
+    no ``headRefName``/``mergedAt`` — those come per PR from
+    :func:`_gh_pr_detail`.
     """
+    last_day = (window.until - timedelta(seconds=1)).date().isoformat()
+    created = f"{window.since.date().isoformat()}..{last_day}"
     return _gh_json(
         [
-            "gh", "pr", "list", "--author", login, "--state", "all", "--limit", "200",
-            "--json", "number,title,state,mergedAt,createdAt,headRefName",
+            "gh", "search", "prs", "--author", login, "--created", created,
+            "--limit", "200",
+            "--json", "number,title,repository,state,createdAt,updatedAt",
         ]
     )
 
 
-def _pr_opened_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
+def _gh_pr_detail(slug: str, number: int) -> dict:
+    """Fetch one PR's ``headRefName``/``mergedAt`` — fields the search JSON lacks.
+
+    Degrades to ``{}`` on failure so the event is still minted (branch-less),
+    mirroring :func:`_collect_review_family`'s per-parent tolerance: one
+    unreadable PR never drops the rest of the capture.
+    """
+    return _gh_json(
+        ["gh", "pr", "view", str(number), "-R", slug, "--json", "headRefName,mergedAt"]
+    ) or {}
+
+
+def _pr_opened_event(pr: dict, window: _Window) -> Optional[EventRecord]:
     """Build a billable ``pr_opened`` event for one authored PR, or None (#656).
 
     Opening a PR is review-family work (assembling the diff, writing the
     description), so it derives windowed sessions exactly like a submitted
-    review. Timestamped at ``createdAt``; skipped when the timestamp is missing
-    or falls outside the window. The external id ``gh:pr:<n>:opened`` is a NEW
-    shape, distinct from the merge event's ``gh:pr:<n>``, so a historical
-    re-resync inserts opened events even for PRs already known as merge rows.
+    review. ``pr`` is a search item already enriched with its
+    :func:`_gh_pr_detail` fields. Timestamped at ``createdAt``; skipped when the
+    item names no repo or the timestamp is missing/out of window. The external
+    id is repo-qualified like the merge event's (``gh:pr:<owner/repo>:<n>``)
+    with an ``:opened`` suffix — the qualification is mandatory now that PR
+    numbers collide across an account-wide search (#652), and the suffix keeps
+    the shape distinct from the merge row so a historical re-resync inserts
+    opened events even for PRs already known as merges.
     """
-    ts = _ts_in_window(pr.get("createdAt"), ctx.since)
+    repo = _repo_of(pr)
+    if not repo:
+        return None
+    ts = _ts_in_window(pr.get("createdAt"), window.since, window.until)
     if ts is None:
         return None
     number = pr["number"]
@@ -417,22 +563,29 @@ def _pr_opened_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
         source="pr_opened",
         timestamp=ts,
         task_ids=_extract_task_ids(title, branch),
-        repo=ctx.label,
+        repo=repo,
         pr_num=number,
         branch=branch,
         subject=title,
-        external_id=f"gh:pr:{number}:opened",
+        external_id=f"gh:pr:{repo}:{number}:opened",
     )
 
 
-def _pr_merged_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
+def _pr_merged_event(pr: dict, window: _Window) -> Optional[EventRecord]:
     """Build a ``merge`` (audit-only) event for one MERGED authored PR, or None.
 
-    Only minted when ``mergedAt`` is set, and timestamped there; skipped when it
-    falls outside the window. The external id ``gh:pr:<n>`` is unchanged from
-    the pre-#656 combined event, so re-resyncs dedupe against existing rows.
+    ``pr`` is a search item already enriched with its :func:`_gh_pr_detail`
+    fields. Only minted when ``mergedAt`` is set, and timestamped there; skipped
+    when the item names no repo or ``mergedAt`` falls outside the window — a PR
+    opened inside the window but merged after it is still captured, by
+    :func:`_pr_opened_event` at its creation time (#656). The external id is
+    repo-qualified (``gh:pr:<owner/repo>:<n>``) — mandatory now that PR numbers
+    collide across an account-wide search (#652).
     """
-    ts = _ts_in_window(pr.get("mergedAt"), ctx.since)
+    repo = _repo_of(pr)
+    if not repo:
+        return None
+    ts = _ts_in_window(pr.get("mergedAt"), window.since, window.until)
     if ts is None:
         return None
     number = pr["number"]
@@ -443,19 +596,24 @@ def _pr_merged_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
         source="merge",
         timestamp=ts,
         task_ids=_extract_task_ids(title, branch, allow_leading_id=True),
-        repo=ctx.label,
+        repo=repo,
         pr_num=number,
         branch=branch,
         subject=title,
-        external_id=f"gh:pr:{number}",
+        external_id=f"gh:pr:{repo}:{number}",
     )
 
 
 def _review_event(
-    review: dict, pr: dict, repo: str, since: datetime
+    review: dict, pr: dict, repo: str, window: _Window
 ) -> Optional[EventRecord]:
-    """Build a ``review`` event for one submitted review, or None (out of window)."""
-    ts = _ts_in_window(review.get("submitted_at"), since)
+    """Build a ``review`` event for one submitted review, or None (out of window).
+
+    ``pr`` must arrive detail-enriched: the gh search JSON carries no
+    ``headRefName``, and without the real branch every branch-encoded task id
+    was lost, leaving reviews structurally unbillable (#653).
+    """
+    ts = _ts_in_window(review.get("submitted_at"), window.since, window.until)
     if ts is None:
         return None
     branch = pr.get("headRefName", "")
@@ -474,14 +632,14 @@ def _review_event(
 
 
 def _comment_event(
-    comment: dict, item: dict, repo: str, since: datetime
+    comment: dict, item: dict, repo: str, window: _Window
 ) -> Optional[EventRecord]:
     """Build a ``comment`` event for one authored issue/PR comment, or None.
 
     ``comment`` (issue #378 item 3) is keyed ``gh:comment:<id>`` and derives as
     windowed sessions. Skipped outside the window.
     """
-    ts = _ts_in_window(comment.get("created_at"), since)
+    ts = _ts_in_window(comment.get("created_at"), window.since, window.until)
     if ts is None:
         return None
     title = item.get("title", "")
@@ -503,9 +661,9 @@ def _comment_event(
 def _collect_review_family(
     parents: list[tuple[dict, str, str]],
     login: str,
-    since: datetime,
+    window: _Window,
     api_path: Callable[[str, int], str],
-    builder: Callable[[dict, dict, str, datetime], Optional[EventRecord]],
+    builder: Callable[[dict, dict, str, _Window], Optional[EventRecord]],
 ) -> list[EventRecord]:
     events: list[EventRecord] = []
     for parent, repo, api_slug in parents:
@@ -514,7 +672,7 @@ def _collect_review_family(
             event
             for sub in subs
             if _review_login(sub) == login
-            if (event := builder(sub, parent, repo, since)) is not None
+            if (event := builder(sub, parent, repo, window)) is not None
         )
     return events
 
@@ -524,96 +682,140 @@ def _reviews_path(slug: str, number: int) -> str:
 
 
 def _own_review_events(
-    ctx: _GithubCtx, login: str, prs: list[dict]
+    window: _Window, login: str, prs: list[dict]
 ) -> list[EventRecord]:
-    """Return ``login``'s reviews on their OWN current-repo PRs (issue #378 #3).
+    """Return ``login``'s reviews on their OWN authored PRs (issue #378 #3).
 
-    No-op when the current repo's slug is unresolved.
+    ``prs`` arrive already detail-enriched (see :func:`_enrich_authored_prs`),
+    so each review event reads its PR's real ``headRefName`` and is stored
+    against the PR's own repo (#652/#653).
     """
-    if ctx.slug is None:
-        return []
-    parents = [(pr, ctx.label, ctx.slug) for pr in prs]
-    return _collect_review_family(parents, login, ctx.since, _reviews_path, _review_event)
+    parents = [(pr, repo, repo) for pr in prs if (repo := _repo_of(pr))]
+    return _collect_review_family(parents, login, window, _reviews_path, _review_event)
 
 
-def _gh_reviewed_prs(login: str) -> list[dict]:
-    """Return PRs (on ANY repo) that ``login`` submitted a review on (issue #378 #3)."""
+def _gh_reviewed_prs(login: str, window: _Window) -> list[dict]:
+    """Return PRs (on ANY repo) that ``login`` submitted a review on (issue #378 #3).
+
+    ``--updated`` bounds the search server-side (#653): a PR reviewed in-window
+    was necessarily updated at/after the review, so the filter can lose nothing
+    that :func:`_review_event`'s window check would have kept.
+    """
     return _gh_json(
         [
-            "gh", "search", "prs", "--reviewed-by", login, "--limit", "100",
+            "gh", "search", "prs", "--reviewed-by", login,
+            "--updated", f">={window.since.date().isoformat()}",
+            "--limit", "100",
             "--json", "number,title,repository",
         ]
     ) or []
 
 
-def _others_review_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
+def _others_review_events(window: _Window, login: str) -> list[EventRecord]:
     """Return ``login``'s reviews on OTHER people's PRs across repos (issue #378 #3).
 
-    Each review is stored against the reviewed PR's own repo, not the current one.
+    Each review is stored against the reviewed PR's own repo. Every parent is
+    detail-enriched before the events build, restoring the real ``headRefName``
+    the search JSON lacks so branch-encoded task ids attribute again (#653).
     """
     parents = [
-        (item, repo, repo)
-        for item in _gh_reviewed_prs(login)
+        ({**item, **_gh_pr_detail(repo, item["number"])}, repo, repo)
+        for item in _gh_reviewed_prs(login, window)
         if (repo := _repo_of(item))
     ]
-    return _collect_review_family(parents, login, ctx.since, _reviews_path, _review_event)
+    return _collect_review_family(parents, login, window, _reviews_path, _review_event)
 
 
-def _gh_commented_issues(login: str) -> list[dict]:
-    """Return issues/PRs (on ANY repo) that ``login`` authored a comment on."""
+def _gh_commented_issues(login: str, window: _Window) -> list[dict]:
+    """Return issues/PRs (on ANY repo) that ``login`` authored a comment on.
+
+    ``--updated`` bounds the search server-side, mirroring
+    :func:`_gh_reviewed_prs` (a commented item was updated by the comment).
+    """
     return _gh_json(
         [
-            "gh", "search", "issues", "--commenter", login, "--limit", "100",
+            "gh", "search", "issues", "--commenter", login,
+            "--updated", f">={window.since.date().isoformat()}",
+            "--limit", "100",
             "--json", "number,title,repository",
         ]
     ) or []
 
 
-def _comment_events(ctx: _GithubCtx, login: str) -> list[EventRecord]:
+def _comment_events(window: _Window, login: str) -> list[EventRecord]:
     """Return ``login``'s authored issue/PR comments across repos (issue #378 #3)."""
     parents = [
         (item, repo, repo)
-        for item in _gh_commented_issues(login)
+        for item in _gh_commented_issues(login, window)
         if (repo := _repo_of(item))
     ]
     return _collect_review_family(
         parents,
         login,
-        ctx.since,
+        window,
         lambda slug, number: f"repos/{slug}/issues/{number}/comments",
         _comment_event,
     )
 
 
+def _enrich_authored_prs(prs: list[dict]) -> list[dict]:
+    """Merge each authored PR's :func:`_gh_pr_detail` fields into its search item.
+
+    The merged dicts feed BOTH the merge-event build and own-review collection,
+    so every downstream ``pr.get("headRefName")``/``pr.get("mergedAt")`` reads
+    the real value the search JSON lacks (#653). A repo-less item is passed
+    through unenriched and skipped later by :func:`_pr_event`.
+    """
+    return [
+        {**pr, **(_gh_pr_detail(repo, pr["number"]) if (repo := _repo_of(pr)) else {})}
+        for pr in prs
+    ]
+
+
 def _github_identity_events(
-    ctx: _GithubCtx, login: str
+    window: _Window, login: str
 ) -> Optional[list[EventRecord]]:
     """Collect every captured event for one author identity, or None on hard fail.
 
-    Returns None only when the authored-PR list itself cannot be read (the one
-    condition that skips the whole puller); the search-backed collectors degrade
-    to empty lists so one unreachable search never drops the other sources.
+    Returns None only when the authored-PR search itself cannot be read (the one
+    condition that fails the whole puller); the other collectors degrade to
+    empty lists so one unreachable search never drops the other sources.
 
     Each authored PR yields up to TWO events (#656): a billable ``pr_opened``
     event at ``createdAt`` and — merged PRs only — an audit ``merge`` event at
-    ``mergedAt``. Side benefit: an unmerged PR no longer mints ``gh:pr:<n>`` at
+    ``mergedAt``. Side benefit: an unmerged PR no longer mints the merge id at
     open time, so for PRs first captured after this change the later merge event
     is no longer blocked by an already-inserted open-time row — the
     stale-merge-timestamp limitation is fixed going forward.
     """
-    prs = _gh_authored_prs(login)
+    prs = _gh_authored_prs(login, window)
     if prs is None:
         return None
+    enriched = _enrich_authored_prs(prs)
     events: list[EventRecord] = [
         event
-        for pr in prs
+        for pr in enriched
         for builder in (_pr_opened_event, _pr_merged_event)
-        if (event := builder(pr, ctx)) is not None
+        if (event := builder(pr, window)) is not None
     ]
-    events.extend(_own_review_events(ctx, login, prs))
-    events.extend(_others_review_events(ctx, login))
-    events.extend(_comment_events(ctx, login))
+    events.extend(_own_review_events(window, login, enriched))
+    events.extend(_others_review_events(window, login))
+    events.extend(_comment_events(window, login))
     return events
+
+
+def _unattributed_reviews(pending: list[EventRecord]) -> list[str]:
+    """Label the review events whose title+branch resolved NO task id (#653).
+
+    Computed at extraction time (before batch validation strips anything), so
+    the warning flags structural attribution failures — a review that cannot
+    bill no matter what — rather than validation outcomes.
+    """
+    return [
+        f"{event.repo}#{event.pr_num}"
+        for event in pending
+        if event.source == "review" and not event.task_ids
+    ]
 
 
 def sync_github(
@@ -622,32 +824,42 @@ def sync_github(
     client: Any = None,
     *,
     now: Optional[datetime] = None,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
 ) -> dict[str, Any]:
-    """Reconcile authored GitHub activity into the ``events`` table (issue #378).
+    """Reconcile authored GitHub activity account-wide (#378, #652, #653).
 
-    For every configured author identity (default the active login) and bounded by
-    the resync window, stores: every authored PR as a billable ``pr_opened``
-    event at creation time plus — merged PRs only — a ``merge`` audit event
-    (#656); the user's reviews on their own AND others' PRs as ``review``
-    events; and authored issue/PR comments as ``comment`` events. Task ids are
-    validated in one batch when ``client`` is supplied. Idempotent. Returns
-    ``{"inserted": n}`` or ``{"skipped": reason}``.
+    For every configured author identity (default the active login) and bounded
+    by the resolved window, stores: every authored PR across every repo (via
+    ``gh search prs --author``) as a billable ``pr_opened`` event at creation
+    time keyed ``gh:pr:<owner/repo>:<n>:opened`` plus — merged PRs only — a
+    ``merge`` audit event keyed ``gh:pr:<owner/repo>:<n>`` (#656); the user's
+    reviews on their own AND others' PRs as ``review`` events, each carrying
+    its PR's real ``headRefName`` fetched per PR (#653); and authored issue/PR
+    comments as ``comment`` events. Task ids are validated in one batch when
+    ``client`` is supplied. Idempotent. Unusable/unauthenticated gh and a
+    failed authored-PR search are hard ``{"error": reason}`` results; review
+    events that resolved no task id are reported under
+    ``unattributed_reviews``.
     """
     login = _gh_login()
     if login is None:
-        return {"skipped": "gh unavailable or not authenticated"}
-    ctx = _GithubCtx(
-        label=_current_repo_label(state),
-        slug=_gh_repo_slug(),
-        since=_window_start(config, now),
-    )
+        return {"error": "gh unavailable or not authenticated"}
+    window = _Window(*_window_bounds(config, now, start, end))
     pending: list[EventRecord] = []
     for identity in _github_logins(config, login):
-        identity_events = _github_identity_events(ctx, identity)
+        identity_events = _github_identity_events(window, identity)
         if identity_events is None:
-            return {"skipped": "gh pr list failed"}
+            return {"error": "gh search prs failed"}
         pending.extend(identity_events)
-    return {"inserted": _store_pending(state, pending, client)}
+    unattributed = _unattributed_reviews(pending)
+    result: dict[str, Any] = {
+        "inserted": _store_pending(state, pending, client),
+        "found": len(pending),
+    }
+    if unattributed:
+        result["unattributed_reviews"] = unattributed
+    return result
 
 
 # ── Odoo task chatter ───────────────────────────────────────────────────────
@@ -721,19 +933,21 @@ def sync_odoo_chatter(
     config: Optional[LocalConfig] = None,
     *,
     now: Optional[datetime] = None,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
 ) -> dict[str, Any]:
     """Reconcile the user's Odoo task chatter into the ``events`` table (issue #378).
 
-    Searches ``mail.message`` author-wide over the resync date window (item 5) and
-    stores each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent.
+    Searches ``mail.message`` author-wide over the resolved window (item 5;
+    explicit ``start``/``end`` override the rolling default, #652) and stores
+    each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent.
     Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
     """
-    now = now or datetime.now(timezone.utc)
-    since = _window_start(config, now)
+    since, until = _window_bounds(config, now, start, end)
     label = _current_repo_label(state)
     try:
         partner_id = _current_partner_id(client)
-        messages = _search_chatter(client, partner_id, since, now)
+        messages = _search_chatter(client, partner_id, since, until)
     except OdooError:
         return {"skipped": "odoo unavailable"}
     inserted = sum(_store_message(state, message, label) for message in messages)

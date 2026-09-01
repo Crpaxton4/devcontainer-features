@@ -26,9 +26,18 @@ WEAK = "WEAK"
 
 # External-id prefixes the resync pullers mint, mapped to a human citation. The
 # id tail (SHA / PR number / message id) is extracted so the reviewer sees the
-# actual cited artifact rather than an opaque key.
+# actual cited artifact rather than an opaque key. PR ids come in two shapes:
+# the repo-qualified ``gh:pr:<owner/repo>:<n>`` minted since the account-wide
+# capture (#652) and the legacy unqualified ``gh:pr:<n>`` still present on
+# pre-#652 rows, which is kept so old evidence keeps citing. Each shape has an
+# ``:opened`` variant for the billable pr_opened event (#656).
 _GIT_RE = re.compile(r"^git:(?P<sha>[0-9a-fA-F]+)$")
 _CITATIONS = (
+    (
+        re.compile(r"^gh:pr:(?P<slug>[^:]+/[^:]+):(?P<n>\d+):opened$"),
+        "opened PR {slug}#{n}",
+    ),
+    (re.compile(r"^gh:pr:(?P<slug>[^:]+/[^:]+):(?P<n>\d+)$"), "PR {slug}#{n}"),
     (re.compile(r"^gh:pr:(?P<n>\d+)$"), "PR #{n}"),
     (re.compile(r"^gh:pr:(?P<n>\d+):opened$"), "opened PR #{n}"),
     (re.compile(r"^gh:review:(?P<n>.+)$"), "review {n}"),
@@ -142,7 +151,7 @@ def event_citation(source: str, external_id: str | None) -> str:
         for pattern, template in _CITATIONS:
             match = pattern.match(external_id)
             if match:
-                return template.format(n=match.group("n"))
+                return template.format(**match.groupdict())
         return external_id
     return source
 

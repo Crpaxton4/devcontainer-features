@@ -97,12 +97,26 @@ class TestCitations(unittest.TestCase):
     def test_commit_sha_is_shortened(self):
         self.assertEqual(event_citation("commit", "git:abcdef1234567890"), "commit abcdef1")
 
-    def test_pr_number(self):
+    def test_pr_number_legacy_unqualified(self):
+        # Pre-#652 rows keep citing through the legacy unqualified id shape.
         self.assertEqual(event_citation("merge", "gh:pr:189"), "PR #189")
 
-    def test_pr_opened(self):
+    def test_pr_number_repo_qualified(self):
+        # #652: account-wide capture mints repo-qualified PR ids.
+        self.assertEqual(
+            event_citation("merge", "gh:pr:acme/web:189"), "PR acme/web#189"
+        )
+
+    def test_pr_opened_legacy_unqualified(self):
         # #656: the opened-PR id shape gets its own citation, not the raw id.
         self.assertEqual(event_citation("pr_opened", "gh:pr:7:opened"), "opened PR #7")
+
+    def test_pr_opened_repo_qualified(self):
+        # #656 + #652: opened ids are repo-qualified under account-wide capture.
+        self.assertEqual(
+            event_citation("pr_opened", "gh:pr:acme/web:189:opened"),
+            "opened PR acme/web#189",
+        )
 
     def test_review_comment_chatter(self):
         self.assertEqual(event_citation("review", "gh:review:551"), "review 551")

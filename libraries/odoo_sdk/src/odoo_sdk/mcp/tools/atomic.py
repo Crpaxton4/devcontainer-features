@@ -274,9 +274,18 @@ def make_abort_run_tool(registry: Registry):
 
 @atomic_tool("resync")
 def make_resync_tool(registry: Registry):
-    def resync(sources: str = "git,github,odoo") -> Dict[str, Any]:
-        """Reconcile local event state against git, GitHub, and Odoo chatter."""
-        return registry["resync"].execute(sources=sources)
+    def resync(
+        sources: str = "git,github,odoo",
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Reconcile local event state against git, GitHub, and Odoo chatter.
+
+        Directory-agnostic: git discovers every repo under the cwd and github
+        searches account-wide. Optional inclusive ``start``/``end`` ISO dates
+        bound the git/github/odoo capture window (gcal/gmail ignore them).
+        """
+        return registry["resync"].execute(sources=sources, start=start, end=end)
 
     return resync
 

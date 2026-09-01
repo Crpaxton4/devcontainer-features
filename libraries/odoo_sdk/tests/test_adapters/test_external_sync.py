@@ -1,9 +1,10 @@
-"""Tests for the idempotent resync pullers (issues #328, #378).
+"""Tests for the idempotent resync pullers (issues #328, #378, #652, #653).
 
 Every backing tool is faked: git/gh go through a fake ``subprocess.run`` that
 dispatches on the command, and Odoo goes through a structural fake client. No
-network, no live Odoo are involved. One real-git fixture test exercises the
-``--all`` unmerged-branch capture (issue #378 item 2) end to end.
+network, no live Odoo are involved. Two real-git fixture tests exercise the
+``--all`` unmerged-branch capture (issue #378 item 2) and the recursive
+multi-repo discovery (#652) end to end.
 """
 
 import os
@@ -11,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -69,6 +70,20 @@ def _has(*needles):
 def _last(suffix):
     """Match a command whose final argument ends with ``suffix``."""
     return lambda cmd: cmd[-1].endswith(suffix)
+
+
+def _repo_cmd(path, *needles):
+    """Match a ``git -C <path> ...`` command scoped to one discovered repo."""
+    return lambda cmd: (
+        "-C" in cmd
+        and cmd[cmd.index("-C") + 1] == path
+        and all(n in cmd for n in needles)
+    )
+
+
+def _pr_view(number, slug):
+    """Match the per-PR detail fetch ``gh pr view <number> -R <slug>``."""
+    return _has("pr", "view", str(number), slug)
 
 
 class _TaskValidator:
@@ -180,6 +195,51 @@ class TestTaskIdValidation(unittest.TestCase):
         self.assertIsNone(event.payload)
 
 
+class TestDiscoverGitRepos(unittest.TestCase):
+    """Recursive repo discovery (#652): any depth, gitfiles, minimal pruning."""
+
+    def test_discovers_repos_at_any_depth_with_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()  # the cwd itself is a repo
+            (root / "a" / "proj1" / ".git").mkdir(parents=True)
+            (root / "b" / "c" / "d" / "proj2" / ".git").mkdir(parents=True)
+            # Worktree/submodule shape: ``.git`` is a FILE (gitfile), not a dir.
+            (root / "wt").mkdir()
+            (root / "wt" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
+            # Vendored tree: a checkout under node_modules must be pruned.
+            (root / "node_modules" / "dep" / ".git").mkdir(parents=True)
+            # A nested checkout BELOW another repo root is still found.
+            (root / "a" / "proj1" / "vendor" / "sub" / ".git").mkdir(parents=True)
+
+            repos = ex._discover_git_repos(root)
+
+            self.assertEqual(
+                repos,
+                sorted(
+                    [
+                        root,
+                        root / "a" / "proj1",
+                        root / "a" / "proj1" / "vendor" / "sub",
+                        root / "b" / "c" / "d" / "proj2",
+                        root / "wt",
+                    ]
+                ),
+            )
+
+    def test_lone_checkout_yields_exactly_itself(self) -> None:
+        # Running inside a single repo reproduces the pre-#652 behavior.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            (root / "src").mkdir()
+            self.assertEqual(ex._discover_git_repos(root), [root])
+
+    def test_no_repos_yields_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ex._discover_git_repos(Path(tmp)), [])
+
+
 class TestSyncGitLog(unittest.TestCase):
     def _log(self) -> str:
         return "\n".join(
@@ -197,11 +257,14 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
 
+    def _one_repo(self):
+        return patch.object(ex, "_discover_git_repos", return_value=[Path("/repo")])
+
     def test_happy_path_inserts_commit_events(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
+        with patch.object(ex.subprocess, "run", _fake_run(self._routes())), self._one_repo():
             result = ex.sync_git_log(state, _config(), now=_NOW)
-        self.assertEqual(result, {"inserted": 2})
+        self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 1})
         events = state.get_events()
         self.assertEqual([e.source for e in events], ["commit", "commit"])
         self.assertEqual({e.external_id for e in events}, {"git:sha1", "git:sha2"})
@@ -209,7 +272,7 @@ class TestSyncGitLog(unittest.TestCase):
         self.assertEqual(events[0].task_ids, ["24648"])
         self.assertEqual(events[0].timestamp.tzinfo, timezone.utc)
 
-    def test_log_command_uses_all_and_since(self) -> None:
+    def _captured_log_cmd(self, config, **kwargs):
         captured = {}
 
         def _capture(cmd):
@@ -220,10 +283,44 @@ class TestSyncGitLog(unittest.TestCase):
                 "remote" if "remote" in cmd else "config"
             ]
 
-        with patch.object(ex, "_run_capture", _capture):
-            ex.sync_git_log(state=_tmp_state(), config=_config(resync_window_days=14), now=_NOW)
-        self.assertIn("--all", captured["cmd"])
-        self.assertIn("--since=2026-07-01", captured["cmd"])  # 14 days before 07-15
+        with patch.object(ex, "_run_capture", _capture), self._one_repo():
+            ex.sync_git_log(state=_tmp_state(), config=config, now=_NOW, **kwargs)
+        return captured["cmd"]
+
+    def test_log_command_scopes_repo_with_full_iso_window(self) -> None:
+        cmd = self._captured_log_cmd(_config(resync_window_days=14))
+        self.assertEqual(cmd[cmd.index("-C") + 1], "/repo")
+        self.assertIn("--all", cmd)
+        # Full ISO bounds (#652), not the old date-only --since: 14 days back.
+        self.assertIn("--since=2026-07-01T00:00:00+00:00", cmd)
+        self.assertIn("--until=2026-07-15T00:00:00+00:00", cmd)
+
+    def test_explicit_range_overrides_rolling_window(self) -> None:
+        cmd = self._captured_log_cmd(
+            _config(), start=date(2026, 6, 1), end=date(2026, 6, 30)
+        )
+        self.assertIn("--since=2026-06-01T00:00:00+00:00", cmd)
+        # Inclusive end date: until is midnight of the day AFTER it.
+        self.assertIn("--until=2026-07-01T00:00:00+00:00", cmd)
+
+    def test_multiple_repos_each_get_their_own_label(self) -> None:
+        state = _tmp_state()
+        log_a = _SEP.join(["shaA", "2026-07-01T10:00:00Z", "a (task 24648)"])
+        log_b = _SEP.join(["shaB", "2026-07-01T11:00:00Z", "b (task 24648)"])
+        routes = [
+            (_has("config", "user.email"), "dev@example.com"),
+            (_repo_cmd("/a", "log"), log_a),
+            (_repo_cmd("/b", "log"), log_b),
+            (_repo_cmd("/a", "remote"), "git@github.com:acme/alpha.git"),
+            (_repo_cmd("/b", "remote"), "git@github.com:acme/beta.git"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
+            ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+        ):
+            result = ex.sync_git_log(state, _config(), now=_NOW)
+        self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 2})
+        labels = {e.external_id: e.repo for e in state.get_events()}
+        self.assertEqual(labels, {"git:shaA": "acme/alpha", "git:shaB": "acme/beta"})
 
     def test_multiple_author_emails_are_or_ed(self) -> None:
         state = _tmp_state()
@@ -237,9 +334,9 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("remote", "get-url"), None),
         ]
         cfg = _config(resync_authors="a@x.com, b@y.com")
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
             result = ex.sync_git_log(state, cfg, now=_NOW)
-        self.assertEqual(result, {"inserted": 2})
+        self.assertEqual(result["inserted"], 2)
 
     def test_validation_flags_unknown_task_id(self) -> None:
         state = _tmp_state()
@@ -250,9 +347,11 @@ class TestSyncGitLog(unittest.TestCase):
             ]
         )
         client = _TaskValidator([24648])
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes(log=log))):
+        with patch.object(
+            ex.subprocess, "run", _fake_run(self._routes(log=log))
+        ), self._one_repo():
             result = ex.sync_git_log(state, _config(), client, now=_NOW)
-        self.assertEqual(result, {"inserted": 2})
+        self.assertEqual(result["inserted"], 2)
         by_ext = {e.external_id: e for e in state.get_events()}
         self.assertEqual(by_ext["git:shaA"].task_ids, ["24648"])
         self.assertIsNone(by_ext["git:shaA"].payload)
@@ -262,24 +361,52 @@ class TestSyncGitLog(unittest.TestCase):
 
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
+        with patch.object(ex.subprocess, "run", _fake_run(self._routes())), self._one_repo():
             ex.sync_git_log(state, _config(), now=_NOW)
             second = ex.sync_git_log(state, _config(), now=_NOW)
-        self.assertEqual(second, {"inserted": 0})
+        # found stays 2 (the commits are still in the window); inserted drops
+        # to 0 — the counters distinguish "nothing new" from "nothing found".
+        self.assertEqual(second, {"inserted": 0, "found": 2, "repos": 1})
         self.assertEqual(state.count_events(), 2)
 
-    def test_git_missing_skips(self) -> None:
+    def test_git_missing_is_error(self) -> None:
         state = _tmp_state()
         with patch.object(ex.subprocess, "run", _fake_run([], missing=("git",))):
             result = ex.sync_git_log(state, _config(), now=_NOW)
-        self.assertEqual(result, {"skipped": "git unavailable or user.email unset"})
+        self.assertEqual(result, {"error": "git unavailable or user.email unset"})
 
-    def test_git_log_failure_skips(self) -> None:
+    def test_zero_repos_is_error(self) -> None:
+        state = _tmp_state()
+        routes = [(_has("config", "user.email"), "dev@example.com")]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
+            ex, "_discover_git_repos", return_value=[]
+        ):
+            result = ex.sync_git_log(state, _config(), now=_NOW)
+        self.assertTrue(result["error"].startswith("no git repositories under "))
+
+    def test_all_repos_failing_is_error(self) -> None:
         state = _tmp_state()
         routes = [(_has("config", "user.email"), "dev@example.com"), (_has("log"), None)]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
             result = ex.sync_git_log(state, _config(), now=_NOW)
-        self.assertEqual(result, {"skipped": "git log failed"})
+        self.assertEqual(result, {"error": "git log failed in all 1 repositories"})
+
+    def test_one_failing_repo_only_counts_as_failed(self) -> None:
+        state = _tmp_state()
+        log_a = _SEP.join(["shaA", "2026-07-01T10:00:00Z", "a (task 24648)"])
+        routes = [
+            (_has("config", "user.email"), "dev@example.com"),
+            (_repo_cmd("/a", "log"), log_a),
+            (_repo_cmd("/b", "log"), None),  # this repo's log fails
+            (_repo_cmd("/a", "remote"), "git@github.com:acme/alpha.git"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
+            ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+        ):
+            result = ex.sync_git_log(state, _config(), now=_NOW)
+        self.assertEqual(
+            result, {"inserted": 1, "found": 1, "repos": 2, "failed_repos": 1}
+        )
 
     def test_label_falls_back_to_empty_without_remote(self) -> None:
         state = _tmp_state()
@@ -288,23 +415,41 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("log"), self._log()),
             (_has("remote", "get-url"), None),  # no origin remote
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
             ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(state.get_events()[0].repo, "")
 
 
 @unittest.skipUnless(shutil.which("git"), "git not installed")
 class TestGitAllFlagIntegration(unittest.TestCase):
-    """Real-git fixture: ``--all`` captures a commit on an unmerged branch (#378 #2)."""
+    """Real-git fixtures: ``--all`` unmerged capture (#378 #2) + discovery (#652).
+
+    These run against real repos created at test time, so they use the real
+    clock (a pinned ``now`` would put ``--until`` before the commits).
+    """
 
     def _git(self, *args, cwd):
         subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
+    def _init_repo(self, repo: Path, origin: str = "") -> None:
+        self._git("init", "-q", "-b", "main", cwd=repo)
+        self._git("config", "user.email", "dev@example.com", cwd=repo)
+        self._git("config", "user.name", "Dev", cwd=repo)
+        if origin:
+            self._git("remote", "add", "origin", origin, cwd=repo)
+
+    def _run_in(self, directory, config) -> tuple:
+        state = _tmp_state()
+        prev = os.getcwd()
+        os.chdir(directory)
+        try:
+            return ex.sync_git_log(state, config), state
+        finally:
+            os.chdir(prev)
+
     def test_all_sees_unmerged_branch_commit(self) -> None:
         with tempfile.TemporaryDirectory() as repo:
-            self._git("init", "-q", "-b", "main", cwd=repo)
-            self._git("config", "user.email", "dev@example.com", cwd=repo)
-            self._git("config", "user.name", "Dev", cwd=repo)
+            self._init_repo(Path(repo))
             (Path(repo) / "a.txt").write_text("a")
             self._git("add", "-A", cwd=repo)
             self._git("commit", "--no-verify", "-qm", "base (task 24648)", cwd=repo)
@@ -315,28 +460,50 @@ class TestGitAllFlagIntegration(unittest.TestCase):
             # Back on main: the feature commit is NOT an ancestor of HEAD.
             self._git("checkout", "-q", "main", cwd=repo)
 
-            state = _tmp_state()
-            prev = os.getcwd()
-            os.chdir(repo)
-            try:
-                result = ex.sync_git_log(state, _config(), now=_NOW)
-            finally:
-                os.chdir(prev)
+            result, state = self._run_in(repo, _config())
 
         # Two commits: the base AND the unmerged-branch commit, thanks to --all.
         self.assertEqual(result["inserted"], 2)
+        self.assertEqual(result["repos"], 1)
         self.assertEqual({e.source for e in state.get_events()}, {"commit"})
+
+    def test_parent_tree_captures_every_repo_with_its_own_label(self) -> None:
+        # Run from a NON-repo parent holding two real checkouts: both are
+        # discovered and each commit carries its own repo's origin label (#652).
+        with tempfile.TemporaryDirectory() as root:
+            for name in ("one", "two"):
+                repo = Path(root) / "nested" / name
+                repo.mkdir(parents=True)
+                self._init_repo(repo, origin=f"git@github.com:acme/{name}.git")
+                (repo / "f.txt").write_text(name)
+                self._git("add", "-A", cwd=repo)
+                self._git("commit", "--no-verify", "-qm", f"{name} (task 24648)", cwd=repo)
+
+            # resync_authors avoids depending on the host's global user.email
+            # (the parent dir is not a repo, so repo-local config cannot apply).
+            result, state = self._run_in(root, _config(resync_authors="dev@example.com"))
+
+        self.assertEqual(result["repos"], 2)
+        self.assertEqual(result["inserted"], 2)
+        self.assertEqual(result["found"], 2)
+        self.assertEqual(
+            {e.repo for e in state.get_events()}, {"acme/one", "acme/two"}
+        )
 
 
 class TestSyncGithub(unittest.TestCase):
+    # ``gh search prs`` items: NO mergedAt/headRefName (the real search JSON
+    # lacks both — the #653 root cause); those come from the per-PR detail.
     _PRS = (
-        '[{"number": 7, "title": "PR (task 24648)", "state": "MERGED",'
-        ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-        ' "headRefName": "24648-feat"},'
-        ' {"number": 8, "title": "Open PR (task 55555)", "state": "OPEN",'
-        ' "mergedAt": null, "createdAt": "2026-07-03T09:00:00Z",'
-        ' "headRefName": "55555-wip"}]'
+        '[{"number": 7, "title": "PR (task 24648)", "state": "merged",'
+        ' "createdAt": "2026-07-01T09:00:00Z", "updatedAt": "2026-07-02T09:00:00Z",'
+        ' "repository": {"nameWithOwner": "o/r"}},'
+        ' {"number": 8, "title": "Open PR (task 55555)", "state": "open",'
+        ' "createdAt": "2026-07-03T09:00:00Z", "updatedAt": "2026-07-03T09:00:00Z",'
+        ' "repository": {"nameWithOwner": "o/r"}}]'
     )
+    _DETAIL_7 = '{"headRefName": "24648-feat", "mergedAt": "2026-07-02T09:00:00Z"}'
+    _DETAIL_8 = '{"headRefName": "55555-wip", "mergedAt": null}'
     _OWN_REVIEWS = (
         '[{"id": 55, "user": {"login": "octocat"}, "submitted_at": "2026-07-02T10:00:00Z"},'
         ' {"id": 56, "user": {"login": "someone-else"}, "submitted_at": "2026-07-02T11:00:00Z"}]'
@@ -345,6 +512,7 @@ class TestSyncGithub(unittest.TestCase):
         '[{"number": 3, "title": "Others PR (task 33333)",'
         ' "repository": {"nameWithOwner": "other/repo"}}]'
     )
+    _DETAIL_3 = '{"headRefName": "33333-things", "mergedAt": null}'
     _OTHER_REVIEWS = (
         '[{"id": 77, "user": {"login": "octocat"}, "submitted_at": "2026-07-05T12:00:00Z"}]'
     )
@@ -359,15 +527,16 @@ class TestSyncGithub(unittest.TestCase):
     def _routes(self):
         return [
             (_has("api", "user"), "octocat"),
-            (_has("repo", "view"), "o/r"),
-            (_has("pr", "list"), self._PRS),
+            (_has("search", "prs", "--author"), self._PRS),
+            (_pr_view(7, "o/r"), self._DETAIL_7),
+            (_pr_view(8, "o/r"), self._DETAIL_8),
             (lambda c: c[-1] == "repos/o/r/pulls/7/reviews", self._OWN_REVIEWS),
             (lambda c: c[-1] == "repos/o/r/pulls/8/reviews", "[]"),
-            (_has("search", "prs"), self._REVIEWED_PRS),
+            (_has("search", "prs", "--reviewed-by"), self._REVIEWED_PRS),
+            (_pr_view(3, "other/repo"), self._DETAIL_3),
             (lambda c: c[-1] == "repos/other/repo/pulls/3/reviews", self._OTHER_REVIEWS),
             (_has("search", "issues"), self._COMMENTED),
             (lambda c: c[-1] == "repos/other/repo/issues/9/comments", self._COMMENTS),
-            (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
 
     def test_captures_prs_reviews_and_comments(self) -> None:
@@ -376,22 +545,30 @@ class TestSyncGithub(unittest.TestCase):
             result = ex.sync_github(state, _config(), now=_NOW)
         # opened(7) + merge(7) + opened(8) + own review(55) + others review(77)
         # + comment(111). PR 8 is unmerged, so it mints NO merge event (#656).
-        self.assertEqual(result, {"inserted": 6})
+        self.assertEqual(result, {"inserted": 6, "found": 6})
         by_ext = {e.external_id: e for e in state.get_events()}
+        # PR ids are repo-qualified (#652): account-wide numbers collide.
         self.assertEqual(set(by_ext), {
-            "gh:pr:7:opened", "gh:pr:7", "gh:pr:8:opened",
+            "gh:pr:o/r:7:opened", "gh:pr:o/r:7", "gh:pr:o/r:8:opened",
             "gh:review:55", "gh:review:77", "gh:comment:111",
         })
         # A merged PR yields BOTH a billable pr_opened event at createdAt and an
-        # audit-only merge event at mergedAt (#656).
-        self.assertEqual(by_ext["gh:pr:7:opened"].source, "pr_opened")
-        self.assertEqual(by_ext["gh:pr:7:opened"].timestamp.day, 1)
-        self.assertEqual(by_ext["gh:pr:7"].source, "merge")
-        self.assertEqual(by_ext["gh:pr:7"].timestamp.day, 2)
-        # Opened (unmerged) PR is captured via --state all, timestamped at createdAt.
-        self.assertEqual(by_ext["gh:pr:8:opened"].source, "pr_opened")
-        self.assertEqual(by_ext["gh:pr:8:opened"].task_ids, ["55555"])
-        # Comment is a new source, attributed via the issue title, on its own repo.
+        # audit-only merge event at the detail-fetched mergedAt (#656).
+        opened = by_ext["gh:pr:o/r:7:opened"]
+        self.assertEqual(opened.source, "pr_opened")
+        self.assertEqual(opened.timestamp, datetime(2026, 7, 1, 9, tzinfo=timezone.utc))
+        merged = by_ext["gh:pr:o/r:7"]
+        self.assertEqual(merged.source, "merge")
+        self.assertEqual(merged.timestamp, datetime(2026, 7, 2, 9, tzinfo=timezone.utc))
+        self.assertEqual(merged.branch, "24648-feat")
+        self.assertEqual(merged.repo, "o/r")
+        # Unmerged PR mints only its pr_opened event, timestamped at createdAt.
+        self.assertEqual(by_ext["gh:pr:o/r:8:opened"].source, "pr_opened")
+        self.assertEqual(by_ext["gh:pr:o/r:8:opened"].task_ids, ["55555"])
+        # Own review reads the enriched parent's branch (#653).
+        self.assertEqual(by_ext["gh:review:55"].branch, "24648-feat")
+        self.assertEqual(by_ext["gh:review:55"].task_ids, ["24648"])
+        # Comment is attributed via the issue title, on its own repo.
         comment = by_ext["gh:comment:111"]
         self.assertEqual(comment.source, "comment")
         self.assertEqual(comment.repo, "other/repo")
@@ -401,104 +578,189 @@ class TestSyncGithub(unittest.TestCase):
         # A review by a different user on our PR is never attributed to us.
         self.assertNotIn("gh:review:56", by_ext)
 
+    def test_search_commands_are_account_wide_and_date_bounded(self) -> None:
+        captured = []
+
+        def _capture(cmd):
+            captured.append(cmd)
+            return "octocat" if cmd[:3] == ["gh", "api", "user"] else "[]"
+
+        with patch.object(ex, "_run_capture", _capture):
+            ex.sync_github(_tmp_state(), _config(resync_window_days=14), now=_NOW)
+        authored = next(c for c in captured if "--author" in c)
+        # Account-wide search (no repo scope), server-side --created range.
+        self.assertEqual(authored[:3], ["gh", "search", "prs"])
+        self.assertIn("--created", authored)
+        self.assertIn("2026-07-01..2026-07-14", authored)
+        reviewed = next(c for c in captured if "--reviewed-by" in c)
+        self.assertIn("--updated", reviewed)
+        self.assertIn(">=2026-07-01", reviewed)
+        commented = next(c for c in captured if "--commenter" in c)
+        self.assertIn(">=2026-07-01", commented)
+
     def test_out_of_window_events_skipped(self) -> None:
         state = _tmp_state()
         with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
             # A 3-day window ends before every July artifact here.
             result = ex.sync_github(state, _config(resync_window_days=3), now=_NOW)
-        self.assertEqual(result, {"inserted": 0})
+        self.assertEqual(result, {"inserted": 0, "found": 0})
+
+    def test_review_on_id_less_title_attributes_via_fetched_branch(self) -> None:
+        # #653 regression: the reviewed-by search JSON has no headRefName, so
+        # a review whose PR title carries no id NEVER attributed. The per-PR
+        # detail fetch restores the branch and the branch-encoded id fires.
+        state = _tmp_state()
+        reviewed = (
+            '[{"number": 12, "title": "Fix payment token on invoice",'
+            ' "repository": {"nameWithOwner": "other/repo"}}]'
+        )
+        detail = '{"headRefName": "24648-payment-token-invoice", "mergedAt": null}'
+        reviews = (
+            '[{"id": 88, "user": {"login": "octocat"},'
+            ' "submitted_at": "2026-07-05T12:00:00Z"}]'
+        )
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), "[]"),
+            (_has("search", "prs", "--reviewed-by"), reviewed),
+            (_pr_view(12, "other/repo"), detail),
+            (lambda c: c[-1] == "repos/other/repo/pulls/12/reviews", reviews),
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW)
+        self.assertEqual(result, {"inserted": 1, "found": 1})
+        event = state.get_events()[0]
+        self.assertEqual(event.source, "review")
+        self.assertEqual(event.branch, "24648-payment-token-invoice")
+        self.assertEqual(event.task_ids, ["24648"])
+
+    def test_zero_id_review_is_reported_unattributed(self) -> None:
+        # #653 second ask: a review that resolved no task id still stores (for
+        # triage) but is surfaced in the summary instead of silently unbillable.
+        state = _tmp_state()
+        reviewed = (
+            '[{"number": 5, "title": "Misc cleanup",'
+            ' "repository": {"nameWithOwner": "other/repo"}}]'
+        )
+        detail = '{"headRefName": "cleanup-pass", "mergedAt": null}'
+        reviews = (
+            '[{"id": 91, "user": {"login": "octocat"},'
+            ' "submitted_at": "2026-07-05T12:00:00Z"}]'
+        )
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), "[]"),
+            (_has("search", "prs", "--reviewed-by"), reviewed),
+            (_pr_view(5, "other/repo"), detail),
+            (lambda c: c[-1] == "repos/other/repo/pulls/5/reviews", reviews),
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW)
+        self.assertEqual(
+            result,
+            {"inserted": 1, "found": 1, "unattributed_reviews": ["other/repo#5"]},
+        )
+
+    def test_detail_fetch_failure_still_mints_branchless_event(self) -> None:
+        # The per-PR detail degrades to {} (branch-less event), replacing the
+        # old slug-unresolved no-op: one unreadable PR never drops the capture.
+        state = _tmp_state()
+        prs = (
+            '[{"number": 7, "title": "PR (task 24648)", "state": "open",'
+            ' "createdAt": "2026-07-01T09:00:00Z",'
+            ' "repository": {"nameWithOwner": "o/r"}}]'
+        )
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), prs),
+            (_pr_view(7, "o/r"), None),  # detail fetch fails
+            (lambda c: c[-1] == "repos/o/r/pulls/7/reviews", "[]"),
+            (_has("search", "prs", "--reviewed-by"), "[]"),
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW)
+        # The PR is unmerged (and its mergedAt unreadable), so only the
+        # billable pr_opened event mints (#656).
+        self.assertEqual(result, {"inserted": 1, "found": 1})
+        event = state.get_events()[0]
+        self.assertEqual(event.external_id, "gh:pr:o/r:7:opened")
+        self.assertEqual(event.branch, "")  # degraded, not dropped
+        self.assertEqual(event.task_ids, ["24648"])  # title still attributes
 
     def test_two_identities_both_captured(self) -> None:
         state = _tmp_state()
         prs_for = {
-            "octo-a": '[{"number": 1, "title": "A (task 24648)", "state": "MERGED",'
-            ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "24648-a"}]',
-            "octo-b": '[{"number": 2, "title": "B (task 55555)", "state": "MERGED",'
-            ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "55555-b"}]',
+            "octo-a": '[{"number": 1, "title": "A (task 24648)", "state": "merged",'
+            ' "createdAt": "2026-07-01T09:00:00Z",'
+            ' "repository": {"nameWithOwner": "o/r"}}]',
+            "octo-b": '[{"number": 2, "title": "B (task 55555)", "state": "merged",'
+            ' "createdAt": "2026-07-01T09:00:00Z",'
+            ' "repository": {"nameWithOwner": "o/r"}}]',
         }
         routes = [
             (_has("api", "user"), "octo-a"),
-            (_has("repo", "view"), "o/r"),
-            (lambda c: "list" in c and "octo-a" in c, prs_for["octo-a"]),
-            (lambda c: "list" in c and "octo-b" in c, prs_for["octo-b"]),
+            (lambda c: "--author" in c and "octo-a" in c, prs_for["octo-a"]),
+            (lambda c: "--author" in c and "octo-b" in c, prs_for["octo-b"]),
+            (_pr_view(1, "o/r"), '{"headRefName": "24648-a", "mergedAt": "2026-07-02T09:00:00Z"}'),
+            (_pr_view(2, "o/r"), '{"headRefName": "55555-b", "mergedAt": "2026-07-02T09:00:00Z"}'),
             (lambda c: c[-1].endswith("/reviews"), "[]"),
-            (_has("search", "prs"), "[]"),
+            (_has("search", "prs", "--reviewed-by"), "[]"),
             (_has("search", "issues"), "[]"),
-            (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
         cfg = _config(resync_authors="octo-a octo-b")
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, cfg, now=_NOW)
-        # Each identity's merged PR mints an opened AND a merge event (#656).
-        self.assertEqual(result, {"inserted": 4})
+        # Each identity's merged PR mints an opened AND a merge event (#656),
+        # both under repo-qualified ids (#652).
+        self.assertEqual(result, {"inserted": 4, "found": 4})
         self.assertEqual(
             {e.external_id for e in state.get_events()},
-            {"gh:pr:1:opened", "gh:pr:1", "gh:pr:2:opened", "gh:pr:2"},
+            {
+                "gh:pr:o/r:1:opened", "gh:pr:o/r:1",
+                "gh:pr:o/r:2:opened", "gh:pr:o/r:2",
+            },
         )
 
     def test_search_results_without_repository_are_skipped(self) -> None:
         state = _tmp_state()
         routes = [
             (_has("api", "user"), "octocat"),
-            (_has("repo", "view"), "o/r"),
-            (_has("pr", "list"), "[]"),
-            (_has("search", "prs"), '[{"number": 3, "title": "no repo"}]'),
+            (
+                _has("search", "prs", "--author"),
+                '[{"number": 3, "title": "no repo", "createdAt": "2026-07-03T09:00:00Z"}]',
+            ),
+            (_has("search", "prs", "--reviewed-by"), '[{"number": 3, "title": "no repo"}]'),
             (_has("search", "issues"), '[{"number": 9, "title": "no repo"}]'),
-            (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, _config(), now=_NOW)
-        self.assertEqual(result, {"inserted": 0})
+        self.assertEqual(result, {"inserted": 0, "found": 0})
 
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
         with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
             ex.sync_github(state, _config(), now=_NOW)
             second = ex.sync_github(state, _config(), now=_NOW)
-        self.assertEqual(second, {"inserted": 0})
+        self.assertEqual(second, {"inserted": 0, "found": 6})
 
-    def test_gh_missing_skips(self) -> None:
+    def test_gh_missing_is_error(self) -> None:
         state = _tmp_state()
         with patch.object(ex.subprocess, "run", _fake_run([], missing=("gh",))):
             result = ex.sync_github(state, _config(), now=_NOW)
-        self.assertEqual(result, {"skipped": "gh unavailable or not authenticated"})
+        self.assertEqual(result, {"error": "gh unavailable or not authenticated"})
 
-    def test_pr_list_failure_skips(self) -> None:
+    def test_authored_search_failure_is_error(self) -> None:
         state = _tmp_state()
         routes = [
             (_has("api", "user"), "octocat"),
-            (_has("repo", "view"), "o/r"),
-            (_has("pr", "list"), None),
-            (_has("remote", "get-url"), "git@github.com:o/r.git"),
+            (_has("search", "prs", "--author"), None),
         ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, _config(), now=_NOW)
-        self.assertEqual(result, {"skipped": "gh pr list failed"})
-
-    def test_reviews_skipped_when_slug_unresolved(self) -> None:
-        state = _tmp_state()
-        prs = (
-            '[{"number": 7, "title": "PR (task 24648)", "state": "MERGED",'
-            ' "mergedAt": "2026-07-02T09:00:00Z", "createdAt": "2026-07-01T09:00:00Z",'
-            ' "headRefName": "24648-feat"}]'
-        )
-        routes = [
-            (_has("api", "user"), "octocat"),
-            (_has("repo", "view"), None),  # slug lookup fails
-            (_has("pr", "list"), prs),
-            (_has("search", "prs"), "[]"),
-            (_has("search", "issues"), "[]"),
-            (_has("remote", "get-url"), "git@github.com:o/r.git"),
-        ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
-        # Only the PR's own events are stored; own-PR reviews are a clean no-op.
-        self.assertEqual(result, {"inserted": 2})
-        self.assertEqual(
-            {e.source for e in state.get_events()}, {"pr_opened", "merge"}
-        )
+        self.assertEqual(result, {"error": "gh search prs failed"})
 
 
 class _FakeClient:
@@ -579,33 +841,78 @@ class TestParsingAndGuards(unittest.TestCase):
 
     def test_ts_in_window_bounds(self) -> None:
         since = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 7, 10, tzinfo=timezone.utc)
         self.assertEqual(
-            ex._ts_in_window("2026-07-02T00:00:00Z", since),
+            ex._ts_in_window("2026-07-02T00:00:00Z", since, until),
             datetime(2026, 7, 2, tzinfo=timezone.utc),
         )
-        self.assertIsNone(ex._ts_in_window("2026-06-30T00:00:00Z", since))
-        self.assertIsNone(ex._ts_in_window(None, since))
-        self.assertIsNone(ex._ts_in_window("not-a-date", since))
+        # The lower bound is inclusive; the upper bound is exclusive.
+        self.assertEqual(ex._ts_in_window("2026-07-01T00:00:00Z", since, until), since)
+        self.assertIsNone(ex._ts_in_window("2026-07-10T00:00:00Z", since, until))
+        self.assertIsNone(ex._ts_in_window("2026-07-11T00:00:00Z", since, until))
+        self.assertIsNone(ex._ts_in_window("2026-06-30T00:00:00Z", since, until))
+        self.assertIsNone(ex._ts_in_window(None, since, until))
+        self.assertIsNone(ex._ts_in_window("not-a-date", since, until))
+
+    def test_window_bounds_defaults_and_explicit_range(self) -> None:
+        cases = [
+            # (start, end, expected_since, expected_until)
+            (None, None, datetime(2026, 6, 15, tzinfo=timezone.utc), _NOW),
+            (date(2026, 7, 1), None, datetime(2026, 7, 1, tzinfo=timezone.utc), _NOW),
+            (
+                None,
+                date(2026, 7, 10),
+                datetime(2026, 6, 15, tzinfo=timezone.utc),
+                datetime(2026, 7, 11, tzinfo=timezone.utc),  # inclusive end: +1 day
+            ),
+            (
+                date(2026, 7, 1),
+                date(2026, 7, 1),
+                datetime(2026, 7, 1, tzinfo=timezone.utc),
+                datetime(2026, 7, 2, tzinfo=timezone.utc),  # one whole day
+            ),
+        ]
+        config = _config(resync_window_days=30)
+        for start, end, since, until in cases:
+            with self.subTest(start=start, end=end):
+                self.assertEqual(
+                    ex._window_bounds(config, _NOW, start, end), (since, until)
+                )
 
     def test_gh_json_returns_none_on_bad_json(self) -> None:
         with patch.object(ex.subprocess, "run", _fake_run([(_has("api"), "not json")])):
             self.assertIsNone(ex._gh_json(["gh", "api", "x"]))
 
-    def test_pr_opened_event_skips_without_created_at(self) -> None:
-        ctx = ex._GithubCtx(label="o/r", slug="o/r", since=_NOW.replace(year=2026, month=1))
-        self.assertIsNone(ex._pr_opened_event({"number": 1, "createdAt": None}, ctx))
+    def test_pr_opened_event_skips_without_created_at_or_repo(self) -> None:
+        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        with_repo = {
+            "number": 1,
+            "repository": {"nameWithOwner": "o/r"},
+            "createdAt": None,
+        }
+        self.assertIsNone(ex._pr_opened_event(with_repo, window))
+        no_repo = {"number": 1, "createdAt": "2026-07-01T09:00:00Z"}
+        self.assertIsNone(ex._pr_opened_event(no_repo, window))
 
-    def test_pr_merged_event_skips_unmerged_pr(self) -> None:
-        # An unmerged PR mints NO merge event — createdAt is no fallback (#656).
-        ctx = ex._GithubCtx(label="o/r", slug="o/r", since=_NOW.replace(year=2026, month=1))
-        pr = {"number": 1, "mergedAt": None, "createdAt": "2026-07-01T09:00:00Z"}
-        self.assertIsNone(ex._pr_merged_event(pr, ctx))
+    def test_pr_merged_event_skips_unmerged_pr_or_repoless_item(self) -> None:
+        # An unmerged PR mints NO merge event — createdAt is no fallback (#656);
+        # the creation is captured by _pr_opened_event instead.
+        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        with_repo = {
+            "number": 1,
+            "repository": {"nameWithOwner": "o/r"},
+            "mergedAt": None,
+            "createdAt": "2026-07-01T09:00:00Z",
+        }
+        self.assertIsNone(ex._pr_merged_event(with_repo, window))
+        no_repo = {"number": 1, "mergedAt": "2026-07-02T09:00:00Z"}
+        self.assertIsNone(ex._pr_merged_event(no_repo, window))
 
     def test_review_event_skips_without_submitted_at(self) -> None:
         pr = {"number": 1, "title": "t", "headRefName": "b"}
         review = {"id": 9, "submitted_at": None}
-        since = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        self.assertIsNone(ex._review_event(review, pr, "o/r", since))
+        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        self.assertIsNone(ex._review_event(review, pr, "o/r", window))
 
     def test_current_partner_id_raises_on_empty_read(self) -> None:
         class _Empty(_FakeClient):

@@ -437,6 +437,22 @@ class TestResync(unittest.TestCase):
     def test_resync_status_handles_empty(self):
         self.assertEqual(_resync_status({}), "resync — nothing to do")
 
+    def test_resync_status_renders_errors_and_unattributed_warning(self):
+        # #652: an entirely-unusable source renders as an error, not a skip;
+        # #653: reviews that resolved no task id are surfaced, never silent.
+        status = _resync_status(
+            {
+                "git": {"error": "no git repositories under /tmp/x"},
+                "github": {
+                    "inserted": 2,
+                    "found": 4,
+                    "unattributed_reviews": ["o/r#5"],
+                },
+            }
+        )
+        self.assertIn("git: error (no git repositories under /tmp/x)", status)
+        self.assertIn("github: +2 (1 review(s) without task id)", status)
+
     def test_do_resync_runs_command_refreshes_and_sets_status(self):
         deps = self._resync_deps(
             {"git": {"inserted": 3}, "github": {"skipped": "no gh"}},
