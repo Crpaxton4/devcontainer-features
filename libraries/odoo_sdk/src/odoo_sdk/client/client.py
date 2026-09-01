@@ -40,10 +40,23 @@ class OdooClient:
         if executor is not None:
             self._executor = executor
         else:
+            # The refresh callable closes over this constructor's own resolution
+            # recipe, so on an authentication failure the executor can re-resolve
+            # settings and retry once after a key rotation (issue #658). Explicit
+            # arguments still win inside ``from_sources``, so pinned credentials
+            # resolve unchanged and surface the rotation hint instead.
             if config is not None:
                 settings = config.connection_settings()
+                credentials_refresh = config.connection_settings
             else:
                 settings = OdooConnectionSettings.from_sources(
+                    url=url,
+                    db=db,
+                    username=username,
+                    password=password,
+                    config_path=config_path,
+                )
+                credentials_refresh = lambda: OdooConnectionSettings.from_sources(
                     url=url,
                     db=db,
                     username=username,
@@ -56,6 +69,7 @@ class OdooClient:
                     settings.db,
                     settings.api_key,  # type: ignore[arg-type]
                     timeout=settings.timeout,
+                    credentials_refresh=credentials_refresh,
                 )
             else:
                 self._executor = OdooRpcExecutor(
@@ -64,6 +78,7 @@ class OdooClient:
                     settings.username,  # type: ignore[arg-type]
                     settings.password,  # type: ignore[arg-type]
                     timeout=settings.timeout,
+                    credentials_refresh=credentials_refresh,
                 )
         self._root_recordset = OdooRecordset(
             executor=self._executor,

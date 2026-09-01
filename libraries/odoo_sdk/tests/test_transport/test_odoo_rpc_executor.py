@@ -6,6 +6,7 @@ import unittest
 import xmlrpc.client
 from unittest.mock import Mock, patch
 
+from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.transport.errors import (
     OdooAuthenticationError,
     OdooServerError,
@@ -92,9 +93,10 @@ class TestOdooRpcExecutor(unittest.TestCase):
             _ = executor.uid
 
         exc = caught.exception
-        self.assertEqual(
-            str(exc),
-            "Odoo authentication failed for user 'user' on database 'db'",
+        self.assertTrue(
+            str(exc).startswith(
+                "Odoo authentication failed for user 'user' on database 'db'"
+            )
         )
         self.assertIn("db", str(exc))
         self.assertIn("user", str(exc))
@@ -141,9 +143,10 @@ class TestOdooRpcExecutor(unittest.TestCase):
         with self.assertRaises(OdooAuthenticationError) as caught:
             _ = executor.uid
 
-        self.assertEqual(
-            str(caught.exception),
-            "Odoo authentication failed for user 'user' on database 'db'",
+        self.assertTrue(
+            str(caught.exception).startswith(
+                "Odoo authentication failed for user 'user' on database 'db'"
+            )
         )
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
@@ -180,7 +183,7 @@ class TestOdooRpcExecutor(unittest.TestCase):
             executor.execute("res.partner", "search", [])
 
         exc = caught.exception
-        self.assertEqual(str(exc), "bad login or password")
+        self.assertTrue(str(exc).startswith("bad login or password"))
         self.assertEqual(exc.fault_code, 1)
         self.assertEqual(
             exc.fault_string, "odoo.exceptions.AccessDenied: bad login or password"
@@ -389,3 +392,256 @@ class TestOdooRpcExecutorTimeout(unittest.TestCase):
         transport = _SafeTimeoutTransport(6.0)
         connection = transport.make_connection("example.com")
         self.assertEqual(connection.timeout, 6.0)
+
+
+def _fresh_settings(**overrides: object) -> OdooConnectionSettings:
+    """Build refreshed connection settings matching the test executor's defaults."""
+    values: dict = {
+        "url": "https://example.com",
+        "db": "db",
+        "username": "user",
+        "password": "pw",
+    }
+    values.update(overrides)
+    return OdooConnectionSettings(**values)
+
+
+def _route_proxies(common_proxy: Mock, object_proxy: Mock):
+    """Return a ServerProxy side effect routing each endpoint to a fixed mock.
+
+    Rebuilt proxies (after a settings change) resolve to the same mocks, so one
+    ``authenticate`` / ``execute_kw`` stub spans both proxy generations.
+    """
+
+    def route(url: str, transport: object = None) -> Mock:
+        return common_proxy if url.endswith("/common") else object_proxy
+
+    return route
+
+
+class TestOdooRpcExecutorCredentialRefresh(unittest.TestCase):
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_retries_once_when_refresh_rotates_password(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.side_effect = lambda db, user, password, ctx: (
+            7 if password == "new" else False
+        )
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings(password="new"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "old", credentials_refresh=refresh
+        )
+
+        self.assertEqual(executor.uid, 7)
+        self.assertEqual(common_proxy.authenticate.call_count, 2)
+        self.assertEqual(
+            common_proxy.authenticate.call_args_list[1].args,
+            ("db", "user", "new", {}),
+        )
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_second_failure_after_rotation_propagates_plain(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings(password="new"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "old", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        self.assertEqual(common_proxy.authenticate.call_count, 2)
+        self.assertEqual(
+            str(caught.exception),
+            "Odoo authentication failed for user 'user' on database 'db'",
+        )
+        self.assertNotIn("recently rotated", str(caught.exception))
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_unchanged_settings_raise_hinted_error_without_retry(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings())
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "pw", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
+        self.assertIn("recently rotated", str(caught.exception))
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_without_refresh_hook_fails_once_with_hint(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+
+        executor = OdooRpcExecutor("https://example.com", "db", "user", "pw")
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
+        self.assertIn("recently rotated", str(caught.exception))
+        self.assertIn("restart the process", str(caught.exception))
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_refresh_error_surfaces_original_hinted_error(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = False
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(side_effect=ValueError("config file is now invalid"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "pw", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            _ = executor.uid
+
+        common_proxy.authenticate.assert_called_once_with("db", "user", "pw", {})
+        self.assertTrue(
+            str(caught.exception).startswith(
+                "Odoo authentication failed for user 'user' on database 'db'"
+            )
+        )
+        self.assertIn("recently rotated", str(caught.exception))
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_uid_url_change_rebuilds_proxies_with_new_url(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        stale_common = Mock()
+        stale_object = Mock()
+        fresh_common = Mock()
+        fresh_object = Mock()
+        stale_common.authenticate.return_value = False
+        fresh_common.authenticate.return_value = 9
+        mock_server_proxy.side_effect = [
+            stale_common,
+            stale_object,
+            fresh_common,
+            fresh_object,
+        ]
+        refresh = Mock(return_value=_fresh_settings(url="https://new.example.com"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "pw", credentials_refresh=refresh
+        )
+
+        self.assertEqual(executor.uid, 9)
+        urls = [call.args[0] for call in mock_server_proxy.call_args_list]
+        self.assertEqual(
+            urls,
+            [
+                "https://example.com/xmlrpc/2/common",
+                "https://example.com/xmlrpc/2/object",
+                "https://new.example.com/xmlrpc/2/common",
+                "https://new.example.com/xmlrpc/2/object",
+            ],
+        )
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_retries_once_after_access_denied_with_rotated_password(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        # The issue's live failure mode: uid cached from an earlier login, then
+        # the server-side rotation makes execute_kw fault with AccessDenied.
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.side_effect = lambda db, user, password, ctx: (
+            5 if password == "new" else 3
+        )
+        object_proxy.execute_kw.side_effect = [
+            xmlrpc.client.Fault(4, "odoo.exceptions.AccessDenied: Access Denied"),
+            [{"id": 1}],
+        ]
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings(password="new"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "old", credentials_refresh=refresh
+        )
+
+        result = executor.execute("res.partner", "search", [])
+
+        self.assertEqual(result, [{"id": 1}])
+        self.assertEqual(object_proxy.execute_kw.call_count, 2)
+        retry_args = object_proxy.execute_kw.call_args_list[1].args
+        self.assertEqual(retry_args[1], 5)
+        self.assertEqual(retry_args[2], "new")
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_unchanged_settings_raise_hinted_error_and_drop_uid(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 3
+        object_proxy.execute_kw.side_effect = xmlrpc.client.Fault(
+            4, "odoo.exceptions.AccessDenied: Access Denied"
+        )
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings())
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "pw", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            executor.execute("res.partner", "search", [])
+
+        self.assertEqual(object_proxy.execute_kw.call_count, 1)
+        self.assertIn("recently rotated", str(caught.exception))
+        # The stale uid is dropped so the next call re-authenticates.
+        self.assertIsNone(executor._uid)
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
+    def test_execute_validation_fault_is_not_retried_and_skips_refresh(
+        self, mock_server_proxy: Mock
+    ) -> None:
+        common_proxy = Mock()
+        object_proxy = Mock()
+        common_proxy.authenticate.return_value = 3
+        object_proxy.execute_kw.side_effect = xmlrpc.client.Fault(
+            3, "odoo.exceptions.ValidationError: Name is required"
+        )
+        mock_server_proxy.side_effect = _route_proxies(common_proxy, object_proxy)
+        refresh = Mock(return_value=_fresh_settings(password="new"))
+
+        executor = OdooRpcExecutor(
+            "https://example.com", "db", "user", "pw", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooValidationError):
+            executor.execute("res.partner", "create", {})
+
+        self.assertEqual(object_proxy.execute_kw.call_count, 1)
+        refresh.assert_not_called()

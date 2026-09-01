@@ -6,6 +6,7 @@ from http.client import HTTPMessage
 from io import BytesIO
 from unittest.mock import MagicMock, Mock, patch
 
+from odoo_sdk.state.config import OdooConnectionSettings
 from odoo_sdk.transport.errors import (
     OdooAccessError,
     OdooAuthenticationError,
@@ -433,3 +434,103 @@ class TestOdooJson2ExecutorErrors(unittest.TestCase):
         ex = OdooJson2Executor("https://example.com", "mydb", "key")
         with self.assertRaises(OdooTransportError):
             ex.execute("res.partner", "search", domain=[])
+
+
+def _json2_settings(api_key: str) -> OdooConnectionSettings:
+    """Build refreshed JSON-2 settings matching the test executor's defaults."""
+    return OdooConnectionSettings(
+        url="https://example.com",
+        db="mydb",
+        transport="json2",
+        api_key=api_key,
+    )
+
+
+def _make_401():
+    """Return a 401 HTTPError mapping to :class:`OdooAuthenticationError`."""
+    return _make_http_error(
+        {"name": "odoo.exceptions.AccessDenied", "message": "unauthorized"}, 401
+    )
+
+
+class TestOdooJson2ExecutorCredentialRefresh(unittest.TestCase):
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_401_retries_once_with_rotated_key(self, mock_urlopen: Mock) -> None:
+        mock_urlopen.side_effect = [_make_401(), _make_response([1, 2])]
+        refresh = Mock(return_value=_json2_settings("newkey"))
+        ex = OdooJson2Executor(
+            "https://example.com", "mydb", "oldkey", credentials_refresh=refresh
+        )
+
+        result = ex.execute("res.partner", "search", domain=[])
+
+        self.assertEqual(result, [1, 2])
+        self.assertEqual(mock_urlopen.call_count, 2)
+        retry_request = mock_urlopen.call_args_list[1].args[0]
+        self.assertEqual(retry_request.get_header("Authorization"), "Bearer newkey")
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_401_with_unchanged_key_raises_hinted_error_without_retry(
+        self, mock_urlopen: Mock
+    ) -> None:
+        mock_urlopen.side_effect = [_make_401()]
+        refresh = Mock(return_value=_json2_settings("key"))
+        ex = OdooJson2Executor(
+            "https://example.com", "mydb", "key", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            ex.execute("res.partner", "search", domain=[])
+
+        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertIn("recently rotated", str(caught.exception))
+        refresh.assert_called_once_with()
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_second_401_despite_rotated_key_propagates_plain(
+        self, mock_urlopen: Mock
+    ) -> None:
+        mock_urlopen.side_effect = [_make_401(), _make_401()]
+        refresh = Mock(return_value=_json2_settings("newkey"))
+        ex = OdooJson2Executor(
+            "https://example.com", "mydb", "oldkey", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            ex.execute("res.partner", "search", domain=[])
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertNotIn("recently rotated", str(caught.exception))
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_non_auth_error_skips_refresh_and_retry(self, mock_urlopen: Mock) -> None:
+        mock_urlopen.side_effect = [
+            _make_http_error(
+                {"name": "odoo.exceptions.ValidationError", "message": "invalid"}, 422
+            )
+        ]
+        refresh = Mock(return_value=_json2_settings("newkey"))
+        ex = OdooJson2Executor(
+            "https://example.com", "mydb", "oldkey", credentials_refresh=refresh
+        )
+
+        with self.assertRaises(OdooValidationError):
+            ex.execute("res.partner", "write", [1], vals={})
+
+        self.assertEqual(mock_urlopen.call_count, 1)
+        refresh.assert_not_called()
+
+    @patch("odoo_sdk.transport.json2.urllib.request.urlopen")
+    def test_401_without_refresh_hook_fails_once_with_hint(
+        self, mock_urlopen: Mock
+    ) -> None:
+        mock_urlopen.side_effect = [_make_401()]
+        ex = OdooJson2Executor("https://example.com", "mydb", "key")
+
+        with self.assertRaises(OdooAuthenticationError) as caught:
+            ex.execute("res.partner", "search", domain=[])
+
+        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertIn("recently rotated", str(caught.exception))
+        self.assertIn("restart the process", str(caught.exception))
