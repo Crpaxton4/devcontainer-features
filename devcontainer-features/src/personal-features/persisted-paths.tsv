@@ -51,7 +51,7 @@
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All eight paths are directories today.
+# distinction. All nine paths are directories today.
 #
 # name	host_source	container_target	env_var	env_value	mode	provision
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
@@ -59,6 +59,11 @@ gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh
 odoo_sdk	.config/odoo_sdk/	/usr/local/share/odoo-sdk-config/	ODOO_SDK_CONFIG	/usr/local/share/odoo-sdk-config	0700	container
 pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755	container
 coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700	container
+# coderabbit-cli: target hardcodes /home/vscode — the CLI derives its state dir as
+# join(homedir(), ".coderabbit") and honors no env override (#661), so the mount must
+# land at the container user's literal home path. /home/vscode matches the primary
+# consumers (remoteUser vscode); under a root remoteUser the dir is provisioned but inert.
+coderabbit-cli	.coderabbit/	/home/vscode/.coderabbit/	-	-	0700	container
 shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777	container
 odoo-tracker	.config/odoo-task-tracker/	/usr/local/share/odoo-task-tracker/	ODOO_TASK_TRACKER_DIR	/usr/local/share/odoo-task-tracker	0700	host
 mempalace	.mempalace/	/usr/local/share/mempalace/	MEMPALACE_PALACE_PATH	/usr/local/share/mempalace/palace	0700	container

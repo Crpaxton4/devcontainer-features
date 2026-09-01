@@ -13,4 +13,11 @@ check "claude code was installed as a global npm package" bash -c "npm list -g @
 check "gh cli is installed" gh --version
 check "claude reports a version" claude --version
 
+# #661: remoteUser is vscode here, so /home/vscode/.coderabbit is the exact dir the
+# CLI hardcodes (join(homedir(), ".coderabbit")). Assert it is vscode's $HOME/.coderabbit
+# and owned by vscode (install.sh chowns $_REMOTE_USER at build; with the mount active,
+# updateRemoteUserUID lines the uid up).
+check "~/.coderabbit is the persisted CLI state dir for the vscode user (#661)" bash -c \
+  "[ \"\$(getent passwd vscode | cut -d: -f6)\" = '/home/vscode' ] && test -d /home/vscode/.coderabbit && [ \"\$(stat -c '%U' /home/vscode/.coderabbit)\" = 'vscode' ]"
+
 reportResults

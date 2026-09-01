@@ -42,7 +42,7 @@ jobs:
           scratch="$(mktemp -d)"
           HOME="$scratch" pwsh -NoProfile -File ./setup.ps1
           for dir in .claude .config/gh .config/odoo_sdk \
-                     .config/pr-automation .config/coderabbit \
+                     .config/pr-automation .config/coderabbit .coderabbit \
                      .config/devcontainer/shell-history \
                      .config/odoo-task-tracker; do
               if [ ! -d "$scratch/$dir" ]; then

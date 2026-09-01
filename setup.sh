@@ -20,7 +20,7 @@
 # marks a FILE source, which is created with touch after its parent dir. That
 # distinction matters: Docker materialises a *missing* single-file mount source
 # as a directory, which then fails the mount, so a file source must exist as a
-# file before the container starts. (All seven sources are directories today.)
+# file before the container starts. (All nine sources are directories today.)
 #
 # One row is host-provisioned (provision=host): the odoo-sdk tracker database
 # directory. For it this script also initializes the SQLite schema via
