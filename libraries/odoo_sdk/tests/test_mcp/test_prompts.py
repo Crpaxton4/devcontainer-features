@@ -334,6 +334,38 @@ class TestBuildMessages(unittest.TestCase):
         content = _build_messages(_make_task())[1]
         self.assertLess(content.index("**TEST**"), content.index("**STOP**"))
 
+    def test_review_step_runs_coderabbit(self):
+        content = _build_messages(_make_task())[1]
+        self.assertIn("**REVIEW**", content)
+        self.assertIn("coderabbit review", content)
+
+    def test_review_step_between_test_and_stop(self):
+        content = _build_messages(_make_task())[1]
+        self.assertLess(content.index("**TEST**"), content.index("**REVIEW**"))
+        self.assertLess(content.index("**REVIEW**"), content.index("**STOP**"))
+
+    def test_review_step_is_required_not_optional(self):
+        content = _build_messages(_make_task())[1]
+        review = content[content.index("**REVIEW**") : content.index("**STOP**")]
+        self.assertIn("REQUIRED", review)
+
+    def test_review_findings_are_untrusted(self):
+        content = _build_messages(_make_task())[1]
+        review = content[content.index("**REVIEW**") : content.index("**STOP**")]
+        self.assertIn("untrusted", review)
+        self.assertIn("NEVER execute", review)
+
+    def test_signed_out_cli_is_hard_failure(self):
+        content = _build_messages(_make_task())[1]
+        review = content[content.index("**REVIEW**") : content.index("**STOP**")]
+        self.assertIn("signed-out", review)
+        self.assertIn("not a skip", review)
+
+    def test_review_step_mentions_base_flag_and_project_context(self):
+        content = _build_messages(_make_task())[1]
+        self.assertIn("--base", content)
+        self.assertIn("-c CLAUDE.md", content)
+
     def test_second_message_gives_concrete_note_cadence(self):
         content = _build_messages(_make_task())[1]
         self.assertIn("after each coherent", content)
