@@ -208,6 +208,33 @@ class TestCmdResync(unittest.TestCase):
         self.assertIn("unattributed review: o/r#5", err.getvalue())
         self.assertIn("unattributed review: acme/x#2", err.getvalue())
 
+    def test_search_truncation_warning_rendered(self):
+        out = self._run(
+            ["resync", "--sources", "github"],
+            sync_github=MagicMock(
+                return_value={
+                    "inserted": 5,
+                    "found": 200,
+                    "warnings": ["authored-PR (octocat) search hit its 200-item cap"],
+                }
+            ),
+        )
+        self.assertIn(
+            "github: inserted 5 (found 200); "
+            "WARNING: authored-PR (octocat) search hit its 200-item cap",
+            out,
+        )
+
+    def test_google_range_ignored_note_rendered(self):
+        # gcal/gmail have no start/end; an explicit range must not be silently
+        # discarded — the line says which window actually applied.
+        out = self._run(
+            ["resync", "--sources", "gcal", "--start", "2026-07-01"],
+            sync_google_calendar=MagicMock(return_value={"inserted": 2}),
+            LocalConfig=MagicMock(),
+        )
+        self.assertIn("gcal: inserted 2; note: start/end ignored", out)
+
     def test_error_result_exits_nonzero_after_all_lines_print(self):
         # An error source fails the command (#652) — but only after every
         # requested source has run and printed its line.

@@ -385,7 +385,8 @@ def _format_resync_line(source: str, result: dict) -> str:
 
     ``error`` (tooling entirely unusable, #652) and ``skipped`` (optional source
     absent) render distinctly; a success line carries the per-source coverage
-    counters and flags reviews that resolved no task id (#653).
+    counters, flags newly stored reviews that resolved no task id (#653), any
+    search-truncation warnings, and a range-ignored note.
     """
     if "error" in result:
         return f"{source}: error ({result['error']})"
@@ -398,6 +399,10 @@ def _format_resync_line(source: str, result: dict) -> str:
     unattributed = result.get("unattributed_reviews") or []
     if unattributed:
         line += f"; WARNING: {len(unattributed)} review event(s) resolved no task id"
+    for warning in result.get("warnings", []):
+        line += f"; WARNING: {warning}"
+    if result.get("note"):
+        line += f"; note: {result['note']}"
     return line
 
 
@@ -416,14 +421,29 @@ def cmd_resync(args: argparse.Namespace) -> None:
     end = date.fromisoformat(args.end) if args.end else None
     db = TaskStateDB()
     config = LocalConfig.load()
+
+    def _google(puller) -> Callable[[TaskStateDB], dict]:
+        # The Google pullers have no start/end; annotate rather than silently
+        # discarding an explicit range (they keep google_sync_window_days).
+        def run(db: TaskStateDB) -> dict:
+            result = _resync_google(puller, db)
+            if (start or end) and "skipped" not in result:
+                result["note"] = (
+                    "start/end ignored: this source always sweeps its "
+                    "google_sync_window_days window"
+                )
+            return result
+
+        return run
+
     runners = {
         # git/github stay local-only in the CLI (no Odoo client, so task-id
         # validation is skipped); config supplies the resync window/authors.
         "git": lambda db: sync_git_log(db, config, start=start, end=end),
         "github": lambda db: sync_github(db, config, start=start, end=end),
         "odoo": lambda db: _resync_odoo(db, start=start, end=end),
-        "gcal": lambda db: _resync_google(sync_google_calendar, db),
-        "gmail": lambda db: _resync_google(sync_gmail, db),
+        "gcal": _google(sync_google_calendar),
+        "gmail": _google(sync_gmail),
     }
     failed = False
     for source in sources:

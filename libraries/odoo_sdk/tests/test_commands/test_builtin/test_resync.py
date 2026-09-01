@@ -125,6 +125,35 @@ class TestResyncCommand(unittest.TestCase):
         self.assertEqual(result["git"], {"error": "no repos"})
         self.assertEqual(result["github"], {"inserted": 1, "found": 1})
 
+    def test_google_errors_degrade_to_skip(self) -> None:
+        # At the shared command surface (TUI/MCP) a Google credentials failure
+        # must become a per-source skip — matching the CLI — not an unhandled
+        # exception escaping the MCP boundary.
+        from odoo_sdk.adapters import GoogleAuthError
+
+        cmd, _client, _state = self._command()
+        with patch(
+            f"{_MOD}.sync_google_calendar",
+            side_effect=GoogleAuthError("no token at /x; re-run helper"),
+        ):
+            result = cmd.execute(sources="gcal")
+        self.assertEqual(
+            result, {"gcal": {"skipped": "no token at /x; re-run helper"}}
+        )
+
+    def test_google_range_gets_ignored_note(self) -> None:
+        cmd, _client, _state = self._command()
+        with patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 3}):
+            result = cmd.execute(sources="gcal", start="2026-07-01")
+        self.assertEqual(result["gcal"]["inserted"], 3)
+        self.assertIn("start/end ignored", result["gcal"]["note"])
+
+    def test_google_without_range_has_no_note(self) -> None:
+        cmd, _client, _state = self._command()
+        with patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 3}):
+            result = cmd.execute(sources="gcal")
+        self.assertEqual(result, {"gcal": {"inserted": 3}})
+
     def test_registered_metadata(self) -> None:
         self.assertEqual(ResyncCommand._name, "resync")
         self.assertIn("Reconcile", ResyncCommand._description)

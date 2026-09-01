@@ -453,6 +453,14 @@ class TestResync(unittest.TestCase):
         self.assertIn("git: error (no git repositories under /tmp/x)", status)
         self.assertIn("github: +2 (1 review(s) without task id)", status)
 
+    def test_resync_status_surfaces_partial_repo_failures(self):
+        # A repo whose log failed is degradation the module contract promises
+        # to report — the TUI must not collapse it into a bare "+1".
+        status = _resync_status(
+            {"git": {"inserted": 1, "found": 1, "repos": 3, "failed_repos": 2}}
+        )
+        self.assertIn("git: +1 (2 of 3 repos failed)", status)
+
     def test_do_resync_runs_command_refreshes_and_sets_status(self):
         deps = self._resync_deps(
             {"git": {"inserted": 3}, "github": {"skipped": "no gh"}},

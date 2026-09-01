@@ -285,14 +285,18 @@ def _source_summary(outcome: dict[str, Any]) -> str:
     """Render one puller's outcome: an inserted count, error, or skip reason.
 
     ``error`` (tooling entirely unusable, #652) renders distinctly from an
-    optional source's ``skipped``; a success surfaces how many review events
-    resolved no task id (#653) so unbillable reviews are never silent.
+    optional source's ``skipped``; a success surfaces partial degradation
+    (repos whose log failed) and how many newly stored review events resolved
+    no task id (#653), so neither is ever silent.
     """
     if "error" in outcome:
         return f"error ({outcome['error']})"
     if "skipped" in outcome:
         return f"skipped ({outcome['skipped']})"
     summary = f"+{outcome['inserted']}"
+    failed = outcome.get("failed_repos")
+    if failed:
+        summary += f" ({failed} of {outcome.get('repos', '?')} repos failed)"
     unattributed = outcome.get("unattributed_reviews") or []
     if unattributed:
         summary += f" ({len(unattributed)} review(s) without task id)"

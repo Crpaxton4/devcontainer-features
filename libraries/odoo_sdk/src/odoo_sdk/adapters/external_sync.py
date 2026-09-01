@@ -175,15 +175,21 @@ def _finalize_task_attribution(event: EventRecord, valid: Optional[set[str]]) ->
 
 def _store_pending(
     state: LocalStateClient, pending: list[EventRecord], client: Any
-) -> int:
-    """Validate every pending event's ids in ONE batch, then store them deduped."""
+) -> list[EventRecord]:
+    """Validate every pending event's ids in ONE batch, then store them deduped.
+
+    Returns the NEWLY inserted events (dedup skips are omitted) so callers can
+    both count insertions and report on first-sight rows only — e.g. the
+    unattributed-review warning must not re-fire for an already-stored (and
+    possibly since-triaged) review on every subsequent resync.
+    """
     all_ids = {i for event in pending for i in event.task_ids}
     valid = _validate_task_ids(client, all_ids)
-    inserted = 0
+    inserted: list[EventRecord] = []
     for event in pending:
         _finalize_task_attribution(event, valid)
         if state.add_event_dedup(event):
-            inserted += 1
+            inserted.append(event)
     return inserted
 
 
@@ -256,10 +262,15 @@ def _window_bounds(
     """Resolve one resync run's half-open ``[since, until)`` capture window.
 
     An explicit inclusive ``start``/``end`` date overrides the rolling default,
-    matching :func:`odoo_sdk.billing.upload.range_bounds`'s semantics: ``since``
-    is UTC midnight of ``start`` and ``until`` is UTC midnight of the day AFTER
-    ``end`` (so the whole end day is covered). Without them, ``since`` falls back
-    to :func:`_window_start` and ``until`` to ``now``.
+    matching :func:`odoo_sdk.billing.upload.range_bounds`'s inclusive-date math:
+    ``since`` is UTC midnight of ``start`` and ``until`` is UTC midnight of the
+    day AFTER ``end`` (so the whole end day is covered). Without them, ``since``
+    falls back to :func:`_window_start` and ``until`` to ``now``.
+
+    :raises ValueError: When the resolved window is empty or inverted (e.g. an
+        ``end`` older than the rolling window's start, or ``start`` after
+        ``end``) — the range must fail loudly rather than silently sweeping
+        nothing.
     """
     since = (
         datetime.combine(start, time.min, tzinfo=timezone.utc)
@@ -271,6 +282,12 @@ def _window_bounds(
         if end
         else (now or datetime.now(timezone.utc))
     )
+    if since >= until:
+        raise ValueError(
+            f"empty resync window: since {since.isoformat()} is not before "
+            f"until {until.isoformat()} (an end-only range must lie inside the "
+            "rolling window; pass --start to widen it)"
+        )
     return since, until
 
 
@@ -315,6 +332,33 @@ def _discover_git_repos(root: Path) -> list[Path]:
         if (Path(dirpath) / ".git").exists():
             repos.append(Path(dirpath))
     return sorted(repos)
+
+
+def _dedupe_shared_stores(repos: list[Path]) -> list[Path]:
+    """Collapse checkouts sharing one object store onto a single root (#652).
+
+    Linked worktrees (gitfile ``.git``) share the main clone's store, so reading
+    each would return the same commits once per worktree — inflating ``found``
+    and wasting subprocesses (``git:<sha>`` dedup keeps the DB correct either
+    way). Keyed on ``git rev-parse --git-common-dir``: linked worktrees resolve
+    to the main clone's ``.git`` and collapse onto the first (sorted) root,
+    while submodules keep their own ``modules/<name>`` dir and survive. A repo
+    whose rev-parse fails falls back to its own path (kept).
+    """
+    seen: set[str] = set()
+    kept: list[Path] = []
+    for root in repos:
+        common = _run_capture(
+            [
+                "git", "-C", str(root), "rev-parse",
+                "--path-format=absolute", "--git-common-dir",
+            ]
+        )
+        key = common or str(root)
+        if key not in seen:
+            seen.add(key)
+            kept.append(root)
+    return kept
 
 
 def _git_log(
@@ -410,13 +454,16 @@ def sync_git_log(
     ``failed_repos``. ``found`` vs ``inserted`` distinguishes "nothing to
     capture" from "captured nothing new" (#652 item 4).
     """
+    try:
+        since, until = _window_bounds(config, now, start, end)
+    except ValueError as exc:
+        return {"error": str(exc)}
     emails = _git_author_emails(config)
     if not emails:
         return {"error": "git unavailable or user.email unset"}
-    repos = _discover_git_repos(Path.cwd())
+    repos = _dedupe_shared_stores(_discover_git_repos(Path.cwd()))
     if not repos:
         return {"error": f"no git repositories under {Path.cwd()}"}
-    since, until = _window_bounds(config, now, start, end)
     pending: list[EventRecord] = []
     failed = 0
     for root in repos:
@@ -428,7 +475,7 @@ def sync_git_log(
     if failed == len(repos):
         return {"error": f"git log failed in all {len(repos)} repositories"}
     result: dict[str, Any] = {
-        "inserted": _store_pending(state, pending, client),
+        "inserted": len(_store_pending(state, pending, client)),
         "found": len(pending),
         "repos": len(repos),
     }
@@ -502,22 +549,30 @@ def _ts_in_window(
     return parsed if since <= parsed < until else None
 
 
+# Fixed caps on the account-wide gh searches. gh refuses to run unbounded, so
+# truncation is possible; :func:`_truncation_warnings` detects a full-to-the-cap
+# result and surfaces it rather than letting ``found`` masquerade as complete.
+_AUTHORED_SEARCH_LIMIT = 200
+_FAMILY_SEARCH_LIMIT = 100
+
+
 def _gh_authored_prs(login: str, window: _Window) -> Optional[list[dict]]:
-    """Return PRs ``login`` authored across ALL repos within the window (#652).
+    """Return PRs ``login`` authored across ALL repos, active in the window (#652).
 
     Account-wide ``gh search prs --author`` replaces the repo-scoped
-    ``gh pr list``, so the same PRs are captured wherever resync runs;
-    ``--created`` bounds the search server-side (the window's exclusive upper
-    bound converts to the range's inclusive last day). The search JSON carries
-    no ``headRefName``/``mergedAt`` — those come per PR from
-    :func:`_gh_pr_detail`.
+    ``gh pr list``, so the same PRs are captured wherever resync runs. The
+    server-side bound is ``--updated`` (like the sibling reviewed-by/commenter
+    searches), NOT ``--created``: a PR created before the window but merged
+    inside it was updated by that merge, so it is still returned and its merge
+    event can mint — a created-bounded search would silently lose it. The
+    search JSON carries no ``headRefName``/``mergedAt`` — those come per PR
+    from :func:`_gh_pr_detail`.
     """
-    last_day = (window.until - timedelta(seconds=1)).date().isoformat()
-    created = f"{window.since.date().isoformat()}..{last_day}"
     return _gh_json(
         [
-            "gh", "search", "prs", "--author", login, "--created", created,
-            "--limit", "200",
+            "gh", "search", "prs", "--author", login,
+            "--updated", f">={window.since.date().isoformat()}",
+            "--limit", str(_AUTHORED_SEARCH_LIMIT),
             "--json", "number,title,repository,state,createdAt,updatedAt",
         ]
     )
@@ -667,7 +722,12 @@ def _collect_review_family(
 ) -> list[EventRecord]:
     events: list[EventRecord] = []
     for parent, repo, api_slug in parents:
-        subs = _gh_json(["gh", "api", api_path(api_slug, parent["number"])]) or []
+        # --paginate: an unpaginated gh api returns only the FIRST page (30,
+        # oldest first), silently dropping the newest — i.e. in-window —
+        # reviews/comments on long threads (#653).
+        subs = _gh_json(
+            ["gh", "api", "--paginate", api_path(api_slug, parent["number"])]
+        ) or []
         events.extend(
             event
             for sub in subs
@@ -705,23 +765,29 @@ def _gh_reviewed_prs(login: str, window: _Window) -> list[dict]:
         [
             "gh", "search", "prs", "--reviewed-by", login,
             "--updated", f">={window.since.date().isoformat()}",
-            "--limit", "100",
+            "--limit", str(_FAMILY_SEARCH_LIMIT),
             "--json", "number,title,repository",
         ]
     ) or []
 
 
-def _others_review_events(window: _Window, login: str) -> list[EventRecord]:
+def _others_review_events(
+    window: _Window, login: str, reviewed: list[dict], authored: set[tuple[str, int]]
+) -> list[EventRecord]:
     """Return ``login``'s reviews on OTHER people's PRs across repos (issue #378 #3).
 
-    Each review is stored against the reviewed PR's own repo. Every parent is
+    ``authored`` (the identity's own ``(repo, number)`` PRs) is excluded — the
+    reviewed-by search has no author filter, so without it a self-review on an
+    own PR would be collected here AND by :func:`_own_review_events`, double-
+    fetching and double-reporting one review. Each remaining parent is
     detail-enriched before the events build, restoring the real ``headRefName``
     the search JSON lacks so branch-encoded task ids attribute again (#653).
+    Each review is stored against the reviewed PR's own repo.
     """
     parents = [
         ({**item, **_gh_pr_detail(repo, item["number"])}, repo, repo)
-        for item in _gh_reviewed_prs(login, window)
-        if (repo := _repo_of(item))
+        for item in reviewed
+        if (repo := _repo_of(item)) and (repo, item["number"]) not in authored
     ]
     return _collect_review_family(parents, login, window, _reviews_path, _review_event)
 
@@ -736,17 +802,19 @@ def _gh_commented_issues(login: str, window: _Window) -> list[dict]:
         [
             "gh", "search", "issues", "--commenter", login,
             "--updated", f">={window.since.date().isoformat()}",
-            "--limit", "100",
+            "--limit", str(_FAMILY_SEARCH_LIMIT),
             "--json", "number,title,repository",
         ]
     ) or []
 
 
-def _comment_events(window: _Window, login: str) -> list[EventRecord]:
+def _comment_events(
+    window: _Window, login: str, commented: list[dict]
+) -> list[EventRecord]:
     """Return ``login``'s authored issue/PR comments across repos (issue #378 #3)."""
     parents = [
         (item, repo, repo)
-        for item in _gh_commented_issues(login, window)
+        for item in commented
         if (repo := _repo_of(item))
     ]
     return _collect_review_family(
@@ -772,14 +840,30 @@ def _enrich_authored_prs(prs: list[dict]) -> list[dict]:
     ]
 
 
+def _truncation_warnings(counts: list[tuple[str, int, int]]) -> list[str]:
+    """Flag any account-wide search that filled its fixed cap (#652).
+
+    A result exactly at the limit is best-match ordered and very likely
+    clipped, so ``found`` would silently under-report; the warning tells the
+    user to narrow the window instead of trusting the counters.
+    """
+    return [
+        f"{name} search hit its {limit}-item cap; results may be truncated "
+        "(narrow the window with --start/--end)"
+        for name, count, limit in counts
+        if count >= limit
+    ]
+
+
 def _github_identity_events(
     window: _Window, login: str
-) -> Optional[list[EventRecord]]:
-    """Collect every captured event for one author identity, or None on hard fail.
+) -> Optional[tuple[list[EventRecord], list[str]]]:
+    """Collect one identity's events plus warnings, or None on hard fail.
 
     Returns None only when the authored-PR search itself cannot be read (the one
     condition that fails the whole puller); the other collectors degrade to
-    empty lists so one unreachable search never drops the other sources.
+    empty lists so one unreachable search never drops the other sources. The
+    second element carries search-truncation warnings.
 
     Each authored PR yields up to TWO events (#656): a billable ``pr_opened``
     event at ``createdAt`` and — merged PRs only — an audit ``merge`` event at
@@ -792,6 +876,9 @@ def _github_identity_events(
     if prs is None:
         return None
     enriched = _enrich_authored_prs(prs)
+    authored = {(repo, pr["number"]) for pr in enriched if (repo := _repo_of(pr))}
+    reviewed = _gh_reviewed_prs(login, window)
+    commented = _gh_commented_issues(login, window)
     events: list[EventRecord] = [
         event
         for pr in enriched
@@ -799,21 +886,28 @@ def _github_identity_events(
         if (event := builder(pr, window)) is not None
     ]
     events.extend(_own_review_events(window, login, enriched))
-    events.extend(_others_review_events(window, login))
-    events.extend(_comment_events(window, login))
-    return events
+    events.extend(_others_review_events(window, login, reviewed, authored))
+    events.extend(_comment_events(window, login, commented))
+    warnings = _truncation_warnings(
+        [
+            (f"authored-PR ({login})", len(prs), _AUTHORED_SEARCH_LIMIT),
+            (f"reviewed-PR ({login})", len(reviewed), _FAMILY_SEARCH_LIMIT),
+            (f"commented-issue ({login})", len(commented), _FAMILY_SEARCH_LIMIT),
+        ]
+    )
+    return events, warnings
 
 
-def _unattributed_reviews(pending: list[EventRecord]) -> list[str]:
-    """Label the review events whose title+branch resolved NO task id (#653).
+def _unattributed_reviews(inserted: list[EventRecord]) -> list[str]:
+    """Label the NEWLY stored review events that carry no billable task id (#653).
 
-    Computed at extraction time (before batch validation strips anything), so
-    the warning flags structural attribution failures — a review that cannot
-    bill no matter what — rather than validation outcomes.
+    Scoped to first-sight rows on purpose: an already-stored review may have
+    been attributed in triage since, so re-warning about it on every resync
+    would train the user to ignore the signal.
     """
     return [
         f"{event.repo}#{event.pr_num}"
-        for event in pending
+        for event in inserted
         if event.source == "review" and not event.task_ids
     ]
 
@@ -838,27 +932,34 @@ def sync_github(
     its PR's real ``headRefName`` fetched per PR (#653); and authored issue/PR
     comments as ``comment`` events. Task ids are validated in one batch when
     ``client`` is supplied. Idempotent. Unusable/unauthenticated gh and a
-    failed authored-PR search are hard ``{"error": reason}`` results; review
-    events that resolved no task id are reported under
-    ``unattributed_reviews``.
+    failed authored-PR search are hard ``{"error": reason}`` results; newly
+    stored review events that resolved no task id are reported under
+    ``unattributed_reviews``, and a search that filled its fixed cap under
+    ``warnings``.
     """
     login = _gh_login()
     if login is None:
         return {"error": "gh unavailable or not authenticated"}
-    window = _Window(*_window_bounds(config, now, start, end))
+    try:
+        window = _Window(*_window_bounds(config, now, start, end))
+    except ValueError as exc:
+        return {"error": str(exc)}
     pending: list[EventRecord] = []
+    warnings: list[str] = []
     for identity in _github_logins(config, login):
-        identity_events = _github_identity_events(window, identity)
-        if identity_events is None:
+        collected = _github_identity_events(window, identity)
+        if collected is None:
             return {"error": "gh search prs failed"}
+        identity_events, identity_warnings = collected
         pending.extend(identity_events)
-    unattributed = _unattributed_reviews(pending)
-    result: dict[str, Any] = {
-        "inserted": _store_pending(state, pending, client),
-        "found": len(pending),
-    }
+        warnings.extend(identity_warnings)
+    inserted = _store_pending(state, pending, client)
+    result: dict[str, Any] = {"inserted": len(inserted), "found": len(pending)}
+    unattributed = _unattributed_reviews(inserted)
     if unattributed:
         result["unattributed_reviews"] = unattributed
+    if warnings:
+        result["warnings"] = warnings
     return result
 
 
@@ -941,9 +1042,13 @@ def sync_odoo_chatter(
     Searches ``mail.message`` author-wide over the resolved window (item 5;
     explicit ``start``/``end`` override the rolling default, #652) and stores
     each as a ``chatter`` event keyed ``odoo:mail:<id>``. Idempotent.
-    Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
+    Returns ``{"inserted": n}``, ``{"skipped": reason}``, or ``{"error": reason}``
+    for an empty/inverted window.
     """
-    since, until = _window_bounds(config, now, start, end)
+    try:
+        since, until = _window_bounds(config, now, start, end)
+    except ValueError as exc:
+        return {"error": str(exc)}
     label = _current_repo_label(state)
     try:
         partner_id = _current_partner_id(client)

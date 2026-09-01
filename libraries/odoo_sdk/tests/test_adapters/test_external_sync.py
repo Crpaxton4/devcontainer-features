@@ -7,6 +7,7 @@ network, no live Odoo are involved. Two real-git fixture tests exercise the
 multi-repo discovery (#652) end to end.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -419,6 +420,34 @@ class TestSyncGitLog(unittest.TestCase):
             ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(state.get_events()[0].repo, "")
 
+    def test_inverted_window_is_error(self) -> None:
+        state = _tmp_state()
+        routes = [(_has("config", "user.email"), "dev@example.com")]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
+            result = ex.sync_git_log(state, _config(), now=_NOW, end=date(2026, 1, 31))
+        self.assertIn("empty resync window", result["error"])
+
+    def test_linked_worktrees_collapse_to_one_repo(self) -> None:
+        # A gitfile worktree shares the main clone's object store; reading both
+        # would return every commit twice and inflate found/repos (#652).
+        state = _tmp_state()
+        routes = [
+            (_has("config", "user.email"), "dev@example.com"),
+            (_repo_cmd("/main", "rev-parse"), "/main/.git"),
+            (_repo_cmd("/main/wt", "rev-parse"), "/main/.git"),  # shared store
+            (_repo_cmd("/sub", "rev-parse"), "/main/.git/modules/sub"),  # submodule
+            (_has("log"), self._log()),
+            (_has("remote", "get-url"), "git@github.com:o/r.git"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
+            ex,
+            "_discover_git_repos",
+            return_value=[Path("/main"), Path("/main/wt"), Path("/sub")],
+        ):
+            result = ex.sync_git_log(state, _config(), now=_NOW)
+        # The worktree is collapsed; the submodule keeps its own store.
+        self.assertEqual(result["repos"], 2)
+
 
 @unittest.skipUnless(shutil.which("git"), "git not installed")
 class TestGitAllFlagIntegration(unittest.TestCase):
@@ -588,10 +617,13 @@ class TestSyncGithub(unittest.TestCase):
         with patch.object(ex, "_run_capture", _capture):
             ex.sync_github(_tmp_state(), _config(resync_window_days=14), now=_NOW)
         authored = next(c for c in captured if "--author" in c)
-        # Account-wide search (no repo scope), server-side --created range.
+        # Account-wide search (no repo scope), server-side --updated bound: a
+        # PR created before the window but merged inside it is still returned
+        # (a --created range would silently lose it).
         self.assertEqual(authored[:3], ["gh", "search", "prs"])
-        self.assertIn("--created", authored)
-        self.assertIn("2026-07-01..2026-07-14", authored)
+        self.assertIn("--updated", authored)
+        self.assertIn(">=2026-07-01", authored)
+        self.assertNotIn("--created", authored)
         reviewed = next(c for c in captured if "--reviewed-by" in c)
         self.assertIn("--updated", reviewed)
         self.assertIn(">=2026-07-01", reviewed)
@@ -658,10 +690,14 @@ class TestSyncGithub(unittest.TestCase):
         ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, _config(), now=_NOW)
+            second = ex.sync_github(state, _config(), now=_NOW)
         self.assertEqual(
             result,
             {"inserted": 1, "found": 1, "unattributed_reviews": ["other/repo#5"]},
         )
+        # The warning is first-sight only: the stored review may be triaged
+        # later, so a re-run must not cry wolf about it forever.
+        self.assertEqual(second, {"inserted": 0, "found": 1})
 
     def test_detail_fetch_failure_still_mints_branchless_event(self) -> None:
         # The per-PR detail degrades to {} (branch-less event), replacing the
@@ -689,6 +725,91 @@ class TestSyncGithub(unittest.TestCase):
         self.assertEqual(event.external_id, "gh:pr:o/r:7:opened")
         self.assertEqual(event.branch, "")  # degraded, not dropped
         self.assertEqual(event.task_ids, ["24648"])  # title still attributes
+
+    def test_self_review_on_own_pr_collected_once(self) -> None:
+        # The reviewed-by search has no author filter, so an own PR can come
+        # back from it too; it must be excluded there (it is already covered by
+        # the authored path) or one self-review would be double-collected.
+        state = _tmp_state()
+        own_pr = (
+            '[{"number": 7, "title": "PR (task 24648)", "state": "open",'
+            ' "createdAt": "2026-07-01T09:00:00Z",'
+            ' "repository": {"nameWithOwner": "o/r"}}]'
+        )
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), own_pr),
+            (_pr_view(7, "o/r"), self._DETAIL_7),
+            (lambda c: c[-1] == "repos/o/r/pulls/7/reviews", self._OWN_REVIEWS),
+            (_has("search", "prs", "--reviewed-by"), own_pr),  # same PR again
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW)
+        # opened(7) + merge(7) + ONE review(55) — not two copies of the
+        # self-review (the authored PR itself mints both #656 events).
+        self.assertEqual(result, {"inserted": 3, "found": 3})
+
+    def test_search_hitting_its_cap_warns(self) -> None:
+        # A result exactly at the fixed --limit is very likely clipped; found
+        # must not masquerade as complete coverage.
+        state = _tmp_state()
+        prs = json.dumps(
+            [
+                {
+                    "number": n,
+                    "title": f"PR {n} (task 24648)",
+                    "state": "open",
+                    "createdAt": "2026-07-03T09:00:00Z",
+                    "repository": {"nameWithOwner": "o/r"},
+                }
+                for n in range(1, ex._AUTHORED_SEARCH_LIMIT + 1)
+            ]
+        )
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), prs),
+            (_has("pr", "view"), '{"headRefName": "", "mergedAt": null}'),
+            (lambda c: c[-1].endswith("/reviews"), "[]"),
+            (_has("search", "prs", "--reviewed-by"), "[]"),
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW)
+        self.assertEqual(result["found"], ex._AUTHORED_SEARCH_LIMIT)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("authored-PR (octocat)", result["warnings"][0])
+        self.assertIn("truncated", result["warnings"][0])
+
+    def test_review_family_fetch_paginates(self) -> None:
+        # Without --paginate only the oldest 30 reviews would ever be read.
+        captured = []
+
+        def fake_gh_json(cmd):
+            captured.append(cmd)
+            return []
+
+        window = ex._Window(datetime(2026, 7, 1, tzinfo=timezone.utc), _NOW)
+        with patch.object(ex, "_gh_json", fake_gh_json):
+            ex._collect_review_family(
+                [({"number": 1}, "o/r", "o/r")],
+                "octocat",
+                window,
+                ex._reviews_path,
+                ex._review_event,
+            )
+        self.assertEqual(
+            captured[0], ["gh", "api", "--paginate", "repos/o/r/pulls/1/reviews"]
+        )
+
+    def test_inverted_window_is_error(self) -> None:
+        # An --end older than the rolling window's start must fail loudly, not
+        # silently sweep nothing (#652 error contract).
+        state = _tmp_state()
+        routes = [(_has("api", "user"), "octocat")]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            result = ex.sync_github(state, _config(), now=_NOW, end=date(2026, 1, 31))
+        self.assertIn("empty resync window", result["error"])
 
     def test_two_identities_both_captured(self) -> None:
         state = _tmp_state()
@@ -879,6 +1000,17 @@ class TestParsingAndGuards(unittest.TestCase):
                     ex._window_bounds(config, _NOW, start, end), (since, until)
                 )
 
+    def test_window_bounds_rejects_empty_or_inverted_ranges(self) -> None:
+        config = _config(resync_window_days=30)
+        cases = [
+            (date(2026, 8, 1), date(2026, 7, 1)),  # start after end
+            (None, date(2026, 1, 31)),  # end before the rolling window start
+        ]
+        for start, end in cases:
+            with self.subTest(start=start, end=end):
+                with self.assertRaises(ValueError):
+                    ex._window_bounds(config, _NOW, start, end)
+
     def test_gh_json_returns_none_on_bad_json(self) -> None:
         with patch.object(ex.subprocess, "run", _fake_run([(_has("api"), "not json")])):
             self.assertIsNone(ex._gh_json(["gh", "api", "x"]))
@@ -907,6 +1039,31 @@ class TestParsingAndGuards(unittest.TestCase):
         self.assertIsNone(ex._pr_merged_event(with_repo, window))
         no_repo = {"number": 1, "mergedAt": "2026-07-02T09:00:00Z"}
         self.assertIsNone(ex._pr_merged_event(no_repo, window))
+
+    def test_pr_created_in_window_but_merged_after_still_mints(self) -> None:
+        # An explicit backfill range: created inside it, merged after it — the
+        # PR must still be captured (not vanish entirely). Since #656 split the
+        # combined event, the creation is carried by the pr_opened event rather
+        # than by a createdAt fallback on the merge event.
+        window = ex._Window(
+            datetime(2026, 7, 1, tzinfo=timezone.utc),
+            datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        pr = {
+            "number": 4,
+            "title": "t (task 24648)",
+            "repository": {"nameWithOwner": "o/r"},
+            "createdAt": "2026-07-20T09:00:00Z",
+            "mergedAt": "2026-08-03T09:00:00Z",  # outside the window
+        }
+        opened = ex._pr_opened_event(pr, window)
+        self.assertIsNotNone(opened)
+        self.assertEqual(
+            opened.timestamp, datetime(2026, 7, 20, 9, tzinfo=timezone.utc)
+        )
+        self.assertEqual(opened.external_id, "gh:pr:o/r:4:opened")
+        # The out-of-window merge itself is not backdated into the range.
+        self.assertIsNone(ex._pr_merged_event(pr, window))
 
     def test_review_event_skips_without_submitted_at(self) -> None:
         pr = {"number": 1, "title": "t", "headRefName": "b"}

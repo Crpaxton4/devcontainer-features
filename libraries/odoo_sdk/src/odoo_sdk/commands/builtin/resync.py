@@ -23,6 +23,8 @@ from datetime import date
 from typing import Any, Optional
 
 from odoo_sdk.adapters import (
+    GoogleAPIError,
+    GoogleAuthError,
     sync_git_log,
     sync_github,
     sync_gmail,
@@ -33,13 +35,42 @@ from odoo_sdk.adapters import (
 from ..command import Command
 from ._registration import builtin_command
 
+# Note appended to a Google source's summary when an explicit range was given:
+# the Google pullers have no start/end parameters, so silently sweeping their
+# own rolling window while the user believes a backfill ran would be a trap.
+_RANGE_IGNORED_NOTE = (
+    "start/end ignored: this source always sweeps its google_sync_window_days "
+    "window"
+)
+
+
+def _run_google(puller, cmd, ranged: bool) -> dict[str, Any]:
+    """Run one Google puller behind the same guard the CLI applies.
+
+    The pullers raise ``GoogleAuthError``/``GoogleAPIError`` (and ``ValueError``
+    for a rejected tick interval) rather than silently ingesting nothing; at
+    this shared command surface (TUI/MCP) those must degrade to a per-source
+    skip — matching the CLI's ``_resync_google`` — instead of escaping as
+    unhandled exceptions. ``ranged`` appends the range-ignored note so an
+    explicit ``start``/``end`` is never silently discarded.
+    """
+    try:
+        result = puller(cmd.state, cmd.config)
+    except (GoogleAuthError, GoogleAPIError, ValueError) as exc:
+        return {"skipped": str(exc)}
+    if ranged:
+        result = {**result, "note": _RANGE_IGNORED_NOTE}
+    return result
+
+
 # The pullers a resync can run, keyed by source in a stable order; each value
 # runs that source's sync against the command's shared dependencies plus the
 # optional explicit date range. git/github/odoo honor ``start``/``end``; the
 # Google sources ignore them (they keep their own ``google_sync_window_days``
-# window). ``gcal`` and ``gmail`` reach the Google APIs and require
-# host-provisioned credentials, so they are opt-in: NOT in the default source
-# string, only run when explicitly requested (issue #370).
+# window and annotate their summary when a range was requested). ``gcal`` and
+# ``gmail`` reach the Google APIs and require host-provisioned credentials, so
+# they are opt-in: NOT in the default source string, only run when explicitly
+# requested (issue #370).
 _SYNC_DISPATCH = {
     "git": lambda cmd, start, end: sync_git_log(
         cmd.state, cmd.config, cmd._client, start=start, end=end
@@ -50,8 +81,10 @@ _SYNC_DISPATCH = {
     "odoo": lambda cmd, start, end: sync_odoo_chatter(
         cmd._client, cmd.state, cmd.config, start=start, end=end
     ),
-    "gcal": lambda cmd, start, end: sync_google_calendar(cmd.state, cmd.config),
-    "gmail": lambda cmd, start, end: sync_gmail(cmd.state, cmd.config),
+    "gcal": lambda cmd, start, end: _run_google(
+        sync_google_calendar, cmd, bool(start or end)
+    ),
+    "gmail": lambda cmd, start, end: _run_google(sync_gmail, cmd, bool(start or end)),
 }
 _DEFAULT_SOURCES = ("git", "github", "odoo")
 _ALL_SOURCES = tuple(_SYNC_DISPATCH)
