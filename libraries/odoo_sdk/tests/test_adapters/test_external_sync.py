@@ -106,10 +106,37 @@ class TestExtractTaskIds(unittest.TestCase):
             ("#31 - Hardcode Checks", "", []),  # short client-side number
             ("cross ref (#189)", "", []),  # PR cross-reference
             ("bumped to v2", "main", []),  # nothing extractable
+            # Bare leading id is GATED (issue #654): without ``allow_leading_id``
+            # (the calendar/gmail contract) a leading id or year mints nothing.
+            ("24648 rtv process", "", []),
+            ("2026 Q1 planning", "", []),
         ]
         for subject, branch, expected in cases:
             with self.subTest(subject=subject, branch=branch):
                 self.assertEqual(ex._extract_task_ids(subject, branch), expected)
+
+    def test_leading_id_extraction_table(self) -> None:
+        """The gated bare-leading-id form (issue #654) — git/GitHub paths only."""
+        cases = [
+            ("24648 rtv process", "", ["24648"]),  # space delimiter
+            ("24648#OdooMeetingRecordingModel", "", ["24648"]),  # hash delimiter
+            ("24648: fix widget", "", ["24648"]),  # colon delimiter
+            ("24648-fix crash", "", ["24648"]),  # hyphen; overlaps <id>-slug form
+            ("24648", "", ["24648"]),  # bare-only title: the join space delimits
+            # Accepted: a leading year reads as an id; the online validation
+            # layer (_validate_task_ids) drops ids that name no real task.
+            ("2026 Q1 planning", "", ["2026"]),
+            # Guards.
+            ("333:IMP repo-local numbering", "", []),  # below _MIN_TASK_ID_DIGITS
+            ("fix 24648 later", "", []),  # mid-string bare number: anchor holds
+            ("", "24648 rtv process", []),  # branch is never at string start
+        ]
+        for subject, branch, expected in cases:
+            with self.subTest(subject=subject, branch=branch):
+                self.assertEqual(
+                    ex._extract_task_ids(subject, branch, allow_leading_id=True),
+                    expected,
+                )
 
 
 class TestTaskIdValidation(unittest.TestCase):
