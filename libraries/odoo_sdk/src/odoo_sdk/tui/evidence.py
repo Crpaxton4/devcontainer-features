@@ -30,6 +30,7 @@ WEAK = "WEAK"
 _GIT_RE = re.compile(r"^git:(?P<sha>[0-9a-fA-F]+)$")
 _CITATIONS = (
     (re.compile(r"^gh:pr:(?P<n>\d+)$"), "PR #{n}"),
+    (re.compile(r"^gh:pr:(?P<n>\d+):opened$"), "opened PR #{n}"),
     (re.compile(r"^gh:review:(?P<n>.+)$"), "review {n}"),
     (re.compile(r"^gh:comment:(?P<n>.+)$"), "comment {n}"),
     (re.compile(r"^odoo:mail:(?P<n>.+)$"), "chatter msg {n}"),

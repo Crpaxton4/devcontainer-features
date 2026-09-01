@@ -214,6 +214,16 @@ class TestSourceAndTaskFiltering(unittest.TestCase):
         lo, hi = _whole_range()
         self.assertEqual(state.derive_sessions_overlapping(lo, hi, gap_secs=GAP), [])
 
+    def test_pr_opened_source_included(self):
+        # ``pr_opened`` is billable review-family work (#656): a lone opened PR
+        # forms one session (which floors to the minimum at upload).
+        state = _tmp_state()
+        _event(state, ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC), source="pr_opened")
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].category, "Review")
+
     def test_task_filter_narrows(self):
         state = _tmp_state()
         _event(state, ts=datetime(2026, 6, 1, 9, 0, tzinfo=UTC), task_ids=["101"])
@@ -273,6 +283,32 @@ class TestReviewFamilyWindowed(unittest.TestCase):
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0].event_ids, (window.id,))
         self.assertEqual(windows[0].duration_seconds, 0)  # picks up the min at upload
+        self.assertEqual(windows[0].category, "Review")
+
+    def test_stacked_pr_opened_burst_derives_one_windowed_session(self):
+        # #656: a stacked-PR batch (18 PRs opened across 24 minutes on one task)
+        # collapses into ONE gap-windowed session — the span first-to-last — not
+        # 18 separate floor-billed entries.
+        state = _tmp_state()
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        for i in range(18):
+            # Spread 18 opened PRs evenly across 24 minutes (< GAP apart each).
+            _event(
+                state,
+                ts=base + timedelta(seconds=i * 24 * 60 // 17),
+                source="pr_opened",
+                task_ids=["101"],
+                repo="owner/repo",
+                pr_num=100 + i,
+            )
+        lo, hi = _whole_range()
+        windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0].event_ids), 18)
+        # The span is the first-to-last opened PR (~24 min), not 18 × floor.
+        self.assertEqual(windows[0].duration_seconds, 24 * 60)
+        # A purely pr_opened window is review family (no development event).
+        self.assertEqual(windows[0].strategy_name, "review")
         self.assertEqual(windows[0].category, "Review")
 
     def test_mixed_development_and_review_takes_development_label(self):

@@ -94,6 +94,10 @@ class TestSessionizationParity(unittest.TestCase):
         # it as a one-event review session; the Python bridge used to raise
         # UnknownEventSourceError here and take the whole window down with it.
         _event(self.db, "comment", 12, 0, "404", pr=9)
+        # Task 505: a lone ``pr_opened`` — opening a PR is billable review-family
+        # work (#656), so BOTH engines must bill it like a lone review, unlike
+        # the audit-only ``merge`` next door.
+        _event(self.db, "pr_opened", 13, 0, "505", pr=10)
         self.config = SessionizationConfig(
             start_date=date(2026, 6, 1), end_date=date(2026, 6, 1)
         )
@@ -118,6 +122,26 @@ class TestSessionizationParity(unittest.TestCase):
         python = _python_billed_secs_per_task(self.db, self.config)
         self.assertIn("404", sql)
         self.assertEqual(python["404"], sql["404"])
+
+    def test_pr_opened_bills_identically_in_both_engines(self):
+        # A `pr_opened` event is review-family to the SQL derivation (#656), so
+        # the Python bridge has to resolve it to a billable review-family type
+        # too — the two engines must bill the lone opened PR the same hours.
+        sql = _sql_billed_secs_per_task(self.db, self.config)
+        python = _python_billed_secs_per_task(self.db, self.config)
+        self.assertIn("505", sql)
+        self.assertEqual(python["505"], sql["505"])
+
+    def test_lone_pr_opened_windows_as_a_review_session(self):
+        events = load_raw_events(
+            self.db, self.config.range_start, self.config.range_end
+        )
+        entries = build_window_entries(
+            billable_events(events), self.config.session_gap_secs, self.config
+        )
+        opened = [entry for entry in entries if entry.task_id == "505"]
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(opened[0].strategy_name, "review")
 
     def test_lone_comment_windows_as_a_review_session(self):
         events = load_raw_events(

@@ -22,9 +22,13 @@ class TestSourceToEventType(unittest.TestCase):
         self.assertEqual(source_to_event_type("review"), EventType.REVIEW)
         self.assertEqual(source_to_event_type("agent"), EventType.AGENT)
         self.assertEqual(source_to_event_type("chatter"), EventType.CHATTER)
+        self.assertEqual(source_to_event_type("pr_opened"), EventType.PR_OPENED)
 
     def test_chatter_round_trips_through_reverse_map(self) -> None:
         self.assertEqual(_EVENT_TYPE_TO_SOURCE[EventType.CHATTER], "chatter")
+
+    def test_pr_opened_round_trips_through_reverse_map(self) -> None:
+        self.assertEqual(_EVENT_TYPE_TO_SOURCE[EventType.PR_OPENED], "pr_opened")
 
     def test_claude_prefixed_sources_map_to_hook(self) -> None:
         self.assertEqual(

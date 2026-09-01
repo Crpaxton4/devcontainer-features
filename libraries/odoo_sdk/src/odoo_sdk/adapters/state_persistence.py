@@ -34,6 +34,7 @@ _SOURCE_TO_EVENT_TYPE = {
     "chatter": EventType.CHATTER,
     "calendar": EventType.CALENDAR,
     "email": EventType.EMAIL,
+    "pr_opened": EventType.PR_OPENED,
 }
 
 # Non-canonical source strings that share an already-mapped EventType. ``comment``
@@ -74,11 +75,12 @@ class UnknownEventSourceError(ValueError):
 def source_to_event_type(source: str) -> EventType:
     """Resolve an :class:`EventRecord` source string to its :class:`EventType`.
 
-    Known sources (``commit``/``merge``/``review``/``agent``/``chatter``) map
-    directly, as does the ``comment`` alias for the review family. Any
-    ``claude:<HookName>`` source resolves to :class:`EventType.CLAUDE_HOOK`.
-    Anything else raises :class:`UnknownEventSourceError` rather than silently
-    defaulting to a commit.
+    Known sources (``commit``/``merge``/``review``/``agent``/``chatter``/
+    ``pr_opened``) map directly, as does the ``comment`` alias for the review
+    family. Any ``claude:<HookName>`` source resolves to
+    :class:`EventType.CLAUDE_HOOK`. Anything else raises
+    :class:`UnknownEventSourceError` rather than silently defaulting to a
+    commit.
     """
     known = _RESOLVABLE_SOURCES.get(source)
     if known is not None:

@@ -90,6 +90,8 @@ class EventType(Enum):
     CALENDAR = auto()  # Google Calendar meeting tick (synthetic; resync, #370)
     EMAIL = auto()  # Sent Gmail message, a point event (resync, #370)
     CLAUDE_HOOK = auto()  # Claude Code hook activity (source ``claude:<HookName>``)
+    # PR opened by the tracked user — billable, review family (resync, #656)
+    PR_OPENED = auto()
 
 
 @dataclass

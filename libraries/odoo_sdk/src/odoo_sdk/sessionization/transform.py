@@ -17,14 +17,16 @@ from .windows import billable_seconds, compute_windows
 # Sources that DO NOT participate in gap-based sessionization. ``merge`` is a
 # point-in-time release marker (audit-only), excluded from windowed billing
 # exactly as the SQL derivation excludes it (issue #404 / #378 item 6). Every
-# other event type — the development family and the review family — windows
-# uniformly; there is no per-event fixed-duration strategy anymore.
+# other event type — the development family and the review family (``REVIEW``
+# and ``PR_OPENED``, #656) — windows uniformly; there is no per-event
+# fixed-duration strategy anymore.
 _NON_SESSION_TYPES = frozenset({EventType.MERGE})
 
 # Development-family event types: a window holding ANY of these is labeled
 # "Development" (development wins a mixed task's label); a window of purely
-# review-family events (``REVIEW``) is labeled "Review". Mirrors the SQL
-# derivation's ``has_dev`` decision so the two engines agree on the category.
+# review-family events (``REVIEW``/``PR_OPENED``, #656) is labeled "Review".
+# Mirrors the SQL derivation's ``has_dev`` decision so the two engines agree on
+# the category.
 _DEVELOPMENT_TYPES = frozenset(
     {
         EventType.COMMIT,
