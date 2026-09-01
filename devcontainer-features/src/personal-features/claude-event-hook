@@ -23,7 +23,7 @@
 #   * Never write to stdout: for PreToolUse a JSON object on stdout can carry a
 #     permission decision, and even plain text is surfaced to the session.
 #     Diagnostics go to stderr only.
-#   * No-op cleanly when `odoo-sdk` is not installed (e.g. Python <3.10 images).
+#   * No-op cleanly when `odoo-sdk` is not installed (e.g. no bundled wheel).
 #   * Bounded runtime so a slow/hung DB can't stall the agent.
 #
 # PreToolUse for `mcp__odoo-mcp__*` tools is skipped: the odoo MCP server
@@ -45,8 +45,9 @@ if [ ! -t 0 ]; then
     STDIN_JSON="$(timeout 5 cat 2>/dev/null || true)"
 fi
 
-# Nothing to do if the SDK CLI isn't on PATH (e.g. base image with Python <3.10
-# where the wheel was skipped). Silent, successful no-op.
+# Nothing to do if the SDK CLI isn't on PATH (e.g. a build with no bundled SDK
+# wheel - since #674 the base image's Python version is irrelevant). Silent,
+# successful no-op.
 command -v odoo-sdk >/dev/null 2>&1 || exit 0
 
 # jq drives payload extraction; without it, fall back to logging the bare event

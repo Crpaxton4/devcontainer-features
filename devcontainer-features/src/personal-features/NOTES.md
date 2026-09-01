@@ -10,6 +10,7 @@
 - [The `claude` command](#the-claude-command)
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
+- [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -208,7 +209,7 @@ written to the local events store on either path.
 **Never blocks a session.** `claude-event-hook` always exits 0, never writes to
 stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
-installed (e.g. Python <3.10 base images) or the cwd isn't a git repo.
+installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
 **Opting out.** The merge only ever replaces its own entries (identified by the
 `claude-event-hook` command) and preserves all your other settings and hooks. To
@@ -257,6 +258,14 @@ each other). If Claude Code's mounted-skill UX is ever retired, the
 `install.sh` skill-staging block and `sync-claude-skills` can be removed and the
 MCP-prompt path becomes the sole source.
 
+## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
+
+The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
+
+**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: `odoo_sdk` is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
+
+It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
@@ -274,7 +283,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   Also set `--system`, for the same reason: `core.pager`/`interactive.diffFilter` (so `delta` renders every diff), and `core.excludesfile` pointing at `/usr/local/share/git-excludes/gitignore`, which keeps `mempalace init`'s project-local artifacts out of every repo on the machine — see the `mempalace` bullet below for the rationale and its two tradeoffs.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
-- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-sdk env (see [Python toolchain](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 

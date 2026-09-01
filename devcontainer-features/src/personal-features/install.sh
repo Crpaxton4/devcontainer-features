@@ -210,77 +210,99 @@ chmod +x "$WRAPPER_PATH"
 # Wheels are bundled into this feature at release time. Installed into an
 # isolated uv-managed venv to avoid touching system cryptography, which would
 # break pyOpenSSL on odoo:17 (cryptography 41+ uses OpenSSL 3.x CFFI bindings
-# that removed X509_V_FLAG_NOTIFY_POLICY). odoo_sdk requires Python 3.10+;
-# skip silently on older images (e.g. odoo:16).
+# that removed X509_V_FLAG_NOTIFY_POLICY).
+#
+# The venv's interpreter is PINNED and deliberately independent of the base
+# image's python3 (#674). odoo_sdk is a pure RPC client - it never imports odoo
+# core - so nothing requires its interpreter to match the container's Odoo
+# Python. uv is a static binary that runs on every supported base (odoo:16's
+# bullseye is glibc 2.31) and fetches its own python-build-standalone CPython
+# (needs only glibc 2.17+) when the pinned version isn't on the image. This
+# block used to be gated on the BASE IMAGE shipping python3 >= 3.10, which
+# silently skipped the entire toolchain on odoo:16 (bullseye, Python 3.9): the
+# only signal was a build-log warning, surfacing weeks later as a confusing
+# ENOENT from a stale bind-mounted odoo-mcp MCP registration. The toolchain now
+# installs unconditionally on every base image.
+UV_PYTHON_PIN=3.11
 FEATURE_DIR="$(dirname "$0")"
-if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
-    # Give uv's downloads plenty of headroom: the odoo_sdk dependency tree pulls
-    # large wheels (onnxruntime 17.8 MiB, numpy 15.9 MiB, ...) that can exceed
-    # uv's default 30s HTTP timeout on a slow link and fail the whole image
-    # build. Paired with the retry() wrapper on the install calls below.
-    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
-    # odoo base images don't ship uv; install it so we can create an isolated
-    # venv without touching system Python packages.
-    if ! command -v uv >/dev/null 2>&1; then
-        UV_INSTALL_DIR=/usr/local/bin
-        export UV_INSTALL_DIR
-        # Deliberately not best-effort: uv is required downstream (`uv venv`),
-        # so a masked download failure here would surface later as a confusing
-        # error. run_installer fails loudly and aborts the build instead.
-        run_installer https://astral.sh/uv/install.sh
-        unset UV_INSTALL_DIR
-    fi
-    # Install the bundled odoo_sdk wheel(s) into one shared uv venv. The glob
-    # stays literal (a single non-matching entry) when no wheel is bundled, so
-    # gate on the first entry actually being a file before doing any work.
-    _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
-    _sdk_wheels=("$FEATURE_DIR"/odoo_sdk-*.whl)
-    if [ -f "${_sdk_wheels[0]}" ]; then
-        # venv creation is hoisted out of the per-wheel loop: with a second
-        # bundled wheel the old in-loop `uv venv` would re-run on the same path
-        # and error. The `[ -d ]` guard also makes a re-provision over a
-        # persisted venv a no-op. `uv pip install` still runs per wheel.
-        [ -d "$_SDK_ENV" ] || retry uv venv "$_SDK_ENV"
-        for wheel in "${_sdk_wheels[@]}"; do
-            retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
-        done
-        # Link the entry points once, after all wheels are installed. ALL THREE
-        # console scripts must be linked: `odoo-sdk` is the CLI that
-        # claude-event-hook shells out to (it guards on `command -v odoo-sdk`
-        # and silently no-ops when it is missing, so leaving it unlinked made
-        # every feature-owned Claude Code hook a dead no-op - #496) and the only
-        # entry point to `odoo-sdk prune`. Adding an entry point to the wheel
-        # means adding it here.
-        _SDK_ENTRYPOINTS=(odoo-sdk odoo-mcp odoo-tui)
-        for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
-            ln -sf "$_SDK_ENV/bin/$_entry" "/usr/local/bin/$_entry"
-        done
-        # Verify at build time, where a broken install is cheap to catch and
-        # loud. The downstream consumers (claude-event-hook, the MCP
-        # registration below) all degrade to a *silent* no-op when an entry
-        # point is missing, so without this the failure only ever shows up as
-        # "the event table is empty" weeks later (#496).
-        for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
-            if [ ! -x "/usr/local/bin/$_entry" ] || ! command -v "$_entry" >/dev/null 2>&1; then
-                echo "ERROR: odoo_sdk console script '$_entry' is not executable on PATH after install (expected $_SDK_ENV/bin/$_entry -> /usr/local/bin/$_entry)." >&2
-                echo "The bundled wheel installed but did not provide this entry point; hooks and CLI tooling that depend on it would silently no-op, so failing the build instead." >&2
-                exit 1
-            fi
-        done
-    fi
-
-    # mempalace: global cross-project memory palace, auto-mined via Claude Code
-    # hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
-    # dir as odoo-sdk and link the entry point onto /usr/local/bin so it lands
-    # on every user's PATH (install.sh runs as root, so uv's default ~/.local
-    # would be root-only). Best-effort - a PyPI/network hiccup shouldn't fail
-    # the whole build, matching the other optional-tool installs.
-    UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        retry uv tool install mempalace \
-        || echo "WARNING: failed to install mempalace, skipping" >&2
-else
-    echo "WARNING: Python 3.10+ required for odoo_sdk (fastmcp dependency); skipping on $(python3 --version 2>&1 || echo 'unknown Python')" >&2
+# Give uv's downloads plenty of headroom: the odoo_sdk dependency tree pulls
+# large wheels (onnxruntime 17.8 MiB, numpy 15.9 MiB, ...) that can exceed
+# uv's default 30s HTTP timeout on a slow link and fail the whole image
+# build. Paired with the retry() wrapper on the install calls below.
+export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+# odoo base images don't ship uv; install it so we can create an isolated
+# venv without touching system Python packages.
+if ! command -v uv >/dev/null 2>&1; then
+    UV_INSTALL_DIR=/usr/local/bin
+    export UV_INSTALL_DIR
+    # Deliberately not best-effort: uv is required downstream (`uv venv`),
+    # so a masked download failure here would surface later as a confusing
+    # error. run_installer fails loudly and aborts the build instead.
+    run_installer https://astral.sh/uv/install.sh
+    unset UV_INSTALL_DIR
 fi
+# Install the bundled odoo_sdk wheel(s) into one shared uv venv. The glob
+# stays literal (a single non-matching entry) when no wheel is bundled, so
+# gate on the first entry actually being a file before doing any work.
+_SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
+_sdk_wheels=("$FEATURE_DIR"/odoo_sdk-*.whl)
+if [ -f "${_sdk_wheels[0]}" ]; then
+    # venv creation is hoisted out of the per-wheel loop: with a second
+    # bundled wheel the old in-loop `uv venv` would re-run on the same path
+    # and error. The `[ -d ]` guard also makes a re-provision over a
+    # persisted venv a no-op. `uv pip install` still runs per wheel.
+    # --python pins the uv-managed interpreter (#674); a failure here aborts
+    # the build loudly rather than leaving a container with no odoo-mcp.
+    [ -d "$_SDK_ENV" ] || retry uv venv --python "$UV_PYTHON_PIN" "$_SDK_ENV"
+    for wheel in "${_sdk_wheels[@]}"; do
+        retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+    done
+    # Link the entry points once, after all wheels are installed. ALL THREE
+    # console scripts must be linked: `odoo-sdk` is the CLI that
+    # claude-event-hook shells out to (it guards on `command -v odoo-sdk`
+    # and silently no-ops when it is missing, so leaving it unlinked made
+    # every feature-owned Claude Code hook a dead no-op - #496) and the only
+    # entry point to `odoo-sdk prune`. Adding an entry point to the wheel
+    # means adding it here.
+    _SDK_ENTRYPOINTS=(odoo-sdk odoo-mcp odoo-tui)
+    for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
+        ln -sf "$_SDK_ENV/bin/$_entry" "/usr/local/bin/$_entry"
+    done
+    # Verify at build time, where a broken install is cheap to catch and
+    # loud. The downstream consumers (claude-event-hook, the MCP
+    # registration below) all degrade to a *silent* no-op when an entry
+    # point is missing, so without this the failure only ever shows up as
+    # "the event table is empty" weeks later (#496).
+    for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
+        if [ ! -x "/usr/local/bin/$_entry" ] || ! command -v "$_entry" >/dev/null 2>&1; then
+            echo "ERROR: odoo_sdk console script '$_entry' is not executable on PATH after install (expected $_SDK_ENV/bin/$_entry -> /usr/local/bin/$_entry)." >&2
+            echo "The bundled wheel installed but did not provide this entry point; hooks and CLI tooling that depend on it would silently no-op, so failing the build instead." >&2
+            exit 1
+        fi
+    done
+else
+    # The only remaining skip path, and it is a packaging condition, not a
+    # base-image one: wheels are bundled at release/CI time (see
+    # .github/workflows/test.yaml), so a plain dev checkout has none. Name the
+    # consequence loudly - the silent version of this skip is exactly what let
+    # #674 fester. sync-claude-mcp additionally deregisters a stale user-scope
+    # odoo-mcp entry at container-create time so the mounted ~/.claude stays
+    # self-consistent.
+    echo "WARNING: no bundled odoo_sdk wheel in $FEATURE_DIR; skipping the odoo-sdk toolchain. This container will have NO odoo-sdk/odoo-mcp/odoo-tui on PATH (Claude Code hooks and the odoo-mcp MCP server will not work). Wheels are bundled at release/CI time." >&2
+fi
+
+# mempalace: global cross-project memory palace, auto-mined via Claude Code
+# hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
+# dir as odoo-sdk - pinned to the same uv-managed interpreter (#674) so the
+# base image's Python is irrelevant here too - and link the entry point onto
+# /usr/local/bin so it lands on every user's PATH (install.sh runs as root,
+# so uv's default ~/.local would be root-only). Best-effort - a PyPI/network
+# hiccup shouldn't fail the whole build, matching the other optional-tool
+# installs - but the warning names the consequence instead of skipping
+# silently.
+UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
+    retry uv tool install --python "$UV_PYTHON_PIN" mempalace \
+    || echo "WARNING: failed to install mempalace; this container will have NO mempalace CLI/MCP server, so the mempalace Claude Code plugin hooks cannot mine and its MCP registration will fail with ENOENT" >&2
 
 # --- mempalace palace root reconciliation (#596, #643) -----------------------
 # Upstream mempalace's hooks CLI hardcodes its palace root to ~/.mempalace and
@@ -479,6 +501,21 @@ if [ -x /usr/local/bin/odoo-mcp ]; then
         echo "sync-claude-mcp: registered MCP server 'odoo-mcp'"
     else
         echo "WARNING: sync-claude-mcp: failed to register the 'odoo-mcp' MCP server" >&2
+    fi
+elif claude mcp get odoo-mcp >/dev/null 2>&1; then
+    # odoo-mcp is NOT installed in this container, but the bind-mounted
+    # ~/.claude carries a registration written by another container (or an
+    # older image built before #674 installed the toolchain unconditionally).
+    # Left in place, Claude Code reports a confusing ENOENT for a binary that
+    # was never installed here - so deregister it and keep the persisted state
+    # self-consistent. The next container that does ship the binary re-adds it
+    # via the branch above. --scope user matches what this script registers; a
+    # project/local-scope entry is the user's own and the remove then fails
+    # into the warning below instead of touching it.
+    if claude mcp remove --scope user odoo-mcp; then
+        echo "sync-claude-mcp: removed stale 'odoo-mcp' MCP registration (odoo-mcp is not installed in this container, #674)"
+    else
+        echo "WARNING: sync-claude-mcp: 'odoo-mcp' is registered but not installed in this container, and deregistering it failed; 'claude mcp list' will report ENOENT for it" >&2
     fi
 fi
 

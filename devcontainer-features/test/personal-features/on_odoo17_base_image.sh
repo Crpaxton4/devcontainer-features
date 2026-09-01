@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Executed against the 'on_odoo17_base_image' scenario in scenarios.json.
-# odoo:17 ships Python 3.10 — the minimum version required by odoo_sdk — and
-# pre-23.2.0 pyOpenSSL that references _lib.X509_V_FLAG_NOTIFY_POLICY. That
-# constant does not exist in cryptography 41+ (which uses OpenSSL 3.x CFFI
-# bindings), so installing cryptography 41+ system-wide would break odoo:17's
-# pyOpenSSL. The isolated install avoids this entirely: system cryptography is
-# never touched, and the OpenSSL check must pass to prove that.
+# odoo:17 ships Python 3.10 and pre-23.2.0 pyOpenSSL that references
+# _lib.X509_V_FLAG_NOTIFY_POLICY. That constant does not exist in
+# cryptography 41+ (which uses OpenSSL 3.x CFFI bindings), so installing
+# cryptography 41+ system-wide would break odoo:17's pyOpenSSL. The isolated
+# install avoids this entirely: system cryptography is never touched, and the
+# OpenSSL check must pass to prove that.
 
 set -e
 
@@ -34,12 +34,15 @@ from odoo_sdk import (
 )
 '"
 
-# Python-3.10 TOML config guard. The isolated tool env binds odoo:17's system
-# CPython 3.10, where `tomllib` is NOT in the stdlib, and `config.toml` is the
-# format probed first in every discovery location. The import checks above only
-# reach module scope, so the TOML branch was never taken and a
-# ModuleNotFoundError in LocalConfig.load() stayed latent on this exact image.
-# These checks force that branch.
+# TOML config discovery guard. These checks used to force odoo_sdk's pre-3.11
+# tomli fallback, because the tool env bound odoo:17's system CPython 3.10
+# (no stdlib `tomllib`). Since #674 the env no longer binds the base image's
+# interpreter at all - install.sh pins a uv-managed CPython 3.11 so the
+# toolchain is identical on every base, including odoo:16's Python-3.9
+# bullseye - so LocalConfig now parses `config.toml` via stdlib tomllib here
+# like everywhere else. The checks still exercise the full TOML discovery
+# path (config.toml is probed first in every discovery location, and the
+# import checks above only reach module scope).
 ODOO17_CONFIG_DIR="$(mktemp -d)"
 cat >"$ODOO17_CONFIG_DIR/config.toml" <<'TOML'
 [connection]
@@ -52,13 +55,13 @@ password = "toml-pass"
 session_gap_mins = 45
 TOML
 
-check "tool env is a pre-3.11 interpreter (no stdlib tomllib)" \
+check "tool env runs the pinned uv-managed CPython 3.11, not the system 3.10 (#674)" \
     bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
 import sys
-assert sys.version_info < (3, 11), sys.version
+assert sys.version_info[:2] == (3, 11), sys.version
 '"
 
-check "LocalConfig parses config.toml without stdlib tomllib" \
+check "LocalConfig parses config.toml in the tool env" \
     bash -c "ODOO_SDK_CONFIG=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-sdk/bin/python -c '
 from odoo_sdk.state.config import LocalConfig
 
@@ -68,7 +71,7 @@ assert config.connection[\"db\"] == \"toml-db\", config.connection
 assert config.session_gap_mins == 45, config.session_gap_mins
 '"
 
-check "connection settings resolve from config.toml on Python 3.10" \
+check "connection settings resolve from config.toml" \
     bash -c "ODOO_SDK_CONFIG=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-sdk/bin/python -c '
 from odoo_sdk.state.config import LocalConfig
 

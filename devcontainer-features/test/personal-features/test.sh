@@ -64,8 +64,11 @@ check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_C
 
 # Regression guard for #120: the odoo-tui curses TUI console script is symlinked
 # onto PATH whenever the SDK is installed (i.e. whenever odoo-mcp is present).
-# Gated on the odoo-mcp binary so it no-ops on <3.10 base images where the SDK
-# wheel isn't installed. PATH checks are unaffected by the bind mounts above.
+# Gated on the odoo-mcp binary so it no-ops when no SDK wheel was bundled (e.g.
+# a plain `devcontainer features test` without CI's wheel-bundling step; since
+# #674 the base image's Python version is irrelevant - the tool env carries its
+# own uv-managed interpreter). PATH checks are unaffected by the bind mounts
+# above.
 check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
 
@@ -83,9 +86,10 @@ check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
 # install.sh symlinks only odoo-mcp/odoo-tui onto PATH - `odoo-sdk` never
 # resolves, so the guard short-circuited to a vacuous exit 0 and NEITHER body had
 # ever executed. They now gate on the real "is the SDK installed at all"
-# condition the :69 check uses (/usr/local/bin/odoo-mcp, absent on <3.10 base
-# images where the wheel is skipped) and invoke the CLI at its uv-managed venv
-# path, the same one the #411 e2e check below resolves.
+# condition the :69 check uses (/usr/local/bin/odoo-mcp, absent only when no
+# wheel was bundled - the base image's Python no longer matters, #674) and
+# invoke the CLI at its uv-managed venv path, the same one the #411 e2e check
+# below resolves.
 _SDK_CLI=/usr/local/share/uv/tools/odoo-sdk/bin/odoo-sdk
 
 # POSITIVE: with the mount live, `odoo-sdk log-event` writes into the central DB.
@@ -423,8 +427,8 @@ check "claude-event-hook no-ops with exit 0 when odoo-sdk is absent" bash -c \
 # SDK schema and points the shim at it via ODOO_TASK_TRACKER_DIR, so it runs
 # deterministically whether or not a host-provisioned central DB is mounted (it
 # is under CI's setup.sh, but NOT under a plain `devcontainer features test`) and
-# never touches the real DB. Gated on the SDK being installed (absent on <3.10
-# images); the SDK bin dir is put on PATH so the shim's bare `odoo-sdk` resolves
+# never touches the real DB. Gated on the SDK being installed (absent only when
+# no wheel was bundled - #674); the SDK bin dir is put on PATH so the shim's bare `odoo-sdk` resolves
 # to the real installed CLI. `odoo-sdk` is deliberately NOT on the default PATH
 # (only odoo-mcp/odoo-tui are symlinked), so this uses the venv bin explicitly.
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
