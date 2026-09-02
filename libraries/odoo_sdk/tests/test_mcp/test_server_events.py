@@ -2,9 +2,10 @@
 
 The ``_event_emitting`` wrapper is the *sole* event producer for the MCP tool
 surface: every successful tool dispatch writes exactly one ``source="agent"``
-event row, exceptions emit nothing, and telemetry failures never break the tool
-call. These tests drive the wrapper through the full registration chain (built
-by ``OdooMCPServer._register_tools``) and unit-test the small emission helpers.
+event row, exceptions and SEP-2322 input-required ask legs (#664) emit nothing,
+and telemetry failures never break the tool call. These tests drive the wrapper
+through the full registration chain (built by ``OdooMCPServer._register_tools``)
+and unit-test the small emission helpers.
 """
 
 import asyncio
@@ -228,6 +229,47 @@ class TestDispatchEmitsEvent(unittest.TestCase):
             events[0].payload,
             {"tool": "do_async", "args": ["note", "task_id"], "outcome": "ok"},
         )
+
+    def test_input_required_leg_emits_no_event(self):
+        # #664: a SEP-2322 input-required first leg is an ask, not an outcome —
+        # no agent event may be recorded for it (the continuation invocation
+        # emits the dispatch's single event), and the ask must flow through the
+        # wrapper chain to the wire unchanged.
+        from mcp.types import (
+            CreateMessageRequest,
+            CreateMessageRequestParams,
+            InputRequiredResult,
+            SamplingMessage,
+            TextContent,
+        )
+
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+        ask = InputRequiredResult(
+            input_requests={
+                "branch_description": CreateMessageRequest(
+                    params=CreateMessageRequestParams(
+                        messages=[
+                            SamplingMessage(
+                                role="user",
+                                content=TextContent(type="text", text="prompt"),
+                            )
+                        ],
+                        max_tokens=30,
+                    )
+                )
+            }
+        )
+
+        async def start_task(task_id: int) -> dict:
+            """Fake tool."""
+            return ask
+
+        tools = _build_tools(registry, {"start_task": start_task})
+        result = asyncio.run(tools["start_task"].fn(task_id=10))
+
+        self.assertIs(result, ask)
+        self.assertEqual(db.get_events(), [])
 
     def test_emit_failure_does_not_break_tool(self):
         class BoomState:

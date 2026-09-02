@@ -16,7 +16,7 @@ pass with ``ctx: Context``.
 import unittest
 from unittest.mock import MagicMock
 
-from fastmcp.tools.tool import Tool
+from fastmcp.tools import Tool
 
 from odoo_sdk.mcp.server import (
     _error_boundary,

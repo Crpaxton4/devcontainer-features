@@ -113,7 +113,6 @@ def _ctx():
     """A ctx able to pick base branch #1 (unused on the headless id-only path)."""
     ctx = MagicMock()
     ctx.elicit = AsyncMock(side_effect=[_accepted(MagicMock(selection=1))])
-    ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
     return ctx
 
 
@@ -196,7 +195,6 @@ class TestRunningSessionIsANoOp(unittest.TestCase):
         with patch(_SP_PATCH, sp):
             result = _run(tool(ctx, task_id=10))
         ctx.elicit.assert_not_awaited()
-        ctx.sample.assert_not_called()
         sp.run.assert_not_called()
         self.assertNotIn("error", result)
 

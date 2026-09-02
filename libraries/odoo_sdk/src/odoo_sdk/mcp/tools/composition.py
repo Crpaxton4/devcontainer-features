@@ -1,8 +1,10 @@
 """Decorator-driven registration of the MCP composition tools.
 
-Composition tools take the FastMCP ``ctx`` and orchestrate ``ctx.elicit`` /
-``ctx.sample`` before delegating to one or more commands (unlike atomic tools,
-which are thin typed wrappers over a single command). This leaf module owns the
+Composition tools take the FastMCP ``ctx`` and orchestrate ``ctx.elicit`` or
+fastmcp 4's two-phase sampling flow (an input-required result answered via
+``ctx.input_responses`` — #664) before delegating to one or more commands
+(unlike atomic tools, which are thin typed wrappers over a single command).
+This leaf module owns the
 :data:`COMPOSITION_TOOL_FACTORIES` mapping and the :func:`composition_tool`
 decorator that populates it, mirroring :func:`odoo_sdk.mcp.tools.atomic.atomic_tool`.
 

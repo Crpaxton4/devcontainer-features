@@ -1,4 +1,5 @@
-"""Tests for explicit MCP tools that compose commands with ctx.elicit/sample."""
+"""Tests for explicit MCP tools that compose commands with ctx.elicit and the
+two-phase sampling flow (input-required result + ctx.input_responses, #664)."""
 
 import asyncio
 import os
@@ -297,7 +298,6 @@ class TestStartTaskTool(unittest.TestCase):
             start_result={"run_id": 1, "task_id": 10},
         )
         ctx = _ctx(_accepted(MagicMock(selection=1)))  # branch pick
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix-vat"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, "VAT", "Accounting"))
@@ -330,7 +330,6 @@ class TestStartTaskTool(unittest.TestCase):
             _accepted(MagicMock(selection=2)),  # pick project
             _accepted(MagicMock(selection=1)),  # branch pick
         )
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, "VAT"))
@@ -378,13 +377,11 @@ class TestStartTaskTool(unittest.TestCase):
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
         ctx.session.check_client_capability.return_value = False
-        ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, task_id=10))
         self.assertFalse(called["search"])
         ctx.elicit.assert_not_awaited()
-        ctx.sample.assert_not_called()
         self.assertEqual(result["project_name"], "Accounting")
         # Deterministic slug + hyphenated convention (#622).
         self.assertEqual(result["branch_name"], "10-fix-vat")
@@ -427,7 +424,6 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
-        ctx.sample = AsyncMock()
         sp = _make_sp()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
@@ -435,7 +431,6 @@ class TestStartTaskTool(unittest.TestCase):
         self.assertTrue(result["already_running"])
         self.assertNotIn("branch_name", result)
         ctx.elicit.assert_not_awaited()
-        ctx.sample.assert_not_called()
         sp.run.assert_not_called()
 
     def test_awaiting_answers_proceeds_to_the_command(self):
@@ -461,7 +456,6 @@ class TestStartTaskTool(unittest.TestCase):
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
         ctx.session.check_client_capability.return_value = False
-        ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp(current_branch="10-fix")):
             result = _run(tool(ctx, task_id=10))
@@ -481,11 +475,9 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
-        ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp(current_branch="10-x")):
             result = _run(tool(ctx, task_id=10))
-        ctx.sample.assert_not_called()
         ctx.elicit.assert_not_awaited()
         self.assertIsNone(result.get("branch_name"))
 
@@ -496,7 +488,6 @@ class TestStartTaskTool(unittest.TestCase):
             start_result={},
         )
         ctx = _ctx(_cancelled())
-        ctx.sample = AsyncMock()
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, "Fix"))
@@ -540,7 +531,6 @@ class TestStartTaskTool(unittest.TestCase):
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
         ctx.session.check_client_capability.return_value = False
-        ctx.sample = AsyncMock()
         sp = _make_sp(
             current_branch="feature/other",
             origin_head="origin/develop",
@@ -567,7 +557,6 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _make_sp(dirty=True)
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
@@ -589,7 +578,6 @@ class TestStartTaskTool(unittest.TestCase):
             start_task=_boom,
         )
         ctx = _ctx(_accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _make_sp(current_branch="main")
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
@@ -618,7 +606,6 @@ class TestStartTaskTool(unittest.TestCase):
         )
         ctx = MagicMock()
         ctx.elicit = AsyncMock()
-        ctx.sample = AsyncMock()
         sp = _make_sp(current_branch="10-x")
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
@@ -639,7 +626,6 @@ class TestStartTaskTool(unittest.TestCase):
             start_task=_boom,
         )
         ctx = _ctx(_accepted(MagicMock(selection=1)))
-        ctx.sample = AsyncMock(return_value=MagicMock(text="fix"))
         sp = _make_sp(current_branch="main", existing_branches=("10-fix",))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, sp):
@@ -653,7 +639,7 @@ class TestStartTaskToolSchema(unittest.TestCase):
     """The start_task wire schema after #614: task_id alone must suffice."""
 
     def _schema(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         fn = make_start_task_tool(MagicMock())
         return Tool.from_function(fn, name="start_task").parameters
@@ -770,84 +756,290 @@ class TestCreateTaskBranch(unittest.TestCase):
         self.assertNotIn(["git", "fetch", "origin", "main"], calls)
 
 
-def _sampling_ctx(*responses, supports_sampling=True) -> MagicMock:
-    """ctx whose client advertises (or not) the sampling capability."""
+def _sampling_ctx(
+    *responses,
+    supports_sampling=True,
+    modern_protocol=True,
+    input_responses=None,
+) -> MagicMock:
+    """ctx for the two-phase sampling flow (SEP-2322, #664).
+
+    ``supports_sampling`` drives the client-capability probe,
+    ``modern_protocol`` the negotiated-era gate (the input-required result type
+    only exists on 2026-07-28+ connections), and ``input_responses`` is what a
+    continuation leg reads back — ``None`` models the first invocation.
+    """
+    from mcp.types.version import MODERN_PROTOCOL_VERSIONS
+
     ctx = _ctx(*responses)
     ctx.session.check_client_capability.return_value = supports_sampling
+    ctx.request_context.protocol_version = (
+        MODERN_PROTOCOL_VERSIONS[0] if modern_protocol else "2025-06-18"
+    )
+    ctx.input_responses = input_responses
     return ctx
 
 
+def _sampled_response(text) -> SimpleNamespace:
+    """Shape of a client ``CreateMessageResult``: text lives at ``.content.text``."""
+    return SimpleNamespace(content=SimpleNamespace(text=text))
+
+
 class TestBranchDescriptionSampling(unittest.TestCase):
-    """`_generate_branch_description` degrades gracefully without sampling."""
+    """The two-phase sampling flow (#664) asks once and degrades gracefully."""
 
-    def test_no_sampling_capability_uses_deterministic_slug(self):
-        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
-
-        ctx = MagicMock()
-        ctx.session.check_client_capability.return_value = False
-        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
-        slug = _run(_generate_branch_description(ctx, "Fix VAT rounding", "Acct"))
-        self.assertEqual(slug, "fix-vat-rounding")
-        ctx.sample.assert_not_called()
-
-    def test_sampling_capability_uses_sampled_slug(self):
-        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
-
-        ctx = MagicMock()
-        ctx.session.check_client_capability.return_value = True
-        ctx.sample = AsyncMock(return_value=MagicMock(text="  Sampled Slug!  "))
-        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
-        self.assertEqual(slug, "sampled-slug")
-
-    def test_empty_sample_result_falls_back_to_task_name(self):
-        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
-
-        ctx = MagicMock()
-        ctx.session.check_client_capability.return_value = True
-        ctx.sample = AsyncMock(return_value=MagicMock(text="   !!!   "))
-        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
-        self.assertEqual(slug, "fix-vat")
-
-    def test_sample_failure_falls_back_to_task_name(self):
-        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
-
-        ctx = MagicMock()
-        ctx.session.check_client_capability.return_value = True
-        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
-        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
-        self.assertEqual(slug, "fix-vat")
-
-    def test_missing_session_falls_back_gracefully(self):
-        from odoo_sdk.mcp.tools.start_task import _generate_branch_description
-
-        ctx = MagicMock()
-        ctx.session.check_client_capability.side_effect = AttributeError("no session")
-        ctx.sample = AsyncMock()
-        slug = _run(_generate_branch_description(ctx, "Fix VAT", "Acct"))
-        self.assertEqual(slug, "fix-vat")
-        ctx.sample.assert_not_called()
-
-    def test_resolved_fastpath_completes_without_sampling(self):
-        # Fully-resolved call (task_id) on a client that cannot sample must
-        # complete into a session using the deterministic branch slug.
+    def _registry(self, *, state=None, start_calls=None):
         client = MagicMock()
         client.execute.return_value = [
             {"id": 10, "name": "Fix VAT", "project_id": [5, "Accounting"]}
         ]
-        reg = _FakeRegistry(
+
+        def _start(**kw):
+            if start_calls is not None:
+                start_calls.append(kw)
+            return {"run_id": 1, **kw}
+
+        return _FakeRegistry(
             client=client,
+            state=state,
             search_projects=lambda *a, **k: [],
             search_tasks=lambda *a, **k: [],
-            start_task=lambda **kw: {"run_id": 1, **kw},
+            start_task=_start,
         )
+
+    def test_first_invocation_returns_input_required_and_mutates_nothing(self):
+        from mcp.types import CreateMessageRequest, InputRequiredResult
+
+        from odoo_sdk.mcp.tools.start_task import _BRANCH_DESCRIPTION_KEY
+
+        start_calls = []
+        reg = self._registry(start_calls=start_calls)
+        ctx = _sampling_ctx()  # first leg: input_responses is None
+        sp = _make_sp()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            result = _run(tool(ctx, task_id=10))
+        self.assertIsInstance(result, InputRequiredResult)
+        request = result.input_requests[_BRANCH_DESCRIPTION_KEY]
+        self.assertIsInstance(request, CreateMessageRequest)
+        prompt = request.params.messages[0].content.text
+        self.assertIn("Fix VAT", prompt)
+        self.assertIn("Accounting", prompt)
+        # Side-effect free: no run row, no branch/stash mutation — only the
+        # read-only current-branch probe may run before the ask is returned.
+        self.assertEqual(start_calls, [])
+        mutating = [
+            c.args[0]
+            for c in sp.run.call_args_list
+            if c.args[0][1] in ("checkout", "stash", "branch", "fetch")
+        ]
+        self.assertEqual(mutating, [])
+        ctx.elicit.assert_not_awaited()
+
+    def test_continuation_uses_the_sanitized_sampled_description(self):
+        from odoo_sdk.mcp.tools.start_task import _BRANCH_DESCRIPTION_KEY
+
+        reg = self._registry()
+        ctx = _sampling_ctx(
+            input_responses={
+                _BRANCH_DESCRIPTION_KEY: _sampled_response("  Sampled Slug!  ")
+            }
+        )
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["run_id"], 1)
+        self.assertEqual(result["branch_name"], "10-sampled-slug")
+
+    def test_continuation_with_garbage_response_falls_back_to_slug(self):
+        from odoo_sdk.mcp.tools.start_task import _BRANCH_DESCRIPTION_KEY
+
+        reg = self._registry()
+        ctx = _sampling_ctx(
+            input_responses={_BRANCH_DESCRIPTION_KEY: _sampled_response("   !!!   ")}
+        )
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["branch_name"], "10-fix-vat")
+
+    def test_continuation_with_missing_response_key_falls_back_to_slug(self):
+        reg = self._registry()
+        ctx = _sampling_ctx(
+            input_responses={"unrelated": _sampled_response("nope")}
+        )
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["branch_name"], "10-fix-vat")
+
+    def test_continuation_with_non_text_content_falls_back_to_slug(self):
+        from odoo_sdk.mcp.tools.start_task import _BRANCH_DESCRIPTION_KEY
+
+        reg = self._registry()
+        image = SimpleNamespace(content=SimpleNamespace(data=b"\x89PNG"))
+        ctx = _sampling_ctx(input_responses={_BRANCH_DESCRIPTION_KEY: image})
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["branch_name"], "10-fix-vat")
+
+    def test_non_sampling_client_goes_straight_through_with_slug(self):
+        # Fully-resolved call (task_id) on a client that cannot sample must
+        # complete in a single invocation using the deterministic branch slug.
+        from mcp.types import InputRequiredResult
+
+        reg = self._registry()
         ctx = _sampling_ctx(supports_sampling=False)
-        ctx.sample = AsyncMock(side_effect=ValueError("Client does not support sampling"))
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, "Fix VAT", "Accounting", task_id=10))
+        self.assertNotIsInstance(result, InputRequiredResult)
         self.assertEqual(result["run_id"], 1)
         self.assertEqual(result["branch_name"], "10-fix-vat")
-        ctx.sample.assert_not_called()
+
+    def test_handshake_era_connection_uses_slug_despite_capability(self):
+        # A handshake-era connection cannot carry the input-required result
+        # (and fastmcp 4 removed the ctx.sample back-channel), so even a
+        # sampling-capable client completes with the deterministic slug.
+        from mcp.types import InputRequiredResult
+
+        reg = self._registry()
+        ctx = _sampling_ctx(modern_protocol=False)
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertNotIsInstance(result, InputRequiredResult)
+        self.assertEqual(result["branch_name"], "10-fix-vat")
+
+    def test_capability_probe_failure_falls_back_to_slug(self):
+        reg = self._registry()
+        ctx = _sampling_ctx()
+        ctx.session.check_client_capability.side_effect = AttributeError("no session")
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp()):
+            result = _run(tool(ctx, task_id=10))
+        self.assertEqual(result["branch_name"], "10-fix-vat")
+
+    def test_running_fastpath_never_requests_input(self):
+        # #621 + #664: an already-RUNNING session short-circuits before the
+        # sampling ask — a sampling-capable first leg still returns the no-op
+        # dict result, never an input-required result.
+        from mcp.types import InputRequiredResult
+
+        reg = self._registry(state=_running_state())
+        ctx = _sampling_ctx()
+        sp = _make_sp()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, sp):
+            result = _run(tool(ctx, task_id=10))
+        self.assertNotIsInstance(result, InputRequiredResult)
+        self.assertEqual(result["run_id"], 1)
+        sp.run.assert_not_called()
+
+    def test_already_on_task_branch_never_requests_input(self):
+        # No new branch name will be minted, so a sampling round-trip would be
+        # pure waste — the flow completes in one leg with no branch mutation.
+        from mcp.types import InputRequiredResult
+
+        reg = self._registry()
+        ctx = _sampling_ctx()
+        tool = make_start_task_tool(reg)
+        with patch(_SP_PATCH, _make_sp(current_branch="10-x")):
+            result = _run(tool(ctx, task_id=10))
+        self.assertNotIsInstance(result, InputRequiredResult)
+        self.assertIsNone(result.get("branch_name"))
+
+
+class _RaisingInputResponses:
+    """ctx stub whose ``input_responses`` property raises (no wire request)."""
+
+    @property
+    def input_responses(self):
+        raise RuntimeError("no active wire request")
+
+
+class TestResolveBranchDescription(unittest.TestCase):
+    """`_resolve_branch_description` keeps the old ctx.sample sanitation."""
+
+    @staticmethod
+    def _resolve(responses, task_name="Fix VAT"):
+        from odoo_sdk.mcp.tools.start_task import _resolve_branch_description
+
+        ctx = MagicMock()
+        ctx.input_responses = responses
+        return _resolve_branch_description(ctx, task_name)
+
+    def _sampled(self, text, task_name="Fix VAT"):
+        from odoo_sdk.mcp.tools.start_task import _BRANCH_DESCRIPTION_KEY
+
+        return self._resolve(
+            {_BRANCH_DESCRIPTION_KEY: _sampled_response(text)}, task_name
+        )
+
+    def test_sampled_text_is_slugified(self):
+        self.assertEqual(self._sampled("  Sampled Slug!  "), "sampled-slug")
+
+    def test_sampled_text_is_truncated_to_45_chars(self):
+        self.assertEqual(self._sampled("x" * 60), "x" * 45)
+
+    def test_special_chars_hyphenate(self):
+        self.assertEqual(self._sampled("Fix VAT & Co."), "fix-vat-co")
+
+    def test_empty_sampled_text_falls_back_to_task_name(self):
+        self.assertEqual(self._sampled("   "), "fix-vat")
+
+    def test_no_responses_fall_back_to_task_name(self):
+        self.assertEqual(self._resolve(None, "Fix VAT rounding"), "fix-vat-rounding")
+
+    def test_responses_access_error_falls_back_to_task_name(self):
+        from odoo_sdk.mcp.tools.start_task import _resolve_branch_description
+
+        slug = _resolve_branch_description(_RaisingInputResponses(), "Fix VAT")
+        self.assertEqual(slug, "fix-vat")
+
+
+class TestSamplingGates(unittest.TestCase):
+    """Connection/capability gates for the two-phase sampling flow (#664)."""
+
+    def test_no_request_context_means_no_input_required(self):
+        from odoo_sdk.mcp.tools.start_task import _connection_supports_input_required
+
+        ctx = MagicMock()
+        ctx.request_context = None
+        self.assertFalse(_connection_supports_input_required(ctx))
+
+    def test_request_context_access_error_means_no_input_required(self):
+        from odoo_sdk.mcp.tools.start_task import _connection_supports_input_required
+
+        class _NoRequestContext:
+            @property
+            def request_context(self):
+                raise RuntimeError("outside a request")
+
+        self.assertFalse(_connection_supports_input_required(_NoRequestContext()))
+
+    def test_modern_protocol_and_capability_enable_sampling(self):
+        from odoo_sdk.mcp.tools.start_task import _sampling_available
+
+        self.assertTrue(_sampling_available(_sampling_ctx()))
+
+    def test_input_responses_access_error_suppresses_the_ask(self):
+        # ``input_responses`` raising (no active wire request) must not crash
+        # the flow — the ask is suppressed and the slug path proceeds.
+        from mcp.types.version import MODERN_PROTOCOL_VERSIONS
+
+        from odoo_sdk.mcp.tools.start_task import _should_request_branch_description
+
+        class _Ctx(_RaisingInputResponses):
+            def __init__(self):
+                self.session = MagicMock()
+                self.session.check_client_capability.return_value = True
+                self.request_context = SimpleNamespace(
+                    protocol_version=MODERN_PROTOCOL_VERSIONS[0]
+                )
+
+        self.assertFalse(_should_request_branch_description(_Ctx(), 10))
 
 
 class TestStopTaskTool(unittest.TestCase):
@@ -963,7 +1155,7 @@ class TestGetTaskToolSchema(unittest.TestCase):
     """Introspect the get_task tool's wire schema as the server builds it."""
 
     def _tool(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         from odoo_sdk.mcp.tools.atomic import make_get_task_tool
 
@@ -1023,7 +1215,7 @@ class TestGetTasksToolSchema(unittest.TestCase):
         return make_get_tasks_tool(_Reg())
 
     def _schema(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         return Tool.from_function(self._make(), name="get_tasks").parameters
 
@@ -1071,7 +1263,7 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         return make_task_note_tool(_Reg())
 
     def _schema(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         return Tool.from_function(self._make(), name="task_note").parameters
 
@@ -1138,7 +1330,7 @@ class TestGetTaskChatterToolSchema(unittest.TestCase):
         return make_get_task_chatter_tool(_Reg())
 
     def _schema(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         return Tool.from_function(self._make(), name="get_task_chatter").parameters
 
@@ -1176,7 +1368,7 @@ class TestTaskQuestionToolSchema(unittest.TestCase):
         return make_task_question_tool(_Reg())
 
     def _schema(self):
-        from fastmcp.tools.tool import Tool
+        from fastmcp.tools import Tool
 
         return Tool.from_function(self._make(), name="task_question").parameters
 

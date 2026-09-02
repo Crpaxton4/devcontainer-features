@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Union
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool
+from fastmcp.tools import Tool
+from mcp.types import InputRequiredResult
 
 from odoo_sdk import OdooError
 from odoo_sdk.commands import LogEventCommand, Registry
@@ -371,14 +372,23 @@ def _event_emitting(
     This is the sole event producer for the MCP tool surface: applied innermost
     (closest to the real tool), so the event is written only after the tool
     returns — an exception propagates outward, past the emit, and no event is
-    recorded. The state store is resolved from ``registry.state_client`` at call
-    time (never at registration), so building a server never forces the SQLite
-    database into existence and a test can inject a fake. The emit is guarded by
-    ``try/except`` because telemetry must never break a tool call.
+    recorded. An input-required result (the SEP-2322 ask leg, #664) likewise
+    emits nothing: the tool has done no work yet, so the continuation leg is
+    the one dispatch that records the single event. The state store is resolved
+    from ``registry.state_client`` at call time (never at registration), so
+    building a server never forces the SQLite database into existence and a
+    test can inject a fake. The emit is guarded by ``try/except`` because
+    telemetry must never break a tool call.
     """
     signature = inspect.signature(tool_fn)
 
     def emit(result: Any, args: tuple, kwargs: dict) -> None:
+        if isinstance(result, InputRequiredResult):
+            # A SEP-2322 input-required leg (#664) is an ask, not an outcome:
+            # recording it as a successful dispatch would write a spurious
+            # "ok" event for work that has not happened. The continuation
+            # invocation emits the dispatch's single event.
+            return
         try:
             _emit_tool_event(
                 registry.state_client,
