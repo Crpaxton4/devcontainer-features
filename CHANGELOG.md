@@ -1,5 +1,28 @@
 # Changelog
 
+## [6.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v5.0.0...personal-features-v6.0.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-sdk:** resync can now exit nonzero; PR events are keyed gh:pr:<owner/repo>:<n> (legacy unqualified rows age out unbilled).
+* **odoo-sdk:** odoo_sdk now requires fastmcp>=4,<5; handshake-era (pre-2026-07-28) connections always use the deterministic branch slug because fastmcp 4 has no server-initiated sampling back-channel.
+
+### Features
+
+* **odoo-sdk:** add CodeRabbit review gate to implement_task prompt ([#667](https://github.com/Crpaxton4/devcontainer-features/issues/667)) ([f6f5f6f](https://github.com/Crpaxton4/devcontainer-features/commit/f6f5f6f2ebaef70788e91a2a4c61680b1d83f128))
+* **odoo-sdk:** bill PR opening as review-family pr_opened events ([#669](https://github.com/Crpaxton4/devcontainer-features/issues/669)) ([d9757cc](https://github.com/Crpaxton4/devcontainer-features/commit/d9757cc7c3f6d78abdeb7ff415ce4ae8a1afdc68)), closes [#656](https://github.com/Crpaxton4/devcontainer-features/issues/656)
+* **odoo-sdk:** make resync directory-agnostic and account-wide with explicit date range ([#673](https://github.com/Crpaxton4/devcontainer-features/issues/673)) ([651e138](https://github.com/Crpaxton4/devcontainer-features/commit/651e138646bc9a7c21aa0ce98446655237bc4784))
+
+
+### Bug Fixes
+
+* **odoo-sdk:** extract bare leading task ids from PR titles ([#672](https://github.com/Crpaxton4/devcontainer-features/issues/672)) ([4ae1eb6](https://github.com/Crpaxton4/devcontainer-features/commit/4ae1eb68a20d7d2963f5ac882dd2efb011b809ee)), closes [#654](https://github.com/Crpaxton4/devcontainer-features/issues/654)
+* **odoo-sdk:** port MCP server to fastmcp 4.x ([#670](https://github.com/Crpaxton4/devcontainer-features/issues/670)) ([5b5d9ef](https://github.com/Crpaxton4/devcontainer-features/commit/5b5d9efe83c16bff7087d492d4bd54aeb13c4a9e))
+* **odoo-sdk:** re-read credentials and retry once on authentication failure ([#671](https://github.com/Crpaxton4/devcontainer-features/issues/671)) ([9ba8e5f](https://github.com/Crpaxton4/devcontainer-features/commit/9ba8e5fe101330c70114e6c94323e9aea37a2210))
+* **personal-features:** install the Python toolchain via uv-managed CPython, unblocking odoo:16 bases ([#675](https://github.com/Crpaxton4/devcontainer-features/issues/675)) ([0c70c2d](https://github.com/Crpaxton4/devcontainer-features/commit/0c70c2d74251dc3e2c9109ebbcbd5e7dd6470c1b))
+* **personal-features:** persist CodeRabbit CLI auth at its hardcoded ~/.coderabbit path ([#668](https://github.com/Crpaxton4/devcontainer-features/issues/668)) ([16a690e](https://github.com/Crpaxton4/devcontainer-features/commit/16a690eea1c62a192f02f52a9bf1953e7e5f7c4e))
+
 ## [5.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v4.2.0...personal-features-v5.0.0) (2026-08-26)
 
 
