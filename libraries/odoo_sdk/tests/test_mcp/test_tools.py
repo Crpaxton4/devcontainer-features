@@ -252,6 +252,11 @@ class TestDefaultToolSurface(unittest.TestCase):
             "timesheet_summary",
             "unbilled_hours",
             "task_aging",
+            # #677: activities are everyday task work, never maintenance tooling.
+            "schedule_activity",
+            "get_activities",
+            "mark_activity_done",
+            "search_activity_types",
         ):
             self.assertIn(name, default)
 
@@ -1126,6 +1131,10 @@ class TestAtomicToolInvocation(unittest.TestCase):
             "stop_run": (1,),
             "stop_all": (),
             "normalize_timesheets": (),
+            "schedule_activity": (5,),
+            "get_activities": (),
+            "mark_activity_done": (5,),
+            "search_activity_types": (),
             "search_chatter": ("q",),
             "search_count": ("project.task",),
             "search_knowledge_articles": ("q",),

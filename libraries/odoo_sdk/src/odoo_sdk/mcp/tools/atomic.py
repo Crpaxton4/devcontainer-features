@@ -158,6 +158,85 @@ def make_create_task_tool(registry: Registry):
     return create_task
 
 
+@atomic_tool("schedule_activity")
+def make_schedule_activity_tool(registry: Registry):
+    def schedule_activity(
+        res_id: int,
+        res_model: str = "project.task",
+        activity_type: Optional[Union[int, str]] = None,
+        summary: str = "",
+        note: str = "",
+        date_deadline: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Schedule an Odoo activity (``mail.activity``) on a record.
+
+        ``res_model`` defaults to ``project.task``. ``activity_type`` takes an
+        id or a name (e.g. ``"Call"``); ``note`` is Markdown, ``date_deadline``
+        an inclusive ``YYYY-MM-DD`` date, and ``user_id`` defaults to the
+        authenticated user.
+        """
+        return registry["schedule_activity"].execute(
+            res_id,
+            res_model=res_model,
+            activity_type=activity_type,
+            summary=summary,
+            note=note,
+            date_deadline=date_deadline,
+            user_id=user_id,
+        )
+
+    return schedule_activity
+
+
+@atomic_tool("get_activities")
+def make_get_activities_tool(registry: Registry):
+    def get_activities(
+        res_id: Optional[int] = None,
+        res_model: Optional[str] = None,
+        user_id: Optional[int] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List open activities on a record and/or for a user (read-only).
+
+        A ``res_id`` without ``res_model`` is read as a ``project.task`` id; a
+        call with no filters at all scopes to the authenticated user.
+        """
+        return registry["get_activities"].execute(
+            res_id=res_id, res_model=res_model, user_id=user_id, limit=limit
+        )
+
+    return get_activities
+
+
+@atomic_tool("mark_activity_done")
+def make_mark_activity_done_tool(registry: Registry):
+    def mark_activity_done(activity_id: int, feedback: str = "") -> Dict[str, Any]:
+        """Mark an activity done (``action_feedback``), posting the feedback.
+
+        Completing an activity deletes the ``mail.activity`` record, so the
+        activity that was closed is returned in full.
+        """
+        return registry["mark_activity_done"].execute(activity_id, feedback=feedback)
+
+    return mark_activity_done
+
+
+@atomic_tool("search_activity_types")
+def make_search_activity_types_tool(registry: Registry):
+    def search_activity_types(
+        query: Optional[str] = None,
+        res_model: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """List activity types (``mail.activity.type``) available to schedule."""
+        return registry["search_activity_types"].execute(
+            query=query, res_model=res_model, limit=limit
+        )
+
+    return search_activity_types
+
+
 @atomic_tool("search_chatter")
 def make_search_chatter_tool(registry: Registry):
     def search_chatter(

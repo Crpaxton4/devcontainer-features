@@ -21,6 +21,7 @@ from .assign_event import AssignEventCommand
 from .close_task import CloseTaskCommand
 from .create_task import CreateTaskCommand
 from .discover_runs import DiscoverRunsCommand
+from .get_activities import GetActivitiesCommand
 from .get_employee_id import GetEmployeeIdCommand
 from .get_mail_status import GetMailStatusCommand
 from .get_models import GetModelsCommand
@@ -31,6 +32,7 @@ from .get_tasks import GetTasksCommand
 from .get_todo import GetTodoCommand
 from .get_uid import GetUidCommand
 from .list_runs import ListRunsCommand
+from .mark_activity_done import MarkActivityDoneCommand
 from .normalize_timesheets import NormalizeTimesheetsCommand
 from .optimize_sessions import OptimizeSessionsCommand
 from .query_sessions import QuerySessionsCommand
@@ -39,6 +41,8 @@ from .read_knowledge_article import ReadKnowledgeArticleCommand
 from .report_runs import ReportRunsCommand
 from .resume_task import ResumeTaskCommand
 from .resync import ResyncCommand
+from .schedule_activity import ScheduleActivityCommand
+from .search_activity_types import SearchActivityTypesCommand
 from .search_chatter import SearchChatterCommand
 from .search_count import SearchCountCommand
 from .search_knowledge_articles import SearchKnowledgeArticlesCommand

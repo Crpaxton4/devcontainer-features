@@ -45,7 +45,7 @@ TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
 }
 
 #: Environment variable that opts the :data:`GATED_TOOL_NAMES` back onto the MCP
-#: surface. Truthy values (``1``/``true``/``yes``/``on``) restore the full 39-tool
+#: surface. Truthy values (``1``/``true``/``yes``/``on``) restore the full 43-tool
 #: surface for a session that genuinely needs the maintenance/triage tooling.
 GATED_TOOLS_ENV = "ODOO_MCP_INCLUDE_GATED"
 

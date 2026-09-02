@@ -284,6 +284,10 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "timesheet_summary",
         "unbilled_hours",
         "unlogged_time_report",
+        "schedule_activity",
+        "get_activities",
+        "mark_activity_done",
+        "search_activity_types",
     }
 )
 
