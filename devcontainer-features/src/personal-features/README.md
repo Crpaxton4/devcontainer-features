@@ -7,7 +7,7 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 
 ```json
 "features": {
-    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:5": {}
+    "ghcr.io/Crpaxton4/devcontainer-features/personal-features:6": {}
 }
 ```
 
@@ -29,6 +29,7 @@ Installs the owner's personal dev container tooling: Claude Code (wrapped to aut
 - [The `claude` command](#the-claude-command)
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
+- [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -69,7 +70,8 @@ Run the setup script once per machine, **before** starting any dev container tha
    ~/.config/gh                         — gh CLI auth and settings
    ~/.config/odoo_sdk                   — odoo_sdk connection config
    ~/.config/pr-automation              — create-pr config (global.yaml + projects/)
-   ~/.config/coderabbit                 — CodeRabbit CLI config/auth state
+   ~/.config/coderabbit                 — CodeRabbit VS Code extension state
+   ~/.coderabbit                        — CodeRabbit CLI auth/state (auth.json, machine-id)
    ~/.config/devcontainer/shell-history — bash history
    ```
 
@@ -92,7 +94,8 @@ Config and history are bind-mounted from your host home directory into fixed con
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
 - `~/.config/odoo_sdk` (host) → `/usr/local/share/odoo-sdk-config` (container) — `ODOO_SDK_CONFIG` points at this directory; the SDK probes it for `config.toml` then `config.ini`.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
-- `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
+- `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here; it persists the VS Code CodeRabbit extension state (`user-data.json`). The CLI itself ignores `CODERABBIT_CONFIG_DIR` (#661).
+- `~/.coderabbit` (host) → `/home/vscode/.coderabbit` (container) — CodeRabbit **CLI** auth/state (`auth.json`, `machine-id`). Unlike every other row, the target is a literal home path, not `/usr/local/share/...`: the CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` and honors no env override, so the only way to persist its auth is to mount at exactly that path (#661). `/home/vscode` matches the primary consumers (`remoteUser: vscode`); under a root `remoteUser` the dir is provisioned but inert — the CLI resolves `/root/.coderabbit` there and auth does not persist.
 - `~/.config/devcontainer/shell-history` (host) → `/usr/local/share/shell-history` (container) — `HISTFILE` points at `bash_history` inside it, and `~/.bash_history` is symlinked to it, so bash history follows you across rebuilds and is shared across containers. Bash is the only supported shell.
 
 A note on the history mount: bash writes `HISTFILE` after every command, and the container user's uid need not match the owner of the host directory the mount exposes (e.g. with `"updateRemoteUserUID": false` and a non-root `remoteUser`, or from a root shell). To keep history writable regardless of uid, `setup.sh` makes the host `shell-history` directory world-writable (mode `0777`); the container inherits that mode through the bind mount, so any user can create and append `bash_history`. Without it, `history -a` fails on every command with `bash: history: .../bash_history: cannot create: Permission denied` (#323).
@@ -134,7 +137,7 @@ To make `CODERABBIT_API_KEY` available inside the container from your host env, 
 
 Caveats:
 
-- **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which usually isn't running in a container, so it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` points at the bind-mounted dir so that state survives rebuilds — but the exact config-dir path the CLI honors isn't documented and may change. The reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key`. Verify with `coderabbit doctor`.
+- **Auth persists via the `~/.coderabbit` home-path mount (#661).** The CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` (verified against v0.7.5) and reads **no** env override — not `CODERABBIT_CONFIG_DIR` (that only ever covered the VS Code extension state) and not `CODERABBIT_API_KEY` either (the headless docs' env var is plain shell interpolation into `--api-key`, not something the CLI reads itself). So the Feature bind-mounts host `~/.coderabbit` at `/home/vscode/.coderabbit`, and `coderabbit auth login` survives rebuilds under a `vscode` remoteUser. One-time migration: if you authenticated under the old volume-backed home, re-run `coderabbit auth login` once — pre-existing volume content at that path is shadowed by the bind mount, not merged (it only held `machine-id`/logs). Verify with `coderabbit auth status`.
 - `.coderabbit.yaml` is a per-repo config file read by CodeRabbit's cloud service. It's authored by the user at the repo root and is **not** managed by this Feature.
 - The Claude Code CodeRabbit plugin / Agentic API access may require a paid CodeRabbit plan — check your account's plan if `/coderabbit:review` reports auth or entitlement errors.
 
@@ -225,7 +228,7 @@ written to the local events store on either path.
 **Never blocks a session.** `claude-event-hook` always exits 0, never writes to
 stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
-installed (e.g. Python <3.10 base images) or the cwd isn't a git repo.
+installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
 **Opting out.** The merge only ever replaces its own entries (identified by the
 `claude-event-hook` command) and preserves all your other settings and hooks. To
@@ -274,6 +277,16 @@ each other). If Claude Code's mounted-skill UX is ever retired, the
 `install.sh` skill-staging block and `sync-claude-skills` can be removed and the
 MCP-prompt path becomes the sole source.
 
+## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
+
+The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
+
+**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: `odoo_sdk` is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
+
+**That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-sdk`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
+
+It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
@@ -291,7 +304,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   Also set `--system`, for the same reason: `core.pager`/`interactive.diffFilter` (so `delta` renders every diff), and `core.excludesfile` pointing at `/usr/local/share/git-excludes/gitignore`, which keeps `mempalace init`'s project-local artifacts out of every repo on the machine — see the `mempalace` bullet below for the rationale and its two tradeoffs.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
-- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`. `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-sdk env (see [Python toolchain](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 
