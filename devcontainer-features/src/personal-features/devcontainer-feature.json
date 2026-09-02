@@ -50,6 +50,11 @@
             "type": "bind"
         },
         {
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.coderabbit",
+            "target": "/home/vscode/.coderabbit",
+            "type": "bind"
+        },
+        {
             "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/devcontainer/shell-history",
             "target": "/usr/local/share/shell-history",
             "type": "bind"

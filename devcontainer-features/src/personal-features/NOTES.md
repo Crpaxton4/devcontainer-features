@@ -50,7 +50,8 @@ Run the setup script once per machine, **before** starting any dev container tha
    ~/.config/gh                         — gh CLI auth and settings
    ~/.config/odoo_sdk                   — odoo_sdk connection config
    ~/.config/pr-automation              — create-pr config (global.yaml + projects/)
-   ~/.config/coderabbit                 — CodeRabbit CLI config/auth state
+   ~/.config/coderabbit                 — CodeRabbit VS Code extension state
+   ~/.coderabbit                        — CodeRabbit CLI auth/state (auth.json, machine-id)
    ~/.config/devcontainer/shell-history — bash history
    ```
 
@@ -73,7 +74,8 @@ Config and history are bind-mounted from your host home directory into fixed con
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
 - `~/.config/odoo_sdk` (host) → `/usr/local/share/odoo-sdk-config` (container) — `ODOO_SDK_CONFIG` points at this directory; the SDK probes it for `config.toml` then `config.ini`.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
-- `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here, so CodeRabbit CLI config/auth state can persist across rebuilds.
+- `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here; it persists the VS Code CodeRabbit extension state (`user-data.json`). The CLI itself ignores `CODERABBIT_CONFIG_DIR` (#661).
+- `~/.coderabbit` (host) → `/home/vscode/.coderabbit` (container) — CodeRabbit **CLI** auth/state (`auth.json`, `machine-id`). Unlike every other row, the target is a literal home path, not `/usr/local/share/...`: the CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` and honors no env override, so the only way to persist its auth is to mount at exactly that path (#661). `/home/vscode` matches the primary consumers (`remoteUser: vscode`); under a root `remoteUser` the dir is provisioned but inert — the CLI resolves `/root/.coderabbit` there and auth does not persist.
 - `~/.config/devcontainer/shell-history` (host) → `/usr/local/share/shell-history` (container) — `HISTFILE` points at `bash_history` inside it, and `~/.bash_history` is symlinked to it, so bash history follows you across rebuilds and is shared across containers. Bash is the only supported shell.
 
 A note on the history mount: bash writes `HISTFILE` after every command, and the container user's uid need not match the owner of the host directory the mount exposes (e.g. with `"updateRemoteUserUID": false` and a non-root `remoteUser`, or from a root shell). To keep history writable regardless of uid, `setup.sh` makes the host `shell-history` directory world-writable (mode `0777`); the container inherits that mode through the bind mount, so any user can create and append `bash_history`. Without it, `history -a` fails on every command with `bash: history: .../bash_history: cannot create: Permission denied` (#323).
@@ -115,7 +117,7 @@ To make `CODERABBIT_API_KEY` available inside the container from your host env, 
 
 Caveats:
 
-- **Auth persistence is best-effort.** On Linux the CLI prefers a system keyring (libsecret/Secret Service), which usually isn't running in a container, so it falls back to on-disk state. `CODERABBIT_CONFIG_DIR` points at the bind-mounted dir so that state survives rebuilds — but the exact config-dir path the CLI honors isn't documented and may change. The reliable headless path is to expose `CODERABBIT_API_KEY` via `remoteEnv` and re-run `coderabbit auth login --api-key`. Verify with `coderabbit doctor`.
+- **Auth persists via the `~/.coderabbit` home-path mount (#661).** The CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` (verified against v0.7.5) and reads **no** env override — not `CODERABBIT_CONFIG_DIR` (that only ever covered the VS Code extension state) and not `CODERABBIT_API_KEY` either (the headless docs' env var is plain shell interpolation into `--api-key`, not something the CLI reads itself). So the Feature bind-mounts host `~/.coderabbit` at `/home/vscode/.coderabbit`, and `coderabbit auth login` survives rebuilds under a `vscode` remoteUser. One-time migration: if you authenticated under the old volume-backed home, re-run `coderabbit auth login` once — pre-existing volume content at that path is shadowed by the bind mount, not merged (it only held `machine-id`/logs). Verify with `coderabbit auth status`.
 - `.coderabbit.yaml` is a per-repo config file read by CodeRabbit's cloud service. It's authored by the user at the repo root and is **not** managed by this Feature.
 - The Claude Code CodeRabbit plugin / Agentic API access may require a paid CodeRabbit plan — check your account's plan if `/coderabbit:review` reports auth or entitlement errors.
 

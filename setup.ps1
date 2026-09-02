@@ -96,6 +96,7 @@ $paths = @(
     '.config/odoo_sdk'
     '.config/pr-automation'
     '.config/coderabbit'
+    '.coderabbit'
     '.config/devcontainer/shell-history'
     '.config/odoo-task-tracker'
     '.mempalace'

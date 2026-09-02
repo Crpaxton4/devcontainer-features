@@ -141,6 +141,10 @@ check "pr-automation config dir exists" bash -c "test -d /usr/local/share/pr-aut
 check "coderabbit is installed" bash -c "test -x \"\$(command -v coderabbit)\""
 check "coderabbit config dir exists" bash -c "test -d /usr/local/share/coderabbit-config"
 check "CODERABBIT_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CODERABBIT_CONFIG_DIR\" = '/usr/local/share/coderabbit-config' ]"
+# #661: the CLI hardcodes join(homedir(), ".coderabbit") for its auth/state
+# (auth.json, machine-id) and ignores CODERABBIT_CONFIG_DIR entirely, so the
+# persisted target must be the container user's literal home path.
+check "coderabbit CLI home state dir exists (#661)" bash -c "test -d /home/vscode/.coderabbit"
 
 # global git hooks
 check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
@@ -682,6 +686,8 @@ check "odoo-sdk-config is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/odoo-sdk-config)\" = '700' ]"
 check "coderabbit-config is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/coderabbit-config)\" = '700' ]"
+check "coderabbit CLI home dir is chmod 0700 (auth.json not world-readable, #661)" bash -c \
+  "[ \"\$(stat -c '%a' /home/vscode/.coderabbit)\" = '700' ]"
 check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
 check "shell-history dir is 0777 (any uid can create/append bash_history, #323)" bash -c \
