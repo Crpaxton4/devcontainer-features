@@ -52,7 +52,7 @@ In full:
 | `e` | Export the window as **Markdown** to `timelog_<start>_<end>.md` in the current directory |
 | `c` | Export the window as **CSV** to `timelog_<start>_<end>.csv` (the footer folds `e`/`c` into "export") |
 | `u` | **Upload** the window's sessions to Odoo timesheets (behind a confirm gate) |
-| `r` | **Resync** the current repo's events from git / GitHub / Odoo |
+| `r` | **Resync** events from git (all repos under the cwd) / GitHub (account-wide) / Odoo |
 | `t` | **Triage** — assign task ids to unattributed events (`↑`/`↓` select, `0-9` task id, `⏎` assign, `s` skip, `q` back) |
 | `v` | **Review** — session cards with confidence and overlap badges (`↑`/`↓` select, `e`/`⏎` evidence pane, `q` back); read-only, never uploads |
 | `q` or `Esc` | Quit |
@@ -102,18 +102,28 @@ min_session_hours = 0.25
 round_session_hours = 0.05
 ```
 
-### Resync (`r`) — three pullers, current-repo and manual only
+### Resync (`r`) — three pullers, directory-agnostic and manual only
 
 Resync reconciles the local `events` table against external activity, then
-re-derives sessions. It runs **git** (commits), **github** (merged PRs and
-reviews), and **odoo** (task chatter), and is:
+re-derives sessions. It runs **git** (commits), **github** (PRs, reviews, and
+comments), and **odoo** (task chatter), and is:
 
-- **current-repo scoped** — only the launch repo and the authenticated user;
+- **directory-agnostic** — the git puller recursively discovers every checkout
+  under the launch directory (any depth, including the directory itself, each
+  labeled from its own `origin` remote), and the github puller searches the
+  authenticated user's activity account-wide, so the same work is captured
+  wherever resync runs;
 - **manual** — only on `r`; nothing resyncs on a timer;
 - **idempotent** — events dedupe by external id, so a re-run inserts nothing new.
 
-The status line reports each source's inserted count, or a skip reason when its
-tool is missing or unauthenticated (a skip is never fatal).
+The status line reports each source's inserted count (with how many events were
+found, and across how many repos for git), a skip reason for an optional absent
+source, or an `error (…)` marker when a source's tooling is entirely unusable
+(no git identity or repos, unauthenticated `gh`). Review events that resolved
+no task id are counted on the github summary so structurally unbillable reviews
+surface for triage instead of silently never billing. The headless
+`odoo-sdk resync` accepts `--start`/`--end` inclusive ISO dates to bound the
+git/github/odoo capture window, mirroring `upload`.
 
 (reading-the-empty-state)=
 ## Reading the empty state

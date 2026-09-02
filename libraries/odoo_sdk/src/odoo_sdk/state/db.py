@@ -451,16 +451,17 @@ _DEVELOPMENT_SOURCE_PREDICATE = (
 
 # Review-family sources (#378 item 6): submitted PR ``review`` passes, authored
 # PR/issue ``comment`` events (``gh:comment:<id>``), and PR-opening ``pr_opened``
-# events (``gh:pr:<n>:opened``, #656) — opening a PR is billable review-family
-# work, floored like a lone review. Review activity is *bursty* — e.g. one pass
-# of 33 inline comments, or a stack of PRs opened minutes apart — which the
-# Python ETL's ``FixedDurationStrategy`` over-bills (15 min × 33 = 8.25 h) and a
-# lone long pass under-bills; gap-windowing models both correctly (the burst
-# becomes one session, a lone review/opened PR a single-event session that
-# floors to the #355 minimum). A group with ONLY review-family events is labeled
-# "Review" (development wins a mixed group). ``merge`` stays deliberately OUT of
-# the windowed derivation — it is a point-in-time release marker kept for audit,
-# not a work span — and remains the only excluded ingested source.
+# events (``gh:pr:<owner/repo>:<n>:opened``, #656) — opening a PR is billable
+# review-family work, floored like a lone review. Review activity is *bursty* —
+# e.g. one pass of 33 inline comments, or a stack of PRs opened minutes apart —
+# which the Python ETL's ``FixedDurationStrategy`` over-bills (15 min × 33 =
+# 8.25 h) and a lone long pass under-bills; gap-windowing models both
+# correctly (the burst becomes one session, a lone review/opened PR a
+# single-event session that floors to the #355 minimum). A group with ONLY
+# review-family events is labeled "Review" (development wins a mixed group).
+# ``merge`` stays deliberately OUT of the windowed derivation — it is a
+# point-in-time release marker kept for audit, not a work span — and remains
+# the only excluded ingested source.
 _REVIEW_SOURCE_PREDICATE = "source IN ('review', 'comment', 'pr_opened')"
 
 # Sources whose events participate in gap-based sessionization: the union of the

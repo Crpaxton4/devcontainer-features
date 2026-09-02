@@ -282,10 +282,25 @@ def _failed_summary(failed: list[dict[str, Any]]) -> str:
 
 
 def _source_summary(outcome: dict[str, Any]) -> str:
-    """Render one puller's outcome: an inserted count or its skip reason."""
+    """Render one puller's outcome: an inserted count, error, or skip reason.
+
+    ``error`` (tooling entirely unusable, #652) renders distinctly from an
+    optional source's ``skipped``; a success surfaces partial degradation
+    (repos whose log failed) and how many newly stored review events resolved
+    no task id (#653), so neither is ever silent.
+    """
+    if "error" in outcome:
+        return f"error ({outcome['error']})"
     if "skipped" in outcome:
         return f"skipped ({outcome['skipped']})"
-    return f"+{outcome['inserted']}"
+    summary = f"+{outcome['inserted']}"
+    failed = outcome.get("failed_repos")
+    if failed:
+        summary += f" ({failed} of {outcome.get('repos', '?')} repos failed)"
+    unattributed = outcome.get("unattributed_reviews") or []
+    if unattributed:
+        summary += f" ({len(unattributed)} review(s) without task id)"
+    return summary
 
 
 def _resync_status(result: dict[str, Any]) -> str:
@@ -299,10 +314,11 @@ def _resync_status(result: dict[str, Any]) -> str:
 def do_resync(deps: TuiDeps, state: AppState) -> AppState:
     """Run the manual resync, re-query the window, and report per-source counts.
 
-    Reconciles the current repo's events (git commits, GitHub PRs/reviews, Odoo
-    chatter) into local state, then refreshes so any newly derivable sessions
-    appear immediately, and surfaces each source's inserted count (or skip
-    reason) on the status line.
+    Reconciles events directory-agnostically (#652) — git commits from every
+    repo under the launch directory, the user's account-wide GitHub
+    PRs/reviews/comments, and Odoo chatter — into local state, then refreshes
+    so any newly derivable sessions appear immediately, and surfaces each
+    source's inserted count (or its error/skip reason) on the status line.
     """
     result = deps.registry["resync"].execute()
     refreshed = refresh(deps, state)
