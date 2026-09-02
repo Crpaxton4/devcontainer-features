@@ -2,7 +2,7 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from hypothesis import given, strategies
 
@@ -166,9 +166,7 @@ class TestOdooClientContract(unittest.TestCase):
         self.assertFalse(client.authenticated)
 
     @patch("odoo_sdk.transport.rpc.xmlrpc.client.ServerProxy")
-    def test_client_uid_raises_on_failed_login(
-        self, mock_server_proxy: Mock
-    ) -> None:
+    def test_client_uid_raises_on_failed_login(self, mock_server_proxy: Mock) -> None:
         common_proxy = Mock()
         object_proxy = Mock()
         common_proxy.authenticate.return_value = False
@@ -219,6 +217,7 @@ class TestOdooClientContract(unittest.TestCase):
             settings.username,
             settings.password,
             timeout=settings.timeout,
+            credentials_refresh=ANY,
         )
 
     def test_client_uses_ini_configuration_when_values_omitted(self) -> None:
@@ -615,6 +614,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
             "user",
             "pw",
             timeout=45.5,
+            credentials_refresh=ANY,
         )
 
     @patch("odoo_sdk.client.client.OdooJson2Executor")
@@ -636,6 +636,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
             "db",
             "key",
             timeout=7.0,
+            credentials_refresh=ANY,
         )
 
     @patch("odoo_sdk.client.client.OdooRpcExecutor")
@@ -660,6 +661,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
             "user",
             "pw",
             timeout=30.0,
+            credentials_refresh=ANY,
         )
 
 
@@ -711,6 +713,7 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
             settings.db,
             settings.api_key,
             timeout=settings.timeout,
+            credentials_refresh=ANY,
         )
 
 
@@ -741,6 +744,7 @@ class TestOdooClientFromConfig(unittest.TestCase):
             "cfg-user",
             "cfg-pass",
             timeout=30.0,
+            credentials_refresh=ANY,
         )
 
     @patch("odoo_sdk.client.client.OdooJson2Executor")
@@ -766,7 +770,80 @@ class TestOdooClientFromConfig(unittest.TestCase):
             "cfg-db",
             "cfg-key",
             timeout=30.0,
+            credentials_refresh=ANY,
         )
+
+
+class TestOdooClientCredentialRefresh(unittest.TestCase):
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    @patch("odoo_sdk.client.client.OdooConnectionSettings.from_sources")
+    def test_client_injects_refresh_that_re_resolves_same_sources(
+        self,
+        mock_from_sources: Mock,
+        mock_rpc_executor: Mock,
+    ) -> None:
+        settings = OdooConnectionSettings(
+            url="https://example.com",
+            db="example-db",
+            username="example-user",
+            password="example-password",
+        )
+        mock_from_sources.return_value = settings
+        mock_rpc_executor.return_value = Mock(spec=OdooExecutor)
+
+        OdooClient(
+            url="https://example.com",
+            db="example-db",
+            username="example-user",
+            password="example-password",
+            config_path="example.ini",
+        )
+
+        refresh = mock_rpc_executor.call_args.kwargs["credentials_refresh"]
+        self.assertEqual(mock_from_sources.call_count, 1)
+        self.assertIs(refresh(), settings)
+        self.assertEqual(mock_from_sources.call_count, 2)
+        self.assertEqual(
+            mock_from_sources.call_args_list[0],
+            mock_from_sources.call_args_list[1],
+        )
+
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_from_config_injects_refresh_that_calls_connection_settings(
+        self, mock_rpc_executor: Mock
+    ) -> None:
+        settings = OdooConnectionSettings(
+            url="https://cfg.example.com",
+            db="cfg-db",
+            username="cfg-user",
+            password="cfg-pass",
+        )
+        cfg = Mock()
+        cfg.connection_settings.return_value = settings
+        mock_rpc_executor.return_value = Mock(spec=OdooExecutor)
+
+        OdooClient.from_config(cfg)
+
+        refresh = mock_rpc_executor.call_args.kwargs["credentials_refresh"]
+        self.assertEqual(cfg.connection_settings.call_count, 1)
+        self.assertIs(refresh(), settings)
+        self.assertEqual(cfg.connection_settings.call_count, 2)
+
+    @patch("odoo_sdk.client.client.OdooRpcExecutor")
+    def test_from_xml_rpc_passes_no_refresh_hook(self, mock_rpc: Mock) -> None:
+        mock_rpc.return_value = Mock(spec=OdooExecutor)
+
+        OdooClient.from_xml_rpc("https://example.com", "mydb", "admin", "pass")
+
+        self.assertNotIn("credentials_refresh", mock_rpc.call_args.kwargs)
+
+    @patch("odoo_sdk.client.client.OdooJson2Executor")
+    def test_from_json2_passes_no_refresh_hook(self, mock_json2: Mock) -> None:
+        mock_json2.return_value = Mock(spec=OdooExecutor)
+
+        OdooClient.from_json2("https://example.com", "mydb", "api-key")
+
+        self.assertNotIn("credentials_refresh", mock_json2.call_args.kwargs)
 
 
 if __name__ == "__main__":
