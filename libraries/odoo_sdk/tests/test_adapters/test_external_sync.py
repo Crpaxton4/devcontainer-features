@@ -726,6 +726,39 @@ class TestSyncGithub(unittest.TestCase):
         self.assertEqual(event.branch, "")  # degraded, not dropped
         self.assertEqual(event.task_ids, ["24648"])  # title still attributes
 
+    def test_bare_leading_id_title_attributes_the_billable_opened_event(self) -> None:
+        # Regression for the #669<->#672 interaction gap: #672 threaded
+        # ``allow_leading_id`` through every builder present in its base, but
+        # ``_pr_opened_event`` arrived independently via #669 and was missed.
+        # ``pr_opened`` is the BILLABLE review-family source while ``merge`` is
+        # audit-only, so a bare-leading-id title (#654) billed NOTHING while its
+        # audit row attributed fine. The branch here carries no id, so only the
+        # leading form can attribute — isolating the gate.
+        state = _tmp_state()
+        prs = (
+            '[{"number": 21, "title": "24648 rtv process", "state": "merged",'
+            ' "createdAt": "2026-07-01T09:00:00Z",'
+            ' "updatedAt": "2026-07-02T09:00:00Z",'
+            ' "repository": {"nameWithOwner": "o/r"}}]'
+        )
+        detail = '{"headRefName": "rtv-process", "mergedAt": "2026-07-02T09:00:00Z"}'
+        routes = [
+            (_has("api", "user"), "octocat"),
+            (_has("search", "prs", "--author"), prs),
+            (_pr_view(21, "o/r"), detail),
+            (lambda c: c[-1] == "repos/o/r/pulls/21/reviews", "[]"),
+            (_has("search", "prs", "--reviewed-by"), "[]"),
+            (_has("search", "issues"), "[]"),
+        ]
+        with patch.object(ex.subprocess, "run", _fake_run(routes)):
+            ex.sync_github(state, _config(), now=_NOW)
+        by_ext = {e.external_id: e for e in state.get_events()}
+        opened = by_ext["gh:pr:o/r:21:opened"]
+        self.assertEqual(opened.source, "pr_opened")
+        self.assertEqual(opened.task_ids, ["24648"])  # was [] — the billing leak
+        # The audit-only merge row always attributed; that asymmetry WAS the bug.
+        self.assertEqual(by_ext["gh:pr:o/r:21"].task_ids, ["24648"])
+
     def test_self_review_on_own_pr_collected_once(self) -> None:
         # The reviewed-by search has no author filter, so an own PR can come
         # back from it too; it must be excluded there (it is already covered by

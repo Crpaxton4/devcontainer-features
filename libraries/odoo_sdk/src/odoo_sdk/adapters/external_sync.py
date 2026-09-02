@@ -617,7 +617,7 @@ def _pr_opened_event(pr: dict, window: _Window) -> Optional[EventRecord]:
         id=None,
         source="pr_opened",
         timestamp=ts,
-        task_ids=_extract_task_ids(title, branch),
+        task_ids=_extract_task_ids(title, branch, allow_leading_id=True),
         repo=repo,
         pr_num=number,
         branch=branch,
