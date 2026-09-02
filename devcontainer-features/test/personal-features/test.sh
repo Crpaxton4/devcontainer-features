@@ -72,6 +72,18 @@ check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_C
 check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
 
+# Regression guard for #674's first cut: the venv shebang points at
+# $_SDK_ENV/bin/python, itself a symlink to the uv-managed CPython. uv's default
+# install dir is under the installing user's HOME - root's, mode 0700 - so every
+# console script exec'd as a non-root remoteUser died with
+# `bad interpreter: Permission denied`. Only the images with a non-root
+# remoteUser (javascript-node ships `node`) reproduced it; the odoo/root matrix
+# legs stayed green. Assert the interpreter actually RUNS as whoever this test
+# is, not merely that the symlink resolves - `test -x` follows the link and
+# would pass on an unreadable target's mode bits.
+check "the uv-managed interpreter is runnable by a non-root remoteUser" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || /usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import sys; print(sys.executable)'"
+
 # #369: the central tracker DB is HOST-provisioned and bind-mounted; the
 # container consumes it and never creates one. This reverses the #115 stance
 # (which wrongly concluded the state dir couldn't be mounted): updateRemoteUserUID

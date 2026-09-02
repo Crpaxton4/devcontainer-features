@@ -230,6 +230,18 @@ FEATURE_DIR="$(dirname "$0")"
 # uv's default 30s HTTP timeout on a slow link and fail the whole image
 # build. Paired with the retry() wrapper on the install calls below.
 export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+# Put the uv-managed CPython somewhere EVERY container user can read. uv's
+# default install dir is $HOME/.local/share/uv/python, and install.sh runs as
+# root, so the interpreter would land under /root (mode 0700). Both the odoo-sdk
+# venv and the mempalace tool venv symlink bin/python at that absolute path, so
+# on any base image with a non-root remoteUser (mcr.../javascript-node ships
+# `node`; the odoo images run as root, which is why only that one CI matrix leg
+# caught it) every console script died with
+# `bad interpreter: Permission denied` - exec(2) EACCES on the traversal into
+# /root, not a PATH problem. /usr/local/share/uv already hosts the tool venvs,
+# so this keeps the whole toolchain under one world-readable prefix.
+export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+install -d -m 0755 "$UV_PYTHON_INSTALL_DIR"
 # odoo base images don't ship uv; install it so we can create an isolated
 # venv without touching system Python packages.
 if ! command -v uv >/dev/null 2>&1; then
@@ -303,6 +315,19 @@ fi
 UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
     retry uv tool install --python "$UV_PYTHON_PIN" mempalace \
     || echo "WARNING: failed to install mempalace; this container will have NO mempalace CLI/MCP server, so the mempalace Claude Code plugin hooks cannot mine and its MCP registration will fail with ENOENT" >&2
+
+# Belt-and-braces on the interpreter perms, after the last uv call that could
+# have materialised a managed CPython. UV_PYTHON_INSTALL_DIR above fixes the
+# *location*; this fixes the *modes* inside it, which come from whatever the
+# python-build-standalone tarball carried and from root's umask. a+rX (capital
+# X) adds the search/execute bit only where it already exists for the owner, so
+# directories and real binaries become traversable/runnable for non-root users
+# while plain .py files stay non-executable. Cheap enough to run
+# unconditionally; guarded only on the dir existing, since a base image that
+# already shipped the pinned Python means uv downloaded nothing.
+if [ -d "$UV_PYTHON_INSTALL_DIR" ]; then
+    chmod -R a+rX "$UV_PYTHON_INSTALL_DIR"
+fi
 
 # --- mempalace palace root reconciliation (#596, #643) -----------------------
 # Upstream mempalace's hooks CLI hardcodes its palace root to ~/.mempalace and
