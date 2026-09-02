@@ -136,6 +136,27 @@ def _rollback_task_branch(branch_name: str, original_branch: Optional[str]) -> N
     _git("branch", "-D", branch_name)
 
 
+def _rollback_task_branch_if_created(
+    branch_name: Optional[str], created: bool, original_branch: Optional[str]
+) -> None:
+    """Roll back the task branch only when this run created it (#164).
+
+    The guard lives here rather than inline in the tool's ``except`` so the
+    cleanup path reads as a single call: a branch that already existed — or
+    was never created because the working tree was already on it
+    (``branch_name is None``) — must survive the failure untouched.
+
+    :param branch_name: Task branch in play, or ``None`` when none was set up.
+    :type branch_name: Optional[str]
+    :param created: Whether this run created ``branch_name``.
+    :type created: bool
+    :param original_branch: Branch to return to; skipped when ``None``.
+    :type original_branch: Optional[str]
+    """
+    if created and branch_name is not None:
+        _rollback_task_branch(branch_name, original_branch)
+
+
 def _resolve_base_ref(base_branch: str) -> str:
     """Fetch ``base_branch`` from ``origin`` and return the ref to fork from.
 
@@ -696,8 +717,7 @@ def make_start_task_tool(registry: Registry):
             # *original typed* exception unchanged for the MCP
             # ``_error_boundary`` (#222) to format — it is not swallowed into an
             # ``{"error": ...}`` dict here.
-            if branch_created and branch_name is not None:
-                _rollback_task_branch(branch_name, original_branch)
+            _rollback_task_branch_if_created(branch_name, branch_created, original_branch)
             raise
 
     return start_task
