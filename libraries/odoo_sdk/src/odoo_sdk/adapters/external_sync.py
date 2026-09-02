@@ -65,6 +65,13 @@ _MIN_TASK_ID_DIGITS = 4
 #                      digit run buried mid-token never reads as an id
 #   ``task <id>``      PR-title form ``(task NNNNN)`` (optional space/hyphen)
 #   ``(<id>)``         trailing ``(NNNNN)`` in a PR title (NOT ``(#NNNNN)``)
+#   ``<id> title``     bare leading id at subject START (space/#/:/- after the
+#                      digits, issue #654), GATED behind ``allow_leading_id``
+#                      (git/GitHub call sites only). ``^`` is safe: the scanned
+#                      text is ``f"{subject} {branch}"``, so a branch never
+#                      sits at string start, and the join space delimits a
+#                      bare-only title; a leading ``NNNNN-`` subject also
+#                      matches the ``<id>-slug`` form — dedupe absorbs it
 _TASK_ID_PATTERNS = (
     re.compile(rf"#(\d{{{_MIN_TASK_ID_DIGITS},}})"),
     re.compile(rf"odoo-(\d{{{_MIN_TASK_ID_DIGITS},}})", re.IGNORECASE),
@@ -73,6 +80,12 @@ _TASK_ID_PATTERNS = (
     re.compile(rf"\btask[ -]?(\d{{{_MIN_TASK_ID_DIGITS},}})\b", re.IGNORECASE),
     re.compile(rf"\((\d{{{_MIN_TASK_ID_DIGITS},}})\)"),
 )
+
+# The gated ``<id> title`` form above. Kept OUT of ``_TASK_ID_PATTERNS`` so the
+# calendar/gmail call sites (explicit-marker contract) can never grow it by
+# accident; :func:`_extract_task_ids` appends it LAST when ``allow_leading_id``
+# is set, preserving first-seen dedupe precedence.
+_LEADING_TASK_ID_PATTERN = re.compile(rf"^(\d{{{_MIN_TASK_ID_DIGITS},}})[\s#:-]")
 
 # ASCII unit separator used to delimit git-log fields (never appears in text).
 _GIT_FIELD_SEP = "\x1f"
@@ -84,15 +97,23 @@ _GIT_FIELD_SEP = "\x1f"
 _UNVALIDATED_TASK_IDS_KEY = "unvalidated_task_ids"
 
 
-def _extract_task_ids(subject: str, branch: str) -> list[str]:
+def _extract_task_ids(
+    subject: str, branch: str, *, allow_leading_id: bool = False
+) -> list[str]:
     """Return the distinct task ids in ``"{subject} {branch}"``, first-seen order.
 
     Every form requires at least :data:`_MIN_TASK_ID_DIGITS` digits, so a short
     client-side number or a PR cross-reference is never mistaken for a task id.
+    ``allow_leading_id`` additionally admits the bare-leading-id form
+    (:data:`_LEADING_TASK_ID_PATTERN`, issue #654); only the git/GitHub call
+    sites pass True — calendar/gmail attribution stays explicit-marker only.
     """
     text = f"{subject} {branch}"
+    patterns = _TASK_ID_PATTERNS
+    if allow_leading_id:
+        patterns += (_LEADING_TASK_ID_PATTERN,)
     ids: list[str] = []
-    for pattern in _TASK_ID_PATTERNS:
+    for pattern in patterns:
         for match in pattern.findall(text):
             if match not in ids:
                 ids.append(match)
@@ -257,7 +278,7 @@ def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
         id=None,
         source="commit",
         timestamp=_parse_iso_utc(authored),
-        task_ids=_extract_task_ids(subject, decorations),
+        task_ids=_extract_task_ids(subject, decorations, allow_leading_id=True),
         repo=label,
         branch=decorations,
         subject=subject,
@@ -421,7 +442,7 @@ def _pr_merged_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
         id=None,
         source="merge",
         timestamp=ts,
-        task_ids=_extract_task_ids(title, branch),
+        task_ids=_extract_task_ids(title, branch, allow_leading_id=True),
         repo=ctx.label,
         pr_num=number,
         branch=branch,
@@ -443,7 +464,7 @@ def _review_event(
         id=None,
         source="review",
         timestamp=ts,
-        task_ids=_extract_task_ids(title, branch),
+        task_ids=_extract_task_ids(title, branch, allow_leading_id=True),
         repo=repo,
         pr_num=pr.get("number", 0),
         branch=branch,
@@ -468,7 +489,7 @@ def _comment_event(
         id=None,
         source="comment",
         timestamp=ts,
-        task_ids=_extract_task_ids(title, ""),
+        task_ids=_extract_task_ids(title, "", allow_leading_id=True),
         repo=repo,
         pr_num=item.get("number", 0),
         subject=title,
