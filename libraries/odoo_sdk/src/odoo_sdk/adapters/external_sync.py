@@ -19,10 +19,13 @@ rather than raising (the Google pullers are the exception — see below).
 
 ``merge`` events are stored for audit only: a merge is a point-in-time release
 marker, not a work span, so it is the one ingested source excluded from derived
-sessions (see :data:`odoo_sdk.state.db._SESSION_SOURCE_PREDICATE`). Every other
-source participates — ``commit``/``chatter`` as the development family and
-``review``/``comment`` as the gap-windowed review family (#396); a window of
-purely review-family events is labeled "Review".
+sessions (see :data:`odoo_sdk.state.db._SESSION_SOURCE_PREDICATE`). Opening a
+PR, by contrast, IS billable work — assembling and describing the change is at
+least a review's worth of effort — so each authored PR also mints a
+``pr_opened`` event at ``createdAt`` (#656). Every non-merge source
+participates — ``commit``/``chatter`` as the development family and
+``review``/``comment``/``pr_opened`` as the gap-windowed review family (#396,
+#656); a window of purely review-family events is labeled "Review".
 """
 
 from __future__ import annotations
@@ -372,13 +375,43 @@ def _gh_authored_prs(login: str) -> Optional[list[dict]]:
     )
 
 
-def _pr_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
-    """Build a ``merge`` (audit) event for one authored PR, or None.
+def _pr_opened_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
+    """Build a billable ``pr_opened`` event for one authored PR, or None (#656).
 
-    Timestamped at ``mergedAt`` when merged, else ``createdAt``. Skipped when
-    neither timestamp exists or it falls outside the window.
+    Opening a PR is review-family work (assembling the diff, writing the
+    description), so it derives windowed sessions exactly like a submitted
+    review. Timestamped at ``createdAt``; skipped when the timestamp is missing
+    or falls outside the window. The external id ``gh:pr:<n>:opened`` is a NEW
+    shape, distinct from the merge event's ``gh:pr:<n>``, so a historical
+    re-resync inserts opened events even for PRs already known as merge rows.
     """
-    ts = _ts_in_window(pr.get("mergedAt") or pr.get("createdAt"), ctx.since)
+    ts = _ts_in_window(pr.get("createdAt"), ctx.since)
+    if ts is None:
+        return None
+    number = pr["number"]
+    title = pr.get("title", "")
+    branch = pr.get("headRefName", "")
+    return EventRecord(
+        id=None,
+        source="pr_opened",
+        timestamp=ts,
+        task_ids=_extract_task_ids(title, branch),
+        repo=ctx.label,
+        pr_num=number,
+        branch=branch,
+        subject=title,
+        external_id=f"gh:pr:{number}:opened",
+    )
+
+
+def _pr_merged_event(pr: dict, ctx: _GithubCtx) -> Optional[EventRecord]:
+    """Build a ``merge`` (audit-only) event for one MERGED authored PR, or None.
+
+    Only minted when ``mergedAt`` is set, and timestamped there; skipped when it
+    falls outside the window. The external id ``gh:pr:<n>`` is unchanged from
+    the pre-#656 combined event, so re-resyncs dedupe against existing rows.
+    """
+    ts = _ts_in_window(pr.get("mergedAt"), ctx.since)
     if ts is None:
         return None
     number = pr["number"]
@@ -539,12 +572,22 @@ def _github_identity_events(
     Returns None only when the authored-PR list itself cannot be read (the one
     condition that skips the whole puller); the search-backed collectors degrade
     to empty lists so one unreachable search never drops the other sources.
+
+    Each authored PR yields up to TWO events (#656): a billable ``pr_opened``
+    event at ``createdAt`` and — merged PRs only — an audit ``merge`` event at
+    ``mergedAt``. Side benefit: an unmerged PR no longer mints ``gh:pr:<n>`` at
+    open time, so for PRs first captured after this change the later merge event
+    is no longer blocked by an already-inserted open-time row — the
+    stale-merge-timestamp limitation is fixed going forward.
     """
     prs = _gh_authored_prs(login)
     if prs is None:
         return None
     events: list[EventRecord] = [
-        event for pr in prs if (event := _pr_event(pr, ctx)) is not None
+        event
+        for pr in prs
+        for builder in (_pr_opened_event, _pr_merged_event)
+        if (event := builder(pr, ctx)) is not None
     ]
     events.extend(_own_review_events(ctx, login, prs))
     events.extend(_others_review_events(ctx, login))
@@ -562,11 +605,12 @@ def sync_github(
     """Reconcile authored GitHub activity into the ``events`` table (issue #378).
 
     For every configured author identity (default the active login) and bounded by
-    the resync window, stores: all authored PRs (opened as well as merged) as
-    ``merge`` audit events; the user's reviews on their own AND others' PRs as
-    ``review`` events; and authored issue/PR comments as ``comment`` events. Task
-    ids are validated in one batch when ``client`` is supplied. Idempotent.
-    Returns ``{"inserted": n}`` or ``{"skipped": reason}``.
+    the resync window, stores: every authored PR as a billable ``pr_opened``
+    event at creation time plus — merged PRs only — a ``merge`` audit event
+    (#656); the user's reviews on their own AND others' PRs as ``review``
+    events; and authored issue/PR comments as ``comment`` events. Task ids are
+    validated in one batch when ``client`` is supplied. Idempotent. Returns
+    ``{"inserted": n}`` or ``{"skipped": reason}``.
     """
     login = _gh_login()
     if login is None:

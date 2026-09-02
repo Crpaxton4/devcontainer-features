@@ -347,14 +347,23 @@ class TestSyncGithub(unittest.TestCase):
         state = _tmp_state()
         with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
             result = ex.sync_github(state, _config(), now=_NOW)
-        # merge(7) + merge(8, opened) + own review(55) + others review(77) + comment(111)
-        self.assertEqual(result, {"inserted": 5})
+        # opened(7) + merge(7) + opened(8) + own review(55) + others review(77)
+        # + comment(111). PR 8 is unmerged, so it mints NO merge event (#656).
+        self.assertEqual(result, {"inserted": 6})
         by_ext = {e.external_id: e for e in state.get_events()}
         self.assertEqual(set(by_ext), {
-            "gh:pr:7", "gh:pr:8", "gh:review:55", "gh:review:77", "gh:comment:111",
+            "gh:pr:7:opened", "gh:pr:7", "gh:pr:8:opened",
+            "gh:review:55", "gh:review:77", "gh:comment:111",
         })
+        # A merged PR yields BOTH a billable pr_opened event at createdAt and an
+        # audit-only merge event at mergedAt (#656).
+        self.assertEqual(by_ext["gh:pr:7:opened"].source, "pr_opened")
+        self.assertEqual(by_ext["gh:pr:7:opened"].timestamp.day, 1)
+        self.assertEqual(by_ext["gh:pr:7"].source, "merge")
+        self.assertEqual(by_ext["gh:pr:7"].timestamp.day, 2)
         # Opened (unmerged) PR is captured via --state all, timestamped at createdAt.
-        self.assertEqual(by_ext["gh:pr:8"].task_ids, ["55555"])
+        self.assertEqual(by_ext["gh:pr:8:opened"].source, "pr_opened")
+        self.assertEqual(by_ext["gh:pr:8:opened"].task_ids, ["55555"])
         # Comment is a new source, attributed via the issue title, on its own repo.
         comment = by_ext["gh:comment:111"]
         self.assertEqual(comment.source, "comment")
@@ -395,9 +404,11 @@ class TestSyncGithub(unittest.TestCase):
         cfg = _config(resync_authors="octo-a octo-b")
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, cfg, now=_NOW)
-        self.assertEqual(result, {"inserted": 2})
+        # Each identity's merged PR mints an opened AND a merge event (#656).
+        self.assertEqual(result, {"inserted": 4})
         self.assertEqual(
-            {e.external_id for e in state.get_events()}, {"gh:pr:1", "gh:pr:2"}
+            {e.external_id for e in state.get_events()},
+            {"gh:pr:1:opened", "gh:pr:1", "gh:pr:2:opened", "gh:pr:2"},
         )
 
     def test_search_results_without_repository_are_skipped(self) -> None:
@@ -456,9 +467,11 @@ class TestSyncGithub(unittest.TestCase):
         ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
             result = ex.sync_github(state, _config(), now=_NOW)
-        # Only the merge event is stored; own-PR reviews are a clean no-op.
-        self.assertEqual(result, {"inserted": 1})
-        self.assertEqual([e.source for e in state.get_events()], ["merge"])
+        # Only the PR's own events are stored; own-PR reviews are a clean no-op.
+        self.assertEqual(result, {"inserted": 2})
+        self.assertEqual(
+            {e.source for e in state.get_events()}, {"pr_opened", "merge"}
+        )
 
 
 class _FakeClient:
@@ -551,9 +564,15 @@ class TestParsingAndGuards(unittest.TestCase):
         with patch.object(ex.subprocess, "run", _fake_run([(_has("api"), "not json")])):
             self.assertIsNone(ex._gh_json(["gh", "api", "x"]))
 
-    def test_pr_event_skips_without_timestamp(self) -> None:
+    def test_pr_opened_event_skips_without_created_at(self) -> None:
         ctx = ex._GithubCtx(label="o/r", slug="o/r", since=_NOW.replace(year=2026, month=1))
-        self.assertIsNone(ex._pr_event({"number": 1, "mergedAt": None}, ctx))
+        self.assertIsNone(ex._pr_opened_event({"number": 1, "createdAt": None}, ctx))
+
+    def test_pr_merged_event_skips_unmerged_pr(self) -> None:
+        # An unmerged PR mints NO merge event — createdAt is no fallback (#656).
+        ctx = ex._GithubCtx(label="o/r", slug="o/r", since=_NOW.replace(year=2026, month=1))
+        pr = {"number": 1, "mergedAt": None, "createdAt": "2026-07-01T09:00:00Z"}
+        self.assertIsNone(ex._pr_merged_event(pr, ctx))
 
     def test_review_event_skips_without_submitted_at(self) -> None:
         pr = {"number": 1, "title": "t", "headRefName": "b"}

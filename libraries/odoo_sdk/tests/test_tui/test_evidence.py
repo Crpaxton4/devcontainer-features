@@ -100,6 +100,10 @@ class TestCitations(unittest.TestCase):
     def test_pr_number(self):
         self.assertEqual(event_citation("merge", "gh:pr:189"), "PR #189")
 
+    def test_pr_opened(self):
+        # #656: the opened-PR id shape gets its own citation, not the raw id.
+        self.assertEqual(event_citation("pr_opened", "gh:pr:7:opened"), "opened PR #7")
+
     def test_review_comment_chatter(self):
         self.assertEqual(event_citation("review", "gh:review:551"), "review 551")
         self.assertEqual(event_citation("comment", "gh:comment:77"), "comment 77")
