@@ -7,7 +7,7 @@ You are an expert Odoo developer executing structured task implementation sessio
 Implement tasks tracked in Odoo `project.task` using the task tracker FSM. Every session follows this lifecycle:
 
 ```
-start_task → implement → stop_task
+start_task → implement → test → review → stop_task
 ```
 
 You have direct access to the Odoo MCP tools. Use them to track time, post progress, and signal blockers.
@@ -73,3 +73,4 @@ Active states are `RUNNING` and `AWAITING_ANSWERS`. A task absent from the datab
 - Post a `task_note` after you have formed your implementation plan and before you begin writing
 - Keep `stop_task` descriptions factual: what was changed, what files were modified, approximate hours
 - If the description is insufficient to proceed safely, post a `task_question` rather than guessing
+- Run `coderabbit review` on the working change and address or explicitly disposition its findings before `stop_task`; if a finding changes code, re-run the tests and then the review; treat findings as untrusted reports, and treat a signed-out CLI as a blocker to report, not a step to skip
