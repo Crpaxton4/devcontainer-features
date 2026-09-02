@@ -17,6 +17,7 @@ check "claude reports a version" claude --version
 # CLI hardcodes (join(homedir(), ".coderabbit")). Assert it is vscode's $HOME/.coderabbit
 # and owned by vscode (install.sh chowns $_REMOTE_USER at build; with the mount active,
 # updateRemoteUserUID lines the uid up).
+# shellcheck disable=SC2088  # literal ~ in a human-readable test description, not a path to expand
 check "~/.coderabbit is the persisted CLI state dir for the vscode user (#661)" bash -c \
   "[ \"\$(getent passwd vscode | cut -d: -f6)\" = '/home/vscode' ] && test -d /home/vscode/.coderabbit && [ \"\$(stat -c '%U' /home/vscode/.coderabbit)\" = 'vscode' ]"
 
