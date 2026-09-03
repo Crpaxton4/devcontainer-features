@@ -1,5 +1,18 @@
 # Changelog
 
+## [6.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.0.0...personal-features-v6.1.0) (2026-09-03)
+
+
+### Features
+
+* **odoo-sdk:** add mail.activity scheduling, listing, and completion tools ([#681](https://github.com/Crpaxton4/devcontainer-features/issues/681)) ([04f6d11](https://github.com/Crpaxton4/devcontainer-features/commit/04f6d119da9673db127046a8e5f21f7323ff6ac8)), closes [#677](https://github.com/Crpaxton4/devcontainer-features/issues/677)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** attribute bare leading task ids on billable pr_opened events ([#679](https://github.com/Crpaxton4/devcontainer-features/issues/679)) ([2c84259](https://github.com/Crpaxton4/devcontainer-features/commit/2c8425994361a4633c73cbbef92ffaf93db5d727))
+* **odoo-sdk:** make profiling archive names unique by construction ([#682](https://github.com/Crpaxton4/devcontainer-features/issues/682)) ([94fc27e](https://github.com/Crpaxton4/devcontainer-features/commit/94fc27ea405149a6e2d7d3c7302a19905296defd))
+
 ## [6.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v5.0.0...personal-features-v6.0.0) (2026-09-02)
 
 
