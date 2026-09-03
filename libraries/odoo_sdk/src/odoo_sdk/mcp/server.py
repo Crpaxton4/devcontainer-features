@@ -3,6 +3,7 @@ import contextlib
 import cProfile
 import functools
 import inspect
+import itertools
 import logging
 import os
 import subprocess
@@ -46,6 +47,20 @@ PROFILE_SUBDIR = "odoo-sdk-profiles"
 #: oldest archives beyond this count are deleted, so an enabled profiler cannot
 #: grow the temp dir without bound over a container's lifetime.
 PROFILE_KEEP_LAST = 20
+
+#: Zero-padding width for the per-process dump sequence embedded in profiling
+#: filenames. Six digits covers a million dumps in one process before the
+#: rendered counter outgrows the field; past that it simply widens (it never
+#: wraps, so uniqueness never lapses) and only the lexicographic tiebreak
+#: degrades -- and only between two dumps that also landed in the same
+#: wall-clock second and the same nanosecond bucket, a million dumps apart.
+PROFILE_SEQ_WIDTH = 6
+
+#: Monotonic per-process dump counter, the component that actually makes each
+#: profiling filename unique. ``next()`` on an :func:`itertools.count` is a
+#: single atomic bytecode under the GIL, so the profiled wrapper can be entered
+#: concurrently without a lock and still hand out strictly increasing values.
+_profile_seq = itertools.count()
 
 #: Default server identity advertised to MCP clients. The server class is
 #: otherwise registry-generic, so this is the one Odoo-specific string; a
@@ -567,13 +582,26 @@ def _dump_profile(profiler: cProfile.Profile, tool_name: str) -> str:
     :rtype: str
     """
     directory = _profile_dir()
-    # Zero-padded nanoseconds keep each call's archive unique, and make same-tool
-    # filenames sort in creation order even within one wall-clock second.
-    timestamp = (
-        f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
+    # The clock alone cannot carry uniqueness: ``time.time_ns()`` reports
+    # nanoseconds but is only as fine as the platform tick (~15.6 ms on
+    # Windows), so back-to-back dumps read an identical value and would
+    # overwrite each other. The trailing per-process sequence is what actually
+    # guarantees distinct names -- it advances on every call regardless of the
+    # clock. Sort order survives because every component is fixed-width and
+    # ordered coarse-to-fine: seconds, then nanoseconds, then the counter. The
+    # counter is the tiebreak exactly when the two clock fields collide, which
+    # is the coarse-tick case above, and zero-padding to PROFILE_SEQ_WIDTH keeps
+    # its lexicographic order equal to its numeric order. That matters beyond
+    # naming: _prune_profiles breaks st_mtime_ns ties on the filename, so a
+    # discriminator that did not sort in creation order (a random uuid4 hex,
+    # say) would make pruning delete the wrong archives.
+    token = (
+        f"{time.strftime('%Y%m%d_%H%M%S')}"
+        f"_{time.time_ns() % 1_000_000_000:09d}"
+        f"_{next(_profile_seq):0{PROFILE_SEQ_WIDTH}d}"
     )
-    prof_path = directory / f"{tool_name}_{timestamp}.prof"
-    zip_path = directory / f"odoo_profile_{tool_name}_{timestamp}.zip"
+    prof_path = directory / f"{tool_name}_{token}.prof"
+    zip_path = directory / f"odoo_profile_{tool_name}_{token}.zip"
 
     profiler.dump_stats(str(prof_path))
     try:

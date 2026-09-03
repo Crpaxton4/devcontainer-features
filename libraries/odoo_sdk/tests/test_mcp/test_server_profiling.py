@@ -136,6 +136,27 @@ class TestDumpProfile(unittest.TestCase):
             zips = _zips(tmp)
         self.assertEqual(len(zips), PROFILE_KEEP_LAST)
 
+    def test_names_stay_unique_and_ordered_under_a_frozen_clock(self):
+        """Uniqueness must not depend on clock resolution.
+
+        A coarse platform tick (~15.6 ms on Windows) makes consecutive
+        ``time.time_ns()`` reads identical, so this pins the worst case by
+        freezing the clock outright: the names must still be distinct, and
+        their sorted order must still match creation order, because
+        :func:`_prune_profiles` breaks ``st_mtime_ns`` ties on the filename.
+        """
+        with TemporaryDirectory() as tmp, patch(
+            "tempfile.gettempdir", return_value=tmp
+        ), patch("odoo_sdk.mcp.server.time.time_ns", return_value=1_234_567_890), patch(
+            "odoo_sdk.mcp.server.time.strftime", return_value="20240101_000000"
+        ):
+            created = [
+                Path(_dump_profile(self._profiler(), "calc")).name
+                for _ in range(PROFILE_KEEP_LAST)
+            ]
+        self.assertEqual(len(set(created)), PROFILE_KEEP_LAST)
+        self.assertEqual(sorted(created), created)
+
 
 class TestPruneProfiles(unittest.TestCase):
     def _seed(self, directory: Path, count: int) -> list[str]:
