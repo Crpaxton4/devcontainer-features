@@ -9,6 +9,7 @@ node_modules/
 **/__pycache__/
 *.py[cod]
 .venv/
+libraries/odoo_sdk/build/
 libraries/odoo_sdk/docs/build/
 libraries/odoo_sdk/docs/source/api/
 .hypothesis/
