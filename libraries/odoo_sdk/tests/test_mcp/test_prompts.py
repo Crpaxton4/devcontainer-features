@@ -679,8 +679,10 @@ class TestSkillPromptParity(unittest.TestCase):
     #: maintained upstream copy now lives in the ``odoo-dev`` Claude Code plugin
     #: (``odoo-dev:<name>``). The MCP prompt surface is deliberately unchanged;
     #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695;
-    #: fibonacci_estimate: #696.
-    RETIRED_SKILLS = frozenset({"discovery_notes", "fibonacci_estimate"})
+    #: fibonacci_estimate: #696; odoo_code_review: #697.
+    RETIRED_SKILLS = frozenset(
+        {"discovery_notes", "fibonacci_estimate", "odoo_code_review"}
+    )
 
     def _skill_body(self, name: str) -> str:
         """Return a SKILL.md stripped exactly as the port strips it."""
