@@ -6,7 +6,7 @@ SPHINX_SOURCE_DIR = docs/source
 SPHINX_BUILD_DIR  = docs/build
 PYTHON_CMD        = uv run python
 
-.PHONY: test coverage static mutation report quality all clean help
+.PHONY: test coverage format static mutation report quality all clean help
 
 # Default help target
 help:
@@ -22,7 +22,8 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@echo "  make coverage    - run coverage"
-	@echo "  make static      - run static analysis (radon + complexipy)"
+	@echo "  make format      - reformat src/tests/tools with black"
+	@echo "  make static      - run static analysis (black + radon + complexipy)"
 	@echo "  make mutation    - run mutation testing (cosmic-ray)"
 	@echo "  make report      - generate unified quality-report.md"
 	@echo "  make quality     - full pipeline (coverage + static + mutation + report)"
@@ -49,6 +50,14 @@ docs: linkcheck html
 # ─────────────────────────────────────────────
 coverage:
 	$(PYTHON_CMD) tools/coverage.py
+
+# ─────────────────────────────────────────────
+# Formatting
+# ─────────────────────────────────────────────
+
+# The fix half of the `black --check` gate inside `make static`.
+format:
+	uv run --group static-analysis black src tests tools
 
 # ─────────────────────────────────────────────
 # Static analysis
