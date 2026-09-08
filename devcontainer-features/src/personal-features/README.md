@@ -240,11 +240,15 @@ untouched (and a warning printed) rather than overwritten.
 
 ## Odoo consulting skills (two delivery paths)
 
-This Feature ships the owner's Odoo consulting playbook — currently weekly
-client status reports (`client-status-report`). The source of truth for every
-skill's content is `skills/<name>/SKILL.md` in this directory (see
-`skills/README.md`), and the content reaches an agent by two independent,
-deliberately-parallel paths:
+This Feature no longer ships any Odoo consulting skills. The playbook that
+lived here — quote drafting, Fibonacci estimating, discovery capture, solution
+design, and Odoo code review — moved to the `odoo-dev` plugin, which bundles
+each one as `odoo-dev:<name>` (#695-#699); weekly client status reporting was
+retired outright (#700). `skills/` therefore holds only its README, and the
+delivery machinery below stays in place for whatever ships next.
+
+Historically the content reached an agent by two independent,
+deliberately-parallel paths, and the second is still live:
 
 1. **Mounted `SKILL.md` files (Claude Code only).** `install.sh` stages the
    `skills/` tree at build time to `/usr/local/share/personal-features/skills`
@@ -255,8 +259,8 @@ deliberately-parallel paths:
    skill-discovery / slash-command UX, but only inside a live container with this
    Feature installed and a working bind mount.
 
-2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each shipped
-   skill is *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
+2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
+   *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
    (`libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py`, one module
    per skill, underscored — `<skill-name>` → `<skill_name>`). Each module embeds
    its `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
@@ -264,16 +268,21 @@ deliberately-parallel paths:
    registered through the same `@builtin_prompt` decorator as `implement_task`
    and `report_incident`. Because the prompts ship inside the SDK package, any
    MCP client gets them for free — no mount, no `postCreateCommand`, no live
-   personal-features container required.
+   personal-features container required. **All six prompt modules outlived their
+   skills**: every `SKILL.md` under `skills/` is now gone, so each module's
+   embedded body is the only copy left in this repo. `test_prompts.py` records
+   them in `RETIRED_SKILLS` and asserts none of them has a `SKILL.md` to drift
+   from.
 
-Both paths are kept in parallel on purpose: the mount path retains Claude Code's
-skill UX, and the MCP-prompt path removes the mount fragility and reaches
-non-Claude-Code clients. The trade-off is a manual sync — the prompt modules
-embed the `SKILL.md` bodies as string literals, so **an edit to a `SKILL.md`
-must be mirrored into its prompt module** (the two are not auto-generated from
-each other). If Claude Code's mounted-skill UX is ever retired, the
-`install.sh` skill-staging block and `sync-claude-skills` can be removed and the
-MCP-prompt path becomes the sole source.
+With no skills left to stage, the MCP-prompt path is currently the only one
+delivering this content. The mount path is retained rather than removed: it is
+name-agnostic, handles the empty tree cleanly, and is what any future
+feature-owned skill would use. The old manual-sync caveat no longer applies —
+there is no `SKILL.md` left to mirror into a prompt module.
+
+Note that `sync-claude-skills` only ever replaces the names it currently ships
+and never deletes others, so a machine that already synced these skills keeps
+its `~/.claude/skills/<name>` copies until they are removed by hand.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 

@@ -1,11 +1,21 @@
 """MCP ``client_status_report`` prompt surface.
 
-Ports the personal-features ``client-status-report`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/client-status-report/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Ports the personal-features ``client-status-report`` skill to a built-in MCP
+prompt, so any MCP client gets it without the mounted-SKILL.md delivery path.
+The prompt takes no arguments and returns the skill's instructional body
+verbatim for the caller to act on with its own (read-only) Odoo tool calls; it
+never calls into the command registry itself.
+
+Source of truth: the ``_BODY`` literal below. The packaged Claude skill it was
+ported from was retired in #700 - the ``odoo-dev`` plugin dropped its copy
+first, so no twin remains - deleting
+``devcontainer-features/src/personal-features/skills/client-status-report/``.
+This module is therefore the only maintained copy of the workflow; edit it
+here. The retired skill is recoverable from the ``odoo-dev`` plugin repo
+(``git show 4635e48^:skills/client-status-report/SKILL.md``) or from the backup
+``backups/odoo-dev-repo-2026-09-07T193706Z/odoo-dev-content.tar.gz``. The
+read-only Odoo tools it drives (``timesheet_summary``, ``unbilled_hours``,
+``task_aging``) are unaffected.
 """
 
 from odoo_sdk.commands import Registry
