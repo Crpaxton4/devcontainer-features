@@ -350,8 +350,12 @@ def _dedupe_shared_stores(repos: list[Path]) -> list[Path]:
     for root in repos:
         common = _run_capture(
             [
-                "git", "-C", str(root), "rev-parse",
-                "--path-format=absolute", "--git-common-dir",
+                "git",
+                "-C",
+                str(root),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
             ]
         )
         key = common or str(root)
@@ -374,8 +378,14 @@ def _git_log(
     """
     pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%D"))
     cmd = [
-        "git", "-C", str(root), "log", "--all", f"--pretty={pretty}",
-        f"--since={since.isoformat()}", f"--until={until.isoformat()}",
+        "git",
+        "-C",
+        str(root),
+        "log",
+        "--all",
+        f"--pretty={pretty}",
+        f"--since={since.isoformat()}",
+        f"--until={until.isoformat()}",
     ]
     cmd.extend(f"--author={email}" for email in emails)
     return _run_capture(cmd)
@@ -570,10 +580,17 @@ def _gh_authored_prs(login: str, window: _Window) -> Optional[list[dict]]:
     """
     return _gh_json(
         [
-            "gh", "search", "prs", "--author", login,
-            "--updated", f">={window.since.date().isoformat()}",
-            "--limit", str(_AUTHORED_SEARCH_LIMIT),
-            "--json", "number,title,repository,state,createdAt,updatedAt",
+            "gh",
+            "search",
+            "prs",
+            "--author",
+            login,
+            "--updated",
+            f">={window.since.date().isoformat()}",
+            "--limit",
+            str(_AUTHORED_SEARCH_LIMIT),
+            "--json",
+            "number,title,repository,state,createdAt,updatedAt",
         ]
     )
 
@@ -585,9 +602,21 @@ def _gh_pr_detail(slug: str, number: int) -> dict:
     mirroring :func:`_collect_review_family`'s per-parent tolerance: one
     unreadable PR never drops the rest of the capture.
     """
-    return _gh_json(
-        ["gh", "pr", "view", str(number), "-R", slug, "--json", "headRefName,mergedAt"]
-    ) or {}
+    return (
+        _gh_json(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(number),
+                "-R",
+                slug,
+                "--json",
+                "headRefName,mergedAt",
+            ]
+        )
+        or {}
+    )
 
 
 def _pr_opened_event(pr: dict, window: _Window) -> Optional[EventRecord]:
@@ -725,9 +754,10 @@ def _collect_review_family(
         # --paginate: an unpaginated gh api returns only the FIRST page (30,
         # oldest first), silently dropping the newest — i.e. in-window —
         # reviews/comments on long threads (#653).
-        subs = _gh_json(
-            ["gh", "api", "--paginate", api_path(api_slug, parent["number"])]
-        ) or []
+        subs = (
+            _gh_json(["gh", "api", "--paginate", api_path(api_slug, parent["number"])])
+            or []
+        )
         events.extend(
             event
             for sub in subs
@@ -761,14 +791,24 @@ def _gh_reviewed_prs(login: str, window: _Window) -> list[dict]:
     was necessarily updated at/after the review, so the filter can lose nothing
     that :func:`_review_event`'s window check would have kept.
     """
-    return _gh_json(
-        [
-            "gh", "search", "prs", "--reviewed-by", login,
-            "--updated", f">={window.since.date().isoformat()}",
-            "--limit", str(_FAMILY_SEARCH_LIMIT),
-            "--json", "number,title,repository",
-        ]
-    ) or []
+    return (
+        _gh_json(
+            [
+                "gh",
+                "search",
+                "prs",
+                "--reviewed-by",
+                login,
+                "--updated",
+                f">={window.since.date().isoformat()}",
+                "--limit",
+                str(_FAMILY_SEARCH_LIMIT),
+                "--json",
+                "number,title,repository",
+            ]
+        )
+        or []
+    )
 
 
 def _others_review_events(
@@ -798,25 +838,31 @@ def _gh_commented_issues(login: str, window: _Window) -> list[dict]:
     ``--updated`` bounds the search server-side, mirroring
     :func:`_gh_reviewed_prs` (a commented item was updated by the comment).
     """
-    return _gh_json(
-        [
-            "gh", "search", "issues", "--commenter", login,
-            "--updated", f">={window.since.date().isoformat()}",
-            "--limit", str(_FAMILY_SEARCH_LIMIT),
-            "--json", "number,title,repository",
-        ]
-    ) or []
+    return (
+        _gh_json(
+            [
+                "gh",
+                "search",
+                "issues",
+                "--commenter",
+                login,
+                "--updated",
+                f">={window.since.date().isoformat()}",
+                "--limit",
+                str(_FAMILY_SEARCH_LIMIT),
+                "--json",
+                "number,title,repository",
+            ]
+        )
+        or []
+    )
 
 
 def _comment_events(
     window: _Window, login: str, commented: list[dict]
 ) -> list[EventRecord]:
     """Return ``login``'s authored issue/PR comments across repos (issue #378 #3)."""
-    parents = [
-        (item, repo, repo)
-        for item in commented
-        if (repo := _repo_of(item))
-    ]
+    parents = [(item, repo, repo) for item in commented if (repo := _repo_of(item))]
     return _collect_review_family(
         parents,
         login,
@@ -1198,9 +1244,7 @@ def _token_is_current(creds: dict, now: datetime) -> bool:
     return _parse_iso_utc(expiry) > now
 
 
-def _refresh_access_token(
-    creds: dict, path: Path, transport: GoogleTransport
-) -> str:
+def _refresh_access_token(creds: dict, path: Path, transport: GoogleTransport) -> str:
     """Exchange the refresh token for a fresh access token via a token POST."""
     refresh_token = creds.get("refresh_token")
     client_id = creds.get("client_id")
@@ -1395,7 +1439,10 @@ def _desired_ticks(
     if span is None:
         return []
     start, end = span
-    return [(_tick_external_id(series_id, m), m) for m in _expand_ticks(start, end, tick_mins)]
+    return [
+        (_tick_external_id(series_id, m), m)
+        for m in _expand_ticks(start, end, tick_mins)
+    ]
 
 
 def _propagate_task_ids(
@@ -1474,7 +1521,9 @@ def _reconcile_series(
     triage assignment). On ANY difference the whole existing series is deleted and
     the desired ticks inserted fresh, so no orphan or duplicate can survive.
     """
-    desired = _desired_ticks(event, series_id, config.calendar_tick_mins) if event else []
+    desired = (
+        _desired_ticks(event, series_id, config.calendar_tick_mins) if event else []
+    )
     if {row.external_id for row in existing_rows} == {ext for ext, _ in desired}:
         return 0
     stale_ids = [row.id for row in existing_rows if row.id is not None]

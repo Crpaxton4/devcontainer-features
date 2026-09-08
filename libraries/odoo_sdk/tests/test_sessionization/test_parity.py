@@ -60,9 +60,9 @@ def _python_billed_secs_per_task(db, config):
     )
     totals: dict[str, float] = {}
     for entry in entries:
-        totals[entry.task_id] = totals.get(entry.task_id, 0.0) + (
-            entry.end - entry.start
-        ).total_seconds()
+        totals[entry.task_id] = (
+            totals.get(entry.task_id, 0.0) + (entry.end - entry.start).total_seconds()
+        )
     return totals
 
 

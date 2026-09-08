@@ -21,9 +21,7 @@ from odoo_sdk.transport.errors import OdooTransportError
 from tests.support import make_state_db
 
 UTC = timezone.utc
-_HELPER = (
-    "odoo_sdk.commands.builtin.unlogged_time_report.unlogged_time_report"
-)
+_HELPER = "odoo_sdk.commands.builtin.unlogged_time_report.unlogged_time_report"
 
 
 def _config() -> LocalConfig:
@@ -120,9 +118,9 @@ def _state_with_sessions():
 
 
 def _run(state, client, **kwargs):
-    return UnloggedTimeReportCommand(
-        client, state=state, config=_config()
-    ).execute("2026-07-01", "2026-07-02", **kwargs)
+    return UnloggedTimeReportCommand(client, state=state, config=_config()).execute(
+        "2026-07-01", "2026-07-02", **kwargs
+    )
 
 
 class TestUnloggedTimeReport(unittest.TestCase):
@@ -333,9 +331,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         # One read, covering exactly the ids the logged side could not name.
         self.assertEqual(client.name_reads, [[202, 303]])
         names = {
-            row["task_id"]: row["task"]
-            for day in report["days"]
-            for row in day["rows"]
+            row["task_id"]: row["task"] for day in report["days"] for row in day["rows"]
         }
         self.assertEqual(names[101], "Task A")  # mined from the logged m2o pair
         self.assertEqual(names[202], "Task B")
@@ -408,9 +404,7 @@ class TestUnloggedTimeReportMcpTool(unittest.TestCase):
 
         class _Reg:
             def __getitem__(self, name):
-                return UnloggedTimeReportCommand(
-                    client, state=state, config=_config()
-                )
+                return UnloggedTimeReportCommand(client, state=state, config=_config())
 
         tool = make_unlogged_time_report_tool(_Reg())
         report = tool("2026-07-01", "2026-07-02")

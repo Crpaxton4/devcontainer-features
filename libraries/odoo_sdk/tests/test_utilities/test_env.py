@@ -40,9 +40,12 @@ class TestAssertSdkConfigured(unittest.TestCase):
         self.assertIn("Missing Odoo connection settings", str(ctx.exception))
 
     def test_raises_tracker_state_missing_when_db_absent(self):
-        with self._patch_config(), patch(
-            f"{_MOD}.assert_tracker_db_present",
-            side_effect=TrackerStateMissingError("no tracker database at /nope"),
+        with (
+            self._patch_config(),
+            patch(
+                f"{_MOD}.assert_tracker_db_present",
+                side_effect=TrackerStateMissingError("no tracker database at /nope"),
+            ),
         ):
             with self.assertRaises(TrackerStateMissingError):
                 assert_sdk_configured()
@@ -50,8 +53,9 @@ class TestAssertSdkConfigured(unittest.TestCase):
     def test_connection_settings_checked_before_tracker_db(self):
         """Settings resolve first, so the cheaper/more common failure wins."""
         db_guard = MagicMock()
-        with self._patch_config(ok=False), patch(
-            f"{_MOD}.assert_tracker_db_present", db_guard
+        with (
+            self._patch_config(ok=False),
+            patch(f"{_MOD}.assert_tracker_db_present", db_guard),
         ):
             with self.assertRaises(ValueError):
                 assert_sdk_configured()
@@ -64,8 +68,10 @@ class TestAssertSdkConfigured(unittest.TestCase):
         pass — this is exactly the "fully provisioned non-Odoo container" that
         #642 reported as wrongly refused.
         """
-        with patch.dict("os.environ", {}, clear=True), self._patch_config(), patch(
-            f"{_MOD}.assert_tracker_db_present"
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            self._patch_config(),
+            patch(f"{_MOD}.assert_tracker_db_present"),
         ):
             assert_sdk_configured()  # must not raise
 
@@ -77,18 +83,22 @@ class TestAssertSdkConfigured(unittest.TestCase):
 
     def test_real_config_and_db_paths_are_wired(self):
         """End-to-end over the real helpers, with only the filesystem faked."""
-        with patch.dict(
-            "os.environ",
-            {
-                "ODOO_URL": "https://example.odoo.com",
-                "ODOO_DB": "example",
-                "ODOO_USERNAME": "bot",
-                "ODOO_PASSWORD": "secret",
-                "ODOO_SDK_CONFIG": "/nonexistent/odoo-sdk.toml",
-            },
-            clear=True,
-        ), patch(
-            "odoo_sdk.state.db.tracker_db_path", return_value=Path("/nonexistent/t.db")
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "ODOO_URL": "https://example.odoo.com",
+                    "ODOO_DB": "example",
+                    "ODOO_USERNAME": "bot",
+                    "ODOO_PASSWORD": "secret",
+                    "ODOO_SDK_CONFIG": "/nonexistent/odoo-sdk.toml",
+                },
+                clear=True,
+            ),
+            patch(
+                "odoo_sdk.state.db.tracker_db_path",
+                return_value=Path("/nonexistent/t.db"),
+            ),
         ):
             with self.assertRaises(TrackerStateMissingError) as ctx:
                 assert_sdk_configured()

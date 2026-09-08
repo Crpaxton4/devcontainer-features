@@ -72,7 +72,7 @@ def sanitize_description(text: str) -> str:
     """Return CSV-safe description text without the AI prefix marker."""
     text = text.strip()
     if text.startswith(AI_DESCRIPTION_PREFIX):
-        text = text[len(AI_DESCRIPTION_PREFIX):].strip()
+        text = text[len(AI_DESCRIPTION_PREFIX) :].strip()
     text = business_context(text, 300)
     text = re.sub(r'["\r\n,;]+', " ", text)
     return re.sub(r"\s+", " ", text).strip()

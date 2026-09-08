@@ -95,7 +95,9 @@ class TestOverlap(unittest.TestCase):
 
 class TestCitations(unittest.TestCase):
     def test_commit_sha_is_shortened(self):
-        self.assertEqual(event_citation("commit", "git:abcdef1234567890"), "commit abcdef1")
+        self.assertEqual(
+            event_citation("commit", "git:abcdef1234567890"), "commit abcdef1"
+        )
 
     def test_pr_number_legacy_unqualified(self):
         # Pre-#652 rows keep citing through the legacy unqualified id shape.
@@ -214,9 +216,7 @@ class TestBuildReviewCards(unittest.TestCase):
 
     def test_weak_single_event_no_logged(self):
         session = _session(1, "24648", (9, 0), (10, 0), events=[{"event_id": 10}])
-        cards = build_review_cards(
-            [session], {1: [_event(10)]}, {}, {}
-        )
+        cards = build_review_cards([session], {1: [_event(10)]}, {}, {})
         self.assertEqual(cards[0].confidence, WEAK)
         self.assertEqual(cards[0].logged_flag, "")
 
@@ -227,7 +227,11 @@ class TestBuildReviewCards(unittest.TestCase):
         events = {
             1: [
                 _event(10, external_id="git:aaa111"),
-                _event(11, external_id="git:bbb222", payload={"unvalidated_task_ids": ["99999"]}),
+                _event(
+                    11,
+                    external_id="git:bbb222",
+                    payload={"unvalidated_task_ids": ["99999"]},
+                ),
             ]
         }
         cards = build_review_cards([session], events, {}, {})

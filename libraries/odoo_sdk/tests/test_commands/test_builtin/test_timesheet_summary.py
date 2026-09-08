@@ -41,7 +41,9 @@ class TestTimesheetSummaryCommand(unittest.TestCase):
         client = MagicMock()
         with patch(_HELPER, return_value={}) as helper:
             TimesheetSummaryCommand(client).execute("2026-07-01", "2026-07-31")
-        self.assertEqual(helper.call_args.kwargs, {"group_by": "project", "only_mine": True})
+        self.assertEqual(
+            helper.call_args.kwargs, {"group_by": "project", "only_mine": True}
+        )
 
 
 def _server_tool(name, tool_fn):

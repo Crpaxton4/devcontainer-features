@@ -123,7 +123,9 @@ class TestPlanPruneGuard(unittest.TestCase):
         # An event shared between an uploaded (101) and an un-uploaded (202)
         # session is protected, and 101 is kept whole so its key cannot shift.
         shared = _event(self.state, ts=self.old, task_ids=("101", "202"))
-        tail = _event(self.state, ts=self.old + timedelta(seconds=GAP), task_ids=("101",))
+        tail = _event(
+            self.state, ts=self.old + timedelta(seconds=GAP), task_ids=("101",)
+        )
         _uploaded_session(self.state, shared, tail, task_id="101")
 
         plan = self._plan()
@@ -142,9 +144,7 @@ class TestExecutePrune(unittest.TestCase):
         e2 = _event(self.state, ts=self.old + timedelta(seconds=GAP))
         _uploaded_session(self.state, e1, e2, task_id="101")
         key = session_key(
-            self.state.derive_sessions_overlapping(
-                datetime.min, NOW, gap_secs=GAP
-            )[0]
+            self.state.derive_sessions_overlapping(datetime.min, NOW, gap_secs=GAP)[0]
         )
 
         plan = plan_prune(self.state, self.config, older_than_days=30, now=NOW)

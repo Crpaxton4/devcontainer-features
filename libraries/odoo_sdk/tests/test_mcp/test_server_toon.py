@@ -146,10 +146,11 @@ class TestToonComposesWithProfiling(unittest.TestCase):
         mock_mcp = MagicMock()
         added = []
         mock_mcp.add_tool.side_effect = added.append
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
-        ), patch.dict("os.environ", {server.TOON_OUTPUT_ENV: "1"}), patch(
-            "odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
+            patch.dict("os.environ", {server.TOON_OUTPUT_ENV: "1"}),
+            patch("odoo_sdk.mcp.server.FastMCP", return_value=mock_mcp),
         ):
             OdooMCPServer(
                 registry, explicit_tools={"dict_tool": _dict_tool}, profiling=True

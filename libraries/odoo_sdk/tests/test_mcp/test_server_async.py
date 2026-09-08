@@ -13,7 +13,6 @@ from odoo_sdk.commands.builtin import BUILTIN_COMMANDS, register_builtins
 from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.mcp.tools import build_explicit_tools
 
-
 #: Built-ins deliberately absent from the MCP surface. Surface selection is the
 #: consumer's concern, never the producer's (#499): the command registry knows
 #: nothing about the layers above it, and MCP names its tools explicitly in

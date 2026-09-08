@@ -26,9 +26,7 @@ class TestScoreGapContinuity(unittest.TestCase):
 
     def test_optimal_band_monotonic(self):
         cfg = one_day_config(b_low=8.0, b_high=10.0)
-        self.assertLess(
-            score_gap(8.5 * HOUR, 1, cfg), score_gap(9.5 * HOUR, 1, cfg)
-        )
+        self.assertLess(score_gap(8.5 * HOUR, 1, cfg), score_gap(9.5 * HOUR, 1, cfg))
 
     def test_optimal_band_linear_fallback_when_denom_zero(self):
         # k2 -> 0 makes expm1(k2 * span) == 0, exercising the linear fallback.

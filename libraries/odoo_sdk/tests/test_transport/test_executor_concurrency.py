@@ -173,7 +173,9 @@ class TestGuardedExecuteConcurrency(ConcurrencyCapTestCase):
         rendezvous = threading.Barrier(thread_count)
 
         class _BarrierExecutor(OdooExecutor):
-            def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+            def execute(
+                self, model: str, method: str, *args: Any, **kwargs: Any
+            ) -> Any:
                 rendezvous.wait(timeout=5.0)
                 return "ok"
 

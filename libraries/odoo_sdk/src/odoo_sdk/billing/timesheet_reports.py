@@ -39,9 +39,7 @@ def parse_date(value: Any, label: str) -> Any:
         ) from None
 
 
-def _read_group_hours(
-    client: OdooClient, domain: list, groupby: str
-) -> list[dict]:
+def _read_group_hours(client: OdooClient, domain: list, groupby: str) -> list[dict]:
     """Sum ``unit_amount`` over ``domain``, grouped by a single specifier."""
     return client.execute(
         "account.analytic.line",
@@ -110,8 +108,7 @@ def _project_partners(client: OdooClient, project_ids: list[int]) -> dict:
         fields=["partner_id"],
     )
     return {
-        rec["id"]: resolve_many2one(rec.get("partner_id")) or None
-        for rec in records
+        rec["id"]: resolve_many2one(rec.get("partner_id")) or None for rec in records
     }
 
 

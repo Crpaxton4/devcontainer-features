@@ -222,24 +222,30 @@ def _config(**overrides: Any) -> MagicMock:
     return config
 
 
-def _run_cli(argv: list[str], db: LocalStateClient, client: _RecordingOdooClient,
-             config: MagicMock) -> str:
+def _run_cli(
+    argv: list[str],
+    db: LocalStateClient,
+    client: _RecordingOdooClient,
+    config: MagicMock,
+) -> str:
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
-    with patch(f"{_MOD}.TaskStateDB", return_value=db), patch(
-        f"{_MOD}._assert_env"
-    ), patch(f"{_MOD}.OdooClient", return_value=client), patch(
-        f"{_MOD}.LocalConfig"
-    ) as local_config, patch("sys.stdout", out), patch(
-        "sys.argv", ["odoo-sdk", *argv]
+    with (
+        patch(f"{_MOD}.TaskStateDB", return_value=db),
+        patch(f"{_MOD}._assert_env"),
+        patch(f"{_MOD}.OdooClient", return_value=client),
+        patch(f"{_MOD}.LocalConfig") as local_config,
+        patch("sys.stdout", out),
+        patch("sys.argv", ["odoo-sdk", *argv]),
     ):
         local_config.load.return_value = config
         cli.main()
     return out.getvalue()
 
 
-def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
-             config: MagicMock) -> tuple[int, int]:
+def _run_tui(
+    db: LocalStateClient, client: _RecordingOdooClient, config: MagicMock
+) -> tuple[int, int]:
     """Drive the seeded DB through the TUI ``u`` upload helper.
 
     ``upload_sessions`` is patched only to inject ``config`` (the TUI helper does
@@ -251,9 +257,7 @@ def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
     from odoo_sdk.tui.app import TuiDeps, _upload_sessions
     from odoo_sdk.tui.window import DateWindow
 
-    registry = register_builtins(
-        Registry(client, state_client=db, config=config)
-    )
+    registry = register_builtins(Registry(client, state_client=db, config=config))
     deps = TuiDeps(registry=registry, client=client, store=db, config=config)
     window = DateWindow(date(2026, 6, 1), date(2026, 6, 7))
     sessions = registry["query_sessions"].execute(
@@ -261,9 +265,7 @@ def _run_tui(db: LocalStateClient, client: _RecordingOdooClient,
         end_date=window.end_iso(),
         include_events=True,
     )
-    with patch(
-        "odoo_sdk.billing.upload.LocalConfig.load", return_value=config
-    ):
+    with patch("odoo_sdk.billing.upload.LocalConfig.load", return_value=config):
         return _upload_sessions(deps, sessions, window)
 
 
@@ -272,7 +274,9 @@ class TestBillingEndToEnd(unittest.TestCase):
         db, client = _seed_db(), _RecordingOdooClient()
         _run_cli(
             ["upload", "--start", "2026-06-01", "--end", "2026-06-07"],
-            db, client, _config(),
+            db,
+            client,
+            _config(),
         )
         billed = client.billed_hours_by_task()
         self.assertEqual(billed[101], 0.25)  # single-event -> minimum

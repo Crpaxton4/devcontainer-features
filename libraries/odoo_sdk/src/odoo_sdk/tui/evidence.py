@@ -105,7 +105,9 @@ def overlap_seconds(
     return max(0.0, (earliest_end - latest_start).total_seconds())
 
 
-def compute_overlaps(sessions: Sequence[Mapping[str, Any]]) -> dict[int, tuple[Overlap, ...]]:
+def compute_overlaps(
+    sessions: Sequence[Mapping[str, Any]],
+) -> dict[int, tuple[Overlap, ...]]:
     """Return each session's cross-task wall-clock overlaps, keyed by session id.
 
     Partition-by-task (#352) still bills interleaved multitasking on two different

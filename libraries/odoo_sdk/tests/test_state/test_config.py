@@ -185,13 +185,15 @@ class TestLocalConfigEnvPrecedence(unittest.TestCase):
         self.assertEqual(config.connection["transport"], "json2")
 
     def test_partial_file_falls_back_to_env_then_default(self):
-        partial = "[connection]\nurl = \"https://file-only.example.com\"\n"
+        partial = '[connection]\nurl = "https://file-only.example.com"\n'
         with TemporaryDirectory() as tmp:
             path = _write(tmp, "config.toml", partial)
             env = {"ODOO_DB": "env-db"}
             with patch.dict("os.environ", env, clear=True):
                 config = LocalConfig.load(config_path=path)
-        self.assertEqual(config.connection["url"], "https://file-only.example.com")  # file
+        self.assertEqual(
+            config.connection["url"], "https://file-only.example.com"
+        )  # file
         self.assertEqual(config.connection["db"], "env-db")  # env
         self.assertEqual(config.connection["transport"], "xmlrpc")  # default
 
@@ -200,9 +202,7 @@ class TestLocalConfigDiscovery(unittest.TestCase):
     def test_env_var_overrides_config_path(self):
         with TemporaryDirectory() as tmp:
             path = _write(tmp, "config.toml", _TOML)
-            with patch.dict(
-                "os.environ", {LOCAL_CONFIG_ENV_VAR: path}, clear=True
-            ):
+            with patch.dict("os.environ", {LOCAL_CONFIG_ENV_VAR: path}, clear=True):
                 config = LocalConfig.load()
         self.assertEqual(config.connection["url"], "https://from-file.example.com")
 
@@ -214,9 +214,7 @@ class TestLocalConfigDiscovery(unittest.TestCase):
 
     def test_default_path_used_when_no_override(self):
         with patch.dict("os.environ", {}, clear=True):
-            with patch(
-                "odoo_sdk.state.config.Path.is_file", return_value=False
-            ):
+            with patch("odoo_sdk.state.config.Path.is_file", return_value=False):
                 config = LocalConfig.load()
         self.assertEqual(config.connection["transport"], "xmlrpc")
 

@@ -163,9 +163,7 @@ def _activity_type_domain(
     if predicate is not None:
         domain.append(predicate)
     if res_model is not None:
-        domain.extend(
-            ["|", ("res_model", "=", False), ("res_model", "=", res_model)]
-        )
+        domain.extend(["|", ("res_model", "=", False), ("res_model", "=", res_model)])
     return domain
 
 
@@ -206,7 +204,11 @@ def search_activity_types(
     predicate = ("name", "ilike", query) if query else None
     rows = _search_activity_type_rows(client, predicate, res_model, limit)
     return [
-        {"id": row["id"], "name": row["name"], "res_model": row.get("res_model") or None}
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "res_model": row.get("res_model") or None,
+        }
         for row in rows
     ]
 
@@ -220,7 +222,9 @@ def _no_type_match_error(
     caller that guessed "Todo" is told the type is spelled "To Do" instead of
     being left to guess again.
     """
-    available = [row["name"] for row in search_activity_types(client, res_model=res_model)]
+    available = [
+        row["name"] for row in search_activity_types(client, res_model=res_model)
+    ]
     suffix = f" Available types: {', '.join(available)}." if available else ""
     return ValueError(f"No activity type matches {name!r}.{suffix}")
 

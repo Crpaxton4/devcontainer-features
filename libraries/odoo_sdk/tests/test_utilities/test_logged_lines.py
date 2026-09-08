@@ -71,13 +71,13 @@ class TestLoggedHoursByTaskDay(unittest.TestCase):
         logged_hours_by_task_day(
             client, [24648], "2026-07-01", "2026-07-15", only_mine=False
         )
-        self.assertNotIn(
-            "hr.employee", [model for model, _, _, _ in client.calls]
-        )
+        self.assertNotIn("hr.employee", [model for model, _, _, _ in client.calls])
 
     def test_non_numeric_task_ids_yield_empty_without_querying(self):
         client = FakeClient([])
-        result = logged_hours_by_task_day(client, ["", "abc"], "2026-07-01", "2026-07-02")
+        result = logged_hours_by_task_day(
+            client, ["", "abc"], "2026-07-01", "2026-07-02"
+        )
         self.assertEqual(result, {})
         self.assertEqual(client.calls, [])
 

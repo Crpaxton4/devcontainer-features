@@ -143,10 +143,10 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
     async def test_all_four_window_actions_are_bound(self):
         app = _app()
         async with app.run_test(size=(100, 30)) as pilot:
-            await pilot.press("left")   # start earlier
+            await pilot.press("left")  # start earlier
             await pilot.press("right")  # start later (back)
-            await pilot.press("up")     # end later
-            await pilot.press("down")   # end earlier (back)
+            await pilot.press("up")  # end later
+            await pilot.press("down")  # end earlier (back)
             self.assertEqual(app.state.window, WINDOW)
 
     async def test_export_keys_write_through_injected_writer(self):
@@ -279,9 +279,7 @@ class TestTriageScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.press("t")
             self.assertIsInstance(app.screen, TriageScreen)
             self.assertEqual(app.state.mode, "triage")
-            self.assertIn(
-                "2 unattributed item(s)", _panel_text(app, "#triage-header")
-            )
+            self.assertIn("2 unattributed item(s)", _panel_text(app, "#triage-header"))
             rows = _panel_text(app, "#triage-list")
             self.assertIn("Standup", rows)
             self.assertIn("1:1 with Sam", rows)
@@ -387,9 +385,7 @@ class TestApply(unittest.IsolatedAsyncioTestCase):
         app = _app()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            app.apply(
-                AppState(window=WINDOW, sessions=[], status="hand-applied state")
-            )
+            app.apply(AppState(window=WINDOW, sessions=[], status="hand-applied state"))
             self.assertEqual(app.state.status, "hand-applied state")
             self.assertIn("hand-applied state", _panel_text(app, "#status"))
 

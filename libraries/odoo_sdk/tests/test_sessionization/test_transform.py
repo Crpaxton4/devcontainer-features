@@ -62,9 +62,7 @@ class TestSweep(unittest.TestCase):
 
 class TestTargetDayTotals(unittest.TestCase):
     def test_splits_across_midnight(self):
-        cfg = one_day_config(
-            start_date=date(2026, 6, 1), end_date=date(2026, 6, 2)
-        )
+        cfg = one_day_config(start_date=date(2026, 6, 1), end_date=date(2026, 6, 2))
         # A late commit that would billed-round into a window near midnight.
         events = [raw_event(23, 0, task="101"), raw_event(23, 30, task="101")]
         entries = build_window_entries(events, 3600, cfg)
@@ -83,7 +81,9 @@ class TestTargetDayTotals(unittest.TestCase):
             end=datetime(2026, 7, 2, 4, 45, tzinfo=UTC),
         )
         base = {"start_date": date(2026, 7, 1), "end_date": date(2026, 7, 2)}
-        central = SessionizationConfig(day_bucket_tz=ZoneInfo("America/Chicago"), **base)
+        central = SessionizationConfig(
+            day_bucket_tz=ZoneInfo("America/Chicago"), **base
+        )
         utc = SessionizationConfig(day_bucket_tz=ZoneInfo("UTC"), **base)
 
         central_totals = target_day_totals([entry], central)
@@ -113,9 +113,7 @@ class TestTransform(unittest.TestCase):
         events = [raw_event(9, 0, task="101"), raw_event(9, 5, task="")]
         result = transform(events, cfg)
         self.assertEqual(len(result.raw_events), 2)
-        self.assertTrue(
-            all(e.task_id != "" for e in result.best_gap_entries)
-        )
+        self.assertTrue(all(e.task_id != "" for e in result.best_gap_entries))
 
 
 if __name__ == "__main__":

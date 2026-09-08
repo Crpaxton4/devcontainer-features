@@ -342,12 +342,42 @@ def section_complexipy(lines: list[str], data: Any) -> None:
 # ``---`` separators woven between sections (see :func:`main`).
 Builder = Callable[[list[str], Any], None]
 SECTIONS: list[tuple[str, str, Path, str, Builder]] = [
-    ("🧪", "Coverage", REPORTS / "coverage" / "coverage.json", "make coverage", section_coverage),
-    ("🧬", "Mutation Testing", REPORTS / "mutation" / "mutation.json", "make mutation", section_mutation),
-    ("🔁", "Cyclomatic Complexity", REPORTS / "radon" / "cc.json", "make static", section_cyclomatic),
-    ("🛠", "Maintainability Index", REPORTS / "radon" / "mi.json", "make static", section_maintainability),
+    (
+        "🧪",
+        "Coverage",
+        REPORTS / "coverage" / "coverage.json",
+        "make coverage",
+        section_coverage,
+    ),
+    (
+        "🧬",
+        "Mutation Testing",
+        REPORTS / "mutation" / "mutation.json",
+        "make mutation",
+        section_mutation,
+    ),
+    (
+        "🔁",
+        "Cyclomatic Complexity",
+        REPORTS / "radon" / "cc.json",
+        "make static",
+        section_cyclomatic,
+    ),
+    (
+        "🛠",
+        "Maintainability Index",
+        REPORTS / "radon" / "mi.json",
+        "make static",
+        section_maintainability,
+    ),
     ("📐", "Raw Metrics", REPORTS / "radon" / "raw.json", "make static", section_raw),
-    ("🔬", "Halstead Metrics", REPORTS / "radon" / "hal.json", "make static", section_halstead),
+    (
+        "🔬",
+        "Halstead Metrics",
+        REPORTS / "radon" / "hal.json",
+        "make static",
+        section_halstead,
+    ),
     (
         "🧠",
         "Cognitive Complexity (complexipy)",

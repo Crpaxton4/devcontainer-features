@@ -230,9 +230,7 @@ class TestReadKnowledgeArticleShaping(unittest.TestCase):
     def test_shapes_expected_keys_and_values(self):
         client, _ = _client([_article(id=9)])
         result = read_knowledge_article(client, 9)
-        self.assertEqual(
-            set(result), {"id", "name", "body", "write_date", "truncated"}
-        )
+        self.assertEqual(set(result), {"id", "name", "body", "write_date", "truncated"})
         self.assertEqual(result["id"], 9)
         self.assertEqual(result["name"], "VAT rounding guide")
         self.assertEqual(result["write_date"], "2026-06-20 10:30:00")
@@ -298,8 +296,7 @@ class TestReadKnowledgeArticleCommand(unittest.TestCase):
     def test_execute_delegates_article_id(self):
         client = MagicMock()
         target = (
-            "odoo_sdk.commands.builtin.read_knowledge_article."
-            "read_knowledge_article"
+            "odoo_sdk.commands.builtin.read_knowledge_article." "read_knowledge_article"
         )
         with patch(target, return_value={"shaped": True}) as helper:
             result = ReadKnowledgeArticleCommand(client).execute(9)

@@ -141,9 +141,7 @@ class TestAbortTaskCommand(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=50)
         with (
             patch(_ABORT_GUARD),
-            patch(
-                "odoo_sdk.billing.timesheet.update_timesheet"
-            ) as mock_update,
+            patch("odoo_sdk.billing.timesheet.update_timesheet") as mock_update,
         ):
             _cmd_with_db(client, db).execute(1)
         # Aborting must never invoke the write path that logs elapsed hours;

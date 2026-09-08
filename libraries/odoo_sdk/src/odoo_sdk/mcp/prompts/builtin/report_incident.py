@@ -24,7 +24,9 @@ def report_incident(description: str = "") -> list[str]:
     except importlib.metadata.PackageNotFoundError:
         sdk_version = "unknown"
 
-    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    python_version = (
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
     transport = os.environ.get("ODOO_TRANSPORT", "xmlrpc")
 
     env_block = (
@@ -37,17 +39,14 @@ def report_incident(description: str = "") -> list[str]:
 
     summary_block = ""
     if description:
-        summary_block = (
-            f"## Summary/description (pre-populated)\n"
-            f"{description}\n\n"
-        )
+        summary_block = f"## Summary/description (pre-populated)\n" f"{description}\n\n"
 
     instructions = (
         f"<incident_report_instructions>\n"
         f"Create a GitHub issue in `{_REPO}` using the gh CLI to report the current incident.\n\n"
         f"{summary_block}"
         f"## Command\n"
-        f"gh issue create --repo {_REPO} --title \"<title>\" --body \"<body>\"\n\n"
+        f'gh issue create --repo {_REPO} --title "<title>" --body "<body>"\n\n'
         f"## Issue format (terse, AI-friendly)\n"
         f"- **Summary**: 1-2 sentences.\n"
         f"- **Symptoms**: bullet list of observed errors or behavior.\n"

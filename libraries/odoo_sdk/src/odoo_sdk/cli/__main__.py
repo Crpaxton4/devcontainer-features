@@ -54,6 +54,7 @@ from odoo_sdk.reap import (
 )
 from odoo_sdk.billing.upload import upload_sessions
 
+
 def _assert_env() -> None:
     try:
         assert_sdk_configured()
@@ -544,9 +545,7 @@ def _positive_int(value: str) -> int:
     return days
 
 
-def _resolve_prune_days(
-    args: argparse.Namespace, config: LocalConfig
-) -> Optional[int]:
+def _resolve_prune_days(args: argparse.Namespace, config: LocalConfig) -> Optional[int]:
     """Return the horizon in days to prune to, or None when auto-prune is off.
 
     An explicit ``--older-than`` always wins; otherwise the configured
@@ -656,8 +655,10 @@ def cmd_reap(args: argparse.Namespace, client, db: TaskStateDB) -> None:
     if args.dry_run:
         print(f"Would reap {len(stale)} stale run(s):")
         for run in stale:
-            print(f"  [{run.id}] {run.task_name!r} (task {run.task_id}, "
-                  f"{run.state.value})")
+            print(
+                f"  [{run.id}] {run.task_name!r} (task {run.task_id}, "
+                f"{run.state.value})"
+            )
         return
     for run in stale:
         anchor_closed = reap_run(db, client, run)
@@ -673,9 +674,7 @@ def cmd_abort(registry: Registry, args: argparse.Namespace) -> None:
     """
     result = registry["abort_run"].execute(args.run_id)
     if result["already_stopped"]:
-        print(
-            f"Run {result['run_id']} is already stopped; nothing to abort."
-        )
+        print(f"Run {result['run_id']} is already stopped; nothing to abort.")
         return
     anchor = "closed" if result["anchor_closed"] else "left untouched"
     print(
@@ -929,7 +928,10 @@ _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
     "abort": (lambda c: cmd_abort(c.registry, c.args), True),
     "get-employee-id": (lambda c: cmd_get_employee_id(c.registry, c.args), True),
     "reap": (lambda c: cmd_reap(c.args, c.client, c.db), True),
-    "upload": (lambda c: cmd_upload(c.args, c.registry, c.client, c.db, c.config), True),
+    "upload": (
+        lambda c: cmd_upload(c.args, c.registry, c.client, c.db, c.config),
+        True,
+    ),
     "close": (lambda c: cmd_close(c.args), False),
     "discover": (lambda c: cmd_discover(c.args), False),
     "resync": (lambda c: cmd_resync(c.args), False),

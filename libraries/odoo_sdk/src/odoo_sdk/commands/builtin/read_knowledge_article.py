@@ -14,7 +14,7 @@ class ReadKnowledgeArticleCommand(Command):
         "is created or modified. The result carries id, name, the full Markdown "
         "body (capped at 50000 characters with a ``truncated`` flag when the "
         "body is longer), and write_date. An unknown id raises a clear "
-        "\"knowledge.article <id> not found\" error. knowledge.article is an "
+        '"knowledge.article <id> not found" error. knowledge.article is an '
         "Odoo Enterprise model: on a Community database the tool raises a clear "
         "error instead of returning content."
     )

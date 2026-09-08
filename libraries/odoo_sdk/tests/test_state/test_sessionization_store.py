@@ -86,9 +86,7 @@ class TestLastNoteAt(unittest.TestCase):
         db = _tmp_db()
         db.add_event(_note_event(5, task="101"))
         db.add_event(_note_event(30, task="101"))
-        self.assertEqual(
-            db.last_note_at(101), datetime(2026, 6, 1, 9, 30, tzinfo=UTC)
-        )
+        self.assertEqual(db.last_note_at(101), datetime(2026, 6, 1, 9, 30, tzinfo=UTC))
 
     def test_ignores_notes_for_other_tasks(self):
         db = _tmp_db()
@@ -100,9 +98,7 @@ class TestLastNoteAt(unittest.TestCase):
         rec = _note_event(12, task="101")
         rec.task_ids = ["101", "202"]
         db.add_event(rec)
-        self.assertEqual(
-            db.last_note_at(202), datetime(2026, 6, 1, 9, 12, tzinfo=UTC)
-        )
+        self.assertEqual(db.last_note_at(202), datetime(2026, 6, 1, 9, 12, tzinfo=UTC))
 
     def test_ignores_non_note_agent_events(self):
         db = _tmp_db()

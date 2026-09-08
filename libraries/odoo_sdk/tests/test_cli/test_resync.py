@@ -20,9 +20,11 @@ _MOD = "odoo_sdk.cli.__main__"
 class TestCmdResync(unittest.TestCase):
     def _run(self, argv, **patches):
         out = StringIO()
-        with patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()), patch(
-            "sys.stdout", out
-        ), patch("sys.argv", ["odoo-sdk", *argv]):
+        with (
+            patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
+            patch("sys.stdout", out),
+            patch("sys.argv", ["odoo-sdk", *argv]),
+        ):
             with _apply(patches):
                 cli.main()
         return out.getvalue()
@@ -30,9 +32,12 @@ class TestCmdResync(unittest.TestCase):
     def _run_expect_exit(self, argv, **patches):
         """Run the CLI expecting ``SystemExit``; return (exit code, stdout)."""
         out = StringIO()
-        with patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()), patch(
-            "sys.stdout", out
-        ), patch("sys.stderr", StringIO()), patch("sys.argv", ["odoo-sdk", *argv]):
+        with (
+            patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
+            patch("sys.stdout", out),
+            patch("sys.stderr", StringIO()),
+            patch("sys.argv", ["odoo-sdk", *argv]),
+        ):
             with _apply(patches):
                 with self.assertRaises(SystemExit) as ctx:
                     cli.main()
@@ -54,7 +59,9 @@ class TestCmdResync(unittest.TestCase):
     def test_subset_runs_only_requested(self):
         git = MagicMock(return_value={"inserted": 0})
         gh = MagicMock()
-        out = self._run(["resync", "--sources", "git"], sync_git_log=git, sync_github=gh)
+        out = self._run(
+            ["resync", "--sources", "git"], sync_git_log=git, sync_github=gh
+        )
         self.assertEqual(out.strip(), "git: inserted 0")
         git.assert_called_once()
         gh.assert_not_called()
@@ -152,8 +159,15 @@ class TestCmdResync(unittest.TestCase):
         git = MagicMock(return_value={"inserted": 0, "found": 0, "repos": 1})
         gh = MagicMock(return_value={"inserted": 0, "found": 0})
         self._run(
-            ["resync", "--sources", "git,github", "--start", "2026-07-01",
-             "--end", "2026-07-31"],
+            [
+                "resync",
+                "--sources",
+                "git,github",
+                "--start",
+                "2026-07-01",
+                "--end",
+                "2026-07-31",
+            ],
             sync_git_log=git,
             sync_github=gh,
         )

@@ -89,8 +89,9 @@ class TestLocalStateClientNeverCreates(unittest.TestCase):
     def test_default_client_targets_central_db_without_creating_it(self):
         """``LocalStateClient()`` binds to ``<state-root>/tracker.db`` and, when
         the host has not provisioned it, raises rather than creating one."""
-        with tempfile.TemporaryDirectory() as root, patch.dict(
-            "os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False),
         ):
             client = LocalStateClient()
             expected = Path(root) / "tracker.db"
@@ -102,8 +103,9 @@ class TestLocalStateClientNeverCreates(unittest.TestCase):
     def test_default_client_reads_a_host_provisioned_central_db(self):
         """Once the host has provisioned ``tracker.db``, the default client uses
         it directly (no per-repo hash directory)."""
-        with tempfile.TemporaryDirectory() as root, patch.dict(
-            "os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.dict("os.environ", {"ODOO_TASK_TRACKER_DIR": root}, clear=False),
         ):
             provision_schema(Path(root) / "tracker.db")
             client = LocalStateClient()

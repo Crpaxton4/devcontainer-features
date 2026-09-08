@@ -93,9 +93,7 @@ class TestExplicitToolRegistration(unittest.TestCase):
             """Docstring description."""
             return "x"
 
-        _, _, added = _build_with_mock_mcp(
-            _registry(), explicit_tools={"echo": impl}
-        )
+        _, _, added = _build_with_mock_mcp(_registry(), explicit_tools={"echo": impl})
         self.assertEqual(added[0].description, "Docstring description.")
 
     def test_schema_from_explicit_signature(self):
@@ -103,9 +101,7 @@ class TestExplicitToolRegistration(unittest.TestCase):
             """Echo a message back."""
             return message.upper() if shout else message
 
-        _, _, added = _build_with_mock_mcp(
-            _registry(), explicit_tools={"echo": echo}
-        )
+        _, _, added = _build_with_mock_mcp(_registry(), explicit_tools={"echo": echo})
         params = added[0].parameters
         self.assertEqual(set(params["properties"]), {"message", "shout"})
         self.assertEqual(params["required"], ["message"])
@@ -120,9 +116,7 @@ class TestExplicitToolRegistration(unittest.TestCase):
             """B."""
             return "B-result"
 
-        _, _, added = _build_with_mock_mcp(
-            _registry(), explicit_tools={"a": a, "b": b}
-        )
+        _, _, added = _build_with_mock_mcp(_registry(), explicit_tools={"a": a, "b": b})
         tools = {tool.name: tool for tool in added}
         self.assertEqual(tools["a"].fn(), "A-result")
         self.assertEqual(tools["b"].fn(), "B-result")
@@ -132,9 +126,7 @@ class TestExplicitToolRegistration(unittest.TestCase):
             """Echo."""
             return message.upper() if shout else message
 
-        _, _, added = _build_with_mock_mcp(
-            _registry(), explicit_tools={"echo": echo}
-        )
+        _, _, added = _build_with_mock_mcp(_registry(), explicit_tools={"echo": echo})
         self.assertEqual(added[0].fn(message="hi", shout=True), "HI")
 
     def test_async_tool_registered_as_coroutine(self):

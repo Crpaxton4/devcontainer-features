@@ -107,7 +107,9 @@ class TestReadPassesFieldsAsKeyword(unittest.TestCase):
         )
         client = OdooClient(executor=executor)
         rows = _task_related_stages(client, [5])
-        self.assertEqual(executor.recorded, {"ids": [5], "fields": ["name", "stage_id"]})
+        self.assertEqual(
+            executor.recorded, {"ids": [5], "fields": ["name", "stage_id"]}
+        )
         self.assertEqual(rows, [[5, "Blocker", "Todo"]])
 
     def test_timesheets_reads_ids_with_keyword_fields(self):
@@ -157,7 +159,9 @@ class TestNameSearchProjects(unittest.TestCase):
         client.execute.assert_called_once_with(
             "project.project", "name_search", "acc", [], "ilike", 5
         )
-        self.assertEqual(result, [{"id": 1, "name": "Accounting"}, {"id": 2, "name": "HR"}])
+        self.assertEqual(
+            result, [{"id": 1, "name": "Accounting"}, {"id": 2, "name": "HR"}]
+        )
 
     def test_empty_results(self):
         client = _client()
@@ -206,7 +210,9 @@ class TestGetEmployeeId(unittest.TestCase):
 class TestUpdateTimesheet(unittest.TestCase):
     def test_writes_amount_and_description(self):
         client = _client()
-        update_timesheet(client, timesheet_id=50, unit_amount=1.5, description="[/] Done")
+        update_timesheet(
+            client, timesheet_id=50, unit_amount=1.5, description="[/] Done"
+        )
         client.execute.assert_called_once_with(
             "account.analytic.line",
             "write",
@@ -289,9 +295,7 @@ class TestPostChatterNote(unittest.TestCase):
             client = _client()
             client.execute.return_value = 1
             post_chatter_note(client, task_id=5, body="Hello", attachment_ids=empty)
-            self.assertNotIn(
-                "attachment_ids", client.execute.call_args.kwargs
-            )
+            self.assertNotIn("attachment_ids", client.execute.call_args.kwargs)
 
     def test_markdown_body_is_rendered_to_html(self):
         # Regression for #324: a Markdown body must reach ``message_post`` as
@@ -299,9 +303,7 @@ class TestPostChatterNote(unittest.TestCase):
         # Markdown text with collapsed newlines.
         client = _client()
         client.execute.return_value = 1
-        post_chatter_note(
-            client, task_id=5, body="**Summary**\n\n- one\n- two"
-        )
+        post_chatter_note(client, task_id=5, body="**Summary**\n\n- one\n- two")
         body = client.execute.call_args.kwargs["body"]
         self.assertIn("<strong>Summary</strong>", body)
         self.assertIn("<ul>", body)
@@ -507,7 +509,9 @@ class TestGetTaskChatter(unittest.TestCase):
     def test_extracts_display_names_from_tuples(self):
         client = _client()
         client.execute.return_value = [self._make_message()]
-        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="Hello"):
+        with patch(
+            "odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="Hello"
+        ):
             result = get_task_chatter(client, task_id=1)
         self.assertEqual(result[0]["author"], "Jane Smith")
         self.assertEqual(result[0]["subtype"], "Discussions")
@@ -655,7 +659,9 @@ class TestGetTaskDetail(unittest.TestCase):
             ],
         ]
         result = get_task_detail(client, task_id=42, include=["timesheets"])
-        self.assertIn("timesheet_ids", client.execute.call_args_list[0].kwargs["fields"])
+        self.assertIn(
+            "timesheet_ids", client.execute.call_args_list[0].kwargs["fields"]
+        )
         self.assertEqual(
             result["timesheets"],
             [{"date": "2026-07-01", "employee": "Jane", "hours": 2.5, "name": "Work"}],
@@ -718,7 +724,9 @@ class TestGetTaskDetail(unittest.TestCase):
     def test_flattens_many2one_display_names(self):
         client = _client()
         client.execute.return_value = [self._make_record()]
-        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="desc"):
+        with patch(
+            "odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value="desc"
+        ):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["project"], "My Project")
         self.assertEqual(result["stage"], "In Progress")
@@ -733,7 +741,9 @@ class TestGetTaskDetail(unittest.TestCase):
     def test_task_id_in_result(self):
         client = _client()
         client.execute.return_value = [self._make_record()]
-        with patch("odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value=""):
+        with patch(
+            "odoo_sdk.utilities.odoo_helpers._html_to_markdown", return_value=""
+        ):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["task_id"], 42)
 

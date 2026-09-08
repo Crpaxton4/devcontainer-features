@@ -397,9 +397,7 @@ def _attachment_values(
     values: dict[str, Any] = {
         "name": filename,
         "datas": payload,
-        "mimetype": mimetype
-        or mimetypes.guess_type(filename)[0]
-        or _DEFAULT_MIMETYPE,
+        "mimetype": mimetype or mimetypes.guess_type(filename)[0] or _DEFAULT_MIMETYPE,
     }
     if res_model is not None:
         values["res_model"] = res_model

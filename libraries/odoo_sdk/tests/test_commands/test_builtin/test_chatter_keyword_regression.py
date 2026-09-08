@@ -155,21 +155,15 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         client, executor = _keyword_client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (
-            patch(_NOTE_GUARD),
-        ):
+        with (patch(_NOTE_GUARD),):
             TaskNoteCommand(client, state=db).execute(1, "Note text")
-        self._assert_recorded_keyword(
-            executor, task_id=1, body="<p>Note text</p>"
-        )
+        self._assert_recorded_keyword(executor, task_id=1, body="<p>Note text</p>")
 
     def test_task_question_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (
-            patch(_QUESTION_GUARD),
-        ):
+        with (patch(_QUESTION_GUARD),):
             TaskQuestionCommand(client, state=db).execute(1, "Which approach?")
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>[?] Which approach?</p>"
@@ -186,18 +180,14 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         content = base64.b64encode(b"findings").decode("ascii")
-        with (
-            patch(_NOTE_GUARD),
-        ):
+        with (patch(_NOTE_GUARD),):
             result = TaskNoteCommand(client, state=db).execute(
                 1,
                 "Note with file",
                 attachments=[{"content": content, "name": "findings.md"}],
             )
         self.assertEqual(len(executor.created_attachments), 1)
-        self.assertEqual(
-            executor.created_attachments[0]["name"], "findings.md"
-        )
+        self.assertEqual(executor.created_attachments[0]["name"], "findings.md")
         self.assertEqual(executor.recorded["attachment_ids"], [401])
         self.assertEqual(executor.recorded["body"], "<p>Note with file</p>")
         self.assertEqual(result["attachment_ids"], [401])
@@ -208,9 +198,7 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         client, executor = _keyword_client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (
-            patch(_NOTE_GUARD),
-        ):
+        with (patch(_NOTE_GUARD),):
             with self.assertRaises(ValueError):
                 TaskNoteCommand(client, state=db).execute(1, "x" * 301)
         self.assertEqual(executor.recorded, {})

@@ -46,17 +46,17 @@ def build_implement_task_messages(task: dict) -> list[str]:
         f"<workflow_instructions>\n"
         f"Follow these steps to implement this task:\n\n"
         f"1. **START** — Call `start_task` with:\n"
-        f"   - `task_name_query=\"{name}\"`\n"
-        f"   - `project_name_query=\"{project}\"`\n"
+        f'   - `task_name_query="{name}"`\n'
+        f'   - `project_name_query="{project}"`\n'
         f"   - `task_id={task_id}`\n\n"
         f"2. **ANALYZE** — Read `<description>` and `<chatter>` above. Identify what needs to be implemented.\n"
-        f"   Post a plan note: `task_note({task_id}, \"Implementation plan: ...\")`\n\n"
+        f'   Post a plan note: `task_note({task_id}, "Implementation plan: ...")`\n\n'
         f"3. **IMPLEMENT** — Write the code.\n"
-        f"   - Checkpoint with `task_note({task_id}, \"...\")` on a concrete cadence, "
+        f'   - Checkpoint with `task_note({task_id}, "...")` on a concrete cadence, '
         f"not only at the end: right after you post the plan, after each coherent "
         f"file-group or subsystem you finish, after tests pass, and again just before "
         f"you stop. Prefer several small notes over one long one.\n"
-        f"   - If blocked: `task_question({task_id}, \"...\")`, then `resume_task({task_id})` when unblocked.\n\n"
+        f'   - If blocked: `task_question({task_id}, "...")`, then `resume_task({task_id})` when unblocked.\n\n'
         f"4. **TEST** — Before the STOP step, add and RUN automated tests for the change. "
         f"This is REQUIRED, not optional follow-up:\n"
         f"   - Write Python unit tests under the module's `tests/` directory for every new or "
@@ -82,7 +82,7 @@ def build_implement_task_messages(task: dict) -> list[str]:
         f"Do NOT write a timesheet-style work summary — hours are owned by the "
         f"odoo-tui upload path and the run summary is derived automatically from "
         f"the run's recorded events and notes. Post the summary of changes as a "
-        f"final `task_note({task_id}, \"...\")` instead.\n\n"
+        f'final `task_note({task_id}, "...")` instead.\n\n'
         f"## Note Style\n\n"
         f"Chatter notes render as HTML, so write them in Markdown and keep them "
         f"short and scannable — not long free-form prose:\n\n"

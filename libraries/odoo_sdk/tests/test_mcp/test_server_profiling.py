@@ -32,8 +32,9 @@ class TestProfiledWrapper(unittest.TestCase):
             """Add two numbers."""
             return a + b
 
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             result = _profiled(add, "add")(2, 3)
             zips = _zips(tmp)
@@ -46,8 +47,9 @@ class TestProfiledWrapper(unittest.TestCase):
             """Double a value."""
             return value * 2
 
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             result = asyncio.run(_profiled(fetch, "fetch")(21))
             zips = _zips(tmp)
@@ -59,8 +61,9 @@ class TestProfiledWrapper(unittest.TestCase):
             """Always raise."""
             raise ValueError("nope")
 
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             with self.assertRaises(ValueError):
                 _profiled(boom, "boom")()
@@ -72,8 +75,9 @@ class TestProfiledWrapper(unittest.TestCase):
             """Do nothing."""
             return None
 
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             wrapped = _profiled(noop, "noop")
             wrapped()
@@ -99,8 +103,9 @@ class TestDumpProfile(unittest.TestCase):
         return profiler
 
     def test_zip_contains_single_loadable_prof(self):
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             path = _dump_profile(self._profiler(), "calc")
             self.assertTrue(Path(path).is_absolute())
@@ -111,16 +116,18 @@ class TestDumpProfile(unittest.TestCase):
             pstats.Stats(str(extracted))  # loads without error
 
     def test_no_intermediate_prof_left_behind(self):
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             _dump_profile(self._profiler(), "calc")
             leftover = list((Path(tmp) / PROFILE_SUBDIR).glob("*.prof"))
         self.assertEqual(leftover, [])
 
     def test_archive_is_written_into_dedicated_subdir(self):
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             path = _dump_profile(self._profiler(), "calc")
             subdir = Path(tmp) / PROFILE_SUBDIR
@@ -128,8 +135,9 @@ class TestDumpProfile(unittest.TestCase):
             self.assertEqual(Path(path).parent, subdir.resolve())
 
     def test_dumps_are_bounded_to_keep_last(self):
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
         ):
             for _ in range(PROFILE_KEEP_LAST + 3):
                 _dump_profile(self._profiler(), "calc")
@@ -145,10 +153,11 @@ class TestDumpProfile(unittest.TestCase):
         their sorted order must still match creation order, because
         :func:`_prune_profiles` breaks ``st_mtime_ns`` ties on the filename.
         """
-        with TemporaryDirectory() as tmp, patch(
-            "tempfile.gettempdir", return_value=tmp
-        ), patch("odoo_sdk.mcp.server.time.time_ns", return_value=1_234_567_890), patch(
-            "odoo_sdk.mcp.server.time.strftime", return_value="20240101_000000"
+        with (
+            TemporaryDirectory() as tmp,
+            patch("tempfile.gettempdir", return_value=tmp),
+            patch("odoo_sdk.mcp.server.time.time_ns", return_value=1_234_567_890),
+            patch("odoo_sdk.mcp.server.time.strftime", return_value="20240101_000000"),
         ):
             created = [
                 Path(_dump_profile(self._profiler(), "calc")).name
@@ -225,9 +234,10 @@ class TestServerProfilingWiring(unittest.TestCase):
             """Tool A."""
             return "a"
 
-        with patch(
-            "odoo_sdk.mcp.server.FastMCP", return_value=MagicMock()
-        ), patch("odoo_sdk.mcp.server._profiled") as mock_profiled:
+        with (
+            patch("odoo_sdk.mcp.server.FastMCP", return_value=MagicMock()),
+            patch("odoo_sdk.mcp.server._profiled") as mock_profiled,
+        ):
             OdooMCPServer(_registry(), explicit_tools={"a": a}, profiling=False)
         mock_profiled.assert_not_called()
 
@@ -236,9 +246,10 @@ class TestServerProfilingWiring(unittest.TestCase):
             """Tool A."""
             return "a"
 
-        with patch(
-            "odoo_sdk.mcp.server.FastMCP", return_value=MagicMock()
-        ), patch("odoo_sdk.mcp.server._profiled", return_value=a) as mock_profiled:
+        with (
+            patch("odoo_sdk.mcp.server.FastMCP", return_value=MagicMock()),
+            patch("odoo_sdk.mcp.server._profiled", return_value=a) as mock_profiled,
+        ):
             OdooMCPServer(_registry(), explicit_tools={"a": a}, profiling=True)
         # Wrapping order is event-emitting (innermost), then error-boundary,
         # then TOON, then profiling (outermost), so the tool passed to _profiled

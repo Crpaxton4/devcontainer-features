@@ -631,9 +631,7 @@ class TestActivityCommands(unittest.TestCase):
 
     def test_search_types_delegates_every_argument(self):
         client = MagicMock()
-        target = (
-            "odoo_sdk.commands.builtin.search_activity_types.search_activity_types"
-        )
+        target = "odoo_sdk.commands.builtin.search_activity_types.search_activity_types"
         with patch(target, return_value=[]) as helper:
             SearchActivityTypesCommand(client).execute(
                 query="call", res_model="project.task", limit=5
@@ -747,9 +745,7 @@ class TestActivityToolSchemas(unittest.TestCase):
     def test_search_types_requires_nothing(self):
         from odoo_sdk.mcp.tools.atomic import make_search_activity_types_tool
 
-        schema = self._schema(
-            make_search_activity_types_tool, "search_activity_types"
-        )
+        schema = self._schema(make_search_activity_types_tool, "search_activity_types")
         self.assertEqual(schema.get("required", []), [])
 
     def test_schedule_tool_forwards_every_argument_to_the_command(self):
