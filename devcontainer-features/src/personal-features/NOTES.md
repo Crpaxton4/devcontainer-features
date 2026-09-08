@@ -221,11 +221,11 @@ untouched (and a warning printed) rather than overwritten.
 
 ## Odoo consulting skills (two delivery paths)
 
-This Feature ships the owner's Odoo consulting playbook — quote drafting
-(`odoo-quote`) and weekly client status reports (`client-status-report`). The
-source of truth for every skill's content is `skills/<name>/SKILL.md` in this
-directory (see `skills/README.md`), and the content reaches an agent by two
-independent, deliberately-parallel paths:
+This Feature ships the owner's Odoo consulting playbook — currently weekly
+client status reports (`client-status-report`). The source of truth for every
+skill's content is `skills/<name>/SKILL.md` in this directory (see
+`skills/README.md`), and the content reaches an agent by two independent,
+deliberately-parallel paths:
 
 1. **Mounted `SKILL.md` files (Claude Code only).** `install.sh` stages the
    `skills/` tree at build time to `/usr/local/share/personal-features/skills`
@@ -236,11 +236,11 @@ independent, deliberately-parallel paths:
    skill-discovery / slash-command UX, but only inside a live container with this
    Feature installed and a working bind mount.
 
-2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each of the two
-   skills is *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
+2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each shipped
+   skill is *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
    (`libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py`, one module
-   per skill, underscored — `odoo-quote` → `odoo_quote`). Each module embeds its
-   `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
+   per skill, underscored — `<skill-name>` → `<skill_name>`). Each module embeds
+   its `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
    description; the markdown body becomes the returned prompt message) and is
    registered through the same `@builtin_prompt` decorator as `implement_task`
    and `report_incident`. Because the prompts ship inside the SDK package, any

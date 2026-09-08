@@ -1,11 +1,13 @@
 """MCP ``odoo_quote`` prompt surface.
 
-Ports the personal-features ``odoo-quote`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/odoo-quote/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Exposes the Odoo quote-drafting playbook as a built-in MCP prompt, so any MCP
+client gets it without the mounted-SKILL.md delivery path. The body embedded
+below is this prompt's source of truth: the personal-features ``odoo-quote``
+skill it was originally ported from has been removed (#699), superseded by the
+``odoo-dev`` plugin's ``odoo-dev:odoo-quote``, which is the maintained upstream
+copy. The prompt takes no arguments and returns the instructional body verbatim
+for the caller to act on with its own (read-only) Odoo tool calls; it never
+calls into the command registry itself.
 """
 
 from odoo_sdk.commands import Registry
