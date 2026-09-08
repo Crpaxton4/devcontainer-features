@@ -162,10 +162,21 @@ class TestGetMailStatusStates(unittest.TestCase):
     """Sent, outgoing, and exception mails are each reported correctly."""
 
     def _three_state_client(self):
-        messages = [_message(101), _message(102, subject="Fallback subject"), _message(103)]
+        messages = [
+            _message(101),
+            _message(102, subject="Fallback subject"),
+            _message(103),
+        ]
         mails = [
             _mail(1, 101, "sent", email_to="alice@example.com"),
-            _mail(2, 102, "outgoing", subject=False, email_to="bob@example.com", recipient_ids=[7]),
+            _mail(
+                2,
+                102,
+                "outgoing",
+                subject=False,
+                email_to="bob@example.com",
+                recipient_ids=[7],
+            ),
             _mail(
                 3,
                 103,
@@ -175,12 +186,16 @@ class TestGetMailStatusStates(unittest.TestCase):
                 failure_type="mail_smtp",
             ),
         ]
-        return _client(messages=messages, mails=mails, partners=[{"id": 7, "name": "Bob P"}])
+        return _client(
+            messages=messages, mails=mails, partners=[{"id": 7, "name": "Bob P"}]
+        )
 
     def test_all_three_states_returned(self):
         client, _ = self._three_state_client()
         result = get_mail_status(client, "project.task", 42)
-        self.assertEqual([r["state"] for r in result], ["sent", "outgoing", "exception"])
+        self.assertEqual(
+            [r["state"] for r in result], ["sent", "outgoing", "exception"]
+        )
         self.assertEqual([r["mail_id"] for r in result], [1, 2, 3])
         self.assertEqual([r["message_id"] for r in result], [101, 102, 103])
 

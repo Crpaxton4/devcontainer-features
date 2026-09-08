@@ -69,11 +69,7 @@ def _rle_sweep_rows(
 
 def _sweep_tables(results: SweepResults, config: SessionizationConfig) -> list[str]:
     """Return per-task sweep tables with run-length-encoded totals."""
-    step = (
-        results.gap_vals[1] - results.gap_vals[0]
-        if len(results.gap_vals) > 1
-        else 0
-    )
+    step = results.gap_vals[1] - results.gap_vals[0] if len(results.gap_vals) > 1 else 0
     lines = [
         "",
         f"## Sweep ({results.gap_vals[0]}-{results.gap_vals[-1]} min, {step}-min steps)",
@@ -119,7 +115,9 @@ def _sweep_summary(results: SweepResults, config: SessionizationConfig) -> list[
         f"({config.b_low}h/day x {config.num_days}d{excluded})  |"
     )
     lines.append(f"| {'best gap':<14} | {results.best_gap}m{'':<24} |")
-    lines.append(f"| {'best total':<14} | {fmt_duration(int(results.best_total)):<30} |")
+    lines.append(
+        f"| {'best total':<14} | {fmt_duration(int(results.best_total)):<30} |"
+    )
     lines.append(f"| {'best score':<14} | {results.best_score:<30.4f} |")
     lines.append(f"| {'best delta':<14} | {fmt_delta(best_dist):<30} |")
     return lines

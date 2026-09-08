@@ -249,8 +249,14 @@ _ROW_VALIDATIONS = {
     ),
     "task_runs": (
         ("datetime(started_at) IS NULL", "invalid started_at"),
-        ("stopped_at IS NOT NULL AND datetime(stopped_at) IS NULL", "invalid stopped_at"),
-        ("aborted_at IS NOT NULL AND datetime(aborted_at) IS NULL", "invalid aborted_at"),
+        (
+            "stopped_at IS NOT NULL AND datetime(stopped_at) IS NULL",
+            "invalid stopped_at",
+        ),
+        (
+            "aborted_at IS NOT NULL AND datetime(aborted_at) IS NULL",
+            "invalid aborted_at",
+        ),
         ("NOT json_valid(notes)", "invalid notes JSON"),
         (
             "state NOT IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED', 'CLOSED')",
@@ -259,12 +265,13 @@ _ROW_VALIDATIONS = {
     ),
     "session_uploads": (
         ("datetime(uploaded_at) IS NULL", "invalid uploaded_at"),
-        ("started_at IS NOT NULL AND datetime(started_at) IS NULL", "invalid started_at"),
+        (
+            "started_at IS NOT NULL AND datetime(started_at) IS NULL",
+            "invalid started_at",
+        ),
         ("ended_at IS NOT NULL AND datetime(ended_at) IS NULL", "invalid ended_at"),
     ),
-    "chatter_dedupe": (
-        ("datetime(created_at) IS NULL", "invalid created_at"),
-    ),
+    "chatter_dedupe": (("datetime(created_at) IS NULL", "invalid created_at"),),
 }
 
 # Column used to identify an offending row of each table in the abort message.
@@ -296,7 +303,9 @@ def _schema_by_table() -> dict:
             name = stmt.split("(", 1)[0].replace("IF NOT EXISTS", "").split()[-1]
             tables[name] = (stmt, [])
         else:
-            target = stmt[stmt.upper().index(" ON ") + 4 :].split("(")[0].strip().split()[0]
+            target = (
+                stmt[stmt.upper().index(" ON ") + 4 :].split("(")[0].strip().split()[0]
+            )
             indexes.append((target, stmt))
     for target, stmt in indexes:
         tables[target][1].append(stmt)
@@ -829,7 +838,7 @@ def _window_where(
 
 
 def _parse_event(row: tuple) -> EventRecord:
-    (id_, source, ts, task_ids, repo, pr_num, branch, subject, payload, ext_id) = row
+    id_, source, ts, task_ids, repo, pr_num, branch, subject, payload, ext_id = row
     return EventRecord(
         id=id_,
         source=source,
@@ -881,10 +890,18 @@ def _parse_derived_window(row: tuple) -> SessionWindow:
     by id — which is monotonic with insertion — gives a deterministic order for
     the bulk event fetch instead of relying on the group-scan order.
     """
-    (task_key, repo_display, session_key_id, started, ended, pr_num, has_dev,
-     event_ids_json) = row
-    strategy_name, category = ("development", "Development") if has_dev else (
-        "review", "Review"
+    (
+        task_key,
+        repo_display,
+        session_key_id,
+        started,
+        ended,
+        pr_num,
+        has_dev,
+        event_ids_json,
+    ) = row
+    strategy_name, category = (
+        ("development", "Development") if has_dev else ("review", "Review")
     )
     return SessionWindow(
         id=session_key_id,
@@ -1089,7 +1106,14 @@ class LocalStateClient:
             cursor = conn.execute(
                 "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
                 "state, started_at, timesheet_id, notes) VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, '[]')",
-                (task_id, task_name, project_id, project_name, started_at, timesheet_id),
+                (
+                    task_id,
+                    task_name,
+                    project_id,
+                    project_name,
+                    started_at,
+                    timesheet_id,
+                ),
             )
             return _fetch_run(  # type: ignore[return-value]
                 conn, "WHERE id = ?", (cursor.lastrowid,)
@@ -1802,7 +1826,9 @@ class LocalStateClient:
         timestamps use, so the sweep can string-compare them against a window.
         """
         uploaded_at = datetime.now(timezone.utc).isoformat()
-        started = _normalize_utc_isoformat(started_at) if started_at is not None else None
+        started = (
+            _normalize_utc_isoformat(started_at) if started_at is not None else None
+        )
         ended = _normalize_utc_isoformat(ended_at) if ended_at is not None else None
         with self._connect() as conn:
             conn.execute(
@@ -1813,7 +1839,15 @@ class LocalStateClient:
                 "timesheet_id = excluded.timesheet_id, hours = excluded.hours, "
                 "uploaded_at = excluded.uploaded_at, task_id = excluded.task_id, "
                 "started_at = excluded.started_at, ended_at = excluded.ended_at",
-                (session_key, timesheet_id, hours, uploaded_at, task_id, started, ended),
+                (
+                    session_key,
+                    timesheet_id,
+                    hours,
+                    uploaded_at,
+                    task_id,
+                    started,
+                    ended,
+                ),
             )
 
     def get_setting(self, key: str) -> Optional[str]:

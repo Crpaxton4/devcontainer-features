@@ -105,17 +105,29 @@ def _fixture():
     store = make_state_db()
     d1 = datetime(2026, 7, 1, tzinfo=UTC)
     d2 = datetime(2026, 7, 2, tzinfo=UTC)
-    e_commit = _add(store, "commit", d1.replace(hour=9), "git:deadbeefcafe0", task="24648")
+    e_commit = _add(
+        store, "commit", d1.replace(hour=9), "git:deadbeefcafe0", task="24648"
+    )
     e_merge = _add(store, "merge", d1.replace(hour=11), "gh:pr:189", task="24648")
     e_chat = _add(store, "chatter", d1.replace(hour=13), "odoo:mail:900", task="55555")
     e_o1a = _add(store, "commit", d2.replace(hour=9), "git:aaa1111", task="70001")
-    e_o1b = _add(store, "commit", d2.replace(hour=9, minute=30), "git:aaa2222", task="70001")
-    e_o2 = _add(store, "commit", d2.replace(hour=9, minute=20), "git:bbb3333", task="70002")
+    e_o1b = _add(
+        store, "commit", d2.replace(hour=9, minute=30), "git:aaa2222", task="70001"
+    )
+    e_o2 = _add(
+        store, "commit", d2.replace(hour=9, minute=20), "git:bbb3333", task="70002"
+    )
     sessions = [
-        _session(1, "24648", d1.replace(hour=9), d1.replace(hour=12), [e_commit, e_merge]),
-        _session(2, "55555", d1.replace(hour=13), d1.replace(hour=13, minute=30), [e_chat]),
+        _session(
+            1, "24648", d1.replace(hour=9), d1.replace(hour=12), [e_commit, e_merge]
+        ),
+        _session(
+            2, "55555", d1.replace(hour=13), d1.replace(hour=13, minute=30), [e_chat]
+        ),
         _session(3, "70001", d2.replace(hour=9), d2.replace(hour=10), [e_o1a, e_o1b]),
-        _session(4, "70002", d2.replace(hour=9, minute=20), d2.replace(hour=11), [e_o2]),
+        _session(
+            4, "70002", d2.replace(hour=9, minute=20), d2.replace(hour=11), [e_o2]
+        ),
     ]
     return store, sessions
 
@@ -142,10 +154,32 @@ def _state(store, sessions):
 
 def _cards():
     return [
-        ReviewCard(1, "24648", "2026-07-01T09:00:00", "2026-07-01T12:00:00", 3.0,
-                   STRONG, 2.0, "partial", (), ("commit deadbee", "PR #189"), False),
-        ReviewCard(2, "55555", "2026-07-01T13:00:00", "2026-07-01T13:30:00", 0.5,
-                   WEAK, 0.0, "", (Overlap("70002", 40),), ("chatter msg 900",), False),
+        ReviewCard(
+            1,
+            "24648",
+            "2026-07-01T09:00:00",
+            "2026-07-01T12:00:00",
+            3.0,
+            STRONG,
+            2.0,
+            "partial",
+            (),
+            ("commit deadbee", "PR #189"),
+            False,
+        ),
+        ReviewCard(
+            2,
+            "55555",
+            "2026-07-01T13:00:00",
+            "2026-07-01T13:30:00",
+            0.5,
+            WEAK,
+            0.0,
+            "",
+            (Overlap("70002", 40),),
+            ("chatter msg 900",),
+            False,
+        ),
     ]
 
 
@@ -183,28 +217,70 @@ class TestReviewBodyLines(unittest.TestCase):
         self.assertIn("no sessions in window to review", "\n".join(lines))
 
     def test_multi_overlap_collapses_to_count(self):
-        card = ReviewCard(1, "24648", "2026-07-01T09:00:00", "2026-07-01T12:00:00",
-                          3.0, WEAK, 0.0, "", (Overlap("a", 10), Overlap("b", 20)),
-                          (), False)
+        card = ReviewCard(
+            1,
+            "24648",
+            "2026-07-01T09:00:00",
+            "2026-07-01T12:00:00",
+            3.0,
+            WEAK,
+            0.0,
+            "",
+            (Overlap("a", 10), Overlap("b", 20)),
+            (),
+            False,
+        )
         body = "\n".join(review_body_lines([card], 0, False))
         self.assertIn("overlaps 2 sessions", body)
 
     def test_overlap_detail_listed_in_pane(self):
-        card = ReviewCard(1, "24648", "2026-07-01T09:00:00", "2026-07-01T12:00:00",
-                          3.0, WEAK, 0.0, "", (Overlap("70002", 40),),
-                          ("commit abc1234",), False)
+        card = ReviewCard(
+            1,
+            "24648",
+            "2026-07-01T09:00:00",
+            "2026-07-01T12:00:00",
+            3.0,
+            WEAK,
+            0.0,
+            "",
+            (Overlap("70002", 40),),
+            ("commit abc1234",),
+            False,
+        )
         body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("overlaps task 70002 by 40m", body)
 
     def test_unvalidated_shown_in_pane(self):
-        card = ReviewCard(1, "999", "2026-07-01T09:00:00", "2026-07-01T10:00:00",
-                          1.0, WEAK, 0.0, "", (), ("commit abc1234",), True)
+        card = ReviewCard(
+            1,
+            "999",
+            "2026-07-01T09:00:00",
+            "2026-07-01T10:00:00",
+            1.0,
+            WEAK,
+            0.0,
+            "",
+            (),
+            ("commit abc1234",),
+            True,
+        )
         body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("task id unvalidated", body)
 
     def test_pane_notes_no_linked_events(self):
-        card = ReviewCard(1, "999", "2026-07-01T09:00:00", "2026-07-01T10:00:00",
-                          1.0, WEAK, 0.0, "", (), (), False)
+        card = ReviewCard(
+            1,
+            "999",
+            "2026-07-01T09:00:00",
+            "2026-07-01T10:00:00",
+            1.0,
+            WEAK,
+            0.0,
+            "",
+            (),
+            (),
+            False,
+        )
         body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("no linked events", body)
 

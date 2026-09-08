@@ -22,9 +22,7 @@ def _backdate(db_path: Path, task_id: int, hours: float) -> None:
     """Rewrite a run's ``started_at`` to ``hours`` ago so it reads as stale."""
     ts = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "UPDATE task_runs SET started_at = ? WHERE task_id = ?", (ts, task_id)
-    )
+    conn.execute("UPDATE task_runs SET started_at = ? WHERE task_id = ?", (ts, task_id))
     conn.commit()
     conn.close()
 
@@ -89,9 +87,7 @@ class TestDiscoverRuns(unittest.TestCase):
             discover_runs(root=self.root / "nope")
 
     def test_lists_active_runs_sorted_by_start(self):
-        _central_db(
-            self.root, runs=[(1, "First", 3), (2, "Second", 1)]
-        )
+        _central_db(self.root, runs=[(1, "First", 3), (2, "Second", 1)])
         runs = discover_runs(root=self.root)
         # Oldest start first (task 1 backdated 3h, task 2 backdated 1h).
         self.assertEqual([r["task_id"] for r in runs], [1, 2])
@@ -127,7 +123,9 @@ class TestDiscoverRuns(unittest.TestCase):
         _central_db(self.root, runs=[(1, "Aging", 5)])
         # 5h old is fresh under the 12h default but stale under a 1h threshold.
         self.assertFalse(discover_runs(root=self.root)[0]["stale"])
-        self.assertTrue(discover_runs(root=self.root, stale_after_hours=1.0)[0]["stale"])
+        self.assertTrue(
+            discover_runs(root=self.root, stale_after_hours=1.0)[0]["stale"]
+        )
 
 
 class TestDiscoverRunsCommand(unittest.TestCase):

@@ -129,8 +129,12 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[], new_id=500)
         db = _tmp_db()
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] session 10|1", hours=1.5,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] session 10|1",
+            hours=1.5,
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
@@ -157,8 +161,12 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[], new_id=[502])
         db = _tmp_db()
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|9",
-            description="[/] session 10|9", hours=1.0,
+            client,
+            db,
+            task_id=10,
+            session_key="10|9",
+            description="[/] session 10|9",
+            hours=1.0,
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
@@ -170,8 +178,12 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[{"id": 88}])
         db = _tmp_db()
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] done", hours=2.0,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] done",
+            hours=2.0,
             started_at=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 2, 10, 0, tzinfo=UTC),
         )
@@ -192,8 +204,12 @@ class TestReconcileSession(unittest.TestCase):
         db = _tmp_db()
         db.record_session_upload("10|1", 200, 1.0)
         tid = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] x", hours=3.0,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] x",
+            hours=3.0,
             started_at=datetime(2026, 7, 3, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
         )
@@ -206,14 +222,22 @@ class TestReconcileSession(unittest.TestCase):
         client, executor = self._client(anchors=[], new_id=500)
         db = _tmp_db()
         first = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] a", hours=1.0,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] a",
+            hours=1.0,
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
         second = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] b", hours=2.5,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] b",
+            hours=2.5,
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
@@ -243,8 +267,12 @@ class TestReconcileSession(unittest.TestCase):
 
         executor = _OrderingExecutor(anchors=[{"id": 88}])
         reconcile_session(
-            OdooClient(executor=executor), db, task_id=10, session_key="10|1",
-            description="[/] done", hours=2.0,
+            OdooClient(executor=executor),
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] done",
+            hours=2.0,
             started_at=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 2, 10, 0, tzinfo=UTC),
         )
@@ -269,8 +297,14 @@ class TestReconcileSession(unittest.TestCase):
         crashing = _CrashOnWrite(anchors=[{"id": 88}])
         with self.assertRaises(OdooServerError):
             reconcile_session(
-                OdooClient(executor=crashing), db, task_id=10, session_key="10|1",
-                description="[/] done", hours=2.0, started_at=start, ended_at=end,
+                OdooClient(executor=crashing),
+                db,
+                task_id=10,
+                session_key="10|1",
+                description="[/] done",
+                hours=2.0,
+                started_at=start,
+                ended_at=end,
             )
         # Mapping persisted before the failing rename: the retry is recoverable.
         self.assertEqual(db.get_session_upload("10|1")["timesheet_id"], 88)
@@ -279,8 +313,14 @@ class TestReconcileSession(unittest.TestCase):
         # mapping routes to the mapped branch — a rewrite of row 88, not a create.
         retry = _SessionExecutor(anchors=[], new_id=999)
         tid = reconcile_session(
-            OdooClient(executor=retry), db, task_id=10, session_key="10|1",
-            description="[/] done", hours=2.0, started_at=start, ended_at=end,
+            OdooClient(executor=retry),
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] done",
+            hours=2.0,
+            started_at=start,
+            ended_at=end,
         )
         self.assertEqual(tid, 88)  # same row, never the would-be new 999
         self.assertEqual(retry.by_method("create"), [])  # no second line billed
@@ -302,8 +342,12 @@ class TestReconcileSession(unittest.TestCase):
 
         # The old ``[[50]]`` shape would raise here; the fix keeps it flat.
         result = reconcile_session(
-            client, db, task_id=10, session_key="10|1",
-            description="[/] Done", hours=1.5,
+            client,
+            db,
+            task_id=10,
+            session_key="10|1",
+            description="[/] Done",
+            hours=1.5,
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
@@ -345,7 +389,10 @@ class TestSweepOrphanedUploads(unittest.TestCase):
 
     def _record(self, db, key, tid, task_id, day):
         db.record_session_upload(
-            key, tid, 1.0, task_id=task_id,
+            key,
+            tid,
+            1.0,
+            task_id=task_id,
             started_at=datetime(2026, 6, day, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 6, day, 10, 0, tzinfo=UTC),
         )
@@ -356,8 +403,12 @@ class TestSweepOrphanedUploads(unittest.TestCase):
         self._record(db, "10|1", 500, "10", day=1)
         lo, hi = self._window()
         retired = sweep_orphaned_uploads(
-            client, db, derived_keys={"10|1"}, derived_task_ids={"10"},
-            window_lo=lo, window_hi=hi,
+            client,
+            db,
+            derived_keys={"10|1"},
+            derived_task_ids={"10"},
+            window_lo=lo,
+            window_hi=hi,
         )
         self.assertEqual(retired, 0)
         self.assertEqual(executor.writes, [])
@@ -369,8 +420,12 @@ class TestSweepOrphanedUploads(unittest.TestCase):
         self._record(db, "10|1", 500, "10", day=1)  # merged-away session
         lo, hi = self._window()
         retired = sweep_orphaned_uploads(
-            client, db, derived_keys=set(), derived_task_ids={"10"},
-            window_lo=lo, window_hi=hi,
+            client,
+            db,
+            derived_keys=set(),
+            derived_task_ids={"10"},
+            window_lo=lo,
+            window_hi=hi,
         )
         self.assertEqual(retired, 1)
         ids, vals = executor.writes[0]
@@ -385,14 +440,21 @@ class TestSweepOrphanedUploads(unittest.TestCase):
         client, executor = self._client()
         db = _tmp_db()
         db.record_session_upload(
-            "10|1", 500, 1.0, task_id="10",
+            "10|1",
+            500,
+            1.0,
+            task_id="10",
             started_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
             ended_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
         )
         lo, hi = self._window()  # June window; mapping is in July
         retired = sweep_orphaned_uploads(
-            client, db, derived_keys=set(), derived_task_ids={"10"},
-            window_lo=lo, window_hi=hi,
+            client,
+            db,
+            derived_keys=set(),
+            derived_task_ids={"10"},
+            window_lo=lo,
+            window_hi=hi,
         )
         self.assertEqual(retired, 0)
         self.assertIsNotNone(db.get_session_upload("10|1"))
@@ -405,8 +467,12 @@ class TestSweepOrphanedUploads(unittest.TestCase):
         db.record_session_upload("10|owner/repo|1", 500, 1.0)  # legacy, no bounds
         lo, hi = self._window()
         retired = sweep_orphaned_uploads(
-            client, db, derived_keys={"10|3"}, derived_task_ids={"10"},
-            window_lo=lo, window_hi=hi,
+            client,
+            db,
+            derived_keys={"10|3"},
+            derived_task_ids={"10"},
+            window_lo=lo,
+            window_hi=hi,
         )
         self.assertEqual(retired, 1)
         self.assertEqual(executor.writes[0][1]["unit_amount"], 0.0)
@@ -418,8 +484,12 @@ class TestSweepOrphanedUploads(unittest.TestCase):
         db.record_session_upload("99|owner/repo|1", 500, 1.0)  # legacy, other task
         lo, hi = self._window()
         retired = sweep_orphaned_uploads(
-            client, db, derived_keys={"10|3"}, derived_task_ids={"10"},
-            window_lo=lo, window_hi=hi,
+            client,
+            db,
+            derived_keys={"10|3"},
+            derived_task_ids={"10"},
+            window_lo=lo,
+            window_hi=hi,
         )
         self.assertEqual(retired, 0)
         self.assertIsNotNone(db.get_session_upload("99|owner/repo|1"))

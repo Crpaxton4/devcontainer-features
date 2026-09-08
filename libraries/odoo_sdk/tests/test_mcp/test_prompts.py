@@ -416,7 +416,9 @@ class TestReportIncidentPromptRegistration(unittest.TestCase):
         from fastmcp.prompts import Prompt
 
         _, captured = self._build(_empty_registry())
-        return next(p for p in captured if isinstance(p, Prompt) and p.name == "report_incident")
+        return next(
+            p for p in captured if isinstance(p, Prompt) and p.name == "report_incident"
+        )
 
     def test_prompt_name_is_report_incident(self):
         prompt = self._get_report_incident_prompt()

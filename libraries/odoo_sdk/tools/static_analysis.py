@@ -7,7 +7,9 @@ REPORTS = ROOT / "reports"
 
 
 def run(cmd: list[str], out: Path | None = None):
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    ) as proc:
         lines = []
         for line in proc.stdout:
             print(line, end="", flush=True)

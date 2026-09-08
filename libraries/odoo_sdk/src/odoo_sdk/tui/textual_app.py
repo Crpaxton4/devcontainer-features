@@ -206,7 +206,9 @@ class MainScreen(_StateScreen):
     def refresh_from_state(self, state: AppState) -> None:
         """Render the timeline, stats, header, and status for ``state``."""
         stats = compute_stats(state.sessions)
-        self.query_one("#header", TextPanel).set_lines([header_text(state.window, stats)])
+        self.query_one("#header", TextPanel).set_lines(
+            [header_text(state.window, stats)]
+        )
         timeline = self.query_one("#timeline-panel", TextPanel)
         inner_width = timeline.size.width - 4  # borders + padding
         if inner_width <= 0:  # not laid out yet; on_resize re-renders with truth

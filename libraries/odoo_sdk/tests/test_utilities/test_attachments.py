@@ -298,9 +298,7 @@ class TestCreateAttachment(unittest.TestCase):
 
     def test_rejects_invalid_base64_content(self):
         with self.assertRaises(ValueError) as ctx:
-            create_attachment(
-                _create_client(), content="not base64!!", name="a.txt"
-            )
+            create_attachment(_create_client(), content="not base64!!", name="a.txt")
         self.assertIn("base64", str(ctx.exception))
 
     def test_rejects_unreadable_path(self):

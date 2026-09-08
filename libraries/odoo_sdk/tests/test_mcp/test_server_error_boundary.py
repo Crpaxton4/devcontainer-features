@@ -29,7 +29,11 @@ from odoo_sdk.transport.errors import OdooError, OdooValidationError
 # amendment to #222 uses TaskAlreadyRunningError in place of ActiveSessionError.
 _CAUGHT_CASES = [
     (OdooError("odoo boom"), "OdooError", "odoo boom"),
-    (TaskNotRunningError("no active session"), "TaskNotRunningError", "no active session"),
+    (
+        TaskNotRunningError("no active session"),
+        "TaskNotRunningError",
+        "no active session",
+    ),
     (
         TaskAlreadyRunningError("session already active"),
         "TaskAlreadyRunningError",
@@ -139,19 +143,33 @@ class TestErrorBoundaryWiredIntoServer(unittest.TestCase):
     """A failing fake tool wired through a real OdooMCPServer (smoke replacement)."""
 
     def test_sync_failing_tool_returns_structured_payload(self):
-        tool = _build_added("boom", _sync_raiser(TaskNotRunningError("no active session")))
+        tool = _build_added(
+            "boom", _sync_raiser(TaskNotRunningError("no active session"))
+        )
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
                 tool.fn(),
-                {"error": {"type": "TaskNotRunningError", "message": "no active session"}},
+                {
+                    "error": {
+                        "type": "TaskNotRunningError",
+                        "message": "no active session",
+                    }
+                },
             )
 
     def test_async_failing_tool_returns_structured_payload(self):
-        tool = _build_added("boom", _async_raiser(TaskAlreadyRunningError("already active")))
+        tool = _build_added(
+            "boom", _async_raiser(TaskAlreadyRunningError("already active"))
+        )
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
                 asyncio.run(tool.fn()),
-                {"error": {"type": "TaskAlreadyRunningError", "message": "already active"}},
+                {
+                    "error": {
+                        "type": "TaskAlreadyRunningError",
+                        "message": "already active",
+                    }
+                },
             )
 
     def test_error_payload_is_toon_encoded_when_flag_on(self):

@@ -70,8 +70,12 @@ class TestBoundFormatting(unittest.TestCase):
     def test_open_range_sentinels_still_sort_past_every_row(self):
         # datetime.min/max are naive sentinels from the query layer; suffixing
         # them must not disturb their role as outer bounds.
-        self.assertLess(_normalize_utc_isoformat(datetime.min), "2026-06-01T00:00:00+00:00")
-        self.assertGreater(_normalize_utc_isoformat(datetime.max), "9998-01-01T00:00:00+00:00")
+        self.assertLess(
+            _normalize_utc_isoformat(datetime.min), "2026-06-01T00:00:00+00:00"
+        )
+        self.assertGreater(
+            _normalize_utc_isoformat(datetime.max), "9998-01-01T00:00:00+00:00"
+        )
 
 
 class TestLowerBoundEdge(unittest.TestCase):

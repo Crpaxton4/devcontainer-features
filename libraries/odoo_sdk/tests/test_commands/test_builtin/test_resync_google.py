@@ -40,9 +40,11 @@ class TestGoogleWiring(unittest.TestCase):
 
     def test_runs_only_google_when_requested(self) -> None:
         cmd, state, config = self._command()
-        with patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 13}) as cal, \
-                patch(f"{_MOD}.sync_gmail", return_value={"inserted": 2}) as mail, \
-                patch(f"{_MOD}.sync_git_log") as git:
+        with (
+            patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 13}) as cal,
+            patch(f"{_MOD}.sync_gmail", return_value={"inserted": 2}) as mail,
+            patch(f"{_MOD}.sync_git_log") as git,
+        ):
             result = cmd.execute(sources="gcal,gmail")
         self.assertEqual(result, {"gcal": {"inserted": 13}, "gmail": {"inserted": 2}})
         cal.assert_called_once_with(state, config)
@@ -51,11 +53,13 @@ class TestGoogleWiring(unittest.TestCase):
 
     def test_google_not_run_by_default(self) -> None:
         cmd, _state, _config = self._command()
-        with patch(f"{_MOD}.sync_git_log", return_value={"inserted": 0}), \
-                patch(f"{_MOD}.sync_github", return_value={"inserted": 0}), \
-                patch(f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 0}), \
-                patch(f"{_MOD}.sync_google_calendar") as cal, \
-                patch(f"{_MOD}.sync_gmail") as mail:
+        with (
+            patch(f"{_MOD}.sync_git_log", return_value={"inserted": 0}),
+            patch(f"{_MOD}.sync_github", return_value={"inserted": 0}),
+            patch(f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 0}),
+            patch(f"{_MOD}.sync_google_calendar") as cal,
+            patch(f"{_MOD}.sync_gmail") as mail,
+        ):
             result = cmd.execute()
         self.assertNotIn("gcal", result)
         self.assertNotIn("gmail", result)

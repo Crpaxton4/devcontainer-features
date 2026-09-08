@@ -182,9 +182,7 @@ class TestAbortRunStateMethod(unittest.TestCase):
             db.abort_run(999)
         # One guard implementation, one message (#627): the db layer raises the
         # same canonical wording as the command layer.
-        self.assertEqual(
-            str(ctx.exception), "No active session for task 999."
-        )
+        self.assertEqual(str(ctx.exception), "No active session for task 999.")
 
 
 class TestAbortedAtColumn(unittest.TestCase):
@@ -272,11 +270,14 @@ class TestUploadSelectionFilter(unittest.TestCase):
             **_session(T_RESTART, T_RESTART + timedelta(minutes=30)),
             "session_key": "101|9",
         }
-        with patch(
-            "odoo_sdk.billing.upload.reconcile_session", return_value=700
-        ) as reconcile, patch(
-            "odoo_sdk.billing.upload.sweep_orphaned_uploads", return_value=0
-        ) as sweep:
+        with (
+            patch(
+                "odoo_sdk.billing.upload.reconcile_session", return_value=700
+            ) as reconcile,
+            patch(
+                "odoo_sdk.billing.upload.sweep_orphaned_uploads", return_value=0
+            ) as sweep,
+        ):
             result = upload_sessions(
                 MagicMock(),
                 db,

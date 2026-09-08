@@ -44,12 +44,10 @@ class TestDescriptions(unittest.TestCase):
     def test_prefixed_description_falls_back_when_empty(self):
         result, _ = _result()
         entry = result.best_gap_entries[0]
-        self.assertEqual(
-            prefixed_description(entry, "   "), default_description(entry)
-        )
+        self.assertEqual(prefixed_description(entry, "   "), default_description(entry))
 
     def test_sanitize_strips_prefix_and_specials(self):
-        cleaned = sanitize_description('[/] hello, world\nnext;line')
+        cleaned = sanitize_description("[/] hello, world\nnext;line")
         self.assertNotIn("[/]", cleaned)
         self.assertNotIn(",", cleaned)
         self.assertNotIn("\n", cleaned)
@@ -67,9 +65,7 @@ class TestRenderCsv(unittest.TestCase):
         result, cfg = _result()
         text = render_odoo_csv(result, cfg)
         rows = list(csv.DictReader(io.StringIO(text)))
-        self.assertEqual(
-            text.splitlines()[0].split(","), CSV_COLUMNS
-        )
+        self.assertEqual(text.splitlines()[0].split(","), CSV_COLUMNS)
         self.assertEqual(len(rows), len(result.best_gap_entries))
 
     def test_columns_odoo_populates_itself_are_absent(self):

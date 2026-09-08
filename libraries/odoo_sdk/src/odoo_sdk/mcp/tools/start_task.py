@@ -445,7 +445,11 @@ async def _setup_task_branch(
     if interactive:
         branches = _list_local_branches()
         if not branches:
-            return None, False, "No local git branches found. Ensure the working directory is a git repo."
+            return (
+                None,
+                False,
+                "No local git branches found. Ensure the working directory is a git repo.",
+            )
 
         numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
         result = await ctx.elicit(
@@ -463,7 +467,11 @@ async def _setup_task_branch(
         # elicitation — fork from the remote default (or current) branch.
         base_branch = _default_base_branch()
         if base_branch is None:
-            return None, False, "No base branch found. Ensure the working directory is a git repo."
+            return (
+                None,
+                False,
+                "No base branch found. Ensure the working directory is a git repo.",
+            )
 
     branch_name = f"{task_id}-{description}"
 
@@ -508,7 +516,11 @@ def _lookup_task_by_id(client: Any, task_id: int) -> Optional[tuple[dict, dict]]
     project_raw = r.get("project_id")
     project = {
         "id": project_raw[0] if isinstance(project_raw, (list, tuple)) else project_raw,
-        "name": project_raw[1] if isinstance(project_raw, (list, tuple)) else str(project_raw),
+        "name": (
+            project_raw[1]
+            if isinstance(project_raw, (list, tuple))
+            else str(project_raw)
+        ),
     }
     return {"id": r["id"], "name": r["name"]}, project
 
@@ -717,7 +729,9 @@ def make_start_task_tool(registry: Registry):
             # *original typed* exception unchanged for the MCP
             # ``_error_boundary`` (#222) to format — it is not swallowed into an
             # ``{"error": ...}`` dict here.
-            _rollback_task_branch_if_created(branch_name, branch_created, original_branch)
+            _rollback_task_branch_if_created(
+                branch_name, branch_created, original_branch
+            )
             raise
 
     return start_task

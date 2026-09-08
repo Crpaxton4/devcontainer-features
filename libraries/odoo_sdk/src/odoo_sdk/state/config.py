@@ -708,7 +708,11 @@ class LocalConfig:
         value = self._behavior.get("resync_authors")
         if value in (None, ""):
             return []
-        raw = value if isinstance(value, (list, tuple)) else re.split(r"[,\s]+", str(value))
+        raw = (
+            value
+            if isinstance(value, (list, tuple))
+            else re.split(r"[,\s]+", str(value))
+        )
         seen: list[str] = []
         for item in raw:
             identity = str(item).strip()

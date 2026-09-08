@@ -39,11 +39,11 @@ class TestResyncCommand(unittest.TestCase):
 
     def test_runs_all_sources_by_default(self) -> None:
         cmd, client, state = self._command()
-        with patch(f"{_MOD}.sync_git_log", return_value={"inserted": 2}) as git, patch(
-            f"{_MOD}.sync_github", return_value={"inserted": 1}
-        ) as gh, patch(
-            f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 3}
-        ) as odoo:
+        with (
+            patch(f"{_MOD}.sync_git_log", return_value={"inserted": 2}) as git,
+            patch(f"{_MOD}.sync_github", return_value={"inserted": 1}) as gh,
+            patch(f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 3}) as odoo,
+        ):
             result = cmd.execute()
         self.assertEqual(
             result,
@@ -62,9 +62,11 @@ class TestResyncCommand(unittest.TestCase):
 
     def test_subset_runs_only_requested_pullers(self) -> None:
         cmd, _client, _state = self._command()
-        with patch(f"{_MOD}.sync_git_log", return_value={"inserted": 0}) as git, patch(
-            f"{_MOD}.sync_github"
-        ) as gh, patch(f"{_MOD}.sync_odoo_chatter") as odoo:
+        with (
+            patch(f"{_MOD}.sync_git_log", return_value={"inserted": 0}) as git,
+            patch(f"{_MOD}.sync_github") as gh,
+            patch(f"{_MOD}.sync_odoo_chatter") as odoo,
+        ):
             result = cmd.execute(sources="git")
         self.assertEqual(result, {"git": {"inserted": 0}})
         git.assert_called_once()
@@ -73,9 +75,11 @@ class TestResyncCommand(unittest.TestCase):
 
     def test_skip_reasons_pass_through(self) -> None:
         cmd, _client, _state = self._command()
-        with patch(f"{_MOD}.sync_git_log", return_value={"skipped": "no git"}), patch(
-            f"{_MOD}.sync_github", return_value={"skipped": "no gh"}
-        ), patch(f"{_MOD}.sync_odoo_chatter", return_value={"skipped": "no odoo"}):
+        with (
+            patch(f"{_MOD}.sync_git_log", return_value={"skipped": "no git"}),
+            patch(f"{_MOD}.sync_github", return_value={"skipped": "no gh"}),
+            patch(f"{_MOD}.sync_odoo_chatter", return_value={"skipped": "no odoo"}),
+        ):
             result = cmd.execute(sources="git,github,odoo")
         self.assertEqual(
             result,
@@ -90,15 +94,17 @@ class TestResyncCommand(unittest.TestCase):
         # git/github/odoo receive the parsed dates; the Google pullers keep
         # their own google_sync_window_days window and never see them (#652).
         cmd, client, state = self._command()
-        with patch(
-            f"{_MOD}.sync_git_log", return_value={"inserted": 0, "found": 0, "repos": 1}
-        ) as git, patch(
-            f"{_MOD}.sync_github", return_value={"inserted": 0, "found": 0}
-        ) as gh, patch(
-            f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 0}
-        ) as odoo, patch(
-            f"{_MOD}.sync_google_calendar", return_value={"inserted": 0}
-        ) as gcal:
+        with (
+            patch(
+                f"{_MOD}.sync_git_log",
+                return_value={"inserted": 0, "found": 0, "repos": 1},
+            ) as git,
+            patch(
+                f"{_MOD}.sync_github", return_value={"inserted": 0, "found": 0}
+            ) as gh,
+            patch(f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 0}) as odoo,
+            patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 0}) as gcal,
+        ):
             cmd.execute(
                 sources="git,github,odoo,gcal", start="2026-07-01", end="2026-07-31"
             )
@@ -118,9 +124,10 @@ class TestResyncCommand(unittest.TestCase):
 
     def test_error_results_pass_through(self) -> None:
         cmd, _client, _state = self._command()
-        with patch(
-            f"{_MOD}.sync_git_log", return_value={"error": "no repos"}
-        ), patch(f"{_MOD}.sync_github", return_value={"inserted": 1, "found": 1}):
+        with (
+            patch(f"{_MOD}.sync_git_log", return_value={"error": "no repos"}),
+            patch(f"{_MOD}.sync_github", return_value={"inserted": 1, "found": 1}),
+        ):
             result = cmd.execute(sources="git,github")
         self.assertEqual(result["git"], {"error": "no repos"})
         self.assertEqual(result["github"], {"inserted": 1, "found": 1})
@@ -137,9 +144,7 @@ class TestResyncCommand(unittest.TestCase):
             side_effect=GoogleAuthError("no token at /x; re-run helper"),
         ):
             result = cmd.execute(sources="gcal")
-        self.assertEqual(
-            result, {"gcal": {"skipped": "no token at /x; re-run helper"}}
-        )
+        self.assertEqual(result, {"gcal": {"skipped": "no token at /x; re-run helper"}})
 
     def test_google_range_gets_ignored_note(self) -> None:
         cmd, _client, _state = self._command()

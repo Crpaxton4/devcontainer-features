@@ -18,8 +18,9 @@ from odoo_sdk.state.summary import summarize_run_activity
 _TS = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def _event(source="agent", subject="", branch="", pr_num=0, payload=None,
-           external_id=None):
+def _event(
+    source="agent", subject="", branch="", pr_num=0, payload=None, external_id=None
+):
     return EventRecord(
         id=None,
         source=source,
@@ -70,8 +71,12 @@ class TestSummarizeRunActivity(unittest.TestCase):
 
     def test_branch_pr_and_test_result_segments(self):
         events = [
-            _event(subject="stop_task", branch="100#fix-vat", pr_num=42,
-                   payload={"test_result": "passed"}),
+            _event(
+                subject="stop_task",
+                branch="100#fix-vat",
+                pr_num=42,
+                payload={"test_result": "passed"},
+            ),
         ]
         summary = summarize_run_activity(events, [])
         self.assertIn("branch 100#fix-vat", summary)
@@ -80,8 +85,11 @@ class TestSummarizeRunActivity(unittest.TestCase):
 
     def test_pr_url_wins_over_bare_pr_number(self):
         events = [
-            _event(subject="x", pr_num=42,
-                   payload={"pr_url": "https://github.com/o/r/pull/42"}),
+            _event(
+                subject="x",
+                pr_num=42,
+                payload={"pr_url": "https://github.com/o/r/pull/42"},
+            ),
         ]
         summary = summarize_run_activity(events, [])
         self.assertIn("PR https://github.com/o/r/pull/42", summary)
@@ -127,9 +135,7 @@ class TestSummarizeRunActivity(unittest.TestCase):
 
     def test_commit_without_external_id_still_lists_subject(self):
         events = [_event(source="commit", subject="hotfix rounding")]
-        self.assertEqual(
-            summarize_run_activity(events, []), "commits: hotfix rounding"
-        )
+        self.assertEqual(summarize_run_activity(events, []), "commits: hotfix rounding")
 
 
 if __name__ == "__main__":

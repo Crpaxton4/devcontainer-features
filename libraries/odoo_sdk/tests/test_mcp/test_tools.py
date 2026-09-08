@@ -70,7 +70,11 @@ def _make_sp(
         elif args[1] == "rev-parse" and "--verify" in args:
             spec = args[-1]
             ref = spec.rsplit("/", 1)[-1]
-            known = remote_branches if spec.startswith("refs/remotes/") else existing_branches
+            known = (
+                remote_branches
+                if spec.startswith("refs/remotes/")
+                else existing_branches
+            )
             r.returncode = 0 if ref in known else 1
         elif args[1] == "rev-parse":
             r.stdout = f"{current_branch}\n"
@@ -264,9 +268,7 @@ class TestDefaultToolSurface(unittest.TestCase):
         from odoo_sdk.mcp.tools import default_tool_surface
 
         full = self._full()
-        self.assertEqual(
-            set(default_tool_surface(full, include_gated=True)), set(full)
-        )
+        self.assertEqual(set(default_tool_surface(full, include_gated=True)), set(full))
 
     def test_env_opt_in_restores_the_full_surface(self):
         from odoo_sdk.mcp.tools import GATED_TOOLS_ENV, default_tool_surface
@@ -568,7 +570,9 @@ class TestStartTaskTool(unittest.TestCase):
             _run(tool(ctx, task_id=10))
         called = [c.args[0] for c in sp.run.call_args_list]
         # push must carry untracked files (-u) so the balanced pop has an entry.
-        self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in called))
+        self.assertTrue(
+            any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in called)
+        )
         self.assertIn(["git", "stash", "pop"], called)
 
     def test_rolls_back_branch_when_start_command_fails(self):
@@ -703,7 +707,9 @@ class TestCreateTaskBranch(unittest.TestCase):
         with patch(_SP_PATCH, sp):
             _create_task_branch("10-fix", "main")  # must not raise
         calls = self._calls(sp)
-        self.assertTrue(any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in calls))
+        self.assertTrue(
+            any(c[:3] == ["git", "stash", "push"] and "-u" in c for c in calls)
+        )
         self.assertIn(["git", "stash", "pop"], calls)
 
     def test_clean_tree_does_not_stash(self):
@@ -870,9 +876,7 @@ class TestBranchDescriptionSampling(unittest.TestCase):
 
     def test_continuation_with_missing_response_key_falls_back_to_slug(self):
         reg = self._registry()
-        ctx = _sampling_ctx(
-            input_responses={"unrelated": _sampled_response("nope")}
-        )
+        ctx = _sampling_ctx(input_responses={"unrelated": _sampled_response("nope")})
         tool = make_start_task_tool(reg)
         with patch(_SP_PATCH, _make_sp()):
             result = _run(tool(ctx, task_id=10))
@@ -1284,9 +1288,7 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         # ``task_id`` and ``note`` stay the only required properties, so an
         # attachment-less call remains schema-valid (backwards compatibility).
         self.assertEqual(schema["required"], ["task_id", "note"])
-        self.assertEqual(
-            schema["properties"]["attachments"].get("default"), None
-        )
+        self.assertEqual(schema["properties"]["attachments"].get("default"), None)
 
     def test_dedupe_key_optional_and_defaults_to_none(self):
         # #631: the idempotency key is opt-in and never required.
@@ -1305,9 +1307,7 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         specs = [{"path": "/tmp/report.csv"}]
         result = fn(5, "note", specs)
         self.assertEqual(result["args"], (5, "note"))
-        self.assertEqual(
-            result["kwargs"], {"attachments": specs, "dedupe_key": None}
-        )
+        self.assertEqual(result["kwargs"], {"attachments": specs, "dedupe_key": None})
 
     def test_dedupe_key_forwarded_to_command(self):
         fn = self._make()
@@ -1319,9 +1319,7 @@ class TestTaskNoteToolSchema(unittest.TestCase):
     def test_plain_call_forwards_none_attachments(self):
         fn = self._make()
         result = fn(5, "note")
-        self.assertEqual(
-            result["kwargs"], {"attachments": None, "dedupe_key": None}
-        )
+        self.assertEqual(result["kwargs"], {"attachments": None, "dedupe_key": None})
 
 
 class TestGetTaskChatterToolSchema(unittest.TestCase):
@@ -1407,15 +1405,9 @@ class TestCompositionToolDecorator(unittest.TestCase):
 
         # The decorator populates the registry at import time — no hand-edited
         # dict literal. Pin the set so a dropped/renamed decorator fails here.
-        self.assertEqual(
-            set(COMPOSITION_TOOL_FACTORIES), {"start_task", "stop_task"}
-        )
-        self.assertIs(
-            COMPOSITION_TOOL_FACTORIES["start_task"], make_start_task_tool
-        )
-        self.assertIs(
-            COMPOSITION_TOOL_FACTORIES["stop_task"], make_stop_task_tool
-        )
+        self.assertEqual(set(COMPOSITION_TOOL_FACTORIES), {"start_task", "stop_task"})
+        self.assertIs(COMPOSITION_TOOL_FACTORIES["start_task"], make_start_task_tool)
+        self.assertIs(COMPOSITION_TOOL_FACTORIES["stop_task"], make_stop_task_tool)
 
     def test_registers_factory_under_explicit_name(self):
         from odoo_sdk.mcp.tools.composition import (

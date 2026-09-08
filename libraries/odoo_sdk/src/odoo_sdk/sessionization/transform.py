@@ -110,9 +110,7 @@ def build_window_entries(
             entries.append(
                 _window_entry(task_id, window_events, start, end_raw, config)
             )
-    return sorted(
-        entries, key=lambda entry: (entry.start, entry.repo, entry.task_id)
-    )
+    return sorted(entries, key=lambda entry: (entry.start, entry.repo, entry.task_id))
 
 
 def billable_events(events: list[RawEvent]) -> list[RawEvent]:
@@ -131,9 +129,7 @@ def billable_events(events: list[RawEvent]) -> list[RawEvent]:
     ``tests/test_sessionization/test_parity.py``.
     """
     return [
-        event
-        for event in events
-        if event.task_ids and "UNKNOWN" not in event.task_ids
+        event for event in events if event.task_ids and "UNKNOWN" not in event.task_ids
     ]
 
 
@@ -254,9 +250,7 @@ def sweep(events: list[RawEvent], config: SessionizationConfig) -> SweepResults:
     )
 
 
-def transform(
-    events: list[RawEvent], config: SessionizationConfig
-) -> TransformResult:
+def transform(events: list[RawEvent], config: SessionizationConfig) -> TransformResult:
     """Compute all time entries and sweep results from raw events."""
     events_for_billing = billable_events(events)
     window_entries = build_window_entries(

@@ -42,7 +42,13 @@ from tests.support import provision_schema
 # Repo root is four parents up from tests/test_cli/<this file> (mirrors the path
 # math in test_init_script_parity.py, which reaches sibling top-level dirs).
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-SHIM = _REPO_ROOT / "devcontainer-features" / "src" / "personal-features" / "claude-event-hook"
+SHIM = (
+    _REPO_ROOT
+    / "devcontainer-features"
+    / "src"
+    / "personal-features"
+    / "claude-event-hook"
+)
 
 
 def _shim_text() -> str:
@@ -56,7 +62,7 @@ def _shim_source_prefix(text: str) -> str:
     inside the quotes up to (but excluding) the first ``$`` or closing quote.
     """
     match = re.search(r'--source\s+"([^"$]*)', text)
-    assert match is not None, f"no --source \"...\" argument found in {SHIM}"
+    assert match is not None, f'no --source "..." argument found in {SHIM}'
     return match.group(1)
 
 
@@ -187,9 +193,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         # --attach-active-run must have attached BOTH active runs' task ids.
         self.assertEqual(sorted(event.task_ids), ["101", "202"])
         # --payload must have persisted verbatim.
-        self.assertEqual(
-            event.payload, {"session_id": "s-1", "tool_name": "Bash"}
-        )
+        self.assertEqual(event.payload, {"session_id": "s-1", "tool_name": "Bash"})
 
         # The persisted row must satisfy the billing predicate — this is what
         # makes a hook event sessionize/bill. A prefix drift would persist a row

@@ -67,9 +67,7 @@ class TestTaskAgingQuery(unittest.TestCase):
 
     def test_base_domain_fields_and_order(self):
         _, executor = _run([])
-        self.assertEqual(
-            executor.recorded["domain"], [("stage_id.fold", "=", False)]
-        )
+        self.assertEqual(executor.recorded["domain"], [("stage_id.fold", "=", False)])
         self.assertEqual(
             executor.recorded["fields"],
             [
@@ -81,9 +79,7 @@ class TestTaskAgingQuery(unittest.TestCase):
                 "date_last_stage_update",
             ],
         )
-        self.assertEqual(
-            executor.recorded["order"], "date_last_stage_update asc"
-        )
+        self.assertEqual(executor.recorded["order"], "date_last_stage_update asc")
 
     def test_default_limit_is_twenty(self):
         _, executor = _run([])
@@ -99,16 +95,12 @@ class TestTaskAgingQuery(unittest.TestCase):
 
     def test_stage_filter_is_case_insensitive_name_ilike(self):
         _, executor = _run([], stage="review")
-        self.assertIn(
-            ("stage_id.name", "ilike", "review"), executor.recorded["domain"]
-        )
+        self.assertIn(("stage_id.name", "ilike", "review"), executor.recorded["domain"])
 
     def test_empty_stage_string_adds_no_term(self):
         # A falsy ``stage`` must not append a domain term.
         _, executor = _run([], stage="")
-        self.assertEqual(
-            executor.recorded["domain"], [("stage_id.fold", "=", False)]
-        )
+        self.assertEqual(executor.recorded["domain"], [("stage_id.fold", "=", False)])
 
     def test_project_and_stage_combine(self):
         _, executor = _run([], project_id=9, stage="qa")

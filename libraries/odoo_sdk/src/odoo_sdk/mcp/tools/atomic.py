@@ -91,9 +91,7 @@ def make_get_todo_tool(registry: Registry):
 
 @atomic_tool("get_task")
 def make_get_task_tool(registry: Registry):
-    def get_task(
-        task_id: int, include: Optional[List[str]] = None
-    ) -> Optional[dict]:
+    def get_task(task_id: int, include: Optional[List[str]] = None) -> Optional[dict]:
         """Fetch task context for a project task with opt-in extra detail."""
         return registry["get_task"].execute(task_id, include=include)
 
@@ -129,9 +127,7 @@ def make_get_mail_status_tool(registry: Registry):
 
 @atomic_tool("get_task_attachments")
 def make_get_task_attachments_tool(registry: Registry):
-    def get_task_attachments(
-        task_id: int, include_content: bool = False
-    ) -> List[dict]:
+    def get_task_attachments(task_id: int, include_content: bool = False) -> List[dict]:
         """List a task's attachments from both the task and its chatter."""
         return registry["get_task_attachments"].execute(
             task_id, include_content=include_content
@@ -262,9 +258,7 @@ def make_search_chatter_tool(registry: Registry):
 
 @atomic_tool("search_knowledge_articles")
 def make_search_knowledge_articles_tool(registry: Registry):
-    def search_knowledge_articles(
-        query: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+    def search_knowledge_articles(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search the Odoo Knowledge base (``knowledge.article``) by text."""
         return registry["search_knowledge_articles"].execute(query, limit=limit)
 
@@ -602,4 +596,3 @@ def make_search_count_tool(registry: Registry):
         return registry["search_count"].execute(model, domain=domain)
 
     return search_count
-

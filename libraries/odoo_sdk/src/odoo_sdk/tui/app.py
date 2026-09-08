@@ -217,9 +217,7 @@ def confirm_upload(state: AppState, deps: TuiDeps, confirmed: bool) -> AppState:
     try:
         result = _run_upload(deps, state.sessions, state.window)
     except OdooError as exc:
-        return replace(
-            state, pending_upload=False, status=f"upload failed: {exc}"
-        )
+        return replace(state, pending_upload=False, status=f"upload failed: {exc}")
     return replace(state, pending_upload=False, status=_upload_status(result))
 
 
@@ -307,7 +305,9 @@ def _resync_status(result: dict[str, Any]) -> str:
     """Render the resync status line: per-source inserted counts / skip reasons."""
     if not result:
         return "resync — nothing to do"
-    parts = [f"{source}: {_source_summary(outcome)}" for source, outcome in result.items()]
+    parts = [
+        f"{source}: {_source_summary(outcome)}" for source, outcome in result.items()
+    ]
     return "resync — " + ", ".join(parts)
 
 

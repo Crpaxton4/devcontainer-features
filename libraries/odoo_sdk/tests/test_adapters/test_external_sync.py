@@ -179,8 +179,11 @@ class TestTaskIdValidation(unittest.TestCase):
 
     def test_finalize_flags_unknown_ids_out_of_task_ids(self) -> None:
         event = ex.EventRecord(
-            id=None, source="commit", timestamp=_NOW,
-            task_ids=["24648", "99999"], repo="o/r",
+            id=None,
+            source="commit",
+            timestamp=_NOW,
+            task_ids=["24648", "99999"],
+            repo="o/r",
         )
         ex._finalize_task_attribution(event, {"24648"})
         self.assertEqual(event.task_ids, ["24648"])
@@ -188,8 +191,11 @@ class TestTaskIdValidation(unittest.TestCase):
 
     def test_finalize_no_validation_keeps_ids(self) -> None:
         event = ex.EventRecord(
-            id=None, source="commit", timestamp=_NOW,
-            task_ids=["99999"], repo="o/r",
+            id=None,
+            source="commit",
+            timestamp=_NOW,
+            task_ids=["99999"],
+            repo="o/r",
         )
         ex._finalize_task_attribution(event, None)  # validation did not run
         self.assertEqual(event.task_ids, ["99999"])
@@ -245,7 +251,9 @@ class TestSyncGitLog(unittest.TestCase):
     def _log(self) -> str:
         return "\n".join(
             [
-                _SEP.join(["sha1", "2026-07-01T10:00:00Z", "first (task 24648)", "HEAD -> m"]),
+                _SEP.join(
+                    ["sha1", "2026-07-01T10:00:00Z", "first (task 24648)", "HEAD -> m"]
+                ),
                 # Undecorated commit: git omits the trailing separator (3 fields).
                 _SEP.join(["sha2", "2026-07-01T10:05:00Z", "second (task 24648)"]),
             ]
@@ -263,7 +271,10 @@ class TestSyncGitLog(unittest.TestCase):
 
     def test_happy_path_inserts_commit_events(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())), self._one_repo():
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(self._routes())),
+            self._one_repo(),
+        ):
             result = ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 1})
         events = state.get_events()
@@ -315,8 +326,11 @@ class TestSyncGitLog(unittest.TestCase):
             (_repo_cmd("/a", "remote"), "git@github.com:acme/alpha.git"),
             (_repo_cmd("/b", "remote"), "git@github.com:acme/beta.git"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
-            ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(
+                ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+            ),
         ):
             result = ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 2})
@@ -326,9 +340,7 @@ class TestSyncGitLog(unittest.TestCase):
     def test_multiple_author_emails_are_or_ed(self) -> None:
         state = _tmp_state()
         both = lambda cmd: (
-            "log" in cmd
-            and "--author=a@x.com" in cmd
-            and "--author=b@y.com" in cmd
+            "log" in cmd and "--author=a@x.com" in cmd and "--author=b@y.com" in cmd
         )
         routes = [
             (both, self._log()),
@@ -348,21 +360,27 @@ class TestSyncGitLog(unittest.TestCase):
             ]
         )
         client = _TaskValidator([24648])
-        with patch.object(
-            ex.subprocess, "run", _fake_run(self._routes(log=log))
-        ), self._one_repo():
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(self._routes(log=log))),
+            self._one_repo(),
+        ):
             result = ex.sync_git_log(state, _config(), client, now=_NOW)
         self.assertEqual(result["inserted"], 2)
         by_ext = {e.external_id: e for e in state.get_events()}
         self.assertEqual(by_ext["git:shaA"].task_ids, ["24648"])
         self.assertIsNone(by_ext["git:shaA"].payload)
         self.assertEqual(by_ext["git:shaB"].task_ids, [])  # not billed
-        self.assertEqual(by_ext["git:shaB"].payload, {"unvalidated_task_ids": ["99999"]})
+        self.assertEqual(
+            by_ext["git:shaB"].payload, {"unvalidated_task_ids": ["99999"]}
+        )
         self.assertEqual(client.calls, 1)  # ONE batched check for the whole puller
 
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())), self._one_repo():
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(self._routes())),
+            self._one_repo(),
+        ):
             ex.sync_git_log(state, _config(), now=_NOW)
             second = ex.sync_git_log(state, _config(), now=_NOW)
         # found stays 2 (the commits are still in the window); inserted drops
@@ -379,15 +397,19 @@ class TestSyncGitLog(unittest.TestCase):
     def test_zero_repos_is_error(self) -> None:
         state = _tmp_state()
         routes = [(_has("config", "user.email"), "dev@example.com")]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
-            ex, "_discover_git_repos", return_value=[]
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(ex, "_discover_git_repos", return_value=[]),
         ):
             result = ex.sync_git_log(state, _config(), now=_NOW)
         self.assertTrue(result["error"].startswith("no git repositories under "))
 
     def test_all_repos_failing_is_error(self) -> None:
         state = _tmp_state()
-        routes = [(_has("config", "user.email"), "dev@example.com"), (_has("log"), None)]
+        routes = [
+            (_has("config", "user.email"), "dev@example.com"),
+            (_has("log"), None),
+        ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
             result = ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"error": "git log failed in all 1 repositories"})
@@ -401,8 +423,11 @@ class TestSyncGitLog(unittest.TestCase):
             (_repo_cmd("/b", "log"), None),  # this repo's log fails
             (_repo_cmd("/a", "remote"), "git@github.com:acme/alpha.git"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
-            ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(
+                ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+            ),
         ):
             result = ex.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(
@@ -439,10 +464,13 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("log"), self._log()),
             (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), patch.object(
-            ex,
-            "_discover_git_repos",
-            return_value=[Path("/main"), Path("/main/wt"), Path("/sub")],
+        with (
+            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(
+                ex,
+                "_discover_git_repos",
+                return_value=[Path("/main"), Path("/main/wt"), Path("/sub")],
+            ),
         ):
             result = ex.sync_git_log(state, _config(), now=_NOW)
         # The worktree is collapsed; the submodule keeps its own store.
@@ -506,18 +534,20 @@ class TestGitAllFlagIntegration(unittest.TestCase):
                 self._init_repo(repo, origin=f"git@github.com:acme/{name}.git")
                 (repo / "f.txt").write_text(name)
                 self._git("add", "-A", cwd=repo)
-                self._git("commit", "--no-verify", "-qm", f"{name} (task 24648)", cwd=repo)
+                self._git(
+                    "commit", "--no-verify", "-qm", f"{name} (task 24648)", cwd=repo
+                )
 
             # resync_authors avoids depending on the host's global user.email
             # (the parent dir is not a repo, so repo-local config cannot apply).
-            result, state = self._run_in(root, _config(resync_authors="dev@example.com"))
+            result, state = self._run_in(
+                root, _config(resync_authors="dev@example.com")
+            )
 
         self.assertEqual(result["repos"], 2)
         self.assertEqual(result["inserted"], 2)
         self.assertEqual(result["found"], 2)
-        self.assertEqual(
-            {e.repo for e in state.get_events()}, {"acme/one", "acme/two"}
-        )
+        self.assertEqual({e.repo for e in state.get_events()}, {"acme/one", "acme/two"})
 
 
 class TestSyncGithub(unittest.TestCase):
@@ -542,16 +572,12 @@ class TestSyncGithub(unittest.TestCase):
         ' "repository": {"nameWithOwner": "other/repo"}}]'
     )
     _DETAIL_3 = '{"headRefName": "33333-things", "mergedAt": null}'
-    _OTHER_REVIEWS = (
-        '[{"id": 77, "user": {"login": "octocat"}, "submitted_at": "2026-07-05T12:00:00Z"}]'
-    )
+    _OTHER_REVIEWS = '[{"id": 77, "user": {"login": "octocat"}, "submitted_at": "2026-07-05T12:00:00Z"}]'
     _COMMENTED = (
         '[{"number": 9, "title": "Issue (task 44444)",'
         ' "repository": {"nameWithOwner": "other/repo"}}]'
     )
-    _COMMENTS = (
-        '[{"id": 111, "user": {"login": "octocat"}, "created_at": "2026-07-06T08:00:00Z"}]'
-    )
+    _COMMENTS = '[{"id": 111, "user": {"login": "octocat"}, "created_at": "2026-07-06T08:00:00Z"}]'
 
     def _routes(self):
         return [
@@ -563,7 +589,10 @@ class TestSyncGithub(unittest.TestCase):
             (lambda c: c[-1] == "repos/o/r/pulls/8/reviews", "[]"),
             (_has("search", "prs", "--reviewed-by"), self._REVIEWED_PRS),
             (_pr_view(3, "other/repo"), self._DETAIL_3),
-            (lambda c: c[-1] == "repos/other/repo/pulls/3/reviews", self._OTHER_REVIEWS),
+            (
+                lambda c: c[-1] == "repos/other/repo/pulls/3/reviews",
+                self._OTHER_REVIEWS,
+            ),
             (_has("search", "issues"), self._COMMENTED),
             (lambda c: c[-1] == "repos/other/repo/issues/9/comments", self._COMMENTS),
         ]
@@ -577,10 +606,17 @@ class TestSyncGithub(unittest.TestCase):
         self.assertEqual(result, {"inserted": 6, "found": 6})
         by_ext = {e.external_id: e for e in state.get_events()}
         # PR ids are repo-qualified (#652): account-wide numbers collide.
-        self.assertEqual(set(by_ext), {
-            "gh:pr:o/r:7:opened", "gh:pr:o/r:7", "gh:pr:o/r:8:opened",
-            "gh:review:55", "gh:review:77", "gh:comment:111",
-        })
+        self.assertEqual(
+            set(by_ext),
+            {
+                "gh:pr:o/r:7:opened",
+                "gh:pr:o/r:7",
+                "gh:pr:o/r:8:opened",
+                "gh:review:55",
+                "gh:review:77",
+                "gh:comment:111",
+            },
+        )
         # A merged PR yields BOTH a billable pr_opened event at createdAt and an
         # audit-only merge event at the detail-fetched mergedAt (#656).
         opened = by_ext["gh:pr:o/r:7:opened"]
@@ -858,8 +894,14 @@ class TestSyncGithub(unittest.TestCase):
             (_has("api", "user"), "octo-a"),
             (lambda c: "--author" in c and "octo-a" in c, prs_for["octo-a"]),
             (lambda c: "--author" in c and "octo-b" in c, prs_for["octo-b"]),
-            (_pr_view(1, "o/r"), '{"headRefName": "24648-a", "mergedAt": "2026-07-02T09:00:00Z"}'),
-            (_pr_view(2, "o/r"), '{"headRefName": "55555-b", "mergedAt": "2026-07-02T09:00:00Z"}'),
+            (
+                _pr_view(1, "o/r"),
+                '{"headRefName": "24648-a", "mergedAt": "2026-07-02T09:00:00Z"}',
+            ),
+            (
+                _pr_view(2, "o/r"),
+                '{"headRefName": "55555-b", "mergedAt": "2026-07-02T09:00:00Z"}',
+            ),
             (lambda c: c[-1].endswith("/reviews"), "[]"),
             (_has("search", "prs", "--reviewed-by"), "[]"),
             (_has("search", "issues"), "[]"),
@@ -873,8 +915,10 @@ class TestSyncGithub(unittest.TestCase):
         self.assertEqual(
             {e.external_id for e in state.get_events()},
             {
-                "gh:pr:o/r:1:opened", "gh:pr:o/r:1",
-                "gh:pr:o/r:2:opened", "gh:pr:o/r:2",
+                "gh:pr:o/r:1:opened",
+                "gh:pr:o/r:1",
+                "gh:pr:o/r:2:opened",
+                "gh:pr:o/r:2",
             },
         )
 
@@ -886,7 +930,10 @@ class TestSyncGithub(unittest.TestCase):
                 _has("search", "prs", "--author"),
                 '[{"number": 3, "title": "no repo", "createdAt": "2026-07-03T09:00:00Z"}]',
             ),
-            (_has("search", "prs", "--reviewed-by"), '[{"number": 3, "title": "no repo"}]'),
+            (
+                _has("search", "prs", "--reviewed-by"),
+                '[{"number": 3, "title": "no repo"}]',
+            ),
             (_has("search", "issues"), '[{"number": 9, "title": "no repo"}]'),
         ]
         with patch.object(ex.subprocess, "run", _fake_run(routes)):
@@ -939,7 +986,12 @@ class _FakeClient:
 class TestSyncOdooChatter(unittest.TestCase):
     def _messages(self):
         return [
-            {"id": 900, "res_id": 123, "date": "2026-07-03 08:00:00", "subject": "note"},
+            {
+                "id": 900,
+                "res_id": 123,
+                "date": "2026-07-03 08:00:00",
+                "subject": "note",
+            },
             {"id": 901, "res_id": 777, "date": "2026-07-03 09:00:00", "subject": False},
         ]
 
@@ -952,7 +1004,9 @@ class TestSyncOdooChatter(unittest.TestCase):
             result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2})
         events = state.get_events()
-        self.assertEqual({e.external_id for e in events}, {"odoo:mail:900", "odoo:mail:901"})
+        self.assertEqual(
+            {e.external_id for e in events}, {"odoo:mail:900", "odoo:mail:901"}
+        )
         self.assertEqual({e.task_ids[0] for e in events}, {"123", "777"})
         # The search is author-scoped and date-bounded, NOT res_id-scoped.
         search = next(c for c in client.calls if c[0] == "mail.message")

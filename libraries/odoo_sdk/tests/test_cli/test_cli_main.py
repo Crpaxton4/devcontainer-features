@@ -12,7 +12,6 @@ from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskState
 from tests.support import make_state_db
 
-
 ASSERT_GUARD = "odoo_sdk.cli.__main__.assert_sdk_configured"
 STOP_GUARD = "odoo_sdk.commands.builtin.stop_task.assert_sdk_configured"
 
@@ -42,6 +41,7 @@ NORMALIZE_MERGE = "odoo_sdk.commands.builtin.normalize_timesheets.merge_timeshee
 
 # ── _assert_env ───────────────────────────────────────────────────────────────
 
+
 class TestAssertEnv(unittest.TestCase):
     def test_exits_when_tracker_db_missing(self):
         from odoo_sdk.state import TrackerStateMissingError
@@ -65,6 +65,7 @@ class TestAssertEnv(unittest.TestCase):
 
 # ── _LazyOdooClient ───────────────────────────────────────────────────────────
 
+
 class TestLazyOdooClient(unittest.TestCase):
     def test_defers_construction_until_first_use(self):
         with patch("odoo_sdk.cli.__main__.OdooClient") as make_client:
@@ -84,6 +85,7 @@ class TestLazyOdooClient(unittest.TestCase):
 
 
 # ── cmd_list ─────────────────────────────────────────────────────────────────
+
 
 class TestCmdList(unittest.TestCase):
     def test_prints_nothing_to_stop(self):
@@ -105,6 +107,7 @@ class TestCmdList(unittest.TestCase):
 
 
 # ── cmd_stop ─────────────────────────────────────────────────────────────────
+
 
 class TestCmdStop(unittest.TestCase):
     def test_stops_active_run(self):
@@ -154,6 +157,7 @@ class TestCmdStop(unittest.TestCase):
 
 # ── cmd_stop_all ──────────────────────────────────────────────────────────────
 
+
 class TestCmdStopAll(unittest.TestCase):
     def test_nothing_to_stop(self):
         db = _tmp_db()
@@ -189,6 +193,7 @@ class TestCmdStopAll(unittest.TestCase):
 
 # ── cmd_report ────────────────────────────────────────────────────────────────
 
+
 class TestCmdReport(unittest.TestCase):
     def test_active_only_by_default(self):
         db = _tmp_db()
@@ -223,6 +228,7 @@ class TestCmdReport(unittest.TestCase):
 
 
 # ── cmd_normalize ─────────────────────────────────────────────────────────────
+
 
 class TestCmdNormalize(unittest.TestCase):
     def test_no_duplicates_message(self):
@@ -269,6 +275,7 @@ class TestCmdNormalize(unittest.TestCase):
 
 
 # ── cmd_close ─────────────────────────────────────────────────────────────────
+
 
 class TestCmdClose(unittest.TestCase):
     def test_closes_running_run(self):
@@ -317,6 +324,7 @@ class TestCmdGetEmployeeId(unittest.TestCase):
 
 
 # ── main entrypoint ───────────────────────────────────────────────────────────
+
 
 class TestMain(unittest.TestCase):
     def _run_main(self, argv, db=None):

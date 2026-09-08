@@ -43,8 +43,9 @@ def _seed_db():
 
     def add(ts, task_ids):
         return db.add_event(
-            EventRecord(id=None, source="agent", timestamp=ts,
-                        task_ids=list(task_ids), repo="")
+            EventRecord(
+                id=None, source="agent", timestamp=ts, task_ids=list(task_ids), repo=""
+            )
         )
 
     ids = {}
@@ -60,8 +61,12 @@ def _seed_db():
     up_first = db.get_event(ids["up1"])
     up_last = db.get_event(ids["up2"])
     db.record_session_upload(
-        f"101|{ids['up1']}", 500, 1.0, task_id="101",
-        started_at=up_first.timestamp, ended_at=up_last.timestamp,
+        f"101|{ids['up1']}",
+        500,
+        1.0,
+        task_id="101",
+        started_at=up_first.timestamp,
+        ended_at=up_last.timestamp,
     )
     return db, ids
 
@@ -69,9 +74,11 @@ def _seed_db():
 def _run_cli(argv, db):
     """Drive ``main`` for ``argv`` against the seeded DB (local-only, no Odoo)."""
     out = StringIO()
-    with patch(f"{_MOD}.TaskStateDB", return_value=db), patch(
-        "sys.stdout", out
-    ), patch("sys.argv", ["odoo-sdk", *argv]):
+    with (
+        patch(f"{_MOD}.TaskStateDB", return_value=db),
+        patch("sys.stdout", out),
+        patch("sys.argv", ["odoo-sdk", *argv]),
+    ):
         cli.main()
     return out.getvalue()
 
@@ -132,9 +139,7 @@ class TestCmdPrune(unittest.TestCase):
 
     def test_configured_horizon_honored_when_flag_omitted(self):
         db, ids = _seed_db()
-        with patch.dict(
-            "os.environ", {"ODOO_PRUNE_HORIZON_DAYS": "30"}, clear=False
-        ):
+        with patch.dict("os.environ", {"ODOO_PRUNE_HORIZON_DAYS": "30"}, clear=False):
             out = _run_cli(["prune"], db)
         self.assertIn("Pruned 3 event(s)", out)
         self.assertIsNone(db.get_event(ids["up1"]))

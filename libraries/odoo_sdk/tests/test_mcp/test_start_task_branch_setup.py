@@ -125,7 +125,9 @@ class TestGitFailuresAreCallerActionable(unittest.TestCase):
     def test_boundary_renders_git_failure_instead_of_raising(self):
         # Before the fix this escaped ``_error_boundary`` as a raw traceback.
         def _tool():
-            raise subprocess.CalledProcessError(128, ["git", "checkout", "-b", "10-fix"])
+            raise subprocess.CalledProcessError(
+                128, ["git", "checkout", "-b", "10-fix"]
+            )
 
         payload = _error_boundary(_tool)()
         self.assertEqual(payload["error"]["type"], "CalledProcessError")
