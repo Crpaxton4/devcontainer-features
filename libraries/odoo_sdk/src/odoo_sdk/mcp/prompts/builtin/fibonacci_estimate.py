@@ -1,11 +1,13 @@
 """MCP ``fibonacci_estimate`` prompt surface.
 
-Ports the personal-features ``fibonacci-estimate`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/fibonacci-estimate/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Originally ported from the personal-features ``fibonacci-estimate`` skill, which
+was retired once the ``odoo-dev`` plugin took the skill over as
+``odoo-dev:fibonacci-estimate`` (the maintained upstream copy). The body
+embedded below is this module's own source of truth, so any MCP client gets the
+prompt without the mounted-SKILL.md delivery path. The prompt takes no arguments
+and returns that instructional body verbatim for the caller to act on with its
+own (read-only) Odoo tool calls; it never calls into the command registry
+itself.
 """
 
 from odoo_sdk.commands import Registry
