@@ -25,9 +25,11 @@ class ScheduleActivityCommand(Command):
         "inclusive 'YYYY-MM-DD' due date (omitted: Odoo applies the activity "
         "type's own delay), and 'user_id' the assignee (omitted: the "
         "authenticated user). Returns the created activity with its resolved "
-        "type and assignee. Scheduling requires read access on ir.model, since "
-        "mail.activity stores its target model as a mandatory ir.model "
-        "reference; a denied read returns a clear access error."
+        "type and assignee. mail.activity stores its target model as a "
+        "mandatory ir.model id, which the SDK takes from the hand-managed "
+        "[model_ids] section of the Odoo SDK config rather than by reading "
+        "ir.model; scheduling against a model that has no [model_ids] entry "
+        "fails with an error naming the exact entry an operator must add."
     )
 
     def execute(
@@ -42,6 +44,10 @@ class ScheduleActivityCommand(Command):
     ) -> dict[str, Any]:
         """Create one activity on ``res_model``/``res_id`` and return it.
 
+        The injected :attr:`~odoo_sdk.commands.command.Command.config` is handed
+        to the helper because ``mail.activity.res_model_id`` is resolved from the
+        ``[model_ids]`` map rather than by reading ``ir.model`` (#444, #686).
+
         :param res_id: Id of the record the activity is attached to.
         :param res_model: The record's model; defaults to ``project.task``.
         :param activity_type: ``mail.activity.type`` id, or its name resolved
@@ -52,7 +58,8 @@ class ScheduleActivityCommand(Command):
         :param user_id: Assignee ``res.users`` id; defaults to the current uid.
         :return: The created activity, read back with resolved names.
         :raises ValueError: On a malformed deadline, an unresolvable activity
-            type, an unknown ``res_model``, or a denied ``ir.model`` read.
+            type, or a ``res_model`` with no ``[model_ids]`` config entry (the
+            message names the entry to add).
         """
         return schedule_activity(
             self._client,
@@ -63,4 +70,5 @@ class ScheduleActivityCommand(Command):
             note=note,
             date_deadline=date_deadline,
             user_id=user_id,
+            config=self.config,
         )

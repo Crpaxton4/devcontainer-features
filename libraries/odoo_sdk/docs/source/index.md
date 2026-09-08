@@ -62,9 +62,14 @@ gated `get_models` tool. Ask for an unmapped model and the SDK raises a
 `ValueError` naming the exact entry to add:
 
 ```python
-config.model_id("mail.activity")      # -> None
-config.require_model_id("mail.activity")  # -> ValueError: No ir.model id is configured for 'mail.activity'. Add it to the [model_ids] section ...
+config.model_id("crm.lead")          # -> None
+config.require_model_id("crm.lead")  # -> ValueError: No ir.model id is configured for 'crm.lead'. Add it to the [model_ids] section ...
 ```
+
+The first consumer is `schedule_activity`: `mail.activity.res_model_id` is a
+mandatory `ir.model` many2one, so scheduling a follow-up on a `project.task`
+needs `[model_ids] "project.task"`. Scheduling against a model with no entry
+fails with that same message rather than with an access error on `ir.model`.
 
 Unquoted TOML keys (`project.task = 123`) and explicit sub-tables
 (`[model_ids.project]`) are flattened back to dotted names, so every spelling
