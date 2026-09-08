@@ -1,10 +1,12 @@
 # Feature-owned Claude skills
 
 This directory is the source of truth for the Claude Code **skills** that
-`personal-features` ships into every container — the owner's consulting
-playbook (quote drafting, design docs, discovery notes, Odoo code review,
-client status reports). Each skill is a subdirectory holding a `SKILL.md`
-(plus any supporting files):
+`personal-features` ships into every container — the owner's Odoo consulting
+playbook, spanning scoping and estimation, technical design, code review, and
+client reporting. The subdirectories here are the authoritative list of what
+ships; it is deliberately not restated in prose, because a hand-maintained copy
+only drifts as skills are added and removed. Each skill is a subdirectory
+holding a `SKILL.md` (plus any supporting files):
 
 ```
 skills/
@@ -12,9 +14,9 @@ skills/
     SKILL.md
 ```
 
-The actual skill content is authored separately (issue #251); this directory
-may therefore be empty of skills apart from this README, and the delivery
-mechanism handles both the empty and the populated case.
+The skill content lives here, next to this README. The delivery mechanism still
+handles both the empty and the populated case, so adding a skill — or removing
+the last one — needs no change to `install.sh` or `sync-claude-skills`.
 
 ## Two delivery paths (both live)
 
@@ -74,4 +76,5 @@ feature-managed header note, e.g.:
 > feature-managed; overwritten on container create — edit in the
 > devcontainer-features repo.
 
-(The header lands with the skill content added by #251.)
+Every skill shipped from this directory carries that note today, as an HTML
+comment immediately below its frontmatter; keep it on any skill added here.
