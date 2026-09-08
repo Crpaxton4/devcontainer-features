@@ -27,7 +27,7 @@ stays the source of truth for both:
    copied into `$CLAUDE_CONFIG_DIR/skills/<name>` at container-create time. See
    [How these skills reach `claude`](#how-these-skills-reach-claude) below.
 2. **`odoo-mcp` built-in prompts** (any MCP client) — since #455, each of the
-   five skills is also exposed as a built-in MCP prompt by the `odoo-sdk` MCP
+   four skills is also exposed as a built-in MCP prompt by the `odoo-sdk` MCP
    server, so any MCP client gets it without the mount/copy machinery or even a
    live personal-features container. The prompt modules live at
    `libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py` (one per

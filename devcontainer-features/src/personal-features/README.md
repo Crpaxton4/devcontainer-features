@@ -241,7 +241,7 @@ untouched (and a warning printed) rather than overwritten.
 ## Odoo consulting skills (two delivery paths)
 
 This Feature ships the owner's Odoo consulting playbook — quote drafting
-(`odoo-quote`), Fibonacci estimating (`fibonacci-estimate`), solution design
+(`odoo-quote`), solution design
 (`odoo-design-doc`), Odoo code review (`odoo-code-review`), and weekly client
 status reports (`client-status-report`).
 The source of truth for every skill's content is `skills/<name>/SKILL.md` in
@@ -257,7 +257,7 @@ independent, deliberately-parallel paths:
    skill-discovery / slash-command UX, but only inside a live container with this
    Feature installed and a working bind mount.
 
-2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each of the five
+2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each of the four
    skills is *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
    (`libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py`, one module
    per skill, underscored — `odoo-quote` → `odoo_quote`). Each module embeds its

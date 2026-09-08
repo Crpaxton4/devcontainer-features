@@ -678,8 +678,9 @@ class TestSkillPromptParity(unittest.TestCase):
     #: Prompts whose personal-features SKILL.md has been removed because the
     #: maintained upstream copy now lives in the ``odoo-dev`` Claude Code plugin
     #: (``odoo-dev:<name>``). The MCP prompt surface is deliberately unchanged;
-    #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695.
-    RETIRED_SKILLS = frozenset({"discovery_notes"})
+    #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695;
+    #: fibonacci_estimate: #696.
+    RETIRED_SKILLS = frozenset({"discovery_notes", "fibonacci_estimate"})
 
     def _skill_body(self, name: str) -> str:
         """Return a SKILL.md stripped exactly as the port strips it."""
