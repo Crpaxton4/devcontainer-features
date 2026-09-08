@@ -1,5 +1,17 @@
 # Changelog
 
+## [6.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.2.0...personal-features-v6.3.0) (2026-09-08)
+
+
+### Features
+
+* **personal-features:** remove discovery-notes skill superseded by odoo-dev plugin ([#706](https://github.com/Crpaxton4/devcontainer-features/issues/706)) ([68e0a89](https://github.com/Crpaxton4/devcontainer-features/commit/68e0a8949de06c663897afcbf7332f2e472f64bc)), closes [#695](https://github.com/Crpaxton4/devcontainer-features/issues/695)
+* **personal-features:** remove fibonacci-estimate skill superseded by odoo-dev plugin ([#701](https://github.com/Crpaxton4/devcontainer-features/issues/701)) ([b414531](https://github.com/Crpaxton4/devcontainer-features/commit/b41453159e4511a9c0d4ad9977e5157fb367360a)), closes [#696](https://github.com/Crpaxton4/devcontainer-features/issues/696)
+* **personal-features:** remove odoo-code-review skill superseded by odoo-dev plugin ([#703](https://github.com/Crpaxton4/devcontainer-features/issues/703)) ([57a94ea](https://github.com/Crpaxton4/devcontainer-features/commit/57a94ea8cbe79b00138d6ee257e844f6fc9aba94)), closes [#697](https://github.com/Crpaxton4/devcontainer-features/issues/697)
+* **personal-features:** remove odoo-design-doc skill superseded by odoo-dev plugin ([#705](https://github.com/Crpaxton4/devcontainer-features/issues/705)) ([a39a094](https://github.com/Crpaxton4/devcontainer-features/commit/a39a094dd737888a44326d1f344f994a89fb7c60)), closes [#698](https://github.com/Crpaxton4/devcontainer-features/issues/698)
+* **personal-features:** remove odoo-quote skill superseded by odoo-dev plugin ([#704](https://github.com/Crpaxton4/devcontainer-features/issues/704)) ([9f79ab0](https://github.com/Crpaxton4/devcontainer-features/commit/9f79ab0db0cbcc05bf254a7d8c9f01337d93d0c5))
+* **personal-features:** retire client-status-report skill ([#702](https://github.com/Crpaxton4/devcontainer-features/issues/702)) ([dacff81](https://github.com/Crpaxton4/devcontainer-features/commit/dacff8114042a360d42b0207d8c76a25f27f7218)), closes [#700](https://github.com/Crpaxton4/devcontainer-features/issues/700)
+
 ## [6.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.1.0...personal-features-v6.2.0) (2026-09-08)
 
 
