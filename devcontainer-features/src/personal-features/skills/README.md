@@ -27,14 +27,17 @@ stays the source of truth for both:
    copied into `$CLAUDE_CONFIG_DIR/skills/<name>` at container-create time. See
    [How these skills reach `claude`](#how-these-skills-reach-claude) below.
 2. **`odoo-mcp` built-in prompts** (any MCP client) — since #455, each of the
-   shipped skills is also exposed as a built-in MCP prompt by the `odoo-sdk` MCP
+   ported skills was also exposed as a built-in MCP prompt by the `odoo-sdk` MCP
    server, so any MCP client gets it without the mount/copy machinery or even a
    live personal-features container. The prompt modules live at
    `libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py` (one per
    skill, underscored: `<skill-name>` → `<skill_name>`); each embeds this
    directory's `SKILL.md` body verbatim (frontmatter → prompt description,
    markdown body → prompt message) and is registered via the same
-   `@builtin_prompt` decorator as `implement_task`/`report_incident`.
+   `@builtin_prompt` decorator as `implement_task`/`report_incident`. One
+   prompt module has no skill here beside it: `client_status_report`, whose
+   packaged skill was retired in #700 — its embedded body is now the only
+   maintained copy.
 
 Both paths are kept deliberately: the mounted path preserves Claude Code's
 native slash-command/skill-discovery UX, while the MCP-prompt path removes the

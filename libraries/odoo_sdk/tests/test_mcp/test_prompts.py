@@ -680,9 +680,10 @@ class TestSkillPromptParity(unittest.TestCase):
     #: (``odoo-dev:<name>``). The MCP prompt surface is deliberately unchanged;
     #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695;
     #: fibonacci_estimate: #696; odoo_code_review: #697; odoo_design_doc: #698;
-    #: odoo_quote: #699.
+    #: odoo_quote: #699; client_status_report: #700 (retired, not superseded).
     RETIRED_SKILLS = frozenset(
         {
+            "client_status_report",
             "discovery_notes",
             "fibonacci_estimate",
             "odoo_code_review",
