@@ -39,8 +39,14 @@
         },
         "remoteUser": "root"
     },
+    // Built, not pulled: Debian 11 is EOL, so odoo:16's apt sources have to be
+    // repointed at archive.debian.org *before* any feature installs, and feature
+    // installs happen during the image build (#688). The Dockerfile lives in the
+    // sibling 'on_odoo16_base_image/' directory, which `devcontainer features
+    // test` copies into the generated .devcontainer/ - hence the bare
+    // "Dockerfile" path here. See that file for the full rationale.
     "on_odoo16_base_image": {
-        "image": "odoo:16",
+        "build": { "dockerfile": "Dockerfile" },
         "features": {
             "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
             "ghcr.io/itsmechlark/features/postgresql:1": {},
