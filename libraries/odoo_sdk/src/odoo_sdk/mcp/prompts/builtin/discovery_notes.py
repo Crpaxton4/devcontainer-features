@@ -1,11 +1,17 @@
 """MCP ``discovery_notes`` prompt surface.
 
-Ports the personal-features ``discovery-notes`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/discovery-notes/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Ports the personal-features ``discovery-notes`` skill to a built-in MCP prompt,
+so any MCP client gets it without the mounted-SKILL.md delivery path.
+
+personal-features no longer ships that skill (#695): it is superseded there by
+the ``odoo-dev`` Claude Code plugin's ``odoo-dev:discovery-notes``, which is the
+maintained upstream copy. There is therefore no ``SKILL.md`` in this repo to
+mirror any more, and the body embedded below is this module's own source of
+truth. The MCP prompt surface itself is unchanged and stays supported.
+
+The prompt takes no arguments and returns the instructional body verbatim for
+the caller to act on with its own (read-only) Odoo tool calls; it never calls
+into the command registry itself.
 """
 
 from odoo_sdk.commands import Registry
@@ -16,6 +22,7 @@ __all__ = ["make_discovery_notes_prompt", "discovery_notes"]
 
 # Skill body embedded verbatim (frontmatter and the feature-managed HTML comment
 # stripped) so the prompt ships with the SDK package rather than a mounted file.
+# Now the only copy in this repo - see the module docstring.
 _BODY = """\
 # Client discovery capture
 

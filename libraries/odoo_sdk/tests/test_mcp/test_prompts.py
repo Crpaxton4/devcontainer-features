@@ -659,6 +659,11 @@ class TestSkillPromptParity(unittest.TestCase):
     the old text. This asserts the two are byte-identical once the frontmatter
     and the feature-managed comment — the only parts the port strips — are
     removed, so any future drift fails here instead of shipping.
+
+    Skills personal-features has since stopped shipping (``RETIRED_SKILLS``)
+    have no SKILL.md left to compare against; their prompt module is now the
+    source of truth for the body, so parity is asserted *absent* for them
+    rather than skipped silently.
     """
 
     #: Repo root: tests/test_mcp/ -> tests/ -> odoo_sdk/ -> libraries/ -> root.
@@ -670,6 +675,12 @@ class TestSkillPromptParity(unittest.TestCase):
         / "skills"
     )
 
+    #: Prompts whose personal-features SKILL.md has been removed because the
+    #: maintained upstream copy now lives in the ``odoo-dev`` Claude Code plugin
+    #: (``odoo-dev:<name>``). The MCP prompt surface is deliberately unchanged;
+    #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695.
+    RETIRED_SKILLS = frozenset({"discovery_notes"})
+
     def _skill_body(self, name: str) -> str:
         """Return a SKILL.md stripped exactly as the port strips it."""
         text = (self.SKILLS_DIR / name.replace("_", "-") / "SKILL.md").read_text()
@@ -679,11 +690,23 @@ class TestSkillPromptParity(unittest.TestCase):
 
     def test_skill_sources_are_present(self):
         # Guard the path itself: a moved skills tree must fail loudly rather
-        # than quietly skipping every parity assertion below.
+        # than quietly skipping every parity assertion below. Retired skills
+        # are guarded the same way in reverse - if one reappears it must be
+        # dropped from RETIRED_SKILLS so parity starts covering it again.
         self.assertTrue(self.SKILLS_DIR.is_dir(), f"missing {self.SKILLS_DIR}")
+        for name in TestMigratedSkillPrompts.SKILLS:
+            with self.subTest(name=name):
+                skill_md = self.SKILLS_DIR / name.replace("_", "-") / "SKILL.md"
+                self.assertEqual(
+                    skill_md.is_file(),
+                    name not in self.RETIRED_SKILLS,
+                    f"{skill_md} presence disagrees with RETIRED_SKILLS",
+                )
 
     def test_prompt_body_matches_skill_md(self):
         for name in TestMigratedSkillPrompts.SKILLS:
+            if name in self.RETIRED_SKILLS:
+                continue
             with self.subTest(name=name):
                 module = importlib.import_module(f"odoo_sdk.mcp.prompts.builtin.{name}")
                 self.assertEqual(
