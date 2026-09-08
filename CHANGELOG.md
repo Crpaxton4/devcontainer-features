@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.1.0...personal-features-v6.2.0) (2026-09-08)
+
+
+### Features
+
+* **odoo-sdk:** config-supplied ir.model id map, no ir.model reads ([#687](https://github.com/Crpaxton4/devcontainer-features/issues/687)) ([88eeaf1](https://github.com/Crpaxton4/devcontainer-features/commit/88eeaf1a761973e1482abd22f50aa22737a5c607))
+
 ## [6.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.0.0...personal-features-v6.1.0) (2026-09-03)
 
 
