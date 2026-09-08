@@ -20,15 +20,36 @@ implementation behind the four activity tools:
 
 Two Odoo facts drive the shape of the write path:
 
-* ``mail.activity.res_model_id`` (a ``ir.model`` many2one) is **required**;
+* ``mail.activity.res_model_id`` (an ``ir.model`` many2one) is **required**;
   ``res_model`` is only a stored *related* mirror of it and is read-only. So a
-  create must resolve the model id, which is why this module reads ``ir.model``
-  even though :mod:`odoo_sdk.utilities.knowledge` deliberately never does. The
+  create has to supply the model *id*, and there is no way around that: the one
   alternative — calling ``mail.thread.activity_schedule`` on the record — is not
   reachable over RPC at all, because it returns a recordset, which no transport
-  can marshal. A denied ``ir.model`` read is translated to one stable, actionable
-  :class:`ValueError` (:data:`MODEL_LOOKUP_DENIED_MESSAGE`) rather than surfacing
-  as an opaque access fault.
+  can marshal.
+
+  That id comes from **configuration, never from Odoo**. The first cut of this
+  module (#677) resolved it with a ``search_read`` on ``ir.model``, which made
+  the entire write path unusable for exactly the accounts the SDK exists to
+  serve: that administrative table must never be granted to a least-privileged
+  service account, so the lookup was denied and ``mail.activity.create`` was
+  never reached (#686). It is the same defect #444 removed from
+  :mod:`odoo_sdk.utilities.knowledge`, which for that reason deliberately runs
+  its real query with no ``ir.model`` pre-flight probe at all. "Ask an Odoo admin
+  to grant read access on ir.model" is not an available remedy here; it is the
+  privilege escalation the constraint exists to prevent.
+
+  So :func:`_res_model_id` reads the hand-managed ``[model_ids]`` map instead,
+  via :meth:`~odoo_sdk.state.config.LocalConfig.require_model_id`. The
+  :class:`~odoo_sdk.state.config.LocalConfig` is threaded in from the command
+  layer (every :class:`~odoo_sdk.commands.command.Command` already exposes a
+  lazily-resolved ``self.config``) rather than loaded inside this module, so the
+  dependency is explicit at the call site and a test can supply its own map
+  without reaching for the developer's real config file. A model absent from the
+  map raises a typed :class:`ValueError` naming the exact entry to add — because
+  the map is maintained by hand, that message is the only discovery mechanism a
+  caller without server access gets. There is deliberately no fallback to an
+  ``ir.model`` read when the map misses: the fallback *is* the bug, and it would
+  reintroduce it for precisely the accounts the map exists to serve.
 * ``mail.activity.note`` is an HTML field, so caller-supplied Markdown is
   rendered with :func:`~odoo_sdk.utilities.html.markdown_to_html` on the way in
   and converted back with :func:`~odoo_sdk.utilities.html.html_to_markdown` on
@@ -39,7 +60,7 @@ Two Odoo facts drive the shape of the write path:
 from typing import Any, Optional, Union
 
 from odoo_sdk.client import OdooClient
-from odoo_sdk.transport.errors import OdooAccessError
+from odoo_sdk.state import LocalConfig
 
 from .html import html_to_markdown, markdown_to_html
 
@@ -59,17 +80,6 @@ DEFAULT_ACTIVITY_LIMIT = 50
 
 #: Maximum activity types returned by one :func:`search_activity_types` call.
 DEFAULT_ACTIVITY_TYPE_LIMIT = 20
-
-#: Exact, stable error raised when ``ir.model`` cannot be read. ``res_model_id``
-#: is required on ``mail.activity`` and only ``ir.model`` maps a model name to
-#: its id, so a locked-down service account cannot schedule activities at all —
-#: which is worth saying plainly instead of leaking an access traceback. Pinned
-#: so callers and tests can match it verbatim.
-MODEL_LOOKUP_DENIED_MESSAGE = (
-    "Access denied reading ir.model, which is required to schedule an activity "
-    "(mail.activity.res_model_id is a mandatory ir.model reference). Ask an Odoo "
-    "admin to grant read access on ir.model to schedule activities."
-)
 
 #: ``mail.activity`` fields read for every returned activity. ``state`` is Odoo's
 #: computed urgency bucket (``overdue`` / ``today`` / ``planned``) and is the
@@ -256,35 +266,30 @@ def resolve_activity_type_id(
     return matches[0]["id"]
 
 
-def _res_model_id(client: OdooClient, res_model: str) -> int:
+def _res_model_id(config: LocalConfig, res_model: str) -> int:
     """Resolve a model name to its ``ir.model`` id for ``res_model_id``.
 
-    See the module docstring for why ``ir.model`` is read here: ``res_model_id``
-    is mandatory on ``mail.activity`` and the RPC-safe create path has no other
-    way to populate it.
+    The id is read from the hand-managed ``[model_ids]`` config map and never
+    from ``ir.model`` itself — see the module docstring for why (#444, #686).
+    Kept as a named seam rather than inlined into :func:`_schedule_values` so the
+    write path has one documented place where a model id enters it, and so the
+    "this module never reads ``ir.model``" guarantee has a single function to
+    point at.
 
-    :raises ValueError: When the read is denied (:data:`MODEL_LOOKUP_DENIED_MESSAGE`)
-        or the model name does not exist on this database.
+    A model missing from the map and a model that does not exist on the database
+    are indistinguishable from here, deliberately: telling them apart is exactly
+    the ``ir.model`` read this avoids. Both surface as the one actionable message.
+
+    :raises ValueError: When ``res_model`` has no ``[model_ids]`` entry. The
+        message names the model and the exact entry to add; it never suggests
+        granting read access on ``ir.model``.
     """
-    try:
-        rows = client.execute(
-            "ir.model",
-            "search_read",
-            [("model", "=", res_model)],
-            fields=["id"],
-            limit=1,
-        )
-    except OdooAccessError as exc:
-        raise ValueError(MODEL_LOOKUP_DENIED_MESSAGE) from exc
-    if not rows:
-        raise ValueError(
-            f"Unknown Odoo model {res_model!r}: no ir.model record matches it."
-        )
-    return rows[0]["id"]
+    return config.require_model_id(res_model)
 
 
 def _schedule_values(
     client: OdooClient,
+    config: LocalConfig,
     res_model: str,
     res_id: int,
     activity_type: Optional[Union[int, str]],
@@ -299,9 +304,13 @@ def _schedule_values(
     unset rather than written as empty strings, so Odoo's own defaults still
     apply — notably ``date_deadline``, which defaults to today, and the type's
     configured delay.
+
+    ``config`` sits beside ``client`` because the two are peer dependencies of
+    the write path: the client resolves the activity type and the assignee, the
+    config supplies ``res_model_id`` from ``[model_ids]`` (#686).
     """
     values: dict[str, Any] = {
-        "res_model_id": _res_model_id(client, res_model),
+        "res_model_id": _res_model_id(config, res_model),
         "res_id": res_id,
         # The activity is the caller's own follow-up unless they hand it off, so
         # an unset assignee resolves to the authenticated user, not to Odoo's
@@ -332,6 +341,8 @@ def schedule_activity(
     note: str = "",
     date_deadline: Optional[str] = None,
     user_id: Optional[int] = None,
+    *,
+    config: LocalConfig,
 ) -> dict[str, Any]:
     """Schedule one ``mail.activity`` on a record and return the created entry.
 
@@ -346,13 +357,27 @@ def schedule_activity(
     The created activity is read back so the return value carries the resolved
     type and assignee names alongside their ids, rather than only the new id.
 
+    ``config`` is keyword-only and required. It supplies ``res_model_id`` from
+    the ``[model_ids]`` map (#686), and being explicit keeps this module from
+    ever loading a config of its own: the command layer hands down its injected
+    ``self.config``. It is deliberately not defaultable, because the only thing
+    to fall back *to* is the ``ir.model`` read this signature exists to remove.
+
     :raises ValueError: On a malformed ``date_deadline``, an unresolvable
-        ``activity_type``, an unknown ``res_model``, or a denied ``ir.model``
-        read.
+        ``activity_type``, or a ``res_model`` with no ``[model_ids]`` entry (that
+        message names the exact entry to add).
     """
     _validate_iso_date(date_deadline, "date_deadline")
     values = _schedule_values(
-        client, res_model, res_id, activity_type, summary, note, date_deadline, user_id
+        client,
+        config,
+        res_model,
+        res_id,
+        activity_type,
+        summary,
+        note,
+        date_deadline,
+        user_id,
     )
     activity_id = client.execute("mail.activity", "create", values)
     return _read_activity(client, activity_id)

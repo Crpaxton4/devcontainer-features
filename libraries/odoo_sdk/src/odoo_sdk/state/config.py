@@ -11,7 +11,9 @@ This module hosts two related concerns of the local state layer:
   so that consuming programs (Claude Desktop, other MCP hosts) can change SDK
   behavior by editing a local config file without touching the host launch
   command. A ``[behavior]`` section is reserved for future behavioral flags
-  (profiling, log level, ...) without further structural changes.
+  (profiling, log level, ...) without further structural changes, and a
+  ``[model_ids]`` section holds the manually-managed model-name to ``ir.model``
+  id map (see :data:`_MODEL_IDS_SECTION`).
 * :class:`OdooConnectionSettings` — the resolved, validated connection value
   object consumed by :class:`~odoo_sdk.client.client.OdooClient`. Its
   :meth:`~OdooConnectionSettings.from_sources` factory is a thin validator fed by
@@ -29,6 +31,11 @@ file:
 
 INI files accept ``[odoo]`` as an alias for ``[connection]`` so an already
 persisted ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
+
+``[connection]`` and ``[behavior]`` have fixed key sets resolved by
+:func:`_resolve_section`. ``[model_ids]`` is open-ended — its keys are Odoo model
+names — so it carries its own loader (:func:`_resolve_model_ids`) wired into
+:meth:`LocalConfig.load` beside the other two.
 """
 
 import configparser
@@ -50,10 +57,17 @@ LOCAL_CONFIG_ENV_VAR = "ODOO_SDK_CONFIG"
 
 # INI section holding connection settings, plus the legacy ``[odoo]`` alias
 # accepted so an already-persisted ``~/.config/odoo_sdk/config.ini`` keeps
-# working, and the reserved ``[behavior]`` section.
+# working, the reserved ``[behavior]`` section, and the open-ended
+# ``[model_ids]`` map.
 _CONNECTION_SECTION = "connection"
 _CONNECTION_SECTION_ALIAS = "odoo"
 _BEHAVIOR_SECTION = "behavior"
+_MODEL_IDS_SECTION = "model_ids"
+
+#: Environment variable holding ``model:id`` pairs for the ``[model_ids]`` map,
+#: separated by commas and/or whitespace (the same delimited-string convention as
+#: ``ODOO_RESYNC_AUTHORS``), e.g. ``"project.task:123, res.partner:77"``.
+MODEL_IDS_ENV_VAR = "ODOO_MODEL_IDS"
 
 # Default config discovery locations (see the module docstring for the full
 # precedence order). ``$ODOO_SDK_CONFIG`` overrides all of these.
@@ -227,6 +241,147 @@ def _coerce_flag(value: Any) -> bool:
     return str(value).strip().lower() in _TRUTHY_VALUES
 
 
+# ── model ids ─────────────────────────────────────────────────────────────────
+
+
+def model_id_unavailable_message(model: str) -> str:
+    """Return the actionable error text for a model missing from ``[model_ids]``.
+
+    Because the map is managed by hand, this message is the only discovery
+    mechanism a user without server access gets, so it names both the missing
+    model and the exact config entry to add, in every spelling that works.
+    """
+    return (
+        f"No ir.model id is configured for {model!r}. Add it to the "
+        f"[model_ids] section of the Odoo SDK config file "
+        f'(TOML: "{model}" = <id>   INI: {model} = <id>) or export '
+        f'{MODEL_IDS_ENV_VAR}="{model}:<id>". The id must be supplied by hand: '
+        "the SDK never reads ir.model, because that administrative table must "
+        "not be granted to a least-privileged service account (#444, #686). An "
+        "operator who does hold the privilege can look the id up once with the "
+        "gated get_models tool."
+    )
+
+
+def _invalid_model_id_message(model: str, value: Any) -> str:
+    """Return the error text for a ``[model_ids]`` value that is not a positive int."""
+    return (
+        f"Invalid [model_ids] entry for {model!r}: {value!r}. An ir.model id must "
+        "be a positive integer."
+    )
+
+
+def _invalid_model_ids_env_message(token: str) -> str:
+    """Return the error text for a malformed :data:`MODEL_IDS_ENV_VAR` token."""
+    return (
+        f"Invalid {MODEL_IDS_ENV_VAR} entry {token!r}: expected comma- or "
+        f'whitespace-separated "model:id" pairs, e.g. '
+        f'{MODEL_IDS_ENV_VAR}="project.task:123,res.partner:77".'
+    )
+
+
+def _flatten_model_id_table(
+    table: Mapping[str, Any], prefix: str = ""
+) -> dict[str, Any]:
+    """Flatten nested TOML tables back into dotted model names.
+
+    An unquoted ``project.task = 123`` under ``[model_ids]`` is a *dotted key* in
+    TOML, so the parser yields the nested ``{"project": {"task": 123}}`` rather
+    than the flat name the section is meant to hold. Flattening on load makes both
+    the quoted (``"project.task" = 123``) and unquoted spellings — and an explicit
+    ``[model_ids.project]`` sub-table — resolve to the same ``project.task`` key,
+    rather than mandating one spelling in the docs and failing confusingly on the
+    other.
+    """
+    flat: dict[str, Any] = {}
+    for key, value in table.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, Mapping):
+            flat.update(_flatten_model_id_table(value, f"{name}."))
+        else:
+            flat[name] = value
+    return flat
+
+
+def _parse_model_ids_env(raw: str) -> dict[str, str]:
+    """Parse ``model:id`` pairs from :data:`MODEL_IDS_ENV_VAR`.
+
+    Accepts comma- and/or whitespace-separated tokens, the same delimited-string
+    convention ``resync_authors`` uses. A token without a ``:`` separator or with
+    an empty model name is a typo that would otherwise silently drop an entry, so
+    it raises rather than being skipped.
+
+    :raises ValueError: When a token is not a well-formed ``model:id`` pair.
+    """
+    parsed: dict[str, str] = {}
+    for token in re.split(r"[,\s]+", raw.strip()):
+        if not token:
+            continue
+        model, separator, id_text = token.partition(":")
+        if not separator or not model.strip():
+            raise ValueError(_invalid_model_ids_env_message(token))
+        parsed[model.strip()] = id_text.strip()
+    return parsed
+
+
+def _coerce_model_id(model: str, value: Any) -> int:
+    """Coerce one raw ``[model_ids]`` value to a positive ``int``.
+
+    Unlike :func:`_coerce_positive_int`, a bad value raises instead of degrading
+    to a default: there is no sensible default for a record id, and a silently
+    dropped entry would resurface later as an opaque XML-RPC fault on a write.
+    ``bool`` is rejected explicitly because ``int(True)`` is ``1``, which would
+    turn ``= true`` into a reference to record 1.
+
+    :raises ValueError: When the value is not a positive integer.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(_invalid_model_id_message(model, value))
+    try:
+        number = int(str(value).strip())
+    except ValueError:
+        raise ValueError(_invalid_model_id_message(model, value)) from None
+    if number <= 0:
+        raise ValueError(_invalid_model_id_message(model, value))
+    return number
+
+
+def _coerce_model_id_map(values: Mapping[str, Any]) -> dict[str, int]:
+    """Coerce every entry of a raw model-id mapping, rejecting bad values at load.
+
+    :raises ValueError: When any value is not a positive integer.
+    """
+    return {
+        str(model).strip(): _coerce_model_id(str(model).strip(), value)
+        for model, value in values.items()
+    }
+
+
+def _resolve_model_ids(file_values: Mapping[str, Any]) -> dict[str, int]:
+    """Merge the model-id map with File > Environment Variable > Default precedence.
+
+    Precedence applies per model name, mirroring :func:`_resolve_section` (which
+    resolves each *setting* independently): the two sources union, and a model
+    named by both takes the file's id. The default is an empty map. A file entry
+    with an empty value counts as unset, so the environment can still supply it.
+
+    :raises ValueError: When any resolved value is not a positive integer, or the
+        environment variable is malformed.
+    """
+    merged: dict[str, Any] = {}
+    raw_env = os.environ.get(MODEL_IDS_ENV_VAR)
+    if raw_env:
+        merged.update(_parse_model_ids_env(raw_env))
+    merged.update(
+        {
+            model: value
+            for model, value in _flatten_model_id_table(file_values).items()
+            if value not in (None, "")
+        }
+    )
+    return _coerce_model_id_map(merged)
+
+
 # ── LocalConfig ───────────────────────────────────────────────────────────────
 
 # Sensible defaults applied at the lowest precedence (File > Env > Default).
@@ -327,6 +482,7 @@ class LocalConfig:
         self,
         connection: Optional[Mapping[str, Optional[str]]] = None,
         behavior: Optional[Mapping[str, Any]] = None,
+        model_ids: Optional[Mapping[str, Any]] = None,
     ):
         self._connection: dict[str, Optional[str]] = {
             **_CONNECTION_DEFAULTS,
@@ -336,6 +492,9 @@ class LocalConfig:
             **_BEHAVIOR_DEFAULTS,
             **(dict(behavior) if behavior else {}),
         }
+        # Coerced here rather than only in ``load`` so a directly constructed
+        # config (tests, embedding callers) rejects a bad id just as loudly.
+        self._model_ids: dict[str, int] = _coerce_model_id_map(model_ids or {})
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "LocalConfig":
@@ -343,6 +502,9 @@ class LocalConfig:
 
         When ``config_path`` is omitted the ``ODOO_SDK_CONFIG`` env var and the
         default discovery locations are consulted.
+
+        :raises ValueError: When a ``[model_ids]`` entry is not a positive integer
+            or ``ODOO_MODEL_IDS`` is malformed.
         """
         file_data = _load_local_config_file(config_path)
         connection = _resolve_section(
@@ -355,7 +517,11 @@ class LocalConfig:
             _BEHAVIOR_ENV_VARS,
             _BEHAVIOR_DEFAULTS,
         )
-        return cls(connection=connection, behavior=behavior)
+        # ``[model_ids]`` has open-ended keys, so it cannot go through
+        # ``_resolve_section`` (which walks a fixed key set) and carries its own
+        # resolver instead.
+        model_ids = _resolve_model_ids(file_data.get(_MODEL_IDS_SECTION, {}))
+        return cls(connection=connection, behavior=behavior, model_ids=model_ids)
 
     @property
     def connection(self) -> Mapping[str, Optional[str]]:
@@ -366,6 +532,43 @@ class LocalConfig:
     def behavior(self) -> Mapping[str, Any]:
         """Return the resolved behavior settings as a read-only mapping."""
         return dict(self._behavior)
+
+    @property
+    def model_ids(self) -> dict[str, int]:
+        """Return the resolved model-name to ``ir.model`` id map (a copy, #686).
+
+        The map is managed by hand precisely so no code path has to read
+        ``ir.model`` to turn a model name into the id a ``res_model_id`` /
+        ``model_id`` field or a model-reference domain wants. Empty by default.
+        """
+        return dict(self._model_ids)
+
+    def model_id(self, model: str) -> Optional[int]:
+        """Return the configured ``ir.model`` id for ``model``, or ``None`` (#686).
+
+        The non-raising lookup, for callers that have their own fallback. A caller
+        that needs the id to proceed should use :meth:`require_model_id` so the
+        user gets the actionable "add this config entry" message instead of a bare
+        ``None``.
+        """
+        return self._model_ids.get(model)
+
+    def require_model_id(self, model: str) -> int:
+        """Return the configured ``ir.model`` id for ``model``, or raise (#686).
+
+        Never falls back to reading ``ir.model``: that administrative table must
+        not be granted to a least-privileged service account (#444), and probing
+        it is exactly the defect this map exists to remove. The Epic C error
+        boundary renders the raised ``ValueError`` as
+        ``{"error": {"type": "ValueError", "message": <the message>}}``, so an LLM
+        caller sees the config entry to add.
+
+        :raises ValueError: When ``model`` is absent from the map.
+        """
+        resolved = self._model_ids.get(model)
+        if resolved is None:
+            raise ValueError(model_id_unavailable_message(model))
+        return resolved
 
     def get(self, key: str, default: Any = None) -> Any:
         """Return one resolved behavior setting, or ``default`` when absent."""
@@ -568,7 +771,7 @@ def _probe_config_dir(directory: Path) -> Optional[Path]:
 
 
 def _load_local_config_file(config_path: Optional[str]) -> dict[str, dict[str, Any]]:
-    """Load ``[connection]`` and ``[behavior]`` sections from the config file.
+    """Load the ``[connection]``, ``[behavior]``, and ``[model_ids]`` sections.
 
     Supports TOML (``.toml``) and INI files. Returns an empty mapping when no
     file applies.
@@ -604,13 +807,19 @@ def _import_toml_module() -> ModuleType:
 
 
 def _load_toml_sections(path: Path) -> dict[str, dict[str, Any]]:
-    """Parse the ``connection`` and ``behavior`` tables from a TOML file."""
+    """Parse the ``connection``, ``behavior``, and ``model_ids`` tables from TOML.
+
+    ``model_ids`` is handed back as parsed, nesting and all;
+    :func:`_flatten_model_id_table` reconciles the dotted-key spelling at resolve
+    time.
+    """
     toml = _import_toml_module()
     with path.open("rb") as handle:
         data = toml.load(handle)
     return {
         "connection": dict(data.get("connection", {})),
         "behavior": dict(data.get("behavior", {})),
+        _MODEL_IDS_SECTION: dict(data.get(_MODEL_IDS_SECTION, {})),
     }
 
 
@@ -620,6 +829,11 @@ def _load_ini_sections(path: Path) -> dict[str, dict[str, Any]]:
     ``[odoo]`` is accepted as an alias for ``[connection]`` (used only when no
     explicit ``[connection]`` section is present) so an already-persisted
     ``~/.config/odoo_sdk/config.ini`` keeps working unchanged.
+
+    Deliberate: ``configparser.optionxform`` lowercases option names, so a
+    ``[model_ids]`` key is read back lower-cased. Odoo model names are lowercase
+    by construction, so this is left at the default rather than overridden — but
+    it means ``Project.Task`` and ``project.task`` are the same INI entry.
     """
     parser = configparser.ConfigParser()
     parser.read(path)
@@ -630,6 +844,17 @@ def _load_ini_sections(path: Path) -> dict[str, dict[str, Any]]:
         sections["connection"] = dict(parser.items(_CONNECTION_SECTION_ALIAS))
     if parser.has_section(_BEHAVIOR_SECTION):
         sections["behavior"] = dict(parser.items(_BEHAVIOR_SECTION))
+    if parser.has_section(_MODEL_IDS_SECTION):
+        # ``parser.items(section)`` folds in ``[DEFAULT]`` keys. The fixed-key
+        # sections above ignore anything they do not recognize, but a model-id
+        # entry that fails to parse raises, so an unrelated ``[DEFAULT]`` value
+        # would turn into a hard load error; drop the defaults here.
+        defaults = parser.defaults()
+        sections[_MODEL_IDS_SECTION] = {
+            key: value
+            for key, value in parser.items(_MODEL_IDS_SECTION)
+            if key not in defaults
+        }
     return sections
 
 

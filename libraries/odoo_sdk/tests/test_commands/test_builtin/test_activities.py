@@ -1,11 +1,20 @@
-"""Tests for the ``mail.activity`` tool family (issue #677).
+"""Tests for the ``mail.activity`` tool family (issues #677, #686).
 
 The helpers are driven through a real :class:`OdooClient` wrapping a recording
 fake executor, so the exact domains, fields, and create values that would reach
-Odoo are asserted and the whole flow — type-name resolution, the mandatory
-``ir.model`` lookup, Markdown/HTML round-tripping, and the read-before-delete
-ordering of ``action_feedback`` — is exercised offline. Nothing here touches a
-live Odoo instance, and none of it has been verified against one.
+Odoo are asserted and the whole flow — type-name resolution, Markdown/HTML
+round-tripping, and the read-before-delete ordering of ``action_feedback`` — is
+exercised offline. Nothing here touches a live Odoo instance, and none of it has
+been verified against one.
+
+The write path additionally carries the #686 regression guard. ``res_model_id``
+used to be resolved with a ``search_read`` on ``ir.model``, which a
+least-privileged service account may never be granted, so scheduling failed
+outright; the id now comes from the hand-managed ``[model_ids]`` config map. The
+fake executor therefore has no ``ir.model`` branch at all — any such call is an
+unexpected call — and :func:`_assert_never_reads_ir_model` states the guarantee
+by name, following the shape ``test_search_knowledge_articles`` uses for the
+identical #444 guard on ``knowledge.article``.
 """
 
 import unittest
@@ -20,11 +29,10 @@ from odoo_sdk.commands.builtin.schedule_activity import ScheduleActivityCommand
 from odoo_sdk.commands.builtin.search_activity_types import (
     SearchActivityTypesCommand,
 )
-from odoo_sdk.transport.errors import OdooAccessError
+from odoo_sdk.state import LocalConfig
 from odoo_sdk.transport.executor import OdooExecutor
 from odoo_sdk.utilities.activities import (
     DEFAULT_ACTIVITY_RES_MODEL,
-    MODEL_LOOKUP_DENIED_MESSAGE,
     get_activities,
     mark_activity_done,
     resolve_activity_type_id,
@@ -80,29 +88,27 @@ class _RecordingExecutor(OdooExecutor):
 
     Real ``OdooClient`` execution runs through this (including the system-wide
     ``forbid_unlink`` guard), and every issued call is captured in ``calls`` so
-    the exact domains / fields / create values can be asserted. ``deny_ir_model``
-    models a least-privileged account that cannot read ``ir.model`` — the exact
-    failure that makes activity creation impossible.
+    the exact domains / fields / create values can be asserted.
+
+    There is deliberately **no** ``ir.model`` branch (#686): a least-privileged
+    service account cannot read that table, so any attempt to falls through to
+    the ``unexpected call`` assertion below and fails the test outright.
     """
 
     def __init__(
         self,
         *,
-        model_rows: list[dict] | None = None,
         type_rows: list[list[dict]] | None = None,
         activities: list[dict] | None = None,
         created_id: int = 1,
         feedback_result: Any = 900,
-        deny_ir_model: bool = False,
     ) -> None:
-        self._model_rows = model_rows if model_rows is not None else [{"id": 71}]
         # One canned response per ``mail.activity.type`` search, consumed in
         # order so the resolver's exact-then-substring two-pass is observable.
         self._type_rows = list(type_rows) if type_rows is not None else []
         self._activities = activities if activities is not None else [_activity()]
         self._created_id = created_id
         self._feedback_result = feedback_result
-        self._deny_ir_model = deny_ir_model
         self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
 
     def _next_type_rows(self) -> list[dict]:
@@ -110,10 +116,6 @@ class _RecordingExecutor(OdooExecutor):
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((model, method, args, kwargs))
-        if model == "ir.model":
-            if self._deny_ir_model:
-                raise OdooAccessError("You are not allowed to access 'Models'.")
-            return self._model_rows
         if model == "mail.activity.type":
             return self._next_type_rows()
         if (model, method) == ("mail.activity", "create"):
@@ -139,6 +141,32 @@ def _client(uid: int = 7, **kwargs: Any) -> tuple[OdooClient, _RecordingExecutor
 
 def _calls_to(executor: _RecordingExecutor, model: str, method: str) -> list[tuple]:
     return [call for call in executor.calls if call[:2] == (model, method)]
+
+
+#: The ``[model_ids]`` map the scheduling tests run against, standing in for the
+#: entries an operator adds by hand once (#686).
+_MODEL_IDS = {"project.task": 71, "crm.lead": 84}
+
+
+def _config(model_ids: dict[str, int] | None = None) -> LocalConfig:
+    """Build a :class:`LocalConfig` carrying a known ``[model_ids]`` map.
+
+    Constructed directly rather than loaded, so no test can pick up (or depend
+    on) a real ``~/.config/odoo_sdk`` file on the machine running it.
+    """
+    return LocalConfig(model_ids=_MODEL_IDS if model_ids is None else model_ids)
+
+
+def _assert_never_reads_ir_model(executor: _RecordingExecutor) -> None:
+    """Fail if any recorded call touched the administrative ``ir.model`` table.
+
+    The #686 regression guard, mirroring ``_assert_never_probes_ir_model`` in
+    ``test_search_knowledge_articles`` (#444). ``res_model_id`` is resolved from
+    config precisely so a least-privileged account, which may never be granted
+    ``ir.model``, can still schedule an activity.
+    """
+    models = [model for model, _, _, _ in executor.calls]
+    assert "ir.model" not in models, f"ir.model must never be read: {executor.calls}"
 
 
 class TestResolveActivityTypeId(unittest.TestCase):
@@ -271,50 +299,59 @@ class TestScheduleActivity(unittest.TestCase):
 
     def test_defaults_to_project_task_and_the_current_uid(self):
         client, executor = self._client()
-        schedule_activity(client, 42)
-        model_domain = _calls_to(executor, "ir.model", "search_read")[0][2][0]
-        self.assertEqual(model_domain, [("model", "=", "project.task")])
+        schedule_activity(client, 42, config=_config())
         values = self._create_values(executor)
+        # 71 is the ``project.task`` entry in the config map, not a lookup.
         self.assertEqual(values["res_model_id"], 71)
         self.assertEqual(values["res_id"], 42)
         self.assertEqual(values["user_id"], 7)
         self.assertEqual(DEFAULT_ACTIVITY_RES_MODEL, "project.task")
 
+    def test_res_model_id_comes_from_config_without_reading_ir_model(self):
+        # The #686 regression guard: the whole write path completes and the id
+        # is the configured one, with ir.model never appearing in the calls.
+        client, executor = self._client()
+        schedule_activity(client, 42, res_model="crm.lead", config=_config())
+        _assert_never_reads_ir_model(executor)
+        self.assertEqual(self._create_values(executor)["res_model_id"], 84)
+
     def test_res_model_id_is_sent_and_res_model_is_not(self):
         # ``mail.activity.res_model`` is a read-only related mirror of
         # ``res_model_id``; writing it would be rejected or ignored.
         client, executor = self._client()
-        schedule_activity(client, 42, res_model="crm.lead")
+        schedule_activity(client, 42, res_model="crm.lead", config=_config())
         values = self._create_values(executor)
         self.assertIn("res_model_id", values)
         self.assertNotIn("res_model", values)
 
     def test_activity_type_name_is_resolved_to_an_id(self):
         client, executor = self._client()
-        schedule_activity(client, 42, activity_type="to do")
+        schedule_activity(client, 42, activity_type="to do", config=_config())
         self.assertEqual(self._create_values(executor)["activity_type_id"], 4)
 
     def test_optional_values_are_omitted_so_odoo_defaults_apply(self):
         client, executor = self._client(type_rows=[])
-        schedule_activity(client, 42)
+        schedule_activity(client, 42, config=_config())
         values = self._create_values(executor)
         for key in ("activity_type_id", "summary", "note", "date_deadline"):
             self.assertNotIn(key, values)
 
     def test_summary_is_forwarded_verbatim(self):
         client, executor = self._client(type_rows=[])
-        schedule_activity(client, 42, summary="Chase the client")
+        schedule_activity(client, 42, summary="Chase the client", config=_config())
         self.assertEqual(self._create_values(executor)["summary"], "Chase the client")
 
     def test_note_is_rendered_from_markdown_to_html(self):
         client, executor = self._client(type_rows=[])
-        schedule_activity(client, 42, note="**chase** the client")
+        schedule_activity(client, 42, note="**chase** the client", config=_config())
         note = self._create_values(executor)["note"]
         self.assertIn("<strong>chase</strong>", note)
 
     def test_explicit_assignee_and_deadline_are_forwarded(self):
         client, executor = self._client(type_rows=[])
-        schedule_activity(client, 42, date_deadline="2026-09-10", user_id=12)
+        schedule_activity(
+            client, 42, date_deadline="2026-09-10", user_id=12, config=_config()
+        )
         values = self._create_values(executor)
         self.assertEqual(values["date_deadline"], "2026-09-10")
         self.assertEqual(values["user_id"], 12)
@@ -322,13 +359,13 @@ class TestScheduleActivity(unittest.TestCase):
     def test_malformed_deadline_is_rejected_before_any_call(self):
         client, executor = self._client()
         with self.assertRaises(ValueError) as ctx:
-            schedule_activity(client, 42, date_deadline="10/09/2026")
+            schedule_activity(client, 42, date_deadline="10/09/2026", config=_config())
         self.assertIn("date_deadline", str(ctx.exception))
         self.assertEqual(executor.calls, [])
 
     def test_created_activity_is_read_back_and_shaped(self):
-        client, _ = self._client(created_id=1)
-        result = schedule_activity(client, 42, activity_type="To Do")
+        client, executor = self._client(created_id=1)
+        result = schedule_activity(client, 42, activity_type="To Do", config=_config())
         self.assertEqual(result["activity_id"], 1)
         self.assertEqual(result["activity_type_id"], 4)
         self.assertEqual(result["activity_type"], "To Do")
@@ -337,23 +374,45 @@ class TestScheduleActivity(unittest.TestCase):
         # The HTML note comes back as Markdown, mirroring the write path.
         self.assertEqual(result["note"], "Chase the client")
         self.assertEqual(result["state"], "planned")
+        # The full round trip — type resolution, create, read back — and still
+        # not one ir.model call anywhere in it (#686).
+        _assert_never_reads_ir_model(executor)
 
-    def test_denied_ir_model_read_raises_the_pinned_message(self):
-        client, _ = self._client(deny_ir_model=True)
+    def test_unmapped_model_names_the_model_and_the_config_entry(self):
+        # The map is hand-managed, so this message is the only discovery
+        # mechanism a caller without server access gets. It must be actionable.
+        client, executor = self._client()
         with self.assertRaises(ValueError) as ctx:
-            schedule_activity(client, 42)
-        self.assertEqual(str(ctx.exception), MODEL_LOOKUP_DENIED_MESSAGE)
+            schedule_activity(client, 42, res_model="not.a.model", config=_config())
+        message = str(ctx.exception)
+        self.assertIn("not.a.model", message)
+        self.assertIn("[model_ids]", message)
+        self.assertIn("ODOO_MODEL_IDS", message)
+        # And it must never send the caller back to the privilege escalation
+        # #444 and #686 exist to forbid — the advice the old message gave.
+        self.assertNotIn("grant read access on ir.model", message)
+        self.assertNotIn("Ask an Odoo admin", message)
 
-    def test_unknown_model_name_is_reported(self):
-        client, _ = self._client(model_rows=[])
-        with self.assertRaises(ValueError) as ctx:
-            schedule_activity(client, 42, res_model="not.a.model")
-        self.assertIn("not.a.model", str(ctx.exception))
+    def test_unmapped_model_fails_closed_before_any_rpc_call(self):
+        # No calls at all subsumes the ir.model guard here: an unmapped model
+        # stops the write path before it reaches the type search or the create.
+        client, executor = self._client()
+        with self.assertRaises(ValueError):
+            schedule_activity(client, 42, res_model="not.a.model", config=_config())
+        _assert_never_reads_ir_model(executor)
+        self.assertEqual(executor.calls, [])
+
+    def test_config_is_required_and_cannot_be_defaulted_away(self):
+        # A default would have to fall back to reading ir.model, which is the
+        # defect itself; the signature makes that impossible to reintroduce.
+        client, _ = self._client()
+        with self.assertRaises(TypeError):
+            schedule_activity(client, 42)  # type: ignore[call-arg]
 
     def test_no_create_is_issued_when_the_type_cannot_be_resolved(self):
         client, executor = _client(type_rows=[[], [], []])
         with self.assertRaises(ValueError):
-            schedule_activity(client, 42, activity_type="Nope")
+            schedule_activity(client, 42, activity_type="Nope", config=_config())
         self.assertEqual(_calls_to(executor, "mail.activity", "create"), [])
 
 
@@ -508,9 +567,10 @@ class TestActivityCommands(unittest.TestCase):
 
     def test_schedule_delegates_every_argument(self):
         client = MagicMock()
+        config = _config()
         target = "odoo_sdk.commands.builtin.schedule_activity.schedule_activity"
         with patch(target, return_value={"activity_id": 1}) as helper:
-            result = ScheduleActivityCommand(client).execute(
+            result = ScheduleActivityCommand(client, config=config).execute(
                 42,
                 res_model="crm.lead",
                 activity_type="Call",
@@ -529,7 +589,27 @@ class TestActivityCommands(unittest.TestCase):
             note="n",
             date_deadline="2026-09-10",
             user_id=12,
+            config=config,
         )
+
+    def test_schedule_passes_the_injected_config_not_a_freshly_loaded_one(self):
+        # ``Command.config`` is the injected peer dependency (#686); building a
+        # second ``LocalConfig`` here would read whatever file happens to be on
+        # the machine instead of the one the host resolved.
+        client = MagicMock()
+        config = _config()
+        command = ScheduleActivityCommand(client, config=config)
+        target = "odoo_sdk.commands.builtin.schedule_activity.schedule_activity"
+        with patch(target, return_value={}) as helper:
+            command.execute(42)
+        self.assertIs(helper.call_args.kwargs["config"], config)
+
+    def test_schedule_description_documents_model_ids_not_ir_model_access(self):
+        # The description is LLM-facing: it has to point at the [model_ids]
+        # entry, never at asking an admin for ir.model access (#686).
+        description = ScheduleActivityCommand._description
+        self.assertIn("[model_ids]", description)
+        self.assertNotIn("requires read access on ir.model", description)
 
     def test_get_activities_delegates_every_argument(self):
         client = MagicMock()
