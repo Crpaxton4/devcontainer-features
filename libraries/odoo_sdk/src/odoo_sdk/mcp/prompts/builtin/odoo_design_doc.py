@@ -1,11 +1,13 @@
 """MCP ``odoo_design_doc`` prompt surface.
 
-Ports the personal-features ``odoo-design-doc`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/odoo-design-doc/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Exposes the ``odoo-design-doc`` consulting skill as a built-in MCP prompt, so
+any MCP client gets it without the mounted-SKILL.md delivery path. The body
+embedded below is this prompt's source of truth: the loose personal-features
+copy of the skill was removed (#698), superseded by the maintained
+``odoo-dev`` plugin twin ``odoo-dev:odoo-design-doc``. The prompt takes no
+arguments and returns the skill's instructional body verbatim for the caller
+to act on with its own (read-only) Odoo tool calls; it never calls into the
+command registry itself.
 """
 
 from odoo_sdk.commands import Registry
