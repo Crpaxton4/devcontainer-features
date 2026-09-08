@@ -1,11 +1,18 @@
 """MCP ``odoo_code_review`` prompt surface.
 
-Ports the personal-features ``odoo-code-review`` skill (source of truth:
-``devcontainer-features/src/personal-features/skills/odoo-code-review/SKILL.md``) to a
-built-in MCP prompt, so any MCP client gets it without the mounted-SKILL.md
-delivery path. The prompt takes no arguments and returns the skill's
-instructional body verbatim for the caller to act on with its own (read-only)
-Odoo tool calls; it never calls into the command registry itself.
+Ports the ``odoo-code-review`` skill to a built-in MCP prompt, so any MCP
+client gets it without the mounted-SKILL.md delivery path. The prompt takes no
+arguments and returns the skill's instructional body verbatim for the caller to
+act on with its own (read-only) Odoo tool calls; it never calls into the
+command registry itself.
+
+Source of truth: this module. The personal-features copy at
+``devcontainer-features/src/personal-features/skills/odoo-code-review/`` was
+removed once the ``odoo-dev`` plugin started shipping the same skill as
+``odoo-dev:odoo-code-review`` (two loose copies competed for the same
+triggers). The body below is embedded verbatim and is no longer regenerated
+from, or parity-checked against, a ``SKILL.md``; the maintained upstream
+wording lives in that plugin.
 """
 
 from odoo_sdk.commands import Registry
