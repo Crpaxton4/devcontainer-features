@@ -430,9 +430,7 @@ class TestResync(unittest.TestCase):
                 "odoo": {"inserted": 0},
             }
         )
-        self.assertEqual(
-            status, "resync — git: +2, github: skipped (no gh), odoo: +0"
-        )
+        self.assertEqual(status, "resync — git: +2, github: skipped (no gh), odoo: +0")
 
     def test_resync_status_handles_empty(self):
         self.assertEqual(_resync_status({}), "resync — nothing to do")
@@ -542,8 +540,17 @@ def _review_state(cards, **kw):
 def _review_cards(n=3):
     return [
         ReviewCard(
-            i, str(100 + i), "2026-06-01T09:00:00", "2026-06-01T10:00:00",
-            1.0, WEAK, 0.0, "", (), (), False,
+            i,
+            str(100 + i),
+            "2026-06-01T09:00:00",
+            "2026-06-01T10:00:00",
+            1.0,
+            WEAK,
+            0.0,
+            "",
+            (),
+            (),
+            False,
         )
         for i in range(n)
     ]

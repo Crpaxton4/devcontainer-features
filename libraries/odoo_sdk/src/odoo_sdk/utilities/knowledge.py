@@ -123,9 +123,7 @@ def _is_missing_model_error(exc: OdooError) -> bool:
     )
 
 
-def _knowledge_query(
-    client: OdooClient, method: str, *args: Any, **kwargs: Any
-) -> Any:
+def _knowledge_query(client: OdooClient, method: str, *args: Any, **kwargs: Any) -> Any:
     """Issue one read-only ``knowledge.article`` call, mapping a missing model.
 
     Runs the real ``knowledge.article`` query directly — there is deliberately no

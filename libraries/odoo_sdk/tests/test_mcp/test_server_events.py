@@ -201,9 +201,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
         # The boundary formats the error; the event wrapper (innermost) never
         # reached its emit because the exception propagated first.
-        self.assertEqual(
-            result, {"error": {"type": "ValueError", "message": "nope"}}
-        )
+        self.assertEqual(result, {"error": {"type": "ValueError", "message": "nope"}})
         self.assertEqual(db.get_events(), [])
 
     def test_async_tool_emits_event(self):
@@ -362,7 +360,11 @@ class TestPayloadEnrichment(unittest.TestCase):
 
         def do_thing(task_id: int) -> dict:
             """Fake tool."""
-            return {"run_id": None, "pr_url": ["not", "a", "scalar"], "state": "RUNNING"}
+            return {
+                "run_id": None,
+                "pr_url": ["not", "a", "scalar"],
+                "state": "RUNNING",
+            }
 
         tools = _build_tools(registry, {"do_thing": do_thing})
         tools["do_thing"].fn(task_id=1)
@@ -391,9 +393,7 @@ class TestPayloadEnrichment(unittest.TestCase):
         self.assertEqual(server_mod._outcome_line({"ok": True}), "ok")
         self.assertEqual(server_mod._outcome_line("plain string"), "ok")
         self.assertEqual(server_mod._outcome_line(None), "ok")
-        self.assertEqual(
-            server_mod._outcome_line({"error": "boom"}), "error: boom"
-        )
+        self.assertEqual(server_mod._outcome_line({"error": "boom"}), "error: boom")
         self.assertEqual(server_mod._outcome_line({"error": {}}), "error")
 
     def test_result_payload_fields_ignores_non_dict(self):

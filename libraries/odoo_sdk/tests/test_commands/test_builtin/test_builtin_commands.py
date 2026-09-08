@@ -86,9 +86,7 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.search.return_value.read.return_value = [{"name": "T"}]
 
-        with patch(
-            "odoo_sdk.commands.builtin.get_tasks.get_task_detail"
-        ) as detail:
+        with patch("odoo_sdk.commands.builtin.get_tasks.get_task_detail") as detail:
             result = GetTasksCommand(client).execute()
 
         detail.assert_not_called()

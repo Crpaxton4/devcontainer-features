@@ -103,8 +103,13 @@ class TestTaskOnlyPartition(unittest.TestCase):
         state = _tmp_state()
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
         _event(state, ts=base, repo="", task_ids=["101"])  # agent, repo-less
-        _event(state, ts=base + timedelta(minutes=5), repo="owner/repo",
-               source="commit", task_ids=["101"])
+        _event(
+            state,
+            ts=base + timedelta(minutes=5),
+            repo="owner/repo",
+            source="commit",
+            task_ids=["101"],
+        )
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 1)
@@ -129,7 +134,9 @@ class TestTaskOnlyPartition(unittest.TestCase):
         state = _tmp_state()
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
         _event(state, ts=base, task_ids=["101"], repo="owner/repo")
-        _event(state, ts=base + timedelta(minutes=5), task_ids=["202"], repo="owner/repo")
+        _event(
+            state, ts=base + timedelta(minutes=5), task_ids=["202"], repo="owner/repo"
+        )
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 2)
@@ -205,7 +212,9 @@ class TestSourceAndTaskFiltering(unittest.TestCase):
             source="claude:PostToolUse",
         )
         lo, hi = _whole_range()
-        self.assertEqual(len(state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)), 1)
+        self.assertEqual(
+            len(state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)), 1
+        )
 
     def test_merge_source_excluded(self):
         # ``merge`` stays fixed/audit-only: a merge marker never forms a session.
@@ -317,8 +326,13 @@ class TestReviewFamilyWindowed(unittest.TestCase):
         state = _tmp_state()
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
         _event(state, ts=base, source="commit", task_ids=["101"], repo="owner/repo")
-        _event(state, ts=base + timedelta(minutes=5), source="review",
-               task_ids=["101"], repo="owner/repo")
+        _event(
+            state,
+            ts=base + timedelta(minutes=5),
+            source="review",
+            task_ids=["101"],
+            repo="owner/repo",
+        )
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 1)
@@ -333,10 +347,20 @@ class TestReviewFamilyWindowed(unittest.TestCase):
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
         _event(state, ts=base, source="commit", task_ids=["101"], repo="owner/repo")
         # A review burst hours later (> GAP after the commit) is its own session.
-        _event(state, ts=base + timedelta(hours=6), source="comment",
-               task_ids=["101"], repo="owner/repo")
-        _event(state, ts=base + timedelta(hours=6, minutes=10), source="review",
-               task_ids=["101"], repo="owner/repo")
+        _event(
+            state,
+            ts=base + timedelta(hours=6),
+            source="comment",
+            task_ids=["101"],
+            repo="owner/repo",
+        )
+        _event(
+            state,
+            ts=base + timedelta(hours=6, minutes=10),
+            source="review",
+            task_ids=["101"],
+            repo="owner/repo",
+        )
         lo, hi = _whole_range()
         windows = state.derive_sessions_overlapping(lo, hi, gap_secs=GAP)
         self.assertEqual(len(windows), 2)
@@ -356,7 +380,12 @@ class TestMultiActiveRunFanOut(unittest.TestCase):
         # Prior solo activity anchors each task's session earlier than the shared
         # event so we can prove the shared event extends an existing session.
         _event(state, ts=base, source="claude:PostToolUse", task_ids=["55"])
-        _event(state, ts=base + timedelta(minutes=5), source="claude:PostToolUse", task_ids=["66"])
+        _event(
+            state,
+            ts=base + timedelta(minutes=5),
+            source="claude:PostToolUse",
+            task_ids=["66"],
+        )
         shared = _event(
             state,
             ts=base + timedelta(minutes=10),
@@ -373,9 +402,7 @@ class TestMultiActiveRunFanOut(unittest.TestCase):
             self.assertGreaterEqual(window.ended_at, shared.timestamp)
             self.assertIn(shared.id, window.event_ids)
         # Distinct session keys despite the shared anchor event.
-        self.assertNotEqual(
-            session_key(by_task["55"]), session_key(by_task["66"])
-        )
+        self.assertNotEqual(session_key(by_task["55"]), session_key(by_task["66"]))
 
     def test_multi_task_event_alone_seeds_both_task_sessions(self):
         # A lone multi-task event (no prior solo activity) still seeds a session

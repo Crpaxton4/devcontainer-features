@@ -272,7 +272,11 @@ def search_chatter(
         limit=limit,
     )
     return [
-        {**shape_chatter_message(m), "res_model": m.get("model"), "res_id": m.get("res_id")}
+        {
+            **shape_chatter_message(m),
+            "res_model": m.get("model"),
+            "res_id": m.get("res_id"),
+        }
         for m in messages
     ]
 
@@ -364,11 +368,7 @@ def _task_detail_fields(selected: list[str]) -> list[str]:
     fields = list(_TASK_BASE_FIELDS)
     # ``_TASK_INCLUDE_FIELDS`` values are disjoint from ``_TASK_BASE_FIELDS``, so
     # no base field can be duplicated; ``dict.fromkeys`` dedups repeated selectors.
-    extra = [
-        field
-        for key in selected
-        for field in _TASK_INCLUDE_FIELDS.get(key, [])
-    ]
+    extra = [field for key in selected for field in _TASK_INCLUDE_FIELDS.get(key, [])]
     fields.extend(dict.fromkeys(extra))
     return fields
 

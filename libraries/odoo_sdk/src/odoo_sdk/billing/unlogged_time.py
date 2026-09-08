@@ -48,8 +48,7 @@ from .upload import range_bounds, upload_sessions
 #: pointless offline (it has nothing to reconcile the derived hours against), so
 #: an unreachable instance is a single clear error rather than a partial report.
 _UNREACHABLE = (
-    "unlogged_time_report needs a reachable Odoo instance to read logged "
-    "timesheets."
+    "unlogged_time_report needs a reachable Odoo instance to read logged " "timesheets."
 )
 
 

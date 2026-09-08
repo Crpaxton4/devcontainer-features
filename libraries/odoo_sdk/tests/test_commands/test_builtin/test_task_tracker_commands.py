@@ -68,6 +68,7 @@ def _add_agent_event(db, task_id, subject, timestamp=None):
 
 # ── GetTaskChatterCommand ─────────────────────────────────────────────────────
 
+
 class TestGetTaskChatterCommand(unittest.TestCase):
     def test_delegates_to_odoo_ops(self):
         client = _client()
@@ -101,12 +102,11 @@ class TestGetTaskChatterCommand(unittest.TestCase):
                 task_id=10, since="2026-06-20 10:30:00"
             )
         mock_chatter.assert_any_call(client, 10, limit=100, since=77)
-        mock_chatter.assert_any_call(
-            client, 10, limit=100, since="2026-06-20 10:30:00"
-        )
+        mock_chatter.assert_any_call(client, 10, limit=100, since="2026-06-20 10:30:00")
 
 
 # ── GetTaskAttachmentsCommand ─────────────────────────────────────────────────
+
 
 class TestGetTaskAttachmentsCommand(unittest.TestCase):
     def test_delegates_to_helper(self):
@@ -126,20 +126,23 @@ class TestGetTaskAttachmentsCommand(unittest.TestCase):
             "odoo_sdk.commands.builtin.get_task_attachments.get_task_attachments",
             return_value=[],
         ) as mock_helper:
-            GetTaskAttachmentsCommand(client).execute(
-                task_id=10, include_content=True
-            )
+            GetTaskAttachmentsCommand(client).execute(task_id=10, include_content=True)
         mock_helper.assert_called_once_with(client, 10, include_content=True)
 
 
 # ── GetTaskCommand ────────────────────────────────────────────────────────────
 
+
 class TestGetTaskCommand(unittest.TestCase):
     def test_returns_none_when_task_not_found(self):
         client = _client()
         with (
-            patch("odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=None),
-            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter") as mock_chatter,
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=None
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_chatter"
+            ) as mock_chatter,
         ):
             result = GetTaskCommand(client).execute(task_id=999)
         self.assertIsNone(result)
@@ -150,8 +153,14 @@ class TestGetTaskCommand(unittest.TestCase):
         task_data = {"task_id": 42, "name": "Feature X", "description": "Do it"}
         chatter_data = [{"id": 1, "author": "Jane", "body": "Note"}]
         with (
-            patch("odoo_sdk.commands.builtin.get_task.get_task_detail", return_value=task_data),
-            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter", return_value=chatter_data),
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_detail",
+                return_value=task_data,
+            ),
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_chatter",
+                return_value=chatter_data,
+            ),
         ):
             result = GetTaskCommand(client).execute(task_id=42, include=["chatter"])
         self.assertEqual(result["chatter"], chatter_data)
@@ -165,7 +174,9 @@ class TestGetTaskCommand(unittest.TestCase):
                 "odoo_sdk.commands.builtin.get_task.get_task_detail",
                 return_value=task_data,
             ) as mock_detail,
-            patch("odoo_sdk.commands.builtin.get_task.get_task_chatter") as mock_chatter,
+            patch(
+                "odoo_sdk.commands.builtin.get_task.get_task_chatter"
+            ) as mock_chatter,
         ):
             result = GetTaskCommand(client).execute(task_id=42)
         self.assertNotIn("chatter", result)
@@ -185,13 +196,12 @@ class TestGetTaskCommand(unittest.TestCase):
             ) as mock_chatter,
         ):
             GetTaskCommand(client).execute(task_id=7, include=["subtasks", "chatter"])
-        mock_detail.assert_called_once_with(
-            client, 7, include=["subtasks", "chatter"]
-        )
+        mock_detail.assert_called_once_with(client, 7, include=["subtasks", "chatter"])
         mock_chatter.assert_called_once_with(client, 7)
 
 
 # ── TaskListCommand ───────────────────────────────────────────────────────────
+
 
 class TestTaskListCommand(unittest.TestCase):
     def test_searches_without_filters(self):
@@ -252,12 +262,11 @@ class TestTaskListCommand(unittest.TestCase):
 
 # ── TaskStatusCommand ─────────────────────────────────────────────────────────
 
+
 class TestTaskStatusCommand(unittest.TestCase):
     def test_returns_empty_list_when_no_sessions(self):
         db = _tmp_db()
-        with (
-            patch(_STATUS_GUARD),
-        ):
+        with (patch(_STATUS_GUARD),):
             result = _cmd_with_db(TaskStatusCommand, _client(), db).execute()
         self.assertEqual(result, [])
 
@@ -265,9 +274,7 @@ class TestTaskStatusCommand(unittest.TestCase):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         db.create_run(2, "Feature", 10, "Project A", timesheet_id=2)
-        with (
-            patch(_STATUS_GUARD),
-        ):
+        with (patch(_STATUS_GUARD),):
             result = _cmd_with_db(TaskStatusCommand, _client(), db).execute()
         self.assertEqual(len(result), 2)
         task_ids = {r["task_id"] for r in result}
@@ -276,9 +283,7 @@ class TestTaskStatusCommand(unittest.TestCase):
     def test_result_contains_required_keys(self):
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (
-            patch(_STATUS_GUARD),
-        ):
+        with (patch(_STATUS_GUARD),):
             result = _cmd_with_db(TaskStatusCommand, _client(), db).execute()
         self.assertIn("elapsed", result[0])
         self.assertIn("state", result[0])
@@ -324,6 +329,7 @@ class TestTaskStatusCommand(unittest.TestCase):
 
 
 # ── TaskNoteCommand ───────────────────────────────────────────────────────────
+
 
 class TestTaskNoteCommand(unittest.TestCase):
     def test_posts_note_and_appends_to_run(self):
@@ -382,9 +388,7 @@ class TestTaskNoteCommand(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
-            patch(
-                "odoo_sdk.commands.builtin.task_note.post_chatter_note"
-            ) as mock_post,
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
         ):
             with self.assertRaises(ValueError) as ctx:
                 _cmd_with_db(TaskNoteCommand, client, db).execute(1, "x" * 301)
@@ -419,9 +423,7 @@ class TestTaskNoteCommand(unittest.TestCase):
 
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
-        with (
-            patch(_NOTE_GUARD),
-        ):
+        with (patch(_NOTE_GUARD),):
             with self.assertRaises(TaskNotRunningError):
                 _cmd_with_db(TaskNoteCommand, _client(), db).execute(999, "note")
 
@@ -534,9 +536,7 @@ class TestTaskNoteCommand(unittest.TestCase):
                 "odoo_sdk.commands.builtin.task_note.create_attachments",
                 side_effect=stop_session_then_return_ids,
             ),
-            patch(
-                "odoo_sdk.commands.builtin.task_note.post_chatter_note"
-            ) as mock_post,
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
         ):
             with self.assertRaises(TaskNotRunningError):
                 _cmd_with_db(TaskNoteCommand, client, db).execute(
@@ -579,9 +579,7 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch(
                 "odoo_sdk.commands.builtin.task_note.create_attachments"
             ) as mock_create,
-            patch(
-                "odoo_sdk.commands.builtin.task_note.post_chatter_note"
-            ) as mock_post,
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
         ):
             result = _cmd_with_db(TaskNoteCommand, client, db).execute(
                 1,
@@ -658,6 +656,7 @@ class TestTaskNoteCommand(unittest.TestCase):
 
 # ── Unified active-session guard (#627) ───────────────────────────────────────
 
+
 class TestUnifiedActiveSessionGuard(unittest.TestCase):
     def test_command_and_db_guards_share_one_message(self):
         from odoo_sdk.commands.command import require_active_run
@@ -680,6 +679,7 @@ class TestUnifiedActiveSessionGuard(unittest.TestCase):
 
 # ── TaskQuestionCommand ───────────────────────────────────────────────────────
 
+
 class TestTaskQuestionCommand(unittest.TestCase):
     def test_posts_prefixed_question_and_transitions(self):
         client = _client()
@@ -692,7 +692,9 @@ class TestTaskQuestionCommand(unittest.TestCase):
                 return_value=77,
             ) as mock_post,
         ):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "Which approach?")
+            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
+                1, "Which approach?"
+            )
         mock_post.assert_called_once_with(client, 1, "[?] Which approach?")
         self.assertEqual(result["state"], "AWAITING_ANSWERS")
         self.assertEqual(result["message_id"], 77)
@@ -704,16 +706,19 @@ class TestTaskQuestionCommand(unittest.TestCase):
         db.transition_to_awaiting(1)
         with (
             patch(_QUESTION_GUARD),
-            patch("odoo_sdk.commands.builtin.task_question.post_chatter_note", return_value=78),
+            patch(
+                "odoo_sdk.commands.builtin.task_question.post_chatter_note",
+                return_value=78,
+            ),
         ):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "Another question?")
+            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
+                1, "Another question?"
+            )
         self.assertEqual(result["state"], "AWAITING_ANSWERS")
 
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
-        with (
-            patch(_QUESTION_GUARD),
-        ):
+        with (patch(_QUESTION_GUARD),):
             with self.assertRaises(TaskNotRunningError):
                 _cmd_with_db(TaskQuestionCommand, _client(), db).execute(999, "?")
 
@@ -730,9 +735,7 @@ class TestTaskQuestionCommand(unittest.TestCase):
             ) as mock_post,
         ):
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                    1, "q" * 301
-                )
+                _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "q" * 301)
         message = str(ctx.exception)
         self.assertIn("300", message)
         self.assertIn("simple, direct, plain", message)
@@ -752,9 +755,7 @@ class TestTaskQuestionCommand(unittest.TestCase):
                 return_value=79,
             ) as mock_post,
         ):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                1, question
-            )
+            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, question)
         mock_post.assert_called_once_with(client, 1, f"[?] {question}")
         self.assertEqual(result["state"], "AWAITING_ANSWERS")
 
@@ -851,13 +852,12 @@ class TestTaskQuestionCommand(unittest.TestCase):
                 return_value=77,
             ),
         ):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                1, "Which?"
-            )
+            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "Which?")
         self.assertNotIn("deduplicated", result)
 
 
 # ── CloseTaskCommand ──────────────────────────────────────────────────────────
+
 
 class TestCloseTaskCommand(unittest.TestCase):
     def test_closes_a_running_run(self):
@@ -913,6 +913,7 @@ class TestCloseTaskCommand(unittest.TestCase):
 
 # ── ResumeTaskCommand ─────────────────────────────────────────────────────────
 
+
 class TestResumeTaskCommand(unittest.TestCase):
     def test_transitions_to_running(self):
         client = _client()
@@ -958,8 +959,8 @@ class TestResumeTaskCommand(unittest.TestCase):
         self.assertIsNotNone(db.get_active_run(1))
 
 
-
 # ── SearchProjectsCommand ─────────────────────────────────────────────────────
+
 
 class TestSearchProjectsCommand(unittest.TestCase):
     def test_delegates_to_name_search_projects(self):
@@ -992,6 +993,7 @@ class TestSearchProjectsCommand(unittest.TestCase):
 
 # ── SearchTasksCommand ────────────────────────────────────────────────────────
 
+
 class TestSearchTasksCommand(unittest.TestCase):
     def test_delegates_to_name_search_tasks_with_project_scope(self):
         client = _client()
@@ -1014,6 +1016,7 @@ class TestSearchTasksCommand(unittest.TestCase):
 
 
 # ── StartTaskCommand ──────────────────────────────────────────────────────────
+
 
 class TestStartTaskCommand(unittest.TestCase):
     def _start(self, client, db, **kwargs):
@@ -1057,7 +1060,9 @@ class TestStartTaskCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         result = self._start(
-            client, db, **self._base_kwargs(branch_name="10-fix-vat", warning="heads up")
+            client,
+            db,
+            **self._base_kwargs(branch_name="10-fix-vat", warning="heads up"),
         )
         self.assertEqual(result["branch_name"], "10-fix-vat")
         self.assertEqual(result["warning"], "heads up")
@@ -1133,7 +1138,9 @@ class TestStartTaskCommand(unittest.TestCase):
         db.create_run.side_effect = RuntimeError("insert failed")
         with patch(_START_GUARD):
             with self.assertRaises(RuntimeError):
-                _cmd_with_db(StartTaskCommand, client, db).execute(**self._base_kwargs())
+                _cmd_with_db(StartTaskCommand, client, db).execute(
+                    **self._base_kwargs()
+                )
         # No account.analytic.line write is attempted.
         client.execute.assert_not_called()
 
@@ -1191,6 +1198,7 @@ class TestStartTaskCommand(unittest.TestCase):
 
 # ── StopTaskCommand ───────────────────────────────────────────────────────────
 
+
 class TestStopTaskCommand(unittest.TestCase):
     def test_stops_run_and_writes_no_timesheet(self):
         client = _client()
@@ -1206,6 +1214,7 @@ class TestStopTaskCommand(unittest.TestCase):
         self.assertIn("elapsed", result)
         self.assertIn("elapsed_hours", result)
         from odoo_sdk.state import TaskState
+
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
 
@@ -1294,6 +1303,7 @@ class TestStopTaskCommand(unittest.TestCase):
         with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
         from odoo_sdk.state import TaskState
+
         run = db.get_run_by_id(result["run_id"])
         self.assertEqual(run.state, TaskState.STOPPED)
 
@@ -1309,6 +1319,7 @@ class TestStopTaskCommand(unittest.TestCase):
 
 
 # ── AGENT event production moved to the MCP wrapper (issue #326) ───────────────
+
 
 class TestNoAgentEventFromCommandBody(unittest.TestCase):
     """FSM command bodies no longer emit AGENT events themselves (#326).
@@ -1348,7 +1359,9 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_NOTE_GUARD),
-            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note", return_value=1),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.post_chatter_note", return_value=1
+            ),
         ):
             _cmd_with_db(TaskNoteCommand, client, db).execute(1, "progress note")
         self._assert_no_agent_event(db)
@@ -1359,7 +1372,10 @@ class TestNoAgentEventFromCommandBody(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (
             patch(_QUESTION_GUARD),
-            patch("odoo_sdk.commands.builtin.task_question.post_chatter_note", return_value=1),
+            patch(
+                "odoo_sdk.commands.builtin.task_question.post_chatter_note",
+                return_value=1,
+            ),
         ):
             _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "which approach?")
         self._assert_no_agent_event(db)

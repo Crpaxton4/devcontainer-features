@@ -285,18 +285,14 @@ def reconcile_session(
         # adoptable anchor — and the create branch below would bill a SECOND
         # line (double-bill). Recording first makes any retry re-find the row
         # through the mapped branch and rewrite it in place.
-        _record_upload(
-            state, session_key, anchor, hours, task_id, started_at, ended_at
-        )
+        _record_upload(state, session_key, anchor, hours, task_id, started_at, ended_at)
         _write_line(
             client,
             anchor,
             {"unit_amount": hours, "name": description, "date": day.isoformat()},
         )
         return anchor
-    timesheet_id = _create_session_line(
-        client, state, task_id, description, hours, day
-    )
+    timesheet_id = _create_session_line(client, state, task_id, description, hours, day)
     _record_upload(
         state, session_key, timesheet_id, hours, task_id, started_at, ended_at
     )
@@ -356,9 +352,7 @@ def sweep_orphaned_uploads(
     for entry in state.list_session_uploads():
         if entry["session_key"] in derived_keys:
             continue
-        if not _mapping_is_window_orphan(
-            entry, derived_task_ids, window_lo, window_hi
-        ):
+        if not _mapping_is_window_orphan(entry, derived_task_ids, window_lo, window_hi):
             continue
         _write_line(
             client,

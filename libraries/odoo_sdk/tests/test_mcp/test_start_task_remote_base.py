@@ -86,7 +86,9 @@ class TestForksFromRemoteTip(unittest.TestCase):
         created = _create_task_branch("10-fix", "main")
 
         self.assertTrue(created, "a fresh branch must be reported as created")
-        self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "10-fix")
+        self.assertEqual(
+            _git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "10-fix"
+        )
         # The new branch sits on the remote tip, so the merged file is present.
         self.assertEqual(_git(self.local, "rev-parse", "HEAD"), self.remote_tip)
         self.assertTrue(

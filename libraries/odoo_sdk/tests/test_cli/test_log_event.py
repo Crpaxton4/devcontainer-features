@@ -41,9 +41,7 @@ class TestLogEvent(unittest.TestCase):
         self._cwd = os.getcwd()
         self._state = tempfile.mkdtemp()
         self._repo = tempfile.mkdtemp()
-        subprocess.run(
-            ["git", "init"], cwd=self._repo, check=True, capture_output=True
-        )
+        subprocess.run(["git", "init"], cwd=self._repo, check=True, capture_output=True)
         subprocess.run(
             ["git", "remote", "add", "origin", "https://example.com/o/r.git"],
             cwd=self._repo,

@@ -131,9 +131,7 @@ class OdooRecordset:
                 record_id
                 for record_id in record_ids
                 if field_name
-                not in self._record_value_cache.get(
-                    (self._model_name, record_id), {}
-                )
+                not in self._record_value_cache.get((self._model_name, record_id), {})
             ]
 
     def _get_cached_field_value(
@@ -455,7 +453,9 @@ class OdooRecordset:
         cross-cutting ``forbid_unlink`` guard — so a recordset-originated ``unlink`` is
         blocked identically to a client-originated one.
         """
-        return guarded_execute(self._executor, self._model_name, method, *args, **kwargs)
+        return guarded_execute(
+            self._executor, self._model_name, method, *args, **kwargs
+        )
 
     def _context_kwargs(self) -> Dict[str, Any]:
         """Build RPC keyword arguments for the current context, or an empty mapping."""
@@ -891,11 +891,13 @@ class OdooRecordset:
 
         return [
             tuple(
-                self._resolve_recordset_value(
-                    base_field[spec], row[base_field[spec]], metadata
+                (
+                    self._resolve_recordset_value(
+                        base_field[spec], row[base_field[spec]], metadata
+                    )
+                    if spec in recordset_specs
+                    else row[base_field[spec]]
                 )
-                if spec in recordset_specs
-                else row[base_field[spec]]
                 for spec in all_specs
             )
             for row in rows
@@ -1172,9 +1174,7 @@ class OdooRecordset:
         record_ids = list(self._ids)
         for field_spec_name, direction, nulls_first in reversed(specs):
             spec_reverse = direction == "DESC"
-            effective_nulls_first = (
-                nulls_first if not spec_reverse else not nulls_first
-            )
+            effective_nulls_first = nulls_first if not spec_reverse else not nulls_first
             key_fn = self._make_field_sort_key(field_spec_name, effective_nulls_first)
             record_ids = sorted(record_ids, key=key_fn, reverse=spec_reverse)
 

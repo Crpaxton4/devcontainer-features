@@ -104,7 +104,9 @@ class RawEvent:
     pr_num: int  # 0 for local-git commits or agent events with no PR
     event_type: EventType
     branch: str = ""
-    is_release: bool = False  # multi-task on a release-bearing source (not agent/claude hooks)
+    is_release: bool = (
+        False  # multi-task on a release-bearing source (not agent/claude hooks)
+    )
     subject: str = ""
     pr_title: str = ""
     pr_body: str = ""

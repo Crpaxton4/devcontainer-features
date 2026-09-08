@@ -107,9 +107,7 @@ class TestConcurrentWriters(unittest.TestCase):
             except Exception as exc:  # pragma: no cover - failure path
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=hammer, args=(w,)) for w in range(WRITERS)
-        ]
+        threads = [threading.Thread(target=hammer, args=(w,)) for w in range(WRITERS)]
         for thread in threads:
             thread.start()
         for thread in threads:

@@ -96,9 +96,19 @@ class _FakeTransport:
         raise AssertionError(f"unexpected URL: {url}")
 
 
-def _meeting(event_id, start, end, *, summary="Sync", status="confirmed",
-             response="accepted", organized_self=False, other_attendees=True,
-             event_type=None, all_day=False):
+def _meeting(
+    event_id,
+    start,
+    end,
+    *,
+    summary="Sync",
+    status="confirmed",
+    response="accepted",
+    organized_self=False,
+    other_attendees=True,
+    event_type=None,
+    all_day=False,
+):
     """Build a Calendar event instance JSON for the fetch response."""
     attendees = [{"self": True, "responseStatus": response}]
     if other_attendees:
@@ -121,8 +131,9 @@ def _meeting(event_id, start, end, *, summary="Sync", status="confirmed",
     return event
 
 
-def _sent_message(message_id, iso_ts, *, subject="Re: status", labels=("SENT",),
-                  thread="t1"):
+def _sent_message(
+    message_id, iso_ts, *, subject="Re: status", labels=("SENT",), thread="t1"
+):
     """Build a Gmail message detail resource (metadata only)."""
     epoch_ms = int(datetime.fromisoformat(iso_ts).timestamp() * 1000)
     return {
@@ -161,8 +172,14 @@ class TestCalendarDerivation(unittest.TestCase):
     def test_hour_meeting_derives_exactly_one_hour(self):
         # Acceptance #1: accepted 10:00-11:00 -> ONE session of exactly 1h.
         token = _token_file()
-        items = [_meeting("m1", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Standup #24648")]
+        items = [
+            _meeting(
+                "m1",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Standup #24648",
+            )
+        ]
         state, result = self._run(items, _config(token))
         self.assertEqual(result, {"inserted": 13})  # 10:00..11:00 every 5 min
         sessions = self._sessions(state)
@@ -173,8 +190,14 @@ class TestCalendarDerivation(unittest.TestCase):
     def test_twelve_minute_meeting_derives_exactly_twelve_minutes(self):
         # Acceptance #2: off-grid terminal tick lands on the true end.
         token = _token_file()
-        items = [_meeting("m2", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T10:12:00+00:00", summary="Chat #77777")]
+        items = [
+            _meeting(
+                "m2",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T10:12:00+00:00",
+                summary="Chat #77777",
+            )
+        ]
         state, result = self._run(items, _config(token))
         self.assertEqual(result, {"inserted": 4})  # 0, 5, 10, 12
         sessions = self._sessions(state)
@@ -192,7 +215,9 @@ class TestCalendarDerivation(unittest.TestCase):
             _meeting("c", *base, status="cancelled", summary="X #4"),
             _meeting("solo", *base, other_attendees=False, summary="Deep work #5"),
             _meeting("ooo", *base, event_type="outOfOffice", summary="OOO #6"),
-            _meeting("allday", "2026-07-15", "2026-07-16", all_day=True, summary="Off #7"),
+            _meeting(
+                "allday", "2026-07-15", "2026-07-16", all_day=True, summary="Off #7"
+            ),
         ]
         state, result = self._run(items, _config(token))
         self.assertEqual(result, {"inserted": 0})
@@ -200,9 +225,16 @@ class TestCalendarDerivation(unittest.TestCase):
 
     def test_organized_meeting_participates_even_without_accept(self):
         token = _token_file()
-        items = [_meeting("org", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T10:30:00+00:00", response="needsAction",
-                          organized_self=True, summary="I called this #44444")]
+        items = [
+            _meeting(
+                "org",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T10:30:00+00:00",
+                response="needsAction",
+                organized_self=True,
+                summary="I called this #44444",
+            )
+        ]
         state, result = self._run(items, _config(token))
         self.assertEqual(result["inserted"], 7)  # 0,5,10,15,20,25,30
         self.assertEqual(len(self._sessions(state)), 1)
@@ -210,12 +242,24 @@ class TestCalendarDerivation(unittest.TestCase):
     def test_meeting_and_agent_work_same_task_merge_into_one_session(self):
         # Acceptance #7: one lane, not two.
         token = _token_file()
-        items = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Call #24648")]
+        items = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Call #24648",
+            )
+        ]
         state, _ = self._run(items, _config(token))
-        state.add_event(EventRecord(
-            id=None, source="agent", timestamp=datetime(2026, 7, 15, 10, 30, tzinfo=UTC),
-            task_ids=["24648"], repo=""))
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=datetime(2026, 7, 15, 10, 30, tzinfo=UTC),
+                task_ids=["24648"],
+                repo="",
+            )
+        )
         sessions = self._sessions(state)
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0].duration_seconds, 3600.0)
@@ -235,12 +279,24 @@ class TestCalendarDerivation(unittest.TestCase):
     def test_meeting_task_a_parallel_to_work_task_b_bills_two_sessions(self):
         # Acceptance #8: distinct tasks stay two concurrent lanes.
         token = _token_file()
-        items = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Call #10000")]
+        items = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Call #10000",
+            )
+        ]
         state, _ = self._run(items, _config(token))
-        state.add_event(EventRecord(
-            id=None, source="agent", timestamp=datetime(2026, 7, 15, 10, 30, tzinfo=UTC),
-            task_ids=["20000"], repo=""))
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="agent",
+                timestamp=datetime(2026, 7, 15, 10, 30, tzinfo=UTC),
+                task_ids=["20000"],
+                repo="",
+            )
+        )
         sessions = self._sessions(state)
         self.assertEqual({s.task_id for s in sessions}, {"10000", "20000"})
 
@@ -251,14 +307,23 @@ class TestCalendarDerivation(unittest.TestCase):
 class TestCalendarReconcile(unittest.TestCase):
     def _ingest(self, state, items, token):
         return sync_google_calendar(
-            state, _config(token), transport=_FakeTransport(calendar_items=items),
-            now=NOW)
+            state,
+            _config(token),
+            transport=_FakeTransport(calendar_items=items),
+            now=NOW,
+        )
 
     def test_reingest_unchanged_inserts_nothing_and_keeps_rows(self):
         # Acceptance #6: overlapping-window re-resync -> no duplicates.
         state, token = _tmp_state(), _token_file()
-        items = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Sync #9")]
+        items = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
         first = self._ingest(state, items, token)
         ids_after_first = {e.id for e in state.get_events()}
         second = self._ingest(state, items, token)
@@ -270,60 +335,111 @@ class TestCalendarReconcile(unittest.TestCase):
     def test_shorten_leaves_no_orphan_ticks(self):
         # Acceptance #4: a shortened meeting bills only its new span.
         state, token = _tmp_state(), _token_file()
-        long = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                         "2026-07-15T11:00:00+00:00", summary="Sync #99999")]
-        short = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T10:30:00+00:00", summary="Sync #99999")]
+        long = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #99999",
+            )
+        ]
+        short = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T10:30:00+00:00",
+                summary="Sync #99999",
+            )
+        ]
         self._ingest(state, long, token)
         self._ingest(state, short, token)
         ticks = [e for e in state.get_events() if e.source == "calendar"]
         self.assertEqual(len(ticks), 7)  # 10:00..10:30
-        self.assertEqual(max(e.timestamp for e in ticks),
-                         datetime(2026, 7, 15, 10, 30, tzinfo=UTC))
+        self.assertEqual(
+            max(e.timestamp for e in ticks), datetime(2026, 7, 15, 10, 30, tzinfo=UTC)
+        )
         sessions = state.derive_sessions_overlapping(
-            datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 7, 31, tzinfo=UTC),
-            gap_secs=GAP_SECS)
+            datetime(2026, 7, 1, tzinfo=UTC),
+            datetime(2026, 7, 31, tzinfo=UTC),
+            gap_secs=GAP_SECS,
+        )
         self.assertEqual(sessions[0].duration_seconds, 30 * 60.0)
 
     def test_move_leaves_no_ghost_series(self):
         state, token = _tmp_state(), _token_file()
-        first = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Sync #9")]
-        moved = [_meeting("m", "2026-07-15T14:00:00+00:00",
-                          "2026-07-15T15:00:00+00:00", summary="Sync #9")]
+        first = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
+        moved = [
+            _meeting(
+                "m",
+                "2026-07-15T14:00:00+00:00",
+                "2026-07-15T15:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
         self._ingest(state, first, token)
         self._ingest(state, moved, token)
-        ticks = sorted(e.timestamp for e in state.get_events() if e.source == "calendar")
+        ticks = sorted(
+            e.timestamp for e in state.get_events() if e.source == "calendar"
+        )
         self.assertEqual(ticks[0], datetime(2026, 7, 15, 14, 0, tzinfo=UTC))
         self.assertEqual(ticks[-1], datetime(2026, 7, 15, 15, 0, tzinfo=UTC))
 
     def test_cancellation_removes_the_whole_series(self):
         # Acceptance #3 (part): a cancellation removes an ingested series in full.
         state, token = _tmp_state(), _token_file()
-        live = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                         "2026-07-15T11:00:00+00:00", summary="Sync #9")]
-        cancelled = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                              "2026-07-15T11:00:00+00:00", status="cancelled",
-                              summary="Sync #9")]
+        live = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
+        cancelled = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                status="cancelled",
+                summary="Sync #9",
+            )
+        ]
         self._ingest(state, live, token)
         self._ingest(state, cancelled, token)
-        self.assertEqual(
-            [e for e in state.get_events() if e.source == "calendar"], [])
+        self.assertEqual([e for e in state.get_events() if e.source == "calendar"], [])
 
     def test_hard_deleted_series_is_removed(self):
         state, token = _tmp_state(), _token_file()
-        live = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                         "2026-07-15T11:00:00+00:00", summary="Sync #9")]
+        live = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
         self._ingest(state, live, token)
         self._ingest(state, [], token)  # event vanished entirely
-        self.assertEqual(
-            [e for e in state.get_events() if e.source == "calendar"], [])
+        self.assertEqual([e for e in state.get_events() if e.source == "calendar"], [])
 
     def test_task_ids_propagate_across_reschedule(self):
         # Contract with triage: an assignment made at series granularity survives.
         state, token = _tmp_state(), _token_file()
-        untitled = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                             "2026-07-15T11:00:00+00:00", summary="Weekly sync")]
+        untitled = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Weekly sync",
+            )
+        ]
         self._ingest(state, untitled, token)
         # Simulate the triage worker assigning task 500 to the series' ticks.
         for event in state.get_events():
@@ -331,8 +447,14 @@ class TestCalendarReconcile(unittest.TestCase):
                 event.task_ids = ["500"]
                 state.delete_events([event.id])
                 state.add_event(event)
-        moved = [_meeting("m", "2026-07-15T14:00:00+00:00",
-                          "2026-07-15T15:00:00+00:00", summary="Weekly sync")]
+        moved = [
+            _meeting(
+                "m",
+                "2026-07-15T14:00:00+00:00",
+                "2026-07-15T15:00:00+00:00",
+                summary="Weekly sync",
+            )
+        ]
         self._ingest(state, moved, token)
         ticks = [e for e in state.get_events() if e.source == "calendar"]
         self.assertTrue(ticks)
@@ -348,8 +470,11 @@ class TestGmailSync(unittest.TestCase):
         state, token = _tmp_state(), _token_file()
         transport = _FakeTransport(
             gmail_ids=["s1"],
-            gmail_messages={"s1": _sent_message(
-                "s1", "2026-07-15T09:00:00+00:00", subject="Update #33333")},
+            gmail_messages={
+                "s1": _sent_message(
+                    "s1", "2026-07-15T09:00:00+00:00", subject="Update #33333"
+                )
+            },
         )
         result = sync_gmail(state, _config(token), transport=transport, now=NOW)
         self.assertEqual(result, {"inserted": 1})
@@ -376,8 +501,11 @@ class TestGmailSync(unittest.TestCase):
         state, token = _tmp_state(), _token_file()
         transport = _FakeTransport(
             gmail_ids=["s1"],
-            gmail_messages={"s1": _sent_message(
-                "s1", "2026-07-15T09:00:00+00:00", subject="Secret client #99999")},
+            gmail_messages={
+                "s1": _sent_message(
+                    "s1", "2026-07-15T09:00:00+00:00", subject="Secret client #99999"
+                )
+            },
         )
         config = _config(token, ingest_subjects=False)
         sync_gmail(state, config, transport=transport, now=NOW)
@@ -405,7 +533,8 @@ class TestCredentialsAndInvariant(unittest.TestCase):
         state, token = _tmp_state(), _token_file(expired=True)
         transport = _FakeTransport(
             gmail_ids=["s1"],
-            gmail_messages={"s1": _sent_message("s1", "2026-07-15T09:00:00+00:00")})
+            gmail_messages={"s1": _sent_message("s1", "2026-07-15T09:00:00+00:00")},
+        )
         sync_gmail(state, _config(token), transport=transport, now=NOW)
         self.assertTrue(transport.refreshed)
 
@@ -437,23 +566,46 @@ class TestCredentialsAndInvariant(unittest.TestCase):
 class TestSyntheticExclusion(unittest.TestCase):
     def test_ticks_excluded_from_sweep_population_but_not_derivation(self):
         state, token = _tmp_state(), _token_file()
-        items = [_meeting("m", "2026-07-15T10:00:00+00:00",
-                          "2026-07-15T11:00:00+00:00", summary="Sync #9")]
-        sync_google_calendar(state, _config(token),
-                             transport=_FakeTransport(calendar_items=items), now=NOW)
-        state.add_event(EventRecord(
-            id=None, source="commit", timestamp=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
-            task_ids=["9"], repo="o/r"))
+        items = [
+            _meeting(
+                "m",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T11:00:00+00:00",
+                summary="Sync #9",
+            )
+        ]
+        sync_google_calendar(
+            state,
+            _config(token),
+            transport=_FakeTransport(calendar_items=items),
+            now=NOW,
+        )
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="commit",
+                timestamp=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+                task_ids=["9"],
+                repo="o/r",
+            )
+        )
         full = load_raw_events(state)
         swept = load_raw_events(state, exclude_synthetic=True)
         self.assertEqual(len(full), 14)  # 13 ticks + 1 commit
         self.assertEqual(len(swept), 1)  # only the commit survives the sweep
 
     def test_is_synthetic_tick_predicate(self):
-        tick = EventRecord(id=None, source="calendar", timestamp=NOW, task_ids=[],
-                           repo="", payload={"synthetic": True})
-        commit = EventRecord(id=None, source="commit", timestamp=NOW, task_ids=[],
-                             repo="")
+        tick = EventRecord(
+            id=None,
+            source="calendar",
+            timestamp=NOW,
+            task_ids=[],
+            repo="",
+            payload={"synthetic": True},
+        )
+        commit = EventRecord(
+            id=None, source="commit", timestamp=NOW, task_ids=[], repo=""
+        )
         self.assertTrue(is_synthetic_tick(tick))
         self.assertFalse(is_synthetic_tick(commit))
 
@@ -469,6 +621,7 @@ class TestTokenPathResolution(unittest.TestCase):
     def test_derives_from_sdk_config_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             import os
+
             old = os.environ.get("ODOO_SDK_CONFIG")
             os.environ["ODOO_SDK_CONFIG"] = tmp
             try:
@@ -499,9 +652,7 @@ class _PagingTransport(_FakeTransport):
             message_id = url.split("/users/me/messages/")[1].split("?")[0]
             return self.gmail_messages[message_id]
         if "/users/me/messages" in url:
-            return {
-                "messages": [{"id": self.gmail_ids[0]}], "nextPageToken": "p2"
-            }
+            return {"messages": [{"id": self.gmail_ids[0]}], "nextPageToken": "p2"}
         raise AssertionError(url)
 
 
@@ -509,13 +660,23 @@ class TestPaginationAndHelpers(unittest.TestCase):
     def test_calendar_pagination_collects_all_pages(self):
         state, token = _tmp_state(), _token_file()
         items = [
-            _meeting("a", "2026-07-15T10:00:00+00:00", "2026-07-15T10:10:00+00:00",
-                     summary="A #1"),
-            _meeting("b", "2026-07-15T11:00:00+00:00", "2026-07-15T11:10:00+00:00",
-                     summary="B #2"),
+            _meeting(
+                "a",
+                "2026-07-15T10:00:00+00:00",
+                "2026-07-15T10:10:00+00:00",
+                summary="A #1",
+            ),
+            _meeting(
+                "b",
+                "2026-07-15T11:00:00+00:00",
+                "2026-07-15T11:10:00+00:00",
+                summary="B #2",
+            ),
         ]
         transport = _PagingTransport(calendar_items=items)
-        result = sync_google_calendar(state, _config(token), transport=transport, now=NOW)
+        result = sync_google_calendar(
+            state, _config(token), transport=transport, now=NOW
+        )
         self.assertEqual(result["inserted"], 6)  # 3 ticks per 10-min meeting
 
     def test_gmail_pagination_collects_all_pages(self):
@@ -544,7 +705,9 @@ class TestPaginationAndHelpers(unittest.TestCase):
         tmp.write(b"{not json")
         tmp.close()
         with self.assertRaises(GoogleAuthError):
-            sync_gmail(state, _config(Path(tmp.name)), transport=_FakeTransport(), now=NOW)
+            sync_gmail(
+                state, _config(Path(tmp.name)), transport=_FakeTransport(), now=NOW
+            )
 
     def test_urllib_transport_wraps_url_error(self):
         with self.assertRaises(ex.GoogleAPIError):

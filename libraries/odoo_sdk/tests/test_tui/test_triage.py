@@ -220,7 +220,9 @@ class TestBuildTriageRows(unittest.TestCase):
 class TestTriageBodyLines(unittest.TestCase):
     def _rows(self):
         return [
-            TriageRow("gcal:m:tick:", (1, 2, 3), "chatter", "2026-06-01T09:00:00", "Standup"),
+            TriageRow(
+                "gcal:m:tick:", (1, 2, 3), "chatter", "2026-06-01T09:00:00", "Standup"
+            ),
             TriageRow("gcal:solo", (4,), "chatter", "2026-06-01T10:00:00", "1:1"),
         ]
 
@@ -294,7 +296,9 @@ def _fixture_store():
 
 class TestTriageTransitionsOverFixture(unittest.TestCase):
     def _state(self):
-        return AppState(window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[])
+        return AppState(
+            window=DateWindow(date(2026, 6, 1), date(2026, 6, 1)), sessions=[]
+        )
 
     def test_enter_triage_lists_series_and_lone_rows(self):
         deps = _deps(_fixture_store())
@@ -397,7 +401,9 @@ class TestTriageEndToEnd(unittest.TestCase):
             state = type_triage_digit(state, ch)
         state = assign_triage(deps, state)
 
-        self.assertIn("assigned 13 events of series gcal:evt-9:tick: to task 24648", state.status)
+        self.assertIn(
+            "assigned 13 events of series gcal:evt-9:tick: to task 24648", state.status
+        )
         # All 13 ticks now carry the task id.
         for event_id in series_ids:
             self.assertEqual(store.get_event(event_id).task_ids, ["24648"])

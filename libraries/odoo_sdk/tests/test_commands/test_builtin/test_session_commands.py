@@ -111,7 +111,9 @@ class TestQuerySessionsCommand(unittest.TestCase):
         _commit(state, 20)
         self.assertEqual(self._query(state).execute(strategy_name="fixed"), [])
         # development is the derived strategy and still matches.
-        self.assertEqual(len(self._query(state).execute(strategy_name="development")), 1)
+        self.assertEqual(
+            len(self._query(state).execute(strategy_name="development")), 1
+        )
 
     def test_no_sessions_returns_empty(self):
         self.assertEqual(self._query(_tmp_state()).execute(), [])

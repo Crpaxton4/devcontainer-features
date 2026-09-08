@@ -93,15 +93,18 @@ def _config() -> MagicMock:
     return config
 
 
-def _run_cli(argv: list[str], db: LocalStateClient, client: _RecordingOdooClient) -> str:
+def _run_cli(
+    argv: list[str], db: LocalStateClient, client: _RecordingOdooClient
+) -> str:
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
-    with patch(f"{_MOD}.TaskStateDB", return_value=db), patch(
-        f"{_MOD}._assert_env"
-    ), patch(f"{_MOD}.OdooClient", return_value=client), patch(
-        f"{_MOD}.LocalConfig"
-    ) as local_config, patch("sys.stdout", out), patch(
-        "sys.argv", ["odoo-sdk", *argv]
+    with (
+        patch(f"{_MOD}.TaskStateDB", return_value=db),
+        patch(f"{_MOD}._assert_env"),
+        patch(f"{_MOD}.OdooClient", return_value=client),
+        patch(f"{_MOD}.LocalConfig") as local_config,
+        patch("sys.stdout", out),
+        patch("sys.argv", ["odoo-sdk", *argv]),
     ):
         local_config.load.return_value = _config()
         cli.main()
@@ -186,8 +189,11 @@ class TestCmdUpload(unittest.TestCase):
         from odoo_sdk.tui.window import DateWindow
 
         cli_db, cli_client = _seed_db(), _RecordingOdooClient()
-        _run_cli(["upload", "--start", "2026-06-01", "--end", "2026-06-07"],
-                 cli_db, cli_client)
+        _run_cli(
+            ["upload", "--start", "2026-06-01", "--end", "2026-06-07"],
+            cli_db,
+            cli_client,
+        )
 
         tui_db, tui_client = _seed_db(), _RecordingOdooClient()
         registry = register_builtins(

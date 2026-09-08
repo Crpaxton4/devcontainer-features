@@ -1,7 +1,11 @@
 import warnings
 from typing import Any
 
-from .commands import _DEPRECATED_COMMAND_ALIAS, X2ManyCommand, normalize_x2many_commands
+from .commands import (
+    _DEPRECATED_COMMAND_ALIAS,
+    X2ManyCommand,
+    normalize_x2many_commands,
+)
 from .values import (
     RelationCollection,
     RelationValue,

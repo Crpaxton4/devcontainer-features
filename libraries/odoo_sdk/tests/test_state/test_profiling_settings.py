@@ -28,9 +28,7 @@ class TestProfilingEnv(unittest.TestCase):
     def test_truthy_env_values_enable(self):
         for token in ("1", "true", "True", "YES", "on"):
             with patch.dict("os.environ", {"ODOO_PROFILING": token}, clear=True):
-                self.assertTrue(
-                    LocalConfig.load(config_path=None).profiling, msg=token
-                )
+                self.assertTrue(LocalConfig.load(config_path=None).profiling, msg=token)
 
     def test_falsy_env_values_disable(self):
         for token in ("0", "false", "no", "off", ""):
@@ -94,26 +92,18 @@ class TestSessionGapMins(unittest.TestCase):
 
     def test_env_override(self):
         with patch.dict("os.environ", {"ODOO_SESSION_GAP_MINS": "90"}, clear=True):
-            self.assertEqual(
-                LocalConfig.load(config_path=None).session_gap_mins, 90
-            )
+            self.assertEqual(LocalConfig.load(config_path=None).session_gap_mins, 90)
 
     def test_file_wins_over_env(self):
         with TemporaryDirectory() as tmp:
-            path = _write(
-                tmp, "config.toml", "[behavior]\nsession_gap_mins = 45\n"
-            )
-            with patch.dict(
-                "os.environ", {"ODOO_SESSION_GAP_MINS": "90"}, clear=True
-            ):
+            path = _write(tmp, "config.toml", "[behavior]\nsession_gap_mins = 45\n")
+            with patch.dict("os.environ", {"ODOO_SESSION_GAP_MINS": "90"}, clear=True):
                 config = LocalConfig.load(config_path=path)
         self.assertEqual(config.session_gap_mins, 45)
 
     def test_invalid_value_falls_back_to_default(self):
         self.assertEqual(
-            LocalConfig(
-                behavior={"session_gap_mins": "not-a-number"}
-            ).session_gap_mins,
+            LocalConfig(behavior={"session_gap_mins": "not-a-number"}).session_gap_mins,
             60,
         )
 

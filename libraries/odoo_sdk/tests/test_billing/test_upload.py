@@ -75,8 +75,9 @@ class TestRangeBounds(unittest.TestCase):
 
 class TestUploadSessionsLoop(unittest.TestCase):
     def test_reconciles_once_per_numeric_session(self):
-        with patch(_RECONCILE, return_value=500) as reconcile, patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, return_value=500) as reconcile,
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(MagicMock(), MagicMock(), _sessions(3))
         self.assertEqual(reconcile.call_count, 3)
@@ -86,8 +87,9 @@ class TestUploadSessionsLoop(unittest.TestCase):
     def test_non_numeric_task_skipped(self):
         sessions = _sessions(1)
         sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 9})
-        with patch(_RECONCILE, return_value=1) as reconcile, patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(MagicMock(), MagicMock(), sessions)
         self.assertEqual(reconcile.call_count, 1)  # only the numeric one is billed
@@ -109,8 +111,9 @@ class TestUploadSessionsLoop(unittest.TestCase):
         # nothing to tell, so the session-key fallback name is used.
         state.get_runs_for_task.return_value = []
         state.get_task_events.return_value = []
-        with patch(_RECONCILE, return_value=77) as reconcile, patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, return_value=77) as reconcile,
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(MagicMock(), state, sessions)
         args = reconcile.call_args.args
@@ -130,9 +133,7 @@ class TestUploadSessionsLoop(unittest.TestCase):
         # (bounds resolved internally via range_bounds so the query window and
         # the sweep window cannot drift) and keyed on the just-derived key set.
         sessions = _sessions(2)
-        with patch(_RECONCILE, return_value=1), patch(
-            _SWEEP, return_value=2
-        ) as sweep:
+        with patch(_RECONCILE, return_value=1), patch(_SWEEP, return_value=2) as sweep:
             result = upload_sessions(
                 MagicMock(),
                 MagicMock(),
@@ -183,9 +184,7 @@ class TestDerivedDescription(unittest.TestCase):
         db.stop_run(100)
         db.set_run_summary(run.id, "actions: task_note x3; branch 100#fix-vat")
         description = _derived_description(db, 100, self._session(100, started, ended))
-        self.assertEqual(
-            description, "[/] actions: task_note x3; branch 100#fix-vat"
-        )
+        self.assertEqual(description, "[/] actions: task_note x3; branch 100#fix-vat")
 
     def test_closed_run_summary_still_attaches(self):
         # Closing hides a run from default listings, not from billing (#626).
@@ -231,7 +230,9 @@ class TestDerivedDescription(unittest.TestCase):
         state = MagicMock()
         state.get_runs_for_task.side_effect = RuntimeError("db down")
         started, ended = self._window()
-        description = _derived_description(state, 100, self._session(100, started, ended))
+        description = _derived_description(
+            state, 100, self._session(100, started, ended)
+        )
         self.assertEqual(description, "[/] session 100|5")
 
     def test_non_overlapping_run_summary_is_ignored(self):
@@ -253,8 +254,9 @@ class TestDerivedDescription(unittest.TestCase):
         db.set_run_summary(run.id, "derived narrative")
         session = self._session(100, started, ended)
         session["duration_secs"] = 7200
-        with patch(_RECONCILE, return_value=9) as reconcile, patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, return_value=9) as reconcile,
+            patch(_SWEEP, return_value=0),
         ):
             upload_sessions(MagicMock(), db, [session])
         self.assertEqual(reconcile.call_args.args[4], "[/] derived narrative")
@@ -286,8 +288,9 @@ class TestPerSessionIsolation(unittest.TestCase):
 
     def test_one_fault_does_not_abort_the_batch(self):
         sessions = _sessions(3)  # keys 100|0, 101|1, 102|2
-        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(MagicMock(), MagicMock(), sessions)
         # The two healthy sessions still billed despite the middle one faulting.
@@ -297,8 +300,9 @@ class TestPerSessionIsolation(unittest.TestCase):
 
     def test_fault_is_captured_as_a_structured_failure_row(self):
         sessions = _sessions(2)  # keys 100|0, 101|1
-        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(MagicMock(), MagicMock(), sessions)
         self.assertEqual(len(result["failed"]), 1)
@@ -312,12 +316,16 @@ class TestPerSessionIsolation(unittest.TestCase):
         # the failed session's key stays in ``derived_keys`` so a partially-billed
         # row for it is never zeroed as an orphan.
         sessions = _sessions(2)
-        with patch(_RECONCILE, side_effect=self._analytic_fault("101|1")), patch(
-            _SWEEP, return_value=3
-        ) as sweep:
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=3) as sweep,
+        ):
             result = upload_sessions(
-                MagicMock(), MagicMock(), sessions,
-                start_date="2026-06-01", end_date="2026-06-03",
+                MagicMock(),
+                MagicMock(),
+                sessions,
+                start_date="2026-06-01",
+                end_date="2026-06-03",
             )
         self.assertEqual(result["retired"], 3)
         sweep.assert_called_once()
@@ -327,9 +335,10 @@ class TestPerSessionIsolation(unittest.TestCase):
 
     def test_all_sessions_faulting_returns_partial_not_raises(self):
         sessions = _sessions(2)
-        with patch(
-            _RECONCILE, side_effect=OdooTransportError("connection reset")
-        ), patch(_SWEEP, return_value=0):
+        with (
+            patch(_RECONCILE, side_effect=OdooTransportError("connection reset")),
+            patch(_SWEEP, return_value=0),
+        ):
             result = upload_sessions(MagicMock(), MagicMock(), sessions)
         self.assertEqual(result["uploaded"], 0)
         self.assertEqual(result["rows"], [])
@@ -354,25 +363,28 @@ class TestSharedPathWithTui(unittest.TestCase):
         client, state = MagicMock(), MagicMock()
         # The driver forwards its own injected (client, store) pair to the shared
         # loop — no reaching into a command's private ``._client``/``.state``.
-        deps = TuiDeps(
-            registry={}, client=client, store=state, config=MagicMock()
-        )
+        deps = TuiDeps(registry={}, client=client, store=state, config=MagicMock())
 
         # The TUI 'u' path routes through the shared loop.
-        with patch(_RECONCILE, return_value=1) as reconcile, patch(
-            _SWEEP, return_value=0
-        ) as sweep:
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0) as sweep,
+        ):
             uploaded, retired = _upload_sessions(deps, sessions, window)
         tui_calls = [c.args for c in reconcile.call_args_list]
         tui_sweep = sweep.call_args.kwargs
 
         # A direct headless invocation of the same loop, same inputs.
-        with patch(_RECONCILE, return_value=1) as reconcile, patch(
-            _SWEEP, return_value=0
-        ) as sweep:
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0) as sweep,
+        ):
             upload_sessions(
-                client, state, sessions,
-                start_date="2026-06-01", end_date="2026-06-03",
+                client,
+                state,
+                sessions,
+                start_date="2026-06-01",
+                end_date="2026-06-03",
             )
         cli_calls = [c.args for c in reconcile.call_args_list]
         cli_sweep = sweep.call_args.kwargs
@@ -413,8 +425,9 @@ class TestReviewSessionBillsThroughSharedPath(unittest.TestCase):
         self.assertEqual(sessions[0]["category"], "Review")
         self.assertEqual(sessions[0]["duration_secs"], 0)  # zero-span lone event
 
-        with patch(_RECONCILE, return_value=42) as reconcile, patch(
-            _SWEEP, return_value=0
+        with (
+            patch(_RECONCILE, return_value=42) as reconcile,
+            patch(_SWEEP, return_value=0),
         ):
             result = upload_sessions(
                 MagicMock(), state, sessions, config=LocalConfig.load()

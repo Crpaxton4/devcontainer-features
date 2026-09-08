@@ -111,9 +111,7 @@ def _recipient_names(client: OdooClient, rows: list[dict]) -> dict[int, str]:
     if not partner_ids:
         return {}
     try:
-        partners = client.execute(
-            "res.partner", "read", partner_ids, fields=["name"]
-        )
+        partners = client.execute("res.partner", "read", partner_ids, fields=["name"])
     except OdooError:
         return {}
     return {p["id"]: p.get("name") or "" for p in partners}
@@ -162,9 +160,7 @@ def _shape_mail_row(
     return entry
 
 
-def get_mail_status(
-    client: OdooClient, res_model: str, res_id: int
-) -> list[dict]:
+def get_mail_status(client: OdooClient, res_model: str, res_id: int) -> list[dict]:
     """Report the outgoing-mail (``mail.mail``) status for one record.
 
     Finds the record's ``mail.message`` rows (``model`` / ``res_id``), then the

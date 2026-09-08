@@ -65,9 +65,9 @@ assert "run_summary" not in _V3_DDL
 #: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
 #: the v3 shape by dropping exactly those v3 additions so it can never drift
 #: from the real prior shape.
-_V2_DDL = _V3_DDL[
-    : _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
-].replace(",\n    question_message_id INTEGER", "")
+_V2_DDL = _V3_DDL[: _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")].replace(
+    ",\n    question_message_id INTEGER", ""
+)
 assert "question_message_id" not in _V2_DDL
 assert "chatter_dedupe" not in _V2_DDL
 
@@ -226,14 +226,13 @@ class TestRebuildMigration(unittest.TestCase):
         for table in ("task_runs", "settings", "events", "session_uploads"):
             self.assertTrue(_is_strict(conn, table), f"{table} not STRICT")
         self.assertEqual(
-            conn.execute("PRAGMA user_version").fetchone()[0], 0,
+            conn.execute("PRAGMA user_version").fetchone()[0],
+            0,
             "migrate_schema rebuilds tables; create_schema stamps the version",
         )
         # Rows survive with ids and values intact.
         self.assertEqual(
-            conn.execute(
-                "SELECT id, source, external_id FROM events"
-            ).fetchall(),
+            conn.execute("SELECT id, source, external_id FROM events").fetchall(),
             [(1, "agent", "ext-1")],
         )
         self.assertEqual(
@@ -280,9 +279,7 @@ class TestRebuildMigration(unittest.TestCase):
             conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
         )
         self.assertTrue(_is_strict(conn, "events"))
-        self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1
-        )
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
 
     def test_migrated_schema_matches_fresh_schema(self):
         migrated = _legacy_conn()
@@ -310,9 +307,7 @@ class TestRebuildMigration(unittest.TestCase):
             conn.execute("SELECT type, name, sql FROM sqlite_master").fetchall()
         )
         self.assertEqual(before, after)
-        self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1
-        )
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
 
     def test_fresh_db_migrate_is_noop(self):
         conn = sqlite3.connect(":memory:")
@@ -343,9 +338,7 @@ class TestMigrationAbort(unittest.TestCase):
             migrate_schema(conn)
         # Tables are still the old non-STRICT shape and every row is preserved.
         self.assertFalse(_is_strict(conn, "events"))
-        self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 3
-        )
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 3)
 
     def test_rebuild_rolls_back_on_copy_failure(self):
         # A value STRICT rejects but pre-flight does not cover (a non-integer in an
@@ -362,9 +355,7 @@ class TestMigrationAbort(unittest.TestCase):
             migrate_schema(conn)
         # events is still the old shape and its row survives (transaction rolled back).
         self.assertFalse(_is_strict(conn, "events"))
-        self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1
-        )
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
 
     def test_bad_state_row_reported(self):
         conn = _legacy_conn(with_rows=False)

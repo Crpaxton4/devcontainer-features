@@ -41,7 +41,6 @@ from odoo_sdk.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
 
-
 # How far past ``aborted_at`` the aborted-run exclusion window extends (#356).
 # The abort's own dispatch telemetry — the MCP wrapper's agent event and the
 # claude-event-hook PostToolUse shim — lands moments AFTER ``aborted_at`` is

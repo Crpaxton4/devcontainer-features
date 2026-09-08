@@ -54,9 +54,7 @@ class TestTimesheetSummaryDomain(unittest.TestCase):
     def test_only_mine_false_skips_employee_lookup(self):
         client = _client()
         client.execute.return_value = []
-        result = timesheet_summary(
-            client, "2026-07-01", "2026-07-31", only_mine=False
-        )
+        result = timesheet_summary(client, "2026-07-01", "2026-07-31", only_mine=False)
         # A single call — the aggregation — with no employee filter in the domain.
         client.execute.assert_called_once_with(
             "account.analytic.line",
@@ -249,9 +247,7 @@ class TestTimesheetSummaryValidation(unittest.TestCase):
     def test_invalid_group_by_raises(self):
         client = _client()
         with self.assertRaises(ValueError) as ctx:
-            timesheet_summary(
-                client, "2026-07-01", "2026-07-31", group_by="employee"
-            )
+            timesheet_summary(client, "2026-07-01", "2026-07-31", group_by="employee")
         self.assertIn("Invalid group_by 'employee'", str(ctx.exception))
         client.execute.assert_not_called()
 

@@ -139,7 +139,10 @@ class StartTaskCommand(Command):
                 run = db.transition_to_running(task_id)
                 already_running = True
         result = _build_run_result(
-            run, task_id, task_name, project_name,
+            run,
+            task_id,
+            task_name,
+            project_name,
             already_running=already_running,
             branch_name=branch_name,
             warning=warning,

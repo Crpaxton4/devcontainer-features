@@ -1,0 +1,23 @@
+# Revisions to skip when running `git blame`.
+#
+# Only bulk, mechanical, no-behaviour-change commits belong here — a
+# repo-wide reformat, a mass rename, a license-header sweep. Never add a
+# commit that changes what the code does.
+#
+# GitHub reads this file automatically for its web blame view. Local `git
+# blame` does not, so enable it once per clone:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# (Relative paths in that setting resolve from the repository root, so the
+# same one-liner works from any subdirectory.)
+#
+# This repo squash-merges, so a SHA added on a feature branch is not the SHA
+# that lands on `main`. Re-point each entry at the squashed commit once the
+# PR that introduced it is merged. An entry naming a commit `main` does not
+# have is inert, not fatal — git only rejects lines that are not valid object
+# names — so a stale entry degrades blame quietly rather than breaking it.
+
+# style(odoo-sdk): apply black across src/ and tests/ — one-time catch-up
+# reformat of libraries/odoo_sdk/{src,tests,tools}; 98 files, formatting only.
+12762210428f7324ece4ff7767b01cdece1a4cab

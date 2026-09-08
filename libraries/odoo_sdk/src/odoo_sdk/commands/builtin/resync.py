@@ -39,8 +39,7 @@ from ._registration import builtin_command
 # the Google pullers have no start/end parameters, so silently sweeping their
 # own rolling window while the user believes a backfill ran would be a trap.
 _RANGE_IGNORED_NOTE = (
-    "start/end ignored: this source always sweeps its google_sync_window_days "
-    "window"
+    "start/end ignored: this source always sweeps its google_sync_window_days " "window"
 )
 
 

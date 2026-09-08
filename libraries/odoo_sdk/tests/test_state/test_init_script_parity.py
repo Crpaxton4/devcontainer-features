@@ -73,9 +73,9 @@ assert "run_summary" not in _V3_DDL
 #: watermark column (#625) and the ``chatter_dedupe`` table (#631). Derived from
 #: the v3 shape by dropping exactly those additions so it tracks the true
 #: prior shape without a hand-copy.
-_V2_DDL = _V3_DDL[
-    : _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")
-].replace(",\n    question_message_id INTEGER", "")
+_V2_DDL = _V3_DDL[: _V3_DDL.index("CREATE TABLE IF NOT EXISTS chatter_dedupe")].replace(
+    ",\n    question_message_id INTEGER", ""
+)
 assert "question_message_id" not in _V2_DDL
 assert "chatter_dedupe" not in _V2_DDL
 
@@ -319,9 +319,9 @@ class TestMigrationParity(unittest.TestCase):
                 [(5, "RUNNING", _TS)],
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT value FROM settings WHERE key = 'k'"
-                ).fetchone()[0],
+                conn.execute("SELECT value FROM settings WHERE key = 'k'").fetchone()[
+                    0
+                ],
                 "v",
             )
             self.assertEqual(

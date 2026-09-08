@@ -146,13 +146,9 @@ class TestBuildTimeline(unittest.TestCase):
         aware_start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
         aware_end = datetime(2026, 6, 1, 23, 59, 59, tzinfo=timezone.utc)
         sessions = [
-            _session(
-                "1", "2026-06-01T09:00:00+00:00", "2026-06-01T12:00:00+00:00"
-            )
+            _session("1", "2026-06-01T09:00:00+00:00", "2026-06-01T12:00:00+00:00")
         ]
-        grid = build_timeline(
-            sessions, aware_start, aware_end, 48, show_ticks=False
-        )
+        grid = build_timeline(sessions, aware_start, aware_end, 48, show_ticks=False)
         self.assertIn("█", grid.rows[0])
 
     def test_naive_session_coerced_against_aware_bounds(self):
@@ -161,9 +157,7 @@ class TestBuildTimeline(unittest.TestCase):
         aware_start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
         aware_end = datetime(2026, 6, 1, 23, 59, 59, tzinfo=timezone.utc)
         sessions = [_session("1", "2026-06-01T09:00:00", "2026-06-01T12:00:00")]
-        grid = build_timeline(
-            sessions, aware_start, aware_end, 48, show_ticks=False
-        )
+        grid = build_timeline(sessions, aware_start, aware_end, 48, show_ticks=False)
         self.assertIn("█", grid.rows[0])
 
 
