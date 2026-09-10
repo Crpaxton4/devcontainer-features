@@ -81,3 +81,54 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
             # The top-level re-export is the same object as the canonical
             # transport.errors definition, not a shadowing duplicate.
             self.assertIs(getattr(package, name), getattr(errors, name))
+
+
+class TestErrorsFacadeExports(unittest.TestCase):
+    """The shared-kernel ``odoo_sdk.errors`` façade (ADR-005).
+
+    Additive coverage for the layering baseline: the façade must re-export
+    the canonical error objects (never shadowing duplicates) so that
+    internal layers can import them without the ``from odoo_sdk import``
+    root-import cycle.
+    """
+
+    TRANSPORT_TAXONOMY = (
+        "OdooError",
+        "OdooAuthenticationError",
+        "OdooAccessError",
+        "OdooValidationError",
+        "OdooMissingRecordError",
+        "OdooTransportError",
+        "OdooServerError",
+        "DeletionNotSupportedError",
+    )
+    STATE_TAXONOMY = (
+        "TrackerStateMissingError",
+        "TaskAlreadyRunningError",
+        "TaskNotRunningError",
+        "InvalidStateTransitionError",
+    )
+
+    def test_facade_all_is_exactly_the_two_taxonomies(self) -> None:
+        facade = importlib.import_module("odoo_sdk.errors")
+
+        self.assertEqual(
+            set(facade.__all__),
+            set(self.TRANSPORT_TAXONOMY) | set(self.STATE_TAXONOMY),
+        )
+
+    def test_facade_reexports_canonical_transport_errors(self) -> None:
+        facade = importlib.import_module("odoo_sdk.errors")
+        canonical = importlib.import_module("odoo_sdk.transport.errors")
+
+        for name in self.TRANSPORT_TAXONOMY:
+            self.assertIn(name, facade.__all__)
+            self.assertIs(getattr(facade, name), getattr(canonical, name))
+
+    def test_facade_reexports_canonical_state_errors(self) -> None:
+        facade = importlib.import_module("odoo_sdk.errors")
+        canonical = importlib.import_module("odoo_sdk.state.models")
+
+        for name in self.STATE_TAXONOMY:
+            self.assertIn(name, facade.__all__)
+            self.assertIs(getattr(facade, name), getattr(canonical, name))

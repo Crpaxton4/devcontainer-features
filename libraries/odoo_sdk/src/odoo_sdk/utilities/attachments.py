@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from markitdown import MarkItDown
 
-from odoo_sdk import OdooMissingRecordError
+from odoo_sdk.errors import OdooMissingRecordError
 from odoo_sdk.client import OdooClient
 
 # Metadata read for every attachment. ``datas`` (the base64 raw bytes) is added
