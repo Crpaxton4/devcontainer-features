@@ -3,7 +3,7 @@ from typing import Dict, Iterator, Optional, Tuple, Type
 from odoo_sdk.state import LocalConfig, LocalStateClient
 
 from .command import Command
-from .protocols import RpcClient
+from .protocols import RpcClient, StateStore
 
 
 class Registry:
@@ -11,8 +11,9 @@ class Registry:
 
     The registry keeps use-case orchestration separate from transport and state
     details while injecting the shared SDK dependencies into each registered
-    command. Commands receive three peers: the :class:`RpcClient`, the
-    :class:`LocalStateClient` (SQLite session FSM), and the :class:`LocalConfig`
+    command. Commands receive three peers: the :class:`RpcClient`, a
+    :class:`StateStore` (the :class:`LocalStateClient` SQLite session FSM in
+    production, #718), and the :class:`LocalConfig`
     (resolved SDK settings). The state client and config are optional; when
     omitted, commands resolve their own lazily on first use, preserving the
     original single-dependency behavior.
@@ -20,7 +21,7 @@ class Registry:
     :param client: RPC client instance shared with all registered commands.
     :type client: RpcClient
     :param state_client: Shared local state client, defaults to None.
-    :type state_client: Optional[LocalStateClient]
+    :type state_client: Optional[StateStore]
     :param config: Shared resolved SDK configuration, defaults to None.
     :type config: Optional[LocalConfig]
     """
@@ -28,7 +29,7 @@ class Registry:
     def __init__(
         self,
         client: RpcClient,
-        state_client: Optional[LocalStateClient] = None,
+        state_client: Optional[StateStore] = None,
         config: Optional[LocalConfig] = None,
     ):
         self._client = client
@@ -37,7 +38,7 @@ class Registry:
         self._commands: Dict[str, Type[Command]] = {}
 
     @property
-    def state_client(self) -> LocalStateClient:
+    def state_client(self) -> StateStore:
         """Return the shared local state client, creating one on first access.
 
         Resolved lazily and cached so merely building a registry never forces the

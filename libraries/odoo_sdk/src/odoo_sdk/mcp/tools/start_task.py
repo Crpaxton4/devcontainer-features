@@ -46,7 +46,7 @@ from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import BaseModel
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.state import TaskState
+from odoo_sdk.tracking.models import TaskState
 
 from .composition import composition_tool
 

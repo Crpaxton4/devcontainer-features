@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from odoo_sdk.adapters import load_raw_events
+# Core and core-owned ports only (#718): the raw-event read goes through the
+# tracking façade (ADR-005 rule 4), the state store is the consumer-side
+# Protocol, and the window vocabulary is the promoted core module.
+from odoo_sdk.commands.protocols import StateStore
 from odoo_sdk.sessionization import (
     SessionizationConfig,
     TimeEntry,
@@ -30,7 +33,8 @@ from odoo_sdk.sessionization import (
     render_odoo_csv,
     sweep,
 )
-from odoo_sdk.state import LocalStateClient, SessionWindow
+from odoo_sdk.tracking.events import load_raw_events
+from odoo_sdk.tracking.models import SessionWindow
 
 
 def config_for_window(start: date, end: date) -> SessionizationConfig:
@@ -65,7 +69,7 @@ def _entry_from_window(
 
 
 def build_result(
-    state: LocalStateClient, start: date, end: date
+    state: StateStore, start: date, end: date
 ) -> tuple[TransformResult, SessionizationConfig]:
     """Derive the window's sessions and project them into a render result.
 
@@ -73,7 +77,7 @@ def build_result(
     billing source of truth); the sweep tables are a decoupled read-only analysis
     over the same window's raw events.
 
-    :param state: The SQLite-backed state store to read from.
+    :param state: The state store (any :class:`StateStore`) to read from.
     :param start: Inclusive window start date.
     :param end: Inclusive window end date.
     :return: The computed :class:`TransformResult` and the config used.
@@ -94,13 +98,13 @@ def build_result(
     return result, config
 
 
-def export_markdown(state: LocalStateClient, start: date, end: date) -> str:
+def export_markdown(state: StateStore, start: date, end: date) -> str:
     """Return the markdown diagnostics document for the window."""
     result, config = build_result(state, start, end)
     return render_markdown(result, config)
 
 
-def export_csv(state: LocalStateClient, start: date, end: date) -> str:
+def export_csv(state: StateStore, start: date, end: date) -> str:
     """Return the Odoo-importable CSV for the window's derived entries."""
     result, config = build_result(state, start, end)
     return render_odoo_csv(result, config)

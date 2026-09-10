@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
-from odoo_sdk.adapters import load_raw_events
+from odoo_sdk.tracking.events import load_raw_events
 from odoo_sdk.sessionization import SessionizationConfig, transform
 
 from ..command import Command
