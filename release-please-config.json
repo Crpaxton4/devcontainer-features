@@ -35,7 +35,7 @@
         },
         "plugins/odoo-dev": {
             "release-type": "simple",
-            "component": "odoo-dev",
+            "component": "odoo-dev-plugin",
             "extra-files": [
                 {
                     "type": "json",
