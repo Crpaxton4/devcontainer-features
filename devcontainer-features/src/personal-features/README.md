@@ -190,7 +190,7 @@ call.
 
 The hooks are wired into `$CLAUDE_CONFIG_DIR/settings.json` at container-create
 time by the feature-contributed `postCreateCommand` (which runs
-`sync-claude-skills && sync-claude-hooks`). Build-time writes under
+`sync-claude-hooks` first). Build-time writes under
 `CLAUDE_CONFIG_DIR` are shadowed by the `~/.claude` bind mount, so the merge has
 to happen at runtime — the same pattern the skills sync uses.
 
@@ -253,11 +253,14 @@ deliberately-parallel paths, and the second is still live:
 1. **Mounted `SKILL.md` files (Claude Code only).** `install.sh` stages the
    `skills/` tree at build time to `/usr/local/share/personal-features/skills`
    (a path *not* under the `~/.claude` bind mount), and the feature-contributed
-   `postCreateCommand` runs `sync-claude-skills` at container-create time to copy
-   each skill into `$CLAUDE_CONFIG_DIR/skills/<name>`, where Claude Code
-   discovers user-scope skills. This preserves Claude Code's native
-   skill-discovery / slash-command UX, but only inside a live container with this
-   Feature installed and a working bind mount.
+   `postCreateCommand` used to run `sync-claude-skills` at container-create time
+   to copy each skill into `$CLAUDE_CONFIG_DIR/skills/<name>`, where Claude Code
+   discovers user-scope skills. As of #701–#708 the feature ships no loose
+   skills (the odoo-dev plugin installed by `sync-claude-mcp` carries them, #723)
+   and `sync-claude-skills` is retired from `postCreateCommand`. The loose-copy
+   path preserved Claude Code's native skill-discovery / slash-command UX, but
+   only inside a live container with this Feature installed and a working bind
+   mount — the plugin install now provides the same UX everywhere.
 
 2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
    *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server

@@ -339,7 +339,7 @@ bare alias, which would put `/pr` and `/test` in the global namespace.
 | [`artifact.sh`](scripts/artifact.sh) | `artifact.sh put\|get\|list\|stages <dir> [stage] [file]` | The only sanctioned way to write a handoff artifact. Schema-validates, writes atomically, never overwrites |
 | [`gate.sh`](scripts/gate.sh) | `gate.sh <dir> [--for pr\|release]` | Fail-closed evidence check. Exits 1 on any blocker so `&&` cannot skip it |
 | [`bootstrap-state.sh`](scripts/bootstrap-state.sh) | `bootstrap-state.sh [--dir <path>]` | Seeds the external state dir. Idempotent; seeds only what is absent |
-| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports feature-managed skills reinstalled loose by a rebuild. Never deletes |
+| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports leftover pre-migration loose copies of plugin skills (safe to delete). Never deletes |
 | [`validate.sh`](scripts/validate.sh) | `validate.sh [--quiet]` | Every CI gate in one call. Offline. Skips the `claude plugin validate` gate visibly when that CLI is absent; `REQUIRE_CLAUDE=1` turns the skip into a failure |
 | [`tests/gate.test.sh`](scripts/tests/gate.test.sh) | `bash scripts/tests/gate.test.sh` | 24 gate assertions, one fixture per blocker |
 | [`tests/setup.test.sh`](scripts/tests/setup.test.sh) | `bash scripts/tests/setup.test.sh` | 34 assertions over `setup.sh`, each running it with a PATH that genuinely lacks the tool under test |
@@ -674,9 +674,10 @@ copy fails the build instead of silently forking the skill body.
 
 The same five skills were also historically shipped loose by a devcontainer feature
 into `<config>/skills/`, where a loose copy loads *alongside* its bundled twin: two
-near-identical descriptions competing for the same triggers. Interim defense,
-reporting only — it never deletes, because deleting a file the feature recreates is
-a loop:
+near-identical descriptions competing for the same triggers. The feature stopped
+shipping them (#701–#708), but copies written by pre-migration containers persist in
+the bind-mounted config dir. The detector reports them — leftover pre-migration
+artifacts, safe to delete by hand; it never deletes anything itself:
 
 ```bash
 scripts/check-stray-skills.sh

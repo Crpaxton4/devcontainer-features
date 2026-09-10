@@ -277,7 +277,7 @@ this skill's base directory — and each is run by its absolute path:
 
 ```bash
 /home/dev/plugins/odoo-dev/scripts/bootstrap-state.sh     # idempotent; seeds the state dir
-/home/dev/plugins/odoo-dev/scripts/check-stray-skills.sh  # feature-managed skills reinstalled loose
+/home/dev/plugins/odoo-dev/scripts/check-stray-skills.sh  # leftover pre-migration loose skill copies
 /home/dev/plugins/odoo-dev/scripts/validate.sh            # every CI gate, including the gate unit tests
 ```
 

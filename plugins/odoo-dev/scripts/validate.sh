@@ -254,7 +254,7 @@ hits="$(grep -rn "/usr/local/share/claude-home/skills" --include='*.md' "$SKILLS
 gate "stray feature-managed skills"
 strays="$(bash "$HERE/check-stray-skills.sh" 2>/dev/null)"
 [ -z "$strays" ] && ok "none loaded one level deep" \
-  || { bad "feature-managed skills reinstalled loose"; echo "$strays" | sed 's/^/       /'; }
+  || { bad "leftover pre-migration loose skill copies (safe to delete, see check-stray-skills.sh)"; echo "$strays" | sed 's/^/       /'; }
 
 # --- 11. script regression + gate unit tests -------------------------------------
 gate "offline test suites"

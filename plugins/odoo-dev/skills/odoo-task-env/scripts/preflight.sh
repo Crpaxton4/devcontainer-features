@@ -77,8 +77,9 @@ STATE_DIR="${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}"
 state_dir_ready() { [ -f "$STATE_DIR/repo-map.json" ]; }
 check state-dir state_dir_ready
 
-# Feature-managed skills reinstalled loose by a container rebuild shadow their
-# bundled twins. Reports only; the fix belongs in the devcontainer-features repo.
+# Leftover pre-migration loose copies of plugin skills shadow their plugin
+# twins. Reports only; the strays are safe to delete — the devcontainer feature
+# stopped shipping them (#701–#708), so nothing recreates them on rebuild.
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 stray_skills_clean() {
   [ -z "$(bash "$PLUGIN_ROOT/scripts/check-stray-skills.sh" 2>/dev/null)" ]
