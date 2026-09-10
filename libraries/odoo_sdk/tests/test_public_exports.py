@@ -132,3 +132,28 @@ class TestErrorsFacadeExports(unittest.TestCase):
         for name in self.STATE_TAXONOMY:
             self.assertIn(name, facade.__all__)
             self.assertIs(getattr(facade, name), getattr(canonical, name))
+
+
+class TestSkillsPackageExports(unittest.TestCase):
+    """Public API of the packaged-skills package ``odoo_sdk.skills`` (#712)."""
+
+    def test_skills_all_is_exactly_the_three_names(self) -> None:
+        skills = importlib.import_module("odoo_sdk.skills")
+
+        self.assertEqual(
+            set(skills.__all__),
+            {"PACKAGED_SKILL_NAMES", "skills_root", "skill_body"},
+        )
+
+    def test_packaged_skill_names_is_a_tuple_of_strings(self) -> None:
+        skills = importlib.import_module("odoo_sdk.skills")
+
+        self.assertIsInstance(skills.PACKAGED_SKILL_NAMES, tuple)
+        for name in skills.PACKAGED_SKILL_NAMES:
+            self.assertIsInstance(name, str)
+
+    def test_accessors_are_callable(self) -> None:
+        skills = importlib.import_module("odoo_sdk.skills")
+
+        self.assertTrue(callable(skills.skills_root))
+        self.assertTrue(callable(skills.skill_body))

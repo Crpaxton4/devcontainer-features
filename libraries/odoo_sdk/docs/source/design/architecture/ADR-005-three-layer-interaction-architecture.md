@@ -59,6 +59,7 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `reap.py` | core | orphaned at package root; relocation tracked in #717 |
 | `prune.py` | core | orphaned at package root; relocation tracked in #717 |
 | `utilities/` | core (provisional) | spans all three layers today; dissolution into `services/` (data), core helpers, and `mcp/prompts` is #717. Classified core so its data-ward imports stay legal until then |
+| `skills/` | core | packaged consulting-skill data + `skill_body` accessors (amendment, #712): pure stdlib, no MCP/CLI imports; surfaces read it, nothing below core does |
 | `transport/` | data | RPC/JSON-2 executors + canonical Odoo error taxonomy |
 | `client/` | data | `OdooClient` session façade |
 | `records/` | data | `OdooRecordset` / `Record` |
