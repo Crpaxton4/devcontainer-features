@@ -1,0 +1,158 @@
+name: "CI - odoo-dev plugin"
+
+# Every gate for the odoo-dev Claude Code plugin at plugins/odoo-dev/, imported
+# from Crpaxton4/odoo-dev-claude-plugin. The suite is offline — no docker, no
+# Odoo, no repos tree — so no job needs secrets or anything beyond the read-only
+# default token; the only network calls install tooling.
+#
+# The SDK skill sources are in the paths filter because five of the plugin's
+# skills are committed generated copies of libraries/odoo_sdk/src/odoo_sdk/skills/
+# — the skill-parity step in the validate job fails when an edit there is not
+# regenerated into plugins/odoo-dev/skills/ (or vice versa).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'plugins/odoo-dev/**'
+      - '.claude-plugin/marketplace.json'
+      - '.github/workflows/plugin-odoo-dev.yaml'
+      - 'libraries/odoo_sdk/src/odoo_sdk/**'
+  pull_request:
+    paths:
+      - 'plugins/odoo-dev/**'
+      - '.claude-plugin/marketplace.json'
+      - '.github/workflows/plugin-odoo-dev.yaml'
+      - 'libraries/odoo_sdk/src/odoo_sdk/**'
+  workflow_dispatch:
+
+# A superseded push to the same ref has nothing left to prove.
+concurrency:
+  group: plugin-odoo-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    # Named for what a red X in the checks list should tell you without a click.
+    name: "plugin gates (plugins/odoo-dev/scripts/validate.sh)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Gate 1 shells out to `claude plugin validate --strict`. The step below
+      # installs the CLI; REQUIRE_CLAUDE=1 makes validate.sh FAIL rather than
+      # skip if that install ever stops working, so a green run here always
+      # means gate 1 really ran. Without it a broken install would show as a
+      # skip and still pass.
+      REQUIRE_CLAUDE: "1"
+      # Pinned so a CLI release cannot turn every open pull request red
+      # overnight. Bump it deliberately. Developers running validate.sh locally
+      # float on whatever CLI they have, which is where a new version's
+      # objections surface first.
+      CLAUDE_CODE_VERSION: "2.1.247"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # @anthropic-ai/claude-code declares engines node >= 22. The plugin's own
+      # node gates are plain CommonJS and run on anything from 18 up, so the CLI
+      # sets the floor here.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # `plugin validate` reads the manifest off disk. It needs no account and
+      # no network: verified against 2.1.247 by running it with an empty HOME,
+      # where it passes and writes nothing. That is why this job stays
+      # credential-free.
+      - name: "Install the Claude Code CLI"
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      # Everything else the suite touches — bash, coreutils, git, python3 — is
+      # already on the runner image, so there is nothing further to install.
+      - name: "Run every gate"
+        run: bash plugins/odoo-dev/scripts/validate.sh
+
+      # Five skills (discovery-notes, fibonacci-estimate, odoo-code-review,
+      # odoo-design-doc, odoo-quote) are committed generated copies of the
+      # packaged sources in libraries/odoo_sdk/src/odoo_sdk/skills/. Regenerate
+      # and diff: a hand edit to a generated copy, or an SDK edit that was not
+      # synced, fails here instead of silently forking the skill body.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: "Generated skill copies match the SDK sources"
+        run: |
+          python -m pip install --quiet ./libraries/odoo_sdk
+          odoo-sdk sync-skills --dest plugins/odoo-dev/skills
+          git diff --exit-code -- plugins/odoo-dev/skills
+
+  # The per-skill script regression suites, run directly rather than through
+  # validate.sh, so a suite failure names the suite in the step log without a
+  # scroll through the gate output. Every *.test.sh under the plugin runs —
+  # enumerated by find, so a new suite is picked up without editing this file
+  # (validate.sh gate 11 keeps its own explicit list; studio-inventory.test.sh
+  # runs only here).
+  script-tests:
+    name: "plugin script test suites"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: "Run every *.test.sh under plugins/odoo-dev"
+        run: |
+          set -u
+          fails=0
+          while IFS= read -r suite; do
+            echo "::group::$suite"
+            if bash "$suite"; then
+              echo "PASS $suite"
+            else
+              echo "FAIL $suite"
+              fails=$((fails + 1))
+            fi
+            echo "::endgroup::"
+          done < <(find plugins/odoo-dev -name '*.test.sh' -type f | sort)
+          echo "failed suites: $fails"
+          exit "$fails"
+
+  # Static shell lint over every shell script the plugin ships. Pinned
+  # shellcheck, downloaded deterministically from the official koalaman release
+  # — the same pinned-tool convention as validate.yaml. Dependabot does not
+  # bump inline workflow strings; refresh the version by hand.
+  #
+  # -s bash: skills/odoo-task-env/scripts/_common.sh is sourced, never
+  #   executed, so it carries no shebang and shellcheck cannot infer a dialect.
+  # -S error: the imported scripts were authored under `bash -n` (validate.sh
+  #   gate 13), not shellcheck, and the import is zero-behavior-change — so
+  #   this job is a floor against real breakage (syntax/semantic errors), not a
+  #   style gate. Verified clean at this severity for the imported tree; ratchet
+  #   to warnings in a follow-up that actually fixes them.
+  shellcheck:
+    name: "shellcheck plugins/odoo-dev"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHELLCHECK_VERSION: "0.10.0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: "Install pinned shellcheck"
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+
+      - name: "Lint every plugin shell script"
+        run: |
+          find plugins/odoo-dev -name '*.sh' -type f | sort \
+            | xargs shellcheck -s bash -S error

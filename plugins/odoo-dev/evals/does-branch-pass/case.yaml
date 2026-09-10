@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: does-branch-pass
+description: Should fire odoo-dev:odoo-test-run.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The last run said the module was green but never said how many tests it ran. Does this branch actually pass?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-test-run
+    tool: Skill
+    input_match: "odoo-test-run"
+    min: 1
+expected_outcome: The odoo-test-run skill is invoked.

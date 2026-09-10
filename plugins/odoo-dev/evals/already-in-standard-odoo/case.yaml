@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: already-in-standard-odoo
+description: Should fire odoo-dev:odoo-prior-art.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Before we build a custom approval workflow module — does standard Odoo 17 or an OCA module already do this?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-prior-art
+    tool: Skill
+    input_match: "odoo-prior-art"
+    min: 1
+expected_outcome: The odoo-prior-art skill is invoked.

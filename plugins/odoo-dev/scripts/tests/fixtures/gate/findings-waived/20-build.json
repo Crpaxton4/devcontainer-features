@@ -1,0 +1,1 @@
+{"worktree":"/repos/acme/.worktrees/task-30412-x","branch":"task-30412-x","modules":["acme_sale"],"claims":["adds delivery-date field to sale.order"],"verify_steps":["open a quotation, set delivery date, confirm it persists"],"diff_summary":"2 files changed, 41 insertions(+), 3 deletions(-)"}

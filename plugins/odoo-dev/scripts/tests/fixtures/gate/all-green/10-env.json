@@ -1,0 +1,1 @@
+{"existing_work":{"state":"none","branch":"task-30412-x","candidates":[],"prs":[]},"worktree_ensure":{"worktree":"/repos/acme/.worktrees/task-30412-x","branch":"task-30412-x","status":"created"},"stack_ensure":{"stack":"acme-17","status":"reused"}}

@@ -1,0 +1,1 @@
+{"project":"Acme Manufacturing","repo":"acme","default_branch":"staging","odoo_version":"17.0","remote":"acme-eng/acme","branch_flow":["dev","staging","main"],"flow_confirmed":false}

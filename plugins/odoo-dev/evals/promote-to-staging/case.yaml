@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: promote-to-staging
+description: Should fire odoo-dev:odoo-release.
+tags: [trigger, positive, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    What would promoting dev to staging actually ship on this project?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-release
+    tool: Skill
+    input_match: "odoo-release"
+    min: 1
+expected_outcome: The odoo-release skill is invoked.

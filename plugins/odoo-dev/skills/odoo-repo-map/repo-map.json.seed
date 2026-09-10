@@ -1,0 +1,4 @@
+{
+  "_doc": "Maps exact Odoo project.project names to repo folders under the repos tree (resolved by scripts/repos-dir.sh; override with REPOS_DIR). Edit ONLY via scripts/repo-map.sh (atomic, validated); never hand-edit. Entries are added only with explicit user confirmation. branch_flow is the ordered environment chain, last element production; flow_confirmed: true means a human vouched for that chain. A flow without flow_confirmed was parsed from the old free-text notes and must be confirmed before it drives a promotion.",
+  "projects": {}
+}

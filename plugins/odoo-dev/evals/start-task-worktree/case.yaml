@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: start-task-worktree
+description: Should fire odoo-dev:odoo-task-env.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    I'm picking up task 30412. Set me up somewhere to work on it.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-task-env
+    tool: Skill
+    input_match: "odoo-task-env"
+    min: 1
+expected_outcome: The odoo-task-env skill is invoked.

@@ -1,0 +1,13 @@
+# Eval runner output — regenerated per run, never source.
+evals/results/
+
+# Mutable state never lives in this tree; it belongs in $ODOO_DEV_STATE_DIR.
+# Listed so an accidental copy is caught rather than committed.
+repo-map.json
+repo-map.json.bak
+lessons/
+tasks/
+
+# Editor and OS noise
+.DS_Store
+*.swp
