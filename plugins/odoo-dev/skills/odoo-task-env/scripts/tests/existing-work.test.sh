@@ -17,6 +17,11 @@ SUT="$SCRIPT_DIR/../existing-work.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/existing-work-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
+# The best-effort tracking probe would reach a real odoo-sdk if one is on PATH,
+# which breaks this suite's no-network promise; task-tracking.test.sh covers it
+# with a stub. Pinned off here so these cases stay about branch/PR triage.
+export ODOO_TASK_TRACKING=0
+
 failures=0
 checked=0
 

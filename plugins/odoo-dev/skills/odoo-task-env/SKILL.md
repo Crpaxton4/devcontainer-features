@@ -72,7 +72,7 @@ Run every check, not stop at first — useful answer is "these three things wron
 <base directory>/scripts/existing-work.sh <repo> <task_id> <default_branch> [--repo-path DIR]
 ```
 
-→ `{"state","branch","candidates":[...],"prs":[...],"gh_error"}`
+→ `{"state","branch","candidates":[...],"prs":[...],"gh_error","tracking":[...],"tracking_error"}`
 
 `state` computed, never judged:
 
@@ -85,17 +85,19 @@ Run every check, not stop at first — useful answer is "these three things wron
 
 Probe **both** branch forms: `<id>#<slug>` (humans push) and `<id>-<slug>` (automation create). Match only one = five commits and open PR become invisible. `gh` failure non-fatal, degrade to `"prs": []` plus `gh_error` string — say so in report, not treat "no PRs" as proof.
 
+`tracking` = this task's active local tracking sessions, from best-effort `odoo-sdk cmd task_status` (argless — the script filters to the task). Same degrade shape as `gh`: CLI missing or failing → `"tracking": []` plus `tracking_error` string. `[]` with non-null `tracking_error` means **unknown**, not "no session" — say so in report.
+
 ### 2. Worktree and branch
 
 ```bash
 <base directory>/scripts/worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-path DIR]
 ```
 
-→ `{"worktree","branch","status":"created"|"reused"}`
+→ `{"worktree","branch","status":"created"|"reused","tracking":"started"|"already_running"|"skipped"|"error"}`
 
 Idempotent, serialized per repo under flock so concurrent callers cannot race `git worktree add`. On reuse branch **read from worktree**, never recomputed from arguments — renamed Odoo task yield new slug, and reporting branch never created hand you something you cannot push.
 
-**Session-FSM alignment.** odoo-mcp `start_task` tool also create `<id>-<slug>` branch. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
+**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
 
 `<resume_branch>` adopted exactly as it stands — never reset, rebased, re-cut. Commits on it are work you continuing.
 
@@ -128,6 +130,7 @@ Run this skill twice for one task must converge, not accumulate:
 | `REPOS_DIR` | resolved by `odoo-repo-map/scripts/repos-dir.sh` | Non-standard repos tree |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |
+| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort `odoo-sdk` tracking probes (existing-work `tracking`, worktree `start_task`) |
 | `MIN_FREE_GB` | `6` | Different RAM budget |
 | `ODOO_SHARED_COMPOSE` | `$REPOS_DIR/.devcontainer/shared/compose.yml` | Shared postgres/proxy stack lives elsewhere |
 | `ODOO_REPO_MAP_SCRIPTS` | sibling `../odoo-repo-map/scripts` | Map skill moved |

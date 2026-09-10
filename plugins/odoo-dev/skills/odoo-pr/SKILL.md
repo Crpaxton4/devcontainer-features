@@ -132,16 +132,18 @@ Non-critical improvement ideas from review become follow-up tasks, not blocking 
 
 ## 7. Write back to the Odoo task
 
-> **Writeback probe:** before any Odoo writeback, inspect available `mcp__odoo-mcp__*` tools. Use most specific tool for intent (activity-capable tool beats `task_note`). If no tool covers intent — no `mail.activity` tool today — post `task_note` of **≤300 characters** carrying `[ACTIVITY]` marker line, and flag manual step in report. Never fail step on missing tool; never silently skip writeback.
+Writebacks are **script-driven and deterministic** — reads may go through MCP tools, but a write to the task never rides on probing what tools happen to be available. Both writebacks below go through `writeback.sh`, which wraps `odoo-sdk cmd task_note` and the activity commands:
 
-Today that means:
-
-```
-task_note(task_id, "PR opened: <pr_url> — [ACTIVITY] review requested",
-          dedupe_key="pr-open-<pr_number>")
+```bash
+<plugin root>/scripts/writeback.sh note <task_id> "PR opened: <pr_url>" --dedupe-key pr-open-<pr_number>
+<plugin root>/scripts/writeback.sh activity <task_id> --summary "Review requested: <pr_url>"
 ```
 
-**300-character cap is hard reject, not truncation** — SDK refuses longer body outright. Keep note to link and one clause; detail lives in PR. `dedupe_key` makes rerun idempotent instead of spamming chatter.
+The note carries the link; the activity carries the review request as a real `mail.activity` — the old `[ACTIVITY]` marker-in-a-note workaround is retired now that the activity commands exist. Schedule the activity only when `pr-open.sh` said `"action": "created"`: a rerun that edited the existing PR already has its review activity, and a second one is noise. If an earlier review request became stale (the PR was superseded), close it with `writeback.sh done <task_id> --match "<old pr_url>"` rather than leaving it open.
+
+Each call prints the CLI's JSON result on success; on failure it passes the CLI's `{"error":{"type","message"}}` envelope through and exits non-zero — report the failure, never silently skip the writeback.
+
+**300-character cap is hard reject, not truncation** — the script pre-checks it for fast feedback, but the SDK refuses a longer body outright either way. Keep note to link and one clause; detail lives in PR. `--dedupe-key` makes rerun idempotent instead of spamming chatter.
 
 Never write timesheet hours from here. Hours reach Odoo through the odoo-tui/CLI upload path alone, and a second writer for a billed number is duplicate state nobody reconciles.
 
