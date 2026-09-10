@@ -56,9 +56,12 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `commands/` (incl. `commands/builtin`) | core | the registry is the service layer |
 | `billing/` | core | timesheet/reporting workflows |
 | `sessionization/` | core | pure transforms + frozen event vocabulary |
-| `reap.py` | core | orphaned at package root; relocation tracked in #717 |
-| `prune.py` | core | orphaned at package root; relocation tracked in #717 |
-| `utilities/` | core (provisional) | spans all three layers today; dissolution into `services/` (data), core helpers, and `mcp/prompts` is #717. Classified core so its data-ward imports stay legal until then |
+| `tracking/` | core | local run/session tracking helpers (amendment, #717): `env`, `runs`, `stats`, `checkpoint` from the dissolved `utilities/` plus the relocated `reap` and `prune` |
+| `reap.py` | shim | deprecation shim aliasing `tracking/reap.py` (#717); excluded from contracts |
+| `prune.py` | shim | deprecation shim aliasing `tracking/prune.py` (#717); excluded from contracts |
+| `services/` | data | Odoo-facing service helpers (amendment, #717): `odoo_helpers`, `activities`, `attachments`, `knowledge`, `mail_status`, `logged_lines` from the dissolved `utilities/` — every module takes an `OdooClient` and talks to Odoo |
+| `utilities/` | shims + shared | dissolved by #717: per-module deprecation shims for every moved path, plus the genuinely shared pure `utilities/html.py`, which stays. Excluded from contracts (shims re-export across layers by design) |
+| `settings.py` | shared kernel | connection-settings value object + validators extracted from `state/config.py` (amendment, #717) so transport stops importing the state layer; `state.config` re-exports them unchanged |
 | `skills/` | core | packaged consulting-skill data + `skill_body` accessors (amendment, #712): pure stdlib, no MCP/CLI imports; surfaces read it, nothing below core does |
 | `transport/` | data | RPC/JSON-2 executors + canonical Odoo error taxonomy |
 | `client/` | data | `OdooClient` session façade |
@@ -68,7 +71,7 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `env/` | data | metadata cache |
 | `state/` | data | SQLite task-tracker state, `LocalConfig`, FSM errors |
 | `adapters/` | data | external-source sync + state persistence adapters |
-| `_utils.py` | shared kernel | private helpers, importable from any layer |
+| `_utils.py` | shared kernel | private helpers, importable from any layer; also `format_chatter` (amendment, #717 — see below) |
 | `errors.py` | shared kernel | façade re-exporting the `transport.errors` taxonomy and the `state.models` FSM errors (new in this ADR) |
 | `__init__.py` | root façade | public API re-exports; PEP 562 lazy `OdooMCPServer` export (named exception) |
 
@@ -123,14 +126,15 @@ retires it.
 
 | Debt | Fixed by |
 | --- | --- |
-| `cli/__main__` duplicates resync orchestration inline and imports `adapters` for it | #717 |
+| `cli/__main__` duplicates resync orchestration inline and imports `adapters` for it | #717 — DONE: the CLI dispatches the registry `ResyncCommand` with an injected local-first puller table and reaches the pullers/event-source vocabulary through `commands/builtin/resync` and `commands/log_event` |
 | `tui/app` imports `LocalConfig`/`LocalStateClient`/`EventRecord` from `state` | #716 (config injection) + #718 (StateStore port) |
 | `tui/app` imports `OdooError` from `transport.errors` directly | #718 (adopt `odoo_sdk.errors`) |
 | `tui/triage`, `tui/evidence`, `tui/export` import `state` types; `tui/timeline` imports `state.db` | #718 |
 | `tui/export` imports `adapters` directly | #718 |
 | `mcp/server` imports FSM error types from `state.models`; `mcp/tools/start_task` imports `TaskState` | #718 |
-| `transport` imports `state.config` for connection settings (data→data, no contract broken, still wrong direction: transport is below state) | #717 (settings extraction into the shared kernel) |
-| `utilities/` spans all three layers | #717 (dissolve into `services/` + core + `mcp/prompts`) |
+| `transport` imports `state.config` for connection settings (data→data, no contract broken, still wrong direction: transport is below state) | #717 — DONE: `odoo_sdk/settings.py` (shared kernel) owns the value object; transport and client import it, `state.config` re-exports it |
+| `utilities/` spans all three layers | #717 — DONE: dissolved into `services/` (data), `tracking/` (core), `mcp/prompts/messages.py` (surface content), and the shared kernel (`format_chatter`); `utilities/html.py` stays as shared code |
+| `tui/app` imports the Odoo-reading `services.logged_lines` helper directly | #718 (StateStore/port work). Newly *visible* debt, not newly created (amendment, #717): the edge existed all along but was invisible while `utilities/` was classified core |
 | Composition roots construct the graph inline (permanent exceptions today) | #716 (`bootstrap.py` single composition root, then the entries are deleted) |
 | Data modules import private `_`-named helpers from the shared kernel (`_is_sequence`, `_is_null_wire_value`, `_dedup_field_names` from `_utils`) | accepted — the kernel is intra-package by design; revisit naming in #718 |
 
@@ -177,6 +181,61 @@ odoo_sdk.errors.OdooError`).
   properties in only three modules, and a second config type would fork the
   peer-dependency contract the registry injects. Revisit removal when the
   command-protocol contract tests are next allowed to move (#718 endgame).
+
+### Dissolution of `utilities/`, settings extraction, and shims (amendment, #717)
+
+- **`utilities/` is dissolved by interaction direction.** The Odoo-facing
+  helpers (each takes an `OdooClient` and issues real calls) moved to the new
+  data package `services/`; the local run/session helpers moved to the new
+  core package `tracking/`, which also absorbed the root-orphaned `reap.py`
+  and `prune.py`; the `implement_task` prompt builders moved to
+  `mcp/prompts/messages.py` (the strings ARE the MCP prompt — surface
+  content). Two classification corrections surfaced by the move:
+  `format_chatter` is a pure primitives-only renderer needed by both the MCP
+  prompt builder (surface) and the chatter services (data), so its only legal
+  home is the shared kernel (`_utils.py`, re-exported by
+  `services/odoo_helpers.py`); and `utilities/html.py` is genuinely shared
+  pure text conversion, so it stays in place rather than moving into a layer.
+- **Connection settings live in the shared kernel.** `odoo_sdk/settings.py`
+  now owns `OdooConnectionSettings`, its validators, and
+  `DEFAULT_TIMEOUT_SECONDS`; `transport/` and `client/` import it, and
+  `state/config.py` re-exports everything unchanged so every historical
+  `odoo_sdk.state.config` import (including the feature tests outside this
+  repo that pin `odoo_sdk.state.db` / `state.config`) keeps working.
+  `LocalConfig` remains the single resolver; the one seam that touches it —
+  `OdooConnectionSettings.from_sources` — imports it lazily inside the call
+  so the kernel module stays import-time dependency-free.
+- **CLI resync has one writer.** `cli/__main__.py` no longer duplicates the
+  resync orchestration inline: it dispatches the registry's `ResyncCommand`
+  (source selection, range parsing, and the per-source summary shape live
+  only there) while injecting a CLI-specific puller table via the command's
+  new keyword-only `pullers` seam. The table preserves the CLI's pinned
+  per-source semantics exactly — git/github run with no Odoo client, the
+  odoo puller stays behind the lazy capability guard, gcal/gmail keep the
+  range-ignored annotation — and resolves the puller names through
+  `cli.__main__` module globals at call time, so the frozen CLI tests'
+  patch points (`cli.__main__.sync_git_log`, …) still intercept every call.
+  The CLI's `adapters` imports are gone: pullers and Google error types come
+  through `commands/builtin/resync`, the event-source vocabulary through
+  `commands/log_event`, retiring the `cli.__main__ -> adapters` baseline
+  entry.
+- **Shim policy.** Every moved module leaves a shim at its old path:
+  `sys.modules`-aliasing modules (the old path warns once on import, then IS
+  the relocated module, so attribute patches through the old path keep
+  reaching canonical code — the property the 124 deep-importing frozen test
+  files rely on), plus a PEP 562 `__getattr__` in `utilities/__init__.py`
+  for the package-level re-exports. All shims emit `DeprecationWarning`
+  (`stacklevel=2`), are kept for **at least two minor releases**, are never
+  removed in the release that introduced them, and are **excluded from the
+  import-linter contract lists** — a shim re-exports across layers by
+  design, so listing it would only force ignore entries that restate its
+  job. The canonical homes are listed and enforced instead.
+- **Baseline movement.** Deleted: `cli.__main__ -> adapters` (#717). Added
+  (with this amendment, per the exception policy): `tui.app ->
+  services.logged_lines` — newly *visible*, not newly created; the TUI has
+  always called the Odoo-reading logged-hours helper directly, but the edge
+  was invisible while `utilities/` was classified core. #718's port work
+  retires it.
 
 ## Rejected alternatives
 

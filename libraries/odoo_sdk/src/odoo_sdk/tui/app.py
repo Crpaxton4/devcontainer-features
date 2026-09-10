@@ -32,7 +32,7 @@ from odoo_sdk.commands import Registry
 from odoo_sdk.commands.protocols import RpcClient
 from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
 from odoo_sdk.transport.errors import OdooError
-from odoo_sdk.utilities.logged_lines import logged_hours_by_task_day
+from odoo_sdk.services.logged_lines import logged_hours_by_task_day
 from odoo_sdk.billing.upload import range_bounds, upload_sessions
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps

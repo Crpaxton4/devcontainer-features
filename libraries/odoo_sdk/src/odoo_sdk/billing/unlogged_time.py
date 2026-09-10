@@ -39,7 +39,7 @@ from typing import Any, Optional
 
 from odoo_sdk.errors import OdooTransportError
 from odoo_sdk.state import LocalConfig, LocalStateClient, SessionWindow, session_key
-from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
+from odoo_sdk.services.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
 
 from .timesheet_reports import day_label, parse_date, row_hours
 from .upload import range_bounds, upload_sessions
@@ -162,7 +162,7 @@ def _task_names(
 
     The logged ``read_group`` already grouped on ``task_id`` and so returns each
     logged task as an ``[id, name]`` many2one pair; those names are mined with
-    :func:`~odoo_sdk.utilities.odoo_helpers.resolve_many2one` for free. Only the
+    :func:`~odoo_sdk.services.odoo_helpers.resolve_many2one` for free. Only the
     ids left over — the derived-only ones — cost a read, and they cost exactly
     one for all of them. A window whose derived tasks are all logged issues no
     extra call at all.

@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.odoo_helpers import get_task_chatter, get_task_detail
+from odoo_sdk.services.odoo_helpers import get_task_chatter, get_task_detail
 
 
 @builtin_command

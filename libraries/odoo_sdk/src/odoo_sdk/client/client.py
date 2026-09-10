@@ -2,7 +2,7 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from odoo_sdk.records.recordset import OdooRecordset
-from odoo_sdk.state.config import OdooConnectionSettings
+from odoo_sdk.settings import OdooConnectionSettings
 from odoo_sdk.transport.errors import OdooAuthenticationError
 from odoo_sdk.transport.executor import OdooExecutor, guarded_execute
 from odoo_sdk.transport.json2 import OdooJson2Executor

@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.attachments import read_attachment
+from odoo_sdk.services.attachments import read_attachment
 
 
 @builtin_command

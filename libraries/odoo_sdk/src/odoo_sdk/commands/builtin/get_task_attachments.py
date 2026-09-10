@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.attachments import get_task_attachments
+from odoo_sdk.services.attachments import get_task_attachments
 
 
 @builtin_command

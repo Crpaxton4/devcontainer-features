@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.odoo_helpers import search_chatter
+from odoo_sdk.services.odoo_helpers import search_chatter
 
 
 @builtin_command

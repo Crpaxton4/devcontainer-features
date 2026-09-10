@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.activities import DEFAULT_ACTIVITY_LIMIT, get_activities
+from odoo_sdk.services.activities import DEFAULT_ACTIVITY_LIMIT, get_activities
 
 
 @builtin_command

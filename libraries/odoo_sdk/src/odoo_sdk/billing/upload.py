@@ -4,9 +4,8 @@ This is the single upload code path shared by every surface: the ``odoo-tui``
 ``u`` key and the headless ``odoo-sdk upload`` subcommand both derive sessions
 the same way (the ``query_sessions`` command) and feed those session dicts into
 :func:`upload_sessions` here, so a non-interactive invocation bills exactly the
-rows the TUI would. It lives in ``utilities`` — not in a command — because it is
-shared logic between two interaction surfaces (the SDK's stated home for such
-code) and the built-in command surface is pinned 1:1 to the explicit MCP tool
+rows the TUI would. It lives in ``billing`` — not in a command — because it is
+shared workflow logic between two interaction surfaces and the built-in command surface is pinned 1:1 to the explicit MCP tool
 surface, which deliberately does not expose an upload tool.
 
 The loop is: **reconcile each session, then orphan-sweep once**. Sessions are

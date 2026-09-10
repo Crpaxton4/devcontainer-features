@@ -1,12 +1,13 @@
 """MCP ``implement_task`` prompt surface.
 
 The prompt composes the ``get_task`` command to fetch context and delegates all
-message-building to :func:`build_implement_task_messages` in the utilities layer;
-no business logic lives inline here.
+message-building to :func:`~odoo_sdk.mcp.prompts.messages.build_implement_task_messages`
+(the prompt-content module beside this package, #717); no business logic lives
+inline here.
 """
 
 from odoo_sdk.commands import Registry
-from odoo_sdk.utilities.prompt_messages import build_implement_task_messages
+from odoo_sdk.mcp.prompts.messages import build_implement_task_messages
 
 from ._registration import builtin_prompt
 

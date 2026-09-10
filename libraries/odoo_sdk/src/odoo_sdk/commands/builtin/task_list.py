@@ -2,8 +2,8 @@ from typing import Any, Optional
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_sdk_configured
-from odoo_sdk.utilities.odoo_helpers import name_search_projects
+from odoo_sdk.tracking.env import assert_sdk_configured
+from odoo_sdk.services.odoo_helpers import name_search_projects
 
 
 @builtin_command

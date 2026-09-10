@@ -20,7 +20,7 @@ genuinely optional absence still reports ``skipped``.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from odoo_sdk.adapters import (
     GoogleAPIError,
@@ -122,6 +122,30 @@ class ResyncCommand(Command):
     stable external id.
     """
 
+    def __init__(
+        self,
+        client,
+        state=None,
+        config=None,
+        *,
+        pullers: Optional[Mapping[str, Callable[..., dict[str, Any]]]] = None,
+    ):
+        """Bind the shared peers, optionally overriding the puller table.
+
+        ``pullers`` (keyword-only, #717) maps source name to a
+        ``(command, start, end) -> summary`` callable and defaults to
+        :data:`_SYNC_DISPATCH`. It exists for exactly one caller: the CLI's
+        ``resync`` subcommand dispatches THIS command as the single writer of
+        the resync workflow while keeping its historical local-first
+        per-source semantics (no Odoo client for git/github, a lazily-guarded
+        odoo puller) — and its patchable module-level puller names — by
+        injecting its own table. The registry always builds the default.
+        """
+        super().__init__(client, state=state, config=config)
+        self._pullers: Mapping[str, Callable[..., dict[str, Any]]] = (
+            dict(pullers) if pullers is not None else _SYNC_DISPATCH
+        )
+
     _name = "resync"
     _description = (
         "Reconcile local event state against external history: pull authored "
@@ -161,6 +185,6 @@ class ResyncCommand(Command):
         end_date = _parse_range_date(end)
         selected = _parse_sources(sources)
         return {
-            source: _SYNC_DISPATCH[source](self, start_date, end_date)
+            source: self._pullers[source](self, start_date, end_date)
             for source in selected
         }

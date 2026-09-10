@@ -2,7 +2,7 @@ from typing import Any, Optional, Union
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.activities import (
+from odoo_sdk.services.activities import (
     DEFAULT_ACTIVITY_RES_MODEL,
     schedule_activity,
 )

@@ -2,7 +2,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.knowledge import read_knowledge_article
+from odoo_sdk.services.knowledge import read_knowledge_article
 
 
 @builtin_command

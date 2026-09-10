@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from odoo_sdk.utilities.odoo_helpers import get_task_detail
+from odoo_sdk.services.odoo_helpers import get_task_detail
 
 from ..command import Command
 from ._registration import builtin_command

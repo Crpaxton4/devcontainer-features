@@ -2,7 +2,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.activities import mark_activity_done
+from odoo_sdk.services.activities import mark_activity_done
 
 
 @builtin_command
