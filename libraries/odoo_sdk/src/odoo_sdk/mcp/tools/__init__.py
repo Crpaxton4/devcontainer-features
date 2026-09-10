@@ -21,8 +21,9 @@ heuristic, so the default MCP surface is the everyday working set and the
 narrow-context tools in :data:`GATED_TOOL_NAMES` (tracker-run administration,
 state maintenance/reconciliation, session triage, low-level introspection) are
 held back behind an opt-in flag. Nothing is deleted — every gated tool is still
-built, still reachable on the CLI, and restored to the MCP surface by setting
-``ODOO_MCP_INCLUDE_GATED`` (or passing ``include_gated=True``).
+built, still reachable on the CLI via the generic ``odoo-sdk cmd`` dispatcher
+(#713), and restored to the MCP surface by setting ``ODOO_MCP_INCLUDE_GATED``
+(or passing ``include_gated=True``).
 """
 
 import os
@@ -56,8 +57,9 @@ GATED_TOOLS_ENV = "ODOO_MCP_INCLUDE_GATED"
 #: enough avoids Claude Code's client-side lazy deferral, which turns every first
 #: tool use into an extra schema round-trip once too many tools are exposed. These
 #: are *not* removed: they remain in :data:`TOOL_FACTORIES` (so
-#: :func:`build_explicit_tools` still builds them), stay reachable on the CLI, and
-#: return to the MCP surface via :data:`GATED_TOOLS_ENV` / ``include_gated``.
+#: :func:`build_explicit_tools` still builds them), stay reachable on the CLI via
+#: the generic ``odoo-sdk cmd`` dispatcher (#713), and return to the MCP surface
+#: via :data:`GATED_TOOLS_ENV` / ``include_gated``.
 GATED_TOOL_NAMES: FrozenSet[str] = frozenset(
     {
         # Tracker-run administration (host SQLite tracker DB; operator tooling).

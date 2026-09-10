@@ -18,6 +18,8 @@ Subcommands:
     resync [--sources ...]  Reconcile local events against git/GitHub/Odoo chatter
     upload [--start ...]    Bill derived sessions to Odoo (headless TUI upload)
     prune [--older-than N]  Delete aged hook events past a retention horizon
+    cmd <name> [--args J]   Dispatch any registry command; stdout is one JSON doc
+    cmd --list [--json]     List every registry command as {name, description}
 """
 
 import argparse
@@ -25,7 +27,7 @@ import json
 import math
 import sys
 from datetime import date, datetime
-from typing import Callable, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, NoReturn, Optional
 
 from odoo_sdk.adapters import (
     GoogleAPIError,
@@ -39,8 +41,13 @@ from odoo_sdk.adapters import (
     sync_odoo_chatter,
 )
 from odoo_sdk.client import OdooClient
-from odoo_sdk.commands import LogEventCommand, Registry
+from odoo_sdk.commands import Command, LogEventCommand, Registry
 from odoo_sdk.commands.builtin import register_builtins
+from odoo_sdk.commands.dispatch_telemetry import (
+    _BOUNDARY_ERRORS,
+    _emit_tool_event,
+    _error_payload,
+)
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.state import LocalConfig, TrackerStateMissingError
 from odoo_sdk.state import LocalStateClient as TaskStateDB
@@ -715,6 +722,119 @@ def cmd_get_employee_id(registry: Registry, _args: argparse.Namespace) -> None:
     print(f"employee_id={employee_id}")
 
 
+def _cmd_fail(exc: BaseException, code: int) -> NoReturn:
+    """Print the shared dispatch error envelope as stdout's one JSON doc; exit.
+
+    The envelope is built by the same :func:`~odoo_sdk.commands.
+    dispatch_telemetry._error_payload` the MCP error boundary uses, so a script
+    driving ``odoo-sdk cmd`` sees exactly the ``{"error": {"type", "message"}}``
+    shape an MCP caller would. Exit ``1`` marks a boundary (caller-actionable)
+    failure, ``2`` a usage error — unknown name, malformed ``--args``, bad
+    kwargs.
+    """
+    print(json.dumps(_error_payload(exc), default=str))
+    sys.exit(code)
+
+
+def _cmd_list_entries(registry: Registry) -> list[dict[str, str]]:
+    """Return every registry command as a ``{name, description}`` row.
+
+    Sorted by name so the output is stable — this listing is the contract-gate
+    ground truth for the CI gate that asserts the dispatchable surface (#713).
+    """
+    return [
+        {"name": name, "description": command.description}
+        for name, command in sorted(registry.items(), key=lambda item: item[0])
+    ]
+
+
+def _print_cmd_list(entries: list[dict[str, str]], as_json: bool) -> None:
+    """Print the command listing: a JSON array, or a human-readable table."""
+    if as_json:
+        print(json.dumps(entries, default=str))
+        return
+    width = max(len(entry["name"]) for entry in entries)
+    header = f"{'Command':<{width}}  Description"
+    print(header)
+    print("-" * len(header))
+    for entry in entries:
+        summary = entry["description"].strip().splitlines()
+        print(f"{entry['name']:<{width}}  {summary[0] if summary else ''}")
+
+
+def _parse_cmd_kwargs(raw: Optional[str]) -> dict[str, Any]:
+    """Parse ``--args`` into the command's kwargs; usage-fail (exit 2) if bad."""
+    if raw is None:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _cmd_fail(ValueError(f"malformed --args JSON: {exc}"), 2)
+    if not isinstance(parsed, dict):
+        _cmd_fail(ValueError("--args must be a JSON object"), 2)
+    return parsed
+
+
+def _resolve_cmd(registry: Registry, name: str) -> Command:
+    """Resolve ``name`` on the registry; usage-fail (exit 2) when unknown."""
+    try:
+        return registry[name]
+    except KeyError:
+        _cmd_fail(ValueError(f"unknown command: {name!r} (see 'cmd --list')"), 2)
+
+
+def _emit_cmd_event(
+    registry: Registry, name: str, kwargs: dict[str, Any], result: Any
+) -> None:
+    """Emit the one ``source="agent"`` event a successful ``cmd`` dispatch owns.
+
+    Routed through the same :func:`~odoo_sdk.commands.dispatch_telemetry.
+    _emit_tool_event` pipeline the MCP server uses, with ``via="cli"`` marking
+    the dispatch surface in the payload. Best-effort like the MCP wrapper: a
+    failing state store must never turn a successful dispatch into an error.
+    """
+    try:
+        _emit_tool_event(registry.state_client, name, kwargs, result, via="cli")
+    except Exception:
+        pass
+
+
+def cmd_cmd(args: argparse.Namespace) -> None:
+    """Generic dispatcher: run any registry command, stdout one JSON document.
+
+    ``cmd --list`` enumerates the full registered surface — gated MCP tools
+    included (process trust: a shell that can run this CLI already owns the
+    process) — and ``cmd <name> --args '<json>'`` dispatches one command with
+    the JSON object as kwargs. Success prints the raw command result
+    (``json.dumps(..., default=str)``) and exits 0; a boundary error prints the
+    shared MCP error envelope and exits 1; a usage error (unknown name,
+    malformed ``--args``, a ``TypeError`` from bad kwargs) prints the same
+    envelope shape and exits 2.
+
+    The registry is built over :class:`_LazyOdooClient` with no eager state or
+    config, so a command that never touches Odoo dispatches with no Odoo
+    configuration present; a command that does need Odoo surfaces its
+    config/connection failure through the boundary as the JSON envelope rather
+    than the ``_assert_env`` plaintext.
+    """
+    registry = _build_registry(_LazyOdooClient())
+    if args.list_commands:
+        _print_cmd_list(_cmd_list_entries(registry), args.as_json)
+        return
+    if args.name is None:
+        _cmd_fail(ValueError("a command name (or --list) is required"), 2)
+    kwargs = _parse_cmd_kwargs(args.cmd_args)
+    command = _resolve_cmd(registry, args.name)
+    try:
+        result = command.execute(**kwargs)
+    except TypeError as exc:
+        _cmd_fail(exc, 2)
+    except _BOUNDARY_ERRORS as exc:
+        _cmd_fail(exc, 1)
+    _emit_cmd_event(registry, args.name, kwargs, result)
+    print(json.dumps(result, default=str))
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands declared.
 
@@ -894,6 +1014,35 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         help="Preview what would be pruned without deleting anything",
     )
+
+    cmd_p = subparsers.add_parser(
+        "cmd",
+        help="Dispatch any registry command by name; stdout is one JSON document",
+    )
+    cmd_p.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="Registry command name to dispatch (see 'cmd --list')",
+    )
+    cmd_p.add_argument(
+        "--args",
+        default=None,
+        dest="cmd_args",
+        help="JSON object of keyword arguments passed to the command's execute()",
+    )
+    cmd_p.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_commands",
+        help="List every registry command as {name, description}",
+    )
+    cmd_p.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="With --list, print the listing as a JSON array",
+    )
     return parser
 
 
@@ -937,6 +1086,11 @@ _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
     "resync": (lambda c: cmd_resync(c.args), False),
     "prune": (lambda c: cmd_prune(c.args), False),
     "log-event": (lambda c: cmd_log_event(c.args), False),
+    # ``cmd`` is needs_odoo=False on purpose: it builds its own registry over a
+    # _LazyOdooClient so a local-only command never constructs an OdooClient or
+    # touches env config, and an Odoo-needing command surfaces its config error
+    # through the boundary as the JSON envelope (never _assert_env plaintext).
+    "cmd": (lambda c: cmd_cmd(c.args), False),
 }
 
 # The local-only command names, derived from the table so routing stays a single
