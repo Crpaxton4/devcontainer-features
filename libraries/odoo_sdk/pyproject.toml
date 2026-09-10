@@ -218,15 +218,11 @@ forbidden_modules = [
 ]
 allow_indirect_imports = true
 ignore_imports = [
-    # permanent (ADR-005): the three composition roots construct the object
-    # graph (client + state + config). #716 replaces them with bootstrap.py,
-    # then these entries are deleted.
-    "odoo_sdk.cli.__main__ -> odoo_sdk.client",
-    "odoo_sdk.cli.__main__ -> odoo_sdk.state",
-    "odoo_sdk.mcp.__main__ -> odoo_sdk.client",
-    "odoo_sdk.mcp.__main__ -> odoo_sdk.state.config",
-    "odoo_sdk.tui.__main__ -> odoo_sdk.client",
-    "odoo_sdk.tui.__main__ -> odoo_sdk.state.config",
+    # (#716 retired the three per-entrypoint composition-root entries: the
+    # object graph is now assembled by odoo_sdk.bootstrap — the single
+    # composition root, deliberately outside every source list above and
+    # below, and the only module allowed to name every layer — and the
+    # entrypoints reach client/state/config only through it.)
     # baseline debt — #717 (CLI resync re-pointed at the registry command;
     # today cli/__main__.py duplicates the resync orchestration inline).
     "odoo_sdk.cli.__main__ -> odoo_sdk.adapters",
@@ -249,6 +245,52 @@ ignore_imports = [
     # moved to core commands/dispatch_telemetry.py, so the surface no longer
     # imports state.models at all.)
     "odoo_sdk.mcp.tools.start_task -> odoo_sdk.state",
+]
+unmatched_ignore_imports_alerting = "error"
+
+# odoo_sdk.bootstrap is the single composition root (#716): the ONE module
+# allowed to touch every layer, which it is granted by being outside every
+# source list in rules 1-4. The price of that freedom is this rule: nothing
+# imports the composition root except the three surface entrypoints (tests
+# live outside the package and are unconstrained).
+[[tool.importlinter.contracts]]
+name = "ADR-005 rule 5: only the entrypoints import the composition root"
+type = "forbidden"
+source_modules = [
+    # surfaces
+    "odoo_sdk.cli",
+    "odoo_sdk.mcp",
+    "odoo_sdk.tui",
+    # core
+    "odoo_sdk.commands",
+    "odoo_sdk.billing",
+    "odoo_sdk.sessionization",
+    "odoo_sdk.reap",
+    "odoo_sdk.prune",
+    "odoo_sdk.utilities",
+    "odoo_sdk.skills",
+    # data
+    "odoo_sdk.transport",
+    "odoo_sdk.client",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
+    "odoo_sdk.env",
+    "odoo_sdk.state",
+    "odoo_sdk.adapters",
+    # shared kernel
+    "odoo_sdk._utils",
+    "odoo_sdk.errors",
+]
+forbidden_modules = [
+    "odoo_sdk.bootstrap",
+]
+ignore_imports = [
+    # permanent: composition root — the three entrypoints are the only
+    # sanctioned importers of the assembled object graph.
+    "odoo_sdk.cli.__main__ -> odoo_sdk.bootstrap",
+    "odoo_sdk.mcp.__main__ -> odoo_sdk.bootstrap",
+    "odoo_sdk.tui.__main__ -> odoo_sdk.bootstrap",
 ]
 unmatched_ignore_imports_alerting = "error"
 

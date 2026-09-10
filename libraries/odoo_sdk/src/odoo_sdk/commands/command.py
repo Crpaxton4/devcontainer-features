@@ -70,6 +70,14 @@ class Command(ABC):
     and config dependencies are created lazily on first access so that
     lightweight commands (and unit tests) that only need the client are not
     forced to construct SQLite state or read a config file.
+
+    Injection is the production contract (#716): every production registry is
+    assembled by the composition root (:func:`odoo_sdk.bootstrap.bootstrap`),
+    which loads :class:`LocalConfig` exactly once and injects it into every
+    command, so the lazy ``LocalConfig.load()`` fallback below is never
+    reached on a production path. It survives solely as a convenience for
+    directly constructed commands (unit tests, embedding callers) and is
+    pinned by the command-protocol contract tests.
     """
 
     _name: str

@@ -43,18 +43,22 @@ from odoo_sdk.adapters import (
     sync_google_calendar,
     sync_odoo_chatter,
 )
-from odoo_sdk.client import OdooClient
+
+# The composition root is the CLI's only below-core dependency (#716): the
+# concrete OdooClient / LocalConfig / LocalStateClient constructors are
+# obtained from it rather than from the data layer, and every registry is
+# wired through ``bootstrap`` (via ``_build_registry`` below).
+from odoo_sdk.bootstrap import LocalConfig, OdooClient, bootstrap
+from odoo_sdk.bootstrap import LocalStateClient as TaskStateDB
 from odoo_sdk.commands import Command, LogEventCommand, Registry
-from odoo_sdk.commands.builtin import register_builtins
 from odoo_sdk.commands.dispatch_telemetry import (
     _BOUNDARY_ERRORS,
     _emit_tool_event,
     _error_payload,
 )
 from odoo_sdk.cli.sync_skills import cmd_sync_skills
+from odoo_sdk.errors import TrackerStateMissingError
 from odoo_sdk.sessionization import EventType
-from odoo_sdk.state import LocalConfig, TrackerStateMissingError
-from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.utilities.env import assert_sdk_configured
 from odoo_sdk.prune import execute_prune, plan_prune, resolve_horizon
 from odoo_sdk.reap import (
@@ -113,13 +117,17 @@ def _build_registry(
 ) -> Registry:
     """Build the shared built-in command registry, exactly like MCP/TUI.
 
-    The CLI dispatches every command through this registry instead of
-    constructing command classes by hand, so the command layer is the single
-    integration point and no subcommand reaches into ``state`` internals. A
-    ``None`` ``state`` lets each command resolve its own (the local-only
-    ``discover`` path).
+    A thin delegate to the single composition root
+    (:func:`odoo_sdk.bootstrap.bootstrap`, #716), kept as the CLI's one
+    registry-factory seam so every subcommand — and the tests that patch it —
+    routes through the same wiring. The CLI dispatches every command through
+    this registry instead of constructing command classes by hand, so the
+    command layer is the single integration point and no subcommand reaches
+    into ``state`` internals. A ``None`` ``state`` lets each command resolve
+    its own (the local-only ``discover`` path); a ``None`` ``config`` lets the
+    composition root load and inject the resolved settings once.
     """
-    return register_builtins(Registry(client, state_client=state, config=config))
+    return bootstrap(client=client, state=state, config=config)
 
 
 def _fmt_row(row: dict, *, include_state: bool = True) -> str:

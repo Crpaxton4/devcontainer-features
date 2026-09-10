@@ -2,25 +2,23 @@
 
 Running ``odoo-mcp`` or ``python -m odoo_sdk.mcp`` starts a server exposing the
 SDK's built-in commands. Settings are resolved once from the local config file
-(File > Env > Default) into a :class:`LocalConfig`, which builds the
-:class:`OdooClient` and is injected — alongside the :class:`LocalStateClient` —
-into every command via the :class:`Registry`.
+(File > Env > Default) into a :class:`LocalConfig`, and the object graph —
+client, state, config, registry — is assembled by the single composition root
+(:func:`odoo_sdk.bootstrap.bootstrap`, #716), which injects the resolved
+config into every command via the :class:`~odoo_sdk.commands.Registry`.
 
 Consumers who want to expose custom commands should build their own
-:class:`Registry`, register their commands, and start :class:`OdooMCPServer`
-from their own script instead of using this entry point.
+:class:`~odoo_sdk.commands.Registry`, register their commands, and start
+:class:`OdooMCPServer` from their own script instead of using this entry point.
 """
 
-from odoo_sdk.client import OdooClient
-from odoo_sdk.commands import Registry
-from odoo_sdk.commands.builtin import register_builtins
+from odoo_sdk.bootstrap import LocalConfig, OdooClient, bootstrap
 from odoo_sdk.mcp.server import OdooMCPServer
 from odoo_sdk.mcp.tools import build_explicit_tools, default_tool_surface
-from odoo_sdk.state.config import LocalConfig
 
 
 def main() -> None:
-    """Build the default registry and run the MCP server over stdio.
+    """Bootstrap the default registry and run the MCP server over stdio.
 
     Per-call profiling is resolved from the ``[behavior] profiling`` config
     setting and the ``ODOO_PROFILING`` environment variable (File > Env >
@@ -42,8 +40,7 @@ def main() -> None:
     """
 
     config = LocalConfig.load()
-    client = OdooClient()
-    registry = register_builtins(Registry(client))
+    registry = bootstrap(client=OdooClient(), config=config)
     OdooMCPServer(
         registry,
         explicit_tools=default_tool_surface(build_explicit_tools(registry)),
