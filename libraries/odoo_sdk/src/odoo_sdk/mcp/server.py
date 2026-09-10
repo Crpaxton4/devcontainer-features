@@ -17,6 +17,7 @@ from fastmcp.tools import Tool
 from mcp.types import InputRequiredResult
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, GATED_TOOL_TAG, gated_opt_in
 
 # Re-imported under their historical module attributes (#713): the dispatch
 # boundary vocabulary and telemetry emitter moved to the core layer
@@ -362,10 +363,19 @@ class OdooMCPServer:
         the original typed signature so the wire schema (including any FastMCP
         ``ctx`` parameter) is unchanged.
 
+        Gating is native fastmcp visibility (#715): every tool named in
+        :data:`GATED_TOOL_NAMES` registers with the :data:`GATED_TOOL_TAG` tag,
+        and when any such tool was registered without the
+        ``ODOO_MCP_INCLUDE_GATED`` opt-in the tag is disabled wholesale via
+        ``FastMCP.disable(tags=...)`` — a disabled tool is absent from
+        ``list_tools`` *and* uncallable, so handing the server the full surface
+        exposes exactly the everyday working set by default.
+
         :return: None.
         :rtype: None
         """
 
+        any_gated = False
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
             tool_fn = _event_emitting(tool_fn, name, self.registry)
@@ -373,9 +383,18 @@ class OdooMCPServer:
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
                 tool_fn = _profiled(tool_fn, name)
+            gated = name in GATED_TOOL_NAMES
+            any_gated = any_gated or gated
             self.mcp.add_tool(
-                Tool.from_function(tool_fn, name=name, description=description or None)
+                Tool.from_function(
+                    tool_fn,
+                    name=name,
+                    description=description or None,
+                    tags={GATED_TOOL_TAG} if gated else None,
+                )
             )
+        if any_gated and not gated_opt_in():
+            self.mcp.disable(tags={GATED_TOOL_TAG})
 
     @staticmethod
     def _unpack_spec(spec: ToolSpec) -> Tuple[Callable[..., Any], str]:

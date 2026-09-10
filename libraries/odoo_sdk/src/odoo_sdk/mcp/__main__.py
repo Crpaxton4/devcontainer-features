@@ -26,11 +26,16 @@ def main() -> None:
     setting and the ``ODOO_PROFILING`` environment variable (File > Env >
     Default) via :class:`LocalConfig`, then passed to the server.
 
-    The server exposes the default tool surface — the everyday working set — via
-    :func:`default_tool_surface`, which holds back the narrow-context tools so the
-    count stays under Claude Code's client-side lazy-deferral threshold (#512).
-    Setting ``ODOO_MCP_INCLUDE_GATED`` restores the full surface for a session
-    that needs the maintenance/triage tooling.
+    The server exposes the default tool surface — the everyday working set —
+    with the narrow-context tools held back so the count stays under Claude
+    Code's client-side lazy-deferral threshold (#512). Setting
+    ``ODOO_MCP_INCLUDE_GATED`` restores the full surface for a session that
+    needs the maintenance/triage tooling. The gate itself is native fastmcp
+    visibility since #715 — :class:`OdooMCPServer` tags gated tools and
+    disables the tag unless the opt-in is set — while this entry point still
+    applies the (deprecated) :func:`default_tool_surface` pre-filter, whose
+    hand-off is pinned by the frozen surface contract tests; both layers
+    resolve the same env flag, so the client-observable surface is identical.
 
     :return: None.
     :rtype: None
