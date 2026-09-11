@@ -606,6 +606,71 @@ check "mempalace-repair is a no-op on an agreeing config.json" bash -c \
 check "mempalace-repair leaves a corrupt config.json untouched and exits 0" bash -c \
   "d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{ not json ' > \"\$d/mount/config.json\"; MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\" 2>/dev/null; rc=\$?; [ \$rc -eq 0 ] && [ \"\$(cat \"\$d/mount/config.json\")\" = '{ not json ' ]"
 
+# --- mempalace-as-only-memory asserts (#744) ----------------------------------
+# Native Claude auto-memory is off in the shared settings.json and the native
+# memory files were mined into the palace, so mempalace is the only memory left
+# and three things have to hold: hooks.auto_save true, identity.txt present, and
+# an executable SessionStart recall hook. The repair step REPORTS on all three
+# and repairs none of them - except a wholly absent identity.txt, which it seeds.
+# Driven against the same MEMPALACE_MOUNT sandbox as the checks above, plus a
+# sandbox CLAUDE_CONFIG_DIR so the real claude-home is never read.
+
+# The sandbox every assert case below starts from: a home, a mount, a fake
+# claude-home, and a config.json whose palace_path already agrees (so step 3
+# stays quiet and only the step-4 output is under test).
+_ASSERT_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\" \"\$d/claude/hooks\"; printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":true}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" CLAUDE_CONFIG_DIR=\"\$d/claude\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
+
+# A true hooks.auto_save with everything else in place is the healthy container:
+# the assert step must say nothing at all on stderr.
+check "mempalace-repair is silent when auto_save, identity and recall hook are all good" bash -c \
+  "$_ASSERT_SETUP printf 'agent: devcontainer-claude\n' > \"\$d/mount/identity.txt\"; printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod +x \"\$d/claude/hooks/mempalace-recall.sh\"; err=\"\$(_run 2>&1 >/dev/null)\"; [ -z \"\$err\" ]"
+
+# The #744 bug itself: auto_save was false, so every Stop/SessionEnd/PreCompact
+# hook fire saved nothing and nothing said so.
+check "mempalace-repair warns when hooks.auto_save is false" bash -c \
+  "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run 2>&1 >/dev/null | grep -q 'auto_save'"
+
+# Absent key, not false: same inert hooks, so the same warning is owed.
+check "mempalace-repair warns when hooks.auto_save is absent" bash -c \
+  "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\"}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run 2>&1 >/dev/null | grep -q 'auto_save'"
+
+# Reporting only: a false value is the user's file to fix, and rewriting it here
+# would hide whatever turned it off.
+check "mempalace-repair never rewrites config.json to fix auto_save" bash -c \
+  "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; before=\"\$(cat \"\$d/mount/config.json\")\"; _run >/dev/null 2>&1 && [ \"\$before\" = \"\$(cat \"\$d/mount/config.json\")\" ]"
+
+# identity.txt is L0 for `mempalace wake-up`. Absent means there is no user
+# content to preserve, so this is the one item the step is allowed to create.
+check "mempalace-repair seeds identity.txt when it is absent (#744)" bash -c \
+  "$_ASSERT_SETUP _run >/dev/null 2>&1 && test -f \"\$d/mount/identity.txt\" && grep -q 'devcontainer-claude' \"\$d/mount/identity.txt\""
+
+check "mempalace-repair logs that it seeded identity.txt" bash -c \
+  "$_ASSERT_SETUP _run 2>/dev/null | grep -q 'seeded.*identity.txt'"
+
+# An existing one is the user's own text, however stale it looks: byte-identical
+# afterwards, and no second seeding on the next run.
+check "mempalace-repair leaves an existing identity.txt byte-identical" bash -c \
+  "$_ASSERT_SETUP printf 'agent: someone-else\nrole: hand written\n' > \"\$d/mount/identity.txt\"; before=\"\$(cat \"\$d/mount/identity.txt\")\"; _run >/dev/null 2>&1 && [ \"\$before\" = \"\$(cat \"\$d/mount/identity.txt\")\" ] && ! grep -q 'devcontainer-claude' \"\$d/mount/identity.txt\""
+
+check "mempalace-repair does not re-seed identity.txt on a second run" bash -c \
+  "$_ASSERT_SETUP _run >/dev/null 2>&1; before=\"\$(cat \"\$d/mount/identity.txt\")\"; _run >/dev/null 2>&1 && [ \"\$before\" = \"\$(cat \"\$d/mount/identity.txt\")\" ]"
+
+# The recall hook is hand-maintained and named by path from settings.json, so a
+# missing or non-executable file fails the hook on every session start. Warn -
+# and never create it, since a stub would recall nothing while looking healthy.
+check "mempalace-repair warns when the recall hook is missing" bash -c \
+  "$_ASSERT_SETUP _run 2>&1 >/dev/null | grep -q 'mempalace-recall.sh'"
+
+check "mempalace-repair never creates the recall hook" bash -c \
+  "$_ASSERT_SETUP _run >/dev/null 2>&1; ! test -e \"\$d/claude/hooks/mempalace-recall.sh\""
+
+check "mempalace-repair warns when the recall hook is not executable" bash -c \
+  "$_ASSERT_SETUP printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod 0644 \"\$d/claude/hooks/mempalace-recall.sh\"; _run 2>&1 >/dev/null | grep -q 'not executable'"
+
+# Every branch above is advisory: none of them may change the exit status.
+check "mempalace-repair still exits 0 with all three asserts failing" bash -c \
+  "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run >/dev/null 2>&1; [ \$? -eq 0 ]"
+
 # --- mempalace workspace init, run-once (#643 follow-up) ----------------------
 # `mempalace init` writes the rooms list the miner routes files by; without it
 # everything lands in a single `general` room. It is wired into

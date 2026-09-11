@@ -369,10 +369,13 @@ set -eu
 #      container-local directory left there by an earlier build;
 #   2. remove the stray `~` directory an unexpanded --palace argument creates at
 #      the mount root;
-#   3. rewrite config.json's palace_path to agree with MEMPALACE_PALACE_PATH.
+#   3. rewrite config.json's palace_path to agree with MEMPALACE_PALACE_PATH;
+#   4. assert the three things mempalace-as-only-memory needs - hooks.auto_save,
+#      identity.txt and the SessionStart recall hook (#744) - warn-only.
 #
-# HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root and
-# MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; both exist so
+# HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root,
+# CLAUDE_CONFIG_DIR the shared claude-home step 4 looks for the recall hook in,
+# and MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; all exist so
 # the feature test can drive this against a sandbox instead of the real palace.
 # Every step is idempotent and none is fatal on its own.
 
@@ -483,6 +486,96 @@ with open(config_file, "w", encoding="utf-8") as handle:
     handle.write("\n")
 print(f"mempalace-repair: palace_path {current!r} -> {expected!r} (#643)")
 MEMPALACE_RECONCILE_PY
+fi
+
+# --- 4. final asserts: auto_save, identity, recall hook (#744) ----------------
+# mempalace is now the ONLY memory in this container: Claude Code's native
+# auto-memory is switched off in the shared settings.json (autoMemoryEnabled
+# false, CLAUDE_CODE_DISABLE_AUTO_MEMORY=1) and the native memory files were
+# mined into the palace. That removes the fallback, so three things have to hold
+# or memory stops working with no error anywhere: hooks.auto_save true in
+# config.json, an identity.txt for `mempalace wake-up`, and the SessionStart
+# recall hook.
+#
+# All three are hand-maintained content, so this step REPORTS and does not
+# repair - a generated config value or a stubbed hook would quietly mask the
+# loss of the real one, which is the same failure mode in a better disguise. The
+# single exception is a missing identity.txt: absent means there is nothing to
+# preserve, so a minimal template is seeded. Every branch below is warn-only and
+# the script's exit status is unaffected.
+
+# 4a. config.json hooks.auto_save. mempalace's Stop / SessionEnd / PreCompact
+# plugin hooks consult this key and no-op entirely when it is false - which it
+# was, silently, until #744. Read-only: the file is the user's, and a false value
+# may well be deliberate.
+if [ -f "$LINK/config.json" ]; then
+    python3 - "$LINK/config.json" <<'MEMPALACE_AUTOSAVE_PY' || echo "WARNING: mempalace-repair: could not check hooks.auto_save in $LINK/config.json (#744)" >&2
+import json
+import sys
+
+config_file = sys.argv[1]
+try:
+    with open(config_file, encoding="utf-8") as handle:
+        config = json.load(handle)
+except (OSError, ValueError) as exc:
+    print(f"WARNING: cannot read {config_file} ({exc}); cannot check hooks.auto_save (#744)", file=sys.stderr)
+    sys.exit(0)
+if not isinstance(config, dict):
+    print(f"WARNING: {config_file} is not a JSON object; cannot check hooks.auto_save (#744)", file=sys.stderr)
+    sys.exit(0)
+
+hooks = config.get("hooks")
+auto_save = hooks.get("auto_save") if isinstance(hooks, dict) else None
+# `is True` on purpose: 1 and "true" are not what the plugin tests for.
+if auto_save is True:
+    sys.exit(0)
+if auto_save is None:
+    print(
+        f"WARNING: {config_file} does not set hooks.auto_save; mempalace's Stop/SessionEnd/PreCompact "
+        "hooks save nothing and this container has no other memory. Set it to true (#744).",
+        file=sys.stderr,
+    )
+else:
+    print(
+        # json.dumps, not repr: the reader is looking at a JSON file, and
+        # `auto_save=False` names a value that does not appear in it.
+        f"WARNING: {config_file} has hooks.auto_save={json.dumps(auto_save)}, not true; mempalace's "
+        "Stop/SessionEnd/PreCompact hooks are inert and nothing is being saved. Set it to true (#744).",
+        file=sys.stderr,
+    )
+MEMPALACE_AUTOSAVE_PY
+else
+    echo "WARNING: mempalace-repair: no config.json under $LINK, so hooks.auto_save cannot be checked; mempalace's save hooks may be inert (#744)" >&2
+fi
+
+# 4b. identity.txt - the L0 context `mempalace wake-up` reads, without which the
+# agent wakes up with no idea which machine it is on. Seeded only when the file
+# is absent entirely; an existing one is never read, rewritten or touched,
+# however stale it looks, because it is the user's own text.
+MEMPALACE_IDENTITY="$MOUNT/identity.txt"
+if [ ! -e "$MEMPALACE_IDENTITY" ]; then
+    if mkdir -p "$MOUNT" 2>/dev/null && printf '%s\n' \
+        'agent: devcontainer-claude' \
+        'role: Claude Code running in a devcontainer built by the personal-features feature.' \
+        'memory: mempalace is the only memory here; native Claude auto-memory is disabled.' \
+        'note: seeded by mempalace-repair because identity.txt was missing (#744). Edit freely - once this file exists it is never rewritten.' \
+        > "$MEMPALACE_IDENTITY" 2>/dev/null; then
+        echo "mempalace-repair: seeded $MEMPALACE_IDENTITY with agent id devcontainer-claude (#744)"
+    else
+        echo "WARNING: mempalace-repair: $MEMPALACE_IDENTITY is missing and could not be seeded; 'mempalace wake-up' will start with no identity (#744)" >&2
+    fi
+fi
+
+# 4c. the SessionStart recall hook. Hand-maintained, and referenced by path from
+# the shared settings.json, so a missing or non-executable file makes Claude Code
+# report a failing hook on every single session start and injects no drawers.
+# NEVER created here: this feature does not own the file, and a stub would look
+# like a working recall while recalling nothing.
+MEMPALACE_RECALL_HOOK="${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/hooks/mempalace-recall.sh"
+if [ ! -f "$MEMPALACE_RECALL_HOOK" ]; then
+    echo "WARNING: mempalace-repair: $MEMPALACE_RECALL_HOOK is missing; the SessionStart recall hook referenced from settings.json will fail on every session and inject no palace drawers (#744)" >&2
+elif [ ! -x "$MEMPALACE_RECALL_HOOK" ]; then
+    echo "WARNING: mempalace-repair: $MEMPALACE_RECALL_HOOK is not executable; the SessionStart recall hook will fail on every session. Run 'chmod +x $MEMPALACE_RECALL_HOOK' (#744)" >&2
 fi
 MEMPALACE_REPAIR
 chmod 0755 /usr/local/bin/mempalace-repair
