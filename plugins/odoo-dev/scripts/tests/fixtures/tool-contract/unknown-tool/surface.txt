@@ -1,0 +1,4 @@
+# fixture surface: what `odoo-sdk cmd --list --json` would serve
+task_note
+start_task
+timesheet_summary
