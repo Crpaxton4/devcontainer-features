@@ -154,8 +154,18 @@ if [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
     exit 1
 fi
 
+# Pinned so a CLI release cannot silently change what every rebuilt container
+# gets - an unpinned `npm install -g` makes the image non-reproducible and lets
+# an upstream regression land in every container at once (#741). The feature
+# also sets DISABLE_AUTOUPDATER=1 (devcontainer-feature.json), so this version
+# is the one the container KEEPS: nothing upgrades it behind our back. npm/
+# Dependabot do not track shell-script pins - bump this by hand, same rule as
+# the pinned GitHub-release tools further down. Keep it in step with
+# CLAUDE_CODE_VERSION in .github/workflows/plugin-odoo-dev.yaml.
+CLAUDE_CODE_VERSION=2.1.268  # npmjs.com/package/@anthropic-ai/claude-code
+
 export PATH
-npm install -g @anthropic-ai/claude-code
+npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 # npm links `claude` on PATH as a *relative* symlink into its global
 # node_modules tree, so resolve the real absolute target before touching
@@ -297,8 +307,15 @@ fi
 # hiccup shouldn't fail the whole build, matching the other optional-tool
 # installs - but the warning names the consequence instead of skipping
 # silently.
+#
+# Pinned for the same reason as CLAUDE_CODE_VERSION above (#741): an unpinned
+# `uv tool install` resolves to whatever PyPI publishes at build time, so two
+# containers built a day apart get different hook/MCP behaviour and a bad
+# upstream release reaches every rebuild at once. Dependabot does not track
+# shell-script pins - bump this by hand.
+MEMPALACE_VERSION=3.9.0  # pypi.org/project/mempalace
 UV_TOOL_DIR=/usr/local/share/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
-    retry uv tool install --python "$UV_PYTHON_PIN" mempalace \
+    retry uv tool install --python "$UV_PYTHON_PIN" "mempalace==${MEMPALACE_VERSION}" \
     || echo "WARNING: failed to install mempalace; this container will have NO mempalace CLI/MCP server, so the mempalace Claude Code plugin hooks cannot mine and its MCP registration will fail with ENOENT" >&2
 
 # Belt-and-braces on the interpreter perms, after the last uv call that could
@@ -542,13 +559,35 @@ fi
 # bare CI runner it fails with "not found in any configured marketplace". That
 # is a host-config precondition this Feature cannot satisfy for the user, so it
 # stays best-effort and says so rather than failing container create.
+mempalace_plugin_present=0
 if command -v mempalace >/dev/null 2>&1; then
     if claude plugin list 2>/dev/null | grep -q mempalace; then
         echo "sync-claude-mcp: plugin 'mempalace' is already installed"
+        mempalace_plugin_present=1
     elif claude plugin install --scope user mempalace; then
         echo "sync-claude-mcp: installed plugin 'mempalace'"
+        mempalace_plugin_present=1
     else
         echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
+    fi
+fi
+
+# "already installed" above is satisfied by ANY cached copy, however old (#741).
+# $CLAUDE_CONFIG_DIR is the host's ~/.claude bind mount, so a container seeded
+# from a host that installed the plugin months ago keeps running that stale
+# revision forever - the install branch never fires, and nothing else ever
+# refreshes it. Converge it here on every container create.
+#
+# Strictly best-effort, and louder than the install above would justify being:
+# the plugin already works at whatever revision is cached, so a failure here
+# (offline runner, marketplace unreachable, a revision upstream withdrew) costs
+# freshness, not function. Never let it fail container create - the guard keeps
+# a nonzero `plugin update` off this script's exit status.
+if [ "$mempalace_plugin_present" -eq 1 ]; then
+    if claude plugin update mempalace@mempalace; then
+        echo "sync-claude-mcp: plugin 'mempalace' is up to date"
+    else
+        echo "WARNING: sync-claude-mcp: could not update the 'mempalace' plugin; this container keeps whatever revision was already cached in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), which may be stale. Check network/marketplace access, or run 'claude plugin update mempalace@mempalace' by hand." >&2
     fi
 fi
 
