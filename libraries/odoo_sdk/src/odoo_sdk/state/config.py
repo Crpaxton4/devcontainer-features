@@ -19,6 +19,10 @@ This module hosts two related concerns of the local state layer:
   :meth:`~OdooConnectionSettings.from_sources` factory is a thin validator fed by
   :class:`LocalConfig`: it resolves file, environment, and default values through
   the single resolver and then overlays any explicit constructor arguments.
+  Since #717 the value object and its validators live in the shared-kernel
+  :mod:`odoo_sdk.settings` module (so the transports can name them without
+  importing the state layer) and are re-exported here unchanged, keeping every
+  historical ``odoo_sdk.state.config`` import path working.
 
 Config discovery consults, in order, the first location that yields an existing
 file:
@@ -40,14 +44,25 @@ names — so it carries its own loader (:func:`_resolve_model_ids`) wired into
 
 import configparser
 import importlib
-import math
 import os
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# Extracted to the shared kernel by #717 (transport must not import the state
+# layer for its settings type); re-exported here so every historical
+# ``odoo_sdk.state.config`` import keeps working.
+from odoo_sdk.settings import (  # noqa: F401
+    CONNECTION_ENV_VARS,
+    DEFAULT_TIMEOUT_SECONDS,
+    OdooConnectionSettings,
+    _build_connection_settings,
+    _coerce_non_negative_float,
+    _coerce_timeout,
+    _validate_required_settings,
+)
 
 # The single environment variable that overrides config discovery. It may name a
 # config FILE or a DIRECTORY (the directory is probed for config.toml /
@@ -80,149 +95,6 @@ _CONFIG_DIR_FILENAMES = ("config.toml", "config.ini")
 # shipped by ``odoo:17``) the API-compatible ``tomli`` backport stands in for it
 # and is declared as a ``python_version < "3.11"`` dependency.
 _TOML_MODULE_NAMES = ("tomllib", "tomli")
-
-#: Default per-request transport timeout, in seconds. The single source of this
-#: number: it is the fallback for garbage or absent ``ODOO_TIMEOUT`` values and the
-#: dataclass field default, and both transports re-export it (as
-#: ``DEFAULT_REQUEST_TIMEOUT_SECONDS``) rather than redefining the literal.
-DEFAULT_TIMEOUT_SECONDS: float = 30.0
-
-CONNECTION_ENV_VARS = {
-    "url": "ODOO_URL",
-    "db": "ODOO_DB",
-    "username": "ODOO_USERNAME",
-    "password": "ODOO_PASSWORD",
-    "api_key": "ODOO_API_KEY",
-    "transport": "ODOO_TRANSPORT",
-    "timeout": "ODOO_TIMEOUT",
-}
-
-
-@dataclass(frozen=True)
-class OdooConnectionSettings:
-    """Resolved, validated connection settings consumed by the executor.
-
-    One concrete set of connection strings distilled from explicit arguments,
-    environment variables, and INI files.
-    """
-
-    url: str
-    db: str
-    username: Optional[str] = None
-    password: Optional[str] = field(default=None, repr=False)
-    transport: Literal["xmlrpc", "json2"] = "xmlrpc"
-    timeout: float = DEFAULT_TIMEOUT_SECONDS
-    api_key: Optional[str] = field(default=None, repr=False)
-
-    @classmethod
-    def from_sources(
-        cls,
-        *,
-        url: Optional[str] = None,
-        db: Optional[str] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        api_key: Optional[str] = None,
-        transport: Optional[str] = None,
-        timeout: Optional[float] = None,
-        config_path: Optional[str] = None,
-    ) -> "OdooConnectionSettings":
-        """Resolve connection settings via :class:`LocalConfig`, then validate.
-
-        A thin validator over the single resolver: it resolves file, environment, and
-        default values through :meth:`LocalConfig.load` (precedence **File >
-        Environment Variable > Default**) and overlays any explicit constructor
-        arguments (which win over every resolved source).
-
-        :raises ValueError: When any required setting remains unresolved.
-        """
-        resolved: dict[str, Any] = dict(LocalConfig.load(config_path).connection)
-        # Prefer explicit `None` checks so callers can pass empty strings
-        # deliberately; validation still treats empty values as missing.
-        explicit_values = {
-            "url": url,
-            "db": db,
-            "username": username,
-            "password": password,
-            "api_key": api_key,
-            "transport": transport,
-            "timeout": timeout,
-        }
-        for key, explicit_value in explicit_values.items():
-            if explicit_value is not None:
-                resolved[key] = explicit_value
-        return _build_connection_settings(resolved)
-
-
-def _build_connection_settings(values: Mapping[str, Any]) -> OdooConnectionSettings:
-    """Validate a resolved connection mapping and build the value object.
-
-    The single place transport selection, required-setting validation, and timeout
-    coercion happen, so :meth:`OdooConnectionSettings.from_sources` and
-    :meth:`LocalConfig.connection_settings` behave identically.
-
-    :raises ValueError: When any required setting remains unresolved.
-    """
-    resolved_transport: Literal["xmlrpc", "json2"] = (
-        "json2" if values.get("transport") == "json2" else "xmlrpc"
-    )
-    _validate_required_settings(values, resolved_transport)
-    return OdooConnectionSettings(
-        url=str(values["url"]),
-        db=str(values["db"]),
-        username=values.get("username") or None,
-        password=values.get("password") or None,
-        transport=resolved_transport,
-        timeout=_coerce_timeout(values.get("timeout")),
-        api_key=values.get("api_key") or None,
-    )
-
-
-def _validate_required_settings(
-    values: Mapping[str, Any],
-    transport: Literal["xmlrpc", "json2"],
-) -> None:
-    """Raise ValueError when required settings are absent for the given transport."""
-    if transport == "json2":
-        required = ("url", "db", "api_key")
-        missing = [key for key in required if not values.get(key)]
-    else:
-        required = ("url", "db", "username", "password")
-        missing = [key for key in required if values.get(key) in (None, "")]
-
-    if missing:
-        missing_names = ", ".join(sorted(missing))
-        raise ValueError(
-            "Missing Odoo connection settings: "
-            f"{missing_names}. Configure them with environment variables, "
-            "the config file, or override them with constructor arguments."
-        )
-
-
-def _coerce_non_negative_float(value: Any, default: float) -> float:
-    """Coerce a raw value to a non-negative finite float, else ``default``.
-
-    Values arrive from environment variables and INI files as strings, may be
-    absent, or may be garbage; anything that is not a finite number ``>= 0``
-    degrades to ``default`` rather than raising, so a mistyped config never crashes
-    an upload. Booleans are rejected explicitly because ``float(True)`` is ``1.0``,
-    which would silently turn ``= true`` into a one-hour floor.
-    """
-    if isinstance(value, bool):
-        return default
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    if math.isfinite(number) and number >= 0:
-        return number
-    return default
-
-
-def _coerce_timeout(value: Any) -> float:
-    """Coerce a raw timeout to a strictly-positive float, else :data:`DEFAULT_TIMEOUT_SECONDS`."""
-    coerced = _coerce_non_negative_float(value, DEFAULT_TIMEOUT_SECONDS)
-    return coerced if coerced > 0 else DEFAULT_TIMEOUT_SECONDS
 
 
 def _coerce_positive_int(value: Any, default: int) -> int:

@@ -3,8 +3,8 @@ from typing import Any, Optional
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskAlreadyRunningError, TaskState
-from odoo_sdk.utilities.checkpoint import checkpoint_hint
-from odoo_sdk.utilities.env import assert_sdk_configured
+from odoo_sdk.tracking.checkpoint import checkpoint_hint
+from odoo_sdk.tracking.env import assert_sdk_configured
 
 
 def _build_run_result(

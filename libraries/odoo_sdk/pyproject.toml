@@ -107,12 +107,21 @@ output = "reports/complexipy/"
 
 # ── ADR-005 layering contracts ──────────────────────────────────────────────
 # Layer model (docs/source/design/architecture/ADR-005): surface (cli, mcp,
-# tui) / core (commands, billing, sessionization, reap, prune, utilities) /
-# data (transport, client, records, query, fields, env, state, adapters) +
-# shared kernel (_utils, errors). Every ignore entry below is either marked
-# "permanent" (a named ADR-005 exception) or carries the issue that deletes
-# it; `unmatched_ignore_imports_alerting = "error"` means the lists can only
-# shrink. Adding a NEW entry requires an ADR-005 amendment in the same PR.
+# tui) / core (commands, billing, sessionization, tracking, skills) /
+# data (transport, client, records, query, fields, env, state, adapters,
+# services) + shared kernel (_utils, errors, settings). Every ignore entry
+# below is either marked "permanent" (a named ADR-005 exception) or carries
+# the issue that deletes it; `unmatched_ignore_imports_alerting = "error"`
+# means the lists can only shrink. Adding a NEW entry requires an ADR-005
+# amendment in the same PR.
+#
+# Shim modules (#717) are EXCLUDED from every contract list by design:
+# `odoo_sdk.utilities` (per-module aliasing shims + the genuinely shared
+# `utilities.html`), `odoo_sdk.reap`, and `odoo_sdk.prune` re-export their
+# relocated modules across layers on purpose (a shim preserves the OLD import
+# graph), so listing them would only force ignore entries that restate the
+# shim's job. The canonical homes (`services`, `tracking`, `mcp.prompts`,
+# `settings`) ARE listed and enforced.
 [tool.importlinter]
 root_packages = ["odoo_sdk"]
 
@@ -143,9 +152,7 @@ source_modules = [
     "odoo_sdk.commands",
     "odoo_sdk.billing",
     "odoo_sdk.sessionization",
-    "odoo_sdk.reap",
-    "odoo_sdk.prune",
-    "odoo_sdk.utilities",
+    "odoo_sdk.tracking",
     "odoo_sdk.skills",
     # data
     "odoo_sdk.transport",
@@ -156,9 +163,11 @@ source_modules = [
     "odoo_sdk.env",
     "odoo_sdk.state",
     "odoo_sdk.adapters",
+    "odoo_sdk.services",
     # shared kernel
     "odoo_sdk._utils",
     "odoo_sdk.errors",
+    "odoo_sdk.settings",
 ]
 forbidden_modules = [
     "odoo_sdk.cli",
@@ -178,14 +187,13 @@ source_modules = [
     "odoo_sdk.env",
     "odoo_sdk.state",
     "odoo_sdk.adapters",
+    "odoo_sdk.services",
 ]
 forbidden_modules = [
     "odoo_sdk.commands",
     "odoo_sdk.billing",
     "odoo_sdk.sessionization",
-    "odoo_sdk.reap",
-    "odoo_sdk.prune",
-    "odoo_sdk.utilities",
+    "odoo_sdk.tracking",
     "odoo_sdk.skills",
 ]
 ignore_imports = [
@@ -215,6 +223,7 @@ forbidden_modules = [
     "odoo_sdk.env",
     "odoo_sdk.state",
     "odoo_sdk.adapters",
+    "odoo_sdk.services",
 ]
 allow_indirect_imports = true
 ignore_imports = [
@@ -223,12 +232,19 @@ ignore_imports = [
     # composition root, deliberately outside every source list above and
     # below, and the only module allowed to name every layer — and the
     # entrypoints reach client/state/config only through it.)
-    # baseline debt — #717 (CLI resync re-pointed at the registry command;
-    # today cli/__main__.py duplicates the resync orchestration inline).
-    "odoo_sdk.cli.__main__ -> odoo_sdk.adapters",
+    # (#717 retired the cli.__main__ -> adapters entry: the CLI dispatches
+    # the registry resync command and reaches the pullers/event-source
+    # vocabulary through the core resync and log-event command modules.)
     # baseline debt — #716 (LocalConfig injection-only) + #718 (StateStore
     # port for LocalStateClient/EventRecord).
     "odoo_sdk.tui.app -> odoo_sdk.state",
+    # baseline debt — #718 (StateStore port; ADR-005 amendment for #717).
+    # Newly VISIBLE, not newly created: the TUI has always called the
+    # Odoo-reading logged-hours helper directly, but while it lived in
+    # utilities/ (classified core) the surface->data edge was invisible to
+    # this contract. The #717 move to the data-layer services package
+    # surfaces it; the #718 port work retires it.
+    "odoo_sdk.tui.app -> odoo_sdk.services.logged_lines",
     # baseline debt — #718 (errors façade adoption sweep; OdooError is
     # importable from odoo_sdk.errors today).
     "odoo_sdk.tui.app -> odoo_sdk.transport.errors",
@@ -265,9 +281,7 @@ source_modules = [
     "odoo_sdk.commands",
     "odoo_sdk.billing",
     "odoo_sdk.sessionization",
-    "odoo_sdk.reap",
-    "odoo_sdk.prune",
-    "odoo_sdk.utilities",
+    "odoo_sdk.tracking",
     "odoo_sdk.skills",
     # data
     "odoo_sdk.transport",
@@ -278,9 +292,11 @@ source_modules = [
     "odoo_sdk.env",
     "odoo_sdk.state",
     "odoo_sdk.adapters",
+    "odoo_sdk.services",
     # shared kernel
     "odoo_sdk._utils",
     "odoo_sdk.errors",
+    "odoo_sdk.settings",
 ]
 forbidden_modules = [
     "odoo_sdk.bootstrap",

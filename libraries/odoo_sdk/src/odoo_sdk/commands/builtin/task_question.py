@@ -7,8 +7,8 @@ from ..command import (
     require_active_run,
 )
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_sdk_configured
-from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+from odoo_sdk.tracking.env import assert_sdk_configured
+from odoo_sdk.services.odoo_helpers import post_chatter_note
 from odoo_sdk.state import TaskState
 
 

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from .errors import OdooAuthenticationError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from odoo_sdk.state.config import OdooConnectionSettings
+    from odoo_sdk.settings import OdooConnectionSettings
 
 # Hint appended to an authentication error that survived the refresh-and-retry
 # path (or had no refresh hook at all). Both variants contain the stable

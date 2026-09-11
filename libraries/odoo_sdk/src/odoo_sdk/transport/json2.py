@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from odoo_sdk.state.config import (
+from odoo_sdk.settings import (
     DEFAULT_TIMEOUT_SECONDS as DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
 
@@ -20,10 +20,10 @@ from .errors import OdooAuthenticationError, OdooTransportError
 from .executor import OdooExecutor
 
 if TYPE_CHECKING:  # pragma: no cover
-    from odoo_sdk.state.config import OdooConnectionSettings
+    from odoo_sdk.settings import OdooConnectionSettings
 
 # ``DEFAULT_REQUEST_TIMEOUT_SECONDS`` is re-exported from the single source
-# ``odoo_sdk.state.config.DEFAULT_TIMEOUT_SECONDS`` (imported above) so the
+# ``odoo_sdk.settings.DEFAULT_TIMEOUT_SECONDS`` (imported above) so the
 # settings layer and both transports share one number by reference, not by copy.
 
 # JSON-2 is named-arguments-only (Phase E "Named Arguments Only" decision), while

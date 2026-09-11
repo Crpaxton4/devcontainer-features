@@ -3,7 +3,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.env import assert_sdk_configured
+from odoo_sdk.tracking.env import assert_sdk_configured
 
 
 @builtin_command

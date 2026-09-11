@@ -4,7 +4,7 @@ from typing import Any
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.runs import run_summary
+from odoo_sdk.tracking.runs import run_summary
 
 
 @builtin_command
@@ -28,7 +28,7 @@ class ListRunsCommand(Command):
         """Return one summary dict per active run.
 
         :returns: Active-run summaries (see
-            :func:`~odoo_sdk.utilities.runs.run_summary`), ordered oldest-first.
+            :func:`~odoo_sdk.tracking.runs.run_summary`), ordered oldest-first.
         :rtype: list[dict[str, Any]]
         """
         return [run_summary(run) for run in self.state.get_all_active_runs()]

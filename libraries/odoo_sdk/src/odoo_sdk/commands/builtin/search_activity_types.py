@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.activities import (
+from odoo_sdk.services.activities import (
     DEFAULT_ACTIVITY_TYPE_LIMIT,
     search_activity_types,
 )

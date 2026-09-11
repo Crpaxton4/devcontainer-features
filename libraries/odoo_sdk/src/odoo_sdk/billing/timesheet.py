@@ -27,7 +27,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import EventRecord, LocalStateClient
-from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id
+from odoo_sdk.services.odoo_helpers import get_employee_id, m2o_id
 
 # The marker a legacy anchor row carries. The FSM no longer creates anchors
 # (#325), but :func:`_find_anchor` still keys on this marker to adopt any

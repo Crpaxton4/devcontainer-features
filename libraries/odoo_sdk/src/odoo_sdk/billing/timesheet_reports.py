@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from odoo_sdk.client import OdooClient
-from odoo_sdk.utilities.odoo_helpers import get_employee_id, resolve_many2one
+from odoo_sdk.services.odoo_helpers import get_employee_id, resolve_many2one
 
 #: Public grouping axes accepted by :func:`timesheet_summary`.
 VALID_GROUP_BY = ("project", "client", "task", "day")

@@ -1,27 +1,23 @@
-"""Capability guard for the SDK's tracker commands."""
+"""Deprecated shim: :mod:`odoo_sdk.utilities.env` moved to :mod:`odoo_sdk.tracking.env` (#717).
 
-from odoo_sdk.state import LocalConfig, assert_tracker_db_present
+Importing this path hands back the relocated module itself (``sys.modules``
+aliasing), so every existing import — and any test that patches attributes on
+this path — keeps exactly its old behavior. Excluded from the ADR-005
+import-linter contracts by design (a shim re-exports across layers on
+purpose). Kept for at least two minor releases and never removed in the
+release that introduced it (ADR-005 shim policy, #717).
+"""
 
+import sys
+import warnings
 
-def assert_sdk_configured() -> None:
-    """Raise if the SDK's real preconditions are unmet (#642).
+from odoo_sdk.tracking import env as _relocated
 
-    The predecessor asserted three Odoo *runtime* markers (``ODOO_VERSION``,
-    ``/etc/odoo/odoo.conf``, ``/mnt/extra-addons``) that nothing in this package
-    ever reads, so a fully provisioned non-Odoo container was refused even
-    though every tracker command would have worked in it. What the commands
-    actually need is resolvable Odoo connection settings and the host-provisioned
-    tracker DB, so those are what is checked.
+warnings.warn(
+    "odoo_sdk.utilities.env is deprecated; import odoo_sdk.tracking.env instead "
+    "(shim kept for at least two minor releases; #717).",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-    Both failures already have a named, actionable error that the MCP boundary
-    (:data:`~odoo_sdk.mcp.server._BOUNDARY_ERRORS`) renders as a structured
-    payload, so no new exception type is introduced.
-
-    Only the *settings* are resolved — no :class:`~odoo_sdk.client.OdooClient`
-    is built and no socket is opened — so the lazy-client contract holds.
-
-    :raises ValueError: When required Odoo connection settings are unresolved.
-    :raises TrackerStateMissingError: When the central tracker DB is absent.
-    """
-    LocalConfig.load().connection_settings()
-    assert_tracker_db_present()
+sys.modules[__name__] = _relocated

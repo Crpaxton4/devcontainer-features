@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.odoo_helpers import get_unbilled_hours
+from odoo_sdk.services.odoo_helpers import get_unbilled_hours
 
 
 @builtin_command

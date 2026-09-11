@@ -32,16 +32,27 @@ import sys
 from datetime import date, datetime
 from typing import Any, Callable, NamedTuple, NoReturn, Optional
 
-from odoo_sdk.adapters import (
+# The CLI no longer imports the data-layer adapters directly (#717): the
+# pullers and their Google error types come through the core resync command
+# module — the single writer of the resync workflow and the sanctioned
+# importer of the external-sync adapters — and the event-source vocabulary
+# through the core log-event command module. The puller names stay bound on
+# THIS module because the pinned CLI tests patch them here (the
+# delegating-wrapper contract): every resync puller below resolves through
+# these module globals at call time.
+from odoo_sdk.commands.builtin.resync import (
     GoogleAPIError,
     GoogleAuthError,
-    UnknownEventSourceError,
-    source_to_event_type,
+    ResyncCommand,
     sync_git_log,
     sync_github,
     sync_gmail,
     sync_google_calendar,
     sync_odoo_chatter,
+)
+from odoo_sdk.commands.log_event import (
+    UnknownEventSourceError,
+    source_to_event_type,
 )
 
 # The composition root is the CLI's only below-core dependency (#716): the
@@ -59,9 +70,9 @@ from odoo_sdk.commands.dispatch_telemetry import (
 from odoo_sdk.cli.sync_skills import cmd_sync_skills
 from odoo_sdk.errors import TrackerStateMissingError
 from odoo_sdk.sessionization import EventType
-from odoo_sdk.utilities.env import assert_sdk_configured
-from odoo_sdk.prune import execute_prune, plan_prune, resolve_horizon
-from odoo_sdk.reap import (
+from odoo_sdk.tracking.env import assert_sdk_configured
+from odoo_sdk.tracking.prune import execute_prune, plan_prune, resolve_horizon
+from odoo_sdk.tracking.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
     reap_run,
     stale_active_runs,
@@ -377,7 +388,7 @@ def _resync_odoo(
     than aborting the whole command. The :class:`OdooClient` is built only after
     the assert passes, honoring the lazy-client contract.
 
-    The two failures :func:`~odoo_sdk.utilities.env.assert_sdk_configured` raises
+    The two failures :func:`~odoo_sdk.tracking.env.assert_sdk_configured` raises
     are caught by name (#642). Catching a bare ``ValueError`` matches the sibling
     :func:`_resync_google`, which already treats one as a skip reason.
     """
@@ -426,6 +437,56 @@ def _format_resync_line(source: str, result: dict) -> str:
     return line
 
 
+def _resync_google_ranged(puller: Callable[..., dict], db: TaskStateDB, ranged: bool):
+    """Run one Google puller via :func:`_resync_google`, annotating a ranged call.
+
+    The Google pullers have no start/end; annotate rather than silently
+    discarding an explicit range (they keep ``google_sync_window_days``).
+    """
+    result = _resync_google(puller, db)
+    if ranged and "skipped" not in result:
+        result["note"] = (
+            "start/end ignored: this source always sweeps its "
+            "google_sync_window_days window"
+        )
+    return result
+
+
+def _cli_resync_pullers() -> dict[str, Callable[..., dict]]:
+    """Build the CLI's puller table for the shared :class:`ResyncCommand` (#717).
+
+    The *workflow* — source selection order, range parsing, the per-source
+    summary shape — has one writer, :meth:`ResyncCommand.execute`; only the
+    per-source semantics differ here, preserved exactly as the pinned CLI
+    tests require:
+
+    * git/github stay local-only (NO Odoo client, so task-id validation is
+      skipped), unlike the registry default which passes the injected client;
+    * odoo stays behind the lazy capability guard (:func:`_resync_odoo`);
+    * gcal/gmail go through :func:`_resync_google`, which resolves
+      ``LocalConfig`` from THIS module.
+
+    Every lambda resolves the puller names through this module's globals at
+    call time, so patching ``cli.__main__.sync_git_log`` (etc.) still
+    intercepts the call — the delegating-wrapper contract.
+    """
+    return {
+        "git": lambda cmd, start, end: sync_git_log(
+            cmd.state, cmd.config, start=start, end=end
+        ),
+        "github": lambda cmd, start, end: sync_github(
+            cmd.state, cmd.config, start=start, end=end
+        ),
+        "odoo": lambda cmd, start, end: _resync_odoo(cmd.state, start=start, end=end),
+        "gcal": lambda cmd, start, end: _resync_google_ranged(
+            sync_google_calendar, cmd.state, bool(start or end)
+        ),
+        "gmail": lambda cmd, start, end: _resync_google_ranged(
+            sync_gmail, cmd.state, bool(start or end)
+        ),
+    }
+
+
 def cmd_resync(args: argparse.Namespace) -> None:
     """Reconcile local event state against git/GitHub/Odoo, directory-agnostic.
 
@@ -435,39 +496,27 @@ def cmd_resync(args: argparse.Namespace) -> None:
     (gcal/gmail keep their ``google_sync_window_days`` window). Each puller is
     idempotent and prints a per-source line; after ALL lines print, any
     ``error`` result exits nonzero so scripted callers see the failure.
+
+    Since #717 the orchestration is no longer duplicated inline: the CLI
+    dispatches the registry's :class:`ResyncCommand` (the one writer of the
+    workflow), injecting its local-first puller table
+    (:func:`_cli_resync_pullers`) so flag semantics and output stay exactly
+    as before.
     """
-    sources = _parse_resync_sources(args.sources)
-    start = date.fromisoformat(args.start) if args.start else None
-    end = date.fromisoformat(args.end) if args.end else None
-    db = TaskStateDB()
-    config = LocalConfig.load()
-
-    def _google(puller) -> Callable[[TaskStateDB], dict]:
-        # The Google pullers have no start/end; annotate rather than silently
-        # discarding an explicit range (they keep google_sync_window_days).
-        def run(db: TaskStateDB) -> dict:
-            result = _resync_google(puller, db)
-            if (start or end) and "skipped" not in result:
-                result["note"] = (
-                    "start/end ignored: this source always sweeps its "
-                    "google_sync_window_days window"
-                )
-            return result
-
-        return run
-
-    runners = {
-        # git/github stay local-only in the CLI (no Odoo client, so task-id
-        # validation is skipped); config supplies the resync window/authors.
-        "git": lambda db: sync_git_log(db, config, start=start, end=end),
-        "github": lambda db: sync_github(db, config, start=start, end=end),
-        "odoo": lambda db: _resync_odoo(db, start=start, end=end),
-        "gcal": _google(sync_google_calendar),
-        "gmail": _google(sync_gmail),
-    }
+    selected = _parse_resync_sources(args.sources)
+    if not selected:
+        return
+    command = ResyncCommand(
+        _LazyOdooClient(),
+        state=TaskStateDB(),
+        config=LocalConfig.load(),
+        pullers=_cli_resync_pullers(),
+    )
+    summary = command.execute(
+        sources=",".join(selected), start=args.start, end=args.end
+    )
     failed = False
-    for source in sources:
-        result = runners[source](db)
+    for source, result in summary.items():
         print(_format_resync_line(source, result))
         for label in result.get("unattributed_reviews", []):
             print(f"unattributed review: {label}", file=sys.stderr)
@@ -579,7 +628,7 @@ def _resolve_prune_days(args: argparse.Namespace, config: LocalConfig) -> Option
 def cmd_prune(args: argparse.Namespace) -> None:
     """Delete aged hook events past a retention horizon, guarding uploads (#363).
 
-    Local-only: plans the prune (see :func:`~odoo_sdk.prune.plan_prune`)
+    Local-only: plans the prune (see :func:`~odoo_sdk.tracking.prune.plan_prune`)
     so that no un-uploaded session's events and no still-tracked session's
     minimum-id key can ever be disturbed, then either previews (``--dry-run``) or
     executes the deletion and retires the ledger mappings of the fully-uploaded,

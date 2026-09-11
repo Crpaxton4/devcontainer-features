@@ -1,6 +1,6 @@
 from ..command import Command
 from ._registration import builtin_command
-from odoo_sdk.utilities.mail_status import get_mail_status
+from odoo_sdk.services.mail_status import get_mail_status
 
 
 @builtin_command

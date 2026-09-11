@@ -57,7 +57,8 @@ class Command(ABC):
 
     A command is an atomic, composable unit of business logic with a single
     ``execute`` entry point. Commands never reference interaction surfaces (MCP,
-    CLI) and never reference each other; shared logic lives in ``utilities``.
+    CLI) and never reference each other; shared logic lives in the
+    ``services`` (Odoo-facing) and ``tracking`` (local-state) helper packages.
 
     Commands receive three peer dependencies, injected by the :class:`Registry`:
 

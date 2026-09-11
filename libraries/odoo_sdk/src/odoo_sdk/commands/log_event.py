@@ -5,6 +5,15 @@ from typing import Any, Iterable, Optional
 
 from .command import Command
 from .protocols import RpcClient
+
+# Event-source vocabulary re-exported for the surfaces (#717): the CLI's
+# ``log-event --source`` validation needs the strict resolver, and under
+# ADR-005 rule 4 a surface must reach the data-layer adapters through core —
+# this module, the command-layer owner of the events append, is that door.
+from odoo_sdk.adapters import (  # noqa: F401
+    UnknownEventSourceError,
+    source_to_event_type,
+)
 from odoo_sdk.state import LocalConfig, LocalStateClient, current_repo_label
 from odoo_sdk.state.models import EventRecord
 
@@ -187,18 +196,18 @@ class LogEventCommand(Command):
 
         Stale runs are excluded (#366): a run whose last activity predates the
         reap threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
-        :data:`~odoo_sdk.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged orphan
+        :data:`~odoo_sdk.tracking.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged orphan
         from a dead devcontainer, so attaching an event to it would only accrue
         phantom billable wall-clock; skipping it freezes its activity clock so it
         stays reapable. The same staleness predicate ``reap`` uses is applied
         here, so the two agree on exactly which runs are stale.
 
-        :mod:`odoo_sdk.reap` is imported inside the method rather than at module
+        :mod:`odoo_sdk.tracking.reap` is imported inside the method rather than at module
         scope: it reaches ``odoo_sdk.billing``, which imports the partially
         initialized ``odoo_sdk`` package that is itself importing this module.
         """
 
-        from odoo_sdk.reap import (
+        from odoo_sdk.tracking.reap import (
             is_run_stale,
             resolve_env_threshold_hours,
             threshold_from_hours,

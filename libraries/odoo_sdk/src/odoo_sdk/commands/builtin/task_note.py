@@ -7,10 +7,10 @@ from ..command import (
     require_active_run,
 )
 from ._registration import builtin_command
-from odoo_sdk.utilities.attachments import create_attachments
-from odoo_sdk.utilities.checkpoint import checkpoint_hint
-from odoo_sdk.utilities.env import assert_sdk_configured
-from odoo_sdk.utilities.odoo_helpers import post_chatter_note
+from odoo_sdk.services.attachments import create_attachments
+from odoo_sdk.tracking.checkpoint import checkpoint_hint
+from odoo_sdk.tracking.env import assert_sdk_configured
+from odoo_sdk.services.odoo_helpers import post_chatter_note
 
 
 @builtin_command

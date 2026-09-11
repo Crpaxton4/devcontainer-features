@@ -623,7 +623,7 @@ def assert_tracker_db_present(path: Optional[Path] = None) -> None:
     absence is a setup failure with a fixed remedy rather than something to
     recover from. This is the single definition of that check and of its
     message: :meth:`LocalStateClient._raw_connect` calls it just before opening a
-    connection, and :func:`~odoo_sdk.utilities.env.assert_sdk_configured` calls
+    connection, and :func:`~odoo_sdk.tracking.env.assert_sdk_configured` calls
     it up front so a command fails on its precondition rather than mid-body
     (#642).
 
@@ -1721,7 +1721,7 @@ class LocalStateClient:
         exceeds SQLite's per-statement variable limit. This is a raw delete with no
         guard of its own — the ``prune`` planner is responsible for only ever
         handing it ids it has proven safe to remove (see
-        :func:`odoo_sdk.prune.plan_prune`).
+        :func:`odoo_sdk.tracking.prune.plan_prune`).
         """
         if not ids:
             return 0

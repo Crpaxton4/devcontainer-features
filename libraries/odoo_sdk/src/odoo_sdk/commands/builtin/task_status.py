@@ -3,8 +3,8 @@ from typing import Any
 from ..command import Command
 from ._registration import builtin_command
 from odoo_sdk.state import TaskRun
-from odoo_sdk.utilities.env import assert_sdk_configured
-from odoo_sdk.utilities.odoo_helpers import count_chatter_messages_after
+from odoo_sdk.tracking.env import assert_sdk_configured
+from odoo_sdk.services.odoo_helpers import count_chatter_messages_after
 
 
 @builtin_command
