@@ -245,98 +245,94 @@ check "history -a survives starship/zoxide clobbering PROMPT_COMMAND" bash -ic \
 check "starship.toml was placed in global share" bash -c "test -f /usr/local/share/starship.toml"
 check "shell snippet was appended to global bashrc" bash -c "grep -q 'personal-features' /etc/bash.bashrc"
 
-# Claude consulting skills delivery (feature-owned namespace). install.sh stages
-# the shipped skills at a build-time location OUTSIDE the CLAUDE_CONFIG_DIR bind
-# mount; sync-claude-skills (feature-contributed postCreateCommand) publishes
-# them into $CLAUDE_CONFIG_DIR/skills once the mount is active. Smoke assertions
-# ONLY - the staging dir exists and the sync script is installed, executable, and
-# syntactically valid. Full sync behaviour (temp CLAUDE_CONFIG_DIR, decoy-skill
-# survival, idempotency) is covered by a separate test sub-issue; the sync itself
-# doesn't run under `devcontainer features test` (no postCreateCommand there).
-check "personal-features skills share dir exists" bash -c "test -d /usr/local/share/personal-features/skills"
-check "sync-claude-skills is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-skills"
-check "sync-claude-skills passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-skills"
+# Claude consulting skills are NOT shipped loose any more (#738). They ride in
+# the odoo-dev plugin that sync-claude-mcp installs from this repo's own
+# marketplace (#723), so install.sh stages nothing under /usr/local/share/
+# personal-features/skills and installs no sync-claude-skills publisher - a
+# loose copy would load as a personal skill alongside its plugin twin and
+# compete for the same triggers. Assert both are gone, or a rebuild would
+# quietly start seeding them again.
+check "sync-claude-skills is no longer installed" bash -c \
+  "! test -e /usr/local/bin/sync-claude-skills"
+check "the skills staging dir is no longer created" bash -c \
+  "! test -e /usr/local/share/personal-features/skills"
 
-# --- sync-claude-skills behaviour (#252) --------------------------------------
-# The smoke checks above prove the pieces exist; these exercise what the sync
-# actually DOES, all against THROWAWAY directories - never the real
-# $CLAUDE_CONFIG_DIR. sync-claude-skills takes its staging source from
-# PERSONAL_FEATURES_SKILLS_DIR (default /usr/local/share/personal-features/
-# skills), so the behavioural checks point it at a FIXTURE staging tree built
-# here. That keeps them deterministic and independent of which real skills have
-# shipped so far (the shipped namespace may still be README-only mid-epic).
+# --- sync-claude-mcp: odoo-dev plugin + stale loose skill cleanup (#738) ------
+# sync-claude-mcp runs from postCreateCommand, which `devcontainer features
+# test` never executes, so drive it by hand here - against a THROWAWAY
+# CLAUDE_CONFIG_DIR and a STUB `claude` that records its argv, never the real
+# config dir and never a real marketplace/network call. Same stub pattern as the
+# mempalace-init-workspace checks further down.
+MCP_TEST_ROOT="$(mktemp -d)"
+MCP_STUB_BIN="$MCP_TEST_ROOT/bin"
+MCP_CONFIG="$MCP_TEST_ROOT/claude-home"
+mkdir -p "$MCP_STUB_BIN" \
+  "$MCP_CONFIG/skills/odoo-quote" \
+  "$MCP_CONFIG/skills/fibonacci-estimate" \
+  "$MCP_CONFIG/skills/client-status-report" \
+  "$MCP_CONFIG/skills/my-own-skill" \
+  "$MCP_CONFIG/skills/odoo-code-review"
+# Three of the six names the retired sync used to seed, a DECOY user-authored
+# skill that must survive, and a named dir with NO SKILL.md - which is not a
+# skill by check-stray-skills.sh's definition and so must survive too.
+printf 'stale loose odoo-quote\n'               > "$MCP_CONFIG/skills/odoo-quote/SKILL.md"
+printf 'stale loose fibonacci-estimate\n'       > "$MCP_CONFIG/skills/fibonacci-estimate/SKILL.md"
+printf 'stale loose client-status-report\n'     > "$MCP_CONFIG/skills/client-status-report/SKILL.md"
+printf 'my hand-written skill - do not touch\n' > "$MCP_CONFIG/skills/my-own-skill/SKILL.md"
+printf 'loose notes, no SKILL.md\n'             > "$MCP_CONFIG/skills/odoo-code-review/notes.txt"
 
-# Strengthen the staging smoke check: whatever SKILL.md the build staged (if any)
-# must be a regular, readable file - never a dir or a dangling symlink. Passes
-# vacuously while the namespace is still README-only (the glob matches nothing).
-check "any staged SKILL.md is a regular readable file" bash -c \
-  "for f in /usr/local/share/personal-features/skills/*/SKILL.md; do [ -e \"\$f\" ] || continue; test -f \"\$f\" && test -r \"\$f\" || exit 1; done"
+# Succeeds at everything and records what it was asked to do. Printing NOTHING
+# for `plugin list` is what drives the install branch: the idempotency guard
+# greps that output for an already-installed odoo-dev.
+cat > "$MCP_STUB_BIN/claude" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$0.calls"
+exit 0
+STUB
+chmod +x "$MCP_STUB_BIN/claude"
 
-# Build a deterministic fixture staging tree + a throwaway CLAUDE_CONFIG_DIR the
-# behavioural checks share, then seed the config with a DECOY user-authored skill
-# (must survive) and a STALE copy of a shipped name (wrong content, must be
-# replaced). mktemp keeps it all off the real config dir.
-SKILLS_TEST_ROOT="$(mktemp -d)"
-FIXTURE_STAGING="$SKILLS_TEST_ROOT/staging"
-FIXTURE_CONFIG="$SKILLS_TEST_ROOT/claude-home"
-mkdir -p \
-  "$FIXTURE_STAGING/fixture-quote-draft" \
-  "$FIXTURE_STAGING/fixture-design-doc" \
-  "$FIXTURE_STAGING/fixture-not-a-skill" \
-  "$FIXTURE_CONFIG/skills/my-own-skill" \
-  "$FIXTURE_CONFIG/skills/fixture-quote-draft"
-printf 'shipped quote-draft v2\n'  > "$FIXTURE_STAGING/fixture-quote-draft/SKILL.md"
-printf 'shipped design-doc\n'       > "$FIXTURE_STAGING/fixture-design-doc/SKILL.md"
-printf 'design-doc template\n'      > "$FIXTURE_STAGING/fixture-design-doc/template.md"
-printf 'loose notes, no SKILL.md\n' > "$FIXTURE_STAGING/fixture-not-a-skill/notes.txt"
-printf '# skills readme\n'          > "$FIXTURE_STAGING/README.md"
-printf 'my hand-written skill - do not touch\n' > "$FIXTURE_CONFIG/skills/my-own-skill/SKILL.md"
-printf 'STALE quote-draft v1\n'                 > "$FIXTURE_CONFIG/skills/fixture-quote-draft/SKILL.md"
+check "sync-claude-mcp runs clean against a stub claude" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp"
 
-# The default (non-override) code path must run cleanly against the REAL staging
-# dir into a fresh temp config: it either syncs whatever shipped or no-ops (exit
-# 0) when the namespace is still empty. Proves the production path, not just the
-# fixture one.
-check "sync runs cleanly against the real staging dir into a temp config" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$SKILLS_TEST_ROOT/real-run-home\" /usr/local/bin/sync-claude-skills"
+# The plugin install is pinned to this repo's marketplace by the
+# plugin@marketplace form, so a same-named plugin elsewhere cannot satisfy it.
+check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features marketplace" bash -c \
+  "grep -qF 'plugin install --scope user odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
 
-# Publish the fixture skills into the temp config (this run is itself asserted).
-check "sync publishes fixture skills into a temp CLAUDE_CONFIG_DIR" bash -c \
-  "PERSONAL_FEATURES_SKILLS_DIR=\"$FIXTURE_STAGING\" CLAUDE_CONFIG_DIR=\"$FIXTURE_CONFIG\" /usr/local/bin/sync-claude-skills"
+# The point of #738: copies written into the bind-mounted ~/.claude by
+# pre-migration containers outlive the image that wrote them and shadow their
+# odoo-dev twins. With the plugin in place they are deleted.
+check "sync-claude-mcp removes the stale loose skill copies the plugin now ships" bash -c \
+  "! test -e \"$MCP_CONFIG/skills/odoo-quote\" && ! test -e \"$MCP_CONFIG/skills/fibonacci-estimate\" && ! test -e \"$MCP_CONFIG/skills/client-status-report\""
 
-# Shipped skills land byte-identical to staging (single- and multi-file).
-check "a shipped skill lands with content matching staging exactly" bash -c \
-  "diff -r \"$FIXTURE_STAGING/fixture-quote-draft\" \"$FIXTURE_CONFIG/skills/fixture-quote-draft\""
-check "a shipped multi-file skill lands complete and matching staging" bash -c \
-  "diff -r \"$FIXTURE_STAGING/fixture-design-doc\" \"$FIXTURE_CONFIG/skills/fixture-design-doc\""
+# ...and nothing else. The name list is literal and the SKILL.md test is the
+# same "stray" definition check-stray-skills.sh uses.
+check "sync-claude-mcp leaves a user-authored skill untouched" bash -c \
+  "grep -q 'do not touch' \"$MCP_CONFIG/skills/my-own-skill/SKILL.md\""
+check "sync-claude-mcp leaves a named dir carrying no SKILL.md alone" bash -c \
+  "test -f \"$MCP_CONFIG/skills/odoo-code-review/notes.txt\""
 
-# The stale copy of a shipped name is overwritten (delete-then-copy), not merged.
-check "a stale shipped skill is overwritten by the staged version" bash -c \
-  "grep -q 'shipped quote-draft v2' \"$FIXTURE_CONFIG/skills/fixture-quote-draft/SKILL.md\" && ! grep -q STALE \"$FIXTURE_CONFIG/skills/fixture-quote-draft/SKILL.md\""
+# A container that could not reach the marketplace must keep whatever skills it
+# has: deleting the loose copy there would leave the machine with neither copy.
+# The run still exits 0 - this whole script is best-effort and must never fail
+# container create.
+MCP_FAIL_BIN="$MCP_TEST_ROOT/bin-offline"
+MCP_FAIL_CONFIG="$MCP_TEST_ROOT/claude-home-offline"
+mkdir -p "$MCP_FAIL_BIN" "$MCP_FAIL_CONFIG/skills/odoo-quote"
+printf 'stale loose odoo-quote\n' > "$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md"
+cat > "$MCP_FAIL_BIN/claude" <<'STUB'
+#!/bin/sh
+case "$1 $2" in "plugin install"|"plugin marketplace") exit 1 ;; esac
+exit 0
+STUB
+chmod +x "$MCP_FAIL_BIN/claude"
 
-# The decoy user-authored skill survives untouched (feature-owned namespace only).
-check "a user-authored (decoy) skill survives the sync untouched" bash -c \
-  "grep -q 'do not touch' \"$FIXTURE_CONFIG/skills/my-own-skill/SKILL.md\""
+check "sync-claude-mcp exits 0 when the odoo-dev plugin install fails" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_FAIL_CONFIG\" PATH=\"$MCP_FAIL_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp 2>/dev/null"
+check "sync-claude-mcp keeps the loose copies when the plugin install fails" bash -c \
+  "test -f \"$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md\""
 
-# A staging subdir with no SKILL.md is not a skill and is never published.
-check "a staging subdir without a SKILL.md is ignored" bash -c \
-  "! test -e \"$FIXTURE_CONFIG/skills/fixture-not-a-skill\""
-
-# Idempotency: snapshot the synced tree, run the sync again, assert nothing moved
-# (diff -r finds no differences between the snapshot and the re-synced tree).
-cp -R "$FIXTURE_CONFIG/skills" "$SKILLS_TEST_ROOT/idem-before"
-check "sync is idempotent (a second run leaves the skills tree byte-identical)" bash -c \
-  "PERSONAL_FEATURES_SKILLS_DIR=\"$FIXTURE_STAGING\" CLAUDE_CONFIG_DIR=\"$FIXTURE_CONFIG\" /usr/local/bin/sync-claude-skills && diff -r \"$SKILLS_TEST_ROOT/idem-before\" \"$FIXTURE_CONFIG/skills\""
-
-# Feature-owned-namespace tradeoff: sync only ever replaces names CURRENTLY in
-# staging and never deletes others. So a skill dropped from staging and re-synced
-# is deliberately ORPHANED - its previously-synced copy survives, as does a skill
-# still shipping. Assert that documented behaviour as-is.
-rm -rf "$FIXTURE_STAGING/fixture-quote-draft"
-check "a skill removed from staging is orphaned, not deleted, on re-sync" bash -c \
-  "PERSONAL_FEATURES_SKILLS_DIR=\"$FIXTURE_STAGING\" CLAUDE_CONFIG_DIR=\"$FIXTURE_CONFIG\" /usr/local/bin/sync-claude-skills && test -f \"$FIXTURE_CONFIG/skills/fixture-quote-draft/SKILL.md\" && test -f \"$FIXTURE_CONFIG/skills/fixture-design-doc/SKILL.md\""
-
-rm -rf "$SKILLS_TEST_ROOT"
+rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
 # install.sh installs the hook shim (claude-event-hook) and the settings merge

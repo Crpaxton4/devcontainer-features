@@ -238,29 +238,32 @@ or, to disable it permanently, drop the `sync-claude-hooks` step from the
 Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
 untouched (and a warning printed) rather than overwritten.
 
-## Odoo consulting skills (two delivery paths)
+## Odoo consulting skills (where they live now)
 
-This Feature no longer ships any Odoo consulting skills. The playbook that
-lived here — quote drafting, Fibonacci estimating, discovery capture, solution
-design, and Odoo code review — moved to the `odoo-dev` plugin, which bundles
-each one as `odoo-dev:<name>` (#695-#699); weekly client status reporting was
-retired outright (#700). `skills/` therefore holds only its README, and the
-delivery machinery below stays in place for whatever ships next.
+This Feature ships no Odoo consulting skills, and as of #738 no machinery for
+delivering them either. The playbook that lived here — quote drafting,
+Fibonacci estimating, discovery capture, solution design and Odoo code review —
+moved to the `odoo-dev` plugin, which bundles each one as `odoo-dev:<name>`
+(#695-#699); weekly client status reporting was retired outright (#700).
+`sync-claude-mcp` installs that plugin from this repo's own marketplace at
+container-create time (#723).
 
 Historically the content reached an agent by two independent,
-deliberately-parallel paths, and the second is still live:
+deliberately-parallel paths. Only the second survives:
 
-1. **Mounted `SKILL.md` files (Claude Code only).** `install.sh` stages the
-   `skills/` tree at build time to `/usr/local/share/personal-features/skills`
-   (a path *not* under the `~/.claude` bind mount), and the feature-contributed
-   `postCreateCommand` used to run `sync-claude-skills` at container-create time
-   to copy each skill into `$CLAUDE_CONFIG_DIR/skills/<name>`, where Claude Code
-   discovers user-scope skills. As of #701–#708 the feature ships no loose
-   skills (the odoo-dev plugin installed by `sync-claude-mcp` carries them, #723)
-   and `sync-claude-skills` is retired from `postCreateCommand`. The loose-copy
-   path preserved Claude Code's native skill-discovery / slash-command UX, but
-   only inside a live container with this Feature installed and a working bind
-   mount — the plugin install now provides the same UX everywhere.
+1. **Mounted `SKILL.md` files (Claude Code only) — removed (#738).**
+   `install.sh` used to stage the `skills/` tree at build time to
+   `/usr/local/share/personal-features/skills` (a path *not* under the
+   `~/.claude` bind mount), and the feature-contributed `postCreateCommand` ran
+   `sync-claude-skills` to copy each skill into
+   `$CLAUDE_CONFIG_DIR/skills/<name>`, where Claude Code discovers user-scope
+   skills. The `skills/` tree, the staging dir and the sync script are all gone:
+   a loose copy of a plugin skill loads as a *personal* skill alongside its
+   plugin twin, two near-identical descriptions competing for the same triggers.
+   The loose-copy path preserved Claude Code's native skill-discovery /
+   slash-command UX, but only inside a live container with this Feature
+   installed and a working bind mount — the plugin install provides the same UX
+   everywhere.
 
 2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
    *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
@@ -272,20 +275,24 @@ deliberately-parallel paths, and the second is still live:
    and `report_incident`. Because the prompts ship inside the SDK package, any
    MCP client gets them for free — no mount, no `postCreateCommand`, no live
    personal-features container required. **All six prompt modules outlived their
-   skills**: every `SKILL.md` under `skills/` is now gone, so each module's
-   embedded body is the only copy left in this repo. `test_prompts.py` records
-   them in `RETIRED_SKILLS` and asserts none of them has a `SKILL.md` to drift
-   from.
+   skills**: the `skills/` tree is gone, so each module's embedded body is the
+   only copy of that text left outside the plugin.
 
-With no skills left to stage, the MCP-prompt path is currently the only one
-delivering this content. The mount path is retained rather than removed: it is
-name-agnostic, handles the empty tree cleanly, and is what any future
-feature-owned skill would use. The old manual-sync caveat no longer applies —
-there is no `SKILL.md` left to mirror into a prompt module.
-
-Note that `sync-claude-skills` only ever replaces the names it currently ships
-and never deletes others, so a machine that already synced these skills keeps
-its `~/.claude/skills/<name>` copies until they are removed by hand.
+**Stale loose copies are cleaned up, not just reported (#738).**
+`$CLAUDE_CONFIG_DIR/skills` is a host bind mount, so copies written by
+pre-migration containers outlive the image that wrote them, and no rebuild
+removes them. Once `sync-claude-mcp` has the `odoo-dev` plugin in place it
+deletes exactly the six names the retired sync used to seed — the five the
+plugin now carries (`discovery-notes`, `fibonacci-estimate`,
+`odoo-code-review`, `odoo-design-doc`, `odoo-quote`) plus the retired
+`client-status-report` — and only where `<name>/SKILL.md` exists,
+the same definition of a stray that
+`plugins/odoo-dev/scripts/check-stray-skills.sh` reports on. Every other
+directory under `skills/` — including every user-authored skill, and including
+a same-named directory carrying no `SKILL.md` — is left alone. A failed plugin
+install skips the cleanup rather than leaving the machine with neither copy,
+and each removal is logged on its own line; like everything else in
+`sync-claude-mcp`, the cleanup is best-effort and never fails container create.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 

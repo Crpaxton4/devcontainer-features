@@ -112,30 +112,15 @@ done < "$_MANIFEST"
 # containers — the script tolerates missing config at every level).
 install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 
-# --- Claude consulting skills (feature-owned namespace) ---------------------
-# Stage the shipped Claude skills at a build-time location that is NOT under the
-# CLAUDE_CONFIG_DIR bind mount, then install sync-claude-skills to publish them
-# into the live (mounted) $CLAUDE_CONFIG_DIR/skills at container-create time
-# (wired up as a feature-contributed postCreateCommand in the Feature JSON).
-# Writing them straight into CLAUDE_CONFIG_DIR here would be pointless: the
-# host's ~/.claude bind mount shadows that directory at runtime. See
-# sync-claude-skills and skills/README.md.
-SKILLS_SRC="$(dirname "$0")/skills"
-SKILLS_STAGE="/usr/local/share/personal-features/skills"
-# Rebuild the staging dir from scratch so a re-provision can't leave a skill
-# removed upstream lingering here. `cp -R "$SKILLS_SRC/."` copies the directory
-# *contents*, so this stays correct - and non-fatal under set -e - whether the
-# source has no skills yet (just its README) or is fully populated.
-rm -rf "$SKILLS_STAGE"
-mkdir -p "$SKILLS_STAGE"
-if [ -d "$SKILLS_SRC" ]; then
-    cp -R "$SKILLS_SRC/." "$SKILLS_STAGE/"
-fi
-
-# sync-claude-skills: at runtime (postCreateCommand) copies each staged skill
-# into $CLAUDE_CONFIG_DIR/skills, replacing only the feature-owned names.
-# Installed like create-pr.
-install -m 0755 "$(dirname "$0")/sync-claude-skills" /usr/local/bin/sync-claude-skills
+# --- Claude consulting skills: NOT shipped loose any more (#738) ------------
+# This feature used to stage its consulting skills under /usr/local/share/
+# personal-features/skills and publish them into $CLAUDE_CONFIG_DIR/skills with
+# a sync-claude-skills script run from postCreateCommand. Both are gone: the
+# skills now ship inside the odoo-dev plugin, which sync-claude-mcp installs
+# from this repo's marketplace (#723). A loose copy would load as a personal
+# skill ALONGSIDE its plugin twin and compete for the same triggers, so the
+# feature seeds none - and sync-claude-mcp deletes the copies older containers
+# left behind in the bind-mounted ~/.claude (see its odoo-dev block below).
 
 # --- Claude Code lifecycle hooks (#327) -------------------------------------
 # claude-event-hook: the hook shim invoked by every feature-owned hook entry; it
@@ -144,7 +129,7 @@ install -m 0755 "$(dirname "$0")/sync-claude-skills" /usr/local/bin/sync-claude-
 # PATH at runtime. sync-claude-hooks: at runtime (postCreateCommand) merges the
 # feature-owned hooks block into the live, mounted $CLAUDE_CONFIG_DIR/
 # settings.json — the build-time directory is shadowed by the ~/.claude mount,
-# same reason as the skills sync above.
+# same reason the retired skills sync ran from postCreateCommand (see above).
 install -m 0755 "$(dirname "$0")/claude-event-hook" /usr/local/bin/claude-event-hook
 install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-hooks
 
@@ -571,9 +556,11 @@ fi
 # The odoo-dev consulting plugin ships from THIS repo's own marketplace
 # (Crpaxton4/devcontainer-features). It replaces the five loose skills the
 # feature used to copy into $CLAUDE_CONFIG_DIR/skills (#701-#708): the plugin
-# carries them now, so postCreateCommand deliberately does NOT run
-# sync-claude-skills any more - a loose copy would load alongside and shadow
-# its plugin twin. Same best-effort stance as the mempalace block above: the
+# carries them now, so the feature no longer ships or syncs loose skills at all
+# (#738) - a loose copy would load alongside and shadow its plugin twin. Copies
+# written by pre-migration containers persist in the bind-mounted ~/.claude
+# though, so this block also deletes them once the plugin is in place (below).
+# Same best-effort stance as the mempalace block above: the
 # marketplace add clones from GitHub (auth rides in on the persisted
 # ~/.config/gh mount), so missing auth/network warns and the next container
 # create converges - it never fails container create.
@@ -630,13 +617,49 @@ fi
 # Idempotent plugin install, pinned to this repo's marketplace via the
 # plugin@marketplace form so a same-named plugin from another marketplace can
 # neither satisfy nor break this install.
+odoo_dev_installed=0
 if claude plugin list 2>/dev/null | grep -q 'odoo-dev@devcontainer-features'; then
     echo "sync-claude-mcp: plugin 'odoo-dev@devcontainer-features' is already installed"
+    odoo_dev_installed=1
 elif claude plugin install --scope user odoo-dev@devcontainer-features; then
     echo "sync-claude-mcp: installed plugin 'odoo-dev@devcontainer-features'"
+    odoo_dev_installed=1
 else
     echo "WARNING: sync-claude-mcp: could not install the 'odoo-dev' plugin; install it later with 'claude plugin install --scope user odoo-dev@devcontainer-features' - the next container create will also retry." >&2
 fi
+
+# Stale loose skill copies, left behind by pre-migration containers (#738).
+# These six names used to be copied into $CLAUDE_CONFIG_DIR/skills by the
+# feature's retired sync-claude-skills: five moved into the odoo-dev plugin
+# (#695-#699) and client-status-report was retired outright (#700). The
+# directory is a host bind mount, so the copies outlive the image that wrote
+# them - the five load as PERSONAL skills alongside their odoo-dev twins, two
+# near-identical descriptions competing for the same triggers, and the sixth
+# keeps offering a playbook nobody maintains. Nothing recreates any of them
+# now, so deleting them is the fix (the same fix
+# plugins/odoo-dev/scripts/check-stray-skills.sh reports but does not apply).
+#
+# Only ever with the plugin actually in place, so a failed install never leaves
+# the machine with neither copy. "Stray" is defined exactly as
+# check-stray-skills.sh defines it - a directory carrying a SKILL.md - and the
+# name list is literal: anything not on it, including every user-authored
+# skill, is untouched. Best-effort like the rest of this script: a removal that
+# fails warns and the run still exits 0.
+if [ "$odoo_dev_installed" -eq 1 ]; then
+    for stale_skill in discovery-notes fibonacci-estimate odoo-code-review odoo-design-doc odoo-quote client-status-report; do
+        stale_dir="$CLAUDE_CONFIG_DIR/skills/$stale_skill"
+        [ -f "$stale_dir/SKILL.md" ] || continue
+        if rm -rf "$stale_dir"; then
+            echo "sync-claude-mcp: removed stale loose skill '$stale_skill' from $CLAUDE_CONFIG_DIR/skills (this feature no longer ships loose skills, #738)"
+        else
+            echo "WARNING: sync-claude-mcp: could not remove the stale loose skill copy at $stale_dir; it shadows the plugin's own copy until you delete it by hand" >&2
+        fi
+    done
+fi
+
+# Every step above is best-effort and must never fail container create, so the
+# script's own exit status is fixed rather than inherited from the last one.
+exit 0
 EOF
 chmod 0755 /usr/local/bin/sync-claude-mcp
 
