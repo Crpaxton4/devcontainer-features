@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "odoo-dev",
   "displayName": "Odoo Development",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Odoo consulting and delivery workflows: scoping and quoting, task delivery, testing, PR and release, and version upgrades.",
   "author": {
     "name": "Christopher Paxton"
