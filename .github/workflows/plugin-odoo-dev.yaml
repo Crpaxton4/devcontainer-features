@@ -53,7 +53,12 @@ jobs:
       # overnight. Bump it deliberately. Developers running validate.sh locally
       # float on whatever CLI they have, which is where a new version's
       # objections surface first.
-      CLAUDE_CODE_VERSION: "2.1.247"
+      #
+      # Kept in step with CLAUDE_CODE_VERSION in the personal-features install
+      # script (devcontainer-features/src/personal-features/install.sh), so the
+      # CLI that gates these plugins here is the CLI that actually loads them in
+      # a container. Bump both together (#741).
+      CLAUDE_CODE_VERSION: "2.1.268"
 
     steps:
       - uses: actions/checkout@v7
@@ -66,7 +71,8 @@ jobs:
           node-version: "22"
 
       # `plugin validate` reads the manifest off disk. It needs no account and
-      # no network: verified against 2.1.247 by running it with an empty HOME,
+      # no network: verified against 2.1.247 (the previously pinned CLI) by
+      # running it with an empty HOME,
       # where it passes and writes nothing. That is why this job stays
       # credential-free.
       - name: "Install the Claude Code CLI"

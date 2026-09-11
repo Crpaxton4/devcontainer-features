@@ -27,6 +27,15 @@ source dev-container-features-test-lib
 check "claude wrapper is on PATH and executable" bash -c "test -x \"\$(command -v claude)\""
 check "claude reports a version" claude --version
 
+# #741: install.sh pins @anthropic-ai/claude-code to an exact version
+# (CLAUDE_CODE_VERSION) and the feature sets DISABLE_AUTOUPDATER=1, so the
+# version installed at build time is the version the container keeps. Assert the
+# pin actually took - an unpinned install, or an autoupdater that slipped past
+# the env var, both show up here as a mismatch. Bump this string whenever
+# CLAUDE_CODE_VERSION moves.
+check "claude is pinned to 2.1.268" bash -c \
+  "claude --version | grep -qF '2.1.268'"
+
 # The wrapper injects --ide ONLY for a bare interactive session (no args + TTY)
 # and passes everything else straight through, so a new Claude Code subcommand
 # can never be mangled into `claude --ide <subcommand>` (see NOTES.md). Assert
