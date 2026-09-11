@@ -160,6 +160,8 @@ github_templates:
 
 The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] && [ -t 0 ]`) rather than maintaining an allowlist of subcommands to *exclude*. The old allowlist had to be hand-edited for every new subcommand, and any subcommand it hadn't been taught about was silently turned into `claude --ide <subcommand>`; the inverted rule can never break a new Claude Code subcommand. **Accepted trade-off:** `claude -c`, `claude -r`, and `claude "prompt"` no longer auto-get `--ide` — pass it explicitly if you want it there.
 
+The same wrapper also passes `--append-system-prompt-file "$CLAUDE_CONFIG_DIR/system-prompt-append.md"` (#740) for **session** invocations — no arguments at all, or a first argument that is a flag — so session-wide style and policy rules arrive as *system* prompt rather than as user-turn context that drifts over a long session. That file is **local-only and hand-maintained** in the bind-mounted claude-home: the Feature never ships it and never creates it, and the flag is injected only when it is actually present, so a container without one behaves exactly as it did before. Subcommands are skipped deliberately — `claude plugin …`, `claude mcp …`, anything whose first argument is not a flag, reject the option outright. No VS Code setting is involved: the wrapper **replaces the npm `claude` binary in place**, so everything that resolves `claude` through `PATH` — an IDE-launched session included — already runs it.
+
 ## Claude Code lifecycle hooks (odoo-sdk event capture)
 
 This Feature provisions a set of Claude Code lifecycle hooks that record session

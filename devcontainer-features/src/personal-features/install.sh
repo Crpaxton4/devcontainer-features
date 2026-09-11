@@ -187,11 +187,33 @@ rm "$WRAPPER_PATH"
 #
 # Accepted trade-off: `claude -c`, `claude -r`, and `claude "prompt"` no longer
 # auto-get `--ide` (strict, predictable rule chosen over guessing intent).
+#
+# The same wrapper also injects `--append-system-prompt-file` (#740) so that
+# session-wide style and policy rules load as SYSTEM prompt rather than drifting
+# user-turn context. The file it points at is local-only and hand-maintained in
+# the bind-mounted claude-home: this feature never ships it and never creates it,
+# so the flag is injected only when the file is actually there - an absent file
+# leaves the invocation byte-identical to the pre-#740 wrapper.
+#
+# Injection is gated on the invocation being a SESSION - no args at all, or a
+# first argument that is a flag. Subcommands (`claude mcp`, `claude plugin`,
+# anything whose first argument is not a flag) REJECT the option outright, so
+# they must be left alone. `\${1#-}` != `\$1` is the POSIX test for "starts with
+# a dash"; a `case` statement would read more naturally but would resurrect the
+# subcommand-allowlist shape this wrapper deliberately does not have.
 cat > "$WRAPPER_PATH" << EOF
 #!/bin/sh
 set -e
 
 REAL="$REAL_CLAUDE_BIN"
+PROMPT_FILE="\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/system-prompt-append.md"
+
+if [ -f "\$PROMPT_FILE" ] && { [ \$# -eq 0 ] || [ "\${1#-}" != "\$1" ]; }; then
+    if [ \$# -eq 0 ] && [ -t 0 ]; then
+        set -- --ide
+    fi
+    exec "\$REAL" --append-system-prompt-file "\$PROMPT_FILE" "\$@"
+fi
 
 if [ \$# -eq 0 ] && [ -t 0 ]; then
     exec "\$REAL" --ide
