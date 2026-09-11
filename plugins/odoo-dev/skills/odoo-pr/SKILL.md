@@ -1,7 +1,6 @@
 ---
 name: odoo-pr
-description: "Turn a finished, tested Odoo task branch into a client-visible pull request the standard way: run a local CodeRabbit review before pushing, write the standard PR body, open it as a self-assigned draft against the right base branch, work the review loop, and post the PR link back to the Odoo task. Use this whenever an Odoo change is ready to be reviewed or shipped, when asked to open/update/raise a PR for a task, when asked what the PR standard is, or when a PR body or title needs writing. This skill IS the PR standard — follow it rather than calling gh pr create directly."
-when_to_use: An Odoo task branch is finished and verified and the work has to become visible to the client; someone asks to open, update, or raise a pull request for a task; a PR title or body has to be written; CodeRabbit comments are waiting to be worked; or someone asks what the PR standard is.
+description: "Turn a tested Odoo task branch into a client-visible pull request: local CodeRabbit review, standard body, self-assigned draft on the right base, review loop, link back on the task. This skill IS the PR standard; do not call gh pr create directly."
 user-invocable: false
 ---
 # Odoo PR
@@ -31,6 +30,10 @@ recorded for the project in the repo map, resolved through
 default is where a stray PR lands when nobody looked it up. The third line is the
 duplicate check: a pull request already open for this head is one to update, never
 a reason to open a second.
+
+## When to use
+
+An Odoo task branch is finished and verified and the work has to become visible to the client; someone asks to open, update, or raise a pull request for a task; a PR title or body has to be written; CodeRabbit comments are waiting to be worked; or someone asks what the PR standard is.
 
 ## 1. Preconditions — fail closed
 

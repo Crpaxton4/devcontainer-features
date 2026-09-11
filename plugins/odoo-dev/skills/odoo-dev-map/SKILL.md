@@ -1,7 +1,6 @@
 ---
 name: odoo-dev-map
-description: Router for the odoo-dev plugin. Use when an Odoo request spans more than one step and you need to know which skill or which subagent owns it — scoping and quoting, task delivery, testing and review, PR and release, or version upgrade. Also use when asked what the Odoo workflow is, which agent to dispatch, what order the steps go in, how work hands off between them, or what has to be true before something ships. Resolves the route and builds the spawn prompt; never does the stage work itself.
-when_to_use: An Odoo request takes more than one step and it is not obvious which skill or subagent owns which part; someone asks what the Odoo workflow is, what order the stages run in, which agent to dispatch next, or what has to be true before work ships; a spawn prompt has to be built for a subagent; or a chain has stalled and the next stage has to be identified.
+description: "Router for the odoo-dev plugin: resolves which skill or subagent owns a multi-step Odoo request and builds the spawn prompt, never doing the stage work. Use for scoping, delivery, testing, PR and release, upgrade, or what the Odoo workflow is."
 user-invocable: false
 ---
 
@@ -10,6 +9,10 @@ user-invocable: false
 Route work to the skill or subagent that owns it. **This skill decides who does
 the work. It never does the work.** If you find yourself writing code, running
 tests, or opening a PR from here, you took a wrong turn — dispatch instead.
+
+## When to use
+
+An Odoo request takes more than one step and it is not obvious which skill or subagent owns which part; someone asks what the Odoo workflow is, what order the stages run in, which agent to dispatch next, or what has to be true before work ships; a spawn prompt has to be built for a subagent; or a chain has stalled and the next stage has to be identified.
 
 ## Skill Map
 

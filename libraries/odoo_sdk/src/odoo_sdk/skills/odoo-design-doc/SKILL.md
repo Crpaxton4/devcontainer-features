@@ -1,7 +1,6 @@
 ---
 name: odoo-design-doc
-description: Write an Odoo solution/technical design document. Use when the user asks to design, spec, or write a technical or solution design for an Odoo feature, module, or customization — covering models and fields (with technical names), views, security (access rights + record rules), data migration, upgrade impact, and rollout. Discovers current state via read-only Odoo tools first.
-when_to_use: A change has been scoped and priced and now needs a technical or solution design before anyone builds it; models, fields, and views have to be named technically rather than described; security has to be specified as access rights plus record rules; a data migration or an upgrade impact needs writing down; or a client or a developer asks what exactly is going to be built.
+description: "Write an Odoo solution or technical design document, discovering current state via read-only Odoo tools first. Use to design or spec an Odoo feature, module, or customization: models, fields, views, security, migration, upgrade impact, rollout."
 user-invocable: false
 ---
 
@@ -15,6 +14,10 @@ Produce a technical design an Odoo dev can build from and a client can approve.
 This is a consulting deliverable — it complements, and does not replace, the
 `odoo-sdk` `implement_task` execution prompt. All tools below are read-only
 `odoo-sdk` MCP tools.
+
+## When to use
+
+A change has been scoped and priced and now needs a technical or solution design before anyone builds it; models, fields, and views have to be named technically rather than described; security has to be specified as access rights plus record rules; a data migration or an upgrade impact needs writing down; or a client or a developer asks what exactly is going to be built.
 
 ## 1. Discover current state first (read-only)
 

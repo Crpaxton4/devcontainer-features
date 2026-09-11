@@ -1,7 +1,6 @@
 ---
 name: odoo-quote
-description: "Owns the whole Odoo quote: pull the project's real context out of Odoo, decide whether the engagement is client or internal, decompose the request into line items, and surround them with assumptions, exclusions, risk, and open questions — conforming to the in-house estimate standard when the project already has one. Use it when someone asks to quote, price, bid, size, or scope an Odoo change request, feature, or project. This skill owns the document; odoo-dev:fibonacci-estimate owns the hour values that go inside it, so run this one first and call that one to size each line. When the request is only about the numbers on an estimate that already exists, go straight to odoo-dev:fibonacci-estimate instead."
-when_to_use: A client or an internal stakeholder has asked for a change and nobody has priced it; someone says quote this, price this, bid this, or asks how long it would take; an Odoo task needs an estimate table written into its description; or a fuzzy request has to become a defensible set of line items with assumptions and exclusions before anyone commits to it.
+description: "Owns the Odoo quote: context, client vs internal, line items, assumptions, exclusions, risk. Use to quote, price, bid, size, or scope an Odoo request. odoo-dev:fibonacci-estimate owns the hours inside it; numbers-only asks go straight there."
 user-invocable: false
 ---
 
@@ -15,6 +14,10 @@ Turn a fuzzy request into a defensible, line-item estimate — for a client quot
 or an internal improvement. This complements the `odoo-sdk` `implement_task`
 prompt (which executes tracked work); it does not start or log anything. All
 tools below are the read-only `odoo-sdk` MCP tools.
+
+## When to use
+
+A client or an internal stakeholder has asked for a change and nobody has priced it; someone says quote this, price this, bid this, or asks how long it would take; an Odoo task needs an estimate table written into its description; or a fuzzy request has to become a defensible set of line items with assumptions and exclusions before anyone commits to it.
 
 ## 1. Gather context before you estimate (read-only)
 

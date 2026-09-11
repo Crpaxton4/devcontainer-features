@@ -26,7 +26,7 @@ _BODY = skill_body("odoo-quote")
 
 
 def odoo_quote() -> list[str]:
-    """Draft a scoped, line-item Odoo estimate for a client quote or an internal improvement. Use when the user asks to quote, estimate, scope, size, price, or bid an Odoo change request, feature, or project — produces per-aspect hour estimates with assumptions, exclusions, and risk, conforming to the in-house estimate standard when one exists, grounded in the project's real Odoo context."""
+    """Owns the Odoo quote: context, client vs internal, line items, assumptions, exclusions, risk. Use to quote, price, bid, size, or scope an Odoo request. odoo-dev:fibonacci-estimate owns the hours inside it; numbers-only asks go straight there."""
     return [_BODY]
 
 

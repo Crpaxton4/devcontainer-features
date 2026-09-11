@@ -1,7 +1,6 @@
 ---
 name: discovery-notes
-description: Capture and structure client discovery for an Odoo engagement. Use when the user is running a discovery or requirements session, documenting a client's current process, actors, volumes, integrations, and pain points, or doing a gap analysis before scoping. Mines existing Odoo chatter and knowledge articles for context first.
-when_to_use: The user is on, or has just come off, a discovery or requirements call with a client; the current process has to be written down before anyone can scope it; actors, volumes, integrations, or pain points need capturing; a gap analysis is wanted between what the client does today and what Odoo does out of the box; or a request is too vague to price and the missing facts have to be gathered first.
+description: "Capture and structure client discovery for an Odoo engagement, mining Odoo chatter and knowledge articles first. Use for a discovery or requirements call, current process, actors, volumes, integrations, pain points, or gap analysis before scoping."
 user-invocable: false
 ---
 
@@ -15,6 +14,10 @@ Turn a discovery conversation into structured, reusable notes: what the client
 does today, who does it, how much, what hurts, and where Odoo fits. Feeds
 `odoo-dev:odoo-quote` and `odoo-dev:odoo-design-doc`. All tools below are read-only `odoo-sdk`
 MCP tools.
+
+## When to use
+
+The user is on, or has just come off, a discovery or requirements call with a client; the current process has to be written down before anyone can scope it; actors, volumes, integrations, or pain points need capturing; a gap analysis is wanted between what the client does today and what Odoo does out of the box; or a request is too vague to price and the missing facts have to be gathered first.
 
 ## 1. Mine existing context before asking (read-only)
 

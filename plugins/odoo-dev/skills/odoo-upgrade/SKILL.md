@@ -1,7 +1,6 @@
 ---
 name: odoo-upgrade
-description: Plan and execute code upgrades of custom Odoo modules between major versions (16.0→17.0→18.0→19.0). Use when the user wants to upgrade Odoo, migrate or port a module/addon to a new version, asks about version migration or breaking changes, requests an upgrade estimate/plan, needs a module inventory, or asks what the full upgrade process involves (staging DB upgrade, production cutover, go-live checklist, who does what). Includes a full-lifecycle SOP; AI executes code phases only — database upgrades are run by humans.
-when_to_use: A custom or OCA module has to move between major Odoo series; an upgrade project needs an inventory, a plan, or an estimate; someone asks what breaks between two versions, or what upgrade_code fixes automatically; a ported module renamed a field, model, or xmlid and now needs migration scripts; or someone asks who runs the database upgrade and what the go-live checklist looks like.
+description: "Plan and run code upgrades of custom Odoo modules between major versions (16.0→17.0→18.0→19.0). Use to migrate or port a module or addon, for breaking changes, a module inventory, an upgrade estimate or plan, or the full-lifecycle SOP."
 user-invocable: false
 ---
 # Odoo Code Upgrade Guide
@@ -19,6 +18,10 @@ Environment = Odoo devcontainer (load `odoo-dev:odoo-devcontainer` skill for CLI
 - **gh CLI**: !`gh auth token >/dev/null 2>&1 && echo "token present" || echo "NO TOKEN — oca_check.py will fail"`
 
 Load refs as needed — never all at once.
+
+## When to use
+
+A custom or OCA module has to move between major Odoo series; an upgrade project needs an inventory, a plan, or an estimate; someone asks what breaks between two versions, or what upgrade_code fixes automatically; a ported module renamed a field, model, or xmlid and now needs migration scripts; or someone asks who runs the database upgrade and what the go-live checklist looks like.
 
 ## Index
 

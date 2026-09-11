@@ -1,9 +1,12 @@
 ---
 name: principles
-description: Engineering principles for software design decisions, indexed as one-liners over safety and correctness (assertions, bounds, error repair, explicit control flow), design and architecture (simplicity, parsimony, separation of policy from mechanism, no duplicate state), composition and interfaces (modularity, least surprise, explicit options), code structure (layered architecture, a 25-line function limit, control-flow placement, naming), performance (batching, mechanical sympathy, measure before tuning), and visibility (transparency, silence, PR etiquette). Use it when writing new code or reviewing a diff, and when a design decision needs a stated reason rather than a preference.
-when_to_use: New code is about to be written, or a diff is about to be reviewed; two designs have to be chosen between; a function is growing past what one screen holds; an error path, a limit, a default, or a boundary is being decided; a name, an abbreviation, or a magic literal is in question; or someone asks why the code is shaped the way it is.
+description: "Engineering principles indexed as one-liners: safety and correctness, design and architecture, composition and interfaces, code structure, performance, visibility. Use when writing new code, reviewing a diff, or justifying a design choice."
 user-invocable: false
 ---
+
+## When to use
+
+New code is about to be written, or a diff is about to be reviewed; two designs have to be chosen between; a function is growing past what one screen holds; an error path, a limit, a default, or a boundary is being decided; a name, an abbreviation, or a magic literal is in question; or someone asks why the code is shaped the way it is.
 
 ## How to Use
 

@@ -26,7 +26,7 @@ _BODY = skill_body("odoo-design-doc")
 
 
 def odoo_design_doc() -> list[str]:
-    """Write an Odoo solution/technical design document. Use when the user asks to design, spec, or write a technical or solution design for an Odoo feature, module, or customization — covering models and fields (with technical names), views, security (access rights + record rules), data migration, upgrade impact, and rollout. Discovers current state via read-only Odoo tools first."""
+    """Write an Odoo solution or technical design document, discovering current state via read-only Odoo tools first. Use to design or spec an Odoo feature, module, or customization: models, fields, views, security, migration, upgrade impact, rollout."""
     return [_BODY]
 
 

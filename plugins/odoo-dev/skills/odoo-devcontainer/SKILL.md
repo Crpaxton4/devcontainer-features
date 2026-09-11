@@ -1,7 +1,6 @@
 ---
 name: odoo-devcontainer
-description: "The working reference for this Odoo devcontainer: filesystem paths, the odoo-bin CLI (install, upgrade, test, scaffold, shell, database ops), odoo.conf and workers, the Python venv, logging and debugging, grepping community and enterprise source, module structure and manifest keys, the ORM (fields, decorators, recordsets, environment and sudo(), inheritance), security files, views and XPath, actions, controllers, data files, mixins, QWeb reports, performance and prefetch, the external API and outbound API clients, the OWL frontend (components, assets, registries, services, hooks, patching), writing and running tests and browser tours, commit and versioning conventions, odoo.sh access, and the post-rebuild checklist. Use it whenever Odoo module code is written, read, run, or debugged in the devcontainer."
-when_to_use: Anything is being written, read, run, or debugged inside an Odoo devcontainer — a model, a view, a controller, an OWL component, a test, a tour, a report; a path, an odoo-bin flag, a field kwarg, a decorator, an XPath, or an asset bundle has to be exact rather than remembered; the container was just rebuilt or the machine is new; or a commit is about to be made and the manifest version has to be bumped first.
+description: "Working reference for this Odoo devcontainer: paths, odoo-bin, odoo.conf, the ORM, security, views and XPath, controllers, QWeb, OWL assets, tests and tours, commit conventions. Use whenever Odoo module code is written, read, run, or debugged here."
 ---
 
 # Odoo Dev Env Guide
@@ -22,6 +21,10 @@ container: there is no stack to bring up from in there, and the second line is a
 fact about the container, not a fault. Docker present and no series is a host
 shell, where the second line is the real answer and the series has to come from
 the project rather than from the environment.
+
+## When to use
+
+Anything is being written, read, run, or debugged inside an Odoo devcontainer — a model, a view, a controller, an OWL component, a test, a tour, a report; a path, an odoo-bin flag, a field kwarg, a decorator, an XPath, or an asset bundle has to be exact rather than remembered; the container was just rebuilt or the machine is new; or a commit is about to be made and the manifest version has to be bumped first.
 
 ## Index
 

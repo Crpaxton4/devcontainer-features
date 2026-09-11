@@ -1,7 +1,6 @@
 ---
 name: fibonacci-estimate
-description: "Owns the hour values on any estimate: every leaf snaps to the Fibonacci ladder (1, 2, 3, 5, 8, 13, 21, 34, 55) in hours, each leaf carries a Low and a High anchored to observed effort, and every parent carries the raw sum beside the nearest Fibonacci. Use it on its own whenever the numbers are the job — re-cutting an existing estimate, applying a reduction factor or discount, splitting an estimate into subtasks, rolling subtask hours up to a parent, or sizing work where someone mentions Fibonacci, story points, planning poker, or relative sizing but wants hours as the unit. For a full Odoo quote — context, assumptions, exclusions, risk, house template — odoo-dev:odoo-quote owns the document and calls this skill for the numbers, so start there and this one follows."
-when_to_use: An estimate already exists and its numbers need re-cutting, splitting into subtasks, rolling up to a parent, or a reduction factor applied; someone wants hours rather than story points; a leaf value has landed off the ladder; a parent total is about to be reported without its raw sum beside it; or odoo-dev:odoo-quote has decomposed a quote and each line now needs a defensible hour figure.
+description: "Owns the hours on an estimate: leaves snap to the Fibonacci ladder, parents carry the raw sum. Use for re-cutting, splitting, roll-up, reduction factors, story points or planning poker in hours. odoo-dev:odoo-quote owns the document and calls this."
 user-invocable: false
 ---
 
@@ -10,6 +9,10 @@ user-invocable: false
      other synced copies are generated from it via `odoo-sdk sync-skills`. -->
 
 # Fibonacci estimates in hours
+
+## When to use
+
+An estimate already exists and its numbers need re-cutting, splitting into subtasks, rolling up to a parent, or a reduction factor applied; someone wants hours rather than story points; a leaf value has landed off the ladder; a parent total is about to be reported without its raw sum beside it; or odoo-dev:odoo-quote has decomposed a quote and each line now needs a defensible hour figure.
 
 ## Why the ladder
 

@@ -26,7 +26,7 @@ _BODY = skill_body("fibonacci-estimate")
 
 
 def fibonacci_estimate() -> list[str]:
-    """Break work into a line-item estimate where every leaf value snaps to the Fibonacci ladder (1, 2, 3, 5, 8, 13, 21, 34, 55) measured in hours, and parents carry both the raw sum and the nearest Fibonacci. Use this whenever the user asks to estimate, size, scope, break down, split, or quote a piece of work in hours — and especially when they mention Fibonacci, story points, planning poker, or relative sizing but want hours as the unit rather than points. Also use it when re-cutting an existing estimate, applying a reduction factor or discount, splitting an estimate into subtasks, or rolling subtask numbers up to a parent, even when they never say "Fibonacci" out loud."""
+    """Owns the hours on an estimate: leaves snap to the Fibonacci ladder, parents carry the raw sum. Use for re-cutting, splitting, roll-up, reduction factors, story points or planning poker in hours. odoo-dev:odoo-quote owns the document and calls this."""
     return [_BODY]
 
 

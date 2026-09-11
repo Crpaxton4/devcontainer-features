@@ -26,7 +26,7 @@ _BODY = skill_body("odoo-code-review")
 
 
 def odoo_code_review() -> list[str]:
-    """Odoo-specific code review checklist for module/addon code — Python models, XML views, and security files. Use when reviewing Odoo customizations for ORM anti-patterns, sudo() misuse, raw-SQL injection, N+1/prefetch issues, access rights and record rules, upgrade safety, and translations. Applies Odoo domain knowledge on top of a generic code review; does not invoke the generic code-review flow."""
+    """The Odoo domain lens over module and addon code, in addition to a generic review and never instead. Covers ORM anti-patterns, sudo() misuse, raw-SQL injection, N+1 and prefetch, ir.model.access.csv, record rules, upgrade safety, untranslated strings."""
     return [_BODY]
 
 

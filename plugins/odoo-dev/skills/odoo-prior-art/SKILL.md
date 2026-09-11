@@ -1,7 +1,6 @@
 ---
 name: odoo-prior-art
-description: Check whether standard Odoo (community or enterprise) on the target version, or an existing OCA module on the customer's series, already does what is being asked for — before quoting, designing, or building it. Use this at the START of any Odoo scoping, estimating, quoting, or design task, and whenever someone asks 'do we need to build this?', 'does Odoo do this already?', 'is there an OCA module for this?', or proposes a new custom module or field. Verdicts come from greps of the actual target trees and the OCA catalog, never from memory.
-when_to_use: Before any Odoo quote, estimate, design, or build begins; someone proposes a new custom module, model, or field; someone asks whether Odoo already does this, whether an OCA module exists for it, or whether it needs building at all; or an upgrade is being planned and a custom module may have been made redundant by the target series.
+description: "Check whether standard Odoo on the target version, or an OCA module on the customer's series, already does this. Use at the START of any scoping, estimating, or design task, and for 'do we need to build this?'. Verdicts come from greps, never memory."
 user-invocable: false
 ---
 # Odoo Prior Art
@@ -9,6 +8,10 @@ user-invocable: false
 Answer one question per capability: **does this already exist?** In standard Odoo on target version, or OCA module on customer's series.
 
 Cheapest lever on quote. Custom module paid once when built, again at every upgrade. Settings checkbox or maintained OCA module paid once, never appear in next upgrade.
+
+## When to use
+
+Before any Odoo quote, estimate, design, or build begins; someone proposes a new custom module, model, or field; someone asks whether Odoo already does this, whether an OCA module exists for it, or whether it needs building at all; or an upgrade is being planned and a custom module may have been made redundant by the target series.
 
 ## The rule that makes it worth anything
 
