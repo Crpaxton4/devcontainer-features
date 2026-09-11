@@ -56,7 +56,7 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `commands/` (incl. `commands/builtin`) | core | the registry is the service layer |
 | `billing/` | core | timesheet/reporting workflows |
 | `sessionization/` | core | pure transforms + frozen event vocabulary |
-| `tracking/` | core | local run/session tracking helpers (amendment, #717): `env`, `runs`, `stats`, `checkpoint` from the dissolved `utilities/` plus the relocated `reap` and `prune` |
+| `tracking/` | core | local run/session tracking helpers (amendment, #717): `env`, `runs`, `stats`, `checkpoint` from the dissolved `utilities/` plus the relocated `reap` and `prune`; #718 adds `models` (the promoted tracker vocabulary — see below) and `events` (core door to the raw-event read) |
 | `reap.py` | shim | deprecation shim aliasing `tracking/reap.py` (#717); excluded from contracts |
 | `prune.py` | shim | deprecation shim aliasing `tracking/prune.py` (#717); excluded from contracts |
 | `services/` | data | Odoo-facing service helpers (amendment, #717): `odoo_helpers`, `activities`, `attachments`, `knowledge`, `mail_status`, `logged_lines` from the dissolved `utilities/` — every module takes an `OdooClient` and talks to Odoo |
@@ -64,13 +64,14 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `settings.py` | shared kernel | connection-settings value object + validators extracted from `state/config.py` (amendment, #717) so transport stops importing the state layer; `state.config` re-exports them unchanged |
 | `skills/` | core | packaged consulting-skill data + `skill_body` accessors (amendment, #712): pure stdlib, no MCP/CLI imports; surfaces read it, nothing below core does |
 | `transport/` | data | RPC/JSON-2 executors + canonical Odoo error taxonomy |
+| `billing/logged.py` | core | core door to the Odoo logged-hours read (amendment, #718) |
 | `client/` | data | `OdooClient` session façade |
-| `records/` | data | `OdooRecordset` / `Record` |
-| `query/` | data | `Domain` / `DomainExpression` |
+| `records/` | core | `OdooRecordset` / `Record` — promoted to core domain types (amendment, #718; see the recordset decision below) |
+| `query/` | core | `Domain` / `DomainExpression` — promoted with `records/` (amendment, #718) |
 | `fields/` | data | wire-value normalization |
 | `env/` | data | metadata cache |
-| `state/` | data | SQLite task-tracker state, `LocalConfig`, FSM errors |
-| `adapters/` | data | external-source sync + state persistence adapters |
+| `state/` | data | SQLite task-tracker state + `LocalConfig`; `state/models.py` is now a sanctioned non-warning alias of the promoted `tracking/models.py` (amendment, #718) |
+| `adapters/` | data | external-source sync + state persistence adapters, one package per external system since #718 (`git/`, `github/`, `odoo/`, `google/`, `state/`; see the port-set amendment) |
 | `_utils.py` | shared kernel | private helpers, importable from any layer; also `format_chatter` (amendment, #717 — see below) |
 | `errors.py` | shared kernel | façade re-exporting the `transport.errors` taxonomy and the `state.models` FSM errors (new in this ADR) |
 | `__init__.py` | root façade | public API re-exports; PEP 562 lazy `OdooMCPServer` export (named exception) |
@@ -116,8 +117,13 @@ not by directory moves (the package layout is unchanged in this ADR):
 - **Adding a new exception requires amending this ADR in the same PR.** A
   bare pyproject edit that grows an ignore list without an ADR-005 amendment
   is a review-rejectable change.
-- Endgame (#718): once the debt entries are gone, the contracts flip to
-  `exhaustive = true` so an unclassified new module fails CI.
+- Endgame (#718) — DONE: the rule-4 debt entries are gone and a sixth
+  contract (`layers`, `exhaustive = true` over the `odoo_sdk` container)
+  requires every top-level module to claim a layer, with
+  `exhaustive_ignores` naming only the composition root (`bootstrap`), the
+  `errors` kernel façade, and the shims (`utilities`, `prune`, `reap`). An
+  unclassified new module now fails CI (verified by adding a scratch
+  module and watching `lint-imports` reject it).
 
 ### Baseline debt register
 
@@ -127,16 +133,16 @@ retires it.
 | Debt | Fixed by |
 | --- | --- |
 | `cli/__main__` duplicates resync orchestration inline and imports `adapters` for it | #717 — DONE: the CLI dispatches the registry `ResyncCommand` with an injected local-first puller table and reaches the pullers/event-source vocabulary through `commands/builtin/resync` and `commands/log_event` |
-| `tui/app` imports `LocalConfig`/`LocalStateClient`/`EventRecord` from `state` | #716 (config injection) + #718 (StateStore port) |
-| `tui/app` imports `OdooError` from `transport.errors` directly | #718 (adopt `odoo_sdk.errors`) |
-| `tui/triage`, `tui/evidence`, `tui/export` import `state` types; `tui/timeline` imports `state.db` | #718 |
-| `tui/export` imports `adapters` directly | #718 |
-| `mcp/server` imports FSM error types from `state.models`; `mcp/tools/start_task` imports `TaskState` | #718 |
+| `tui/app` imports `LocalConfig`/`LocalStateClient`/`EventRecord` from `state` | #716 (config injection) + #718 — DONE: `TuiDeps` is typed against the `StateStore`/`SettingsView` ports and `EventRecord` comes from the promoted `tracking.models` |
+| `tui/app` imports `OdooError` from `transport.errors` directly | #718 — DONE: imports the kernel façade `odoo_sdk.errors` |
+| `tui/triage`, `tui/evidence`, `tui/export` import `state` types; `tui/timeline` imports `state.db` | #718 — DONE: the vocabulary (`EventRecord`, `SessionWindow`, `format_repo_label`) is promoted to `tracking.models`; `tui/export` is typed against the `StateStore` port |
+| `tui/export` imports `adapters` directly | #718 — DONE: reads raw events through the core door `tracking.events` |
+| `mcp/server` imports FSM error types from `state.models`; `mcp/tools/start_task` imports `TaskState` | #718 — DONE: `TaskState` comes from the promoted `tracking.models` (the `mcp/server` half was already fixed by the errors façade) |
 | `transport` imports `state.config` for connection settings (data→data, no contract broken, still wrong direction: transport is below state) | #717 — DONE: `odoo_sdk/settings.py` (shared kernel) owns the value object; transport and client import it, `state.config` re-exports it |
 | `utilities/` spans all three layers | #717 — DONE: dissolved into `services/` (data), `tracking/` (core), `mcp/prompts/messages.py` (surface content), and the shared kernel (`format_chatter`); `utilities/html.py` stays as shared code |
-| `tui/app` imports the Odoo-reading `services.logged_lines` helper directly | #718 (StateStore/port work). Newly *visible* debt, not newly created (amendment, #717): the edge existed all along but was invisible while `utilities/` was classified core |
+| `tui/app` imports the Odoo-reading `services.logged_lines` helper directly | #718 — DONE: reads through the core door `billing.logged` (the edge was newly *visible* debt from #717's reclassification, not newly created) |
 | Composition roots construct the graph inline (permanent exceptions today) | #716 (`bootstrap.py` single composition root, then the entries are deleted) |
-| Data modules import private `_`-named helpers from the shared kernel (`_is_sequence`, `_is_null_wire_value`, `_dedup_field_names` from `_utils`) | accepted — the kernel is intra-package by design; revisit naming in #718 |
+| Data modules import private `_`-named helpers from the shared kernel (`_is_sequence`, `_is_null_wire_value`, `_dedup_field_names` from `_utils`) | accepted, permanently (#718 decision): the kernel is intra-package by design and the names are deliberately private to the package — renaming them public would advertise stability the kernel does not promise |
 
 ### The `errors` façade
 
@@ -236,6 +242,111 @@ odoo_sdk.errors.OdooError`).
   always called the Odoo-reading logged-hours helper directly, but the edge
   was invisible while `utilities/` was classified core. #718's port work
   retires it.
+
+### Port set, recordset promotion, and exhaustive mode (final amendment, #718)
+
+- **The consumer-side port set is complete.** `commands/protocols.py` now
+  defines one structural Protocol per external system the command layer
+  drives, each derived strictly from what the consumers call today:
+
+  | Port | Concrete adapter | Adapter package |
+  | --- | --- | --- |
+  | `RpcClient` | `OdooClient` | `client/` + `transport/` |
+  | `StateStore` | `LocalStateClient` | `state/` (+ `adapters/state`) |
+  | `GitGateway` | `sync_git_log` module surface | `adapters/git` |
+  | `IssueTracker` | `sync_github` module surface | `adapters/github` |
+  | `CalendarGateway` | Google puller module surface | `adapters/google` |
+  | `SettingsView` | `LocalConfig` (read-only view) | `state/config` |
+
+  `StateStore` carries the 39 members core, billing/tracking, and the TUI
+  driver actually call; the store's ingest-only members (`add_event_dedup`,
+  `get_event`, `get_events`, `update_timesheet_id`) are deliberately absent —
+  only the data-side resync adapters use them, and an adapter talking to its
+  own store needs no port. The gateway ports are satisfied by the adapter
+  *packages themselves* (PEP 544 module-implements-protocol), so the frozen
+  module-function pullers need no wrapper objects. Odoo task chatter gets no
+  fifth gateway: its puller reaches Odoo through the existing `RpcClient`.
+  Wiring: `bootstrap()` builds the concrete `RpcClient`/`StateStore`/config
+  instances; core's default gateway→adapter binding is
+  `commands/builtin/resync._SYNC_DISPATCH`, overridable per entrypoint
+  through the command's `pullers` seam (#717). Conformance is pinned by the
+  additive `tests/test_commands/test_ports.py`.
+- **Adapters: one package per external system** (Netflix-Dispatch style):
+  `adapters/git`, `adapters/github`, `adapters/odoo`, `adapters/google`,
+  `adapters/state`. Two are physical moves with shims per the shim policy:
+  `state_persistence.py` → `adapters/state/persistence.py` (warning
+  `sys.modules` alias at the old path) and the whole Google section of
+  `external_sync.py` → `adapters/google/sync.py` (its tests inject
+  transports rather than patching module attributes, so it could move; the
+  old module re-exports every public and test-read Google name). The
+  git/GitHub/Odoo-chatter implementations remain *physically* in
+  `external_sync.py` behind their packages' façades — **blocked, concretely**:
+  the frozen adapter tests patch the sections' shared seams on that module
+  object (`patch.object(external_sync, "_run_capture"/"_gh_json"/
+  "_discover_git_repos", ...)` in `tests/test_adapters/test_external_sync.py`),
+  and relocated code would resolve those names in its own globals and escape
+  the patches. The per-system packages are the canonical import surface
+  (core imports through them); the bodies follow when the adapter tests are
+  next allowed to move. Cross-section pure helpers (`_extract_task_ids`,
+  `_parse_iso_utc`) moved to `adapters/_shared.py` to break the
+  google↔external_sync cycle.
+- **Recordset decision — executed as promotion by reclassification.**
+  `records/` (`OdooRecordset`/`Record`) and `query/`
+  (`Domain`/`DomainExpression`) are now **core** in every contract: the
+  public API is explicitly recordset-first, so `RpcClient.__getitem__`
+  naming `OdooRecordset` is a port returning a core domain type, not an
+  adapter leak. The coupling assessment found exactly one downward
+  dependency — `records.recordset` imports the abstract `OdooExecutor`
+  contract and the `guarded_execute` chokepoint from `transport/executor` —
+  which is the sanctioned core→data direction (the RPC plumbing itself
+  stays data-side behind that seam), so no file had to move and no
+  untouchable test was at risk. The one upward edge this creates —
+  `client.client -> records.recordset`, the adapter constructing the domain
+  type its port returns — is a named permanent exception (hexagonal
+  adapters import the domain by design). Physical relocation into a
+  `core/`-style directory stays deferred with the rest of the big-bang move
+  (124 deep-importing test files).
+- **Tracker vocabulary promoted.** `state/models.py` (the `TaskState` FSM,
+  `TaskRun`, `EventRecord`, `SessionWindow`, `session_key`, the FSM errors)
+  moved wholesale to `tracking/models.py`, joined by the absent-repo display
+  vocabulary (`format_repo_label`, `AGENTLESS_REPO*`) from `state/db.py`.
+  `state/models.py` remains as a **non-warning** `sys.modules` alias — it is
+  eagerly imported by `odoo_sdk.state.__init__` (the supported public
+  re-export path), so a `DeprecationWarning` there would fire on every
+  `import odoo_sdk.state`; the path is sanctioned, not deprecated. Its single
+  re-export edge (`state.models -> tracking.models`) is the one shim that
+  cannot be unlisted (it lives inside the listed `state` package) and is an
+  explicit permanent ignore. The `errors` kernel façade keeps importing the
+  FSM errors *via the alias* on purpose: importing `tracking.models`
+  directly would thread a new data→core chain through every data-layer
+  consumer of the façade (`services -> errors -> tracking`), which rules
+  3/6 rightly reject.
+- **Exhaustive mode is ON** (rule 6): a `layers` contract over the
+  `odoo_sdk` container with `exhaustive = true` — every top-level module
+  must claim a layer or be a named `exhaustive_ignores` exception
+  (`bootstrap`, `errors`, `utilities`, `prune`, `reap`). Verified by adding
+  a scratch module and watching `lint-imports` fail. Within-layer siblings
+  use the non-independent `:` form (surface independence stays rule 1's
+  job); the contract's `ignore_imports` restate only the named permanent
+  upward edges plus the settings kernel's lazy resolver seam
+  (`settings -> state.config`, visible to grimp as a function-body import).
+- **Rule 4's baseline-debt register is EMPTY.** All nine remaining
+  surface→data entries are retired (see the updated register above); the
+  contract now carries no ignore list at all. Surfaces reach data only
+  through core, the ports, or the kernel façades.
+- **`Command.config` lazy fallback — status unchanged, still pinned.** The
+  #716 amendment deferred its removal to this issue; re-examined here, the
+  untouchable regression oracle still pins the fallback itself
+  (`tests/test_command_registry/test_command_protocol.py::
+  test_config_lazily_loaded_when_absent` asserts an un-injected
+  `Command.config` calls `LocalConfig.load()` and caches it), so it
+  survives as the documented test-convenience escape hatch. Production
+  remains injection-only via `bootstrap()`. Revisit only when the
+  command-protocol contract tests are allowed to move; with the port set
+  complete there is no architectural pressure to do so sooner — the
+  fallback is core lazily constructing a data-layer default, exactly like
+  `Command.state`'s `LocalStateClient()` fallback, and both are legal
+  core→data edges.
 
 ## Rejected alternatives
 

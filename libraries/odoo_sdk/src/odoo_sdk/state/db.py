@@ -13,6 +13,9 @@ from typing import Optional
 from odoo_sdk._utils import as_utc
 
 from .models import (
+    AGENTLESS_REPO,
+    AGENTLESS_REPO_LABEL,
+    AGENTLESS_REPO_SENTINEL,
     EventRecord,
     InvalidStateTransitionError,
     SessionWindow,
@@ -21,6 +24,7 @@ from .models import (
     TaskRun,
     TaskState,
     TrackerStateMissingError,
+    format_repo_label,
 )
 
 #: Filename of the single central tracker database under the state root (#369).
@@ -29,36 +33,11 @@ from .models import (
 #: the normalized ``owner/repo`` label rather than a per-repo directory hash.
 TRACKER_DB_FILENAME = "tracker.db"
 
-# Repo-less agent events cannot key on a real repository, so their derived
-# sessions carry an ABSENT repo — the empty string — rather than an in-band
-# sentinel value (#508). The empty string is never a real ``owner/repo``, so such
-# events still group deterministically in the SQL-derived read path
-# (:meth:`LocalStateClient.derive_sessions_overlapping`), and unlike the old
-# ``"\x00agent"`` sentinel it carries no control character into JSON, MCP
-# responses, or a rendered TUI screen. It is also exactly what the in-Python
-# derivation (:mod:`odoo_sdk.sessionization.transform`) already produced, so the
-# two paths no longer diverge for the same input.
-AGENTLESS_REPO = ""
-
-#: Deprecated alias for :data:`AGENTLESS_REPO`, kept so out-of-tree callers that
-#: still compare against or filter on the old name keep working (#508). Both
-#: names are the same absent-repo value, so ``repo == AGENTLESS_REPO_SENTINEL``
-#: and ``repo=AGENTLESS_REPO_SENTINEL`` filters behave as before.
-AGENTLESS_REPO_SENTINEL = AGENTLESS_REPO
-
-#: Printable stand-in shown wherever an absent repo needs a human label.
-AGENTLESS_REPO_LABEL = "(agent)"
-
-
-def format_repo_label(repo: Optional[str]) -> str:
-    """Return the display label for a session's ``repo``.
-
-    The ONE place absent-repo display is decided (#508). Every consumer — the TUI
-    lane labels, MCP/CLI JSON renderers, exports — routes through this helper so
-    they agree, instead of each masking the absent value independently.
-    """
-    return repo if repo else AGENTLESS_REPO_LABEL
-
+# The absent-repo vocabulary (AGENTLESS_REPO, AGENTLESS_REPO_SENTINEL,
+# AGENTLESS_REPO_LABEL) and its display helper ``format_repo_label`` were
+# promoted to :mod:`odoo_sdk.tracking.models` (#718, ADR-005 amendment) with
+# the rest of the tracker vocabulary; they are re-imported above so every
+# historical ``odoo_sdk.state.db`` import keeps working unchanged.
 
 # Max ids bound into a single ``... IN (...)`` statement (delete and series-assign).
 # Chunked to stay well under SQLite's historical 999-variable limit; each caller

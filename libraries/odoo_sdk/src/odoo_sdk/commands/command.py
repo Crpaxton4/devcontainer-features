@@ -1,13 +1,16 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+# The concrete constructors are still needed for the lazy fallbacks below;
+# the *annotations* are the consumer-side ports (#718), so any structural
+# stand-in can drive a command.
 from odoo_sdk.state import (
     LocalConfig,
     LocalStateClient,
-    TaskRun,
 )
+from odoo_sdk.tracking.models import TaskRun
 
-from .protocols import RpcClient
+from .protocols import RpcClient, StateStore
 
 #: Maximum characters allowed in a chatter message/note body posted by the SDK
 #: (#610). Enforced at the command layer — transport-agnostic per ADR-004 — so
@@ -40,7 +43,7 @@ def enforce_chatter_body_limit(body: str, label: str) -> None:
         )
 
 
-def require_active_run(db: LocalStateClient, task_id: int) -> TaskRun:
+def require_active_run(db: StateStore, task_id: int) -> TaskRun:
     """Return the active run for ``task_id`` or raise ``TaskNotRunningError``.
 
     Shared by the session-mutating builtin commands (``task_question``,
@@ -64,7 +67,8 @@ class Command(ABC):
 
     * ``client`` — any :class:`RpcClient` (the :class:`OdooClient` in
       production; a structural fake in tests).
-    * ``state`` — the :class:`LocalStateClient` (SQLite session FSM).
+    * ``state`` — any :class:`StateStore` (the :class:`LocalStateClient`
+      SQLite session FSM in production; a structural fake in tests).
     * ``config`` — the :class:`LocalConfig` (resolved SDK settings).
 
     The client is required; the :class:`Registry` always injects it. The state
@@ -88,7 +92,7 @@ class Command(ABC):
     def __init__(
         self,
         client: RpcClient,
-        state: Optional[LocalStateClient] = None,
+        state: Optional[StateStore] = None,
         config: Optional[LocalConfig] = None,
     ):
         self._client = client
@@ -96,8 +100,14 @@ class Command(ABC):
         self._injected_config = config
 
     @property
-    def state(self) -> LocalStateClient:
-        """Return the injected local state client, creating one on first use."""
+    def state(self) -> StateStore:
+        """Return the injected state store, creating the default one on first use.
+
+        Typed against the consumer-side :class:`StateStore` port (#718); the
+        lazy fallback constructs the concrete
+        :class:`~odoo_sdk.state.LocalStateClient`, which satisfies the port
+        structurally.
+        """
         if self._injected_state is None:
             self._injected_state = LocalStateClient()
         return self._injected_state

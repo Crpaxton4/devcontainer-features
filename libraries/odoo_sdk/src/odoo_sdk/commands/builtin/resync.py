@@ -22,15 +22,22 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Callable, Mapping, Optional
 
-from odoo_sdk.adapters import (
+# One import per external-system adapter package (#718): each package sits
+# behind a core-owned Protocol in :mod:`odoo_sdk.commands.protocols`
+# (``GitGateway`` / ``IssueTracker`` / ``CalendarGateway``; the chatter
+# puller rides the existing ``RpcClient`` port), and this module's
+# :data:`_SYNC_DISPATCH` is core's default binding of those ports to the
+# concrete adapters. The names stay module globals so the frozen tests'
+# ``commands.builtin.resync.sync_*`` patch points keep intercepting.
+from odoo_sdk.adapters.git import sync_git_log
+from odoo_sdk.adapters.github import sync_github
+from odoo_sdk.adapters.google import (
     GoogleAPIError,
     GoogleAuthError,
-    sync_git_log,
-    sync_github,
     sync_gmail,
     sync_google_calendar,
-    sync_odoo_chatter,
 )
+from odoo_sdk.adapters.odoo import sync_odoo_chatter
 
 from ..command import Command
 from ._registration import builtin_command

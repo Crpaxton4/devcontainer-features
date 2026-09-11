@@ -1,179 +1,22 @@
-"""Data models and error taxonomy for the local task-session state layer."""
+"""Compat alias: the tracker vocabulary moved to :mod:`odoo_sdk.tracking.models` (#718).
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
+The FSM states, runs, events, session windows, and their error taxonomy were
+promoted from the persistence layer to the core-owned vocabulary module
+(ADR-005 amendment, #718). Importing this path hands back the relocated
+module itself (``sys.modules`` aliasing), so every existing import — and any
+test that patches attributes on this path — keeps exactly its old behavior,
+and ``odoo_sdk.state``'s public re-exports are the identical objects.
 
+Unlike the #717 ``utilities`` shims this alias does NOT warn: it is imported
+eagerly by ``odoo_sdk.state.__init__`` (the supported public re-export path),
+so a :class:`DeprecationWarning` here would fire on every ``import
+odoo_sdk.state``. The path is a sanctioned alias, not a deprecated one.
+Excluded from the ADR-005 import-linter contract expectations via a single
+ignored edge (``state.models -> tracking.models``) documented in the ADR.
+"""
 
-class TaskState(str, Enum):
-    #: Actively being worked; the only state that accrues fresh wall clock.
-    RUNNING = "RUNNING"
-    #: Paused waiting on a stakeholder answer; resumes to RUNNING (#504).
-    AWAITING_ANSWERS = "AWAITING_ANSWERS"
-    #: Not being worked right now but **resumable** — ``resume_task`` reopens it
-    #: and ``start_task`` auto-resumes it instead of inserting a second run row,
-    #: so one continuous effort stays one run rather than splitting (#504).
-    STOPPED = "STOPPED"
-    #: Terminal: a finished run that is never reopened by resume/auto-resume and
-    #: is hidden from the default run queries. CLI-only and invisible to MCP by
-    #: design — the agent cannot reach or reason about it (#504).
-    CLOSED = "CLOSED"
+import sys
 
+from odoo_sdk.tracking import models as _relocated
 
-class TrackerStateMissingError(RuntimeError):
-    """Raised when the central tracker database does not exist at its path.
-
-    The tracker database is host-provisioned state (issue #369): it is created
-    on the host by ``setup.sh`` / ``setup.ps1`` and bind-mounted into every
-    container. The SDK deliberately never creates it — a self-created DB would be
-    container-local and discarded on rebuild, silently splitting one person's
-    timeline. So every state-touching entry point raises this single, actionable
-    error naming the expected path rather than materializing an empty DB.
-    """
-
-
-class TaskAlreadyRunningError(RuntimeError):
-    """Raised when start_task is called for a task that already has an active session."""
-
-
-class TaskNotRunningError(RuntimeError):
-    """Raised when an operation requires an active session but none exists."""
-
-
-class InvalidStateTransitionError(RuntimeError):
-    """Raised when a state transition is not permitted by the FSM."""
-
-
-@dataclass
-class TaskRun:
-    id: int
-    task_id: int
-    task_name: str
-    project_id: int
-    project_name: str
-    state: TaskState
-    started_at: datetime
-    stopped_at: Optional[datetime]
-    timesheet_id: Optional[int]
-    notes: list[str]
-    aborted_at: Optional[datetime] = None
-    """When the run was force-aborted (never billed), else ``None`` (#356).
-
-    An additive, nullable stamp set by :meth:`LocalStateClient.abort_run`. The
-    upload path excludes any derived session lying wholly within the aborted
-    run's ``[started_at, aborted_at]`` window for the same task, so an aborted
-    run's leftover events never bill. A normally stopped run leaves this ``None``.
-    """
-    question_message_id: Optional[int] = None
-    """Chatter message id of the run's most recent posted question, else ``None``.
-
-    The answer-detection watermark (#625): ``task_question`` stamps the
-    ``message_post`` return id here, and ``task_status`` reports how many chatter
-    messages are newer than it (``new_messages_since_question``) so orchestration
-    can poll "answered?" deterministically. A later question on the same run
-    overwrites the watermark (self-loop on AWAITING_ANSWERS); a run that never
-    asked a question leaves it ``None``.
-    """
-
-    run_summary: Optional[str] = None
-    """Machine-derived narrative of the run's work, else ``None`` (#626).
-
-    Written by ``stop_task`` from the run's recorded events and notes
-    (:func:`odoo_sdk.state.summary.summarize_run_activity`), never elicited from
-    a human. Internal/local text with NO length cap — the 300-character chatter
-    limit applies only to chatter bodies posted to Odoo. The billing upload
-    attaches this narrative to the session's timesheet entry.
-    """
-
-    @property
-    def elapsed_seconds(self) -> float:
-        end = self.stopped_at or datetime.now(timezone.utc)
-        return (end - self.started_at).total_seconds()
-
-    @property
-    def elapsed_hours(self) -> float:
-        return self.elapsed_seconds / 3600
-
-    @property
-    def elapsed_human(self) -> str:
-        total = int(self.elapsed_seconds)
-        h, rem = divmod(total, 3600)
-        m, s = divmod(rem, 60)
-        return f"{h}h {m}m {s}s"
-
-
-@dataclass
-class EventRecord:
-    """A point-in-time event row in the unified ``events`` timeseries table.
-
-    This is the persistence-layer twin of the pure
-    :class:`odoo_sdk.sessionization.RawEvent`. It is typed by ``source`` (e.g.
-    ``commit``, ``merge``, ``review``, ``agent``) and carries the extracted task
-    identifiers as a JSON list so a single event may attribute to several tasks.
-    """
-
-    id: Optional[int]
-    source: str
-    timestamp: datetime
-    task_ids: list[str]
-    repo: str
-    pr_num: int = 0
-    branch: str = ""
-    subject: str = ""
-    payload: Optional[dict] = None
-    external_id: Optional[str] = None
-    """Stable external identity for idempotent resync ingestion.
-
-    Set by the external-sync pullers (``git:<sha>``, ``gh:pr:<n>``,
-    ``gh:review:<id>``, ``odoo:mail:<id>``) so a re-run dedupes against the
-    partial unique index on ``events(external_id)``. ``None`` for events with no
-    external origin (hook / agent / FSM-driven writes), which never dedupe.
-    """
-
-
-@dataclass
-class SessionWindow:
-    """A per-task computed time window derived from the ``events`` timeseries.
-
-    Windows are not stored: they are computed at query time by the SQL-derived
-    read path (:meth:`~odoo_sdk.state.LocalStateClient.derive_sessions_overlapping`)
-    and returned to callers. They live alongside the ``task_runs`` FSM store
-    rather than replacing it.
-    """
-
-    id: Optional[int]
-    task_id: str
-    repo: str
-    started_at: datetime
-    ended_at: datetime
-    strategy_name: str = "development"
-    category: str = "Development"
-    pr_num: int = 0
-    event_ids: tuple[int, ...] = ()
-    """Ids of the events that compose this window, in ascending order.
-
-    Populated by the SQL-derived read path (``derive_sessions_overlapping``); the
-    window's ``id`` is the *minimum* of these, so it is stable under append-only
-    tail writes (a closed session's earliest event never changes).
-    """
-
-    @property
-    def duration_seconds(self) -> float:
-        """Return the window duration in seconds."""
-        return (self.ended_at - self.started_at).total_seconds()
-
-
-def session_key(window: SessionWindow) -> str:
-    """Return a stable identity string for a derived session window.
-
-    The key is ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
-    id. As of #352 sessions partition by task only (the repo is display-only
-    metadata, no longer part of the identity), so a task's agent events
-    (``repo=""``) and its resync'd commits (``repo="owner/repo"``) share one key
-    rather than splitting into two parallel lanes. Because a closed session's
-    earliest event id is immutable under append-only tail writes, the key stays
-    stable across re-derivations and is the idempotency key for per-session
-    timesheet uploads.
-    """
-    return f"{window.task_id}|{window.id}"
+sys.modules[__name__] = _relocated

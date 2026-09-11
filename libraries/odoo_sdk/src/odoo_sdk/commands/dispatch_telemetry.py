@@ -23,7 +23,7 @@ import subprocess
 from typing import Any, Optional, Tuple
 
 from odoo_sdk.errors import OdooError
-from odoo_sdk.state.models import (
+from odoo_sdk.tracking.models import (
     TaskAlreadyRunningError,
     TaskNotRunningError,
     TrackerStateMissingError,

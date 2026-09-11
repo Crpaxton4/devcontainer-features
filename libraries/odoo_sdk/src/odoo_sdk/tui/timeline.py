@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from odoo_sdk.state.db import format_repo_label
+from odoo_sdk.tracking.models import format_repo_label
 
 Session = Mapping[str, Any]
 
@@ -153,7 +153,7 @@ def _lane_label(key: tuple[str, str, str]) -> str:
     """Return a compact human label for a lane key.
 
     A repo-less agent session carries an absent ``repo``; it is rendered through
-    the shared :func:`~odoo_sdk.state.db.format_repo_label` helper so the TUI, MCP,
+    the shared :func:`~odoo_sdk.tracking.models.format_repo_label` helper so the TUI, MCP,
     and CLI paths agree on one stand-in rather than each masking it locally (#508).
     """
     task_id, repo, strategy = key

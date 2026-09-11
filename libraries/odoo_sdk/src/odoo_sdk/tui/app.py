@@ -28,12 +28,17 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
-from odoo_sdk.commands import Registry
-from odoo_sdk.commands.protocols import RpcClient
-from odoo_sdk.state import EventRecord, LocalConfig, LocalStateClient
-from odoo_sdk.transport.errors import OdooError
-from odoo_sdk.services.logged_lines import logged_hours_by_task_day
+# Everything below is core or shared kernel (#718): the driver's injected
+# peers are typed against the consumer-side ports, the tracker vocabulary is
+# the promoted core module, errors come from the kernel façade, and the
+# logged-hours read goes through billing's core door — no data-layer import
+# remains.
+from odoo_sdk.billing.logged import logged_hours_by_task_day
 from odoo_sdk.billing.upload import range_bounds, upload_sessions
+from odoo_sdk.commands import Registry
+from odoo_sdk.commands.protocols import RpcClient, SettingsView, StateStore
+from odoo_sdk.errors import OdooError
+from odoo_sdk.tracking.models import EventRecord
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
@@ -61,17 +66,22 @@ class TuiDeps:
     the registry shares with every command, so a write routed through a command
     (e.g. ``assign_event``) is immediately visible to the driver's own reads.
 
+    Each peer is typed against its consumer-side port (#718) — the concrete
+    ``OdooClient`` / ``LocalStateClient`` / ``LocalConfig`` the entrypoint
+    injects satisfy them structurally, and the driver names no data-layer
+    type.
+
     :param registry: Command registry the driver dispatches through.
     :param client: RPC client for the best-effort Odoo reads (logged hours) and
         the upload path.
-    :param store: Shared local state client (the same one the commands use).
-    :param config: Resolved SDK configuration (e.g. the session gap).
+    :param store: Shared state store (the same one the commands use).
+    :param config: Resolved SDK configuration view (e.g. the session gap).
     """
 
     registry: Registry
     client: RpcClient
-    store: LocalStateClient
-    config: LocalConfig
+    store: StateStore
+    config: SettingsView
 
 
 @dataclass(frozen=True)

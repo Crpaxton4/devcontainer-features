@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from odoo_sdk.state import EventRecord
+from odoo_sdk.tracking.models import EventRecord
 
 # A tick-series member's external id is ``<parent>:tick:<iso>`` where ``<iso>`` is
 # the tick's UTC ISO-8601 timestamp — exactly what the ingestion producer emits.

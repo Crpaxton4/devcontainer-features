@@ -10,12 +10,12 @@ from .protocols import RpcClient
 # ``log-event --source`` validation needs the strict resolver, and under
 # ADR-005 rule 4 a surface must reach the data-layer adapters through core —
 # this module, the command-layer owner of the events append, is that door.
-from odoo_sdk.adapters import (  # noqa: F401
+from odoo_sdk.adapters.state import (  # noqa: F401
     UnknownEventSourceError,
     source_to_event_type,
 )
 from odoo_sdk.state import LocalConfig, LocalStateClient, current_repo_label
-from odoo_sdk.state.models import EventRecord
+from odoo_sdk.tracking.models import EventRecord
 
 
 def _git_text(*args: str) -> str:
