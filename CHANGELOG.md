@@ -1,5 +1,25 @@
 # Changelog
 
+## [6.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.3.0...personal-features-v6.4.0) (2026-09-11)
+
+
+### Features
+
+* **odoo-sdk:** add generic cmd dispatcher with shared error envelope and telemetry ([2bef417](https://github.com/Crpaxton4/devcontainer-features/commit/2bef4179b33c17f657b521c4293714b72ddde1be)), closes [#713](https://github.com/Crpaxton4/devcontainer-features/issues/713)
+* **odoo-sdk:** add sync-skills command with target-dir and dest modes ([8ee7095](https://github.com/Crpaxton4/devcontainer-features/commit/8ee709570d734886850d1d4a761c4c4063908b02)), closes [#714](https://github.com/Crpaxton4/devcontainer-features/issues/714)
+* **odoo-sdk:** generic CLI dispatcher odoo-sdk cmd + telemetry extraction ([#727](https://github.com/Crpaxton4/devcontainer-features/issues/727)) ([2bef417](https://github.com/Crpaxton4/devcontainer-features/commit/2bef4179b33c17f657b521c4293714b72ddde1be))
+* **odoo-sdk:** package consulting skills as data and serve them via SkillsDirectoryProvider ([d503665](https://github.com/Crpaxton4/devcontainer-features/commit/d503665a3b8b67d3d53a816aadcb42a21a69bc61))
+* **odoo-sdk:** repo attribution for log-event + sidechain skip in event hook ([#747](https://github.com/Crpaxton4/devcontainer-features/issues/747)) ([3d751a2](https://github.com/Crpaxton4/devcontainer-features/commit/3d751a2c935fd5a9f82436420d3b4cf4d63027cc)), closes [#742](https://github.com/Crpaxton4/devcontainer-features/issues/742)
+* **odoo-sdk:** skills package data, prompt refactor, skills provider ([#726](https://github.com/Crpaxton4/devcontainer-features/issues/726)) ([d503665](https://github.com/Crpaxton4/devcontainer-features/commit/d503665a3b8b67d3d53a816aadcb42a21a69bc61))
+* **odoo-sdk:** sync-skills command (--target-dir + --dest) ([#728](https://github.com/Crpaxton4/devcontainer-features/issues/728)) ([8ee7095](https://github.com/Crpaxton4/devcontainer-features/commit/8ee709570d734886850d1d4a761c4c4063908b02))
+* **personal-features:** auto-install odoo-dev marketplace plugin in sync-claude-mcp ([#734](https://github.com/Crpaxton4/devcontainer-features/issues/734)) ([0461f88](https://github.com/Crpaxton4/devcontainer-features/commit/0461f8873719fe52a5a298f466b745cc50391680)), closes [#723](https://github.com/Crpaxton4/devcontainer-features/issues/723)
+* **personal-features:** claude wrapper appends system prompt file for sessions ([#752](https://github.com/Crpaxton4/devcontainer-features/issues/752)) ([bcca9ff](https://github.com/Crpaxton4/devcontainer-features/commit/bcca9ff538ac48c919bf1343422fd80ba952a617)), closes [#740](https://github.com/Crpaxton4/devcontainer-features/issues/740)
+* **personal-features:** mempalace-repair assert step for config, identity, recall hook ([#751](https://github.com/Crpaxton4/devcontainer-features/issues/751)) ([8f9294c](https://github.com/Crpaxton4/devcontainer-features/commit/8f9294c62c8718399d77d5d4a108d0793619f88f)), closes [#744](https://github.com/Crpaxton4/devcontainer-features/issues/744)
+* **personal-features:** stop seeding loose skills and clean stale copies ([#748](https://github.com/Crpaxton4/devcontainer-features/issues/748)) ([7399b45](https://github.com/Crpaxton4/devcontainer-features/commit/7399b453262e4f7642592de42a7200cb335f3448)), closes [#738](https://github.com/Crpaxton4/devcontainer-features/issues/738)
+* **plugins:** import odoo-dev plugin as devcontainer-features marketplace plugin ([#730](https://github.com/Crpaxton4/devcontainer-features/issues/730)) ([58070f6](https://github.com/Crpaxton4/devcontainer-features/commit/58070f6b663a0a954976596c3d2f79f68b845ed0))
+* **plugins:** import odoo-dev plugin from odoo-dev-claude-plugin @ 7e9dea0 ([58070f6](https://github.com/Crpaxton4/devcontainer-features/commit/58070f6b663a0a954976596c3d2f79f68b845ed0)), closes [#719](https://github.com/Crpaxton4/devcontainer-features/issues/719)
+* **plugins:** tool-contract and skill-parity CI gates for odoo-dev ([#733](https://github.com/Crpaxton4/devcontainer-features/issues/733)) ([6e2d679](https://github.com/Crpaxton4/devcontainer-features/commit/6e2d679c8bf5257f578363be223ca37cf639f960)), closes [#720](https://github.com/Crpaxton4/devcontainer-features/issues/720)
+
 ## [6.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.2.0...personal-features-v6.3.0) (2026-09-08)
 
 
