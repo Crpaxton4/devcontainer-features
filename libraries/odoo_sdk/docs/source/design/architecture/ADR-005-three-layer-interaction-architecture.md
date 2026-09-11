@@ -146,6 +146,38 @@ data modules directly (rule 4). The four former root-import sites
 unchanged and identical objects (`odoo_sdk.OdooError is
 odoo_sdk.errors.OdooError`).
 
+### Composition root and configuration (amendment, #716)
+
+- **`bootstrap.py` is the single composition root.** The rule-4 "someone has
+  to construct the object graph" exceptions for the three `__main__` modules
+  are retired: `odoo_sdk/bootstrap.py` now assembles the default graph
+  (`bootstrap(*, client=None, state=None, config=None) -> Registry`), and the
+  entrypoints shrink to parse → bootstrap → dispatch → format. The module is
+  deliberately outside every contract source list — it is the ONE module
+  allowed to name every layer — and a new rule-5 `forbidden` contract ("only
+  the entrypoints import the composition root") guarantees nothing else
+  imports it. The entrypoints obtain the concrete constructors they still
+  need by name (`OdooClient`, `LocalConfig`, `LocalStateClient`) from the
+  composition root's re-exports rather than from the data layer, so
+  `bootstrap` is their only below-core dependency.
+- **Config is injection-only in production.** `bootstrap()` loads
+  `LocalConfig` at most once per graph and injects it into every command via
+  the `Registry`; no production path reaches `Command.config`'s lazy
+  `LocalConfig.load()` fallback any more. Of the two candidate shapes for the
+  command base — *remove the fallback and raise when un-injected* vs. *a
+  core-owned frozen `Settings` value object* — **neither was adopted**, and
+  the fallback survives as a documented test-convenience escape hatch: the
+  untouched-suite regression oracle pins the fallback itself
+  (`tests/test_command_registry/test_command_protocol.py::
+  test_config_lazily_loaded_when_absent` asserts that an un-injected
+  `Command.config` calls `LocalConfig.load()` from `commands/command.py` and
+  caches it), so both removal and a `Settings` delegation would have required
+  editing frozen tests. A `Settings` dataclass additionally buys nothing
+  while the fallback is pinned: core reads `LocalConfig`'s behavior
+  properties in only three modules, and a second config type would fork the
+  peer-dependency contract the registry injects. Revisit removal when the
+  command-protocol contract tests are next allowed to move (#718 endgame).
+
 ## Rejected alternatives
 
 - **Big-bang `surface/`/`core/`/`data/` directory move.**
