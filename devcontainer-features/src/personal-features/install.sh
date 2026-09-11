@@ -488,9 +488,10 @@ chmod 0755 /usr/local/bin/mempalace-repair
 echo "Reconciling the mempalace palace root for $_REMOTE_USER_HOME"
 MEMPALACE_LINK_OWNER="$_REMOTE_USER" /usr/local/bin/mempalace-repair "$_REMOTE_USER_HOME"
 
-# --- Claude Code integrations: MCP server + mempalace plugin (#486, #484) ----
-# sync-claude-mcp registers the odoo-mcp MCP server and the mempalace plugin at
-# user scope. Installed to /usr/local/bin and run at container-create time
+# --- Claude Code integrations: MCP server + plugins (#486, #484, #723) -------
+# sync-claude-mcp registers the odoo-mcp MCP server and the mempalace and
+# odoo-dev plugins at user scope. Installed to /usr/local/bin and run at
+# container-create time
 # (postCreateCommand), NOT here: $CLAUDE_CONFIG_DIR is shadowed at runtime by the
 # feature's bind mount of the host's ~/.claude, so a registration written during
 # the image build is discarded the moment the mount goes live. That is why the
@@ -499,7 +500,8 @@ MEMPALACE_LINK_OWNER="$_REMOTE_USER" /usr/local/bin/mempalace-repair "$_REMOTE_U
 cat > /usr/local/bin/sync-claude-mcp << 'EOF'
 #!/bin/sh
 # sync-claude-mcp - register the feature-owned Claude Code integrations (the
-# odoo-mcp MCP server and the mempalace plugin) at user scope, idempotently.
+# odoo-mcp MCP server and the mempalace and odoo-dev plugins) at user scope,
+# idempotently.
 #
 # Runs from the feature's postCreateCommand, where $CLAUDE_CONFIG_DIR is the
 # LIVE bind mount of the host's ~/.claude, so what it writes actually persists
@@ -563,6 +565,77 @@ if command -v mempalace >/dev/null 2>&1; then
     else
         echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
     fi
+fi
+
+# --- odoo-dev plugin: marketplace + install (#723) ---------------------------
+# The odoo-dev consulting plugin ships from THIS repo's own marketplace
+# (Crpaxton4/devcontainer-features). It replaces the five loose skills the
+# feature used to copy into $CLAUDE_CONFIG_DIR/skills (#701-#708): the plugin
+# carries them now, so postCreateCommand deliberately does NOT run
+# sync-claude-skills any more - a loose copy would load alongside and shadow
+# its plugin twin. Same best-effort stance as the mempalace block above: the
+# marketplace add clones from GitHub (auth rides in on the persisted
+# ~/.config/gh mount), so missing auth/network warns and the next container
+# create converges - it never fails container create.
+#
+# Migration first: the plugin was previously published from the standalone
+# Crpaxton4/odoo-dev-claude-plugin repo. A persisted ~/.claude may still carry
+# a marketplace sourced from that repo; installing from BOTH sources would put
+# two odoo-dev plugins side by side. Match on the marketplace's SOURCE (its
+# repo/URL), never on its name - a marketplace that merely reuses the name
+# 'odoo-dev' but points elsewhere is the user's own and must be left alone.
+# `claude plugin marketplace list --json` emits a list of objects with 'name'
+# plus source fields ('repo' for GitHub sources, a URL/path otherwise); parse
+# it defensively - any unexpected shape means "no match", never a failure.
+# python3 is already a hard dependency of this feature (see mempalace-repair).
+old_marketplace=""
+if command -v python3 >/dev/null 2>&1; then
+    old_marketplace="$(claude plugin marketplace list --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    entries = json.load(sys.stdin)
+except Exception:
+    entries = []
+for entry in entries if isinstance(entries, list) else []:
+    if not isinstance(entry, dict):
+        continue
+    source = " ".join(str(entry.get(key, "")) for key in ("repo", "url", "source", "path"))
+    if "odoo-dev-claude-plugin" in source and entry.get("name"):
+        print(entry["name"])
+        break
+' 2>/dev/null)" || old_marketplace=""
+fi
+if [ -n "$old_marketplace" ]; then
+    echo "sync-claude-mcp: marketplace '$old_marketplace' is sourced from the retired odoo-dev-claude-plugin repo; migrating the 'odoo-dev' plugin to the 'devcontainer-features' marketplace (#723)"
+    if claude plugin uninstall odoo-dev >/dev/null 2>&1; then
+        echo "sync-claude-mcp: uninstalled plugin 'odoo-dev' (old source; reinstalled from 'devcontainer-features' below)"
+    fi
+    if claude plugin marketplace remove "$old_marketplace"; then
+        echo "sync-claude-mcp: removed retired marketplace '$old_marketplace'"
+    else
+        echo "WARNING: sync-claude-mcp: failed to remove the retired marketplace '$old_marketplace'; remove it by hand with 'claude plugin marketplace remove $old_marketplace'" >&2
+    fi
+fi
+
+# Idempotent marketplace add. The name to check comes from this repo's
+# .claude-plugin/marketplace.json ("devcontainer-features").
+if claude plugin marketplace list --json 2>/dev/null | grep -q '"name"[[:space:]]*:[[:space:]]*"devcontainer-features"'; then
+    echo "sync-claude-mcp: marketplace 'devcontainer-features' is already configured"
+elif claude plugin marketplace add Crpaxton4/devcontainer-features; then
+    echo "sync-claude-mcp: added marketplace 'devcontainer-features' (Crpaxton4/devcontainer-features)"
+else
+    echo "WARNING: sync-claude-mcp: could not add the 'devcontainer-features' marketplace (no GitHub auth/network in this container?). The odoo-dev plugin was not installed; add it later with 'claude plugin marketplace add Crpaxton4/devcontainer-features' - the next container create will also retry." >&2
+fi
+
+# Idempotent plugin install, pinned to this repo's marketplace via the
+# plugin@marketplace form so a same-named plugin from another marketplace can
+# neither satisfy nor break this install.
+if claude plugin list 2>/dev/null | grep -q 'odoo-dev@devcontainer-features'; then
+    echo "sync-claude-mcp: plugin 'odoo-dev@devcontainer-features' is already installed"
+elif claude plugin install --scope user odoo-dev@devcontainer-features; then
+    echo "sync-claude-mcp: installed plugin 'odoo-dev@devcontainer-features'"
+else
+    echo "WARNING: sync-claude-mcp: could not install the 'odoo-dev' plugin; install it later with 'claude plugin install --scope user odoo-dev@devcontainer-features' - the next container create will also retry." >&2
 fi
 EOF
 chmod 0755 /usr/local/bin/sync-claude-mcp

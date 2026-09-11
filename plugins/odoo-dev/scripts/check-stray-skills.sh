@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# check-stray-skills.sh — detect feature-managed skills reinstalled loose.
+# check-stray-skills.sh — detect leftover loose copies of plugin skills.
 #
-# Five of the bundled skills are also shipped by a devcontainer feature, which
-# writes them one level deep under the personal skills dir on every container
-# create. That location is exactly what the personal-skill scan matches, so after
-# a rebuild they load ALONGSIDE their odoo-dev twins: two near-identical
-# descriptions competing for the same triggers, invisible until someone diffs them.
+# Five of the bundled skills used to ALSO be shipped loose by the
+# devcontainer feature, which copied them into the personal skills dir on
+# every container create. The feature stopped shipping them (#701–#708) and
+# the plugin install carries them now — but copies written by pre-migration
+# containers persist in the bind-mounted ~/.claude/skills, where the
+# personal-skill scan still loads them ALONGSIDE their odoo-dev twins: two
+# near-identical descriptions competing for the same triggers, invisible
+# until someone diffs them.
 #
-# REPORTS, NEVER DELETES. Deleting a file the feature will recreate on the next
-# rebuild is a loop; the fix belongs in the devcontainer-features repo, which must
-# stop shipping loose skills and let the marketplace install carry them.
+# REPORTS, NEVER DELETES — but unlike the pre-migration days, deleting the
+# strays is now safe and IS the fix: nothing recreates them on rebuild.
 #
 # Silent and exit 0 when clean, so `[ -z "$(check-stray-skills.sh)" ]` is a valid
 # test and preflight.sh can call it as a check.
@@ -38,9 +40,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# The five the devcontainer feature owns. Kept as a literal list rather than
-# derived from the banner, so a stray copy whose banner was edited away is still
-# caught.
+# The five the devcontainer feature used to ship loose (removed in #701–#708).
+# Kept as a literal list rather than derived from the banner, so a stray copy
+# whose banner was edited away is still caught.
 FEATURE_MANAGED=(
   discovery-notes
   fibonacci-estimate
@@ -71,11 +73,14 @@ for name in "${strays[@]}"; do
 done
 cat >&2 <<'MSG'
 
-These are feature-managed skills reinstalled loose by a container rebuild. They
-load as personal skills alongside their bundled twins and compete for the same
-triggers. Do not delete them here — the next rebuild recreates them. Fix it in
-the devcontainer-features repo (src/personal-features/skills/): stop shipping
-loose skills, and let the odoo-dev marketplace install carry them instead —
+These are leftover loose copies from before the skills moved into the odoo-dev
+plugin — the devcontainer feature no longer ships them (#701–#708), so nothing
+recreates them on rebuild. They load as personal skills alongside their plugin
+twins and compete for the same triggers. Safe to delete:
+
+  rm -rf "$CLAUDE_CONFIG_DIR"/skills/{discovery-notes,fibonacci-estimate,odoo-code-review,odoo-design-doc,odoo-quote}
+
+The plugin versions stay installed via —
 
   claude plugin marketplace add Crpaxton4/devcontainer-features
   claude plugin install odoo-dev@devcontainer-features

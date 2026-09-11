@@ -2,6 +2,12 @@
 # sync-claude-skills — publish the feature-shipped Claude skills into the
 # user-scope skills directory ($CLAUDE_CONFIG_DIR/skills).
 #
+# RETIRED, PENDING REMOVAL (#723): the feature ships no loose skills any more
+# (#701–#708 moved them into the odoo-dev plugin, auto-installed by
+# sync-claude-mcp), so the staging dir holds only a README and this script
+# no-ops. It is no longer wired into postCreateCommand; removal itself is
+# deferred to a later feature release.
+#
 # WHY THIS EXISTS: personal-features bind-mounts the host's ~/.claude over
 # $CLAUDE_CONFIG_DIR (=/usr/local/share/claude-home) at runtime, so anything
 # install.sh writes under that directory at BUILD time is shadowed by the mount.
