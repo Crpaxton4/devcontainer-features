@@ -15,6 +15,15 @@ from odoo_sdk.adapters.state import (  # noqa: F401
     source_to_event_type,
 )
 from odoo_sdk.state import LocalConfig, LocalStateClient, current_repo_label
+
+# The one ``owner/repo`` normalization rule, borrowed rather than restated
+# (#742). ``_derive_repo_label`` is the same helper ``current_repo_label`` and
+# the external-sync pullers already normalize a git remote URL with, so a
+# caller-stated ``--repo`` collapses to exactly the label a cwd-derived one
+# would — otherwise a hook event and the commit it accompanies would land under
+# two different spellings of the same repo. Private-name import, matching the
+# existing ``adapters.external_sync`` precedent.
+from odoo_sdk.state.db import _derive_repo_label
 from odoo_sdk.tracking.models import EventRecord
 
 
@@ -53,6 +62,37 @@ def current_branch_label() -> str:
     """
 
     return _git_text("symbolic-ref", "--short", "HEAD")
+
+
+def normalize_repo_label(value: Optional[str]) -> Optional[str]:
+    """Return the canonical ``owner/repo`` label for a caller-stated repo (#742).
+
+    The core-layer door the surfaces normalize an incoming repo through, so the
+    CLI never has to reach past core into :mod:`odoo_sdk.state.db` (ADR-005 rule
+    4). The caller may hand over whatever it happens to have: the hook shim
+    states the raw ``git remote get-url origin`` URL of the *session's* cwd
+    (which is not the shim's own cwd, so the SDK cannot re-derive it), and a
+    remote-less checkout falls back to the bare directory name.
+
+    * A git URL — ssh (``git@github.com:owner/repo.git``) or https
+      (``https://github.com/owner/repo.git``) — collapses to ``owner/repo``.
+    * An already-normalized ``owner/repo`` label passes through unchanged.
+    * A single-segment label (the shim's no-remote basename fallback) is kept
+      verbatim.
+    * ``None`` or blank yields ``None``, which is
+      :meth:`LogEventCommand.execute`'s "resolve it from the working tree"
+      sentinel — an absent ``--repo`` must not record the literal
+      ``"(unknown)"`` that a blank URL would otherwise derive to.
+
+    :param value: Raw git remote URL, plain repo label, blank, or ``None``.
+    :type value: Optional[str]
+    :return: The ``owner/repo`` label, or ``None`` to defer to cwd derivation.
+    :rtype: Optional[str]
+    """
+
+    if value is None or not value.strip():
+        return None
+    return _derive_repo_label(value)
 
 
 def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:

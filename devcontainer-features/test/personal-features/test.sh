@@ -470,6 +470,85 @@ check "claude-event-hook logs a normal tool but excludes mcp__odoo-mcp__* tools"
 rm -rf "$HOOK_STUB_ROOT"
 unset HOOK_STUB_BIN HOOK_STUB_LOG
 
+# --- sidechain exclusion + repo attribution (#742) ----------------------------
+# Two behaviours, same stub-`odoo-sdk`-on-PATH technique as above (assert the
+# argv the shim BUILT, no real SDK needed):
+#
+#   * A subagent's Pre/PostToolUse must produce NO odoo-sdk invocation at all.
+#     Claude Code stamps `agent_id`/`agent_type` onto every hook payload fired
+#     inside a sidechain, and the parent session is already billing that span -
+#     logging the subagent's tool calls too double-counted them (~17.5k Bash
+#     rows in the live DB). SubagentStart/SubagentStop stay logged; only the
+#     per-tool-call rows are dropped.
+#   * `--repo` must carry the repo of the payload's `cwd`, NOT of the shim's own
+#     PWD. Claude Code spawns the hook from wherever it likes, so leaving the SDK
+#     to derive the label from its process cwd attributed events to the wrong
+#     repo. The RAW remote URL is forwarded unparsed (the SDK normalizes ssh and
+#     https forms to `owner/repo` with the same helper the cwd-derived path
+#     uses); a checkout with no origin remote falls back to the working tree's
+#     directory name.
+REPO_STUB_ROOT="$(mktemp -d)"
+mkdir -p "$REPO_STUB_ROOT/bin"
+cat > "$REPO_STUB_ROOT/bin/odoo-sdk" <<'STUB'
+#!/bin/sh
+# Stand-in for the real CLI: one line per invocation, recording the whole argv.
+printf '%s\n' "$*" >> "$HOOK_STUB_LOG"
+STUB
+chmod +x "$REPO_STUB_ROOT/bin/odoo-sdk"
+export HOOK_STUB_BIN="$REPO_STUB_ROOT/bin"
+export HOOK_STUB_LOG="$REPO_STUB_ROOT/invocations"
+export HOOK_GIT_REMOTE="$REPO_STUB_ROOT/with-remote"
+export HOOK_GIT_BARE="$REPO_STUB_ROOT/nested/no-remote-checkout"
+git init -q "$HOOK_GIT_REMOTE"
+git -C "$HOOK_GIT_REMOTE" remote add origin git@github.com:acme/widgets.git
+mkdir -p "$HOOK_GIT_BARE"
+git init -q "$HOOK_GIT_BARE"
+: > "$HOOK_STUB_LOG"
+
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook skips a subagent sidechain PreToolUse entirely" bash -c '
+  : > "$HOOK_STUB_LOG"
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"agent_id\":\"a-1\",\"agent_type\":\"Explore\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"$HOOK_GIT_REMOTE\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+  # A skipped event exits before forking, but give a regression that DID fork a
+  # grace period to land rather than racing the negative assertion.
+  sleep 1
+  [ "$(wc -l < "$HOOK_STUB_LOG")" -eq 0 ] \
+    || { echo "sidechain PreToolUse logged $(wc -l < "$HOOK_STUB_LOG") event(s); expected 0" >&2; exit 1; }
+'
+
+# Negative control for the check above: strip the sidechain markers and the very
+# same payload MUST log, so a shim that silently stopped logging everything
+# cannot masquerade as a working exclusion.
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook forwards --repo for a normal event from a cwd with an origin remote" bash -c '
+  : > "$HOOK_STUB_LOG"
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"$HOOK_GIT_REMOTE\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+  for _ in $(seq 1 50); do
+    grep -q -- "--repo " "$HOOK_STUB_LOG" && break
+    sleep 0.2
+  done
+  grep -q -- "--repo git@github.com:acme/widgets.git" "$HOOK_STUB_LOG" \
+    || { echo "expected the raw origin URL in --repo, got: $(cat "$HOOK_STUB_LOG")" >&2; exit 1; }
+'
+
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook falls back to the toplevel basename when the cwd has no remote" bash -c '
+  : > "$HOOK_STUB_LOG"
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Read\",\"hook_event_name\":\"PostToolUse\",\"cwd\":\"$HOOK_GIT_BARE\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" /usr/local/bin/claude-event-hook PostToolUse
+  for _ in $(seq 1 50); do
+    grep -q -- "--repo " "$HOOK_STUB_LOG" && break
+    sleep 0.2
+  done
+  grep -q -- "--repo no-remote-checkout" "$HOOK_STUB_LOG" \
+    || { echo "expected the toplevel basename in --repo, got: $(cat "$HOOK_STUB_LOG")" >&2; exit 1; }
+'
+
+rm -rf "$REPO_STUB_ROOT"
+unset HOOK_STUB_BIN HOOK_STUB_LOG HOOK_GIT_REMOTE HOOK_GIT_BARE
+
 # The shim must always exit 0 and pass --attach-active-run to odoo-sdk.
 check "claude-event-hook attaches the active run" bash -c \
   "grep -q -- '--attach-active-run' /usr/local/bin/claude-event-hook"

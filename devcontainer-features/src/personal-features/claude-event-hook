@@ -11,8 +11,9 @@
 # every event carries `hook_event_name`, `session_id`, `cwd`; PreToolUse/
 # PostToolUse also carry `tool_name` and `tool_input`; Subagent* carry
 # `agent_type`/`agent_id`). This shim extracts a compact subject, resolves the
-# session branch from `cwd` for task attribution (#574), and forwards a trimmed
-# payload carrying the hook event type and session id (#575) to the SDK, which
+# session branch and repo from `cwd` for task/repo attribution (#574, #742), and
+# forwards a trimmed payload carrying the hook event type and session id (#575)
+# to the SDK, which
 # resolves the HOST-provisioned CENTRAL tracker DB (#369 — one DB shared by every
 # project, located via ODOO_TASK_TRACKER_DIR) and appends one row to its `events`
 # table.
@@ -28,7 +29,10 @@
 #
 # PreToolUse for `mcp__odoo-mcp__*` tools is skipped: the odoo MCP server
 # already logs those dispatches server-side (#326/#340), so logging them here
-# too would double-count them.
+# too would double-count them. Pre/PostToolUse fired inside a SUBAGENT sidechain
+# (the payload carries `agent_id`/`agent_type`) is skipped for the same reason
+# (#742) — the parent session already bills that span, and the SubagentStart/
+# SubagentStop pair is kept as its record of the spawn.
 
 # Deliberately NOT `set -e`/`set -o pipefail`: a failure anywhere in this shim
 # must degrade to "no event logged", never to a nonzero exit that the hook
@@ -62,6 +66,14 @@ if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
     TOOL_NAME="$(printf '%s' "$STDIN_JSON" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 fi
 
+# Sidechain marker. Claude Code stamps `agent_id`/`agent_type` onto the payload
+# of every hook that fires inside a SUBAGENT's sidechain, so it is the one
+# reliable signal that a tool call did not come from the main session.
+AGENT_REF=""
+if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
+    AGENT_REF="$(printf '%s' "$STDIN_JSON" | jq -r '(.agent_id // .agent_type) // empty' 2>/dev/null || true)"
+fi
+
 # The odoo MCP server logs its own tool dispatches server-side (#326/#340).
 # Skipping PreToolUse for those tools here avoids double-logging. install.sh
 # registers the server under the key `odoo-mcp` (its console-script name), and
@@ -71,8 +83,19 @@ fi
 # real `odoo-mcp` key, so every odoo call was double-counted. Keep this prefix in
 # lockstep with the `claude mcp add ... odoo-mcp` key in install.sh.
 # Belt-and-braces alongside the settings.json matcher, which matches all tools.
+#
+# Sidechain tool events are dropped for the same double-counting reason (#742).
+# A subagent's Pre/PostToolUse fires in addition to the parent session's own
+# record of having spawned it, so every tool the subagent runs lands as activity
+# the parent is already billing for - ~17.5k Bash rows in the live DB. The
+# SubagentStart/SubagentStop events themselves are deliberately KEPT: those ARE
+# the parent's record of the spawn, one pair per subagent rather than one row per
+# tool call, and they carry `agent_type` as their subject.
 case "$HOOK_NAME" in
     PreToolUse|PostToolUse)
+        if [ -n "$AGENT_REF" ]; then
+            exit 0
+        fi
         case "$TOOL_NAME" in
             mcp__odoo-mcp__*) exit 0 ;;
         esac
@@ -129,6 +152,28 @@ if [ -n "$CWD" ]; then
     BRANCH="$(timeout 2 git -C "$CWD" symbolic-ref --short HEAD 2>/dev/null || true)"
 fi
 
+# Resolve the repo the same way, from the same authoritative `cwd` (#742).
+# Without this the SDK derived the repo label from ITS OWN cwd - whatever
+# directory Claude Code happened to spawn this shim in - so hook events were
+# attributed to the wrong repo, or to none, while the resync commits they belong
+# beside carried the real `owner/repo` label. The RAW remote URL is handed over
+# unparsed: `log-event --repo` normalizes ssh and https forms to `owner/repo`
+# with the SAME helper the cwd-derived path uses, so the shell never has to
+# reimplement (and drift from) that rule. A checkout with no origin remote falls
+# back to the working tree's directory name, which is still a stabler key than
+# the empty string. Best-effort and bounded like the branch above: an empty
+# REPO simply omits the flag and leaves the SDK to resolve it as before.
+REPO=""
+if [ -n "$CWD" ]; then
+    REPO="$(timeout 2 git -C "$CWD" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$REPO" ]; then
+        TOPLEVEL="$(timeout 2 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -n "$TOPLEVEL" ]; then
+            REPO="$(basename "$TOPLEVEL")"
+        fi
+    fi
+fi
+
 # Assemble args. `--attach-active-run` associates the event with the task id of
 # EVERY non-stale active FSM run in the central tracker DB (issue #327 open
 # question 1), falling back to untargeted when there is none. Attribution is
@@ -139,6 +184,7 @@ fi
 set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
 [ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
 [ -n "$BRANCH" ] && set -- "$@" --branch "$BRANCH"
+[ -n "$REPO" ] && set -- "$@" --repo "$REPO"
 [ -n "$PAYLOAD" ] && set -- "$@" --payload "$PAYLOAD"
 
 # Fire-and-forget: fork the SDK call into a detached background subshell and

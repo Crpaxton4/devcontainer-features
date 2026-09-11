@@ -52,6 +52,7 @@ from odoo_sdk.commands.builtin.resync import (
 )
 from odoo_sdk.commands.log_event import (
     UnknownEventSourceError,
+    normalize_repo_label,
     source_to_event_type,
 )
 
@@ -290,15 +291,15 @@ def cmd_log_event(args: argparse.Namespace) -> None:
     one rule instead of two: ``--task-id`` is handed over as the explicit hint
     and ``--attach-active-run`` selects whether an unhinted event falls back to
     the active runs, which keeps this subcommand's documented flag semantics —
-    and the hook shim's contract — unchanged. The repo label is no
-    longer resolved here either; the command resolves it from the working tree
-    (#509).
+    and the hook shim's contract — unchanged.
 
-    ``--branch`` is passed through when the hook shim states it: the shim reads it
-    from the session's authoritative cwd so the command can recover the task id
-    from the ``<task-id>-<slug>`` convention and stop hook events landing in
-    triage (#574/#575). Omitting it leaves the command to resolve the branch from
-    the cwd for the provenance column only, with no attribution recovery.
+    ``--branch`` and ``--repo`` are passed through when the hook shim states
+    them: the shim reads both from the session's authoritative ``cwd``, which is
+    *not* this process's cwd, so the command cannot re-derive them itself. The
+    branch additionally recovers the task id from the ``<task-id>-<slug>``
+    convention and stops hook events landing in triage (#574/#575). Omitting
+    either leaves the command to resolve it from the cwd for the provenance
+    column only (#509), with no attribution recovery.
     """
     event_type = _resolve_source(args.source)
     payload = _parse_payload(args.payload)
@@ -307,6 +308,7 @@ def cmd_log_event(args: argparse.Namespace) -> None:
         subject=args.subject,
         payload=payload,
         task_ids=args.task_id,
+        repo=normalize_repo_label(args.repo),
         branch=args.branch,
         timestamp=args.timestamp,
         attach_active_run=args.attach_active_run,
@@ -952,6 +954,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "provenance and, via the '<task-id>-' convention, used to recover the "
         "task attribution when no --task-id and no active run name it (#574). "
         "Default: resolve from the cwd checkout for provenance only.",
+    )
+    log_p.add_argument(
+        "--repo",
+        default=None,
+        help="Repository the event originated from, as either a raw git remote "
+        "URL or an already-normalized 'owner/repo' label; a URL is normalized "
+        "to 'owner/repo'. State it when the event's repo is not this process's "
+        "cwd (the hook shim reads the session's cwd). Default/blank: resolve "
+        "from the cwd's origin remote.",
     )
     log_p.add_argument(
         "--payload", default=None, help="Optional JSON object string of extra fields"
