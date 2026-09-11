@@ -48,6 +48,57 @@ check "wrapper passes everything else (subcommands, flags, prompts) through unto
 check "wrapper has no hardcoded subcommand allowlist" bash -c \
   "! grep -qF 'case \"\$1\" in' \"\$(command -v claude)\""
 
+# --- #740: the wrapper also appends the hand-maintained system prompt ---------
+# Session-wide style/policy rules have to arrive as SYSTEM prompt, so the wrapper
+# injects --append-system-prompt-file pointing at a file in the bind-mounted
+# claude-home. That file is local-only: the feature never ships it and never
+# creates it, so the injection is gated on the file actually existing and on the
+# invocation being a SESSION (no args, or a first arg that is a flag) -
+# subcommands (`claude mcp`, `claude plugin`) reject the option outright.
+check "wrapper injects --append-system-prompt-file" bash -c \
+  "grep -qF -- '--append-system-prompt-file' \"\$(command -v claude)\""
+check "wrapper points the appended prompt at CLAUDE_CONFIG_DIR/system-prompt-append.md" bash -c \
+  "grep -qF -- '\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/system-prompt-append.md' \"\$(command -v claude)\""
+check "wrapper gates the injection on the prompt file existing" bash -c \
+  "grep -qF -- '[ -f \"\$PROMPT_FILE\" ]' \"\$(command -v claude)\""
+
+# Functional half: exercise the SHIPPED wrapper logic verbatim, with only its
+# REAL= line repointed at a stub that records its argv - running the real Claude
+# binary here would start a session. CLAUDE_CONFIG_DIR is redirected at a
+# throwaway dir so the prompt file can be made to exist, and not exist, on
+# demand. Same stub pattern as the sync-claude-mcp checks further down.
+SPA_ROOT="$(mktemp -d)"
+SPA_CONFIG="$SPA_ROOT/claude-home"
+mkdir -p "$SPA_CONFIG"
+cat > "$SPA_ROOT/real-claude" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" > "$0.argv"
+exit 0
+STUB
+chmod +x "$SPA_ROOT/real-claude"
+sed "s|^REAL=.*|REAL=\"$SPA_ROOT/real-claude\"|" "$(command -v claude)" > "$SPA_ROOT/claude"
+chmod +x "$SPA_ROOT/claude"
+SPA_RUN="CLAUDE_CONFIG_DIR=\"$SPA_CONFIG\" \"$SPA_ROOT/claude\""
+SPA_ARGV="$SPA_ROOT/real-claude.argv"
+
+# No prompt file yet: every invocation must look exactly like it did pre-#740.
+check "wrapper adds no flag when the prompt file is absent" bash -c \
+  "$SPA_RUN -c </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- '-c' \"$SPA_ARGV\""
+
+printf 'local-only system prompt append\n' > "$SPA_CONFIG/system-prompt-append.md"
+
+# ...and with it in place, sessions - and only sessions - pick it up.
+check "wrapper flags a bare session once the prompt file exists" bash -c \
+  "$SPA_RUN </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md' \"$SPA_ARGV\""
+check "wrapper flags a flag-first session and keeps its original args" bash -c \
+  "$SPA_RUN -c </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md -c' \"$SPA_ARGV\""
+check "wrapper leaves 'claude plugin' un-flagged" bash -c \
+  "$SPA_RUN plugin --help </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- 'plugin --help' \"$SPA_ARGV\""
+check "wrapper leaves 'claude mcp' un-flagged" bash -c \
+  "$SPA_RUN mcp list </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- 'mcp list' \"$SPA_ARGV\""
+check "wrapper leaves a bare prompt argument un-flagged" bash -c \
+  "$SPA_RUN 'summarise this' </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\""
+
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
 check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
