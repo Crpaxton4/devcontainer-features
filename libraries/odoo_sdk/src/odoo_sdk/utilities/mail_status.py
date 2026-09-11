@@ -21,7 +21,7 @@ uniform ``{"error": {"type", "message"}}`` payload, so an LLM caller sees a clea
 message rather than an opaque access traceback.
 """
 
-from odoo_sdk import OdooAccessError, OdooError
+from odoo_sdk.errors import OdooAccessError, OdooError
 from odoo_sdk.client import OdooClient
 
 from .odoo_helpers import m2o_id

@@ -37,7 +37,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
-from odoo_sdk import OdooTransportError
+from odoo_sdk.errors import OdooTransportError
 from odoo_sdk.state import LocalConfig, LocalStateClient, SessionWindow, session_key
 from odoo_sdk.utilities.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
 

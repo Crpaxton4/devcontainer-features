@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from mcp.types import InputRequiredResult
 
-from odoo_sdk import OdooError
+from odoo_sdk.errors import OdooError
 from odoo_sdk.commands import LogEventCommand, Registry
 from odoo_sdk.commands.log_event import normalize_task_ids
 from odoo_sdk.state.models import (

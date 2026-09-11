@@ -23,6 +23,7 @@ dependencies = [
 static-analysis = [
     "black>=26.5.1",
     "complexipy>=6.0.1",
+    "import-linter>=2.3",
     "pygount>=3.2.0",
     "radon>=6.0.1",
 ]
@@ -100,6 +101,142 @@ max-complexity-allowed = 15
 exclude = ["tests", "examples", "build", "htmlcov"]
 output-format = ["json"]
 output = "reports/complexipy/"
+
+# ── ADR-005 layering contracts ──────────────────────────────────────────────
+# Layer model (docs/source/design/architecture/ADR-005): surface (cli, mcp,
+# tui) / core (commands, billing, sessionization, reap, prune, utilities) /
+# data (transport, client, records, query, fields, env, state, adapters) +
+# shared kernel (_utils, errors). Every ignore entry below is either marked
+# "permanent" (a named ADR-005 exception) or carries the issue that deletes
+# it; `unmatched_ignore_imports_alerting = "error"` means the lists can only
+# shrink. Adding a NEW entry requires an ADR-005 amendment in the same PR.
+[tool.importlinter]
+root_packages = ["odoo_sdk"]
+
+[[tool.importlinter.contracts]]
+name = "ADR-005 rule 1: surfaces are mutually independent (cli / mcp / tui)"
+type = "independence"
+modules = [
+    "odoo_sdk.cli",
+    "odoo_sdk.mcp",
+    "odoo_sdk.tui",
+]
+
+# The root façade (odoo_sdk/__init__.py) is deliberately outside the source
+# list: its PEP 562 lazy `OdooMCPServer` export is the one sanctioned
+# below-surface reference to a surface module (ADR-005 named exception).
+[[tool.importlinter.contracts]]
+name = "ADR-005 rule 2: nothing below a surface imports a surface"
+type = "forbidden"
+source_modules = [
+    # core
+    "odoo_sdk.commands",
+    "odoo_sdk.billing",
+    "odoo_sdk.sessionization",
+    "odoo_sdk.reap",
+    "odoo_sdk.prune",
+    "odoo_sdk.utilities",
+    # data
+    "odoo_sdk.transport",
+    "odoo_sdk.client",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
+    "odoo_sdk.env",
+    "odoo_sdk.state",
+    "odoo_sdk.adapters",
+    # shared kernel
+    "odoo_sdk._utils",
+    "odoo_sdk.errors",
+]
+forbidden_modules = [
+    "odoo_sdk.cli",
+    "odoo_sdk.mcp",
+    "odoo_sdk.tui",
+]
+
+[[tool.importlinter.contracts]]
+name = "ADR-005 rule 3: data does not import core"
+type = "forbidden"
+source_modules = [
+    "odoo_sdk.transport",
+    "odoo_sdk.client",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
+    "odoo_sdk.env",
+    "odoo_sdk.state",
+    "odoo_sdk.adapters",
+]
+forbidden_modules = [
+    "odoo_sdk.commands",
+    "odoo_sdk.billing",
+    "odoo_sdk.sessionization",
+    "odoo_sdk.reap",
+    "odoo_sdk.prune",
+    "odoo_sdk.utilities",
+]
+ignore_imports = [
+    # permanent (ADR-005): adapters borrow the sessionization event
+    # vocabulary (pure frozen models), not behaviour.
+    "odoo_sdk.adapters.state_persistence -> odoo_sdk.sessionization",
+    "odoo_sdk.adapters.external_sync -> odoo_sdk.sessionization.config",
+]
+unmatched_ignore_imports_alerting = "error"
+
+# Direct-only on purpose (`allow_indirect_imports`): surface -> core -> data
+# chains are exactly the sanctioned path.
+[[tool.importlinter.contracts]]
+name = "ADR-005 rule 4: surfaces reach data only through core"
+type = "forbidden"
+source_modules = [
+    "odoo_sdk.cli",
+    "odoo_sdk.mcp",
+    "odoo_sdk.tui",
+]
+forbidden_modules = [
+    "odoo_sdk.transport",
+    "odoo_sdk.client",
+    "odoo_sdk.records",
+    "odoo_sdk.query",
+    "odoo_sdk.fields",
+    "odoo_sdk.env",
+    "odoo_sdk.state",
+    "odoo_sdk.adapters",
+]
+allow_indirect_imports = true
+ignore_imports = [
+    # permanent (ADR-005): the three composition roots construct the object
+    # graph (client + state + config). #716 replaces them with bootstrap.py,
+    # then these entries are deleted.
+    "odoo_sdk.cli.__main__ -> odoo_sdk.client",
+    "odoo_sdk.cli.__main__ -> odoo_sdk.state",
+    "odoo_sdk.mcp.__main__ -> odoo_sdk.client",
+    "odoo_sdk.mcp.__main__ -> odoo_sdk.state.config",
+    "odoo_sdk.tui.__main__ -> odoo_sdk.client",
+    "odoo_sdk.tui.__main__ -> odoo_sdk.state.config",
+    # baseline debt — #717 (CLI resync re-pointed at the registry command;
+    # today cli/__main__.py duplicates the resync orchestration inline).
+    "odoo_sdk.cli.__main__ -> odoo_sdk.adapters",
+    # baseline debt — #716 (LocalConfig injection-only) + #718 (StateStore
+    # port for LocalStateClient/EventRecord).
+    "odoo_sdk.tui.app -> odoo_sdk.state",
+    # baseline debt — #718 (errors façade adoption sweep; OdooError is
+    # importable from odoo_sdk.errors today).
+    "odoo_sdk.tui.app -> odoo_sdk.transport.errors",
+    # baseline debt — #718 (StateStore port + promoted event/session types).
+    "odoo_sdk.tui.triage -> odoo_sdk.state",
+    "odoo_sdk.tui.timeline -> odoo_sdk.state.db",
+    "odoo_sdk.tui.evidence -> odoo_sdk.state",
+    "odoo_sdk.tui.export -> odoo_sdk.state",
+    # baseline debt — #718 (adapters behind core-owned ports).
+    "odoo_sdk.tui.export -> odoo_sdk.adapters",
+    # baseline debt — #718 (FSM error types are importable from
+    # odoo_sdk.errors today; TaskState needs the StateStore port).
+    "odoo_sdk.mcp.server -> odoo_sdk.state.models",
+    "odoo_sdk.mcp.tools.start_task -> odoo_sdk.state",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [tool.uv]
 # ``toon-format`` currently ships its first functional encoder only as a
