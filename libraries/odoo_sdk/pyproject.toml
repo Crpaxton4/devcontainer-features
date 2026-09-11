@@ -238,7 +238,9 @@ ignore_imports = [
     "odoo_sdk.tui.export -> odoo_sdk.adapters",
     # baseline debt — #718 (FSM error types are importable from
     # odoo_sdk.errors today; TaskState needs the StateStore port).
-    "odoo_sdk.mcp.server -> odoo_sdk.state.models",
+    # (#713 retired the mcp.server -> state.models entry: the boundary tuple
+    # moved to core commands/dispatch_telemetry.py, so the surface no longer
+    # imports state.models at all.)
     "odoo_sdk.mcp.tools.start_task -> odoo_sdk.state",
 ]
 unmatched_ignore_imports_alerting = "error"
