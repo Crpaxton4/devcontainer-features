@@ -124,6 +124,13 @@ modules = [
     "odoo_sdk.mcp",
     "odoo_sdk.tui",
 ]
+ignore_imports = [
+    # permanent (ADR-005 named exception, #714): sync-skills' --target-dir
+    # mode is *defined* as "what an MCP client would sync from the running
+    # server", so the CLI builds the in-process OdooMCPServer itself. The
+    # import is function-local, so the --dest parity path never loads fastmcp.
+    "odoo_sdk.cli.sync_skills -> odoo_sdk.mcp.server",
+]
 
 # The root façade (odoo_sdk/__init__.py) is deliberately outside the source
 # list: its PEP 562 lazy `OdooMCPServer` export is the one sanctioned
