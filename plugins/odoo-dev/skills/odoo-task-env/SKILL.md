@@ -1,7 +1,6 @@
 ---
 name: odoo-task-env
-description: "Stand up the working environment for one Odoo task: find any work that already exists for it, then create or reuse an isolated git worktree on the task branch, and make sure a runnable Odoo stack is up. Use this at the START of implementing any Odoo task — before writing code, before cutting a branch, before running anything — and whenever picking a task back up, so existing branches and open PRs are found instead of duplicated. Also use it when the user asks where to work on a task, whether a task was already started, or to set up/reset a task branch or dev stack."
-when_to_use: At the start of implementing any Odoo task, and whenever a task is picked back up; before writing code, cutting a branch, or running anything; someone asks where to work on a task, whether it was already started, or whether a branch or an open PR already exists for it; or a task branch or a dev stack has to be set up or reset.
+description: "Stand up the working environment for one Odoo task: find work that already exists, create or reuse an isolated git worktree on the task branch, bring a runnable stack up. Use at the START of implementing any task, and whenever one is picked back up."
 user-invocable: false
 ---
 # Odoo Task Environment
@@ -25,6 +24,10 @@ naming conventions and finds merged pull requests whose branch has since been
 deleted. The two lines are an early warning instead. A task id that already appears
 on either of them is work in flight, so stop and find it rather than cutting a
 second branch beside it.
+
+## When to use
+
+At the start of implementing any Odoo task, and whenever a task is picked back up; before writing code, cutting a branch, or running anything; someone asks where to work on a task, whether it was already started, or whether a branch or an open PR already exists for it; or a task branch or a dev stack has to be set up or reset.
 
 ## Preconditions
 

@@ -1,7 +1,6 @@
 ---
 name: odoo-release
-description: "Prepare the promotion of merged Odoo work one hop up the environment chain — dev to staging, staging to staging, staging to production — by building a manifest of what would ship, opening a DRAFT aggregation release PR carrying the task/PR table and the exact module install/update commands, and posting a release note back to every included Odoo task. Use this whenever work needs to move to the next environment, when asked to deploy, promote, cut a release, do a production deploy, merge to UAT/staging/main, or asked what is pending release between two branches. Also use it to check what a merge would actually ship before doing it. This skill only ever opens draft PRs: it never approves, never marks ready for review, and never merges."
-when_to_use: Merged work has to move to the next environment; someone asks to deploy, promote, cut a release, or merge to UAT, staging, or production; someone asks what is pending release between two branches, or what a merge would actually ship; or the tasks in a release need a note telling them their work is queued.
+description: "Promote merged Odoo work one hop up the chain (dev, staging, production): manifest of what would ship, DRAFT aggregation PR with the task/PR table and install/update commands, release note on every task. Use to deploy, promote, or cut a release."
 user-invocable: false
 ---
 # Odoo Release
@@ -9,6 +8,10 @@ user-invocable: false
 Set up the pull request that proposes moving merged work one hop up the environment chain, and tell the affected tasks it is queued. Single-PR promotion = same procedure, manifest of one.
 
 Manifest is what makes the note and the module commands possible, so there is no separate "just open it" path.
+
+## When to use
+
+Merged work has to move to the next environment; someone asks to deploy, promote, cut a release, or merge to UAT, staging, or production; someone asks what is pending release between two branches, or what a merge would actually ship; or the tasks in a release need a note telling them their work is queued.
 
 ## Hard limits
 

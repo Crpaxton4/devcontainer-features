@@ -135,7 +135,17 @@ for (const d of fs.readdirSync(skills).sort()) {
                     .replace(/^["\x27]|["\x27]$/g, "");
   const when = (fm.match(/^when_to_use:\s*([\s\S]*?)(?=\n[a-zA-Z_-]+:|$(?![\s\S]))/m) || ["",""])[1]
                  .replace(/\s+/g, " ").trim();
-  if (desc.length > 1024) { console.log(`  FAIL ${d}: description ${desc.length} chars > 1024`); bad++; }
+  // The routing cap. A description is the only text the router sees before it
+  // picks a skill, so it is a trigger surface, not documentation: one purpose
+  // sentence plus the phrases that should match. Skills are authored to 250;
+  // 300 is the hard stop, leaving room to add a trigger without a refactor.
+  // Everything past it belongs in the body, which the router never reads.
+  // It subsumes the old 1024 cap, which is why that one is gone: a value over
+  // 1024 fails here first, and two FAIL lines for one overrun helps nobody.
+  if (desc.length > 300) { console.log(`  FAIL ${d}: description ${desc.length} chars > 300`); bad++; }
+  // when_to_use is no longer carried in frontmatter — the router concatenates it
+  // onto the description, so it is routing surface too, and its prose now lives
+  // in the body. This cap stays as the guard for a skill that reintroduces it.
   if (desc.length + when.length > 1536) {
     console.log(`  FAIL ${d}: description + when_to_use ${desc.length + when.length} chars > 1536`); bad++;
   }

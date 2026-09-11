@@ -1,12 +1,15 @@
 ---
 name: odoo-test-run
-description: "Run an Odoo module's tests — unit tests and HttpCase browser tours — on a throwaway database, and return machine-checkable evidence (tests executed, tours executed, extracted failure lines). Use this whenever Odoo module code needs testing or verifying: before opening a PR, after a fix, when asked whether a module passes, when a tour needs to actually run rather than silently skip, or when a previous run reported green without saying how many tests it executed. Also use it when tours are being skipped, a browser is missing for headless testing, or test results need to be trusted by a gate."
-when_to_use: An Odoo module has to be proved to work before a pull request opens or after a fix; someone asks whether a module passes; a previous run reported green without saying how many tests it executed; tours are declared but are being skipped, or the headless run has no browser; or a gate needs numbers it can trust.
+description: "Run an Odoo module's unit tests and HttpCase browser tours on a throwaway database and return machine-checkable evidence: tests executed, tours executed, failure lines. Use before a PR, after a fix, or when a green run never said how many tests ran."
 user-invocable: false
 ---
 # Odoo Test Run
 
 Run module tests on disposable database. Report what happened in shape gate can read. Point not "did it print OK" — it **how many tests executed**, and **did tours run at all**.
+
+## When to use
+
+An Odoo module has to be proved to work before a pull request opens or after a fix; someone asks whether a module passes; a previous run reported green without saying how many tests it executed; tours are declared but are being skipped, or the headless run has no browser; or a gate needs numbers it can trust.
 
 ## Why the evidence is shaped this way
 

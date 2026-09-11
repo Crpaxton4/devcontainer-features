@@ -26,7 +26,7 @@ _BODY = skill_body("discovery-notes")
 
 
 def discovery_notes() -> list[str]:
-    """Capture and structure client discovery for an Odoo engagement. Use when the user is running a discovery or requirements session, documenting a client's current process, actors, volumes, integrations, and pain points, or doing a gap analysis before scoping. Mines existing Odoo chatter and knowledge articles for context first."""
+    """Capture and structure client discovery for an Odoo engagement, mining Odoo chatter and knowledge articles first. Use for a discovery or requirements call, current process, actors, volumes, integrations, pain points, or gap analysis before scoping."""
     return [_BODY]
 
 

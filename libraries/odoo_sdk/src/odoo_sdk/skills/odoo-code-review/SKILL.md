@@ -1,7 +1,6 @@
 ---
 name: odoo-code-review
-description: "IN ADDITION TO a generic code review, never instead of one: the Odoo domain lens over module and addon code — Python models, XML views, and security files. Run it alongside whatever generic reviewer covers style, tests, and general correctness; this skill adds only the findings a generic reviewer cannot see — ORM anti-patterns, sudo() misuse, raw-SQL injection, N+1 and prefetch problems, ir.model.access.csv and record rules, version-specific API removals and upgrade safety, and untranslated user-facing strings. Use it when reviewing an Odoo customization, addon, or module diff. Pin the Odoo series first: a version-specific finding without its version rule is not a finding."
-when_to_use: An Odoo module diff, addon, or customization is under review and the generic review has already run or is running alongside; someone asks whether an addon is safe to ship; sudo(), raw SQL, a search() inside a loop, or a missing ir.model.access.csv entry turns up in the diff; or a module is being checked for upgrade safety before a version bump.
+description: "The Odoo domain lens over module and addon code, in addition to a generic review and never instead. Covers ORM anti-patterns, sudo() misuse, raw-SQL injection, N+1 and prefetch, ir.model.access.csv, record rules, upgrade safety, untranslated strings."
 user-invocable: false
 ---
 
@@ -18,6 +17,10 @@ target **Odoo version and edition** first: it changes which APIs are valid.
 
 Review the diff against every group below. Flag the file and line; cite the
 version rule when one applies.
+
+## When to use
+
+An Odoo module diff, addon, or customization is under review and the generic review has already run or is running alongside; someone asks whether an addon is safe to ship; sudo(), raw SQL, a search() inside a loop, or a missing ir.model.access.csv entry turns up in the diff; or a module is being checked for upgrade safety before a version bump.
 
 ## ORM anti-patterns
 - Writes/creates inside a loop over records — batch instead: build a list of

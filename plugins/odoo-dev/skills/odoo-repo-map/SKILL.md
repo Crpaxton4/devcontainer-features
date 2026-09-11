@@ -1,7 +1,6 @@
 ---
 name: odoo-repo-map
-description: Resolve an Odoo project to its git repo, base branch, Odoo series, GitHub remote, and environment chain (dev → staging → production), and maintain that mapping safely. Use this whenever work on an Odoo task or project needs to know WHICH repo, WHICH branch to base off, WHICH Odoo version, or WHERE a branch gets promoted to next — before cutting a worktree, opening a PR, or planning a release. Also use it when the user adds a new client project, renames a repo, corrects a branch flow, or asks what projects/repos are known. Never guess a repo or a branch for an unmapped project; look it up here or ask.
-when_to_use: Before cutting a worktree, opening a pull request, or planning a release, and any time the repo, base branch, Odoo series, GitHub remote, or environment chain for a project is not already known; a new client project has to be added to the map; a repo was renamed or a branch flow is wrong; or someone asks which projects and repos are known.
+description: "Resolve an Odoo project to its git repo, base branch, Odoo series, GitHub remote, and environment chain (dev → staging → production). Use before cutting a worktree, opening a PR, or planning a release, and when a project is added or renamed."
 user-invocable: false
 ---
 # Odoo Repo Map
@@ -18,6 +17,10 @@ agent spawn that preloads it. Trust them; do not re-derive them.
 A project that is not named on that line is unmapped. Ask the user for its repo,
 base branch, series and chain, or add it — never infer any of them from a folder
 name or from a checkout.
+
+## When to use
+
+Before cutting a worktree, opening a pull request, or planning a release, and any time the repo, base branch, Odoo series, GitHub remote, or environment chain for a project is not already known; a new client project has to be added to the map; a repo was renamed or a branch flow is wrong; or someone asks which projects and repos are known.
 
 ## The data
 
