@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: design-doc-k8s-operator
+description: Near miss — shares a trigger word with an odoo-dev skill but is out of domain (design doc).
+tags: [trigger, negative, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Write a design doc for a Kubernetes operator that reconciles TLS certificates.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: no-odoo-dev-skill
+    tool: Skill
+    input_match: "odoo-dev"
+    max: 0
+expected_outcome: No odoo-dev skill fires; the request is out of domain.

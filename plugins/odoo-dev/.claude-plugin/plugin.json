@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "odoo-dev",
+  "displayName": "Odoo Development",
+  "version": "1.1.0",
+  "description": "Odoo consulting and delivery workflows: scoping and quoting, task delivery, testing, PR and release, and version upgrades.",
+  "author": {
+    "name": "Christopher Paxton"
+  },
+  "license": "UNLICENSED",
+  "repository": "https://github.com/Crpaxton4/devcontainer-features",
+  "homepage": "https://github.com/Crpaxton4/devcontainer-features",
+  "keywords": [
+    "odoo",
+    "erp",
+    "oca",
+    "upgrade",
+    "consulting"
+  ],
+  "experimental": {
+    "evals": "evals"
+  }
+}

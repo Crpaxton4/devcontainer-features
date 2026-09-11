@@ -1,0 +1,24 @@
+schema_version: "1.1"
+name: quote-change-request
+description: Should fire odoo-dev:odoo-quote, which owns the quote document.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The client wants a delivery-date field on sale orders that syncs to the picking. Can you quote this for them?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-quote
+    tool: Skill
+    input_match: "odoo-quote"
+    min: 1
+expected_outcome: >-
+  The odoo-quote skill is invoked. fibonacci-estimate may also fire, in sequence and
+  after it, because odoo-quote owns the document and calls fibonacci-estimate for the
+  hour values that go inside it — the composition odoo-dev-scoper's Order step 4
+  spells out. This case therefore carries no reciprocal grader forbidding the ladder;
+  the asymmetry is the point, and the paired estimate-split-hours case is where the
+  ladder has to fire on its own.

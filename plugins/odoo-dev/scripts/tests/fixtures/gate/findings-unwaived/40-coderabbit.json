@@ -1,0 +1,1 @@
+{"clean":false,"findings_count":2,"findings":[{"severity":"warning","file":"models/sale_order.py","comment":"sudo() is used to write delivery_date without a matching record rule"},{"severity":"info","file":"views/sale_order_views.xml","comment":"the new field has no groups= attribute"}],"status":"complete","base":"staging"}

@@ -1,0 +1,1 @@
+{"waived":[{"file":"models/sale_order.py","line":null,"reason":"the write runs in a scheduled job with no user context; a record rule cannot apply and the domain is already narrowed by company"},{"file":"views/sale_order_views.xml","line":null,"reason":"the field is deliberately visible to every sales user, which the acceptance criteria asked for"}]}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "devcontainer-features",
+  "description": "Plugins shipped from the devcontainer-features monorepo.",
+  "owner": {
+    "name": "Christopher Paxton",
+    "url": "https://github.com/Crpaxton4"
+  },
+  "plugins": [
+    {
+      "name": "odoo-dev",
+      "description": "Odoo consulting and delivery workflows: scoping and quoting, task delivery, testing, PR and release, and version upgrades.",
+      "source": "./plugins/odoo-dev",
+      "category": "development"
+    }
+  ]
+}

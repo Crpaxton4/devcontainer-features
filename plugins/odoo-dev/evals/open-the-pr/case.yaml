@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: open-the-pr
+description: Should fire odoo-dev:odoo-pr.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The branch for task 30412 is finished and verified. Open the PR.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-pr
+    tool: Skill
+    input_match: "odoo-pr"
+    min: 1
+expected_outcome: The odoo-pr skill is invoked.

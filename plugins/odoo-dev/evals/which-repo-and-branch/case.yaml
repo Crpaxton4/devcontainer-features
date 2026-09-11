@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: which-repo-and-branch
+description: Should fire odoo-dev:odoo-repo-map.
+tags: [trigger, positive, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Which repo and which base branch does the B&K Logistics work go to?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-repo-map
+    tool: Skill
+    input_match: "odoo-repo-map"
+    min: 1
+expected_outcome: The odoo-repo-map skill is invoked.

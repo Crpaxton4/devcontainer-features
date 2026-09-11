@@ -1,0 +1,17 @@
+# Lessons — raw capture
+
+One file per upgrade project (`YYYY-MM-<source>-to-<target>.md`). Append a lesson the
+moment it is learned — terse, factual, with the evidence that proved it. This
+directory is semi-durable scratch, not documentation: entries are ingested into
+`references/sop.md` and the reference files at the next skill revision, then marked
+`[ingested]`. Do not load this directory for normal skill use; read it only when
+capturing a new lesson or revising the skill.
+
+Entry format:
+
+```
+## <one-line lesson>
+- status: new | ingested
+- evidence: <what proved it>
+- detail: <2-5 lines>
+```
