@@ -736,11 +736,11 @@ neither can do otherwise:
 The repo-root [`release-please.yaml`](../../.github/workflows/release-please.yaml)
 runs on every push to `main`. This plugin is the `plugins/odoo-dev` package in
 [`release-please-config.json`](../../release-please-config.json) (component
-`odoo-dev`, seeded at 1.1.0 — the version the old repo last released, so
+`odoo-dev-plugin`, seeded at 1.1.0 — the version the old repo last released, so
 `claude plugin update` keeps working across the move): Conventional Commits touching
 this tree open a release PR that bumps `version` in
 [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json), and on merge cut an
-`odoo-dev-vX.Y.Z` tag and GitHub release. That version bump is the only thing
+`odoo-dev-plugin-vX.Y.Z` tag and GitHub release. That version bump is the only thing
 `claude plugin update` reacts to, so a release is what makes work reach an installed
 copy at all.
 
