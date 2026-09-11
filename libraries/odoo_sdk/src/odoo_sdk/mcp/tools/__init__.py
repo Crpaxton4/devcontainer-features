@@ -15,15 +15,20 @@ bound to a registry, pairing each callable with the description taken from the
 like-named command so the wire schema and docs stay in one place.
 
 ``build_explicit_tools`` always builds the *whole* surface. Which of those tools a
-server actually exposes is a separate decision made by :func:`default_tool_surface`
-(#512): a large enough tool count trips Claude Code's client-side lazy-deferral
-heuristic, so the default MCP surface is the everyday working set and the
-narrow-context tools in :data:`GATED_TOOL_NAMES` (tracker-run administration,
-state maintenance/reconciliation, session triage, low-level introspection) are
-held back behind an opt-in flag. Nothing is deleted — every gated tool is still
-built, still reachable on the CLI via the generic ``odoo-sdk cmd`` dispatcher
-(#713), and restored to the MCP surface by setting ``ODOO_MCP_INCLUDE_GATED``
-(or passing ``include_gated=True``).
+server actually exposes is a separate decision (#512): a large enough tool count
+trips Claude Code's client-side lazy-deferral heuristic, so the default MCP
+surface is the everyday working set and the narrow-context tools in
+:data:`GATED_TOOL_NAMES` (tracker-run administration, state
+maintenance/reconciliation, session triage, low-level introspection) are held
+back behind an opt-in flag. Since #715 the gate is fastmcp's native visibility
+machinery: :class:`odoo_sdk.mcp.server.OdooMCPServer` registers every gated tool
+with the :data:`GATED_TOOL_TAG` tag and disables that tag
+(``FastMCP.disable(tags=...)``) unless the opt-in is set, so a disabled tool is
+absent from ``list_tools`` *and* uncallable. Nothing is deleted — every gated
+tool is still built, still reachable on the CLI via the generic ``odoo-sdk cmd``
+dispatcher (#713), and restored to the MCP surface by setting
+``ODOO_MCP_INCLUDE_GATED`` (or passing ``include_gated=True`` to the deprecated
+:func:`default_tool_surface` pre-filter).
 """
 
 import os
@@ -49,6 +54,14 @@ TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {
 #: surface. Truthy values (``1``/``true``/``yes``/``on``) restore the full 43-tool
 #: surface for a session that genuinely needs the maintenance/triage tooling.
 GATED_TOOLS_ENV = "ODOO_MCP_INCLUDE_GATED"
+
+#: fastmcp component tag applied to every :data:`GATED_TOOL_NAMES` tool at
+#: registration (#715). :class:`odoo_sdk.mcp.server.OdooMCPServer` disables this
+#: tag (``FastMCP.disable(tags={GATED_TOOL_TAG})``) unless the
+#: :data:`GATED_TOOLS_ENV` opt-in is set, which is what actually holds the gated
+#: tools off the wire: a tag-disabled tool is absent from ``list_tools`` and
+#: uncallable.
+GATED_TOOL_TAG = "gated"
 
 #: Tools held back from the default MCP surface (#512). Every name here is a
 #: narrow-context tool — it matters only during tracker-run administration, state
@@ -87,11 +100,14 @@ GATED_TOOL_NAMES: FrozenSet[str] = frozenset(
 )
 
 
-def _gated_opt_in() -> bool:
+def gated_opt_in() -> bool:
     """Return whether the gated tools are opted back onto the MCP surface.
 
     Read per call (not at import) so the flag stays togglable per process and
     trivial to exercise from tests, mirroring the server's other env gates.
+    This is the single reader of :data:`GATED_TOOLS_ENV`, shared by the
+    server's native tag gating (#715) and the deprecated
+    :func:`default_tool_surface` pre-filter.
     """
 
     return os.environ.get(GATED_TOOLS_ENV, "").strip().lower() in {
@@ -136,6 +152,17 @@ def default_tool_surface(
 ) -> Dict[str, Tuple[Callable[..., Any], str]]:
     """Select the subset of ``tools`` a server exposes by default (#512).
 
+    .. deprecated:: #715
+        Gating is now native to :class:`odoo_sdk.mcp.server.OdooMCPServer`,
+        which tags every :data:`GATED_TOOL_NAMES` tool with
+        :data:`GATED_TOOL_TAG` and disables the tag unless
+        :data:`GATED_TOOLS_ENV` opts in — pass the full
+        :func:`build_explicit_tools` output and let the server gate. This
+        pre-filter is retained because the frozen surface snapshot
+        (``tests/test_mcp/test_default_surface_snapshot.py``) and the entry
+        point's contract tests pin it; it produces the same client-observable
+        surface, so either path is equivalent on the wire.
+
     Drops the narrow-context :data:`GATED_TOOL_NAMES` so the everyday surface
     stays small enough to avoid Claude Code's client-side lazy deferral, which
     otherwise makes every first tool use pay for an extra schema round-trip. The
@@ -153,7 +180,7 @@ def default_tool_surface(
     :rtype: Dict[str, Tuple[Callable[..., Any], str]]
     """
     if include_gated is None:
-        include_gated = _gated_opt_in()
+        include_gated = gated_opt_in()
     if include_gated:
         return dict(tools)
     return {name: spec for name, spec in tools.items() if name not in GATED_TOOL_NAMES}
@@ -165,6 +192,8 @@ __all__ = [
     "COMPOSITION_TOOL_FACTORIES",
     "GATED_TOOL_NAMES",
     "GATED_TOOLS_ENV",
+    "GATED_TOOL_TAG",
+    "gated_opt_in",
     "atomic_tool",
     "composition_tool",
     "build_explicit_tools",
