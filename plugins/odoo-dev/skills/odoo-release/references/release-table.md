@@ -83,27 +83,28 @@ Empty sections are omitted, because presence is itself signal: a `No task id` he
 
 ## Chatter note — one per confirmed task
 
-The SDK enforces a **300-character hard cap** on a chatter body and **rejects** anything longer; it does not truncate. So the note carries the link and the table stays in the PR:
+The SDK enforces a **300-character hard cap** on a chatter body and **rejects** anything longer; it does not truncate (`writeback.sh` pre-checks the same cap for fast feedback). So the note carries the link and the table stays in the PR:
 
 ```
-Queued in draft release <from>-><to>: <release_pr_url> — [ACTIVITY] review requested
+Queued in draft release <from>-><to>: <release_pr_url>
 ```
+
+The review request is NOT part of the note any more: it is a real `mail.activity`, scheduled separately with `writeback.sh activity <task_id> --summary "Review draft release: <release_pr_url>"`. The old `[ACTIVITY]` marker line is retired.
 
 Say **queued** and **draft**. At the moment this posts, nothing has merged and nothing has deployed. A note claiming the work shipped is wrong the instant it is written and cannot be unsent.
 
-With `dedupe_key="release-<pr_number>-<task_id>"`, so a re-run of a partial fan-out updates rather than repeats.
+With `--dedupe-key release-<pr_number>-<task_id>`, so a re-run of a partial fan-out updates rather than repeats.
 
 Budget check before posting — a long branch pair eats the cap fast:
 
 ```
-"Queued in draft release " (24) + from + "->" (2) + to + ": " (2)
-  + url (~50) + " — [ACTIVITY] review requested" (30)
+"Queued in draft release " (24) + from + "->" (2) + to + ": " (2) + url (~50)
 ```
 
-A 50-character URL leaves roughly 190 characters for both branch names together. Longer pair? Drop to:
+A 50-character URL leaves roughly 220 characters for both branch names together. Longer pair? Drop to:
 
 ```
-Draft release <release_pr_url> — [ACTIVITY] review requested
+Draft release <release_pr_url>
 ```
 
 Never post to an `_unresolved_` PR's task. Never to a `?` id. The noteable set is `tasks[]` minus `inferred_task_ids[]` minus everything in `unresolved[]`, and it is routinely empty.

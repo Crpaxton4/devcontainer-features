@@ -18,7 +18,15 @@
 # so a MERGED pull request whose branch was deleted afterwards still proves the work
 # landed — which is the whole point of asking GitHub as well as git.
 #
-# Last stdout line: {"state", "branch", "candidates": [...], "prs": [...], "gh_error"}
+# odoo-sdk is best-effort the same way: `odoo-sdk cmd task_status` lists the active
+# local tracking sessions (the command takes no kwargs — it returns every active
+# run, and this script filters to <task_id> here), reported as "tracking". A missing
+# or failing CLI degrades to "tracking": [] plus a "tracking_error" string and is
+# never fatal. "tracking": [] with a non-null "tracking_error" means UNKNOWN, not
+# "no session" — say so in the report rather than treating it as proof.
+#
+# Last stdout line: {"state", "branch", "candidates": [...], "prs": [...],
+#                    "gh_error", "tracking": [...], "tracking_error"}
 #   complete   a candidate is merged into <default_branch>, or a PR is MERGED
 #   resume     exactly one unmerged candidate — continue on "branch"
 #   ambiguous  two or more unmerged candidates — a human picks
@@ -131,10 +139,32 @@ else
   rm -f "$gh_stderr"
 fi
 
+# Local tracking-session state, mirroring the gh degrade pattern above: a missing
+# or failing CLI is a string, never a fatal error. task_status takes no kwargs (it
+# lists every active run), so the task filter happens client-side in node below.
+tracking_error=""
+tracking_json="[]"
+if [ "${ODOO_TASK_TRACKING:-1}" = "0" ]; then
+  tracking_error="tracking probe disabled (ODOO_TASK_TRACKING=0) — tracking state unknown"
+elif ! command -v odoo-sdk >/dev/null 2>&1; then
+  tracking_error="odoo-sdk is not installed — tracking state unknown"
+else
+  ts_stderr="$(mktemp "${TMPDIR:-/tmp}/existing-work-sdk.XXXXXX")"
+  if ! tracking_json="$(odoo-sdk cmd task_status 2>"$ts_stderr")"; then
+    # On failure the CLI puts its JSON error envelope on stdout; prefer that,
+    # fall back to stderr for a crash that never reached the envelope.
+    tracking_error="${tracking_json:-$(head -c 400 "$ts_stderr")}"
+    [ -n "$tracking_error" ] || tracking_error="odoo-sdk cmd task_status failed — tracking state unknown"
+    tracking_json="[]"
+  fi
+  rm -f "$ts_stderr"
+fi
+
 node -e '
   const fs = require("fs");
-  const [taskId, prsRaw, ghErrorIn] = process.argv.slice(1);
+  const [taskId, prsRaw, ghErrorIn, trackingRaw, trackingErrorIn] = process.argv.slice(1);
   let ghError = ghErrorIn;
+  let trackingError = trackingErrorIn;
 
   const tsv = fs.readFileSync(0, "utf8").trim();
   const candidates = tsv === "" ? [] : tsv.split("\n").map((line) => {
@@ -160,6 +190,18 @@ node -e '
     ghError = ghError === "" ? "unparseable gh output: " + error.message : ghError;
   }
 
+  // Active local tracking sessions for THIS task. task_status returns every
+  // active run; the filter to one task happens here. Unparseable output joins
+  // the degrade path rather than crashing the triage.
+  let tracking = [];
+  try {
+    tracking = JSON.parse(trackingRaw).filter((run) => run.task_id === Number(taskId));
+  } catch (error) {
+    tracking = [];
+    trackingError = trackingError === ""
+      ? "unparseable odoo-sdk output: " + error.message : trackingError;
+  }
+
   const unmerged = candidates.filter((candidate) => !candidate.merged);
   const mergedPullRequest = prs.some((pr) => pr.state === "MERGED");
   let state = "none";
@@ -179,5 +221,7 @@ node -e '
     candidates: candidates,
     prs: prs,
     gh_error: ghError === "" ? null : ghError,
+    tracking: tracking,
+    tracking_error: trackingError === "" ? null : trackingError,
   }));
-' "$task_id" "$prs_json" "$gh_error" <<<"$candidates_tsv"
+' "$task_id" "$prs_json" "$gh_error" "$tracking_json" "$tracking_error" <<<"$candidates_tsv"

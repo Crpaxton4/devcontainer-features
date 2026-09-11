@@ -122,7 +122,7 @@ Formats for table and body: `references/release-table.md`.
 
 ## 6. Tell the tasks
 
-> **Writeback probe:** inspect the available `mcp__odoo-mcp__*` tools first and use the most specific one for the intent. If none covers it — there is no `mail.activity` tool today — post a `task_note` of **≤300 characters** carrying an `[ACTIVITY]` marker line and flag the manual step. Never fail the step on a missing tool; never silently skip the writeback.
+Writebacks are **script-driven and deterministic** — never probe MCP tools before a write. Every note and activity below goes through `writeback.sh` (wrapping `odoo-sdk cmd task_note` / the activity commands); on failure it passes the CLI's `{"error":{"type","message"}}` envelope through and exits non-zero — report that, never silently skip the writeback.
 
 Only after the draft PR exists, and only for the **noteable set**:
 
@@ -130,17 +130,21 @@ Only after the draft PR exists, and only for the **noteable set**:
 
 That difference is the whole rule. Compute it, do not eyeball it. It is routinely **empty** — a release of four PRs where every id was inferred notes nothing at all — and empty is a correct outcome, not a failure. When it is empty, post nothing and say so in your report, naming why. A skipped note that nobody mentions is indistinguishable from a note that failed to send.
 
+```bash
+<plugin root>/scripts/writeback.sh note <task_id> \
+  "Queued in draft release <from>-><to>: <release_pr_url>" \
+  --dedupe-key release-<pr_number>-<task_id>
+<plugin root>/scripts/writeback.sh activity <task_id> \
+  --summary "Review draft release: <release_pr_url>"
 ```
-task_note(task_id,
-          "Queued in draft release <from>-><to>: <release_pr_url> — [ACTIVITY] review requested",
-          dedupe_key="release-<pr_number>-<task_id>")
-```
+
+The note carries the link; the review request is a real `mail.activity` scheduled on the task — the old `[ACTIVITY]` marker-in-a-note workaround is retired now that the activity commands exist.
 
 Wording says **queued** and **draft**, because that is what is true when this runs. Nothing has merged and nothing has deployed. Do not write a note that claims the work shipped.
 
-The 300-character cap is a hard reject, not a truncation. The full table lives in the PR body; the note carries the link. If the branch pair makes it too long, fall back to `Draft release <url> — [ACTIVITY] review requested`. Budget arithmetic in `references/release-table.md`.
+The 300-character cap is a hard reject, not a truncation — `writeback.sh` pre-checks it, the SDK enforces it. The full table lives in the PR body; the note carries the link. If the branch pair makes it too long, fall back to `Draft release <release_pr_url>`. Budget arithmetic in `references/release-table.md`.
 
-`dedupe_key` makes a partially completed fan-out safe to resume.
+`--dedupe-key` makes a partially completed fan-out safe to resume.
 
 **Never post to an `_unresolved_` PR's task, or to an inferred `?` id.** A release note on the wrong task is client-visible and cannot be unsent. This rule, not the gate, is what protects the wrong task from a note: `untagged_pr` is only a warning, so nothing else stands between an inferred id and a client-visible message.
 

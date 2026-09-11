@@ -40,6 +40,10 @@ git -C "$repo" push --quiet -u origin UAT
 # REPOS_DIR deliberately empty AND the candidate list pointed at nothing: if the
 # scripts still resolved a tree, --repo-path would not really be an escape hatch.
 export REPOS_DIR="" REPOS_DIR_CANDIDATES="$work/nonexistent"
+# The best-effort tracking probes would reach a real odoo-sdk if one is on PATH,
+# which breaks this suite's no-network promise; task-tracking.test.sh covers them
+# with a stub. Pinned off here so these cases stay about worktree/stack behaviour.
+export ODOO_TASK_TRACKING=0
 out="$(cd / && bash "$SCRIPTS/worktree-ensure.sh" anyrepo 4242 my-slug UAT --repo-path "$repo" 2>&1 | tail -1)"
 rc=$?
 expect_exit "worktree with --repo-path succeeds" 0 $rc
