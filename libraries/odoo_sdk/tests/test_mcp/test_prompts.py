@@ -2,8 +2,6 @@
 
 import asyncio
 import importlib
-import pathlib
-import re
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -106,8 +104,9 @@ class TestPromptRegistration(unittest.TestCase):
         return next(p for p in captured if p.name == name)
 
     def test_all_builtin_prompts_registered_on_server(self):
+        # 7 since #712 purged client_status_report.
         _, captured = self._build(_empty_registry())
-        self.assertEqual(len(captured), 8)
+        self.assertEqual(len(captured), 7)
 
     def test_registered_prompt_is_a_prompt_instance(self):
         from fastmcp.prompts import Prompt
@@ -500,7 +499,6 @@ class TestBuiltinPromptDecorator(unittest.TestCase):
         self.assertEqual(
             set(BUILTIN_PROMPT_FACTORIES),
             {
-                "client_status_report",
                 "discovery_notes",
                 "fibonacci_estimate",
                 "implement_task",
@@ -519,7 +517,6 @@ class TestBuiltinPromptDecorator(unittest.TestCase):
         self.assertEqual(
             list(BUILTIN_PROMPT_FACTORIES),
             [
-                "client_status_report",
                 "discovery_notes",
                 "fibonacci_estimate",
                 "implement_task",
@@ -574,17 +571,16 @@ class TestBuiltinPromptDecorator(unittest.TestCase):
 
 
 class TestMigratedSkillPrompts(unittest.TestCase):
-    """The 6 personal-features skills ported to built-in MCP prompts.
+    """The 5 consulting skills served as built-in MCP prompts.
 
     Each is a ``report_incident``-shaped prompt: a plain callable returning the
     skill body as a one-element message list, and a factory that ignores the
     command registry. This drives them from their public modules so a rename or
-    dropped decorator fails here.
+    dropped decorator fails here. (``client_status_report`` was purged in #712.)
     """
 
     # module/prompt name -> a phrase that must appear in the returned body.
     SKILLS = {
-        "client_status_report": "timesheet_summary",
         "discovery_notes": "Gap analysis",
         "fibonacci_estimate": "Fibonacci",
         "odoo_code_review": "sudo()",
@@ -652,78 +648,23 @@ class TestMigratedSkillPrompts(unittest.TestCase):
 
 
 class TestSkillPromptParity(unittest.TestCase):
-    """Every ported prompt body still matches its SKILL.md source of truth.
+    """Every consulting prompt serves exactly its packaged SKILL.md body.
 
-    The prompt modules embed the skill body *verbatim*; nothing re-derives it at
-    build time, so an edit to a SKILL.md silently leaves the shipped prompt on
-    the old text. This asserts the two are byte-identical once the frontmatter
-    and the feature-managed comment — the only parts the port strips — are
-    removed, so any future drift fails here instead of shipping.
-
-    Skills personal-features has since stopped shipping (``RETIRED_SKILLS``)
-    have no SKILL.md left to compare against; their prompt module is now the
-    source of truth for the body, so parity is asserted *absent* for them
-    rather than skipped silently.
+    Since #712 the prompt modules read their body from the packaged skills
+    (``odoo_sdk/skills/<name>/SKILL.md``) via :func:`odoo_sdk.skills.skill_body`
+    at import time, so parity is a direct equality against that accessor.
     """
 
-    #: Repo root: tests/test_mcp/ -> tests/ -> odoo_sdk/ -> libraries/ -> root.
-    SKILLS_DIR = (
-        pathlib.Path(__file__).resolve().parents[4]
-        / "devcontainer-features"
-        / "src"
-        / "personal-features"
-        / "skills"
-    )
+    def test_prompt_body_is_packaged_skill_body(self):
+        from odoo_sdk.skills import skill_body
 
-    #: Prompts whose personal-features SKILL.md has been removed because the
-    #: maintained upstream copy now lives in the ``odoo-dev`` Claude Code plugin
-    #: (``odoo-dev:<name>``). The MCP prompt surface is deliberately unchanged;
-    #: only the mounted-SKILL.md delivery path went away. discovery_notes: #695;
-    #: fibonacci_estimate: #696; odoo_code_review: #697; odoo_design_doc: #698;
-    #: odoo_quote: #699; client_status_report: #700 (retired, not superseded).
-    RETIRED_SKILLS = frozenset(
-        {
-            "client_status_report",
-            "discovery_notes",
-            "fibonacci_estimate",
-            "odoo_code_review",
-            "odoo_design_doc",
-            "odoo_quote",
-        }
-    )
-
-    def _skill_body(self, name: str) -> str:
-        """Return a SKILL.md stripped exactly as the port strips it."""
-        text = (self.SKILLS_DIR / name.replace("_", "-") / "SKILL.md").read_text()
-        text = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL)
-        text = re.sub(r"\A\s*<!--.*?-->\s*\n", "", text, flags=re.DOTALL)
-        return text.lstrip("\n")
-
-    def test_skill_sources_are_present(self):
-        # Guard the path itself: a moved skills tree must fail loudly rather
-        # than quietly skipping every parity assertion below. Retired skills
-        # are guarded the same way in reverse - if one reappears it must be
-        # dropped from RETIRED_SKILLS so parity starts covering it again.
-        self.assertTrue(self.SKILLS_DIR.is_dir(), f"missing {self.SKILLS_DIR}")
         for name in TestMigratedSkillPrompts.SKILLS:
-            with self.subTest(name=name):
-                skill_md = self.SKILLS_DIR / name.replace("_", "-") / "SKILL.md"
-                self.assertEqual(
-                    skill_md.is_file(),
-                    name not in self.RETIRED_SKILLS,
-                    f"{skill_md} presence disagrees with RETIRED_SKILLS",
-                )
-
-    def test_prompt_body_matches_skill_md(self):
-        for name in TestMigratedSkillPrompts.SKILLS:
-            if name in self.RETIRED_SKILLS:
-                continue
             with self.subTest(name=name):
                 module = importlib.import_module(f"odoo_sdk.mcp.prompts.builtin.{name}")
                 self.assertEqual(
                     getattr(module, name)()[0],
-                    self._skill_body(name),
-                    f"{name} prompt body drifted from its SKILL.md",
+                    skill_body(name.replace("_", "-")),
+                    f"{name} prompt body drifted from its packaged SKILL.md",
                 )
 
 

@@ -445,6 +445,15 @@ class OdooMCPServer:
     :param instructions: Server identity advertised to MCP clients. Defaults to
         :data:`DEFAULT_INSTRUCTIONS`; a non-Odoo registry passes its own text.
     :type instructions: str
+    :param serve_skills: When True (the default), serve the packaged consulting
+        skills (:data:`odoo_sdk.skills.PACKAGED_SKILL_NAMES`) as MCP resources
+        (``skill://<name>/SKILL.md`` + ``_manifest``) via fastmcp's
+        ``SkillsDirectoryProvider``. Orthogonal to tool gating.
+    :type serve_skills: bool
+    :param skills_root: Directory of skill folders to serve instead of the
+        packaged :func:`odoo_sdk.skills.skills_root`. Defaults to None (serve
+        the packaged skills).
+    :type skills_root: Optional[Path]
     """
 
     def __init__(
@@ -454,6 +463,8 @@ class OdooMCPServer:
         explicit_tools: Optional[dict[str, ToolSpec]] = None,
         profiling: bool = False,
         instructions: str = DEFAULT_INSTRUCTIONS,
+        serve_skills: bool = True,
+        skills_root: Optional[Path] = None,
     ):
         from odoo_sdk.mcp.prompts import register_builtin_prompts
 
@@ -466,6 +477,37 @@ class OdooMCPServer:
         )
         self._register_tools()
         register_builtin_prompts(self.mcp, self.registry)
+        if serve_skills:
+            self._register_skills(skills_root)
+
+    def _register_skills(self, root: Optional[Path]) -> None:
+        """Serve a directory of skill folders as MCP resources.
+
+        Mounts fastmcp's ``SkillsDirectoryProvider`` (lazily imported — it is
+        only paid for when skills are actually served) over ``root``, or over
+        the packaged :func:`odoo_sdk.skills.skills_root` when ``root`` is None.
+        ``reload=False`` because package data never changes at runtime, and
+        ``supporting_files="template"`` keeps the resource list to each skill's
+        ``SKILL.md`` + synthetic ``_manifest``. Entirely orthogonal to tool
+        gating: the skills are served whether or not the gated tools are.
+
+        :param root: Directory containing skill folders, or None for the
+            packaged skills.
+        :type root: Optional[Path]
+        :return: None.
+        :rtype: None
+        """
+        from fastmcp.server.providers.skills import SkillsDirectoryProvider
+
+        from odoo_sdk.skills import skills_root as packaged_skills_root
+
+        self.mcp.add_provider(
+            SkillsDirectoryProvider(
+                roots=root if root is not None else packaged_skills_root(),
+                reload=False,
+                supporting_files="template",
+            )
+        )
 
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.

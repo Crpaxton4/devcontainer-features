@@ -58,6 +58,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
+# Packaged consulting skills (odoo_sdk/skills/<name>/SKILL.md): the source of
+# truth the MCP prompts read and SkillsDirectoryProvider serves.
+"odoo_sdk" = ["skills/*/SKILL.md", "skills/*/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -136,6 +139,7 @@ source_modules = [
     "odoo_sdk.reap",
     "odoo_sdk.prune",
     "odoo_sdk.utilities",
+    "odoo_sdk.skills",
     # data
     "odoo_sdk.transport",
     "odoo_sdk.client",
@@ -175,6 +179,7 @@ forbidden_modules = [
     "odoo_sdk.reap",
     "odoo_sdk.prune",
     "odoo_sdk.utilities",
+    "odoo_sdk.skills",
 ]
 ignore_imports = [
     # permanent (ADR-005): adapters borrow the sessionization event

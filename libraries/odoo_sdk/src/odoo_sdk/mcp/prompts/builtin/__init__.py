@@ -15,7 +15,6 @@ from ._registration import BUILTIN_PROMPT_FACTORIES, builtin_prompt
 
 # Importing these modules runs their ``@builtin_prompt`` decorators, populating
 # BUILTIN_PROMPT_FACTORIES. Order here fixes the registration order.
-from .client_status_report import make_client_status_report_prompt
 from .discovery_notes import make_discovery_notes_prompt
 from .fibonacci_estimate import make_fibonacci_estimate_prompt
 from .implement_task import make_implement_task_prompt
@@ -45,7 +44,6 @@ __all__ = [
     "register_builtin_prompts",
     "BUILTIN_PROMPT_FACTORIES",
     "builtin_prompt",
-    "make_client_status_report_prompt",
     "make_discovery_notes_prompt",
     "make_fibonacci_estimate_prompt",
     "make_implement_task_prompt",
