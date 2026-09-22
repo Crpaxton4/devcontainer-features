@@ -286,7 +286,13 @@ delete_merged_branch() {
 
     branch=$(head_branch "$pr")
     set_cursor "$key"
-    gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent
+    # A ref that is already gone is the desired end state, not a failure: a
+    # resumed run can reach here after an earlier attempt (or a human) removed
+    # it. Anything other than "absent" still fails loudly.
+    if git ls-remote --exit-code --heads "$(git -C "$REPO" remote get-url origin)" \
+        "refs/heads/$branch" >/dev/null 2>&1; then
+        gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent
+    fi
     add_done "$key"
 }
 
