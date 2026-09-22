@@ -1,6 +1,6 @@
 # odoo-dev
 
-Odoo consulting and delivery, packaged as one Claude Code plugin: 15 skills, 5
+Odoo consulting and delivery, packaged as one Claude Code plugin: 16 skills, 5
 subagents, 5 slash commands, and a fail-closed evidence gate.
 
 The plugin lives at `plugins/odoo-dev/` in the
@@ -47,6 +47,7 @@ One step per skill, no orchestrator. Run one, several, or all.
 | Skill | Does | Use when |
 |---|---|---|
 | [`odoo-devcontainer`](skills/odoo-devcontainer/SKILL.md) | Devcontainer env map, CLI, paths, and ORM/frontend/testing references | Always, inside an Odoo devcontainer |
+| [`odoo-populate-db`](skills/odoo-populate-db/SKILL.md) | Seed a local database from a named model profile; resolved order up front, and a non-zero exit where `odoo populate` swallows the exception and returns 0 | Building a dev or benchmark database; a populate run that reported success with most models empty |
 | [`odoo-upgrade`](skills/odoo-upgrade/SKILL.md) | Port modules 16 → 17 → 18 → 19; full lifecycle SOP; Studio inventory | "upgrade this module", "what breaks?", upgrade estimate or plan |
 | [`principles`](skills/principles/SKILL.md) | Engineering principles for design decisions | Any code generation or review |
 | [`odoo-dev-map`](skills/odoo-dev-map/SKILL.md) | **The router.** Skill map, agent map, workflows, spawn-prompt template, gate rules | Work spans more than one step, or you need to know who owns it |
@@ -589,7 +590,7 @@ suite still reports green, and the gate blocks on `tours_skipped`.
 
 ```bash
 claude plugin validate  .           --strict     # any checkout, by path
-claude plugin details   odoo-dev                 # Skills (20) — 15 skills + 5 commands, which
+claude plugin details   odoo-dev                 # Skills (21) — 16 skills + 5 commands, which
                                                  # plugin details counts together — Agents (5),
                                                  # Hooks (1)
 claude plugin disable   odoo-dev                 # the only escape hatch, all-or-nothing
@@ -612,7 +613,7 @@ devcontainer-features/
 ├── libraries/odoo_sdk/     src/odoo_sdk/skills/ — source of truth for the 5 consulting skills
 └── plugins/odoo-dev/
     ├── .claude-plugin/  plugin.json — the plugin manifest
-    ├── skills/     15 skills; odoo-dev-map is the router
+    ├── skills/     16 skills; odoo-dev-map is the router
     ├── agents/     5 subagents, all named odoo-dev-*
     ├── scripts/    artifact.sh, gate.sh, bootstrap-state.sh, check-stray-skills.sh, validate.sh
     ├── evals/      20 trigger-accuracy cases
