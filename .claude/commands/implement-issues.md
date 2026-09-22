@@ -31,6 +31,8 @@ Ahead of origin/main: !`git -C /workspaces/devcontainer-features rev-list --coun
 
 Uncommitted: !`git -C /workspaces/devcontainer-features status --porcelain`
 
+Repo-local credential helper (must print nothing): !`git -C /workspaces/devcontainer-features config --local --get-all credential.helper`
+
 Worktrees: !`git -C /workspaces/devcontainer-features worktree list`
 
 Open issues: !`gh issue list -R "$(git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')" --state open --limit 100 --json number,title,labels --template '{{range .}}#{{.number}} {{.title}}{{"\n"}}{{end}}'`
@@ -98,6 +100,16 @@ Resolve all of these before planning:
   against a stale tree produces workers that conflict with code already landed.
 - **Token for the derived owner unavailable** → stop. Do not fall back to the
   active account.
+- **Repo-local `credential.helper` is set** → stop, and remove it with
+  `git -C "$REPO" config --local --remove-section credential` before dispatching.
+  Nothing in this command writes it, so a value there was left by a worker that
+  improvised its auth. `.git/config` is shared by every worktree, so that entry
+  silently changes auth for every sibling worker and every later session in this
+  repo. It has happened once already — see the Identity section for the
+  per-command `-c` form that replaces it.
+
+Re-check this one at the **end** of the run too, not just at preflight: it is
+written mid-run, by a worker, at push time.
 
 Two more conditions that are **reported, not stopped on**, because Phase 4 pins
 every base to `origin/main` and so neither can reach a worker:
