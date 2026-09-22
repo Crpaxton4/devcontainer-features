@@ -13,6 +13,11 @@
 # status and its own stderr, unmodified - no `||`, no retries, no error
 # translation, no re-checking of conditions the tools already enforce.
 #
+# One deliberate exception, added after the first real run: a merge refused
+# because required checks have not registered or finished yet is this script
+# racing the head SHA it just force-pushed, not a signal about the PR. It waits
+# (see "Check settling"). Every other refusal still ends the run unmodified.
+#
 # Deliberately NOT re-implemented, because the tools already guarantee it:
 #
 #   green-checks / mergeable / unresolved threads   gh pr merge refuses, and says why
@@ -259,11 +264,27 @@ head_branch() { jq -r --arg pr "$1" '.heads[$pr].branch' "$STATE"; }
 head_sha() { jq -r --arg pr "$1" '.heads[$pr].sha' "$STATE"; }
 
 # --------------------------------------------------------------------------
+# Check settling
+# --------------------------------------------------------------------------
+# The one place this script waits rather than failing. Restacking a child force-
+# pushes a new head SHA, which discards every check result and leaves the PR
+# with required checks that have not been *registered* yet, let alone run. The
+# merge attempt that follows in the same breath then fails with "Required status
+# check ... is expected".
+#
+# That is not `gh pr merge` refusing on a red or contested PR, which is a real
+# signal and still stops the run. It is this script racing its own push. Waiting
+# for the checks it just invalidated is the script cleaning up after itself.
+CHECK_POLL=${STACK_MERGE_CHECK_POLL:-30}
+CHECK_TIMEOUT=${STACK_MERGE_CHECK_TIMEOUT:-900}
+CHECK_PENDING_RE='is expected|Required status check|checks are pending|not yet complete|still (running|pending)|in progress'
+
+# --------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------
 
 merge_node() {
-    local pr=$1 key
+    local pr=$1 key out rc waited=0
     key="$pr:merge"
     is_done "$key" && return 0
 
@@ -272,7 +293,22 @@ merge_node() {
     # base branch of every child PR still pointing at it, and GitHub closes a
     # PR whose base branch disappears - before restack_child can retarget it.
     # The branch is dropped by delete_merged_branch once the children are off it.
-    gh pr merge "$pr" -R "$SLUG" --squash
+    while :; do
+        if out=$(gh pr merge "$pr" -R "$SLUG" --squash 2>&1); then
+            break
+        else
+            rc=$?
+        fi
+        if ((waited >= CHECK_TIMEOUT)) || ! printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
+            printf '%s\n' "$out" >&2
+            exit "$rc"
+        fi
+        printf 'stack-merge: #%s checks not settled (%ss/%ss), waiting %ss\n' \
+            "$pr" "$waited" "$CHECK_TIMEOUT" "$CHECK_POLL" >&2
+        sleep "$CHECK_POLL"
+        waited=$((waited + CHECK_POLL))
+    done
+    printf '%s\n' "$out"
     add_done "$key"
 
     git -C "$REPO" fetch origin --quiet
