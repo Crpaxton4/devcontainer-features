@@ -185,9 +185,6 @@ One template, filled per worker.
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
     means the title is what lands on `main` and what release-please parses.
-- **Immediately after `gh pr create` succeeds**, run a CodeRabbit review.
-  PR-first ordering is deliberate: the CLI free tier rate-limits at around three
-  reviews, and this way the PR exists regardless.
 - `## Report back` — branch, PR URL, files changed, **and anything that
   contradicts the issue's assumptions**. Final line exactly `PR: <url>` or
   `PR: none — <reason>`. Silently dropping scope is failure; a documented,
