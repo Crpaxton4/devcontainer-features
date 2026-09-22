@@ -27,6 +27,10 @@ Local HEAD: !`git -C /workspaces/devcontainer-features log -1 --format='%h %s'`
 
 Behind origin/main: !`git -C /workspaces/devcontainer-features fetch origin --quiet && git -C /workspaces/devcontainer-features rev-list --count HEAD..origin/main`
 
+Ahead of origin/main: !`git -C /workspaces/devcontainer-features rev-list --count origin/main..HEAD`
+
+Uncommitted: !`git -C /workspaces/devcontainer-features status --porcelain`
+
 Worktrees: !`git -C /workspaces/devcontainer-features worktree list`
 
 Open issues: !`gh issue list -R "$(git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')" --state open --limit 100 --json number,title,labels --template '{{range .}}#{{.number}} {{.title}}{{"\n"}}{{end}}'`
@@ -69,9 +73,20 @@ Resolve all of these before planning:
 
 - **Behind origin/main is non-zero** → rebase or restate the baseline. Planning
   against a stale tree produces workers that conflict with code already landed.
-- **Stale `agent-*` worktrees present** → prune before dispatching.
 - **Token for the derived owner unavailable** → stop. Do not fall back to the
   active account.
+
+Two more conditions that are **reported, not stopped on**, because Phase 4 pins
+every base to `origin/main` and so neither can reach a worker:
+
+- **Ahead of origin/main is non-zero** — the session is sitting on an unmerged
+  branch. State which commits, so the plan is read against the right baseline.
+  It does not change where workers branch from.
+- **Uncommitted changes** — name the files. A dirty path that falls inside an
+  issue's blast radius is a collision the plan must call out by name, because
+  the worker's own worktree will not show it.
+
+The **stale-worktree** case is not a preflight one-liner; see Phase 9.
 
 ---
 
@@ -123,11 +138,24 @@ pausing has failed regardless of how good the grouping is.
 ## Phase 4 — Dispatch by layer
 
 - **Roots** → `Agent` with `isolation: "worktree"`. The harness creates
-  `.claude/worktrees/agent-<id>` on `worktree-agent-<id>`; the worker cuts its
-  own real branch inside. Batch a layer's roots into **one message** so they run
-  concurrently.
-- **Children cannot use harness isolation** — it always bases on current HEAD.
-  Create them by hand:
+  `.claude/worktrees/agent-<id>` on `worktree-agent-<id>`.
+
+  **Never inherit whatever base that worktree arrived on.** The worker's first
+  two commands pin it:
+
+  ```bash
+  git -C <abs worktree path> fetch origin --quiet
+  git -C <abs worktree path> checkout -b <type>/<issue>-<slug> origin/main
+  ```
+
+  The harness base is not yours to choose — it follows the user's
+  `worktree.baseRef` setting, and the session HEAD may itself be an unmerged
+  branch. Pinning `origin/main` explicitly makes the base independent of both,
+  and is the only form that survives being run from a feature branch.
+
+  Batch a layer's roots into **one message** so they run concurrently.
+- **Children must be created by hand**, because their base is a sibling's branch
+  rather than `origin/main`:
 
   ```bash
   git -C "$REPO" worktree add <scratchpad>/wt-<slug> \
@@ -256,9 +284,40 @@ Things the script cannot judge, so you must:
 
 ## Phase 9 — Reap
 
-`git -C "$REPO" worktree remove` every worktree this run created, then
-`git -C "$REPO" worktree prune`. Post-merge reaping has never once happened
-here, which is why the preflight worktree list is 40 entries long.
+Remove every worktree **this run created**, then `git -C "$REPO" worktree prune`.
+Post-merge reaping has never once happened here, which is why a preflight
+worktree list of 40 entries was the normal state.
+
+Two mechanics that are not obvious:
+
+- **Name one path per invocation.** A glob or a `for` loop over
+  `.claude/worktrees/agent-*` is refused by the permission classifier, with and
+  without `--force`. Semicolon-chained invocations naming each path literally
+  pass. Write them out.
+- A worktree with uncommitted files needs `--force`, and `--force` on a worktree
+  you did not create is destructive. Only your own are safe to force.
+
+**Worktrees you did not create are not yours to prune**, and deciding is not a
+one-liner — a stale-looking worktree can hold the only copy of unshipped work.
+For each one, before removing anything:
+
+```bash
+git -C <wt> status --porcelain
+git -C <wt> log origin/main..HEAD --oneline
+```
+
+A worktree is safe to purge only once its commits are provably on `main` (match
+by subject, not by hash — squash-merge rewrites hashes) **and** its uncommitted
+files are accounted for. The reliable tell for the uncommitted case: compare the
+dirty file list against the file list of a merged PR
+(`gh pr view <n> --json files`). An exact match means the worktree is the
+pre-commit snapshot of work that already landed.
+
+Back up before you delete — `git -C <wt> diff HEAD > <backup>/<name>.patch`
+plus a copy of everything `git -C <wt> ls-files --others --exclude-standard`
+reports. That turns an irreversible deletion into a reversible one. Then report
+what you found and hand the decision to the user; do not purge foreign
+worktrees on your own judgement.
 
 ---
 
