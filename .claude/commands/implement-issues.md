@@ -228,6 +228,12 @@ One template, filled per worker.
     `shellcheck -s bash -S error` (pinned 0.10.0), `black --check`,
     `py_compile`, and `uv lock` when dependencies change (CI runs
     `uv lock --check`).
+  - **Worktrees do not isolate the Python environment.** Every worker resolves
+    the same `.venv` from the main checkout, so one worker running `uv sync`
+    or installing a dependency changes the interpreter its siblings are
+    linting and compiling against, and breaks their gates for reasons that
+    appear nowhere in their own diffs. Confine dependency work to `uv lock`,
+    which only rewrites the lockfile.
   - Do not merge, do not force-push, do not touch another worker's branch.
   - Do not edit shared doc lines unless explicitly assigned them.
   - **Parity traps**, when in scope:
@@ -310,14 +316,23 @@ the text and decide. The three to recognise:
 - **`gh pr merge` denied by the permission classifier** → **degrade to
   handoff**: print the exact command, wait for the user's "merged", re-run.
 
-Two bespoke exit codes, both of which mutate nothing:
+Three bespoke exit codes:
 
-- **`20`** — same `--id`, different stack. Re-plan deliberately or use a new
-  `--id`.
+- **`20`** — same `--id`, different stack. Nothing mutated. Re-plan
+  deliberately or use a new `--id`.
 - **`21`** — a child branch is checked out in another worktree, named in the
-  message. This is the Phase 8 opening paragraph arriving as an error because
-  the reap was skipped. Remove the listed worktrees and re-run the identical
-  command.
+  message. Nothing mutated. This is the Phase 8 opening paragraph arriving as
+  an error because the reap was skipped. Remove the listed worktrees and re-run
+  the identical command.
+- **`23`** — the train reached its end with PRs still unmerged, which means a
+  bug in the script itself. **Do not reap and do not report the stack as
+  landed.** The message names the unmerged PRs.
+
+**Re-derive PR state from `gh` after any failed train — never from the stack
+expression.** The train mutates PRs you did not name: merging a parent can
+close or retarget its children, and a failure partway leaves a mixture. A run
+once reported a child as open and stacked when the train's own `--delete-branch`
+had closed it several steps earlier.
 
 Things the script cannot judge, so you must:
 
