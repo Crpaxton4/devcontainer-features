@@ -11,6 +11,8 @@
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
 - [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
+- [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
+- [The Odoo language server (odoo-ls)](#the-odoo-language-server-odoo-ls)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -287,6 +289,67 @@ The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` 
 
 It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
 
+## The shared mempalace MCP hub
+
+**One mempalace MCP server per container, not one per session (#764).** mempalace grants the *MCP writer lease* to exactly one process per palace. Every Claude Code session used to start its own stdio server against the same palace, so the first session to mutate kept the lease and every other session's mutating tools failed with:
+
+```
+MCP error -32001: Peer MCP writer active; this server is read-only for mutating tools
+```
+
+Reads kept working, which is what made it expensive: the failure surfaced only at **write** time — usually at session end, after the work that produced the memory was already done. N live sessions meant N−1 sessions that could remember nothing.
+
+The Feature now starts one long-lived hub — `mempalace serve`, bound to `127.0.0.1:8765` — and that is the entire fix.
+
+**No session MCP config is rewritten, because none has to be.** Verified by reading the pinned 3.9.0 in site-packages, not the docs: the `mempalace-mcp` console script is no longer the server. Its entry point is `mempalace.mcp_proxy:main`, which resolves the palace, looks that palace's live hub up in a per-palace registry (`~/.mempalace/server/<sha256 of the canonical palace path>/serverinfo.json`, trusted only while the recorded pid is alive) and forwards every JSON-RPC request to it over HTTP — importing the ~77 MB storage stack only when no hub answers. The same discovery is wired into the CLI (`_forward_mine_to_hub`, `_forward_search_to_hub`), so `mempalace mine` — which the plugin's Stop/SessionEnd/PreCompact save hooks spawn, and which the hub's own lease would otherwise refuse — is forwarded too.
+
+That matters because the stdio registration is **not ours to change**: it lives in the upstream plugin's own `.mcp.json` under `$CLAUDE_CONFIG_DIR/plugins/cache/mempalace/…`, a path this repo does not ship and that `sync-claude-mcp`'s `claude plugin update mempalace@mempalace` overwrites on every container create. Patching it would be undone on the next rebuild. Starting a hub turns that unchanged registration into a proxy by itself, and the memory saving is a bonus: a proxied session runs at roughly 22 MB instead of ~100 MB.
+
+**Supervision: the Feature's `postStartCommand`, and deliberately nothing heavier.** This repo had no service-supervision pattern of any kind before this, so the choice sets the precedent:
+
+- `systemd` is not PID 1 in a dev container. Upstream ships a unit file; it is not usable here.
+- `supervisord`/`s6` would mean a new package, a new config file and a new failure mode, for one process.
+- `postStartCommand` is the only lifecycle hook that fires on **every** container start — create, a stop/start of an existing container, and a host reboot — which is exactly the "survives a container restart" requirement, and it costs one JSON key. It is declared on the Feature (a [documented Feature property](https://containers.dev/implementors/features/#lifecycle-hooks), collected alongside any the consuming `devcontainer.json` declares rather than overriding them) and runs as the `remoteUser`, which is what the registry lookup needs: the hub and its clients must agree on `$HOME`, or `~/.mempalace/server/…` names two different directories and the client concludes there is no hub. Everything that matters here — Claude Code, its plugin hooks, your shells — runs as the `remoteUser` too, so they agree; a session `su`'d to another account would not find the hub and would quietly serve its own palace copy instead.
+
+What `postStartCommand` does **not** give is restart-on-crash within a single container run. The honest mitigation is that a dead hub is not an outage: `mcp_proxy` falls back to serving the session locally and says so on the tool result itself, so the agent driving the session is told its memory backend changed shape. `mempalace-hub` can also be re-run by hand at any time. One real consequence of the lifecycle ordering is worth knowing: a failing `postCreateCommand` skips `postStartCommand` entirely, so a broken `mempalace-repair` takes the hub down with it.
+
+**`mempalace-hub` is idempotent and never fatal.** `start` (the default) probes `/healthz` — mempalace's own liveness route, and the only credential-free one — before doing anything, so running it on every container start can never produce two hubs. Then it truncates its log (nothing rotates a log inside a container, and one hub run is the only bounded unit that keeps the diagnostics), launches `mempalace serve` under `setsid` (or `nohup` on an image without util-linux) with stdin on `/dev/null` and both output streams on the log — a background child still holding the lifecycle command's pipes would keep the dev container CLI waiting on it forever — and then polls `/healthz` until it answers. It polls rather than watching a pid because `setsid` may or may not fork, so `$!` answers a different question than the one that matters.
+
+Every failure path exits 0 with a warning naming the consequence: no `mempalace` on PATH, an unwritable log, or a bind that never answers. A container with no hub is exactly the pre-#764 behaviour — degraded, not broken — and not worth failing container start over. `mempalace-hub status` reports the endpoint, and `MEMPALACE_SKIP_HUB=1` opts out; `MEMPALACE_HUB_CMD`/`_HOST`/`_PORT`/`_LOG`/`_WAIT` exist for the feature test and for debugging.
+
+**`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set in the launcher's environment rather than in `containerEnv` precisely so per-session servers keep the watchdog they were designed for.
+
+**No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount, so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log is container-local, under `/usr/local/share/personal-features/`, pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
+
+## The Odoo language server (odoo-ls)
+
+**Claude Code sessions get Odoo-aware diagnostics, go-to-definition, references and hover (#746).** Upstream [odoo-ls](https://github.com/odoo/odoo-ls) is the server; the Feature installs and configures it, and the `odoo-dev` plugin's `.lsp.json` is what tells Claude Code to launch it. Without it, an invalid XPath, a misspelled field name or a bad import surfaces only when `odoo-bin -i/-u` runs.
+
+**Pinned to 1.6.0 and checksum-verified — the only download here that is.** #746 named 1.4.0, which was current when the issue was written; 1.6.0 is the current non-prerelease (every 1.5.x is marked prerelease). Both assets — the per-arch `odoo-linux-<arch>-<ver>.tar.gz` and the shared `typeshed.zip` — are verified against a pinned SHA-256 before anything is published, and a partial install is never published: a server with no stubs starts, answers, and silently resolves nothing. Verification is what `fetch`'s optional third argument now does; it stays opt-in per call because the other downloads here fetch installer scripts and tarballs whose publishers re-cut assets under the same tag, where a pinned digest would break a working install on every upstream re-tag. Bumping means moving `ODOO_LS_VERSION`, both per-arch digests and the typeshed digest together.
+
+**It does not live in `/usr/local/bin`.** The server resolves its stdlib and stub roots *relative to its own binary* (`typeshed/stdlib`, `typeshed/stubs` next to `current_exe()`), so binary and the 35 MiB typeshed tree sit together in `/usr/local/share/odoo-ls` and a launcher, `odoo-ls-server`, is what goes on `PATH` — which is where Claude Code requires `command` to resolve, since it will not run a bundled binary. `--stdlib` could override the path instead; co-locating means the default is already right and one fewer flag can drift.
+
+**Two scripts, because `.lsp.json` cannot express either job.**
+
+- `odoo-ls-config` (from `postCreateCommand`) writes `/usr/local/share/odoo-ls/odools.toml` from paths that only exist once the container does: `odoo_path`, the community/enterprise/`/mnt/extra-addons` `addons_paths`, and the checkout's `.venv` interpreter as `python_path`. Same reason `resolve-mempal-dir` exists — a Feature build cannot see any of this (#485). Not an Odoo container? It writes nothing and *removes* a stale file from a previous create, because every path setting is resolved against the filesystem and a stale entry is a hard config error, which is worse than no config.
+- `odoo-ls-server` picks exactly one config source per session: a project's own `odools.toml` at or above `$CLAUDE_PROJECT_DIR` if there is one, otherwise the generated file via `--config-path`, and with neither it starts nothing at all — the plugin registers `.py` for every project, not only Odoo ones, and without an `odoo_path` the server would index a whole tree to resolve no model, no field and no xmlid. **Never both** — the server merges its sources agree-or-error for scalars, so passing both turns a legitimate per-project override of `odoo_path` or `python_path` into a config error instead of an override. The cost is that a project config has to be self-contained; the generated file is the copy-paste starting point. Task worktrees under `.worktrees/` need no entry anywhere: the server infers addon paths from the LSP workspace folder when the profile for that folder sets none, and Claude Code sends the project directory as that folder, so a session started in a worktree indexes it. Enumerating them would instead bake in paths that come and go with every task.
+
+**Facts checked against the 1.6.0 source and the running binary, not the docs.**
+
+- **stdio is the default transport.** #746 asked whether `--stdio` is needed; there is no such flag. `--use-tcp` is what switches away from stdio, and passing a flag that does not exist is a startup error.
+- **Logs never reach stdout.** The stdout log subscriber is installed only under `--parse` or `--use-tcp`; over stdio everything goes to a rolling file appender. So the wrapper is *not* needed to keep stdout clean — it is needed for config selection and for the log directory.
+- **`--logs-directory` must already exist.** The server checks the path and falls back to `<binary dir>/logs` rather than creating it, and that fallback's construction is an `.expect()` — a panic before the server ever speaks LSP. The launcher creates the directory it names, and `install.sh` pre-creates `/usr/local/share/odoo-ls/logs` mode `0777` (server logs, no secret) so the fallback can never be the thing that kills a session. `--log-level` is `warn`, not the server's own `trace`, which is megabytes an hour per session.
+- **`${workspaceFolder}` is not a thing in a plugin LSP config.** #746 flagged this as unverified; it is false. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PROJECT_DIR}` into `command`/`args`/`env`/`workspaceFolder`, and injects those three into the server's environment as well — which is how the launcher knows the project directory with no `env` block at all.
+- **JS/OWL support is off** (`disable_javascript = true`). That half of the server shells out to `tsserver`; TypeScript is not installed here, and without the flag it reports the same diagnostic on every session. Python, XML and CSV — what the plugin registers — are unaffected.
+
+**Kill switches, coarsest last**, because upstream flags the project "in development": `"diagnostics": false` in `.lsp.json` keeps navigation and stops diagnostics being pushed into context; `settings.Odoo.selectedProfile = "Disabled"` is the server's own in-protocol off switch (it logs `OdooLS is disabled. Exiting...` and indexes nothing); `ODOO_LS_DISABLE=1` stops the process starting; disabling the plugin removes the registration. `restartOnCrash` with `maxRestarts: 3` covers a server that dies on its own — both keys need Claude Code >= 2.1.205, and the pinned version here is well past that.
+
+**Every failure path exits 0.** A non-zero exit from the launcher reads to Claude Code as a crash and burns the restart budget, and "this container has no Odoo in it" is not worth that. No binary, no config, an unwritable log directory: each says why on stderr, which Claude Code captures, and starts nothing.
+
+**No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
+
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. Nothing checks the two agree — `claude plugin validate` reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252) — so renaming the launcher means editing the plugin in the same change.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
@@ -307,6 +370,8 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 - [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-sdk env (see [Python toolchain](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
+
+  Concurrent sessions share **one** MCP server, started from `postStartCommand` — see [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub).
 
   **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things, then asserts a fourth:
 

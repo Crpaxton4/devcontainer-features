@@ -1,0 +1,20 @@
+{
+  "odoo": {
+    "command": "odoo-ls-server",
+    "extensionToLanguage": {
+      ".py": "python",
+      ".xml": "xml",
+      ".csv": "csv"
+    },
+    "settings": {
+      "Odoo": {
+        "selectedProfile": "default"
+      }
+    },
+    "startupTimeout": 60000,
+    "shutdownTimeout": 10000,
+    "restartOnCrash": true,
+    "maxRestarts": 3,
+    "diagnostics": true
+  }
+}
