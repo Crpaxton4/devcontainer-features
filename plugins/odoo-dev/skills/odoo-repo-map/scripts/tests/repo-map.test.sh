@@ -28,9 +28,9 @@ seed() {
   "_doc": "test fixture",
   "projects": {
     "Alpha": {"repo": "alpha", "default_branch": "UAT", "odoo_version": "17.0",
-              "branch_flow": ["dev", "UAT", "main"], "flow_confirmed": true},
+              "branch_flow": [":task", "UAT", "main"], "flow_confirmed": true},
     "Beta": {"repo": "beta", "default_branch": "staging", "odoo_version": "18.0",
-             "branch_flow": ["dev", "staging", "prod"]},
+             "branch_flow": [":task", "staging", "prod"]},
     "Gamma": {"repo": "shared", "default_branch": "dev"},
     "Delta": {"repo": "shared", "default_branch": "dev"}
   }
@@ -70,7 +70,7 @@ check_contains "default-branch-msg" "is not in branch_flow" "$out"
 
 seed && node -e '
   const fs=require("fs"); const f=process.argv[1];
-  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.branch_flow=["dev","UAT","dev"];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.branch_flow=["staging","UAT","staging"];
   fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
 out="$(map validate 2>&1)"; check "flow-no-duplicates" 4 $?
 
@@ -89,19 +89,19 @@ out="$(map validate 2>&1)"; check "unknown-key-rejected" 4 $?
 # --- get / list ---------------------------------------------------------------
 seed
 out="$(map get Alpha)"; check "get-known" 0 $?
-check_contains "get-carries-flow" '"branch_flow":["dev","UAT","main"]' "$out"
+check_contains "get-carries-flow" '"branch_flow":[":task","UAT","main"]' "$out"
 out="$(map get Nope 2>&1)"; check "get-unmapped" 3 $?
 
 # --- set-flow -----------------------------------------------------------------
 seed
-out="$(map set-flow Beta "dev,staging,prod" --flow-confirmed)"; check "set-flow" 0 $?
+out="$(map set-flow Beta ":task,staging,prod" --flow-confirmed)"; check "set-flow" 0 $?
 check_contains "set-flow-confirms" '"flow_confirmed":true' "$out"
 [ -f "$TMP/map.json.bak" ]; check "set-flow-writes-bak" 0 $?
 
 # A rejected edit must never land: the live map keeps the prior content.
 seed
 before="$(cat "$TMP/map.json")"
-map set-flow Alpha "dev,nowhere" >/dev/null 2>&1; check "set-flow-invalid-rejected" 4 $?
+map set-flow Alpha ":task,nowhere" >/dev/null 2>&1; check "set-flow-invalid-rejected" 4 $?
 [ "$(cat "$TMP/map.json")" = "$before" ]; check "set-flow-invalid-no-write" 0 $?
 
 # --- set ------------------------------------------------------------------------
@@ -145,7 +145,7 @@ out="$(map set Sigma --hosting odoo.sh 2>&1)"; check "set-unknown-option" 2 $?
 
 # branch_flow and the release owners each already have a setter carrying its own
 # extra question, so `set` points at them instead of duplicating the rules.
-out="$(map set Sigma --branch-flow "dev,main" 2>&1)"; check "set-defers-branch-flow" 2 $?
+out="$(map set Sigma --branch-flow ":task,main" 2>&1)"; check "set-defers-branch-flow" 2 $?
 check_contains "set-defers-branch-flow-msg" "set-flow" "$out"
 out="$(map set Sigma --release-assignee bob 2>&1)"; check "set-defers-release-owners" 2 $?
 check_contains "set-defers-release-owners-msg" "set-release-owners" "$out"
@@ -173,7 +173,7 @@ check_contains "resolve-ambiguous-lists" "Gamma" "$out"
 out="$(resolve Nope 2>&1)"; check "resolve-unmapped" 3 $?
 check_contains "resolve-unmapped-says-ask" "never guess" "$out"
 
-out="$(resolve Alpha --next-after dev)"; check "next-after-mid-chain" 0 $?
+out="$(resolve Alpha --next-after :task)"; check "next-after-mid-chain" 0 $?
 check_contains "next-env" '"next_env":"UAT"' "$out"
 out="$(resolve Alpha --next-after UAT)"; check "next-after-confirmed-prod" 0 $?
 check_contains "next-env-prod" '"next_env":"main"' "$out"
@@ -181,13 +181,112 @@ out="$(resolve Alpha --next-after main)"; check "next-after-last" 0 $?
 check_contains "at-production" '"at_production":true' "$out"
 
 # Beta's flow is unconfirmed: a staging hop is allowed, the production hop is not.
-out="$(resolve Beta --next-after dev)"; check "unconfirmed-staging-hop-ok" 0 $?
+out="$(resolve Beta --next-after :task)"; check "unconfirmed-staging-hop-ok" 0 $?
 check_contains "unconfirmed-staging-next" '"next_env":"staging"' "$out"
 out="$(resolve Beta --next-after staging 2>&1)"; check "unconfirmed-prod-hop-blocked" 4 $?
 check_contains "unconfirmed-prod-msg" "unconfirmed" "$out"
 
-out="$(resolve Gamma --next-after dev 2>&1)"; check "no-flow-blocked" 4 $?
+out="$(resolve Gamma --next-after :task 2>&1)"; check "no-flow-blocked" 4 $?
 out="$(resolve Alpha --next-after ghost 2>&1)"; check "branch-not-in-flow" 4 $?
+# A task branch is not an element of the chain, so the refusal names the token
+# that IS — otherwise the first hop has no sayable answer.
+check_contains "branch-not-in-flow-hints-token" "--next-after :task" "$out"
+
+# --- branch_flow index 0 --------------------------------------------------------
+# The chain's first element is where task work starts from, and that is usually a
+# branch cut fresh per task: it exists on no remote. The old convention wrote the
+# literal "dev" there, which every consumer walking the chain believed in and none
+# could resolve (gh api .../branches/dev -> 404 on every mapped remote). ":task" is
+# reserved for it instead: a colon is illegal anywhere in a git ref name, so the
+# token cannot collide with a branch anyone could create.
+
+# Reserved at element 0 and nowhere else — later elements are what work is
+# promoted INTO, and there is nothing to promote into a per-task branch.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.branch_flow=["UAT",":task","main"];
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "task-token-only-first" 4 $?
+check_contains "task-token-only-first-msg" "only ever the FIRST element" "$out"
+
+# A task PR needs a real branch to target, so default_branch is never the token.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.default_branch=":task";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "default-branch-not-token" 4 $?
+check_contains "default-branch-not-token-msg" "per-task placeholder" "$out"
+
+# Every element but the placeholder has to be a branch someone could actually
+# create — that is what makes "placeholder or branch?" answerable by looking,
+# rather than by special-casing whatever happens to sit at index 0.
+for bad in "UAT staging" "re:lease" "ma*in" "feat..x" "main.lock"; do
+  seed && BAD="$bad" node -e '
+    const fs=require("fs"); const f=process.argv[1];
+    const d=JSON.parse(fs.readFileSync(f,"utf8"));
+    d.projects.Alpha.branch_flow=[":task", process.env.BAD, "main"]; d.projects.Alpha.default_branch="main";
+    fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+  out="$(map validate 2>&1)"; check "flow-element-not-a-branch-$bad" 4 $?
+done
+
+# The token is optional: a project whose task work is based directly on a shared
+# environment records that branch first and no placeholder at all.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8"));
+  d.projects.Alpha.branch_flow=["staging","main"]; d.projects.Alpha.default_branch="staging";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "no-placeholder-is-valid" 0 $?
+check_absent "no-placeholder-no-warning" "warnings" "$out"
+
+# A chain of nothing but the placeholder has no target, so the existing
+# source-and-target rule covers it and no new one is needed.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8"));
+  d.projects.Alpha.branch_flow=[":task"]; delete d.projects.Alpha.default_branch;
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "placeholder-alone-rejected" 4 $?
+
+# The phantom itself: valid, but the first element claims a branch nobody bases
+# work on. A warning rather than a failure — the map is still usable, every other
+# rule still holds, and the repair is one set-flow away, so it is quoted verbatim.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.branch_flow=["dev","UAT","main"];
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "phantom-first-element-still-valid" 0 $?
+check_contains "phantom-warns" '"warnings"' "$out"
+check_contains "phantom-warns-names-it" 'branch_flow starts with \"dev\"' "$out"
+check_contains "phantom-warns-carries-fix" 'set-flow \"Alpha\" \":task,UAT,main\"' "$out"
+# Silence is the contract for a clean map: the object stays byte-identical.
+seed
+out="$(map validate 2>&1)"; check "clean-map-no-warnings" 0 $?
+[ "$out" = '{"ok": true}' ]; check "clean-map-object-unchanged" 0 $?
+
+# Recording the phantom says so at the moment it is written, not only on demand:
+# the mutation path forwards the warning to stderr without blocking the write.
+seed
+out="$(map set-flow Alpha "dev,UAT,main" 2>&1 >/dev/null)"; check "set-flow-phantom-allowed" 0 $?
+check_contains "set-flow-phantom-warns" "neither the \":task\" placeholder" "$out"
+out="$(map set-flow Alpha ":task,UAT,main" 2>&1 >/dev/null)"; check "set-flow-token-silent" 0 $?
+check_absent "set-flow-token-no-warning" "branch_flow starts with" "$out"
+out="$(map get Alpha)"; check_contains "set-flow-token-round-trips" '"branch_flow":[":task","UAT","main"]' "$out"
+
+# --next-after answers the first hop from the token, with the same arithmetic as
+# every other hop: the element after it is what a task PR targets, default_branch.
+seed
+out="$(resolve Alpha --next-after :task)"; check "next-after-token" 0 $?
+check_contains "next-after-token-is-default-branch" '"next_env":"UAT"' "$out"
+check_contains "next-after-token-not-production" '"at_production":false' "$out"
+
+# Two-element chain: the first hop IS production, so an unconfirmed chain refuses
+# it — the placeholder changes where the hop starts, never what is protected.
+seed
+map set Alpha --default-branch main >/dev/null
+map set-flow Alpha ":task,main" >/dev/null
+out="$(resolve Alpha --next-after :task 2>&1)"; check "token-first-hop-into-prod-blocked" 4 $?
+check_contains "token-first-hop-prod-msg" "unconfirmed" "$out"
 
 # --- release_assignee / release_reviewer ---------------------------------------
 # Recorded per project so the release route never has to ask mid-run. Present and

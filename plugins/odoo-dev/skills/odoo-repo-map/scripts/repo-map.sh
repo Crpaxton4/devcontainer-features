@@ -7,14 +7,14 @@
 #   repo-map.sh get "<project name>"
 #   repo-map.sh list
 #   repo-map.sh add "<project name>" <repo> [--default-branch B] [--odoo-version V]
-#                                          [--branch-flow "dev,UAT,main"] [--flow-confirmed]
+#                                          [--branch-flow ":task,UAT,main"] [--flow-confirmed]
 #                                          [--remote owner/repo] [--notes "..."] [--no-repo-check]
 #                                          [--release-assignee LOGIN] [--release-reviewer LOGIN|none]
 #                                          [--repo-path /abs/path/to/checkout]
 #   repo-map.sh set "<project name>" [--default-branch B] [--odoo-version V]
 #                                    [--remote owner/repo] [--notes "..."]
 #                                    [--repo-path /abs/path] [--no-repo-check]
-#   repo-map.sh set-flow "<project name>" "dev,UAT,main" [--flow-confirmed]
+#   repo-map.sh set-flow "<project name>" ":task,UAT,main" [--flow-confirmed]
 #   repo-map.sh set-release-owners "<project name>" <assignee> <reviewer|none>
 #   repo-map.sh remove "<project name>"
 #   repo-map.sh validate
@@ -28,13 +28,29 @@
 # a merge cannot otherwise say. branch_flow is deliberately not settable here:
 # `set-flow` owns it, along with the flow_confirmed question that comes with it.
 #
-# branch_flow is the ordered environment chain, first element the branch task
-# work starts from and LAST element production. It exists because the free-text
-# notes field could only ever be read by a human: "flow: dev -> UAT -> main" is
-# obvious prose and unusable as data, so promotion decisions could not be
-# computed. flow_confirmed records whether a human has actually vouched for the
-# chain — a flow parsed out of old notes is a hypothesis, and a wrong last
-# element points a release at production.
+# branch_flow is the ordered environment chain, LAST element production. It
+# exists because the free-text notes field could only ever be read by a human:
+# "flow: dev -> UAT -> main" is obvious prose and unusable as data, so promotion
+# decisions could not be computed. flow_confirmed records whether a human has
+# actually vouched for the chain — a flow parsed out of old notes is a
+# hypothesis, and a wrong last element points a release at production.
+#
+# The FIRST element is where task work starts from, and on most projects that is
+# not a shared branch at all: a task branch is cut fresh per unit of work, so no
+# branch by that description exists on the remote. Writing an ordinary name there
+# — the old "dev" convention — claims a branch every consumer walking the chain
+# will believe in and none can resolve. The first element may therefore be the
+# reserved token :task, which stands for "whatever branch this one task is on".
+# A colon is forbidden anywhere in a git ref name, so the token cannot collide
+# with a branch anyone could create, and the chain can be read without guessing
+# at index 0. Every LATER element must be a real branch: those are what work gets
+# promoted INTO, so they have to exist to be targeted.
+#
+# The token is optional and never required. A project whose task work is based
+# directly on a shared environment records that branch as the first element and
+# no placeholder at all; the rules are only that the placeholder, where present,
+# is the first element and appears once, and that default_branch is never the
+# placeholder — a task PR needs a real branch to target.
 #
 # repo_path is an optional ABSOLUTE path to this project's checkout, overriding
 # the default $REPOS_DIR/$repo. The flat repos tree is a convention, not a law:
@@ -73,7 +89,24 @@ let data;
 try { data = JSON.parse(readFileSync(file, "utf8")); }
 catch (e) { console.error("invalid JSON: " + e.message); process.exit(4); }
 const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer"];
+// The reserved first element of branch_flow, standing for the per-task branch.
+// A colon cannot appear anywhere in a git ref name, so no branch can ever be
+// spelled this way and the token needs no escaping rule to stay distinguishable.
+const TASK_BRANCH = ":task";
+// git check-ref-format, the part of it that applies to a single branch name. It
+// holds every element other than the placeholder to being a branch somebody
+// could actually create — which is what makes "placeholder or real branch?"
+// answerable by looking at an element instead of at its position.
+function refErr(b) {
+  if (/[\x00-\x20~^:?*[\\\x7f]/.test(b)) return "contains a character git forbids in a branch name";
+  if (b === "@" || b.includes("..") || b.includes("@{") || b.endsWith(".")) return "is not a legal git branch name";
+  if (b.split("/").some((s) => !s || s.startsWith(".") || s.endsWith(".lock"))) return "is not a legal git branch name";
+  return null;
+}
 const errs = [];
+// Findings that do not invalidate the map but describe a claim nothing can
+// honour. They ride on the success object rather than on the exit code.
+const warns = [];
 if (typeof data !== "object" || data === null || Array.isArray(data)) errs.push("root must be an object");
 else {
   if (typeof data._doc !== "string") errs.push("_doc must be a string");
@@ -95,6 +128,10 @@ else {
     }
     for (const k of ["default_branch", "odoo_version", "remote", "notes"])
       if (k in entry && typeof entry[k] !== "string") errs.push(`${name}: ${k} must be a string`);
+    // Checked wherever branch_flow is or is not: a task PR is opened against
+    // default_branch, so the one thing it can never be is the placeholder.
+    if (entry.default_branch === TASK_BRANCH)
+      errs.push(`${name}: default_branch cannot be "${TASK_BRANCH}" — that is the per-task placeholder, and a task PR needs a real branch to target`);
     // Recorded to be used unasked, so an empty one is worse than an absent one:
     // it reads as answered and names nobody. `none` is a real answer and passes.
     for (const k of ["release_assignee", "release_reviewer"])
@@ -107,12 +144,29 @@ else {
       if (!Array.isArray(flow)) errs.push(`${name}: branch_flow must be an array of branch names`);
       else {
         if (flow.length === 1) errs.push(`${name}: branch_flow needs at least a source and a target, or omit it`);
-        for (const b of flow)
-          if (typeof b !== "string" || !b.trim()) errs.push(`${name}: branch_flow entries must be non-empty strings`);
+        for (const [i, b] of flow.entries()) {
+          if (typeof b !== "string" || !b.trim()) { errs.push(`${name}: branch_flow entries must be non-empty strings`); continue; }
+          // The placeholder is first or nowhere. Later elements are what work is
+          // promoted INTO, and there is nothing to promote into a branch that is
+          // cut fresh per task and exists on no remote.
+          if (b === TASK_BRANCH) {
+            if (i !== 0) errs.push(`${name}: "${TASK_BRANCH}" is the per-task placeholder and only ever the FIRST element of branch_flow, not element ${i}`);
+            continue;
+          }
+          const bad = refErr(b);
+          if (bad) errs.push(`${name}: branch_flow entry "${b}" ${bad} — every element but a leading "${TASK_BRANCH}" names a branch that has to exist on the remote`);
+        }
         if (new Set(flow).size !== flow.length) errs.push(`${name}: branch_flow repeats a branch`);
         // default_branch is where task work is based, so it has to be ON the chain.
         if (flow.length && entry.default_branch && !flow.includes(entry.default_branch))
           errs.push(`${name}: default_branch "${entry.default_branch}" is not in branch_flow [${flow.join(", ")}]`);
+        // The phantom this token exists to retire. A first element that is neither
+        // the placeholder nor default_branch is claiming a shared branch that
+        // nobody bases work on — historically the literal "dev", which resolved on
+        // no remote. A warning, not an error: the map is still usable and every
+        // other rule still holds, and the repair is one set-flow away.
+        if (flow.length > 1 && flow[0] !== TASK_BRANCH && entry.default_branch && flow[0] !== entry.default_branch)
+          warns.push(`${name}: branch_flow starts with "${flow[0]}", which is neither the "${TASK_BRANCH}" placeholder nor default_branch "${entry.default_branch}" — if it stands for the per-task branch rather than a branch on the remote, record it as the placeholder: repo-map.sh set-flow "${name}" "${[TASK_BRANCH, ...flow.slice(1)].join(",")}"`);
       }
     }
     if (entry.flow_confirmed === true && !(Array.isArray(entry.branch_flow) && entry.branch_flow.length))
@@ -122,13 +176,26 @@ else {
   }
 }
 if (errs.length) { console.error(errs.join("\n")); process.exit(4); }
+// Printed only when asked, because every other command runs this as a precheck
+// and an unasked-for line here would land in front of the JSON that command emits.
+if (warns.length && process.env.REPO_MAP_WARN === "1") console.log(warns.join("\n"));
 '
+
+# Validation always runs against an explicit file, so a pending write can be
+# checked before it is allowed to become the live map.
+validate_file() { node --input-type=module -e "$VALIDATE_JS" -- "$1"; }
 
 # Every mutation lands the same way: write tmp, validate tmp, .bak the live file,
 # rename. A map that fails validation therefore never becomes the live map.
 commit_tmp() {
   local tmp="$1"
-  REPO_MAP_FILE="$tmp" bash "$SCRIPT_DIR/repo-map.sh" validate >/dev/null
+  local warns
+  # Assigned on its own line so the exit status of a failed validation is the
+  # status of this function: `local warns=$(...)` would swallow it and commit.
+  warns="$(REPO_MAP_WARN=1 validate_file "$tmp")"
+  # Warnings do not stop the write, but a chain whose first element resolves to
+  # nothing should say so at the moment someone records it, not only on demand.
+  [ -z "$warns" ] || echo "$warns" >&2
   cp "$MAP" "$MAP.bak"
   mv "$tmp" "$MAP"
 }
@@ -151,13 +218,21 @@ check_repo_path() { # check_repo_path <path> <repo_check 0|1>
 cmd="${1:-}"; shift || true
 case "$cmd" in
   validate)
-    run_node "$VALIDATE_JS"
-    echo '{"ok": true}'
+    # This is the one place warnings surface unprompted, because this is the one
+    # command whose whole job is to have an opinion about the map. They ride on
+    # the success object: the map is valid, and something in it still needs a
+    # human. The bare object is kept byte-identical when there is nothing to say.
+    warns="$(REPO_MAP_WARN=1 validate_file "$MAP")"
+    if [ -n "$warns" ]; then
+      node -e 'process.stdout.write("{\"ok\": true, \"warnings\": " + JSON.stringify(process.argv[1].split("\n")) + "}\n")' "$warns"
+    else
+      echo '{"ok": true}'
+    fi
     ;;
 
   get)
     [ $# -eq 1 ] || die "usage: repo-map.sh get \"<project name>\""
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     run_node '
       import { readFileSync } from "fs";
       const data = JSON.parse(readFileSync(process.argv[1], "utf8"));
@@ -168,7 +243,7 @@ case "$cmd" in
     ;;
 
   list)
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     run_node '
       import { readFileSync } from "fs";
       const data = JSON.parse(readFileSync(process.argv[1], "utf8"));
@@ -203,7 +278,7 @@ case "$cmd" in
       REPOS_DIR="${REPOS_DIR:-$("$SCRIPT_DIR/repos-dir.sh" --raw)}"
       [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (pass --repo-path /abs/path when the checkout is not under the repos tree, or --no-repo-check pre-rebuild)"
     fi
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";
@@ -244,7 +319,7 @@ case "$cmd" in
           if [ "$key" = repo_path ]; then repo_path="$2"; fi
           updates+=("$key" "$2"); shift 2 ;;
         --branch-flow)
-          die "branch_flow is set by: repo-map.sh set-flow \"$project\" \"dev,UAT,main\" [--flow-confirmed]" ;;
+          die "branch_flow is set by: repo-map.sh set-flow \"$project\" \":task,UAT,main\" [--flow-confirmed]" ;;
         --release-assignee|--release-reviewer)
           die "release owners are set by: repo-map.sh set-release-owners \"$project\" <assignee> <reviewer|none>" ;;
         --no-repo-check) repo_check=0; shift ;;
@@ -253,7 +328,7 @@ case "$cmd" in
     done
     [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes or --repo-path"
     check_repo_path "$repo_path" "$repo_check"
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";
@@ -274,7 +349,7 @@ case "$cmd" in
     ;;
 
   set-flow)
-    [ $# -ge 2 ] || die "usage: repo-map.sh set-flow \"<project name>\" \"dev,UAT,main\" [--flow-confirmed]"
+    [ $# -ge 2 ] || die "usage: repo-map.sh set-flow \"<project name>\" \":task,UAT,main\" [--flow-confirmed]"
     project="$1"; flow="$2"; shift 2
     confirmed=false
     while [ $# -gt 0 ]; do
@@ -283,7 +358,7 @@ case "$cmd" in
         *) die "unknown option: $1" ;;
       esac
     done
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";
@@ -304,7 +379,7 @@ case "$cmd" in
     # on a new project and never on an existing one — which is every project.
     [ $# -eq 3 ] || die "usage: repo-map.sh set-release-owners \"<project name>\" <assignee> <reviewer|none>"
     project="$1"; rel_assignee="$2"; rel_reviewer="$3"
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";
@@ -322,7 +397,7 @@ case "$cmd" in
 
   remove)
     [ $# -eq 1 ] || die "usage: repo-map.sh remove \"<project name>\""
-    run_node "$VALIDATE_JS"
+    validate_file "$MAP"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";

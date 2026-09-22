@@ -34,9 +34,9 @@ One entry per **exact Odoo `project.project` name**:
 |-----|---------|
 | `repo` | Bare folder name under repos tree — never path |
 | `repo_path` | Optional **absolute** path to checkout. Overrides `$REPOS_DIR/$repo` |
-| `default_branch` | Branch task work based on, and task PRs target. Must appear in `branch_flow` |
+| `default_branch` | Branch task work based on, and task PRs target. Must appear in `branch_flow`. Never `:task` |
 | `odoo_version` | Series this project run, e.g. `18.0` |
-| `branch_flow` | Ordered environment chain, **last element is production**, e.g. `["dev","UAT","main"]` |
+| `branch_flow` | Ordered environment chain, **last element is production**, e.g. `[":task","UAT","main"]` |
 | `flow_confirmed` | `true` only when human vouched for chain (see below) |
 | `remote` | `owner/repo` on GitHub, when differ from what local clone show |
 | `notes` | Free text for humans. Never parsed |
@@ -47,10 +47,14 @@ One entry per **exact Odoo `project.project` name**:
 
 **`release_assignee` / `release_reviewer` exist so the release route never has to ask.** Who owns a release PR is a property of the project, not of the run, and `odoo-dev:odoo-release` runs inside a subagent that cannot put a question to the user. Recorded once, read every release. Absent = unanswered: ask the user and record the answer, never infer one from commit authorship.
 
+**`:task` is reserved first element of `branch_flow`, standing for per-task branch.** Chain's first element is where task work start from, and on most project that not shared branch at all — task branch cut fresh per unit of work, exist on no remote. Writing ordinary name there (old `dev` convention) claim branch every consumer walking chain believe in and none can resolve; `gh api repos/<owner>/<repo>/branches/dev` return 404 on every mapped remote. Record `:task` instead. Colon forbidden anywhere in git ref name, so token can never collide with branch anyone could create, and chain readable without guessing at index 0.
+
+Token **optional**: project whose task work based directly on shared environment record that branch first and no placeholder — `["staging","main"]` with `default_branch: staging` correct and warn nothing. Rules validator enforce: placeholder only ever element 0, appear once, never `default_branch` (task PR need real branch to target), and every element after it must be legal git branch name that exist on remote. `validate` also **warn** (not fail) when chain start with name that neither `:task` nor `default_branch` — that the phantom, and warning carry `set-flow` command that repair it.
+
 **`flow_confirmed` is honesty flag.** Seeded flows parsed out of old free-text notes written for people. Parsed chain = hypothesis. `project-resolve.sh` answer mid-chain hop from unconfirmed flow — wrong there cost re-run — but refuse to name **production** hop until someone confirm. Hit that refusal: ask user confirm chain, record it:
 
 ```bash
-<base directory>/scripts/repo-map.sh set-flow "QOC Delivery Improvements" "dev,UAT,main" --flow-confirmed
+<base directory>/scripts/repo-map.sh set-flow "QOC Delivery Improvements" ":task,UAT,main" --flow-confirmed
 ```
 
 ## Scripts
@@ -79,9 +83,12 @@ Every script print one JSON object as last stdout line.
 
 ```bash
 <base directory>/scripts/project-resolve.sh "B&K Logistics Support"
-<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after dev   # -> next_env: "UAT"
-<base directory>/scripts/project-resolve.sh B-K-Logistics                             # repo folder also works
+<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after :task  # first hop -> next_env: "UAT"
+<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after UAT    # -> next_env: "main"
+<base directory>/scripts/project-resolve.sh B-K-Logistics                               # repo folder also works
 ```
+
+`--next-after` take **element of chain**, never arbitrary branch. First hop — out of per-task branch, into whatever that task PR target — spelled `--next-after :task`, same arithmetic as every other hop. Real branch name not on chain still exit 4: treating unrecognised name as "must be task branch" would answer typo'd environment name with `default_branch`.
 
 Output: `{"project","repo","repo_path","default_branch","odoo_version","branch_flow","flow_confirmed","remote","next_env","at_production","release_assignee","release_reviewer"}`.
 
@@ -96,7 +103,7 @@ Exit codes: `2` usage · `3` unmapped **or** repo folder mapping to several proj
 ```bash
 <base directory>/scripts/repo-map.sh add "New Client - Phase 1" newclient \
   --default-branch UAT --odoo-version 18.0 \
-  --branch-flow "dev,UAT,main" --flow-confirmed \
+  --branch-flow ":task,UAT,main" --flow-confirmed \
   --remote acme-eng/newclient --notes "..." \
   --release-assignee alice --release-reviewer bob
 ```
@@ -116,7 +123,7 @@ Empty value delete the key: `set "<project>" --repo-path ""` put entry back on f
 Two fields `set` deliberately not take, because each carry own extra question — it point you at owner instead:
 
 ```bash
-<base directory>/scripts/repo-map.sh set-flow "New Client - Phase 1" "dev,UAT,main" --flow-confirmed
+<base directory>/scripts/repo-map.sh set-flow "New Client - Phase 1" ":task,UAT,main" --flow-confirmed
 <base directory>/scripts/repo-map.sh set-release-owners "New Client - Phase 1" alice bob
 ```
 
@@ -134,7 +141,8 @@ Writes atomic (temp file → validate → `.bak` → rename), so rejected edit n
 - **Unknown project = stop, not guess.** `project-resolve.sh` exit 3, list what it know. Ask user which repo and branch, then `add` entry. Never infer repo from similar name.
 - **Entries added only with explicit user confirmation** — repo, base branch, series, chain.
 - **One repo, several projects is normal** (delivery project and its upgrade project share checkout). Those entries can legitimately disagree on `odoo_version` and `branch_flow` — that why resolving by folder name ambiguous by design. Name the project.
-- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain, no repeats, no unknown keys, `repo_path` absolute.
+- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain and never `:task`, no repeats, no unknown keys, `repo_path` absolute, `:task` only element 0, every other `branch_flow` element a legal git branch name.
+- **Never invent branch name for chain's first element.** Task branch cut fresh per task is `:task`, not `dev`. Only thing that go on chain is branch that exist on remote, plus that one placeholder.
 - `default_branch` is what task PR target. Frequently **not** GitHub default branch. Real case: client repo whose GitHub default is `Odoov18` while every task PR belongs on `staging`.
 
 ## Verify
