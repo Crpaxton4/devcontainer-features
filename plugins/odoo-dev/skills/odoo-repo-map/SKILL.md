@@ -33,6 +33,7 @@ One entry per **exact Odoo `project.project` name**:
 | Key | Meaning |
 |-----|---------|
 | `repo` | Bare folder name under repos tree — never path |
+| `repo_path` | Optional **absolute** path to checkout. Overrides `$REPOS_DIR/$repo` |
 | `default_branch` | Branch task work based on, and task PRs target. Must appear in `branch_flow` |
 | `odoo_version` | Series this project run, e.g. `18.0` |
 | `branch_flow` | Ordered environment chain, **last element is production**, e.g. `["dev","UAT","main"]` |
@@ -41,6 +42,8 @@ One entry per **exact Odoo `project.project` name**:
 | `notes` | Free text for humans. Never parsed |
 | `release_assignee` | GitHub login an aggregation release PR is assigned to |
 | `release_reviewer` | GitHub login the release PR requests review from, or `none` |
+
+**`repo_path` exists because the flat repos tree is convention, not law.** `repos-dir.sh` need directory whose immediate subdirectory names equal `repo`. Bind mount cannot supply one: Odoo devcontainer mount client repo at `/mnt/extra-addons`, name fixed by addons path, never match `repo`, and no `REPOS_DIR` value bridge that — `REPOS_DIR=/mnt` still leave folder named `extra-addons`. Record absolute path on entry instead. Project carrying `repo_path` never consult `repos-dir.sh` at all: `add` check that path exist, `project-resolve.sh` report it as `repo_path` and sniff `origin` from it, so `remote` fill in instead of stay null. Relative path rejected — resolve against whatever directory caller stand in, exactly guesswork this map exist to stop. `repo` stay required and stay bare folder name: it the lookup key, independent of where checkout mounted.
 
 **`release_assignee` / `release_reviewer` exist so the release route never has to ask.** Who owns a release PR is a property of the project, not of the run, and `odoo-dev:odoo-release` runs inside a subagent that cannot put a question to the user. Recorded once, read every release. Absent = unanswered: ask the user and record the answer, never infer one from commit authorship.
 
@@ -68,7 +71,7 @@ Every script print one JSON object as last stdout line.
 
 | Script | Use |
 |--------|-----|
-| `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first |
+| `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
 | `repo-map.sh get\|list\|add\|set-flow\|remove\|validate` | **Only** sanctioned way to read or edit map |
 | `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | Full resolution, plus next environment in chain |
 
@@ -84,7 +87,7 @@ Output: `{"project","repo","repo_path","default_branch","odoo_version","branch_f
 
 The two `release_*` fields are `null` when the project recorded none.
 
-`repo_path` is `null` when repos tree not on this machine — metadata still correct, still useful for planning. Only filesystem-touching skills need path.
+`repo_path` is checkout path when one present on this machine, `null` when none — metadata still correct, still useful for planning. Only filesystem-touching skills need path. Entry's own `repo_path` win over `$REPOS_DIR/$repo`, so project pinned that way resolve even where no repos tree exist. Hand value straight to `odoo-dev:odoo-task-env` scripts' `--repo-path DIR` — same bypass, now recorded once instead of typed every call.
 
 Exit codes: `2` usage · `3` unmapped **or** repo folder mapping to several projects · `4` branch chain cannot answer question asked.
 
@@ -104,14 +107,21 @@ Exit codes: `2` usage · `3` unmapped **or** repo folder mapping to several proj
 <base directory>/scripts/repo-map.sh set-release-owners "New Client - Phase 1" alice bob
 ```
 
-Writes atomic (temp file → validate → `.bak` → rename), so rejected edit never become live map. `add` check repo folder exist unless you pass `--no-repo-check`.
+Checkout not under repos tree (bind mount, devcontainer) — pin it:
+
+```bash
+<base directory>/scripts/repo-map.sh add "Client - Support" clientrepo \
+  --repo-path /mnt/extra-addons --default-branch staging --odoo-version 18.0
+```
+
+Writes atomic (temp file → validate → `.bak` → rename), so rejected edit never become live map. `add` check repo folder exist unless you pass `--no-repo-check` — checks `--repo-path` when given, else `$REPOS_DIR/$repo`.
 
 ## Rules
 
 - **Unknown project = stop, not guess.** `project-resolve.sh` exit 3, list what it know. Ask user which repo and branch, then `add` entry. Never infer repo from similar name.
 - **Entries added only with explicit user confirmation** — repo, base branch, series, chain.
 - **One repo, several projects is normal** (delivery project and its upgrade project share checkout). Those entries can legitimately disagree on `odoo_version` and `branch_flow` — that why resolving by folder name ambiguous by design. Name the project.
-- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain, no repeats, no unknown keys.
+- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain, no repeats, no unknown keys, `repo_path` absolute.
 - `default_branch` is what task PR target. Frequently **not** GitHub default branch. Real case: client repo whose GitHub default is `Odoov18` while every task PR belongs on `staging`.
 
 ## Verify

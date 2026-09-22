@@ -34,6 +34,13 @@ JSON
 }
 map() { REPO_MAP_FILE="$TMP/map.json" bash "$SCRIPTS/repo-map.sh" "$@"; }
 resolve() { REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-resolve.sh" "$@"; }
+# Same two, with REPOS_DIR pinned: the repo_path cases turn on what the flat-tree
+# layout would have said, so they cannot use the ambient value.
+map_in() { local rd="$1"; shift; REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="$rd" bash "$SCRIPTS/repo-map.sh" "$@"; }
+resolve_in() { local rd="$1"; shift; REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="$rd" bash "$SCRIPTS/project-resolve.sh" "$@"; }
+# REPOS_DIR set but absent makes repos-dir.sh exit 1, which is the devcontainer
+# case: no repos tree resolves at all and project-resolve.sh gets an empty one.
+NO_TREE="$TMP/no-such-tree"
 
 # --- validation ---------------------------------------------------------------
 seed
@@ -181,6 +188,101 @@ check_contains "resolve-emits-reviewer" '"release_reviewer":"none"' "$out"
 out="$(resolve Alpha)"; check "resolve-without-release-owners" 0 $?
 check_contains "resolve-assignee-null" '"release_assignee":null' "$out"
 check_contains "resolve-reviewer-null" '"release_reviewer":null' "$out"
+
+# --- repo_path ------------------------------------------------------------------
+# The flat repos tree is a convention repos-dir.sh cannot satisfy for a checkout
+# whose folder name can never equal `repo` — the Odoo devcontainer bind-mounts
+# the one client repo at /mnt/extra-addons, a name fixed by the addons path. An
+# absolute repo_path answers the lookup with no tree resolved at all.
+#
+# Two checkouts, so precedence is observable: one where the flat layout says to
+# look, one the entry pins. A bare `.git` directory is enough for the presence
+# check and keeps these cases independent of a git binary.
+mkdir -p "$TMP/tree/iota/.git" "$TMP/mount/extra-addons/.git" "$TMP/mount-no-checkout"
+
+seed
+map add "Iota" iota --repo-path "$TMP/mount/extra-addons" --default-branch main >/dev/null
+check "add-with-repo-path" 0 $?
+out="$(map get Iota)"; check_contains "add-records-repo-path" "\"repo_path\":\"$TMP/mount/extra-addons\"" "$out"
+
+out="$(resolve_in "$TMP/tree" Iota)"; check "resolve-with-repo-path" 0 $?
+check_contains "repo-path-beats-repos-dir" "\"repo_path\":\"$TMP/mount/extra-addons\"" "$out"
+
+# The reported bug verbatim: no tree resolves, yet the pinned checkout is found.
+out="$(resolve_in "$NO_TREE" Iota)"; check "resolve-repo-path-without-tree" 0 $?
+check_contains "repo-path-without-tree" "\"repo_path\":\"$TMP/mount/extra-addons\"" "$out"
+
+# Without the override the same entry falls back to $REPOS_DIR/$repo, unchanged.
+seed
+map add "Iota" iota --no-repo-check --default-branch main >/dev/null
+out="$(resolve_in "$TMP/tree" Iota)"; check "resolve-without-repo-path" 0 $?
+check_contains "fallback-to-repos-dir" "\"repo_path\":\"$TMP/tree/iota\"" "$out"
+
+# A pinned path with no checkout under it is still null: repo_path says where to
+# look, not that something is there.
+seed
+map add "Nu" nu --repo-path "$TMP/mount-no-checkout" >/dev/null
+out="$(resolve_in "$NO_TREE" Nu)"; check "resolve-repo-path-no-checkout" 0 $?
+check_contains "repo-path-null-without-checkout" '"repo_path":null' "$out"
+
+# add's repo-existence check reads the pinned path, so it needs neither a
+# resolvable tree nor --no-repo-check — the workaround the bug report describes.
+seed
+out="$(map_in "$NO_TREE" add "Kappa" kappa --repo-path "$TMP/mount/extra-addons" 2>&1)"
+check "add-repo-check-uses-repo-path" 0 $?
+out="$(map_in "$NO_TREE" add "Lambda" lambda --repo-path "$TMP/nowhere" 2>&1)"
+check "add-repo-path-missing-dir" 2 $?
+check_contains "add-repo-path-missing-msg" "repo folder not found" "$out"
+
+# Relative is rejected where the user typed it, naming the flag.
+seed
+out="$(map add "Mu" mu --repo-path relative/path 2>&1)"; check "add-repo-path-relative" 2 $?
+check_contains "add-repo-path-relative-msg" "must be an absolute path" "$out"
+
+# The key was previously rejected outright as unknown, which is what made the
+# devcontainer unfixable from the map.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.repo_path="/mnt/extra-addons";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "repo-path-absolute-accepted" 0 $?
+
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.repo_path="extra-addons";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "repo-path-relative-rejected" 4 $?
+check_contains "repo-path-relative-validate-msg" "must be an absolute path" "$out"
+
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.repo_path="   ";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "repo-path-empty-rejected" 4 $?
+check_contains "repo-path-empty-msg" "must be a non-empty string" "$out"
+
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.repo_path=["/mnt/extra-addons"];
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "repo-path-non-string-rejected" 4 $?
+
+# The origin sniff is gated on the checkout being present, so before repo_path it
+# could never fire in the devcontainer and `remote` was always null. Needs a real
+# git repo; skipped rather than failed where git is absent.
+if command -v git >/dev/null 2>&1; then
+  git init -q "$TMP/gitmount" >/dev/null 2>&1
+  git -C "$TMP/gitmount" remote add origin git@github.com:acme/pinned-addons.git
+  seed
+  map add "Omicron" omicron --repo-path "$TMP/gitmount" >/dev/null
+  out="$(resolve_in "$NO_TREE" Omicron)"; check "resolve-sniffs-origin-at-repo-path" 0 $?
+  check_contains "repo-path-drives-origin-sniff" '"remote":"acme/pinned-addons"' "$out"
+
+  # An explicit remote still wins: the map is what a human vouched for.
+  seed
+  map add "Pi" pi --repo-path "$TMP/gitmount" --remote other/override >/dev/null
+  out="$(resolve_in "$NO_TREE" Pi)"; check_contains "map-remote-beats-sniff" '"remote":"other/override"' "$out"
+fi
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

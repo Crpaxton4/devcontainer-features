@@ -11,6 +11,15 @@
 # callers that care set REPOS_DIR. Keeping it overridable means a machine with a
 # differently-shaped home does not need this file edited.
 #
+# A flat tree is an assumption this resolver cannot always satisfy: it needs a
+# directory whose immediate subdirectory names equal the `repo` field, and a
+# bind mount (the Odoo devcontainer's /mnt/extra-addons) has a name fixed by the
+# addons path that can never equal one. That case is answered per project rather
+# than per machine: an absolute `repo_path` on the repo-map.json entry overrides
+# $REPOS_DIR/$repo, and a project carrying one never reaches this script at all.
+# Failing here is therefore not fatal to a lookup — callers treat it as "no tree
+# on this machine" and fall back to whatever the map recorded.
+#
 # Last stdout line: {"repos_dir": "<abs path>"}; exit 1 when unresolvable.
 # --raw prints the bare path instead, for the sibling scripts that assign it to a
 # shell variable — a JSON parse per script invocation buys nothing there.
@@ -49,5 +58,11 @@ for cand in "$PWD" "${candidates[@]}"; do
   fi
 done
 
-echo "could not resolve the repos tree (no candidate has >= 2 git repos); set REPOS_DIR explicitly" >&2
+cat >&2 <<'MSG'
+could not resolve the repos tree (no candidate has >= 2 git repos); set REPOS_DIR explicitly.
+If the checkout is not under a flat repos tree at all — a bind mount whose folder
+name cannot match the repo field, as in the Odoo devcontainer — record the path on
+the project instead, which bypasses this resolver entirely:
+  repo-map.sh add "<project>" <repo> --repo-path /abs/path/to/checkout
+MSG
 exit 1
