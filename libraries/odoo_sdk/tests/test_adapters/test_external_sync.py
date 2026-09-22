@@ -1158,6 +1158,22 @@ class TestParsingAndGuards(unittest.TestCase):
         window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
         self.assertIsNone(ex._review_event(review, pr, "o/r", window))
 
+    def test_review_event_records_its_state_in_the_payload(self) -> None:
+        # #710: the billing narrative says "PR #n reviewed (APPROVED)", which
+        # needs the verdict. It rides in the existing free-form payload column,
+        # so no schema change is involved.
+        pr = {"number": 1, "title": "t", "headRefName": "b"}
+        review = {"id": 9, "submitted_at": "2026-07-01T10:00:00Z", "state": "APPROVED"}
+        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        event = ex._review_event(review, pr, "o/r", window)
+        self.assertEqual(event.payload, {"review_state": "APPROVED"})
+
+    def test_review_event_without_a_state_records_no_payload(self) -> None:
+        pr = {"number": 1, "title": "t", "headRefName": "b"}
+        review = {"id": 9, "submitted_at": "2026-07-01T10:00:00Z"}
+        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        self.assertIsNone(ex._review_event(review, pr, "o/r", window).payload)
+
     def test_current_partner_id_raises_on_empty_read(self) -> None:
         class _Empty(_FakeClient):
             def execute(self, model, method, *a, **k):
@@ -1171,6 +1187,55 @@ class TestParsingAndGuards(unittest.TestCase):
         message = {"id": 1, "res_id": 5, "date": False, "subject": "x"}
         self.assertEqual(ex._store_message(state, message, "o/r"), 0)
         self.assertEqual(state.count_events(), 0)
+
+    def test_chatter_body_supplies_the_subject_when_there_is_none(self) -> None:
+        # #710: a logged note posts with an EMPTY subject, so before this the
+        # chatter event carried no text at all and the billing narrative had
+        # nothing of the user's own words to lead with.
+        state = _tmp_state()
+        message = {
+            "id": 2,
+            "res_id": 5,
+            "date": "2026-07-03 08:00:00",
+            "subject": False,
+            "body": "<p>Reconciled the July VAT postings</p><p>Second paragraph</p>",
+        }
+        self.assertEqual(ex._store_message(state, message, "o/r"), 1)
+        self.assertEqual(
+            state.get_events()[0].subject, "Reconciled the July VAT postings"
+        )
+
+    def test_explicit_chatter_subject_still_wins_over_the_body(self) -> None:
+        state = _tmp_state()
+        message = {
+            "id": 3,
+            "res_id": 5,
+            "date": "2026-07-03 08:00:00",
+            "subject": "Status update",
+            "body": "<p>ignored</p>",
+        }
+        ex._store_message(state, message, "o/r")
+        self.assertEqual(state.get_events()[0].subject, "Status update")
+
+    def test_chatter_headline_unescapes_and_breaks_on_block_tags(self) -> None:
+        self.assertEqual(
+            ex._chatter_headline("<div>A &amp; B<br>next line</div>"), "A & B"
+        )
+
+    def test_chatter_headline_tolerates_missing_or_markup_only_bodies(self) -> None:
+        # Odoo returns False for an empty body; a markup-only body has no line.
+        self.assertEqual(ex._chatter_headline(False), "")
+        self.assertEqual(ex._chatter_headline(None), "")
+        self.assertEqual(ex._chatter_headline("<p></p><br>"), "")
+
+    def test_chatter_headline_is_capped(self) -> None:
+        body = "<p>" + "x" * 5000 + "</p>"
+        self.assertEqual(len(ex._chatter_headline(body)), ex._CHATTER_SUBJECT_CHARS)
+
+    def test_chatter_search_reads_the_body_field(self) -> None:
+        client = _FakeClient(messages=[])
+        ex._search_chatter(client, 42, _NOW, _NOW)
+        self.assertIn("body", client.calls[0][3]["fields"])
 
 
 class TestRepoLabel(unittest.TestCase):

@@ -16,6 +16,17 @@
 # the answer would be production (the last element): being wrong about a staging
 # hop costs a re-run, being wrong about production costs a customer.
 #
+# The argument is an ELEMENT OF THE CHAIN, never an arbitrary branch. For the
+# first hop — out of a per-task branch and into whatever that task PR targets —
+# pass the reserved token :task, which is what a chain records at index 0 when
+# task work starts from a branch cut fresh per task rather than from a shared
+# one. That answers the first hop with the same arithmetic as every other hop,
+# and it is why the token exists: a chain beginning with an ordinary name (the
+# old "dev" convention) made the first hop a question about a branch that was on
+# no remote. A branch that is not on the chain is still an error rather than an
+# assumed task branch: silently treating an unrecognised name as "must be a task
+# branch" would answer a typo'd environment name with default_branch.
+#
 # Last stdout line: {"project","repo","repo_path","default_branch","odoo_version",
 #   "branch_flow":[],"flow_confirmed","remote","next_env","at_production",
 #   "release_assignee","release_reviewer"}
@@ -23,6 +34,13 @@
 # release_assignee and release_reviewer are null when the project has recorded
 # none. Null means unanswered and the caller has to ask; it is not a licence to
 # infer one from commit authorship.
+#
+# repo_path is the checkout when one is present on this machine, and null when
+# there is none. An absolute repo_path recorded on the map entry wins over
+# $REPOS_DIR/$repo: the flat tree is a convention, and a bind mount whose folder
+# name cannot match the repo field (the Odoo devcontainer's /mnt/extra-addons)
+# has no tree to resolve. The origin sniff below reads that same path, so a
+# project pinned this way gets its remote filled in rather than left null.
 #
 # Exit codes: 0 ok | 2 usage | 3 unmapped or ambiguous | 4 flow missing/unusable
 set -euo pipefail
@@ -74,18 +92,29 @@ node --input-type=module -e '
   import { execFileSync } from "child_process";
   const [entryRaw, reposDir, nextAfter] = process.argv.slice(1);
   const entry = JSON.parse(entryRaw);
+  // branch_flow index 0 when task work starts from a per-task branch. Spelled
+  // with a colon, which git forbids in a ref name, so it can never be a branch.
+  const TASK_BRANCH = ":task";
   const flow = Array.isArray(entry.branch_flow) ? entry.branch_flow : [];
   const confirmed = entry.flow_confirmed === true;
 
-  const repoPath = reposDir ? `${reposDir}/${entry.repo}` : null;
-  const repoPresent = repoPath && existsSync(`${repoPath}/.git`);
+  // An explicit repo_path is where the checkout actually is, so it wins outright
+  // over the $REPOS_DIR/$repo convention — including on machines where no repos
+  // tree resolves at all and reposDir is empty.
+  const repoPath = entry.repo_path || (reposDir ? `${reposDir}/${entry.repo}` : null);
+  const repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
 
   // Map first, git second: the map is what a human vouched for, and a checkout
-  // can sit on a fork or a stale remote.
+  // can sit on a fork or a stale remote. Gated on repoPresent, so pinning
+  // repo_path is what makes this fire where no tree resolves.
   let remote = entry.remote || null;
   if (!remote && repoPresent) {
     try {
-      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+      // stderr is ignored rather than inherited: a checkout with no origin — or a
+      // repo_path that is not a git repo at all — means a null remote, not a line
+      // of git noise beside the JSON this script prints.
+      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
       const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
       if (m) remote = m[1];
     } catch { /* no origin — remote stays null */ }
@@ -95,12 +124,19 @@ node --input-type=module -e '
   let atProduction = null;
   if (nextAfter) {
     if (!flow.length) {
-      console.error(`no branch_flow recorded for "${entry.project}" — confirm the environment chain with the user, then: repo-map.sh set-flow "${entry.project}" "dev,UAT,main" --flow-confirmed`);
+      console.error(`no branch_flow recorded for "${entry.project}" — confirm the environment chain with the user, then: repo-map.sh set-flow "${entry.project}" "${TASK_BRANCH},UAT,main" --flow-confirmed`);
       process.exit(4);
     }
     const i = flow.indexOf(nextAfter);
     if (i === -1) {
-      console.error(`branch "${nextAfter}" is not in branch_flow [${flow.join(", ")}] for "${entry.project}"`);
+      // A task branch is never an element of the chain: the chain names shared
+      // environments, plus the one reserved token standing in for whichever
+      // branch this task happens to be on. Naming it is what makes the first hop
+      // answerable without assuming an unrecognised name must be a task branch.
+      const hint = flow[0] === TASK_BRANCH
+        ? ` — for the first hop out of a per-task branch pass the reserved placeholder: --next-after ${TASK_BRANCH}`
+        : "";
+      console.error(`branch "${nextAfter}" is not in branch_flow [${flow.join(", ")}] for "${entry.project}"${hint}`);
       process.exit(4);
     }
     atProduction = i === flow.length - 1;

@@ -1,4 +1,4 @@
-"""Tests for the machine-derived run/session summarizer (#626).
+"""Tests for the machine-derived run/session summarizers (#626, #710).
 
 ``summarize_run_activity`` is the single pure derivation both consumers share:
 ``stop_task`` stores its output on the run row and the billing upload attaches
@@ -6,6 +6,12 @@ it to the timesheet entry. These tests pin the reconstructable content — the
 tool-activity tally, commit sha+subject lines, branch/PR provenance, the
 recorded test result, and the flattened checkpoint notes — plus the
 no-length-cap policy (internal text is never routed through the chatter limit).
+
+``summarize_session_context`` (#710) is its narrative counterpart, reading the
+same events for WHAT WAS DONE rather than how many tools ran. Its tests pin the
+three-tier preference order (chatter notes > commits/PRs/reviews > hook
+context), the per-item headline cap, and that each tier reads only fields that
+are actually persisted on an event row.
 """
 
 import unittest
@@ -13,7 +19,11 @@ from datetime import datetime, timezone
 
 from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_sdk.state import EventRecord
-from odoo_sdk.state.summary import summarize_run_activity
+from odoo_sdk.state.summary import (
+    _HEADLINE_ITEM_CHARS,
+    summarize_run_activity,
+    summarize_session_context,
+)
 
 _TS = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -136,6 +146,135 @@ class TestSummarizeRunActivity(unittest.TestCase):
     def test_commit_without_external_id_still_lists_subject(self):
         events = [_event(source="commit", subject="hotfix rounding")]
         self.assertEqual(summarize_run_activity(events, []), "commits: hotfix rounding")
+
+
+class TestSummarizeSessionContext(unittest.TestCase):
+    """The narrative headline a timesheet row leads with (#710).
+
+    Strict preference order, first non-empty tier wins: chatter notes the user
+    wrote, then commits / PR titles / review states, then the hook context
+    (first user prompt, else ``cwd``).
+    """
+
+    def test_nothing_to_tell_yields_empty(self):
+        self.assertEqual(summarize_session_context([]), "")
+
+    def test_tool_tallies_are_never_the_headline(self):
+        # The headline complaint of #710: 231 Bash calls say nothing billable,
+        # so an agent/hook tally alone contributes NO headline at all and the
+        # caller falls back (the tally still reaches the row as the debug tail).
+        events = [_event(subject="Bash") for _ in range(231)]
+        self.assertEqual(summarize_session_context(events), "")
+
+    def test_chatter_note_first_lines_lead(self):
+        events = [
+            _event(source="chatter", subject="Reconciled the July VAT postings"),
+            _event(source="chatter", subject="Raised the rounding fix with finance"),
+        ]
+        self.assertEqual(
+            summarize_session_context(events),
+            "Reconciled the July VAT postings | Raised the rounding fix with finance",
+        )
+
+    def test_chatter_beats_commits_and_hook_context(self):
+        events = [
+            _event(source="commit", subject="fix: rounding"),
+            _event(source="chatter", subject="Explained the fix to the client"),
+            _event(
+                source="claude:UserPromptSubmit", payload={"prompt": "fix rounding"}
+            ),
+        ]
+        self.assertEqual(
+            summarize_session_context(events), "Explained the fix to the client"
+        )
+
+    def test_repeated_chatter_line_is_listed_once(self):
+        events = [_event(source="chatter", subject="same note") for _ in range(3)]
+        self.assertEqual(summarize_session_context(events), "same note")
+
+    def test_blank_chatter_subject_falls_through_to_the_next_tier(self):
+        # Pre-#710 chatter rows were stored with an empty subject (the puller
+        # read only ``subject``, which a logged note leaves blank), so they must
+        # not shadow the forge tier with an empty headline.
+        events = [
+            _event(source="chatter", subject=""),
+            _event(source="commit", subject="fix: VAT rounding"),
+        ]
+        self.assertEqual(summarize_session_context(events), "commit: fix: VAT rounding")
+
+    def test_commit_subjects_and_pr_titles(self):
+        events = [
+            _event(source="commit", subject="feat: add the reconciliation wizard"),
+            _event(source="pr_opened", subject="Add reconciliation wizard", pr_num=42),
+            _event(source="merge", subject="Add reconciliation wizard", pr_num=42),
+        ]
+        self.assertEqual(
+            summarize_session_context(events),
+            "commit: feat: add the reconciliation wizard, "
+            "PR #42 opened: Add reconciliation wizard, "
+            "PR #42 merged: Add reconciliation wizard",
+        )
+
+    def test_review_state_names_the_verdict(self):
+        events = [
+            _event(source="review", pr_num=7, payload={"review_state": "APPROVED"})
+        ]
+        self.assertEqual(summarize_session_context(events), "PR #7 reviewed (APPROVED)")
+
+    def test_review_without_recorded_state_still_names_the_pr(self):
+        # Reviews resynced before #710 carry no ``review_state`` payload; they
+        # must still say which PR was reviewed rather than nothing.
+        events = [_event(source="review", pr_num=7)]
+        self.assertEqual(summarize_session_context(events), "PR #7 reviewed")
+
+    def test_authored_comment_is_summarised_as_review_family(self):
+        events = [_event(source="comment", pr_num=9)]
+        self.assertEqual(summarize_session_context(events), "PR #9 commented")
+
+    def test_commit_subject_is_the_first_line_only(self):
+        events = [_event(source="commit", subject="fix: rounding\n\nlong body text")]
+        self.assertEqual(summarize_session_context(events), "commit: fix: rounding")
+
+    def test_hook_only_session_is_named_by_its_first_prompt(self):
+        events = [
+            _event(source="claude:SessionStart", payload={"cwd": "/workspaces/acme"}),
+            _event(
+                source="claude:UserPromptSubmit",
+                payload={"prompt": "Add a VAT column to the invoice report"},
+            ),
+            _event(source="claude:PreToolUse", subject="Bash"),
+        ]
+        self.assertEqual(
+            summarize_session_context(events),
+            "prompt: Add a VAT column to the invoice report",
+        )
+
+    def test_hook_only_session_falls_back_to_cwd(self):
+        events = [
+            _event(source="claude:SessionStart", payload={"cwd": "/workspaces/acme"}),
+            _event(source="claude:PreToolUse", subject="Bash"),
+        ]
+        self.assertEqual(summarize_session_context(events), "cwd /workspaces/acme")
+
+    def test_first_prompt_wins_over_later_ones(self):
+        events = [
+            _event(source="claude:UserPromptSubmit", payload={"prompt": "first ask"}),
+            _event(source="claude:UserPromptSubmit", payload={"prompt": "second ask"}),
+        ]
+        self.assertEqual(summarize_session_context(events), "prompt: first ask")
+
+    def test_long_headline_item_is_capped_and_marked(self):
+        # A multi-KB markdown note must not become a multi-KB timesheet name.
+        note = "x" * (_HEADLINE_ITEM_CHARS * 4)
+        headline = summarize_session_context([_event(source="chatter", subject=note)])
+        self.assertTrue(headline.endswith("..."))
+        self.assertLessEqual(len(headline), _HEADLINE_ITEM_CHARS + 3)
+
+    def test_non_dict_payload_never_raises(self):
+        # The payload column is free-form JSON; a scalar there must degrade to
+        # "no context", not abort the billing description derivation.
+        events = [_event(source="claude:SessionStart", payload=["not", "a", "dict"])]
+        self.assertEqual(summarize_session_context(events), "")
 
 
 if __name__ == "__main__":

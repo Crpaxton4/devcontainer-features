@@ -71,11 +71,13 @@ Read that line three ways:
 
 **The release route is deliberately not pre-gated, and restoring a pre-gate here
 would break every release.** `gate.sh --for release` reads `00-context.json` with
-`flow_confirmed: true` and a `60-release.json` manifest, and neither of those exists
-before you have built the manifest, so a pre-gate would report a missing manifest on
-every promotion and block work that is perfectly sound. On the release route you run
-the gate yourself, against the release directory above, **after** you have written
-`60-release.json` and before anything leaves the machine.
+`flow_confirmed: true` and a `60-release.json` manifest. The release directory starts
+out holding neither: `odoo-dev:odoo-release` writes `00-context.json` itself in its
+step 1, from the resolver, and the manifest only exists once it has been built. So a
+pre-gate here would report both as missing on every promotion and block work that is
+perfectly sound. On the release route you run the gate yourself, against the release
+directory above, **after** you have written `60-release.json` and before anything
+leaves the machine.
 
 The pre-gate is a fast, legible failure seconds after someone types the command, and
 it is not the enforcement. The enforcement is the `PreToolUse` hook this plugin
@@ -104,9 +106,14 @@ Return contract, typed out in full in each Bash call. On the task route:
     <ARTIFACT above> put <TASK ROUTE ARTIFACTS above> 40-coderabbit <file>
     <ARTIFACT above> put <TASK ROUTE ARTIFACTS above> 50-pr <file>
 
-On the release route, one stage and one only:
+On the release route, two stages:
 
+    <ARTIFACT above> put <RELEASE ROUTE ARTIFACTS above> 00-context -
     <ARTIFACT above> put <RELEASE ROUTE ARTIFACTS above> 60-release <file>
+
+`00-context` is the resolver output, written only when the stage is absent — the
+routed skill carries the guarded form, so take it from there rather than typing an
+unguarded put.
 
 Final message: the artifact path, then plain English for a person who has read
 none of this.
