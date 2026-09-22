@@ -333,7 +333,7 @@ delete_merged_branch() {
 }
 
 restack_child() {
-    local child=$1 parent=$2 child_branch parent_sha
+    local child=$1 parent=$2 child_branch parent_sha current_base
     child_branch=$(head_branch "$child")
     parent_sha=$(head_sha "$parent")
 
@@ -355,7 +355,19 @@ restack_child() {
 
     if ! is_done "$child:retarget"; then
         set_cursor "$child:retarget"
-        gh pr edit "$child" -R "$SLUG" --base "$BASE"
+        # Often already done for us. With the repo's deleteBranchOnMerge on,
+        # GitHub deletes the parent's head at merge time and retargets the
+        # orphaned child onto that branch's own base - which is this BASE. The
+        # script never gets to choose, so it must tolerate arriving second.
+        #
+        # `gh pr edit --base` rejects a no-op retarget with "A pull request
+        # already exists for base branch X and head branch Y", naming the PR
+        # being edited as though it collided with a different one. That reads
+        # like a duplicate-PR problem and is not one.
+        current_base=$(gh pr view "$child" -R "$SLUG" --json baseRefName --jq .baseRefName)
+        if [[ $current_base != "$BASE" ]]; then
+            gh pr edit "$child" -R "$SLUG" --base "$BASE"
+        fi
         add_done "$child:retarget"
     fi
 
