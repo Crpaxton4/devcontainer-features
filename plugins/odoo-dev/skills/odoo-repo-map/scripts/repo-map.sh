@@ -11,10 +11,22 @@
 #                                          [--remote owner/repo] [--notes "..."] [--no-repo-check]
 #                                          [--release-assignee LOGIN] [--release-reviewer LOGIN|none]
 #                                          [--repo-path /abs/path/to/checkout]
+#   repo-map.sh set "<project name>" [--default-branch B] [--odoo-version V]
+#                                    [--remote owner/repo] [--notes "..."]
+#                                    [--repo-path /abs/path] [--no-repo-check]
 #   repo-map.sh set-flow "<project name>" "dev,UAT,main" [--flow-confirmed]
 #   repo-map.sh set-release-owners "<project name>" <assignee> <reviewer|none>
 #   repo-map.sh remove "<project name>"
 #   repo-map.sh validate
+#
+# `set` merges into an existing entry: a field you do not name keeps its value.
+# It exists because `add` only ever creates, so the alternative was `remove` then
+# a full `add` — lossy, since every field left off the re-`add` is silently
+# dropped (`notes` first), and non-atomic, since the `remove` commits its own
+# write before the `add` runs and takes the only .bak of the original with it.
+# Passing an empty value (`--notes ""`) deletes that key, which is the one thing
+# a merge cannot otherwise say. branch_flow is deliberately not settable here:
+# `set-flow` owns it, along with the flow_confirmed question that comes with it.
 #
 # branch_flow is the ordered environment chain, first element the branch task
 # work starts from and LAST element production. It exists because the free-text
@@ -121,6 +133,21 @@ commit_tmp() {
   mv "$tmp" "$MAP"
 }
 
+# Both writers that accept --repo-path check it the same way, and check it here
+# rather than at validation so the message names the flag the user typed instead
+# of a key they never wrote. An explicit path answers the question outright: no
+# tree to resolve, so repos-dir.sh is never called and its failure cannot block
+# the write. An empty path is "not given" (or, for `set`, "unset it").
+check_repo_path() { # check_repo_path <path> <repo_check 0|1>
+  local path="$1" repo_check="$2"
+  case "$path" in
+    ""|/*) ;;
+    *) die "--repo-path must be an absolute path, got: $path" ;;
+  esac
+  [ -n "$path" ] && [ "$repo_check" -eq 1 ] || return 0
+  [ -d "$path" ] || die "repo folder not found: $path (use --no-repo-check only pre-rebuild)"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   validate)
@@ -169,21 +196,12 @@ case "$cmd" in
         *) die "unknown option: $1" ;;
       esac
     done
-    # Caught here as a usage error rather than at validation, so the message names
-    # the flag the user typed instead of a key they never wrote.
-    case "$repo_path" in
-      ""|/*) ;;
-      *) die "--repo-path must be an absolute path, got: $repo_path" ;;
-    esac
-    if [ "$repo_check" -eq 1 ]; then
-      if [ -n "$repo_path" ]; then
-        # An explicit path answers the question outright: no tree to resolve, so
-        # repos-dir.sh is never called and its failure cannot block the write.
-        [ -d "$repo_path" ] || die "repo folder not found: $repo_path (use --no-repo-check only pre-rebuild)"
-      else
-        REPOS_DIR="${REPOS_DIR:-$("$SCRIPT_DIR/repos-dir.sh" --raw)}"
-        [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (pass --repo-path /abs/path when the checkout is not under the repos tree, or --no-repo-check pre-rebuild)"
-      fi
+    check_repo_path "$repo_path" "$repo_check"
+    # Only `add` falls back to the flat tree, because only `add` knows the entry
+    # has no repo_path at all; `set` may be leaving an existing one in place.
+    if [ "$repo_check" -eq 1 ] && [ -z "$repo_path" ]; then
+      REPOS_DIR="${REPOS_DIR:-$("$SCRIPT_DIR/repos-dir.sh" --raw)}"
+      [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (pass --repo-path /abs/path when the checkout is not under the repos tree, or --no-repo-check pre-rebuild)"
     fi
     run_node "$VALIDATE_JS"
     tmp="$MAP.tmp"
@@ -207,6 +225,52 @@ case "$cmd" in
     ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$tmp"
     commit_tmp "$tmp"
     echo "{\"ok\": true, \"added\": $(node -e 'console.log(JSON.stringify(process.argv[1]))' "$project")}"
+    ;;
+
+  set)
+    # Merges into the existing entry. `add` only creates, so before this the only
+    # way to change a field was remove + full re-add: lossy for every field left
+    # off, and non-atomic because the remove committed first.
+    [ $# -ge 1 ] || die "usage: repo-map.sh set \"<project name>\" [--default-branch B] [--odoo-version V] [--remote owner/repo] [--notes \"...\"] [--repo-path /abs/path] [--no-repo-check]"
+    project="$1"; shift
+    # Alternating key/value pairs, applied in order by node — so a repeated flag
+    # simply lets the last one win, and an unnamed field is never written at all.
+    updates=(); repo_path=""; repo_check=1
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --default-branch|--odoo-version|--remote|--notes|--repo-path)
+          [ $# -ge 2 ] || die "$1 needs a value (pass \"\" to unset the field)"
+          key="${1#--}"; key="${key//-/_}"
+          if [ "$key" = repo_path ]; then repo_path="$2"; fi
+          updates+=("$key" "$2"); shift 2 ;;
+        --branch-flow)
+          die "branch_flow is set by: repo-map.sh set-flow \"$project\" \"dev,UAT,main\" [--flow-confirmed]" ;;
+        --release-assignee|--release-reviewer)
+          die "release owners are set by: repo-map.sh set-release-owners \"$project\" <assignee> <reviewer|none>" ;;
+        --no-repo-check) repo_check=0; shift ;;
+        *) die "unknown option: $1" ;;
+      esac
+    done
+    [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes or --repo-path"
+    check_repo_path "$repo_path" "$repo_check"
+    run_node "$VALIDATE_JS"
+    tmp="$MAP.tmp"
+    run_node '
+      import { readFileSync, writeFileSync } from "fs";
+      const [file, project, tmp, ...updates] = process.argv.slice(1);
+      const data = JSON.parse(readFileSync(file, "utf8"));
+      const entry = data.projects[project];
+      if (!entry) { console.error("unmapped project: " + project); process.exit(3); }
+      for (let i = 0; i < updates.length; i += 2) {
+        const [key, value] = [updates[i], updates[i + 1]];
+        // "" is the only way a merge can say "remove this key". An empty string
+        // left in place would validate but read as an answer nobody gave.
+        if (value === "") delete entry[key]; else entry[key] = value;
+      }
+      writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
+    ' "$project" "$tmp" "${updates[@]}"
+    commit_tmp "$tmp"
+    bash "$SCRIPT_DIR/repo-map.sh" get "$project"
     ;;
 
   set-flow)
@@ -273,6 +337,6 @@ case "$cmd" in
     ;;
 
   *)
-    die "unknown command: '$cmd' (get|list|add|set-flow|set-release-owners|remove|validate)"
+    die "unknown command: '$cmd' (get|list|add|set|set-flow|set-release-owners|remove|validate)"
     ;;
 esac

@@ -16,6 +16,11 @@ check() { # check <name> <expected_exit> <actual_exit>
 check_contains() { # check_contains <name> <needle> <haystack>
   case "$3" in *"$2"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL $1: '$2' not in output: $3" ;; esac
 }
+# Removing a key is a distinct outcome from writing an empty one, so the absence
+# has to be asserted directly rather than inferred from the value.
+check_absent() { # check_absent <name> <needle> <haystack>
+  case "$3" in *"$2"*) fail=$((fail+1)); echo "FAIL $1: '$2' unexpectedly in output: $3" ;; *) pass=$((pass+1)) ;; esac
+}
 
 seed() {
   cat > "$TMP/map.json" <<'JSON'
@@ -98,6 +103,65 @@ seed
 before="$(cat "$TMP/map.json")"
 map set-flow Alpha "dev,nowhere" >/dev/null 2>&1; check "set-flow-invalid-rejected" 4 $?
 [ "$(cat "$TMP/map.json")" = "$before" ]; check "set-flow-invalid-no-write" 0 $?
+
+# --- set ------------------------------------------------------------------------
+# `add` only creates, so before `set` the only way to change a field was remove +
+# full re-add: every field left off the re-add was silently dropped, and the
+# remove committed its own write first, so a failed re-add left the project gone
+# with the .bak already one generation past the original entry.
+
+seed
+map add "Sigma" sigma --no-repo-check --default-branch main --odoo-version 17.0 \
+    --notes "release assignee is alice" --release-assignee cpqoc >/dev/null
+before="$(cat "$TMP/map.json")"
+out="$(map set Sigma --remote acme/sigma)"; check "set-one-field" 0 $?
+check_contains "set-applies-remote" '"remote":"acme/sigma"' "$out"
+# The headline of the bug report: notes is what remove + re-add silently dropped.
+check_contains "set-keeps-notes" '"notes":"release assignee is alice"' "$out"
+check_contains "set-keeps-version" '"odoo_version":"17.0"' "$out"
+check_contains "set-keeps-branch" '"default_branch":"main"' "$out"
+check_contains "set-keeps-release-owner" '"release_assignee":"cpqoc"' "$out"
+# The .bak has to be the entry as it stood before this edit — that is the rollback
+# point remove + re-add destroyed by committing the remove first.
+[ "$(cat "$TMP/map.json.bak")" = "$before" ]; check "set-bak-is-prior-version" 0 $?
+
+# Several fields at once, and the merge lands in the map, not just in the echo.
+out="$(map set Sigma --odoo-version 18.0 --notes "chain caveat")"; check "set-many-fields" 0 $?
+out="$(map get Sigma)"
+check_contains "set-persists-version" '"odoo_version":"18.0"' "$out"
+check_contains "set-persists-notes" '"notes":"chain caveat"' "$out"
+check_contains "set-persists-earlier-remote" '"remote":"acme/sigma"' "$out"
+
+# An empty value deletes the key: the one thing a merge cannot otherwise say, and
+# an empty string left in place would read as an answer nobody gave.
+out="$(map set Sigma --notes "")"; check "set-empty-unsets" 0 $?
+check_absent "set-notes-removed" '"notes"' "$out"
+
+out="$(map set Nope --remote x 2>&1)"; check "set-unmapped" 3 $?
+out="$(map set Sigma 2>&1)"; check "set-needs-a-field" 2 $?
+check_contains "set-needs-a-field-msg" "at least one field" "$out"
+out="$(map set Sigma --remote 2>&1)"; check "set-flag-needs-value" 2 $?
+out="$(map set Sigma --hosting odoo.sh 2>&1)"; check "set-unknown-option" 2 $?
+
+# branch_flow and the release owners each already have a setter carrying its own
+# extra question, so `set` points at them instead of duplicating the rules.
+out="$(map set Sigma --branch-flow "dev,main" 2>&1)"; check "set-defers-branch-flow" 2 $?
+check_contains "set-defers-branch-flow-msg" "set-flow" "$out"
+out="$(map set Sigma --release-assignee bob 2>&1)"; check "set-defers-release-owners" 2 $?
+check_contains "set-defers-release-owners-msg" "set-release-owners" "$out"
+
+# A rejected edit must never land: default_branch off the chain fails on the tmp
+# file, so the live map keeps the prior content.
+seed
+before="$(cat "$TMP/map.json")"
+map set Alpha --default-branch nope >/dev/null 2>&1; check "set-invalid-rejected" 4 $?
+[ "$(cat "$TMP/map.json")" = "$before" ]; check "set-invalid-no-write" 0 $?
+
+# `add` stays create-only. `set` is the update path; overwriting through `add` is
+# still an error, so a typo'd project name cannot quietly replace a real entry.
+seed
+out="$(map add Alpha alpha --no-repo-check --remote acme/alpha 2>&1)"; check "add-still-rejects-duplicate" 2 $?
+check_contains "add-duplicate-msg" "duplicate project" "$out"
 
 # --- resolve ------------------------------------------------------------------
 seed
@@ -266,6 +330,31 @@ seed && node -e '
   const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.repo_path=["/mnt/extra-addons"];
   fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
 out="$(map validate 2>&1)"; check "repo-path-non-string-rejected" 4 $?
+
+# `set` carries repo_path for the same reason every other field needs a setter:
+# the devcontainer's pinned checkout was otherwise unreachable on a project that
+# was already in the map, which is every project.
+seed
+map add "Rho" iota --no-repo-check --default-branch main >/dev/null
+out="$(map_in "$NO_TREE" set Rho --repo-path "$TMP/mount/extra-addons")"; check "set-repo-path" 0 $?
+check_contains "set-records-repo-path" "\"repo_path\":\"$TMP/mount/extra-addons\"" "$out"
+out="$(resolve_in "$NO_TREE" Rho)"; check "set-repo-path-resolves" 0 $?
+check_contains "set-repo-path-beats-tree" "\"repo_path\":\"$TMP/mount/extra-addons\"" "$out"
+
+# Same rules as on `add`, checked at the flag so the message names what was typed.
+out="$(map set Rho --repo-path relative/path 2>&1)"; check "set-repo-path-relative" 2 $?
+check_contains "set-repo-path-relative-msg" "must be an absolute path" "$out"
+out="$(map set Rho --repo-path "$TMP/nowhere" 2>&1)"; check "set-repo-path-missing-dir" 2 $?
+check_contains "set-repo-path-missing-msg" "repo folder not found" "$out"
+out="$(map_in "$NO_TREE" set Rho --repo-path "$TMP/nowhere" --no-repo-check)"
+check "set-repo-path-no-repo-check" 0 $?
+
+# Unsetting puts the entry back on the flat tree — nothing else could do that
+# without a remove + re-add that would have dropped every other field with it.
+out="$(map set Rho --repo-path "")"; check "set-unsets-repo-path" 0 $?
+check_absent "set-repo-path-removed" '"repo_path"' "$out"
+out="$(resolve_in "$TMP/tree" Rho)"; check "resolve-after-repo-path-unset" 0 $?
+check_contains "unset-repo-path-falls-back" "\"repo_path\":\"$TMP/tree/iota\"" "$out"
 
 # The origin sniff is gated on the checkout being present, so before repo_path it
 # could never fire in the devcontainer and `remote` was always null. Needs a real

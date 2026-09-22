@@ -72,7 +72,7 @@ Every script print one JSON object as last stdout line.
 | Script | Use |
 |--------|-----|
 | `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
-| `repo-map.sh get\|list\|add\|set-flow\|remove\|validate` | **Only** sanctioned way to read or edit map |
+| `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | **Only** sanctioned way to read or edit map |
 | `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | Full resolution, plus next environment in chain |
 
 ### Resolving
@@ -101,9 +101,22 @@ Exit codes: `2` usage · `3` unmapped **or** repo folder mapping to several proj
   --release-assignee alice --release-reviewer bob
 ```
 
-`add` only create. Already-mapped project need setter:
+`add` only create, and refuse duplicate. Already-mapped project need setter. `set` merge into existing entry — field you not name keep its value:
 
 ```bash
+<base directory>/scripts/repo-map.sh set "New Client - Phase 1" \
+  --remote acme-eng/newclient --notes "release goes out Thursdays" \
+  --default-branch UAT --odoo-version 18.0 --repo-path /mnt/extra-addons
+```
+
+**Never `remove` then re-`add` to change a field.** That the old way and it lossy — every field you leave off the re-`add` silently dropped, `notes` first — and non-atomic: `remove` commit its own write before `add` run, so failed `add` leave project simply gone, `.bak` holding only post-`remove` state. `set` write once, through same validate → `.bak` → rename path.
+
+Empty value delete the key: `set "<project>" --repo-path ""` put entry back on flat tree. Only way a merge can say "unset this". `--repo-path` on `set` check same as on `add` — absolute, and directory must exist unless `--no-repo-check`.
+
+Two fields `set` deliberately not take, because each carry own extra question — it point you at owner instead:
+
+```bash
+<base directory>/scripts/repo-map.sh set-flow "New Client - Phase 1" "dev,UAT,main" --flow-confirmed
 <base directory>/scripts/repo-map.sh set-release-owners "New Client - Phase 1" alice bob
 ```
 
