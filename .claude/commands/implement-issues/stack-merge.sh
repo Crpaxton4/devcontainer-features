@@ -321,14 +321,22 @@ sync_node() {
     key="$pr:sync"
     is_done "$key" && return 0
 
+    # A step key added after a state file was written is absent from every node
+    # in it, so an older run's finished nodes look un-synced and get re-run
+    # against branches that no longer exist. Adding a step must be safe for
+    # state files written before that step existed.
+    if [[ $(gh pr view "$pr" -R "$SLUG" --json state --jq .state) == MERGED ]]; then
+        add_done "$key"
+        return 0
+    fi
+
     set_cursor "$key"
-    if ! out=$(gh pr update-branch "$pr" -R "$SLUG" 2>&1); then
-        rc=$?
+    rc=0
+    out=$(gh pr update-branch "$pr" -R "$SLUG" 2>&1) || rc=$?
+    if ((rc != 0)) && ! printf '%s' "$out" | grep -qiE "$ALREADY_CURRENT_RE"; then
         # Already current is the state this step exists to produce.
-        if ! printf '%s' "$out" | grep -qiE "$ALREADY_CURRENT_RE"; then
-            printf '%s\n' "$out" >&2
-            exit "$rc"
-        fi
+        printf '%s\n' "$out" >&2
+        exit "$rc"
     fi
     add_done "$key"
 }
@@ -405,12 +413,11 @@ delete_merged_branch() {
     # asynchronously from the merge that just happened, so ls-remote can still
     # see it while the DELETE that follows returns 422. Absent is the end state
     # this step wants, however the ref got there.
-    if ! out=$(gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent 2>&1); then
-        rc=$?
-        if ! printf '%s' "$out" | grep -qE "$REF_GONE_RE"; then
-            printf '%s\n' "$out" >&2
-            exit "$rc"
-        fi
+    rc=0
+    out=$(gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent 2>&1) || rc=$?
+    if ((rc != 0)) && ! printf '%s' "$out" | grep -qE "$REF_GONE_RE"; then
+        printf '%s\n' "$out" >&2
+        exit "$rc"
     fi
     add_done "$key"
 }
@@ -510,6 +517,22 @@ for pr in "${ORDER[@]}"; do
     done
     delete_merged_branch "$pr"
 done
+
+# Exit 0 is a promise the caller acts on - Phase 8 says "exit 0 means the stack
+# landed - go to Phase 9", and Phase 9 reaps. A bug that let the script exit 0
+# without landing the stack would have the caller reap and report success over
+# six unmerged PRs. So the promise is checked rather than assumed.
+unlanded=""
+for pr in "${ORDER[@]}"; do
+    [[ $(gh pr view "$pr" -R "$SLUG" --json state --jq .state) == MERGED ]] ||
+        unlanded+=" #$pr"
+done
+if [[ -n $unlanded ]]; then
+    printf 'stack-merge: reached the end of the train with unmerged PRs:%s\n' "$unlanded" >&2
+    printf '  This is a bug in this script - it should have stopped at the first\n' >&2
+    printf '  failure. Nothing has been reaped. Do not treat the stack as landed.\n' >&2
+    exit 23
+fi
 
 set_cursor ""
 mark_complete
