@@ -16,6 +16,17 @@
 # the answer would be production (the last element): being wrong about a staging
 # hop costs a re-run, being wrong about production costs a customer.
 #
+# The argument is an ELEMENT OF THE CHAIN, never an arbitrary branch. For the
+# first hop — out of a per-task branch and into whatever that task PR targets —
+# pass the reserved token :task, which is what a chain records at index 0 when
+# task work starts from a branch cut fresh per task rather than from a shared
+# one. That answers the first hop with the same arithmetic as every other hop,
+# and it is why the token exists: a chain beginning with an ordinary name (the
+# old "dev" convention) made the first hop a question about a branch that was on
+# no remote. A branch that is not on the chain is still an error rather than an
+# assumed task branch: silently treating an unrecognised name as "must be a task
+# branch" would answer a typo'd environment name with default_branch.
+#
 # Last stdout line: {"project","repo","repo_path","default_branch","odoo_version",
 #   "branch_flow":[],"flow_confirmed","remote","next_env","at_production",
 #   "release_assignee","release_reviewer"}
@@ -81,6 +92,9 @@ node --input-type=module -e '
   import { execFileSync } from "child_process";
   const [entryRaw, reposDir, nextAfter] = process.argv.slice(1);
   const entry = JSON.parse(entryRaw);
+  // branch_flow index 0 when task work starts from a per-task branch. Spelled
+  // with a colon, which git forbids in a ref name, so it can never be a branch.
+  const TASK_BRANCH = ":task";
   const flow = Array.isArray(entry.branch_flow) ? entry.branch_flow : [];
   const confirmed = entry.flow_confirmed === true;
 
@@ -110,12 +124,19 @@ node --input-type=module -e '
   let atProduction = null;
   if (nextAfter) {
     if (!flow.length) {
-      console.error(`no branch_flow recorded for "${entry.project}" — confirm the environment chain with the user, then: repo-map.sh set-flow "${entry.project}" "dev,UAT,main" --flow-confirmed`);
+      console.error(`no branch_flow recorded for "${entry.project}" — confirm the environment chain with the user, then: repo-map.sh set-flow "${entry.project}" "${TASK_BRANCH},UAT,main" --flow-confirmed`);
       process.exit(4);
     }
     const i = flow.indexOf(nextAfter);
     if (i === -1) {
-      console.error(`branch "${nextAfter}" is not in branch_flow [${flow.join(", ")}] for "${entry.project}"`);
+      // A task branch is never an element of the chain: the chain names shared
+      // environments, plus the one reserved token standing in for whichever
+      // branch this task happens to be on. Naming it is what makes the first hop
+      // answerable without assuming an unrecognised name must be a task branch.
+      const hint = flow[0] === TASK_BRANCH
+        ? ` — for the first hop out of a per-task branch pass the reserved placeholder: --next-after ${TASK_BRANCH}`
+        : "";
+      console.error(`branch "${nextAfter}" is not in branch_flow [${flow.join(", ")}] for "${entry.project}"${hint}`);
       process.exit(4);
     }
     atProduction = i === flow.length - 1;
