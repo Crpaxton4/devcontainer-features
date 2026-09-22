@@ -279,14 +279,24 @@ CHECK_POLL=${STACK_MERGE_CHECK_POLL:-30}
 CHECK_TIMEOUT=${STACK_MERGE_CHECK_TIMEOUT:-900}
 CHECK_PENDING_RE='is expected|Required status check|checks are pending|not yet complete|still (running|pending)|in progress'
 
+# "Base branch was modified. Review and try the merge again." is GitHub's
+# optimistic-lock error, and it is ambiguous on its face. It fires both when the
+# base genuinely advanced (the node's rebase is stale and must be redone) and
+# when GitHub is merely still recomputing mergeability after a burst of
+# mutations - a retarget, a force-push and a branch deletion landing back to
+# back is enough. The two are separable without guessing: compare the base tip
+# now against the base tip the merge was attempted against.
+BASE_MOVED_RE='Base branch was modified'
+
 # --------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------
 
 merge_node() {
-    local pr=$1 key out rc waited=0
+    local pr=$1 key out rc waited=0 retryable base_before base_now
     key="$pr:merge"
     is_done "$key" && return 0
+    base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
 
     set_cursor "$key"
     # Deliberately NOT --delete-branch. Deleting the head ref here deletes the
@@ -299,12 +309,31 @@ merge_node() {
         else
             rc=$?
         fi
-        if ((waited >= CHECK_TIMEOUT)) || ! printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
+        retryable=0
+        if printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
+            retryable=1
+        elif printf '%s' "$out" | grep -qE "$BASE_MOVED_RE"; then
+            git -C "$REPO" fetch origin --quiet
+            base_now=$(git -C "$REPO" rev-parse "origin/$BASE")
+            if [[ $base_now == "$base_before" ]]; then
+                retryable=1
+            else
+                printf '%s\n' "$out" >&2
+                printf 'stack-merge: %s really did advance, %s -> %s.\n' \
+                    "$BASE" "${base_before:0:7}" "${base_now:0:7}" >&2
+                printf '  #%s was rebased onto the older tip, so its rebase is stale.\n' "$pr" >&2
+                printf '  Re-rebase it before retrying: this script will not silently\n' >&2
+                printf '  merge a node computed against a base that has moved.\n' >&2
+                exit "$rc"
+            fi
+        fi
+
+        if ((retryable == 0)) || ((waited >= CHECK_TIMEOUT)); then
             printf '%s\n' "$out" >&2
             exit "$rc"
         fi
-        printf 'stack-merge: #%s checks not settled (%ss/%ss), waiting %ss\n' \
-            "$pr" "$waited" "$CHECK_TIMEOUT" "$CHECK_POLL" >&2
+        printf 'stack-merge: #%s not settled yet (%ss/%ss), waiting %ss: %s\n' \
+            "$pr" "$waited" "$CHECK_TIMEOUT" "$CHECK_POLL" "${out%%$'\n'*}" >&2
         sleep "$CHECK_POLL"
         waited=$((waited + CHECK_POLL))
     done
