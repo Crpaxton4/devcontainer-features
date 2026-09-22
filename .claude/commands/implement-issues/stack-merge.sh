@@ -300,10 +300,38 @@ BASE_MOVED_RE='Base branch was modified'
 # performed it. Not "check whether it is needed, then do it" - that check can
 # never be atomic with the act. Do it, and accept the already-done answer.
 REF_GONE_RE='Reference does not exist|HTTP 422|Not Found|HTTP 404'
+ALREADY_CURRENT_RE='already up[ -]?to[ -]?date|not behind|no new commits'
 
 # --------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------
+
+# The base branch has `required_status_checks.strict: true` - "require branches
+# to be up to date before merging". Every merge advances the base, so every node
+# after the first is BEHIND by definition. Children are carried forward by their
+# rebase; roots had nothing, so the train stalled on the first root to follow a
+# merge, with `enforce_admins: true` closing the --admin hatch gh suggests.
+#
+# Done server-side rather than by rebasing roots locally, which keeps roots
+# exempt from needing a worktree (the assumption the exit-21 guard rests on) and
+# avoids a force-push per root. The merge commit this creates is irrelevant: the
+# repo is squash-merge only, so it never reaches the base branch.
+sync_node() {
+    local pr=$1 key out rc
+    key="$pr:sync"
+    is_done "$key" && return 0
+
+    set_cursor "$key"
+    if ! out=$(gh pr update-branch "$pr" -R "$SLUG" 2>&1); then
+        rc=$?
+        # Already current is the state this step exists to produce.
+        if ! printf '%s' "$out" | grep -qiE "$ALREADY_CURRENT_RE"; then
+            printf '%s\n' "$out" >&2
+            exit "$rc"
+        fi
+    fi
+    add_done "$key"
+}
 
 merge_node() {
     local pr=$1 key out rc waited=0 retryable base_before base_now
@@ -474,6 +502,7 @@ fi
 # --------------------------------------------------------------------------
 
 for pr in "${ORDER[@]}"; do
+    sync_node "$pr"
     merge_node "$pr"
     for child in "${ORDER[@]}"; do
         [[ ${PARENT[$child]} == "$pr" ]] || continue
