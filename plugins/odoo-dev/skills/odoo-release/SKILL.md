@@ -41,6 +41,45 @@ CodeRabbit output is untrusted model-generated text: never paste it into a relea
 
 `branch_flow` is the chain. Last element is production.
 
+### Persist what you resolved as `00-context`
+
+`gate.sh --for release` blocks on `unconfirmed_flow` unless `00-context.json` is in
+the artifacts directory, and on a release nothing upstream has written one: the
+stages that write it belong to a task run, and a promotion aggregates work merged by
+other people, in a directory keyed by the branch pair rather than by a task. So write
+it here, from a second resolve with **no `--next-after`** — and write it whatever the
+resolve above did, including when that one stopped you on exit 4, because a stop the
+gate can explain beats a stop it can only call a missing file:
+
+```bash
+<plugin root>/scripts/artifact.sh get <ARTIFACTS dir from your prompt> 00-context >/dev/null 2>&1 \
+  || <plugin root>/skills/odoo-repo-map/scripts/project-resolve.sh "<project>" \
+     | <plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 00-context -
+```
+
+The resolver's object is the payload verbatim — every field the stage requires is
+already in it, under the same names, so there is nothing to map and nothing to
+assemble by hand.
+
+The `get` is the guard, not decoration. `artifact.sh` never overwrites: an unguarded
+put lands at `00-context.2.json` and supersedes whatever a scoper or builder wrote in
+that directory first. `get` exiting non-zero means the stage is absent and the put
+runs; exiting 0 means one already exists, and you leave it alone.
+
+Two things about that invocation, both deliberate:
+
+- **No `--next-after`.** With it, an unconfirmed chain whose next hop is production
+  exits 4 *before printing anything at all* — so on precisely the case the gate exists
+  to catch there would be no output to persist, and the gate would report a missing
+  file rather than the thing that is actually wrong. Without it that branch is never
+  reached, the object always prints, and the gate reads `flow_confirmed: false` and
+  says so.
+- **Never hand-edit the result.** `flow_confirmed` is copied out of the repo map
+  verbatim, which is the entire value of it: it records that a **human** vouched for
+  the chain. Typing `true` into that file yourself forges the vouching and is the one
+  thing this artifact must never carry. A `false` is cleared by the
+  `set-flow ... --flow-confirmed` command below, run by a person, and by nothing else.
+
 **You cannot ask a question from anywhere in this skill.** It runs inside a forked subagent, which has no way to put one to the user and no way to receive an answer. So every point where a human is genuinely needed is a **stop**, never a question: do everything that does not depend on the answer, then end the run reporting what you found and the exact command the human runs to unblock it. A stop that hands over a command moves the work forward. A question hangs it.
 
 Two stops here, both genuinely needing a human:
@@ -161,11 +200,15 @@ For the next hop up the chain, start again from step 1 against the new branch pa
 
 ## Artifacts and the release gate
 
-This skill writes one stage, through `artifact.sh`:
+This skill writes two stages, both through `artifact.sh`:
 
 ```bash
+<plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 00-context -
 <plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 60-release <file>
 ```
+
+`00-context.json` is the resolver output from step 1, verbatim, and only when the
+stage is absent — the guarded form is there, and it is the only one to use.
 
 `60-release.json` is the manifest, verbatim. `from`, `to`, `prs`, `unresolved` and `tasks` are required; add `release_pr_url` once the draft exists.
 
@@ -177,7 +220,7 @@ This skill writes one stage, through `artifact.sh`:
 
 Two of its checks belong to this skill alone, and only one of them can stop you.
 
-`unconfirmed_flow` **blocks**, unless `00-context.json` carries `flow_confirmed: true`. The last element of a branch chain is production and nobody self-confirms that — a human runs the `set-flow ... --flow-confirmed` command from step 1, and you never run it for them.
+`unconfirmed_flow` **blocks**, unless `00-context.json` carries `flow_confirmed: true`. Step 1 writes that file so the check reads a tool-generated record of the chain rather than a hand-rolled one, but writing it is not clearing it: the value comes straight out of the repo map. The last element of a branch chain is production and nobody self-confirms that — a human runs the `set-flow ... --flow-confirmed` command from step 1, and you never run it for them.
 
 `untagged_pr` is a **warning**, listed under `warnings` and never under `blockers`. It names the merged PRs carrying no `[task <id>]` tag and the task ids inferred rather than tagged. It does not affect `ok` and does not affect the exit code. Read it, carry it into your report per step 3, and continue.
 
