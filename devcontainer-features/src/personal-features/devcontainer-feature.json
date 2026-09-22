@@ -19,6 +19,7 @@
         "DISABLE_AUTOUPDATER": "1",
         "ODOO_SDK_CONFIG": "/usr/local/share/odoo-sdk-config",
         "MEMPALACE_PALACE_PATH": "/usr/local/share/mempalace/palace",
+        "MEMPALACE_EMBEDDING_MODEL": "embeddinggemma",
         "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation",
         "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config",
         "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker"
