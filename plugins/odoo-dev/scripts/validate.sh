@@ -82,7 +82,7 @@ gate "inventory"
 n_skills="$(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l)"
 n_agents="$(find "$AGENTS" -maxdepth 1 -name '*.md' | wc -l)"
 n_cmds="$(find "$COMMANDS" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
-[ "$n_skills" -eq 15 ] && ok "15 skills"   || bad "expected 15 skills, found $n_skills"
+[ "$n_skills" -eq 16 ] && ok "16 skills"   || bad "expected 16 skills, found $n_skills"
 [ "$n_agents" -eq 5 ]  && ok "5 agents"    || bad "expected 5 agents, found $n_agents"
 [ "$n_cmds"   -eq 5 ]  && ok "5 commands"  || bad "expected 5 commands, found $n_cmds"
 
@@ -285,6 +285,7 @@ run_suite "task-env.test.sh"       "$SKILLS/odoo-task-env/scripts/tests/task-env
 run_suite "task-tracking.test.sh"  "$SKILLS/odoo-task-env/scripts/tests/task-tracking.test.sh"
 run_suite "writeback.test.sh"      "$HERE/tests/writeback.test.sh"
 run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-tests.test.sh"
+run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
 
