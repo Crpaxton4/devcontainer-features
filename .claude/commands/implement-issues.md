@@ -275,6 +275,13 @@ worktree agent, then **correct any PR body the harmonization made untrue**.
 
 ## Phase 8 — Merge train: call the script, do not hand-drive it
 
+**Reap every worker worktree before you invoke the script** — the child ones
+especially. git permits a branch in exactly one worktree, and the script has to
+check each child branch out to rebase it, so a child still held by the worktree
+that built it makes the train impossible. Phase 9's triage does not apply to
+these: they are this run's own worktrees and you know their branches are pushed.
+Remove them, naming one path per invocation, then come back here.
+
 **Never run `gh pr merge`, `git rebase`, or `git push` for the stack yourself.**
 Build the stack expression, invoke the script, read the raw failure when there
 is one:
@@ -303,8 +310,14 @@ the text and decide. The three to recognise:
 - **`gh pr merge` denied by the permission classifier** → **degrade to
   handoff**: print the exact command, wait for the user's "merged", re-run.
 
-The one bespoke exit code is `20`: same `--id`, different stack. Nothing is
-mutated. Re-plan deliberately or use a new `--id`.
+Two bespoke exit codes, both of which mutate nothing:
+
+- **`20`** — same `--id`, different stack. Re-plan deliberately or use a new
+  `--id`.
+- **`21`** — a child branch is checked out in another worktree, named in the
+  message. This is the Phase 8 opening paragraph arriving as an error because
+  the reap was skipped. Remove the listed worktrees and re-run the identical
+  command.
 
 Things the script cannot judge, so you must:
 

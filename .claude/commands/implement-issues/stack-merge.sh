@@ -268,10 +268,26 @@ merge_node() {
     is_done "$key" && return 0
 
     set_cursor "$key"
-    gh pr merge "$pr" -R "$SLUG" --squash --delete-branch
+    # Deliberately NOT --delete-branch. Deleting the head ref here deletes the
+    # base branch of every child PR still pointing at it, and GitHub closes a
+    # PR whose base branch disappears - before restack_child can retarget it.
+    # The branch is dropped by delete_merged_branch once the children are off it.
+    gh pr merge "$pr" -R "$SLUG" --squash
     add_done "$key"
 
     git -C "$REPO" fetch origin --quiet
+}
+
+# Runs only after every child of $pr has been retargeted and pushed.
+delete_merged_branch() {
+    local pr=$1 branch key
+    key="$pr:delete-branch"
+    is_done "$key" && return 0
+
+    branch=$(head_branch "$pr")
+    set_cursor "$key"
+    gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent
+    add_done "$key"
 }
 
 restack_child() {
@@ -309,6 +325,42 @@ restack_child() {
 }
 
 # --------------------------------------------------------------------------
+# Branch availability
+# --------------------------------------------------------------------------
+# git allows a branch to be checked out in exactly one worktree at a time. The
+# ops worktree has to check each CHILD branch out to rebase it, so a child still
+# held by the worker worktree that built it makes the train impossible. Roots
+# are exempt: they only ever get `gh pr merge`, which is server-side.
+#
+# Checked here rather than discovered at the rebase, because discovering it
+# there means failing mid-train with a root already merged and its children
+# stranded. Nothing below this point is reached unless every child is free.
+
+held=$(git -C "$REPO" worktree list --porcelain | awk -v ops="$OPS" '
+    /^worktree /{ wt = $2 }
+    /^branch /  { b = $2; sub(/^refs\/heads\//, "", b); if (wt != ops) print b }
+')
+
+blocked=""
+for pr in "${ORDER[@]}"; do
+    [[ -n ${PARENT[$pr]:-} ]] || continue
+    b=$(head_branch "$pr")
+    if printf '%s\n' "$held" | grep -qxF "$b"; then
+        blocked+="  $b (PR #$pr)"$'\n'
+    fi
+done
+
+if [[ -n $blocked ]]; then
+    printf 'stack-merge: these child branches are checked out in other worktrees:\n' >&2
+    printf '%s' "$blocked" >&2
+    printf 'The ops worktree must check each one out to rebase it, and git permits\n' >&2
+    printf 'only one worktree per branch. Remove those worktrees:\n' >&2
+    printf '  git -C %s worktree remove <path>\n' "$REPO" >&2
+    printf 'then re-run this identical command. Nothing has been changed.\n' >&2
+    exit 21
+fi
+
+# --------------------------------------------------------------------------
 # Train
 # --------------------------------------------------------------------------
 
@@ -318,6 +370,7 @@ for pr in "${ORDER[@]}"; do
         [[ ${PARENT[$child]} == "$pr" ]] || continue
         restack_child "$child" "$pr"
     done
+    delete_merged_branch "$pr"
 done
 
 set_cursor ""
