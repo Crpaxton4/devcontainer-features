@@ -17,6 +17,16 @@ root. Both names are labels for directories, not shell variables to set and reus
 every Bash call has to spell the absolute path out in full, because a Bash call
 inherits no environment and keeps no state from the call before it.
 
+Branch names never go raw into a GitHub API path. `gh api repos/<o>/<r>/branches/<branch>`
+answers 404 for a branch that exists the moment the name contains `#` — `#` opens a
+URL fragment, so the request is made against a truncated name — and `#` is exactly
+what humans push here (`30412#some-slug`). Source `<plugin root>/scripts/_gh-url.sh`
+and wrap each ref-bearing segment with `gh_path_segment`; where only existence is in
+question, call `gh_branch_exists`, which lists the branches and matches locally so
+the name never enters a URL at all. Refs handed to `gh` as flag values — `--head`,
+`--base`, the way `pr-open.sh` does it — are already safe, because gh encodes those
+itself rather than pasting them into a path.
+
 Live values, injected every time this skill is rendered — at invocation and at every
 agent spawn that preloads it. Trust them; do not re-derive them.
 
