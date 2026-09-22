@@ -53,8 +53,10 @@ participates — ``commit``/``chatter`` as the development family and
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -659,12 +661,20 @@ def _review_event(
     ``pr`` must arrive detail-enriched: the gh search JSON carries no
     ``headRefName``, and without the real branch every branch-encoded task id
     was lost, leaving reviews structurally unbillable (#653).
+
+    The review's ``state`` (``APPROVED`` / ``CHANGES_REQUESTED`` / ``COMMENTED``
+    / ``DISMISSED``) is recorded in the payload (#710) so the billing narrative
+    can say ``PR #n reviewed (APPROVED)`` rather than naming a session that says
+    nothing about which PR was reviewed or what the verdict was. It goes in the
+    payload — an existing free-form JSON column — rather than a new column, so
+    no schema migration is involved. A review with no state records no payload.
     """
     ts = _ts_in_window(review.get("submitted_at"), window.since, window.until)
     if ts is None:
         return None
     branch = pr.get("headRefName", "")
     title = pr.get("title", "")
+    state = review.get("state") or ""
     return EventRecord(
         id=None,
         source="review",
@@ -674,6 +684,7 @@ def _review_event(
         pr_num=pr.get("number", 0),
         branch=branch,
         subject=title,
+        payload={"review_state": state} if state else None,
         external_id=f"gh:review:{review['id']}",
     )
 
@@ -1000,6 +1011,12 @@ def _search_chatter(
 
     Author-wide over ALL ``project.task`` messages, NOT just tracked tasks — the
     biggest manual finding was unlogged work on tasks never started locally.
+
+    ``body`` is read alongside ``subject`` (#710): a logged note posts with an
+    EMPTY ``subject``, so a chatter event built from the subject alone carried
+    no text at all and the billing narrative had nothing of the user's own words
+    to lead with. The body supplies that first line (see
+    :func:`_chatter_headline`).
     """
     return client.execute(
         "mail.message",
@@ -1010,8 +1027,40 @@ def _search_chatter(
             ("date", ">=", _odoo_dt_str(since)),
             ("date", "<=", _odoo_dt_str(until)),
         ],
-        fields=["id", "res_id", "date", "subject"],
+        fields=["id", "res_id", "date", "subject", "body"],
     )
+
+
+# Odoo chatter bodies are HTML. Block-level closers and ``<br>`` become newlines
+# FIRST so the note's real first line survives tag-stripping (without this,
+# ``<p>a</p><p>b</p>`` would flatten to the single line ``ab``); everything else
+# is then dropped and HTML entities unescaped.
+#
+# NOT ``utilities.html.html_to_markdown``: that renders MARKDOWN (``**bold**``,
+# ``[text](url)``) through a MarkItDown stream conversion per call, which is both
+# the wrong output — this wants a plain index line, not marked-up text — and a
+# disproportionate cost inside a per-message resync loop.
+_HTML_LINE_BREAK = re.compile(r"(?i)<br\s*/?>|</(?:p|div|li|tr|h[1-6])\s*>")
+_HTML_TAG = re.compile(r"<[^>]*>")
+
+# Cap on the chatter first line stored as the event subject (#710). The note
+# itself lives in Odoo and is not being replaced here — this is an index line,
+# and an uncapped one is the multi-KB markdown blob #710 was filed about.
+_CHATTER_SUBJECT_CHARS = 200
+
+
+def _chatter_headline(body: Any) -> str:
+    """Return the first line of an Odoo chatter HTML body as plain text (#710).
+
+    Best-effort and total: Odoo returns ``False`` for an empty body, and a body
+    of pure markup or whitespace has no first line, both of which yield ``""``
+    rather than raising on the resync write path.
+    """
+    if not isinstance(body, str) or not body:
+        return ""
+    text = html.unescape(_HTML_TAG.sub("", _HTML_LINE_BREAK.sub("\n", body)))
+    lines = [stripped for line in text.split("\n") if (stripped := line.strip())]
+    return lines[0][:_CHATTER_SUBJECT_CHARS] if lines else ""
 
 
 def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
@@ -1019,7 +1068,10 @@ def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
 
     A message with no timestamp (Odoo returns ``False`` for an empty datetime) is
     skipped rather than crashing the puller. The task id is the message's
-    ``res_id`` (the task it is ON), so it exists by construction.
+    ``res_id`` (the task it is ON), so it exists by construction. The subject is
+    the message's own when it has one, else the body's first line (#710) — the
+    usual case, since a logged note carries no subject — so the event arrives
+    carrying the user's own words instead of an empty string.
     """
     date = message.get("date")
     if not date:
@@ -1031,7 +1083,7 @@ def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
         timestamp=_parse_odoo_dt(date),
         task_ids=[str(res_id)],
         repo=label,
-        subject=message.get("subject") or "",
+        subject=message.get("subject") or _chatter_headline(message.get("body")),
         external_id=f"odoo:mail:{message['id']}",
     )
     return 1 if state.add_event_dedup(event) else 0
