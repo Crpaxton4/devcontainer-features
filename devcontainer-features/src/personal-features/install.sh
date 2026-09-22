@@ -17,10 +17,34 @@ echo "Activating feature 'personal-features'"
 # failure is caught directly instead of hidden behind a pipe (and give a single
 # place to add checksumming later).
 
-# fetch(url, dest): download url to dest, retrying transient failures. Fails
-# loudly (non-zero exit) so callers can react.
+# fetch(url, dest[, sha256]): download url to dest, retrying transient failures.
+# Fails loudly (non-zero exit) so callers can react.
+#
+# The optional third argument is the expected SHA-256 of the downloaded file; it
+# is the "checksumming later" the comment above reserved space for, added here
+# rather than at a call site so every future caller can opt in with one extra
+# word. A mismatch DELETES the file before returning non-zero, so a caller that
+# ignores the status can never go on to install a body that failed the check.
+#
+# Verification is opt-in per call, not mandatory, because the existing callers
+# fetch installer scripts and release tarballs whose publishers re-cut assets
+# under the same tag; pinning a digest for those would trade a working install
+# for a broken one on every upstream re-tag. Where the digest IS pinned (odoo-ls
+# below) that trade is the point: the binary runs as a long-lived server inside
+# every session.
 fetch() {
-    curl -fsSL --retry 3 --retry-delay 2 -o "$2" "$1"
+    local url="$1" dest="$2" expected="${3-}"
+    curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url" || return 1
+    [ -n "$expected" ] || return 0
+    local actual
+    actual="$(sha256sum "$dest" | cut -d' ' -f1)"
+    if [ "$actual" != "$expected" ]; then
+        echo "ERROR: checksum mismatch for $url" >&2
+        echo "  expected sha256 $expected" >&2
+        echo "  actual   sha256 $actual" >&2
+        rm -f "$dest"
+        return 1
+    fi
 }
 
 # run_installer(url, args...): download an installer script to a temp file, then
@@ -1275,6 +1299,23 @@ LAZYGIT_VERSION=0.63.0   # github.com/jesseduffield/lazygit
 # it needs its own installer (install_qsv) rather than install_gh_release. The
 # per-arch target (musl on amd64, gnu on arm64) is ARCH_QSV, set above.
 QSV_VERSION=21.1.0       # github.com/dathere/qsv
+# odoo-ls, the Odoo language server (#746). Unlike every tool above it is not a
+# convenience CLI: Claude Code launches it as a long-lived LSP server that reads
+# every Python/XML/CSV file in the workspace, so its download is the one here
+# whose digest is pinned (see fetch's third argument). Tagged WITHOUT a leading
+# "v" (1.6.0), and the per-arch asset name uses the same x86_64/aarch64 spelling
+# as ARCH_GNU above. Bump all four values together: `curl -fsSL
+# https://api.github.com/repos/odoo/odoo-ls/releases/latest` lists the assets,
+# and sha256sum each downloaded file.
+#
+# 1.6.0, not the 1.4.0 named in #746: 1.4.0 was current when the issue was
+# written, 1.6.0 is the current non-prerelease (1.5.x are all marked prerelease).
+ODOO_LS_VERSION=1.6.0    # github.com/odoo/odoo-ls
+ODOO_LS_SHA256_TYPESHED=f95e220274f29452ee02204b1b44f2645cb2050839b02ca40b3971aa89bbcf02
+case "$ARCH_GNU" in
+    x86_64)  ODOO_LS_SHA256=4424663a03a8433de60e822694e5532bd48bee41229344dfc0c7aaa95fe4b37b ;;
+    aarch64) ODOO_LS_SHA256=e58d06913f1be1b1355f48756760d51d26bdf775c6d6b5a03a485732a9bb952f ;;
+esac
 
 # Installs a pinned GitHub release asset from a deterministic download URL (no
 # api.github.com lookup). With a dest path ($3) it downloads a single binary
@@ -1330,6 +1371,72 @@ install_qsv() {
         echo "WARNING: failed to install qsv, skipping" >&2
     fi
     rm -f "$zip"
+}
+
+# odoo-ls (#746): the Odoo language server Claude Code launches over stdio.
+# Neither install_gh_release path fits, for two reasons.
+#
+# 1. It does not belong in /usr/local/bin. The server resolves its typeshed
+#    stubs RELATIVE TO ITS OWN BINARY - core/odoo.rs default_stdlib()/
+#    default_stubs() look for `typeshed/stdlib` and `typeshed/stubs` next to
+#    `current_exe()` before falling back to the cwd, and without stdlib stubs it
+#    logs "Unable to find builtins.pyi" and resolves nothing. Unpacking 35 MiB of
+#    typeshed into /usr/local/bin/typeshed to satisfy that is not acceptable, so
+#    binary and stubs live together in /usr/local/share/odoo-ls and the wrapper
+#    installed below is what goes on PATH. `--stdlib` could override the path
+#    instead, but co-locating means the default is already right and one fewer
+#    flag can drift.
+# 2. Two assets, both digest-pinned (the per-arch tarball and the shared
+#    typeshed.zip), and a partial install is worse than none: a server with no
+#    stubs starts, answers, and silently resolves nothing. So this stages both
+#    into a temp dir and only publishes once BOTH have passed their checksum.
+#
+# Best-effort like every tool above - a container with no language server is the
+# pre-#746 state, which is degraded, not broken, and not worth failing an image
+# build over. A checksum mismatch is loud (fetch prints both digests) and lands
+# here as a skip; the feature test asserts the binary is present, so CI still
+# goes red rather than shipping a silently server-less image.
+install_odoo_ls() {
+    local version="$1" tarball_sha="$2" typeshed_sha="$3"
+    local dest=/usr/local/share/odoo-ls
+    local base="https://github.com/odoo/odoo-ls/releases/download/${version}"
+    local staging
+    staging="$(mktemp -d)"
+
+    if ! fetch "${base}/odoo-linux-${ARCH_GNU}-${version}.tar.gz" "$staging/server.tar.gz" "$tarball_sha"; then
+        echo "WARNING: failed to install odoo-ls (server binary), skipping" >&2
+        rm -rf "$staging"
+        return 0
+    fi
+    # typeshed.zip is arch-independent and shared by every platform's asset.
+    if ! fetch "${base}/typeshed.zip" "$staging/typeshed.zip" "$typeshed_sha"; then
+        echo "WARNING: failed to install odoo-ls (typeshed stubs), skipping" >&2
+        rm -rf "$staging"
+        return 0
+    fi
+
+    # The tarball holds ./odoo_ls_server and nothing else; the zip's root holds
+    # stdlib/ and stubs/ directly, so it unpacks into <dest>/typeshed.
+    if tar -xz -C "$staging" -f "$staging/server.tar.gz" ./odoo_ls_server \
+        && unzip -q -o "$staging/typeshed.zip" -d "$staging/typeshed" \
+        && [ -d "$staging/typeshed/stdlib" ]; then
+        mkdir -p "$dest"
+        rm -rf "$dest/typeshed"
+        mv "$staging/typeshed" "$dest/typeshed"
+        install -m 0755 "$staging/odoo_ls_server" "$dest/odoo_ls_server"
+        # The server's own log directory, and the ONE that cannot fail: with no
+        # --logs-directory (or one that does not exist - the server checks
+        # `path.exists()` and falls back rather than creating it) the rolling
+        # file appender is built against <exe dir>/logs, and that build is an
+        # .expect(), i.e. a panic at startup. 0777 for the same reason as
+        # shell-history: install.sh cannot know which uid ends up running a
+        # Claude Code session, and these are server logs, not a secret.
+        mkdir -p "$dest/logs"
+        chmod 0777 "$dest/logs"
+    else
+        echo "WARNING: failed to unpack odoo-ls, skipping" >&2
+    fi
+    rm -rf "$staging"
 }
 
 echo "Installing productivity/navigation CLI tools"
@@ -1396,6 +1503,9 @@ bg install_gh_release lazygit \
 # ARCH_QSV selects the per-arch target (static musl on amd64, gnu on arm64).
 bg install_qsv \
     "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip"
+# odoo-ls (#746) - see install_odoo_ls above for why it gets its own installer
+# and why its two assets are the only digest-pinned downloads here.
+bg install_odoo_ls "$ODOO_LS_VERSION" "$ODOO_LS_SHA256" "$ODOO_LS_SHA256_TYPESHED"
 
 # CodeRabbit CLI — not published as GitHub release assets, so use the upstream
 # installer (https://cli.coderabbit.ai/install.sh) pinned to /usr/local/bin.
@@ -1526,13 +1636,254 @@ install_starship() {
 bg install_starship
 
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
-# lazygit, qsv, coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# lazygit, qsv, odoo-ls, coderabbit, starship). Each job already warns and exits 0 on its own failure;
 # wait on each PID and guard it so an unexpected non-zero exit degrades to a
 # warning instead of aborting the build under set -e. (A bare `wait` returns 0
 # regardless, which would instead silently mask such a failure.)
 for _pid in "${_download_pids[@]}"; do
     wait "$_pid" || echo "WARNING: a background download job failed" >&2
 done
+
+# --- odoo-ls launcher + generated odools.toml (#746) -------------------------
+# Two scripts, because the language server needs two things the plugin's
+# .lsp.json cannot express.
+#
+# odoo-ls-server  the `command` the odoo-dev plugin's .lsp.json names. Claude
+#                 Code requires the command on PATH and substitutes only
+#                 ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PLUGIN_DATA}/${CLAUDE_PROJECT_DIR}
+#                 into it - verified against the 2.1.252 bundle, and notably NOT
+#                 the ${workspaceFolder} #746 assumed. Choosing between the
+#                 generated config and a project's own is a conditional, so it
+#                 needs a script either way.
+# odoo-ls-config  writes the generated odools.toml from the container's real
+#                 paths at create time, when $ODOO_VERSION and the mounted
+#                 checkout are finally knowable. Same reason resolve-mempal-dir
+#                 exists: a Feature build cannot see any of this (#485).
+cat > /usr/local/bin/odoo-ls-server << 'ODOO_LS_SERVER'
+#!/bin/sh
+set -u
+# odoo-ls-server - launch the Odoo language server for one Claude Code session.
+#
+# Named on PATH because Claude Code's plugin LSP loader requires `command` to be
+# resolvable there and will not run a bundled binary; the server itself lives in
+# /usr/local/share/odoo-ls next to the typeshed stubs it resolves relative to its
+# own path (see install_odoo_ls).
+#
+# NEVER FATAL, and that is a deliberate trade. Exiting non-zero here reads to
+# Claude Code as a crashed server, which it then restarts up to maxRestarts
+# times; exiting 0 without speaking LSP reads the same way. Neither is worth it
+# for "this container has no Odoo in it", so the no-server cases below exec
+# nothing, say why on stderr (Claude Code captures it) and exit 0 once.
+#
+# Overrides:
+#   ODOO_LS_DISABLE=1    do not start the server at all (the kill switch; the
+#                        other one is `diagnostics: false` or disabling the
+#                        odoo-dev plugin, both of which need a restart)
+#   ODOO_LS_BIN          server binary
+#   ODOO_LS_CONFIG       generated config file
+#   ODOO_LS_LOG_LEVEL    trace|debug|info|warn|error (default: warn)
+#   ODOO_LS_LOGS_DIR     log directory
+
+BIN="${ODOO_LS_BIN:-/usr/local/share/odoo-ls/odoo_ls_server}"
+CONFIG="${ODOO_LS_CONFIG:-/usr/local/share/odoo-ls/odools.toml}"
+# The server defaults to --log-level trace and rotates hourly keeping 5 files,
+# which is megabytes an hour per session for output nobody reads. warn keeps the
+# failures and drops the rest.
+LEVEL="${ODOO_LS_LOG_LEVEL:-warn}"
+LOGS_DIR="${ODOO_LS_LOGS_DIR:-${TMPDIR:-/tmp}/odoo-ls-logs}"
+
+if [ -n "${ODOO_LS_DISABLE:-}" ]; then
+    echo "odoo-ls-server: ODOO_LS_DISABLE is set; not starting the Odoo language server" >&2
+    exit 0
+fi
+
+if [ ! -x "$BIN" ]; then
+    echo "WARNING: odoo-ls-server: $BIN is missing or not executable (its install is best-effort); this session gets no Odoo language intelligence" >&2
+    exit 0
+fi
+
+# CLAUDE_PROJECT_DIR is injected into every plugin LSP server's environment by
+# Claude Code itself (no `env` block needed), and is the same directory it sends
+# as the LSP workspace folder. $PWD is the fallback for a hand-run server.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+
+# Does the project already carry its own odools.toml, at its root or anywhere
+# above it? The server walks exactly that chain itself and merges what it finds
+# (deeper wins), so when one exists it must be the ONLY source: passing
+# --config-path as well makes the generated file a second, sibling source, and
+# sources are merged agree-or-error for scalars - a project that legitimately
+# overrides odoo_path or python_path would get a config error instead of an
+# override. So the generated file steps aside entirely, and a project config is
+# expected to be self-contained.
+project_config() {
+    dir="$1"
+    while :; do
+        [ -f "$dir/odools.toml" ] && { echo "$dir/odools.toml"; return 0; }
+        [ "$dir" = "/" ] && return 1
+        parent="$(dirname "$dir")"
+        [ "$parent" = "$dir" ] && return 1
+        dir="$parent"
+    done
+}
+
+# Each block below PREPENDS its flags, so whatever the caller passed stays last
+# and still wins - both the .lsp.json `args` list and a hand-run
+# `odoo-ls-server --version`.
+if found="$(project_config "$PROJECT_DIR")"; then
+    echo "odoo-ls-server: using the project's own $found (the generated $CONFIG is not passed)" >&2
+elif [ -f "$CONFIG" ]; then
+    set -- --config-path "$CONFIG" "$@"
+else
+    # Start NOTHING rather than a server with no Odoo source. The plugin
+    # registers .py for every project, not only Odoo ones, so this is the normal
+    # case in a container that has no Odoo in it - and there the server would
+    # index the whole tree to answer nothing, because without odoo_path it
+    # resolves no model, no field and no xmlid.
+    echo "odoo-ls-server: no $CONFIG and no odools.toml at or above $PROJECT_DIR; not starting the Odoo language server. Run odoo-ls-config in an Odoo container, or add an odools.toml to the project." >&2
+    exit 0
+fi
+
+# --logs-directory is honoured only when the directory ALREADY EXISTS: the
+# server checks path.exists() and otherwise falls back to <binary dir>/logs
+# (which install.sh pre-creates 0777 for exactly this reason). So create it.
+#
+# The writability test is not belt-and-braces. A log directory the server cannot
+# write to is a PANIC before it ever speaks LSP - measured against 1.6.0, exit
+# 101, "failed to initialize rolling file appender ... PermissionDenied" - and
+# the default path is shared across accounts, so one session run as root leaves
+# a directory the next session cannot write. That would crash-loop through
+# maxRestarts and end with no language server at all. Dropping the flag instead
+# falls back to the 0777 directory next to the binary, which always works.
+if mkdir -p "$LOGS_DIR" 2>/dev/null && [ -w "$LOGS_DIR" ]; then
+    set -- --logs-directory "$LOGS_DIR" "$@"
+fi
+
+# No --stdio flag exists and none is needed: stdio is the server's default
+# transport and --use-tcp is what switches away from it (#746 asked; args.rs and
+# main.rs answer). Logs never reach stdout in this mode either - the stdout
+# subscriber is installed only under --parse or --use-tcp - so stdout carries
+# LSP protocol and nothing else, which is what Claude Code requires.
+exec "$BIN" --log-level "$LEVEL" "$@"
+ODOO_LS_SERVER
+chmod 0755 /usr/local/bin/odoo-ls-server
+
+cat > /usr/local/bin/odoo-ls-config << 'ODOO_LS_CONFIG'
+#!/bin/sh
+set -u
+# odoo-ls-config - write the container-wide odools.toml the Odoo language server
+# reads, from paths that only exist once the container does.
+#
+# Run from postCreateCommand. Regenerates unconditionally: the file is derived
+# state, and $ODOO_VERSION or the mounted checkout can change across a rebuild.
+# Hand edits belong in a project's OWN odools.toml, which odoo-ls-server honours
+# instead of this one - see that script for why the two are never both in play.
+#
+# Never fatal: a container that cannot be configured for Odoo gets no language
+# server, which is the pre-#746 state, not an outage worth failing create over.
+#
+# Overrides (all default to this devcontainer's documented paths):
+#   ODOO_LS_SKIP_CONFIG=1  write nothing
+#   ODOO_LS_CONFIG         output file
+#   ODOO_LS_ODOO_PATH      Odoo community source
+#   ODOO_LS_ENTERPRISE     enterprise addons directory
+#   ODOO_LS_WORKSPACE      the mounted customization checkout
+#   ODOO_LS_PYTHON         interpreter whose site-packages the server reads
+
+OUT="${ODOO_LS_CONFIG:-/usr/local/share/odoo-ls/odools.toml}"
+ODOO_PATH="${ODOO_LS_ODOO_PATH:-/usr/lib/python3/dist-packages/odoo}"
+# Enterprise addons are per-series (/var/lib/odoo/addons/<series>), so with no
+# $ODOO_VERSION there is no directory to name - and naming the parent would hand
+# the server a directory of series directories, not of modules.
+ENTERPRISE="${ODOO_LS_ENTERPRISE:-}"
+if [ -z "$ENTERPRISE" ] && [ -n "${ODOO_VERSION:-}" ]; then
+    ENTERPRISE="/var/lib/odoo/addons/$ODOO_VERSION"
+fi
+WORKSPACE="${ODOO_LS_WORKSPACE:-/mnt/extra-addons}"
+VENV_PYTHON="$WORKSPACE/.venv/bin/python"
+
+if [ -n "${ODOO_LS_SKIP_CONFIG:-}" ]; then
+    echo "odoo-ls-config: ODOO_LS_SKIP_CONFIG is set, skipping"
+    exit 0
+fi
+
+# No Odoo source means this is not an Odoo container. Remove any file a previous
+# create wrote rather than leaving one behind: every path setting is resolved
+# against the filesystem and a stale entry is a hard config error, which is a
+# worse outcome than no config at all.
+if [ ! -d "$ODOO_PATH" ]; then
+    if [ -f "$OUT" ]; then
+        rm -f "$OUT" && echo "odoo-ls-config: no Odoo source at $ODOO_PATH; removed the stale $OUT"
+    else
+        echo "odoo-ls-config: no Odoo source at $ODOO_PATH; this container gets no Odoo language server"
+    fi
+    exit 0
+fi
+
+# A venv's own interpreter, when the checkout has one: the server reads the
+# site-packages that interpreter resolves, so pointing it at the system python3
+# in a container whose dependencies live in the venv loses every third-party
+# import. Left unset when neither exists, which makes the server fall back to
+# its own default rather than resolving a path that is not there.
+PYTHON="${ODOO_LS_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    if [ -x "$VENV_PYTHON" ]; then
+        PYTHON="$VENV_PYTHON"
+    else
+        PYTHON="$(command -v python3 2>/dev/null || true)"
+    fi
+fi
+
+mkdir -p "$(dirname "$OUT")" || {
+    echo "WARNING: odoo-ls-config: cannot create $(dirname "$OUT"); no Odoo language server config was written" >&2
+    exit 0
+}
+
+TMP="$OUT.tmp.$$"
+{
+    echo "# GENERATED by odoo-ls-config at container create - do not edit."
+    echo "# Edits are lost on the next rebuild. To override any of this for one"
+    echo "# project, put an odools.toml in that project instead: odoo-ls-server"
+    echo "# then uses it alone, so it has to restate everything it still wants."
+    echo "[[config]]"
+    echo 'name = "default"'
+    printf 'odoo_path = "%s"\n' "$ODOO_PATH"
+    echo "addons_paths = ["
+    printf '  "%s",\n' "$ODOO_PATH/addons"
+    [ -n "$ENTERPRISE" ] && [ -d "$ENTERPRISE" ] && printf '  "%s",\n' "$ENTERPRISE"
+    [ -d "$WORKSPACE" ] && printf '  "%s",\n' "$WORKSPACE"
+    echo "]"
+    [ -n "$PYTHON" ] && printf 'python_path = "%s"\n' "$PYTHON"
+    # The JS/OWL half of the server shells out to tsserver and reports a
+    # diagnostic on every session when it is absent. typescript is not installed
+    # here and installing it to silence a warning is the wrong trade, so turn
+    # that half off; Python/XML/CSV - what the .lsp.json actually registers - is
+    # unaffected.
+    echo "disable_javascript = true"
+} > "$TMP" || {
+    rm -f "$TMP"
+    echo "WARNING: odoo-ls-config: could not write $TMP; no Odoo language server config was written" >&2
+    exit 0
+}
+mv "$TMP" "$OUT" || {
+    rm -f "$TMP"
+    echo "WARNING: odoo-ls-config: could not move $TMP to $OUT" >&2
+    exit 0
+}
+# Readable by whichever account ends up running a Claude Code session, for the
+# same reason the log directory is world-writable: install.sh cannot know it.
+chmod 0644 "$OUT"
+
+# NOT listed here: the task worktrees under $WORKSPACE/.worktrees. The server
+# infers addon paths from the LSP workspace folder itself when the profile it
+# resolves for that folder sets no addons_paths (config/stages.rs infer_addons,
+# which runs per workspace), so a session opened inside a worktree picks that
+# worktree up on its own - and the list merges across sources rather than
+# replacing. Enumerating them here would instead bake in paths that are created
+# and removed constantly during task work, and every removed one becomes a hard
+# config error on the next session.
+echo "odoo-ls-config: wrote $OUT (odoo_path=$ODOO_PATH, python_path=${PYTHON:-<unset>})"
+ODOO_LS_CONFIG
+chmod 0755 /usr/local/bin/odoo-ls-config
 
 # Starship config: single-char Unicode symbols throughout (no emoji, no Nerd
 # Font glyphs), extra modules useful for Odoo dev work.
