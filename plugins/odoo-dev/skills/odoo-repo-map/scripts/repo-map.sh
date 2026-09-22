@@ -10,6 +10,7 @@
 #                                          [--branch-flow "dev,UAT,main"] [--flow-confirmed]
 #                                          [--remote owner/repo] [--notes "..."] [--no-repo-check]
 #                                          [--release-assignee LOGIN] [--release-reviewer LOGIN|none]
+#                                          [--repo-path /abs/path/to/checkout]
 #   repo-map.sh set-flow "<project name>" "dev,UAT,main" [--flow-confirmed]
 #   repo-map.sh set-release-owners "<project name>" <assignee> <reviewer|none>
 #   repo-map.sh remove "<project name>"
@@ -22,6 +23,15 @@
 # computed. flow_confirmed records whether a human has actually vouched for the
 # chain — a flow parsed out of old notes is a hypothesis, and a wrong last
 # element points a release at production.
+#
+# repo_path is an optional ABSOLUTE path to this project's checkout, overriding
+# the default $REPOS_DIR/$repo. The flat repos tree is a convention, not a law:
+# in the Odoo devcontainer the one client repo is bind-mounted at
+# /mnt/extra-addons, a name fixed by the addons path that can never equal the
+# repo field, and no value of REPOS_DIR can bridge that. With repo_path set,
+# neither repos-dir.sh nor the tree layout is consulted for this project at all.
+# repo stays required and stays a bare folder name: it is the lookup key callers
+# resolve by, independent of where the checkout happens to be mounted.
 #
 # release_assignee and release_reviewer are the GitHub logins an aggregation
 # release PR is opened against for this project. They live here because they are
@@ -50,7 +60,7 @@ const file = process.argv[1];
 let data;
 try { data = JSON.parse(readFileSync(file, "utf8")); }
 catch (e) { console.error("invalid JSON: " + e.message); process.exit(4); }
-const KNOWN = ["repo", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer"];
+const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer"];
 const errs = [];
 if (typeof data !== "object" || data === null || Array.isArray(data)) errs.push("root must be an object");
 else {
@@ -61,6 +71,16 @@ else {
     if (typeof entry !== "object" || entry === null) { errs.push(`${name}: entry must be an object`); continue; }
     if (typeof entry.repo !== "string" || !entry.repo.trim()) errs.push(`${name}: repo is required`);
     else if (entry.repo.includes("/") || entry.repo.includes("..")) errs.push(`${name}: repo must be a bare folder name`);
+    // repo_path overrides $REPOS_DIR/$repo, so it is only ever useful absolute:
+    // a relative one would resolve against whatever directory the caller happens
+    // to be standing in, which is exactly the guesswork this map exists to stop.
+    if ("repo_path" in entry) {
+      const p = entry.repo_path;
+      if (typeof p !== "string" || !p.trim())
+        errs.push(`${name}: repo_path must be a non-empty string (an absolute path to the checkout), or omit it`);
+      else if (!p.startsWith("/"))
+        errs.push(`${name}: repo_path must be an absolute path, got "${p}"`);
+    }
     for (const k of ["default_branch", "odoo_version", "remote", "notes"])
       if (k in entry && typeof entry[k] !== "string") errs.push(`${name}: ${k} must be a string`);
     // Recorded to be used unasked, so an empty one is worse than an absent one:
@@ -133,7 +153,7 @@ case "$cmd" in
     [ $# -ge 2 ] || die "usage: repo-map.sh add \"<project name>\" <repo> [options]"
     project="$1"; repo="$2"; shift 2
     branch=""; version=""; notes=""; flow=""; remote=""; confirmed=false; repo_check=1
-    rel_assignee=""; rel_reviewer=""
+    rel_assignee=""; rel_reviewer=""; repo_path=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --default-branch)   branch="${2:?}"; shift 2 ;;
@@ -143,23 +163,37 @@ case "$cmd" in
         --notes)            notes="${2:?}"; shift 2 ;;
         --release-assignee) rel_assignee="${2:?}"; shift 2 ;;
         --release-reviewer) rel_reviewer="${2:?}"; shift 2 ;;
+        --repo-path)        repo_path="${2:?}"; shift 2 ;;
         --flow-confirmed)   confirmed=true; shift ;;
         --no-repo-check)    repo_check=0; shift ;;
         *) die "unknown option: $1" ;;
       esac
     done
+    # Caught here as a usage error rather than at validation, so the message names
+    # the flag the user typed instead of a key they never wrote.
+    case "$repo_path" in
+      ""|/*) ;;
+      *) die "--repo-path must be an absolute path, got: $repo_path" ;;
+    esac
     if [ "$repo_check" -eq 1 ]; then
-      REPOS_DIR="${REPOS_DIR:-$("$SCRIPT_DIR/repos-dir.sh" --raw)}"
-      [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (use --no-repo-check only pre-rebuild)"
+      if [ -n "$repo_path" ]; then
+        # An explicit path answers the question outright: no tree to resolve, so
+        # repos-dir.sh is never called and its failure cannot block the write.
+        [ -d "$repo_path" ] || die "repo folder not found: $repo_path (use --no-repo-check only pre-rebuild)"
+      else
+        REPOS_DIR="${REPOS_DIR:-$("$SCRIPT_DIR/repos-dir.sh" --raw)}"
+        [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (pass --repo-path /abs/path when the checkout is not under the repos tree, or --no-repo-check pre-rebuild)"
+      fi
     fi
     run_node "$VALIDATE_JS"
     tmp="$MAP.tmp"
     run_node '
       import { readFileSync, writeFileSync } from "fs";
-      const [file, project, repo, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, tmp] = process.argv.slice(1);
+      const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       if (data.projects[project]) { console.error("duplicate project: " + project); process.exit(2); }
       const entry = { repo };
+      if (repoPath) entry.repo_path = repoPath;
       if (branch) entry.default_branch = branch;
       if (version) entry.odoo_version = version;
       if (flow) entry.branch_flow = flow.split(",").map((b) => b.trim()).filter(Boolean);
@@ -170,7 +204,7 @@ case "$cmd" in
       if (relReviewer) entry.release_reviewer = relReviewer;
       data.projects[project] = entry;
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
-    ' "$project" "$repo" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$tmp"
+    ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$tmp"
     commit_tmp "$tmp"
     echo "{\"ok\": true, \"added\": $(node -e 'console.log(JSON.stringify(process.argv[1]))' "$project")}"
     ;;

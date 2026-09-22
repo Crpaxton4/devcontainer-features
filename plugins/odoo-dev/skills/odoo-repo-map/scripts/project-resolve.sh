@@ -24,6 +24,13 @@
 # none. Null means unanswered and the caller has to ask; it is not a licence to
 # infer one from commit authorship.
 #
+# repo_path is the checkout when one is present on this machine, and null when
+# there is none. An absolute repo_path recorded on the map entry wins over
+# $REPOS_DIR/$repo: the flat tree is a convention, and a bind mount whose folder
+# name cannot match the repo field (the Odoo devcontainer's /mnt/extra-addons)
+# has no tree to resolve. The origin sniff below reads that same path, so a
+# project pinned this way gets its remote filled in rather than left null.
+#
 # Exit codes: 0 ok | 2 usage | 3 unmapped or ambiguous | 4 flow missing/unusable
 set -euo pipefail
 
@@ -77,15 +84,23 @@ node --input-type=module -e '
   const flow = Array.isArray(entry.branch_flow) ? entry.branch_flow : [];
   const confirmed = entry.flow_confirmed === true;
 
-  const repoPath = reposDir ? `${reposDir}/${entry.repo}` : null;
-  const repoPresent = repoPath && existsSync(`${repoPath}/.git`);
+  // An explicit repo_path is where the checkout actually is, so it wins outright
+  // over the $REPOS_DIR/$repo convention — including on machines where no repos
+  // tree resolves at all and reposDir is empty.
+  const repoPath = entry.repo_path || (reposDir ? `${reposDir}/${entry.repo}` : null);
+  const repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
 
   // Map first, git second: the map is what a human vouched for, and a checkout
-  // can sit on a fork or a stale remote.
+  // can sit on a fork or a stale remote. Gated on repoPresent, so pinning
+  // repo_path is what makes this fire where no tree resolves.
   let remote = entry.remote || null;
   if (!remote && repoPresent) {
     try {
-      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+      // stderr is ignored rather than inherited: a checkout with no origin — or a
+      // repo_path that is not a git repo at all — means a null remote, not a line
+      // of git noise beside the JSON this script prints.
+      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
       const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
       if (m) remote = m[1];
     } catch { /* no origin — remote stays null */ }
