@@ -24,7 +24,9 @@
 #   "did the remote move under us"                  git push --force-with-lease
 #   conflict detection and file enumeration         git rebase exits nonzero and
 #                                                   leaves itself in progress
-#   "is this PR already merged"                     gh pr merge refuses
+#   (was: "is this PR already merged" - gh pr merge refuses. True, but a refusal
+#    is not the same as a failure when the PR is already in the state this step
+#    exists to produce. See the concurrent-writer note below.)
 #   squash-only, linear history, thread resolution  the main ruleset
 #   conventional PR title                           pr-title-lint
 #   wrong-account push                              403 from the pinned GH_TOKEN
@@ -288,6 +290,17 @@ CHECK_PENDING_RE='is expected|Required status check|checks are pending|not yet c
 # now against the base tip the merge was attempted against.
 BASE_MOVED_RE='Base branch was modified'
 
+# The general rule behind the three preceding constants, learned the hard way
+# across four halts in one run: with deleteBranchOnMerge on, GitHub is a
+# CONCURRENT WRITER on every branch and PR this train touches. It retargets
+# orphaned children, it deletes merged heads, and it recomputes mergeability -
+# all asynchronously, all while the script is issuing its next command.
+#
+# So every step that mutates a ref or a PR must succeed when GitHub has already
+# performed it. Not "check whether it is needed, then do it" - that check can
+# never be atomic with the act. Do it, and accept the already-done answer.
+REF_GONE_RE='Reference does not exist|HTTP 422|Not Found|HTTP 404'
+
 # --------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------
@@ -309,6 +322,14 @@ merge_node() {
         else
             rc=$?
         fi
+        # Same concurrent-writer rule: if the PR is already merged, this step's
+        # goal is met and the refusal is about a state we wanted anyway. Reached
+        # when a merge lands but the run dies before the done-key is written.
+        if [[ $(gh pr view "$pr" -R "$SLUG" --json state --jq .state) == MERGED ]]; then
+            out="stack-merge: #$pr was already merged"
+            break
+        fi
+
         retryable=0
         if printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
             retryable=1
@@ -345,18 +366,23 @@ merge_node() {
 
 # Runs only after every child of $pr has been retargeted and pushed.
 delete_merged_branch() {
-    local pr=$1 branch key
+    local pr=$1 branch key out rc
     key="$pr:delete-branch"
     is_done "$key" && return 0
 
     branch=$(head_branch "$pr")
     set_cursor "$key"
-    # A ref that is already gone is the desired end state, not a failure: a
-    # resumed run can reach here after an earlier attempt (or a human) removed
-    # it. Anything other than "absent" still fails loudly.
-    if git ls-remote --exit-code --heads "$(git -C "$REPO" remote get-url origin)" \
-        "refs/heads/$branch" >/dev/null 2>&1; then
-        gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent
+    # Act, then check - never check, then act. A pre-check cannot be atomic with
+    # the delete: with deleteBranchOnMerge on, GitHub is deleting this same ref
+    # asynchronously from the merge that just happened, so ls-remote can still
+    # see it while the DELETE that follows returns 422. Absent is the end state
+    # this step wants, however the ref got there.
+    if ! out=$(gh api -X DELETE "repos/$SLUG/git/refs/heads/$branch" --silent 2>&1); then
+        rc=$?
+        if ! printf '%s' "$out" | grep -qE "$REF_GONE_RE"; then
+            printf '%s\n' "$out" >&2
+            exit "$rc"
+        fi
     fi
     add_done "$key"
 }
