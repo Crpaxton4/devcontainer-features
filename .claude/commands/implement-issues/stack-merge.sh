@@ -299,8 +299,25 @@ BASE_MOVED_RE='Base branch was modified'
 # So every step that mutates a ref or a PR must succeed when GitHub has already
 # performed it. Not "check whether it is needed, then do it" - that check can
 # never be atomic with the act. Do it, and accept the already-done answer.
+#
+# There is a SECOND rule, distinct from the first and the source of four of this
+# run's failures on its own:
+#
+#   Every step that reads a DERIVED property must tolerate GitHub not having
+#   computed it yet.
+#
+# `mergeable`, `mergeStateStatus` and check status are all derived, all
+# recomputed asynchronously after any change to a head or a base, and all
+# transiently UNKNOWN rather than stale-but-valid during that window. A refusal
+# sourced from one of them is not evidence about the PR until the value settles.
+# Since every node is now synced immediately before it is merged, and mutating
+# the head is exactly what forces the recompute, every node can hit this.
+#
+# The discipline both rules share: re-query the underlying fact and decide from
+# that, never from the error string alone.
 REF_GONE_RE='Reference does not exist|HTTP 422|Not Found|HTTP 404'
 ALREADY_CURRENT_RE='already up[ -]?to[ -]?date|not behind|no new commits'
+NOT_MERGEABLE_RE='is not mergeable|Pull Request is not mergeable'
 
 # --------------------------------------------------------------------------
 # Steps
@@ -369,6 +386,14 @@ merge_node() {
         retryable=0
         if printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
             retryable=1
+        elif printf '%s' "$out" | grep -qiE "$NOT_MERGEABLE_RE"; then
+            # Derived-property rule. sync_node rewrote this head moments ago, so
+            # `mergeable` is very likely still being recomputed. Decide from the
+            # re-queried value, not from the refusal: only CONFLICTING is a real
+            # answer, and UNKNOWN means "not computed yet" rather than "no".
+            if [[ $(gh pr view "$pr" -R "$SLUG" --json mergeable --jq .mergeable) != CONFLICTING ]]; then
+                retryable=1
+            fi
         elif printf '%s' "$out" | grep -qE "$BASE_MOVED_RE"; then
             git -C "$REPO" fetch origin --quiet
             base_now=$(git -C "$REPO" rev-parse "origin/$BASE")
