@@ -70,5 +70,6 @@
             "type": "bind"
         }
     ],
-    "postCreateCommand": "sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace"
+    "postCreateCommand": "sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace",
+    "postStartCommand": "mempalace-hub"
 }

@@ -1053,6 +1053,179 @@ exit 0
 MEMPALACE_INIT_WORKSPACE
 chmod 0755 /usr/local/bin/mempalace-init-workspace
 
+# --- mempalace shared MCP hub (#764) -----------------------------------------
+# Every Claude Code session used to spawn its OWN stdio mempalace MCP server
+# against the SAME palace, and mempalace grants the MCP writer lease to exactly
+# one process per palace: the first session to mutate kept it, and every other
+# session's mutating tools then failed with
+#   MCP error -32001: Peer MCP writer active; this server is read-only for mutating tools
+# Reads kept working, so the loss only surfaced at write time - typically at
+# session end, after the work that produced the memory was already done. N live
+# sessions meant N-1 sessions that could remember nothing.
+#
+# The fix is one long-lived hub per container that owns the palace, and starting
+# it is the WHOLE change - no session MCP config is rewritten, because none has
+# to be. Verified against the pinned mempalace 3.9.0 (site-packages, not docs):
+# the `mempalace-mcp` console script is no longer the server. Its entry point is
+# `mempalace.mcp_proxy:main`, which resolves the palace, looks up that palace's
+# live hub in the per-palace registry (~/.mempalace/server/<sha256 of the
+# canonical palace path>/serverinfo.json, trusted only while the recorded pid is
+# alive) and forwards every JSON-RPC request to it over HTTP, importing the
+# storage stack only when no hub answers. The same discovery is wired into the
+# CLI (cli._forward_mine_to_hub / _forward_search_to_hub), so `mempalace mine` -
+# which the plugin's Stop/SessionEnd/PreCompact save hooks spawn, and which the
+# hub's own lease would otherwise refuse - is forwarded too.
+#
+# That matters because the stdio registration is NOT ours to change: it lives in
+# the upstream plugin's own .mcp.json under $CLAUDE_CONFIG_DIR/plugins/cache/
+# mempalace/..., which this repo does not ship and which the `claude plugin
+# update mempalace@mempalace` in sync-claude-mcp overwrites on every create. A
+# hub turns that unchanged registration into a proxy by itself.
+#
+# SUPERVISION: the Feature's own `postStartCommand`, deliberately and nothing
+# heavier. This repo had no service-supervision pattern at all before this, so
+# the choice is a precedent; systemd is not PID 1 in a dev container, and
+# supervisord/s6 would mean a new package, a new config file and a new failure
+# mode for one process. `postStartCommand` is the only lifecycle hook that fires
+# on EVERY container start - create, `docker start` of an existing container,
+# and a host reboot - which is exactly the "survives a container restart"
+# requirement, and it costs one JSON key. What it does not give is restart-on-
+# crash within a single container run; the honest mitigation is that a dead hub
+# is not an outage - mcp_proxy falls back to serving the session locally and
+# says so on the tool result - and `mempalace-hub` can be re-run by hand.
+MEMPALACE_HUB_LOG_FILE=/usr/local/share/personal-features/mempalace-hub.log
+mkdir -p "$(dirname "$MEMPALACE_HUB_LOG_FILE")"
+# Pre-created mode 0666 for the same reason as mempal-dir.sh above: install.sh
+# cannot know which account the dev container CLI will run postStartCommand as,
+# and a chown to the wrong one would send the hub's only diagnostics to
+# /dev/null. It holds server logs, no secret.
+: > "$MEMPALACE_HUB_LOG_FILE"
+chmod 0666 "$MEMPALACE_HUB_LOG_FILE"
+
+cat > /usr/local/bin/mempalace-hub << 'MEMPALACE_HUB'
+#!/bin/sh
+set -u
+# mempalace-hub [start|status] - run the container's single shared mempalace MCP
+# server, so concurrent Claude Code sessions can all write to one palace (#764).
+#
+# `start` (the default) is IDEMPOTENT: it probes the hub's liveness route first
+# and returns 0 when one is already answering, so postStartCommand can run it on
+# every container start without ever ending up with two hubs.
+#
+# Never fatal. A container with no hub is exactly the pre-#764 behaviour - every
+# session serves its own palace copy and only one of them can write - which is
+# degraded, not broken, and not worth failing container start over.
+#
+# Overrides, for the feature test and for debugging:
+#   MEMPALACE_SKIP_HUB=1   do not start a hub at all
+#   MEMPALACE_HUB_CMD      binary providing `serve`  (default: mempalace)
+#   MEMPALACE_HUB_HOST     bind address              (default: 127.0.0.1)
+#   MEMPALACE_HUB_PORT     bind port                 (default: 8765)
+#   MEMPALACE_HUB_LOG      log file
+#   MEMPALACE_HUB_WAIT     seconds to wait for the bind (default: 60)
+
+CMD="${MEMPALACE_HUB_CMD:-mempalace}"
+HOST="${MEMPALACE_HUB_HOST:-127.0.0.1}"
+PORT="${MEMPALACE_HUB_PORT:-8765}"
+LOG="${MEMPALACE_HUB_LOG:-/usr/local/share/personal-features/mempalace-hub.log}"
+WAIT="${MEMPALACE_HUB_WAIT:-60}"
+URL="http://$HOST:$PORT"
+
+# /healthz is mempalace's own liveness route and the only credential-free one,
+# so this works whether or not the hub ever gets a bearer token. python3 rather
+# than curl: python3 is already a hard dependency of the mempalace install (see
+# mempalace-repair), curl is not guaranteed on every base image.
+hub_alive() {
+    python3 - "$HOST" "$PORT" <<'MEMPALACE_HUB_HEALTH' 2>/dev/null
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen(f"http://{sys.argv[1]}:{sys.argv[2]}/healthz", timeout=1) as resp:
+        sys.exit(0 if resp.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+MEMPALACE_HUB_HEALTH
+}
+
+case "${1:-start}" in
+    start) ;;
+    status)
+        if hub_alive; then
+            echo "mempalace-hub: serving on $URL/mcp"
+            exit 0
+        fi
+        echo "mempalace-hub: nothing answering $URL/healthz"
+        exit 1
+        ;;
+    *)
+        echo "usage: mempalace-hub [start|status]" >&2
+        exit 2
+        ;;
+esac
+
+if [ -n "${MEMPALACE_SKIP_HUB:-}" ]; then
+    echo "mempalace-hub: MEMPALACE_SKIP_HUB is set, skipping"
+    exit 0
+fi
+
+if hub_alive; then
+    echo "mempalace-hub: already serving on $URL/mcp"
+    exit 0
+fi
+
+if ! command -v "$CMD" >/dev/null 2>&1; then
+    echo "WARNING: mempalace-hub: '$CMD' is not on PATH (its install is best-effort); every Claude Code session will serve its own palace copy and only one of them will be able to write (#764)" >&2
+    exit 0
+fi
+
+# One hub run, one log. The server logs at INFO for its whole lifetime and
+# nothing rotates it inside a container, so truncating at the only moment a hub
+# is actually launched is the only bounded option that keeps the diagnostics.
+if ! : > "$LOG" 2>/dev/null; then
+    echo "WARNING: mempalace-hub: $LOG is not writable; starting the hub with its output discarded" >&2
+    LOG=/dev/null
+fi
+
+# setsid puts the hub in its own session so it cannot be signalled through the
+# lifecycle command's process group; nohup is the fallback on an image without
+# util-linux. Either way stdin is /dev/null and both output streams go to the
+# log - a background child still holding the lifecycle command's pipes would
+# keep the dev container CLI waiting on it forever.
+if command -v setsid >/dev/null 2>&1; then
+    set -- setsid
+else
+    set -- nohup
+fi
+
+# MEMPALACE_MCP_IDLE_HOURS=0 disables mempalace's idle-exit watchdog, which
+# otherwise os._exit(0)s the server after 8 idle hours. That watchdog exists so
+# abandoned PER-SESSION servers stop accumulating ChromaDB file handles; applied
+# to the one process the whole container shares it is a self-inflicted outage,
+# and the next lifecycle event that would restart it may be days away.
+echo "mempalace-hub: starting '$CMD serve' on $URL/mcp (log: $LOG)"
+MEMPALACE_MCP_IDLE_HOURS=0 "$@" "$CMD" serve --host "$HOST" --port "$PORT" \
+    < /dev/null >> "$LOG" 2>&1 &
+
+# Poll rather than watch a pid: with setsid in the way, $! names a wrapper that
+# may or may not have exec'd into the server, so it answers a different question
+# than the one that matters - "is the endpoint up". Each probe carries its own
+# 1s timeout, so this waits at least WAIT seconds.
+waited=0
+while [ "$waited" -lt "$WAIT" ]; do
+    if hub_alive; then
+        echo "mempalace-hub: hub is live on $URL/mcp"
+        exit 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+
+echo "WARNING: mempalace-hub: '$CMD serve' did not answer $URL/healthz within ${WAIT}s. Sessions fall back to one private MCP server each, where only the first to mutate can write (#764). Check $LOG - a writable hub refuses to start while another process already holds the palace's MCP writer lease." >&2
+exit 0
+MEMPALACE_HUB
+chmod 0755 /usr/local/bin/mempalace-hub
+
 # --- Additional personal tooling --------------------------------------------
 # Opinionated, always installed - this Feature is the owner's own personal
 # config, not a general-purpose toolkit, so none of this is optional. If a
