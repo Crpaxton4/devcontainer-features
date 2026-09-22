@@ -46,23 +46,46 @@ The account comes from the repo itself. Run this before anything that touches
 GitHub, and repeat it inside every worker's own preflight so no worker inherits
 or assumes an active account:
 
+**`GH_TOKEN` must be set inline, as a prefix on the one command that needs it.**
+Not exported in a prior statement. Two independent reasons, and each one alone
+is fatal:
+
+- Your Bash calls keep **no exported environment** between them, exactly as they
+  keep no working directory. An `export` in call N is gone by call N+1.
+- The permission classifier refuses a bare `gh` that depends on an
+  ambient token. Only the inline-prefix form is accepted.
+
+So every authenticated command carries its own token:
+
 ```bash
-set -euo pipefail
-REPO=/workspaces/devcontainer-features
-SLUG=$(git -C "$REPO" remote get-url origin \
-  | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')
-OWNER=${SLUG%%/*}
-export GH_TOKEN="$(gh auth token --user "$OWNER")"
+GH_TOKEN="$(gh auth token --user "$(git -C /workspaces/devcontainer-features remote get-url origin \
+  | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##' \
+  | cut -d/ -f1)")" \
+  gh pr create -R <owner>/<repo> ...
 ```
 
-Pinning `GH_TOKEN` is the enforceable form of "always act as the repo owner".
-`gh` has no global `--user` flag — `-u` exists only on `gh auth token`,
-`auth switch`, and `auth status` — but `GH_TOKEN` overrides the active account
-for every subsequent `gh` call, which makes it immune to the mid-run account
-drift that has previously produced a hard `403 ... denied to cpqoc` partway
-through a merge train. `gh auth token --user` exits nonzero when that account
-is not authenticated, and `set -e` turns that into a loud stop before anything
-is mutated.
+and `git push`, which reaches GitHub through `gh`'s credential helper, carries
+it the same way — via `-c`, **never** by writing the helper into the repo's
+config:
+
+```bash
+GH_TOKEN="$(gh auth token --user <owner>)" \
+  git -C <abs worktree path> -c credential.helper='!gh auth git-credential' \
+  push -u origin <branch>
+```
+
+`git config credential.helper` is **not** an acceptable substitute. `.git/config`
+is shared by every worktree in the repo, so one worker writing it silently
+changes auth for every sibling and for every later session. `-c` is per-command
+and leaves nothing behind.
+
+Pinning the token this way is the enforceable form of "always act as the repo
+owner". `gh` has no global `--user` flag — `-u` exists only on `gh auth token`,
+`auth switch`, and `auth status` — but `GH_TOKEN` overrides the active account,
+which makes it immune to the mid-run account drift that has previously produced
+a hard `403 ... denied to cpqoc` partway through a merge train.
+`gh auth token --user` exits nonzero when that account is not authenticated,
+which fails the command loudly before anything is mutated.
 
 Do **not** use `gh auth switch` as the mechanism. It mutates global state, and
 it is what drifted.
@@ -175,10 +198,13 @@ One template, filled per worker.
 - **Batch identity and absolute worktree path.** State it literally: *"You are
   worker N in a batch. Your worktree is `<abs path>`. Every `git` command you
   run must carry `-C <abs path>` and every `gh` command must carry
-  `-R <owner>/<repo>` — your Bash calls keep no working directory between
-  them."*
-- **The `GH_TOKEN` derivation block above**, repeated verbatim in the worker's
-  own preflight.
+  `-R <owner>/<repo>` — your Bash calls keep no working directory **and no
+  exported environment** between them."*
+- **Both inline-`GH_TOKEN` forms from the Identity section above**, pasted
+  verbatim — the `gh` one and the `git push` one. Hand the worker the form that
+  works; a worker that has to invent its own auth at push time will invent a
+  different one from every sibling, which is Phase 7's named failure mode
+  arriving by design rather than by accident.
 - `Read the issue first: gh issue view <n> -R <owner>/<repo>`
 - `## The change` — numbered steps with `file:line` pointers from Phase 2.
 - `## Hard constraints`
