@@ -11,6 +11,7 @@
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
 - [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
+- [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -287,6 +288,38 @@ The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` 
 
 It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
 
+## The shared mempalace MCP hub
+
+**One mempalace MCP server per container, not one per session (#764).** mempalace grants the *MCP writer lease* to exactly one process per palace. Every Claude Code session used to start its own stdio server against the same palace, so the first session to mutate kept the lease and every other session's mutating tools failed with:
+
+```
+MCP error -32001: Peer MCP writer active; this server is read-only for mutating tools
+```
+
+Reads kept working, which is what made it expensive: the failure surfaced only at **write** time — usually at session end, after the work that produced the memory was already done. N live sessions meant N−1 sessions that could remember nothing.
+
+The Feature now starts one long-lived hub — `mempalace serve`, bound to `127.0.0.1:8765` — and that is the entire fix.
+
+**No session MCP config is rewritten, because none has to be.** Verified by reading the pinned 3.9.0 in site-packages, not the docs: the `mempalace-mcp` console script is no longer the server. Its entry point is `mempalace.mcp_proxy:main`, which resolves the palace, looks that palace's live hub up in a per-palace registry (`~/.mempalace/server/<sha256 of the canonical palace path>/serverinfo.json`, trusted only while the recorded pid is alive) and forwards every JSON-RPC request to it over HTTP — importing the ~77 MB storage stack only when no hub answers. The same discovery is wired into the CLI (`_forward_mine_to_hub`, `_forward_search_to_hub`), so `mempalace mine` — which the plugin's Stop/SessionEnd/PreCompact save hooks spawn, and which the hub's own lease would otherwise refuse — is forwarded too.
+
+That matters because the stdio registration is **not ours to change**: it lives in the upstream plugin's own `.mcp.json` under `$CLAUDE_CONFIG_DIR/plugins/cache/mempalace/…`, a path this repo does not ship and that `sync-claude-mcp`'s `claude plugin update mempalace@mempalace` overwrites on every container create. Patching it would be undone on the next rebuild. Starting a hub turns that unchanged registration into a proxy by itself, and the memory saving is a bonus: a proxied session runs at roughly 22 MB instead of ~100 MB.
+
+**Supervision: the Feature's `postStartCommand`, and deliberately nothing heavier.** This repo had no service-supervision pattern of any kind before this, so the choice sets the precedent:
+
+- `systemd` is not PID 1 in a dev container. Upstream ships a unit file; it is not usable here.
+- `supervisord`/`s6` would mean a new package, a new config file and a new failure mode, for one process.
+- `postStartCommand` is the only lifecycle hook that fires on **every** container start — create, a stop/start of an existing container, and a host reboot — which is exactly the "survives a container restart" requirement, and it costs one JSON key. It is declared on the Feature (a [documented Feature property](https://containers.dev/implementors/features/#lifecycle-hooks), collected alongside any the consuming `devcontainer.json` declares rather than overriding them) and runs as the `remoteUser`, which is what the registry lookup needs: the hub and its clients must agree on `$HOME`, or `~/.mempalace/server/…` names two different directories and the client concludes there is no hub. Everything that matters here — Claude Code, its plugin hooks, your shells — runs as the `remoteUser` too, so they agree; a session `su`'d to another account would not find the hub and would quietly serve its own palace copy instead.
+
+What `postStartCommand` does **not** give is restart-on-crash within a single container run. The honest mitigation is that a dead hub is not an outage: `mcp_proxy` falls back to serving the session locally and says so on the tool result itself, so the agent driving the session is told its memory backend changed shape. `mempalace-hub` can also be re-run by hand at any time. One real consequence of the lifecycle ordering is worth knowing: a failing `postCreateCommand` skips `postStartCommand` entirely, so a broken `mempalace-repair` takes the hub down with it.
+
+**`mempalace-hub` is idempotent and never fatal.** `start` (the default) probes `/healthz` — mempalace's own liveness route, and the only credential-free one — before doing anything, so running it on every container start can never produce two hubs. Then it truncates its log (nothing rotates a log inside a container, and one hub run is the only bounded unit that keeps the diagnostics), launches `mempalace serve` under `setsid` (or `nohup` on an image without util-linux) with stdin on `/dev/null` and both output streams on the log — a background child still holding the lifecycle command's pipes would keep the dev container CLI waiting on it forever — and then polls `/healthz` until it answers. It polls rather than watching a pid because `setsid` may or may not fork, so `$!` answers a different question than the one that matters.
+
+Every failure path exits 0 with a warning naming the consequence: no `mempalace` on PATH, an unwritable log, or a bind that never answers. A container with no hub is exactly the pre-#764 behaviour — degraded, not broken — and not worth failing container start over. `mempalace-hub status` reports the endpoint, and `MEMPALACE_SKIP_HUB=1` opts out; `MEMPALACE_HUB_CMD`/`_HOST`/`_PORT`/`_LOG`/`_WAIT` exist for the feature test and for debugging.
+
+**`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set in the launcher's environment rather than in `containerEnv` precisely so per-session servers keep the watchdog they were designed for.
+
+**No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount, so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log is container-local, under `/usr/local/share/personal-features/`, pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
+
 ## Additional tooling
 
 This Feature is the owner's own personal, opinionated setup, not a configurable toolkit — there are no options to turn pieces on or off. If a tool stops earning its place here, it gets removed outright rather than gated behind a flag. Everything below installs via apt or static binaries, with no dependency on the node Feature.
@@ -307,6 +340,8 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 - [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-sdk env (see [Python toolchain](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
+
+  Concurrent sessions share **one** MCP server, started from `postStartCommand` — see [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub).
 
   **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things, then asserts a fourth:
 

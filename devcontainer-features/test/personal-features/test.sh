@@ -877,6 +877,78 @@ check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash
 check "real mempalace init completes headless and writes rooms" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
 
+# --- the shared mempalace MCP hub (#764) --------------------------------------
+# mempalace hands the MCP writer lease to one process per palace, so a container
+# where every session spawns its own server has exactly one session that can
+# write and N-1 that fail at write time with -32001. The fix is one long-lived
+# `mempalace serve` per container, started from postStartCommand - which
+# `devcontainer features test` does not run, so the script is driven by hand
+# here. MEMPALACE_HUB_CMD substitutes a stub for the real binary so these assert
+# the launcher's policy, not mempalace's server. Port 8799 throughout, never the
+# 8765 default, so nothing here can collide with a real hub.
+check "mempalace-hub is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-hub"
+check "mempalace-hub passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/mempalace-hub"
+
+# Pre-created 0666 for the same reason as mempal-dir.sh: install.sh cannot know
+# which account the dev container CLI runs postStartCommand as, and the hub's
+# only diagnostics live in this file.
+check "the hub log is pre-created and writable by any uid" bash -c \
+  "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
+
+check "mempalace-hub status reports no hub when nothing is listening" bash -c \
+  "MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
+check "mempalace-hub rejects an unknown action" bash -c \
+  "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
+
+# A stub that records its argv and the environment the launcher hands it, then
+# outlives the launcher - the detach path has to be exercised, not simulated.
+_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\";"
+
+check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
+
+# The idle-exit watchdog exists for abandoned PER-SESSION servers; on the one
+# process the container shares it is a self-inflicted outage whose next repair
+# is the next container start.
+check "mempalace-hub disables the hub's idle-exit watchdog" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -qx 'idle=0' \"\$d/bin/stub.calls\""
+
+# A background child still holding the lifecycle command's pipes would keep the
+# dev container CLI waiting on it forever, so the launcher must return on its
+# own timeout even though the hub it started is still alive.
+check "mempalace-hub does not block on the hub it started" bash -c \
+  "$_HUB_STUB_SETUP s=\$(date +%s); /usr/local/bin/mempalace-hub >/dev/null 2>&1; [ \$(( \$(date +%s) - s )) -lt 20 ]"
+
+# Every failure is a warning: no hub is the pre-#764 behaviour, which is
+# degraded (one writer among N sessions), not broken.
+check "mempalace-hub exits 0 when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1"
+check "mempalace-hub warns when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
+check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
+  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub 2>/dev/null"
+check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
+  "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
+
+# The pinned mempalace must actually be able to serve a shared transport; if a
+# version bump ever drops `serve`, the whole design goes with it.
+check "the pinned mempalace ships a 'serve' subcommand" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || mempalace serve --help 2>&1 | grep -q -- '--port'"
+# What the sessions launch. Since 3.9.0 this console script is the hub-aware
+# proxy (mempalace.mcp_proxy:main), not the server - which is why no session MCP
+# config has to be rewritten for any of this to work.
+check "the mempalace-mcp console script is on PATH" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || command -v mempalace-mcp >/dev/null 2>&1"
+
+# End-to-end against the REAL binary, on an isolated HOME so the container's own
+# palace and hub are untouched: start, confirm the endpoint answers, confirm a
+# second start is a no-op rather than a second hub, then stop it via the pid in
+# mempalace's own per-palace registry record (no dependency on pkill).
+check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from
