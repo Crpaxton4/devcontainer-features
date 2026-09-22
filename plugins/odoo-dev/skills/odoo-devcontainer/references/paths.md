@@ -10,3 +10,5 @@
 | Data dir                  | `/var/lib/odoo`                              |
 | Python venv               | `/mnt/extra-addons/.venv`                    |
 | Odoo binary               | `/usr/bin/odoo`                              |
+| Language server + stubs   | `/usr/local/share/odoo-ls`                   |
+| Language server config    | `/usr/local/share/odoo-ls/odools.toml`       |

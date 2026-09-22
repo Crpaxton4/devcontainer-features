@@ -12,6 +12,7 @@
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
 - [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
 - [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
+- [The Odoo language server (odoo-ls)](#the-odoo-language-server-odoo-ls)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -319,6 +320,35 @@ Every failure path exits 0 with a warning naming the consequence: no `mempalace`
 **`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set in the launcher's environment rather than in `containerEnv` precisely so per-session servers keep the watchdog they were designed for.
 
 **No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount, so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log is container-local, under `/usr/local/share/personal-features/`, pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
+
+## The Odoo language server (odoo-ls)
+
+**Claude Code sessions get Odoo-aware diagnostics, go-to-definition, references and hover (#746).** Upstream [odoo-ls](https://github.com/odoo/odoo-ls) is the server; the Feature installs and configures it, and the `odoo-dev` plugin's `.lsp.json` is what tells Claude Code to launch it. Without it, an invalid XPath, a misspelled field name or a bad import surfaces only when `odoo-bin -i/-u` runs.
+
+**Pinned to 1.6.0 and checksum-verified — the only download here that is.** #746 named 1.4.0, which was current when the issue was written; 1.6.0 is the current non-prerelease (every 1.5.x is marked prerelease). Both assets — the per-arch `odoo-linux-<arch>-<ver>.tar.gz` and the shared `typeshed.zip` — are verified against a pinned SHA-256 before anything is published, and a partial install is never published: a server with no stubs starts, answers, and silently resolves nothing. Verification is what `fetch`'s optional third argument now does; it stays opt-in per call because the other downloads here fetch installer scripts and tarballs whose publishers re-cut assets under the same tag, where a pinned digest would break a working install on every upstream re-tag. Bumping means moving `ODOO_LS_VERSION`, both per-arch digests and the typeshed digest together.
+
+**It does not live in `/usr/local/bin`.** The server resolves its stdlib and stub roots *relative to its own binary* (`typeshed/stdlib`, `typeshed/stubs` next to `current_exe()`), so binary and the 35 MiB typeshed tree sit together in `/usr/local/share/odoo-ls` and a launcher, `odoo-ls-server`, is what goes on `PATH` — which is where Claude Code requires `command` to resolve, since it will not run a bundled binary. `--stdlib` could override the path instead; co-locating means the default is already right and one fewer flag can drift.
+
+**Two scripts, because `.lsp.json` cannot express either job.**
+
+- `odoo-ls-config` (from `postCreateCommand`) writes `/usr/local/share/odoo-ls/odools.toml` from paths that only exist once the container does: `odoo_path`, the community/enterprise/`/mnt/extra-addons` `addons_paths`, and the checkout's `.venv` interpreter as `python_path`. Same reason `resolve-mempal-dir` exists — a Feature build cannot see any of this (#485). Not an Odoo container? It writes nothing and *removes* a stale file from a previous create, because every path setting is resolved against the filesystem and a stale entry is a hard config error, which is worse than no config.
+- `odoo-ls-server` picks exactly one config source per session: a project's own `odools.toml` at or above `$CLAUDE_PROJECT_DIR` if there is one, otherwise the generated file via `--config-path`, and with neither it starts nothing at all — the plugin registers `.py` for every project, not only Odoo ones, and without an `odoo_path` the server would index a whole tree to resolve no model, no field and no xmlid. **Never both** — the server merges its sources agree-or-error for scalars, so passing both turns a legitimate per-project override of `odoo_path` or `python_path` into a config error instead of an override. The cost is that a project config has to be self-contained; the generated file is the copy-paste starting point. Task worktrees under `.worktrees/` need no entry anywhere: the server infers addon paths from the LSP workspace folder when the profile for that folder sets none, and Claude Code sends the project directory as that folder, so a session started in a worktree indexes it. Enumerating them would instead bake in paths that come and go with every task.
+
+**Facts checked against the 1.6.0 source and the running binary, not the docs.**
+
+- **stdio is the default transport.** #746 asked whether `--stdio` is needed; there is no such flag. `--use-tcp` is what switches away from stdio, and passing a flag that does not exist is a startup error.
+- **Logs never reach stdout.** The stdout log subscriber is installed only under `--parse` or `--use-tcp`; over stdio everything goes to a rolling file appender. So the wrapper is *not* needed to keep stdout clean — it is needed for config selection and for the log directory.
+- **`--logs-directory` must already exist.** The server checks the path and falls back to `<binary dir>/logs` rather than creating it, and that fallback's construction is an `.expect()` — a panic before the server ever speaks LSP. The launcher creates the directory it names, and `install.sh` pre-creates `/usr/local/share/odoo-ls/logs` mode `0777` (server logs, no secret) so the fallback can never be the thing that kills a session. `--log-level` is `warn`, not the server's own `trace`, which is megabytes an hour per session.
+- **`${workspaceFolder}` is not a thing in a plugin LSP config.** #746 flagged this as unverified; it is false. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PROJECT_DIR}` into `command`/`args`/`env`/`workspaceFolder`, and injects those three into the server's environment as well — which is how the launcher knows the project directory with no `env` block at all.
+- **JS/OWL support is off** (`disable_javascript = true`). That half of the server shells out to `tsserver`; TypeScript is not installed here, and without the flag it reports the same diagnostic on every session. Python, XML and CSV — what the plugin registers — are unaffected.
+
+**Kill switches, coarsest last**, because upstream flags the project "in development": `"diagnostics": false` in `.lsp.json` keeps navigation and stops diagnostics being pushed into context; `settings.Odoo.selectedProfile = "Disabled"` is the server's own in-protocol off switch (it logs `OdooLS is disabled. Exiting...` and indexes nothing); `ODOO_LS_DISABLE=1` stops the process starting; disabling the plugin removes the registration. `restartOnCrash` with `maxRestarts: 3` covers a server that dies on its own — both keys need Claude Code >= 2.1.205, and the pinned version here is well past that.
+
+**Every failure path exits 0.** A non-zero exit from the launcher reads to Claude Code as a crash and burns the restart budget, and "this container has no Odoo in it" is not worth that. No binary, no config, an unwritable log directory: each says why on stderr, which Claude Code captures, and starts nothing.
+
+**No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
+
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. Nothing checks the two agree — `claude plugin validate` reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252) — so renaming the launcher means editing the plugin in the same change.
 
 ## Additional tooling
 
