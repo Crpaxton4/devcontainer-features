@@ -8,7 +8,7 @@ Two contexts, and they need different things:
 | Context | What it is | Sections |
 |---|---|---|
 | **Host** | Where the repos tree, docker, and the devcontainer CLI live. Worktrees and stacks are managed from here | all |
-| **Devcontainer** | An Odoo container with the checkout bind-mounted at `/mnt/extra-addons` | 1, 4, 5, 6 |
+| **Devcontainer** | An Odoo container with the checkout bind-mounted at `/mnt/extra-addons` | 1, 4, 5, 6, 8 |
 
 Every command below names its script through `<plugin root>`. That is the plugin's
 own directory: two levels above the absolute path on the `Base directory for this
@@ -218,3 +218,36 @@ hit one shared odoo container at the same time. Confirm on live hardware:
 RAM safety rests on `stack-ensure.sh`'s `MIN_FREE_GB` eviction. Protect the
 stacks you are using with `ODOO_ACTIVE_REPOS=repoA,repoB` — omit it and an
 eviction can stop a stack someone else is testing on.
+
+## 8. Odoo language server *(devcontainer)*
+
+odoo-ls is what gives a session Odoo-aware diagnostics and go-to-definition. It
+fails quietly by design — a session with no language server looks exactly like a
+session whose code happens to have no problems — so check it rather than assume
+it. Full reference: [language-server.md](./language-server.md).
+
+```bash
+/usr/local/share/odoo-ls/odoo_ls_server --version   # the pinned version
+test -d /usr/local/share/odoo-ls/typeshed/stdlib && echo "stubs present"
+cat /usr/local/share/odoo-ls/odools.toml            # written by postCreateCommand
+```
+
+All three must answer. No `odools.toml` means `odoo-ls-config` did not run or
+found no Odoo source — rerun it by hand (`odoo-ls-config`) and read what it
+says. Missing stubs mean the server will start, answer, and resolve nothing.
+
+Then confirm the config the server will actually use, and that it parses:
+
+```bash
+odoo-ls-server --version                            # launcher resolves on PATH
+ODOO_LS_BIN=/bin/echo CLAUDE_PROJECT_DIR=/mnt/extra-addons odoo-ls-server
+```
+
+The second line prints the argv the launcher would have exec'd, and says on
+stderr which config it chose. Expect `--config-path
+/usr/local/share/odoo-ls/odools.toml` unless this checkout carries its own
+`odools.toml`, in which case it says so by name — and that file then has to be
+self-contained, because the generated one is not passed alongside it.
+
+Last, inside a live Claude Code session: `/plugin` → Errors tab. `Executable not
+found in $PATH` there means the launcher is missing, not the server.

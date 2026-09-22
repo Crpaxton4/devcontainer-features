@@ -877,6 +877,196 @@ check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash
 check "real mempalace init completes headless and writes rooms" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
 
+# --- the shared mempalace MCP hub (#764) --------------------------------------
+# mempalace hands the MCP writer lease to one process per palace, so a container
+# where every session spawns its own server has exactly one session that can
+# write and N-1 that fail at write time with -32001. The fix is one long-lived
+# `mempalace serve` per container, started from postStartCommand - which
+# `devcontainer features test` does not run, so the script is driven by hand
+# here. MEMPALACE_HUB_CMD substitutes a stub for the real binary so these assert
+# the launcher's policy, not mempalace's server. Port 8799 throughout, never the
+# 8765 default, so nothing here can collide with a real hub.
+check "mempalace-hub is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-hub"
+check "mempalace-hub passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/mempalace-hub"
+
+# Pre-created 0666 for the same reason as mempal-dir.sh: install.sh cannot know
+# which account the dev container CLI runs postStartCommand as, and the hub's
+# only diagnostics live in this file.
+check "the hub log is pre-created and writable by any uid" bash -c \
+  "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
+
+check "mempalace-hub status reports no hub when nothing is listening" bash -c \
+  "MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
+check "mempalace-hub rejects an unknown action" bash -c \
+  "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
+
+# A stub that records its argv and the environment the launcher hands it, then
+# outlives the launcher - the detach path has to be exercised, not simulated.
+_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\";"
+
+check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
+
+# The idle-exit watchdog exists for abandoned PER-SESSION servers; on the one
+# process the container shares it is a self-inflicted outage whose next repair
+# is the next container start.
+check "mempalace-hub disables the hub's idle-exit watchdog" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -qx 'idle=0' \"\$d/bin/stub.calls\""
+
+# A background child still holding the lifecycle command's pipes would keep the
+# dev container CLI waiting on it forever, so the launcher must return on its
+# own timeout even though the hub it started is still alive.
+check "mempalace-hub does not block on the hub it started" bash -c \
+  "$_HUB_STUB_SETUP s=\$(date +%s); /usr/local/bin/mempalace-hub >/dev/null 2>&1; [ \$(( \$(date +%s) - s )) -lt 20 ]"
+
+# Every failure is a warning: no hub is the pre-#764 behaviour, which is
+# degraded (one writer among N sessions), not broken.
+check "mempalace-hub exits 0 when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1"
+check "mempalace-hub warns when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
+check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
+  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub 2>/dev/null"
+check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
+  "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
+
+# The pinned mempalace must actually be able to serve a shared transport; if a
+# version bump ever drops `serve`, the whole design goes with it.
+check "the pinned mempalace ships a 'serve' subcommand" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || mempalace serve --help 2>&1 | grep -q -- '--port'"
+# What the sessions launch. Since 3.9.0 this console script is the hub-aware
+# proxy (mempalace.mcp_proxy:main), not the server - which is why no session MCP
+# config has to be rewritten for any of this to work.
+check "the mempalace-mcp console script is on PATH" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || command -v mempalace-mcp >/dev/null 2>&1"
+
+# End-to-end against the REAL binary, on an isolated HOME so the container's own
+# palace and hub are untouched: start, confirm the endpoint answers, confirm a
+# second start is a no-op rather than a second hub, then stop it via the pid in
+# mempalace's own per-palace registry record (no dependency on pkill).
+check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
+
+# --- the odoo-ls language server (#746) ---------------------------------------
+# The server is what gives a Claude Code session Odoo-aware diagnostics,
+# go-to-definition and hover. It is installed as a pinned, checksum-verified
+# GitHub release asset, so a bump that forgets a digest, or an upstream re-cut of
+# a tag, shows up here as a missing binary rather than as a container that
+# quietly has no language intelligence.
+check "the odoo-ls server binary is installed" bash -c \
+  "test -x /usr/local/share/odoo-ls/odoo_ls_server"
+# Bump this string whenever ODOO_LS_VERSION moves - same contract as the pinned
+# Claude Code version above.
+check "odoo-ls is pinned to 1.6.0" bash -c \
+  "/usr/local/share/odoo-ls/odoo_ls_server --version | grep -qF '1.6.0'"
+
+# The server resolves its stdlib/stub roots relative to its OWN binary before
+# falling back to the cwd, and without stdlib stubs it resolves nothing while
+# still starting and answering - a silent failure. So the co-location is the
+# assertion, not the download.
+check "typeshed stubs sit next to the binary, where the server looks for them" bash -c \
+  "test -d /usr/local/share/odoo-ls/typeshed/stdlib && test -d /usr/local/share/odoo-ls/typeshed/stubs"
+# With no writable log directory the rolling file appender's build is an
+# .expect(), i.e. a panic before the server ever speaks LSP. install.sh cannot
+# know which uid runs a session, so this is the guaranteed fallback.
+check "the server's fallback log directory is writable by any uid" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls/logs)\" = '777' ]"
+
+# The launcher is what the odoo-dev plugin's .lsp.json names as `command`;
+# Claude Code resolves it on PATH and refuses to run a bundled binary.
+check "odoo-ls-server is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/odoo-ls-server"
+check "odoo-ls-server passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/odoo-ls-server"
+check "odoo-ls-config is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/odoo-ls-config"
+check "odoo-ls-config passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/odoo-ls-config"
+
+# stdio is the server's DEFAULT transport and --use-tcp is what switches away
+# from it; there is no --stdio flag to pass and passing one is a startup error.
+# #746 asked the question, so guard the answer. Comment lines are stripped
+# first: the launcher explains both flags in prose right where it declines to
+# pass them, and a grep that could not tell the two apart would fail on the
+# explanation rather than on the code.
+check "the launcher passes no --stdio flag (stdio is the default transport)" bash -c \
+  "! grep -v '^[[:space:]]*#' /usr/local/bin/odoo-ls-server | grep -qF -- '--stdio'"
+check "the launcher never switches the server to TCP" bash -c \
+  "! grep -v '^[[:space:]]*#' /usr/local/bin/odoo-ls-server | grep -qF -- '--use-tcp'"
+
+# ODOO_LS_DISABLE is the kill switch that needs no Claude Code restart policy
+# behind it. It must start nothing and still exit 0: a non-zero exit reads to
+# Claude Code as a crash and burns the restart budget.
+check "ODOO_LS_DISABLE starts nothing and exits 0" bash -c \
+  "[ -z \"\$(ODOO_LS_DISABLE=1 ODOO_LS_BIN=/bin/echo /usr/local/bin/odoo-ls-server 2>/dev/null)\" ]"
+check "a missing server binary exits 0 with a warning rather than crash-looping" bash -c \
+  "ODOO_LS_BIN=/definitely/not/here /usr/local/bin/odoo-ls-server 2>&1 >/dev/null | grep -q 'no Odoo language intelligence'"
+
+# The generated container-wide config and a project's own odools.toml are never
+# both in play: the server merges its sources agree-or-error for scalars, so
+# passing both would turn a legitimate per-project override of odoo_path or
+# python_path into a config error. ODOO_LS_BIN=/bin/echo makes the launcher
+# print the argv it would have exec'd.
+_OLS_FAKE="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/proj/sub\"; printf '[[config]]\nname = \"default\"\n' > \"\$d/gen.toml\";"
+check "the generated config is passed when the project has none" bash -c \
+  "$_OLS_FAKE ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -qF -- \"--config-path \$d/gen.toml\""
+check "a project's own odools.toml suppresses the generated one" bash -c \
+  "$_OLS_FAKE touch \"\$d/proj/odools.toml\"; ! ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj/sub\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -q -- '--config-path'"
+# The launcher PREPENDS its own flags so a caller's arguments stay last and win -
+# both the .lsp.json `args` list and the hand-run `odoo-ls-server --version` the
+# post-rebuild checklist tells people to use. A config has to be in play for the
+# launcher to exec anything at all (see below), and postCreateCommand does not
+# run under `devcontainer features test`, so point it at a throwaway one.
+check "the launcher passes the caller's own arguments through, last" bash -c \
+  "$_OLS_FAKE ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" odoo-ls-server --version | grep -qF '1.6.0'"
+# The plugin registers .py for every project, not only Odoo ones. With no config
+# anywhere the server would index a whole tree to answer nothing, because
+# without odoo_path it resolves no model, no field and no xmlid - so start
+# nothing, and still exit 0 rather than burn the restart budget.
+check "no config anywhere starts nothing and exits 0" bash -c \
+  "$_OLS_FAKE [ -z \"\$(ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/absent.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null)\" ]"
+check "the launcher creates the log directory it names (the server will not)" bash -c \
+  "$_OLS_FAKE ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" ODOO_LS_LOGS_DIR=\"\$d/logs\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server >/dev/null 2>&1; test -d \"\$d/logs\""
+# A log directory the server cannot write to is a PANIC before it speaks LSP
+# (exit 101), and the default path is shared across accounts, so one session run
+# as root can leave one the next session cannot write. The flag has to be
+# dropped, not passed, so the 0777 fallback next to the binary takes over.
+# Skipped under a root remote user, for whom nothing is unwritable.
+check "an unwritable log directory drops the flag instead of panicking the server" bash -c \
+  "[ \"\$(id -u)\" = '0' ] || { $_OLS_FAKE mkdir -p \"\$d/ro\"; chmod 0555 \"\$d/ro\"; ! ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" ODOO_LS_LOGS_DIR=\"\$d/ro\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -q -- '--logs-directory'; }"
+
+# odoo-ls-config derives the config from paths that only exist once the
+# container does, and must never fail container creation.
+_OLS_TREE="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/odoo/addons\" \"\$d/ent\" \"\$d/ws\";"
+check "odoo-ls-config writes nothing when the container has no Odoo source" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/absent\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+# A stale config outlives the container it described; every path setting is
+# resolved against the filesystem, so a stale entry is a hard config error -
+# worse than no config at all.
+check "odoo-ls-config removes a stale config when the Odoo source is gone" bash -c \
+  "$_OLS_TREE touch \"\$d/out.toml\"; ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/absent\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+check "odoo-ls-config writes odoo_path and every addons path it can see" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/ent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"odoo_path = \\\"\$d/odoo\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/odoo/addons\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/ent\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/ws\\\"\" \"\$d/out.toml\""
+# An addons path that does not exist is a hard config error at server startup,
+# so a directory that is absent must simply not be named.
+check "odoo-ls-config omits an enterprise directory that is not there" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && ! grep -qF 'absent' \"\$d/out.toml\""
+# The JS half of the server shells out to tsserver and reports a diagnostic on
+# every session when it is missing; typescript is not installed here.
+check "odoo-ls-config turns off the server's JS half (no tsserver in this image)" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF 'disable_javascript = true' \"\$d/out.toml\""
+check "ODOO_LS_SKIP_CONFIG opts out entirely" bash -c \
+  "$_OLS_TREE ODOO_LS_SKIP_CONFIG=1 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+
+# End-to-end against the REAL server: the config odoo-ls-config generates has to
+# be one the server actually accepts. A rejected key or an unresolvable path is
+# reported over LSP, not on exit status, so drive it in --parse mode instead -
+# that is the one mode where the server reports on stdout and then stops.
+check "the real server accepts a generated config in --parse mode" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null; cd \"\$d\" && /usr/local/share/odoo-ls/odoo_ls_server --parse --tracked-folders \"\$d/ws\" --config-path \"\$d/out.toml\" --output \"\$d/parse.json\" --logs-directory \"\$d\" >/dev/null 2>&1; test -f \"\$d/parse.json\""
+
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,
 # gh's hosts.yml) live in a world-readable dir. The mode comes from
