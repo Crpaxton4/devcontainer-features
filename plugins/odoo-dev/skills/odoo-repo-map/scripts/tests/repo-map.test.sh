@@ -472,5 +472,56 @@ if command -v git >/dev/null 2>&1; then
   out="$(resolve_in "$NO_TREE" Pi)"; check_contains "map-remote-beats-sniff" '"remote":"other/override"' "$out"
 fi
 
+# --- the scratch file a write lands through --------------------------------------
+# Every mutation writes a scratch file, validates it, and renames it onto the map.
+# Two things about that file were once wrong and are asserted here: it must never
+# survive the run, and its path must not be the one fixed name every concurrent
+# writer would also be holding.
+no_scratch() { [ -z "$(find "$TMP" -maxdepth 1 -name 'map.json.tmp*')" ]; }
+
+seed
+map set-flow Beta ":task,staging,prod" >/dev/null; check "scratch-write-ok" 0 $?
+no_scratch; check "scratch-gone-after-success" 0 $?
+
+# `set -euo pipefail` aborts commit_tmp at the failed validation, before the
+# rename — so without a trap the rejected map is left sitting beside the live one,
+# and the next run of the same subcommand inherits a stale file at that path.
+seed
+map set-flow Alpha ":task,nowhere" >/dev/null 2>&1; check "scratch-rejected-write" 4 $?
+no_scratch; check "scratch-gone-after-rejection" 0 $?
+
+# Here the failure is earlier still: node exits 3 before writing anything, so the
+# scratch file is empty at the point the run dies. Empty or not, it is a file.
+seed
+map set Nope --remote x >/dev/null 2>&1; check "scratch-unmapped-exit" 3 $?
+no_scratch; check "scratch-gone-after-unmapped" 0 $?
+
+# A fixed "$MAP.tmp" is a name a second writer holds too. Occupying that exact
+# path with a directory is the deterministic proof it is no longer used: a writer
+# that still wrote there would die on EISDIR instead of committing.
+seed
+rm -f "$TMP/map.json.tmp"   # nothing should be there; a leak would hide this case
+mkdir -p "$TMP/map.json.tmp"
+out="$(map set-flow Beta ":task,staging,prod")"; check "scratch-path-not-fixed" 0 $?
+check_contains "scratch-path-not-fixed-write" '"branch_flow":[":task","staging","prod"]' "$out"
+rmdir "$TMP/map.json.tmp"
+
+# Concurrent writers are deliberately not serialised: the last rename wins and the
+# losing update is gone, which the script header now says outright. What must not
+# happen is what one shared scratch path caused — a writer validating or renaming
+# a file another writer had already replaced, so an invocation fails outright or
+# the live map ends up being neither writer's JSON.
+seed
+pids=""
+for n in 1 2 3 4 5 6; do
+  map set Alpha --notes "writer $n" >/dev/null 2>&1 &
+  pids="$pids $!"
+done
+racers=0
+for p in $pids; do wait "$p" || racers=$((racers+1)); done
+check "concurrent-writers-all-exit-0" 0 "$racers"
+map validate >/dev/null 2>&1; check "concurrent-map-still-validates" 0 $?
+no_scratch; check "concurrent-no-scratch-left" 0 $?
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
