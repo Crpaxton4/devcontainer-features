@@ -327,19 +327,38 @@ MCP_TEST_ROOT="$(mktemp -d)"
 MCP_STUB_BIN="$MCP_TEST_ROOT/bin"
 MCP_CONFIG="$MCP_TEST_ROOT/claude-home"
 mkdir -p "$MCP_STUB_BIN" \
-  "$MCP_CONFIG/skills/odoo-quote" \
+  "$MCP_CONFIG/skills/discovery-notes" \
   "$MCP_CONFIG/skills/fibonacci-estimate" \
+  "$MCP_CONFIG/skills/odoo-design-doc" \
+  "$MCP_CONFIG/skills/odoo-quote" \
   "$MCP_CONFIG/skills/client-status-report" \
   "$MCP_CONFIG/skills/my-own-skill" \
+  "$MCP_CONFIG/skills/lint" \
+  "$MCP_CONFIG/skills/query" \
   "$MCP_CONFIG/skills/odoo-code-review"
-# Three of the six names the retired sync used to seed, a DECOY user-authored
-# skill that must survive, and a named dir with NO SKILL.md - which is not a
-# skill by check-stray-skills.sh's definition and so must survive too.
-printf 'stale loose odoo-quote\n'               > "$MCP_CONFIG/skills/odoo-quote/SKILL.md"
+# EVERY name the retired sync used to seed is represented (#778): the five that
+# moved into the plugin plus the retired client-status-report. The fixture used
+# to seed only three of the six, so the list it covered was never the list the
+# cleanup deletes.
+#
+# Four of the five plugin-shadowed names carry a SKILL.md and must go; the
+# fifth, odoo-code-review, is the named dir with NO SKILL.md - not a skill by
+# check-stray-skills.sh's definition, so it must survive even though its name is
+# on the list.
+printf 'stale loose discovery-notes\n'          > "$MCP_CONFIG/skills/discovery-notes/SKILL.md"
 printf 'stale loose fibonacci-estimate\n'       > "$MCP_CONFIG/skills/fibonacci-estimate/SKILL.md"
+printf 'stale loose odoo-design-doc\n'          > "$MCP_CONFIG/skills/odoo-design-doc/SKILL.md"
+printf 'stale loose odoo-quote\n'               > "$MCP_CONFIG/skills/odoo-quote/SKILL.md"
 printf 'stale loose client-status-report\n'     > "$MCP_CONFIG/skills/client-status-report/SKILL.md"
-printf 'my hand-written skill - do not touch\n' > "$MCP_CONFIG/skills/my-own-skill/SKILL.md"
 printf 'loose notes, no SKILL.md\n'             > "$MCP_CONFIG/skills/odoo-code-review/notes.txt"
+# DECOYS that must survive: an obviously user-authored skill, plus two of the
+# personal Second Brain skills that sit beside the strays on a real machine.
+# The feature never seeded lint or query and deliberately claims neither, so a
+# future edit that widens the delete list to "everything that looked stale on
+# that machine" fails here rather than eating the user's own work.
+printf 'my hand-written skill - do not touch\n' > "$MCP_CONFIG/skills/my-own-skill/SKILL.md"
+printf 'personal lint skill - do not touch\n'   > "$MCP_CONFIG/skills/lint/SKILL.md"
+printf 'personal query skill - do not touch\n'  > "$MCP_CONFIG/skills/query/SKILL.md"
 
 # Succeeds at everything and records what it was asked to do. Printing NOTHING
 # for `plugin list` is what drives the install branch: the idempotency guard
@@ -363,7 +382,14 @@ check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features mar
 # pre-migration containers outlive the image that wrote them and shadow their
 # odoo-dev twins. With the plugin in place they are deleted.
 check "sync-claude-mcp removes the stale loose skill copies the plugin now ships" bash -c \
-  "! test -e \"$MCP_CONFIG/skills/odoo-quote\" && ! test -e \"$MCP_CONFIG/skills/fibonacci-estimate\" && ! test -e \"$MCP_CONFIG/skills/client-status-report\""
+  "! test -e \"$MCP_CONFIG/skills/discovery-notes\" && ! test -e \"$MCP_CONFIG/skills/fibonacci-estimate\" && ! test -e \"$MCP_CONFIG/skills/odoo-design-doc\" && ! test -e \"$MCP_CONFIG/skills/odoo-quote\""
+
+# client-status-report has no plugin twin - it was retired outright (#700) - but
+# it is still feature-seeded debris and still goes. It is the name
+# check-stray-skills.sh was missing until #778 while this loop already deleted
+# it; both lists now carry it.
+check "sync-claude-mcp removes the retired loose skill that has no plugin twin" bash -c \
+  "! test -e \"$MCP_CONFIG/skills/client-status-report\""
 
 # ...and nothing else. The name list is literal and the SKILL.md test is the
 # same "stray" definition check-stray-skills.sh uses.
@@ -371,6 +397,11 @@ check "sync-claude-mcp leaves a user-authored skill untouched" bash -c \
   "grep -q 'do not touch' \"$MCP_CONFIG/skills/my-own-skill/SKILL.md\""
 check "sync-claude-mcp leaves a named dir carrying no SKILL.md alone" bash -c \
   "test -f \"$MCP_CONFIG/skills/odoo-code-review/notes.txt\""
+# The five personal Second Brain skills (ingest, lint, llm-wiki-workspace,
+# process, query) are the user's, not this feature's, and are on neither list by
+# design (#778). Two of them stand in for all five here.
+check "sync-claude-mcp leaves the user's own personal skills untouched" bash -c \
+  "grep -q 'do not touch' \"$MCP_CONFIG/skills/lint/SKILL.md\" && grep -q 'do not touch' \"$MCP_CONFIG/skills/query/SKILL.md\""
 
 # A container that could not reach the marketplace must keep whatever skills it
 # has: deleting the loose copy there would leave the machine with neither copy.

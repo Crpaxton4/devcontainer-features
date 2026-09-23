@@ -49,8 +49,11 @@ One step per skill; no orchestrator. Route from here.
 | `odoo-dev:principles` | Engineering principles for design decisions | Any code generation or review |
 | `odoo-dev:odoo-dev-map` | This router | Work spans more than one step |
 
-Outside this plugin: `ingest`, `process`, `query` and `lint` are personal Second
-Brain skills and are not part of any Odoo workflow.
+Outside this plugin: `ingest`, `process`, `query`, `lint` and
+`llm-wiki-workspace` are personal Second Brain skills and are not part of any
+Odoo workflow. They are the user's own, not the devcontainer feature's, so
+`check-stray-skills.sh` never reports them and the feature's cleanup never
+deletes them (#778).
 
 ## Agent Map
 

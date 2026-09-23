@@ -16,6 +16,15 @@ on:
       - 'devcontainer-features/src/personal-features/devcontainer-feature.json'
       - 'setup.sh'
       - 'setup.ps1'
+      # test_stray_skill_parity.py gates the stale-skill name lists against one
+      # another (#778): the list install.sh deletes, the list
+      # check-stray-skills.sh reports, and the packaged names both derive from.
+      # Editing any one of them alone is exactly the drift it catches, so each
+      # has to be able to trigger this job on its own.
+      - 'devcontainer-features/src/personal-features/install.sh'
+      - 'plugins/odoo-dev/scripts/check-stray-skills.sh'
+      - 'plugins/odoo-dev/scripts/check-skill-parity.sh'
+      - 'libraries/odoo_sdk/src/odoo_sdk/skills/__init__.py'
   workflow_dispatch:
 
 jobs:
