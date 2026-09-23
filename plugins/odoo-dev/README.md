@@ -759,10 +759,39 @@ Commit titles on every PR. A non-conventional title would cut no release.
 
 ### Trigger accuracy
 
-[`evals/`](evals/) holds 20 cases — 10 that should fire a specific skill and 10
+[`evals/`](evals/) holds 22 cases — 12 that should fire a specific skill and 10
 near-misses that share a trigger word but are out of domain ("upgrade the npm
 dependencies", "quote this sentence as a blockquote"), split train/validation. They
 catch descriptions cannibalizing each other before real work does.
+
+Two of the should-fire cases are phrased the way the request actually arrives
+("push it up and let the client see it") rather than in the skill's own canonical
+wording, and they carry a second grader asserting the prohibited command never ran:
+
+```yaml
+graders:
+  - type: tool_used
+    name: no-bare-gh-pr-create
+    tool: Bash
+    input_match: "gh pr create"
+    max: 0
+```
+
+Without it, "the model opened the PR by hand" and "the model did nothing" are the
+same signal — and only the first is a bypass of the standard `odoo-dev:odoo-pr` owns.
+
+A grader's `tool:` picks the namespace its `input_match` is read against, and
+`validate.sh` checks it there:
+
+| `tool:` | `input_match:` must be | checked against |
+|---|---|---|
+| `Skill` | a bundled skill name, bare or `odoo-dev:`-prefixed, or the plain plugin name `odoo-dev` for a whole-namespace assertion | [`skills/`](skills/) |
+| `Task` | a bundled agent name, bare or `odoo-dev:`-prefixed | [`agents/`](agents/) |
+| anything else (`Bash`, …) | a literal command substring, in no namespace | nothing — but it may not *be* a bundled skill or agent name, which only ever means the `tool:` is wrong |
+
+Every grader in a case is read, not just the first, so grader order is free. A
+should-fire case still has to assert `min: 1` on a `Skill` or `Task` grader; a
+near-miss still has to assert `max: 0`.
 
 ```bash
 claude plugin eval odoo-dev@devcontainer-features --ablation with-without
