@@ -99,6 +99,113 @@ check "wrapper leaves 'claude mcp' un-flagged" bash -c \
 check "wrapper leaves a bare prompt argument un-flagged" bash -c \
   "$SPA_RUN 'summarise this' </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\""
 
+# --- #807: the wrapper is published into the bind mount, beside the rules -----
+# The prompt file lives in the mount and is always current; the wrapper reading
+# it lived only in the image and was current only until the next edit, so an
+# older image silently passed no flag at all. The wrapper now prefers a copy
+# published into $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper at
+# container-create time, which is reachable from both ends of the mount.
+check "wrapper looks for a published copy in the bind-mounted config dir" bash -c \
+  "grep -qF -- '\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features/claude-wrapper' \"\$(command -v claude)\""
+check "wrapper execs the published copy when one is there" bash -c \
+  "grep -qF -- 'exec \"\$SHARED_WRAPPER\" \"\$@\"' \"\$(command -v claude)\""
+# Re-entry is ruled out by comparing \$0 against the shared path, NOT by an
+# environment flag - a flag would leak into the session and make a nested
+# `claude` skip the shared copy.
+check "wrapper guards re-entry on \$0, not on an environment flag" bash -c \
+  "grep -qF -- '[ \"\$0\" != \"\$SHARED_WRAPPER\" ]' \"\$(command -v claude)\""
+# The real binary's path carries this image's Node version, so it cannot travel
+# with the published copy; the on-PATH stub hands its own over instead.
+check "wrapper hands the real binary to the published copy via CLAUDE_REAL_BIN" bash -c \
+  "grep -qF -- 'export CLAUDE_REAL_BIN' \"\$(command -v claude)\" && grep -qF -- 'CLAUDE_REAL_BIN:-' \"\$(command -v claude)\""
+
+# install.sh writes the wrapper to a stable image path FIRST and installs onto
+# PATH from there, so publish-claude-wrapper has a source outside the mount to
+# copy - exactly as /usr/local/bin/claude-event-hook is the source for the hook
+# sync. The two must be the same bytes or the published copy is not the wrapper.
+check "the wrapper source exists in the image outside the bind mount" bash -c \
+  "test -x /usr/local/share/personal-features/claude-wrapper"
+check "the wrapper source is byte-identical to the claude on PATH" bash -c \
+  "cmp -s /usr/local/share/personal-features/claude-wrapper \"\$(command -v claude)\""
+
+# Functional half: with a published copy in place the stub must exec it and pass
+# its own REAL through, rather than running its own baked logic.
+mkdir -p "$SPA_CONFIG/personal-features"
+cat > "$SPA_CONFIG/personal-features/claude-wrapper" <<'SHARED'
+#!/bin/sh
+printf 'argv=%s real=%s\n' "$*" "${CLAUDE_REAL_BIN:-unset}" > "$CLAUDE_CONFIG_DIR/shared.out"
+exit 0
+SHARED
+chmod +x "$SPA_CONFIG/personal-features/claude-wrapper"
+
+check "wrapper delegates to the published copy, args intact" bash -c \
+  "$SPA_RUN -c </dev/null && grep -qF -- 'argv=-c' \"$SPA_CONFIG/shared.out\""
+check "wrapper passes its own real binary to the published copy" bash -c \
+  "grep -qF -- 'real=$SPA_ROOT/real-claude' \"$SPA_CONFIG/shared.out\""
+# The published copy is the SAME script, reached with \$0 equal to the shared
+# path, so it must fall through to the delivery logic instead of re-execing
+# itself forever. Exercise that directly.
+cp "$SPA_ROOT/claude" "$SPA_CONFIG/personal-features/claude-wrapper"
+chmod +x "$SPA_CONFIG/personal-features/claude-wrapper"
+check "the published copy does not re-exec itself (no delegation loop)" bash -c \
+  "$SPA_RUN -c </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md -c' \"$SPA_ARGV\""
+rm -rf "$SPA_CONFIG/personal-features"
+
+# --- publish-claude-wrapper: the runtime publisher + the flag audit (#807) ----
+check "publish-claude-wrapper is installed and executable" bash -c \
+  "test -x /usr/local/bin/publish-claude-wrapper"
+check "publish-claude-wrapper passes shell syntax check" bash -c \
+  "bash -n /usr/local/bin/publish-claude-wrapper"
+
+PCW_ROOT="$(mktemp -d)"
+PCW_A="$PCW_ROOT/config-a"
+mkdir -p "$PCW_A"
+check "publish-claude-wrapper publishes the wrapper into the config dir" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$PCW_A\" /usr/local/bin/publish-claude-wrapper && test -x \"$PCW_A/personal-features/claude-wrapper\""
+check "the published wrapper is byte-identical to the image's source" bash -c \
+  "cmp -s /usr/local/share/personal-features/claude-wrapper \"$PCW_A/personal-features/claude-wrapper\""
+# Refreshed on every container create, like the #803 hook shim: a re-run must
+# converge rather than accumulate, and must overwrite a stale copy.
+printf 'stale\n' > "$PCW_A/personal-features/claude-wrapper"
+check "publish-claude-wrapper refreshes a stale published copy" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$PCW_A\" /usr/local/bin/publish-claude-wrapper && cmp -s /usr/local/share/personal-features/claude-wrapper \"$PCW_A/personal-features/claude-wrapper\""
+check "publish-claude-wrapper leaves no temp files behind" bash -c \
+  "[ \"\$(find \"$PCW_A/personal-features\" -type f | wc -l)\" = '1' ]"
+# No config dir means no shared directory to publish into: skip, never fail -
+# a nonzero exit here would break the postCreateCommand chain behind it.
+check "publish-claude-wrapper skips cleanly with CLAUDE_CONFIG_DIR unset" bash -c \
+  "env -u CLAUDE_CONFIG_DIR /usr/local/bin/publish-claude-wrapper"
+check "publish-claude-wrapper exits 0 when its source is missing" bash -c \
+  "PERSONAL_FEATURES_CLAUDE_WRAPPER_SRC=\"$PCW_ROOT/absent-wrapper\" CLAUDE_CONFIG_DIR=\"$PCW_ROOT/config-b\" /usr/local/bin/publish-claude-wrapper"
+
+# The audit: one grep against the file `claude` resolves to. Drive it with a fake
+# `claude` first on PATH that carries no flag - the exact shape of the pre-#740
+# image this issue was raised from - and assert it is reported, loudly, and that
+# the run still exits 0.
+PCW_FAKE="$PCW_ROOT/fakebin"
+mkdir -p "$PCW_FAKE"
+cat > "$PCW_FAKE/claude" <<'FAKECLAUDE'
+#!/bin/sh
+exit 0
+FAKECLAUDE
+chmod +x "$PCW_FAKE/claude"
+PCW_C="$PCW_ROOT/config-c"
+mkdir -p "$PCW_C"
+printf 'a standing rule\n' > "$PCW_C/system-prompt-append.md"
+check "publish-claude-wrapper reports a wrapper that delivers no prompt file" bash -c \
+  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
+check "publish-claude-wrapper still exits 0 when it reports one" bash -c \
+  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper >/dev/null 2>&1"
+# ...and says nothing about the real wrapper, which does pass the flag.
+check "publish-claude-wrapper is quiet about a wrapper that does deliver it" bash -c \
+  "! CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
+
+# The staleness half is NOT a second breadcrumb: the wrapper is fingerprinted by
+# the #806 provision marker, so an image older than one this config dir has
+# already seen announces itself through that one file.
+check "the #806 provision marker fingerprints the claude wrapper (#807)" bash -c \
+  "grep -qF -- '/usr/local/share/personal-features/claude-wrapper' /usr/local/bin/sync-claude-mcp"
+
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
 check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
