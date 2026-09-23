@@ -16,14 +16,29 @@ module reaps every stale run through that SAME path, so a reaped run is excluded
 from billing exactly like a manually-aborted one.
 
 **"Last activity" definition.** A run's last activity is the most recent of (a)
-the latest event attributed to its task id and (b) its own ``started_at`` (the
-fallback when the task has no events yet). A run is stale when its last activity
-predates the threshold. This is deliberately activity-aware rather than the
-cheaper ``started_at``-only flag :func:`discover_runs` renders as an operator
-hint: a run still receiving genuine hook events is never reaped just for being
-old, and once a run crosses the threshold the attachment exclusion below freezes
-its activity so it stays reapable (idempotent — a second reap of the same state
-is a no-op because the first left every stale run ``STOPPED``).
+the latest event attributed to its task id *independently of this run being
+active* and (b) its own ``started_at`` (the fallback when the task has no such
+events yet). A run is stale when its last activity predates the threshold. This
+is deliberately activity-aware rather than the cheaper ``started_at``-only flag
+:func:`discover_runs` renders as an operator hint: a run still receiving genuine
+work is never reaped just for being old (idempotent — a second reap of the same
+state is a no-op because the first left every stale run ``STOPPED``).
+
+**Why "independently" (#779).** The clock used to count EVERY event carrying the
+task id, including the ones ``log-event --attach-active-run`` attached *because
+this run was active*. That made the liveness signal self-referential: every hook
+event in the container refreshed exactly the timestamp the reaper reads, so a
+forgotten-but-live run never crossed the threshold and kept tagging every session
+indefinitely. The threshold was only reachable once the whole container went
+quiet for 12h — the dead-devcontainer case, not the live one. The clock therefore
+reads :meth:`~odoo_sdk.state.LocalStateClient.latest_unattached_event_timestamp_for_task`,
+which ignores an event for the tasks it names ONLY by attachment. What still
+counts as evidence a run is alive: an explicitly-attributed event (``--task-id``,
+an MCP tool call carrying ``task_id``), an event whose ``<task-id>-<slug>``
+session branch names the task, and the ingested ``commit``/``chatter`` events the
+resync pullers attribute from the commit subject and the Odoo message they were
+posted on — each of which names the task for a reason other than the run's own
+existence.
 
 **Interaction with resumable STOPPED runs (#504).** The reaper only ever touches
 ACTIVE (``RUNNING``/``AWAITING_ANSWERS``) runs, so it never disturbs a run a user
@@ -80,9 +95,14 @@ def resolve_env_threshold_hours() -> float:
 
 
 def run_last_activity(db: LocalStateClient, run: TaskRun) -> datetime:
-    """Return a run's last-activity instant (see this module's docstring)."""
+    """Return a run's last-activity instant (see this module's docstring).
+
+    Reads the ATTACHMENT-INDEPENDENT event clock (#779): an event that carries
+    this task id only because this run was active is not evidence the run is
+    alive, so counting it would make the staleness test circular.
+    """
     started = as_utc(run.started_at)
-    latest = db.latest_event_timestamp_for_task(run.task_id)
+    latest = db.latest_unattached_event_timestamp_for_task(run.task_id)
     if latest is None:
         return started
     return max(as_utc(latest), started)

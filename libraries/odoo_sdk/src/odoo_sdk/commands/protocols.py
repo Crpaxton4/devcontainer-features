@@ -143,6 +143,10 @@ class StateStore(Protocol):
 
     def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]: ...
 
+    def latest_unattached_event_timestamp_for_task(
+        self, task_id: int
+    ) -> Optional[datetime]: ...
+
     def get_task_events(
         self,
         task_id: str,
