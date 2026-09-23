@@ -35,8 +35,10 @@ from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.adapters.state_persistence import _CLAUDE_SOURCE_PREFIX
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE, tracker_db_path
+from odoo_sdk.state.summary import _CWD_KEY, _PROMPT_KEY, summarize_session_context
 from tests.support import provision_schema
 
 # Repo root is four parents up from tests/test_cli/<this file> (mirrors the path
@@ -112,6 +114,27 @@ class TestShimPinnedFlags(unittest.TestCase):
         # #575: the hook event type must ride in the payload (it has no column),
         # keyed on hook_event_name.
         self.assertIn("hook_event_name", _shim_text())
+
+    def test_shim_payload_keys_match_the_billing_summariser(self) -> None:
+        # #710 is a two-sided string contract like the ``claude:`` prefix above:
+        # the shim WRITES the session context into the payload and
+        # ``summarize_session_context`` READS it back to name the timesheet row.
+        # Renaming either side silently returns hook-only sessions to the bare
+        # ``[/] session <task>|<event>`` name, with every test still green.
+        text = _shim_text()
+        self.assertIn(_PROMPT_KEY, text)
+        self.assertIn(_CWD_KEY, text)
+
+    def test_shim_records_the_transcript_path(self) -> None:
+        # #710: the path (not the transcript text) is captured, so a later
+        # summariser can read ~/.claude/projects/<dashed-cwd>/<session>.jsonl
+        # without this hot hook path copying transcript content into every row.
+        self.assertIn("transcript_path", _shim_text())
+
+    def test_shim_caps_the_captured_prompt(self) -> None:
+        # The prompt is truncated at the point of CAPTURE, so no pasted document
+        # or stack trace can reach the events table however long it is.
+        self.assertIn("[0:200]", _shim_text())
 
     def test_cli_accepts_the_exact_flags_the_shim_emits(self) -> None:
         parser = cli._build_parser()
@@ -192,8 +215,17 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         self.assertEqual(event.subject, "Bash")
         # --attach-active-run must have attached BOTH active runs' task ids.
         self.assertEqual(sorted(event.task_ids), ["101", "202"])
-        # --payload must have persisted verbatim.
-        self.assertEqual(event.payload, {"session_id": "s-1", "tool_name": "Bash"})
+        # --payload must have persisted verbatim, alongside the attachment-only
+        # provenance the command records for the ids rule 2 alone attributed
+        # (#779) — the marker is additive and never rewrites a caller's keys.
+        self.assertEqual(
+            event.payload,
+            {
+                "session_id": "s-1",
+                "tool_name": "Bash",
+                ATTACHED_TASK_IDS_PAYLOAD_KEY: event.task_ids,
+            },
+        )
 
         # The persisted row must satisfy the billing predicate — this is what
         # makes a hook event sessionize/bill. A prefix drift would persist a row
@@ -206,6 +238,25 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(count, 1)
+
+    def test_captured_prompt_names_the_session_end_to_end(self) -> None:
+        # #710 across the whole vector: the shim's payload goes through the real
+        # CLI into the real events table, and the billing summariser reads it
+        # back as the session's narrative. Before this a hook-only session had
+        # nothing but its tool tally to be named by.
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        self._run_shim_argv(
+            "",
+            '{"session_id": "s-1", "hook_event_name": "UserPromptSubmit", '
+            '"cwd": "/workspaces/acme", '
+            '"prompt": "Add a VAT column to the invoice report"}',
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(
+            summarize_session_context(events),
+            "prompt: Add a VAT column to the invoice report",
+        )
 
     def test_stated_branch_recovers_task_without_an_active_run(self) -> None:
         # #574 end to end: with no active run, the shim's --branch lets the CLI

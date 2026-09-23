@@ -8,6 +8,17 @@
 # Chain: git log <to>..<from> gives the commits that <to> does not have; the
 # GitHub commits/{sha}/pulls API is then asked which PRs touch each commit.
 #
+# <from> and <to> are BRANCH NAMES and they never reach a URL: they are resolved
+# against git refs here, and the only value this script puts in an API path is a
+# 40-hex sha out of `git rev-list` (and a PR number). That is deliberate, not
+# incidental. A branch name interpolated into `repos/<slug>/branches/<branch>`
+# returns 404 for a branch that exists as soon as the name contains '#', because
+# '#' opens a URL fragment — and '<task id>#<slug>' is the convention humans push
+# here, so such a branch is a live branch_flow element (issue #762). Anything
+# added below that does need a ref inside a path must go through
+# gh_path_segment() in <plugin root>/scripts/_gh-url.sh, or gh_branch_exists()
+# when only existence is in question.
+#
 # That API does NOT return only "the PR that introduced this commit". It returns
 # every PR whose head branch contains the sha, including OPEN ones that merely
 # branched off the same history. Unfiltered it reports work that is not shipping:

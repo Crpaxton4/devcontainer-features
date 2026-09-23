@@ -1,6 +1,6 @@
 # odoo-dev
 
-Odoo consulting and delivery, packaged as one Claude Code plugin: 15 skills, 5
+Odoo consulting and delivery, packaged as one Claude Code plugin: 16 skills, 5
 subagents, 5 slash commands, and a fail-closed evidence gate.
 
 The plugin lives at `plugins/odoo-dev/` in the
@@ -47,6 +47,7 @@ One step per skill, no orchestrator. Run one, several, or all.
 | Skill | Does | Use when |
 |---|---|---|
 | [`odoo-devcontainer`](skills/odoo-devcontainer/SKILL.md) | Devcontainer env map, CLI, paths, and ORM/frontend/testing references | Always, inside an Odoo devcontainer |
+| [`odoo-populate-db`](skills/odoo-populate-db/SKILL.md) | Seed a local database from a named model profile; resolved order up front, and a non-zero exit where `odoo populate` swallows the exception and returns 0 | Building a dev or benchmark database; a populate run that reported success with most models empty |
 | [`odoo-upgrade`](skills/odoo-upgrade/SKILL.md) | Port modules 16 → 17 → 18 → 19; full lifecycle SOP; Studio inventory | "upgrade this module", "what breaks?", upgrade estimate or plan |
 | [`principles`](skills/principles/SKILL.md) | Engineering principles for design decisions | Any code generation or review |
 | [`odoo-dev-map`](skills/odoo-dev-map/SKILL.md) | **The router.** Skill map, agent map, workflows, spawn-prompt template, gate rules | Work spans more than one step, or you need to know who owns it |
@@ -278,15 +279,21 @@ Three properties follow from that mechanism and are worth keeping:
   not whether it is a task id, so `/odoo-dev:pr Create a release PR from UAT to
   main` came back as a raw `ls: cannot access '.../tasks/Create'`, and the `mkdir -p`
   commands failed the other way by silently creating an artifacts directory named
-  after a word of prose. Every injection in `commands/` now validates the id as
-  numeric, reaches `mkdir -p` only once it has, and ends in a fail-soft tail that
-  emits a marker such as `NO ARTIFACTS DIRECTORY` and exits 0. Each command body
-  says what the dispatched agent must do when it reads a marker instead of a path:
-  stop, and give the person the form the command takes. `/odoo-dev:test` and
-  `/odoo-dev:pr` still resolve their task directory with `ls -d` rather than
-  creating it. Gate 18 in [`validate.sh`](scripts/validate.sh) runs every extracted
-  injection against hostile arguments and fails if one exits non-zero or leaves a
-  junk directory behind.
+  after a word of prose. Every injection in `commands/` is now a single call to
+  [`state-dir.sh`](scripts/state-dir.sh), the one place that knows the state dir: it
+  validates a task id as `^[0-9]+$`, and creates the directory only when passed
+  `--create`. The inline `grep`/`mkdir`/`ls`/`||` chain is gone — a worktree-isolated
+  session cannot statically prove what a runtime-computed value inside an `&&`/`||`
+  chain will run, so it declined the whole expansion and `/odoo-dev:pr` was
+  unreachable from exactly the place `odoo-dev-builder` is documented to work, its own
+  worktree. `--else TEXT` carries the fail-soft marker: `task` and `release` always
+  exit 0 and print the marker rather than failing. Each command body says what the
+  dispatched agent must do when it reads a marker instead of a path: stop, and give
+  the person the form the command takes. `/odoo-dev:test` and `/odoo-dev:pr` call it
+  **without** `--create`, so they still require the task directory to exist rather
+  than creating it. Gate 18 in [`validate.sh`](scripts/validate.sh) runs every
+  extracted injection against hostile arguments and fails if one exits non-zero or
+  leaves a junk directory behind.
 - **The gate in `/odoo-dev:pr` is not the enforcement.** It is the fast, legible
   failure, seconds after typing: the `--for pr` verdict is injected into the body
   before the fork, and a red one arrives as its blockers followed by a
@@ -339,11 +346,12 @@ bare alias, which would put `/pr` and `/test` in the global namespace.
 | [`artifact.sh`](scripts/artifact.sh) | `artifact.sh put\|get\|list\|stages <dir> [stage] [file]` | The only sanctioned way to write a handoff artifact. Schema-validates, writes atomically, never overwrites |
 | [`gate.sh`](scripts/gate.sh) | `gate.sh <dir> [--for pr\|release]` | Fail-closed evidence check. Exits 1 on any blocker so `&&` cannot skip it |
 | [`bootstrap-state.sh`](scripts/bootstrap-state.sh) | `bootstrap-state.sh [--dir <path>]` | Seeds the external state dir. Idempotent; seeds only what is absent |
-| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports leftover pre-migration loose copies of plugin skills (safe to delete). Never deletes |
+| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports leftover pre-migration loose copies of the six feature-seeded skills — the five with plugin twins, plus the retired `client-status-report` (#778). Safe to delete; never deletes, and never names a skill the user owns |
 | [`validate.sh`](scripts/validate.sh) | `validate.sh [--quiet]` | Every CI gate in one call. Offline. Skips the `claude plugin validate` gate visibly when that CLI is absent; `REQUIRE_CLAUDE=1` turns the skip into a failure |
 | [`tests/gate.test.sh`](scripts/tests/gate.test.sh) | `bash scripts/tests/gate.test.sh` | 24 gate assertions, one fixture per blocker |
 | [`tests/setup.test.sh`](scripts/tests/setup.test.sh) | `bash scripts/tests/setup.test.sh` | 34 assertions over `setup.sh`, each running it with a PATH that genuinely lacks the tool under test |
 | [`tests/hooks.test.sh`](scripts/tests/hooks.test.sh) | `bash scripts/tests/hooks.test.sh` | 68 assertions over both `PreToolUse` hooks, driven by synthetic payloads |
+| [`tests/check-stray-skills.test.sh`](scripts/tests/check-stray-skills.test.sh) | `bash scripts/tests/check-stray-skills.test.sh` | 13 assertions over the stray report: every feature-seeded name reported, no user-owned skill ever named, and the suggested `rm -rf` listing only what was found |
 
 ---
 
@@ -589,7 +597,7 @@ suite still reports green, and the gate blocks on `tours_skipped`.
 
 ```bash
 claude plugin validate  .           --strict     # any checkout, by path
-claude plugin details   odoo-dev                 # Skills (20) — 15 skills + 5 commands, which
+claude plugin details   odoo-dev                 # Skills (21) — 16 skills + 5 commands, which
                                                  # plugin details counts together — Agents (5),
                                                  # Hooks (1)
 claude plugin disable   odoo-dev                 # the only escape hatch, all-or-nothing
@@ -612,7 +620,7 @@ devcontainer-features/
 ├── libraries/odoo_sdk/     src/odoo_sdk/skills/ — source of truth for the 5 consulting skills
 └── plugins/odoo-dev/
     ├── .claude-plugin/  plugin.json — the plugin manifest
-    ├── skills/     15 skills; odoo-dev-map is the router
+    ├── skills/     16 skills; odoo-dev-map is the router
     ├── agents/     5 subagents, all named odoo-dev-*
     ├── scripts/    artifact.sh, gate.sh, bootstrap-state.sh, check-stray-skills.sh, validate.sh
     ├── evals/      20 trigger-accuracy cases

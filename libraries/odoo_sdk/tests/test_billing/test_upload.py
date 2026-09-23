@@ -162,7 +162,14 @@ class TestUploadSessionsLoop(unittest.TestCase):
 
 
 class TestDerivedDescription(unittest.TestCase):
-    """The billing upload attaches the machine-derived description (#626)."""
+    """The billing upload attaches the machine-derived description (#626, #710).
+
+    Since #710 the name is two halves: the narrative headline
+    (``summarize_session_context`` — chatter notes, else commits/PRs/reviews,
+    else the hook context) followed by the machine tally as an explicit
+    ``; debug: `` suffix. With no headline the tally stands alone exactly as it
+    did before, and with neither the session-key fallback stands.
+    """
 
     def _session(self, task_id, started, ended, key="100|5"):
         return {
@@ -245,6 +252,84 @@ class TestDerivedDescription(unittest.TestCase):
         ended = datetime(2020, 1, 2, tzinfo=timezone.utc)
         description = _derived_description(db, 100, self._session(100, started, ended))
         self.assertEqual(description, "[/] session 100|5")
+
+    def _add_event(self, db, source, subject="", payload=None, pr_num=0, ext=None):
+        db.add_event(
+            EventRecord(
+                id=None,
+                source=source,
+                timestamp=datetime.now(timezone.utc),
+                task_ids=["100"],
+                repo="o/r",
+                pr_num=pr_num,
+                subject=subject,
+                payload=payload,
+                external_id=ext,
+            )
+        )
+
+    def test_tool_tallies_are_demoted_behind_the_narrative(self):
+        # The explicit requirement of #710: the tally is a TRAILING DEBUG
+        # SUFFIX, never the headline. The chatter note the user wrote leads and
+        # the 231-Bash tally follows it, labelled as debug.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(db, "chatter", subject="Reconciled the July VAT postings")
+        for _ in range(3):
+            self._add_event(db, "claude:PreToolUse", subject="Bash")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        headline, _, debug = description.partition("; debug: ")
+        self.assertEqual(headline, "[/] Reconciled the July VAT postings")
+        self.assertEqual(debug, "actions: Bash x3")
+
+    def test_stored_run_summary_becomes_the_debug_tail(self):
+        # #626's run_summary is still attached in full — it is just no longer
+        # what a reviewer reads first.
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "actions: Bash x231, Edit x50; branch 100-fix-vat")
+        self._add_event(db, "commit", subject="fix: VAT rounding", ext="git:abc1234def")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(
+            description,
+            "[/] commit: fix: VAT rounding"
+            "; debug: actions: Bash x231, Edit x50; branch 100-fix-vat",
+        )
+
+    def test_review_session_names_the_pr_and_verdict(self):
+        # Previously a review session said nothing about which PR was reviewed.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(
+            db,
+            "review",
+            subject="Add reconciliation wizard",
+            pr_num=53,
+            payload={"review_state": "APPROVED"},
+            ext="gh:review:1",
+        )
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] PR #53 reviewed (APPROVED); debug: PR #53")
+
+    def test_hook_only_session_is_named_by_its_first_prompt(self):
+        # The `[/] session <task>|<event>` case: hook rows only, but the shim
+        # now records the truncated first prompt, so the row says what was asked.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(
+            db,
+            "claude:UserPromptSubmit",
+            payload={"prompt": "Add a VAT column to the invoice report"},
+        )
+        self._add_event(db, "claude:PreToolUse", subject="Edit")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(
+            description,
+            "[/] prompt: Add a VAT column to the invoice report"
+            "; debug: actions: claude:UserPromptSubmit, Edit",
+        )
 
     def test_upload_passes_derived_description_to_reconciler(self):
         db = make_state_db()

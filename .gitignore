@@ -1,6 +1,21 @@
-# Claude Code
+# Claude Code - local agent state stays out of the repo; repo-scoped agent
+# tooling is committed by explicit allowlist only. Add one `!` line per file
+# that should ship; everything else under .claude/ stays ignored, including
+# worktrees/, settings.local.json, scheduled_tasks.lock and stacks/ run state.
+#
+# `.claude/*` rather than `.claude/`: a directory ignore stops git descending,
+# so a `!` line on a leaf inside it can never take effect. Every parent level
+# has to be un-ignored before its children can be, hence the repeated
+# ignore-parent / un-ignore-dir / ignore-children / un-ignore-leaf ladder.
 CLAUDE.md
-.claude/
+.claude/*
+!.claude/commands/
+.claude/commands/*
+!.claude/commands/implement-issues.md
+!.claude/commands/implement-issues/
+.claude/commands/implement-issues/*
+!.claude/commands/implement-issues/stack-merge.sh
+!.claude/commands/implement-issues/gh-as-owner.sh
 
 # Node
 node_modules/

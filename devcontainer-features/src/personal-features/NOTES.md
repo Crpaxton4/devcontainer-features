@@ -11,6 +11,8 @@
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
 - [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
+- [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
+- [The Odoo language server (odoo-ls)](#the-odoo-language-server-odoo-ls)
 - [Additional tooling](#additional-tooling)
 
 ## Companion Features
@@ -177,6 +179,79 @@ time by the feature-contributed `postCreateCommand` (which runs
 `CLAUDE_CONFIG_DIR` are shadowed by the `~/.claude` bind mount, so the merge has
 to happen at runtime — the same pattern the skills sync uses.
 
+**Where the hook command points (#803).** That `settings.json` is the host's real
+`~/.claude/settings.json`, so the **host** runs the very same hook commands this
+container writes. A container-absolute command therefore resolves on exactly one
+side: for as long as the entries said `/usr/local/bin/claude-event-hook`, every
+host session's hooks failed with `/bin/sh: 1: …: not found` and dropped every
+event they were meant to record — 11,965 of them, all host-side, none from a
+container. So `sync-claude-hooks` now **publishes the shim into the shared config
+directory** as `$CLAUDE_CONFIG_DIR/hooks/claude-event-hook` (refreshed from the
+image on every container create) and writes the entries as
+
+```
+"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook" <EventName>
+```
+
+Claude Code runs hook commands through `/bin/sh -c`, so that expansion is
+resolved **per machine at hook time**: `/usr/local/share/claude-home/hooks/…` in
+the container, `~/.claude/hooks/…` on a host that sets no `CLAUDE_CONFIG_DIR` —
+the two ends of the same bind mount, hence the same file. Nothing has to be
+installed on the host, and because the published file is the real shim rather
+than a stub, host sessions **record** their events (or no-op silently where
+`odoo-sdk` isn't installed) instead of failing. Stale absolute-path entries left
+in a settings.json by an older container are stripped and replaced on the next
+sync. If no shim can be published and none is already in place, the sync writes
+no entries at all rather than hand a session a command that resolves nowhere.
+
+**Every hook command is resolved, not just the ones that already broke (#805).**
+A hook entry naming a command that cannot be executed is not an inert entry:
+Claude Code runs it through `/bin/sh -c`, gets a 127, and — for a `PreToolUse`
+guard — reads that failure as an **allow**. `odoo-api-guard.sh`, the enforcement
+point for this repo's own prohibition on Odoo RPC and credential access, failed
+exactly that way 73 times across five sessions with the file present and
+executable, and nothing anywhere reported it. Against ten commands referenced
+from the shared `settings.json` the Feature asserted precisely two — the
+`odoo-sdk` console scripts (#496) and `mempalace-recall.sh` (#744) — each added
+reactively, after the thing it guarded had already broken. Both one-offs are
+gone, replaced by one routine in `sync-claude-hooks` that resolves the lot:
+
+- **Provision time**, after the merge: every command in the hooks block of the
+  file that was just written, ours and the user's, is expanded to the program it
+  will exec and resolved (`-x` for a path, `command -v` for a bare name). One of
+  **ours** that does not resolve is fatal — it can only mean the shim guard above
+  was defeated. One of the **user's** is reported, loudly and by name, and never
+  repaired: the Feature does not own those files and writing a stub would look
+  like a working hook while doing nothing (the #744 decision, kept verbatim). A
+  hand-maintained hook the user has yet to install must not fail container
+  create.
+- **Build time**, via `sync-claude-hooks --check-deps` called from `install.sh`:
+  the programs a feature hook command goes on to exec (`HOOK_DEPS` —
+  `odoo-sdk`, which `claude-event-hook` shells out to and silently skips when it
+  is missing, plus the two console scripts from the same wheel). This half
+  **fails the build**, which is what replaced the hand-written entry-point loop.
+
+**The split is forced, not stylistic.** `settings.json` lives in the
+bind-mounted config dir, which does not exist while the image is being built —
+that is the entire reason `sync-claude-hooks` runs from `postCreateCommand` — so
+"resolve every command in `settings.json`" cannot be a build-time check however
+much one would prefer it there. `HOOK_DEPS` is the mirror image: those programs
+live in the image and nowhere else, so resolving them is cheapest and loudest at
+build time. Each half runs at the only moment its subject exists.
+
+**Necessary, not sufficient.** This resolves a command *at provision time*. It
+cannot say the command will still resolve, or still work, when a hook actually
+fires — `odoo-api-guard.sh` resolved fine at provision time and exit-127'd
+anyway, for reasons still undiagnosed. The runtime half of that problem is #804
+and is deliberately not attempted here.
+
+**Resolution never executes anything.** The command strings are user config, and
+expanding them means handing them to a shell. Any command carrying a control
+operator, a redirection or a command substitution is therefore **refused and
+reported as unverifiable** rather than expanded; with those screened out and
+globbing disabled, the expansion can perform parameter and tilde expansion and
+word splitting, and nothing else.
+
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
 forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
 following events are wired (verified against the current Claude Code hooks
@@ -213,12 +288,55 @@ stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
 installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
+**A second, unrelated `SessionStart` hook: the worktree Bash constraint (#809).**
+The same sync also registers `worktree-context-hook`, which has nothing to do
+with event capture. A session whose cwd is inside a `.claude/worktrees` checkout
+has its Bash calls screened by Claude Code's worktree sandbox, which refuses
+anything it cannot verify stays inside the worktree. That rule is stated
+**nowhere** up front — a scan of every injected attachment in the local
+transcript corpus (hook context, instructions, skill listings, system reminders)
+finds no statement of it — so it is discoverable only by being refused, and it is
+rediscovered from scratch session after session: 252 refusals across 99
+transcripts, **54% of every transcript that ever runs Bash from a worktree**, on
+4.9% of their Bash calls, with no decline over a month. The hook emits a
+`hookSpecificOutput.additionalContext` envelope naming the constraint *before*
+the first command, and emits **nothing at all** for any other cwd (a
+`SessionStart` hook's stdout is added to the session context verbatim, so a stray
+byte would be noise in every session). It always exits 0 — `exit 2` from
+`SessionStart` blocks the session from starting.
+
+It is a separate program from `claude-event-hook` on purpose: that shim's
+contract is "never write to stdout", which is the exact opposite of this one's
+job, and it fires on every session rather than only worktree ones. It gets the
+same publish-then-reference treatment as the event shim (#803) — copied to
+`$CLAUDE_CONFIG_DIR/hooks/worktree-context-hook`, referenced through the
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}` expansion — so the host side of the mount
+resolves it too. If its shim cannot be published the entry is simply omitted;
+unlike the event shim that is not worth refusing the whole merge over, because
+the fallback is only the status quo.
+
+**The text it ships is a declaration, not the sandbox's own rules.** The rules
+live in the Claude Code binary and are published nowhere this repo can read
+(`grep -rn 'isolated in the worktree'` over the tree returns nothing), so the
+list was written from refusals actually observed — compound commands and
+pipelines, `$( )` substitution, `source` of a computed string, `git` in a form
+too complex to verify or `git -C` pointing outside the worktree, `sed` with a
+runtime-computed value, `GIT_CONFIG_GLOBAL` (refused separately as "git-config
+injection"), `gh auth switch` (refused in some sessions and not others), and even
+a bare `bash` token inside an otherwise plain command. The shipped text says in
+so many words that this list is **indicative, not exhaustive**, and that it can
+go stale when the binary changes; a confidently wrong list would be worse than a
+short honest one. When a new refusal shape turns up, add it to
+`src/personal-features/worktree-context-hook`.
+
 **Opting out.** The merge only ever replaces its own entries (identified by the
-`claude-event-hook` command) and preserves all your other settings and hooks. To
+`HOOK_MARKERS` substrings — `claude-event-hook` and `worktree-context-hook`) and
+preserves all your other settings and hooks. To
 disable the capture, remove the `claude-event-hook` entries from
-`~/.claude/settings.json` (they will be re-added on the next container create) —
-or, to disable it permanently, drop the `sync-claude-hooks` step from the
-Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
+`~/.claude/settings.json` (they — and the published
+`~/.claude/hooks/claude-event-hook` — will be re-added on the next container
+create) — or, to disable it permanently, drop the `sync-claude-hooks` step from
+the Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
 untouched (and a warning printed) rather than overwritten.
 
 ## Odoo consulting skills (where they live now)
@@ -277,6 +395,97 @@ install skips the cleanup rather than leaving the machine with neither copy,
 and each removal is logged on its own line; like everything else in
 `sync-claude-mcp`, the cleanup is best-effort and never fails container create.
 
+**One set of names, two groups, one gate (#778).** The deleter here and the
+reporter in `plugins/odoo-dev/scripts/check-stray-skills.sh` used to disagree:
+this list carried six names, that one carried five — the same five minus
+`client-status-report` — and nothing reconciled them. That is silent in both
+directions. A name only the deleter knows about is `rm -rf`'d by a script that
+never mentions it, and a name only the reporter knows about keeps the gate red
+forever because nothing removes it. Both files now carry the same six, split
+into the two groups that actually need different handling:
+
+| Group | Names | Why it is on the list | Advice when found |
+|---|---|---|---|
+| Plugin-shadowed | `discovery-notes`, `fibonacci-estimate`, `odoo-code-review`, `odoo-design-doc`, `odoo-quote` | Moved into `odoo-dev` (#695-#699, #701-#708); the plugin still ships them, so a loose copy loads *alongside* a live twin | Delete the loose copy; the plugin twin stays |
+| Retired, no twin | `client-status-report` | Retired outright (#700). No plugin copy, no packaged source, nothing replaces it — it shadows nothing but is still feature-seeded debris spending description budget every turn | Delete; there is nothing to fall back on |
+
+The plugin-shadowed five are not a fourth hand-maintained copy: they are
+`odoo_sdk.skills.PACKAGED_SKILL_NAMES`, the packaged sources the plugin's copies
+are generated from and the list `check-skill-parity.sh` already checks against.
+`.github/scripts/test_stray_skill_parity.py` gates all of it — the two lists
+against each other, both against the packaged names, and each claimed group
+against what the plugin actually ships on disk — so editing one file alone now
+fails CI instead of drifting.
+
+**Not on either list, deliberately: `ingest`, `lint`, `llm-wiki-workspace`,
+`process`, `query`.** These turn up in `$CLAUDE_CONFIG_DIR/skills` beside the
+strays on a real machine, which is why #778 listed them, but this Feature never
+seeded them and no plugin ships them — they are the user's own personal skills
+(`plugins/odoo-dev/skills/odoo-dev-map/SKILL.md` records them as Second Brain
+skills, outside every Odoo workflow). Reporting them would be a false positive
+and deleting them would be data loss, since the remedy here is `rm -rf`. The
+parity gate asserts neither list ever acquires one, and the Feature test seeds
+two of them as decoys that must survive a cleanup run.
+
+## Provision marker: telling a stale image from a current one (#806)
+
+Every step in `sync-claude-mcp` reports what it *did*. None of them can report
+what an older copy of the script *would* have done — a container whose image
+predates a migration simply runs a script that lacks it, prints nothing about
+it, and looks exactly like a container where that migration ran and succeeded.
+That is what #806 turned out to be: the `#723` marketplace migration was
+correct and had simply never been in the image on that machine, so every
+Claude session there kept loading `odoo-dev@odoo-dev` from a repo this project
+retired, three weeks behind the tree in front of it — and the container-create
+log that would have said so was long gone.
+
+**No checker shipped inside the image can close that gap**, because a checker
+baked into the image is exactly as absent from an old image as the step it
+would check. The only state that outlives the image is `$CLAUDE_CONFIG_DIR` —
+the host's bind-mounted `~/.claude`, shared by every container the machine
+builds. So `sync-claude-mcp` records the provenance of *this* container's
+feature scripts there, in `~/.claude/personal-features-provision.json`, and
+compares it against the newest set that ever provisioned the same config dir:
+
+```
+$ cat ~/.claude/personal-features-provision.json
+{
+  "provisioned_at": "2026-09-23T03:06:08Z",
+  "script_digest": "fef269073a2a…",
+  "script_epoch": 1790128289,
+  "scripts": { "sync-claude-mcp": "a07e942c…", "claude-event-hook": "08f7e708…", … },
+  "newest_script_epoch": 1790128289,
+  "newest_seen_at": "2026-09-23T03:06:08Z",
+  "stale_image": false
+}
+```
+
+An image whose scripts are older than a set already seen in that config dir
+gets a loud `WARNING` on every container create, naming both build timestamps
+and pointing at the marker — rather than the `ls -la /usr/local/bin/…` plus
+`grep -c` archaeology #806 needed to establish the same fact. The high-water
+mark (`newest_*`) is carried forward independently of the current run, so a
+stale container writing its own provenance cannot erase the evidence that
+something newer was here and go quiet on the next create.
+
+**Deliberately not odoo-dev-specific.** It fingerprints the feature-owned
+scripts themselves — `sync-claude-mcp`, `sync-claude-hooks`,
+`claude-event-hook`, `mempalace-repair`, `resolve-mempal-dir`, `create-pr` —
+by SHA-256 content hash plus newest mtime, so *every* step any of them ever
+gains is covered by the same marker, with no per-migration assertion to
+remember to add. (The alternative #806 floats, an assertion against the
+retired-marketplace list, only ever catches the one migration already written
+down.) Content hash *and* mtime are both needed: the mtime says which build is
+older, the hash keeps a rebuild of unchanged scripts from being reported as
+drift. A 60-second slack absorbs filesystem timestamp granularity.
+
+It adds no mount and no `containerEnv` variable — the marker lives inside a
+directory the Feature already mounts — and, like everything else in
+`sync-claude-mcp`, it is best-effort: a marker that cannot be read, written or
+parsed warns and the run still exits 0. No step was added to the
+`postCreateCommand` chain, which is an `&&` chain where any failing step aborts
+container create and suppresses `postStartCommand`.
+
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
 The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
@@ -286,6 +495,67 @@ The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` 
 **That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-sdk`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
 
 It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
+
+## The shared mempalace MCP hub
+
+**One mempalace MCP server per container, not one per session (#764).** mempalace grants the *MCP writer lease* to exactly one process per palace. Every Claude Code session used to start its own stdio server against the same palace, so the first session to mutate kept the lease and every other session's mutating tools failed with:
+
+```
+MCP error -32001: Peer MCP writer active; this server is read-only for mutating tools
+```
+
+Reads kept working, which is what made it expensive: the failure surfaced only at **write** time — usually at session end, after the work that produced the memory was already done. N live sessions meant N−1 sessions that could remember nothing.
+
+The Feature now starts one long-lived hub — `mempalace serve`, bound to `127.0.0.1:8765` — and that is the entire fix.
+
+**No session MCP config is rewritten, because none has to be.** Verified by reading the pinned 3.9.0 in site-packages, not the docs: the `mempalace-mcp` console script is no longer the server. Its entry point is `mempalace.mcp_proxy:main`, which resolves the palace, looks that palace's live hub up in a per-palace registry (`~/.mempalace/server/<sha256 of the canonical palace path>/serverinfo.json`, trusted only while the recorded pid is alive) and forwards every JSON-RPC request to it over HTTP — importing the ~77 MB storage stack only when no hub answers. The same discovery is wired into the CLI (`_forward_mine_to_hub`, `_forward_search_to_hub`), so `mempalace mine` — which the plugin's Stop/SessionEnd/PreCompact save hooks spawn, and which the hub's own lease would otherwise refuse — is forwarded too.
+
+That matters because the stdio registration is **not ours to change**: it lives in the upstream plugin's own `.mcp.json` under `$CLAUDE_CONFIG_DIR/plugins/cache/mempalace/…`, a path this repo does not ship and that `sync-claude-mcp`'s `claude plugin update mempalace@mempalace` overwrites on every container create. Patching it would be undone on the next rebuild. Starting a hub turns that unchanged registration into a proxy by itself, and the memory saving is a bonus: a proxied session runs at roughly 22 MB instead of ~100 MB.
+
+**Supervision: the Feature's `postStartCommand`, and deliberately nothing heavier.** This repo had no service-supervision pattern of any kind before this, so the choice sets the precedent:
+
+- `systemd` is not PID 1 in a dev container. Upstream ships a unit file; it is not usable here.
+- `supervisord`/`s6` would mean a new package, a new config file and a new failure mode, for one process.
+- `postStartCommand` is the only lifecycle hook that fires on **every** container start — create, a stop/start of an existing container, and a host reboot — which is exactly the "survives a container restart" requirement, and it costs one JSON key. It is declared on the Feature (a [documented Feature property](https://containers.dev/implementors/features/#lifecycle-hooks), collected alongside any the consuming `devcontainer.json` declares rather than overriding them) and runs as the `remoteUser`, which is what the registry lookup needs: the hub and its clients must agree on `$HOME`, or `~/.mempalace/server/…` names two different directories and the client concludes there is no hub. Everything that matters here — Claude Code, its plugin hooks, your shells — runs as the `remoteUser` too, so they agree; a session `su`'d to another account would not find the hub and would quietly serve its own palace copy instead.
+
+What `postStartCommand` does **not** give is restart-on-crash within a single container run. The honest mitigation is that a dead hub is not an outage: `mcp_proxy` falls back to serving the session locally and says so on the tool result itself, so the agent driving the session is told its memory backend changed shape. `mempalace-hub` can also be re-run by hand at any time. One real consequence of the lifecycle ordering is worth knowing: a failing `postCreateCommand` skips `postStartCommand` entirely, so a broken `mempalace-repair` takes the hub down with it.
+
+**`mempalace-hub` is idempotent and never fatal.** `start` (the default) probes `/healthz` — mempalace's own liveness route, and the only credential-free one — before doing anything, so running it on every container start can never produce two hubs. Then it truncates its log (nothing rotates a log inside a container, and one hub run is the only bounded unit that keeps the diagnostics), launches `mempalace serve` under `setsid` (or `nohup` on an image without util-linux) with stdin on `/dev/null` and both output streams on the log — a background child still holding the lifecycle command's pipes would keep the dev container CLI waiting on it forever — and then polls `/healthz` until it answers. It polls rather than watching a pid because `setsid` may or may not fork, so `$!` answers a different question than the one that matters.
+
+Every failure path exits 0 with a warning naming the consequence: no `mempalace` on PATH, an unwritable log, or a bind that never answers. A container with no hub is exactly the pre-#764 behaviour — degraded, not broken — and not worth failing container start over. `mempalace-hub status` reports the endpoint, and `MEMPALACE_SKIP_HUB=1` opts out; `MEMPALACE_HUB_CMD`/`_HOST`/`_PORT`/`_LOG`/`_WAIT` exist for the feature test and for debugging.
+
+**`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set in the launcher's environment rather than in `containerEnv` precisely so per-session servers keep the watchdog they were designed for.
+
+**No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount, so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log is container-local, under `/usr/local/share/personal-features/`, pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
+
+## The Odoo language server (odoo-ls)
+
+**Claude Code sessions get Odoo-aware diagnostics, go-to-definition, references and hover (#746).** Upstream [odoo-ls](https://github.com/odoo/odoo-ls) is the server; the Feature installs and configures it, and the `odoo-dev` plugin's `.lsp.json` is what tells Claude Code to launch it. Without it, an invalid XPath, a misspelled field name or a bad import surfaces only when `odoo-bin -i/-u` runs.
+
+**Pinned to 1.6.0 and checksum-verified — the only download here that is.** #746 named 1.4.0, which was current when the issue was written; 1.6.0 is the current non-prerelease (every 1.5.x is marked prerelease). Both assets — the per-arch `odoo-linux-<arch>-<ver>.tar.gz` and the shared `typeshed.zip` — are verified against a pinned SHA-256 before anything is published, and a partial install is never published: a server with no stubs starts, answers, and silently resolves nothing. Verification is what `fetch`'s optional third argument now does; it stays opt-in per call because the other downloads here fetch installer scripts and tarballs whose publishers re-cut assets under the same tag, where a pinned digest would break a working install on every upstream re-tag. Bumping means moving `ODOO_LS_VERSION`, both per-arch digests and the typeshed digest together.
+
+**It does not live in `/usr/local/bin`.** The server resolves its stdlib and stub roots *relative to its own binary* (`typeshed/stdlib`, `typeshed/stubs` next to `current_exe()`), so binary and the 35 MiB typeshed tree sit together in `/usr/local/share/odoo-ls` and a launcher, `odoo-ls-server`, is what goes on `PATH` — which is where Claude Code requires `command` to resolve, since it will not run a bundled binary. `--stdlib` could override the path instead; co-locating means the default is already right and one fewer flag can drift.
+
+**Two scripts, because `.lsp.json` cannot express either job.**
+
+- `odoo-ls-config` (from `postCreateCommand`) writes `/usr/local/share/odoo-ls/odools.toml` from paths that only exist once the container does: `odoo_path`, the community/enterprise/`/mnt/extra-addons` `addons_paths`, and the checkout's `.venv` interpreter as `python_path`. Same reason `resolve-mempal-dir` exists — a Feature build cannot see any of this (#485). Not an Odoo container? It writes nothing and *removes* a stale file from a previous create, because every path setting is resolved against the filesystem and a stale entry is a hard config error, which is worse than no config.
+- `odoo-ls-server` picks exactly one config source per session: a project's own `odools.toml` at or above `$CLAUDE_PROJECT_DIR` if there is one, otherwise the generated file via `--config-path`, and with neither it starts nothing at all — the plugin registers `.py` for every project, not only Odoo ones, and without an `odoo_path` the server would index a whole tree to resolve no model, no field and no xmlid. **Never both** — the server merges its sources agree-or-error for scalars, so passing both turns a legitimate per-project override of `odoo_path` or `python_path` into a config error instead of an override. The cost is that a project config has to be self-contained; the generated file is the copy-paste starting point. Task worktrees under `.worktrees/` need no entry anywhere: the server infers addon paths from the LSP workspace folder when the profile for that folder sets none, and Claude Code sends the project directory as that folder, so a session started in a worktree indexes it. Enumerating them would instead bake in paths that come and go with every task.
+
+**Facts checked against the 1.6.0 source and the running binary, not the docs.**
+
+- **stdio is the default transport.** #746 asked whether `--stdio` is needed; there is no such flag. `--use-tcp` is what switches away from stdio, and passing a flag that does not exist is a startup error.
+- **Logs never reach stdout.** The stdout log subscriber is installed only under `--parse` or `--use-tcp`; over stdio everything goes to a rolling file appender. So the wrapper is *not* needed to keep stdout clean — it is needed for config selection and for the log directory.
+- **`--logs-directory` must already exist.** The server checks the path and falls back to `<binary dir>/logs` rather than creating it, and that fallback's construction is an `.expect()` — a panic before the server ever speaks LSP. The launcher creates the directory it names, and `install.sh` pre-creates `/usr/local/share/odoo-ls/logs` mode `0777` (server logs, no secret) so the fallback can never be the thing that kills a session. `--log-level` is `warn`, not the server's own `trace`, which is megabytes an hour per session.
+- **`${workspaceFolder}` is not a thing in a plugin LSP config.** #746 flagged this as unverified; it is false. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PROJECT_DIR}` into `command`/`args`/`env`/`workspaceFolder`, and injects those three into the server's environment as well — which is how the launcher knows the project directory with no `env` block at all.
+- **JS/OWL support is off** (`disable_javascript = true`). That half of the server shells out to `tsserver`; TypeScript is not installed here, and without the flag it reports the same diagnostic on every session. Python, XML and CSV — what the plugin registers — are unaffected.
+
+**Kill switches, coarsest last**, because upstream flags the project "in development": `"diagnostics": false` in `.lsp.json` keeps navigation and stops diagnostics being pushed into context; `settings.Odoo.selectedProfile = "Disabled"` is the server's own in-protocol off switch (it logs `OdooLS is disabled. Exiting...` and indexes nothing); `ODOO_LS_DISABLE=1` stops the process starting; disabling the plugin removes the registration. `restartOnCrash` with `maxRestarts: 3` covers a server that dies on its own — both keys need Claude Code >= 2.1.205, and the pinned version here is well past that.
+
+**Every failure path exits 0.** A non-zero exit from the launcher reads to Claude Code as a crash and burns the restart budget, and "this container has no Odoo in it" is not worth that. No binary, no config, an unwritable log directory: each says why on stderr, which Claude Code captures, and starts nothing.
+
+**No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
+
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. A gate in `plugins/odoo-dev/scripts/validate.sh` now holds the two together: it extracts every `command` in `.lsp.json` and fails unless `install.sh` writes a file of that name into a `bin` directory (#787). It is a name check and cannot prove the generated script runs, but it catches the rename — whose failure mode is otherwise a language server that never starts and never says why. `claude plugin validate` is no help here: it reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252). Renaming the launcher still means editing the plugin in the same change; the gate is what makes forgetting loud.
 
 ## Additional tooling
 
@@ -308,12 +578,14 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 
+  Concurrent sessions share **one** MCP server, started from `postStartCommand` — see [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub).
+
   **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things, then asserts a fourth:
 
   1. **Symlinks `~/.mempalace` onto the mount.** A large class of mempalace state ignores `MEMPALACE_PALACE_PATH` and is hardcoded under `$HOME/.mempalace` — `config.json` and `people_map.json`, `locks/`, `wal/`, `hook_state/`, `known_entities.json` — and the hooks CLI additionally treats an absent `~/.mempalace` as the user's kill-switch. If it finds a **real directory** there (left by an earlier build, whose contents would otherwise be discarded on the next rebuild — the exact failure #596 fixed and #643 found reintroduced) it migrates the contents onto the mount, never clobbering a file the mount already has, and replaces it with the link. A regular file at that path is a user artifact and is left untouched with a warning.
   2. **Removes the stray `~` directory.** mempalace's MCP server `abspath()`s a literal `~/…` `--palace` argument without `expanduser()`, unlike its CLI sibling, so it resolves against the process cwd and the chroma backend then creates a real directory *named* `~` at the palace root, stranding memories where nothing will ever read them. Matched narrowly on that exact shape, so real palace data is never at risk.
   3. **Reconciles `config.json`'s `palace_path` with `MEMPALACE_PALACE_PATH`.** `Config.palace_path` returns on the env-var branch *before* consulting `config.json` and says nothing when the two disagree, so a `config.json` carried in on the mount from another machine can name a host path that does not exist here and sit there indefinitely — misleading anyone who reads the file, and silently deciding the answer for any code path that reads it directly. Only that key is rewritten; `topic_wings` and `hall_keywords` in the same file are user content and are never touched.
-  4. **Asserts what mempalace-as-only-memory needs, and repairs none of it (#744).** Native Claude auto-memory is switched off in the shared `settings.json` (`autoMemoryEnabled: false`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) and the native memory files were mined into the palace, so there is no longer a fallback when mempalace is misconfigured — and every one of these failures is silent. Three things are checked and **warned** about: `config.json`'s `hooks.auto_save` is `true` (the plugin's Stop/SessionEnd/PreCompact hooks consult that key and save nothing when it is false — which it was, unnoticed, until #744); `identity.txt` exists on the mount (the L0 context `mempalace wake-up` reads); and `$CLAUDE_CONFIG_DIR/hooks/mempalace-recall.sh` exists and is executable (the `SessionStart` recall hook, named by path from `settings.json`, so a missing file fails the hook on every session). `config.json` and the hook script are hand-maintained and are never written here — a generated value or a stubbed hook would mask the loss of the real one, which is the same silent failure in a better disguise. The one exception is a **wholly absent** `identity.txt`: absent means there is no user content to preserve, so a minimal template naming agent id `devcontainer-claude` is seeded and logged. An existing one is never touched. Nothing in this step is fatal.
+  4. **Asserts what mempalace-as-only-memory needs, and repairs none of it (#744).** Native Claude auto-memory is switched off in the shared `settings.json` (`autoMemoryEnabled: false`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) and the native memory files were mined into the palace, so there is no longer a fallback when mempalace is misconfigured — and every one of these failures is silent. Two things are checked here and **warned** about: `config.json`'s `hooks.auto_save` is `true` (the plugin's Stop/SessionEnd/PreCompact hooks consult that key and save nothing when it is false — which it was, unnoticed, until #744); and `identity.txt` exists on the mount (the L0 context `mempalace wake-up` reads). A third used to live here — `$CLAUDE_CONFIG_DIR/hooks/mempalace-recall.sh` exists and is executable — and moved to `sync-claude-hooks` with #805, which resolves **every** command `settings.json` references rather than that one alone, and so reports the recall hook exactly when the file actually names it. `config.json` and the hook script are hand-maintained and are never written here — a generated value or a stubbed hook would mask the loss of the real one, which is the same silent failure in a better disguise. The one exception is a **wholly absent** `identity.txt`: absent means there is no user content to preserve, so a minimal template naming agent id `devcontainer-claude` is seeded and logged. An existing one is never touched. Nothing in this step is fatal.
 
   **`mempalace init` runs once per workspace, and its artifacts are ignored machine-wide (#643).** `init` is worth running: the `rooms` list in the `mempalace.yaml` it writes is what routes mined files into rooms, and without it mining collapses into a single `general` room. (`config.json`'s `topic_wings`/`hall_keywords` are a keyword→hall map, not a substitute.) But `init`'s artifacts **cannot be redirected** — it resolves `entities.json`, `mempalace.yaml` and `.mempalace/` from its `--dir` argument, and exposes no `--output`/`--central`/`--palace-path` option, no `config.json` key, and no `MEMPALACE_*` env var that moves them. Upstream's own answer is appending a two-line block to each project's `.gitignore`, which dirties every repo it touches and does not scale across a tree of working repos.
 

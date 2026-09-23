@@ -5,6 +5,7 @@
             "release-type": "simple",
             "component": "personal-features",
             "exclude-paths": [
+                ".claude",
                 "devcontainer-features/src/second-brain",
                 "devcontainer-features/test/second-brain",
                 "plugins/odoo-dev"

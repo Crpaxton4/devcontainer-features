@@ -35,7 +35,7 @@ from typing import Any, Optional
 from odoo_sdk._utils import as_utc
 from odoo_sdk.client import OdooClient
 from odoo_sdk.state import LocalConfig, LocalStateClient
-from odoo_sdk.state.summary import summarize_run_activity
+from odoo_sdk.state.summary import summarize_run_activity, summarize_session_context
 from odoo_sdk.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
@@ -191,18 +191,44 @@ def _overlapping_run_summaries(
     return summaries
 
 
+# Separator between a timesheet name's narrative headline and the machine tally
+# demoted behind it (#710). The tally is kept — it is the only reconstructable
+# record of what ran — but it is explicitly labelled as the debug tail so a
+# reviewer reads the narrative first and stops there.
+_DEBUG_JOIN = "; debug: "
+
+
+def _compose_description(headline: str, detail: str) -> str:
+    """Join the narrative headline and the machine tally, headline first (#710).
+
+    The explicit requirement of #710: tool tallies are a TRAILING DEBUG SUFFIX,
+    never the headline. With no headline derived the tally stands alone exactly
+    as it did before, so nothing that used to name a row stops naming it.
+    """
+    if headline and detail:
+        return f"{headline}{_DEBUG_JOIN}{detail}"
+    return headline or detail
+
+
 def _derived_description(
     state: LocalStateClient, task_id: int, session: dict[str, Any]
 ) -> str:
-    """Derive the timesheet entry's description for one session (#626).
+    """Derive the timesheet entry's description for one session (#626, #710).
 
-    Preference order: the stored run summaries of the task's runs overlapping
-    the session window (the stop-time derivation), else a fresh
-    :func:`summarize_run_activity` over the session window's events (covers
-    resync'd history that never passed through the FSM), else the bare
-    ``[/] session {key}`` fallback. Derived text is internal/local and carries
-    NO length cap — the 300-character limit applies only to posted chatter
-    bodies, never to timesheet names.
+    Two halves, composed by :func:`_compose_description`:
+
+    * The **headline** — :func:`summarize_session_context` over the session
+      window's events: the chatter notes the user wrote on the task, else the
+      commits / PR titles / review states recorded in the window, else the hook
+      context (first user prompt, else ``cwd``). This is what a reviewer reads.
+    * The **debug tail** — the stored run summaries of the task's runs
+      overlapping the window (the #626 stop-time derivation), else a fresh
+      :func:`summarize_run_activity` over the same events (covers resync'd
+      history that never passed through the FSM). Tool tallies live HERE (#710).
+
+    With neither half the bare ``[/] session {key}`` fallback stands. Derived
+    text is internal/local and carries NO length cap — the 300-character limit
+    applies only to posted chatter bodies, never to timesheet names.
 
     Best-effort by design: the description is display metadata, so a derivation
     fault must never block billing the hours — any failure falls back to the
@@ -213,9 +239,9 @@ def _derived_description(
         started = as_utc(datetime.fromisoformat(session["started_at"]))
         ended = as_utc(datetime.fromisoformat(session["ended_at"]))
         summaries = _overlapping_run_summaries(state, task_id, started, ended)
-        text = "; ".join(summaries) or summarize_run_activity(
-            state.get_task_events(str(task_id), started, ended), []
-        )
+        events = state.get_task_events(str(task_id), started, ended)
+        detail = "; ".join(summaries) or summarize_run_activity(events, [])
+        text = _compose_description(summarize_session_context(events), detail)
     except Exception:
         return fallback
     return f"[/] {text}" if text else fallback
@@ -241,8 +267,9 @@ def _upload_one(
     apply to whatever is actually billed — and, because the same billed hours
     populate the summary row, a dry-run preview shows exactly what a real run
     would write. The entry's name is the machine-derived description
-    (:func:`_derived_description`, #626) — fully automatic, never a human gate —
-    with the session key as the fallback when nothing derives. Idempotent per
+    (:func:`_derived_description`, #626/#710) — fully automatic, never a human
+    gate — leading with what was actually done and falling back to the session
+    key only when nothing at all derives. Idempotent per
     session key. On a dry run nothing is written and the row's ``timesheet_id``
     is None.
     """

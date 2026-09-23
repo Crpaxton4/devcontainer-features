@@ -327,19 +327,38 @@ MCP_TEST_ROOT="$(mktemp -d)"
 MCP_STUB_BIN="$MCP_TEST_ROOT/bin"
 MCP_CONFIG="$MCP_TEST_ROOT/claude-home"
 mkdir -p "$MCP_STUB_BIN" \
-  "$MCP_CONFIG/skills/odoo-quote" \
+  "$MCP_CONFIG/skills/discovery-notes" \
   "$MCP_CONFIG/skills/fibonacci-estimate" \
+  "$MCP_CONFIG/skills/odoo-design-doc" \
+  "$MCP_CONFIG/skills/odoo-quote" \
   "$MCP_CONFIG/skills/client-status-report" \
   "$MCP_CONFIG/skills/my-own-skill" \
+  "$MCP_CONFIG/skills/lint" \
+  "$MCP_CONFIG/skills/query" \
   "$MCP_CONFIG/skills/odoo-code-review"
-# Three of the six names the retired sync used to seed, a DECOY user-authored
-# skill that must survive, and a named dir with NO SKILL.md - which is not a
-# skill by check-stray-skills.sh's definition and so must survive too.
-printf 'stale loose odoo-quote\n'               > "$MCP_CONFIG/skills/odoo-quote/SKILL.md"
+# EVERY name the retired sync used to seed is represented (#778): the five that
+# moved into the plugin plus the retired client-status-report. The fixture used
+# to seed only three of the six, so the list it covered was never the list the
+# cleanup deletes.
+#
+# Four of the five plugin-shadowed names carry a SKILL.md and must go; the
+# fifth, odoo-code-review, is the named dir with NO SKILL.md - not a skill by
+# check-stray-skills.sh's definition, so it must survive even though its name is
+# on the list.
+printf 'stale loose discovery-notes\n'          > "$MCP_CONFIG/skills/discovery-notes/SKILL.md"
 printf 'stale loose fibonacci-estimate\n'       > "$MCP_CONFIG/skills/fibonacci-estimate/SKILL.md"
+printf 'stale loose odoo-design-doc\n'          > "$MCP_CONFIG/skills/odoo-design-doc/SKILL.md"
+printf 'stale loose odoo-quote\n'               > "$MCP_CONFIG/skills/odoo-quote/SKILL.md"
 printf 'stale loose client-status-report\n'     > "$MCP_CONFIG/skills/client-status-report/SKILL.md"
-printf 'my hand-written skill - do not touch\n' > "$MCP_CONFIG/skills/my-own-skill/SKILL.md"
 printf 'loose notes, no SKILL.md\n'             > "$MCP_CONFIG/skills/odoo-code-review/notes.txt"
+# DECOYS that must survive: an obviously user-authored skill, plus two of the
+# personal Second Brain skills that sit beside the strays on a real machine.
+# The feature never seeded lint or query and deliberately claims neither, so a
+# future edit that widens the delete list to "everything that looked stale on
+# that machine" fails here rather than eating the user's own work.
+printf 'my hand-written skill - do not touch\n' > "$MCP_CONFIG/skills/my-own-skill/SKILL.md"
+printf 'personal lint skill - do not touch\n'   > "$MCP_CONFIG/skills/lint/SKILL.md"
+printf 'personal query skill - do not touch\n'  > "$MCP_CONFIG/skills/query/SKILL.md"
 
 # Succeeds at everything and records what it was asked to do. Printing NOTHING
 # for `plugin list` is what drives the install branch: the idempotency guard
@@ -363,7 +382,14 @@ check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features mar
 # pre-migration containers outlive the image that wrote them and shadow their
 # odoo-dev twins. With the plugin in place they are deleted.
 check "sync-claude-mcp removes the stale loose skill copies the plugin now ships" bash -c \
-  "! test -e \"$MCP_CONFIG/skills/odoo-quote\" && ! test -e \"$MCP_CONFIG/skills/fibonacci-estimate\" && ! test -e \"$MCP_CONFIG/skills/client-status-report\""
+  "! test -e \"$MCP_CONFIG/skills/discovery-notes\" && ! test -e \"$MCP_CONFIG/skills/fibonacci-estimate\" && ! test -e \"$MCP_CONFIG/skills/odoo-design-doc\" && ! test -e \"$MCP_CONFIG/skills/odoo-quote\""
+
+# client-status-report has no plugin twin - it was retired outright (#700) - but
+# it is still feature-seeded debris and still goes. It is the name
+# check-stray-skills.sh was missing until #778 while this loop already deleted
+# it; both lists now carry it.
+check "sync-claude-mcp removes the retired loose skill that has no plugin twin" bash -c \
+  "! test -e \"$MCP_CONFIG/skills/client-status-report\""
 
 # ...and nothing else. The name list is literal and the SKILL.md test is the
 # same "stray" definition check-stray-skills.sh uses.
@@ -371,6 +397,11 @@ check "sync-claude-mcp leaves a user-authored skill untouched" bash -c \
   "grep -q 'do not touch' \"$MCP_CONFIG/skills/my-own-skill/SKILL.md\""
 check "sync-claude-mcp leaves a named dir carrying no SKILL.md alone" bash -c \
   "test -f \"$MCP_CONFIG/skills/odoo-code-review/notes.txt\""
+# The five personal Second Brain skills (ingest, lint, llm-wiki-workspace,
+# process, query) are the user's, not this feature's, and are on neither list by
+# design (#778). Two of them stand in for all five here.
+check "sync-claude-mcp leaves the user's own personal skills untouched" bash -c \
+  "grep -q 'do not touch' \"$MCP_CONFIG/skills/lint/SKILL.md\" && grep -q 'do not touch' \"$MCP_CONFIG/skills/query/SKILL.md\""
 
 # A container that could not reach the marketplace must keep whatever skills it
 # has: deleting the loose copy there would leave the machine with neither copy.
@@ -392,6 +423,58 @@ check "sync-claude-mcp exits 0 when the odoo-dev plugin install fails" bash -c \
 check "sync-claude-mcp keeps the loose copies when the plugin install fails" bash -c \
   "test -f \"$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md\""
 
+# --- sync-claude-mcp: the provision marker (#806) -----------------------------
+# A container running pre-migration feature scripts used to be indistinguishable
+# from one where the migration ran: the steps it lacks emit nothing. The marker
+# records, in the host-persisted $CLAUDE_CONFIG_DIR, which build of the
+# feature-owned scripts last provisioned this config dir - so an image older
+# than one already seen here says so instead of looking healthy.
+MCP_MARKER="$MCP_CONFIG/personal-features-provision.json"
+
+check "sync-claude-mcp writes the provision marker" bash -c \
+  "test -f \"$MCP_MARKER\""
+# The fingerprint is of the feature-owned SCRIPTS, not of the odoo-dev
+# migration: every step any of them ever gains is covered by the same marker.
+check "the provision marker fingerprints the feature-owned scripts" bash -c \
+  "grep -qF '\"sync-claude-mcp\"' \"$MCP_MARKER\" && grep -qF '\"claude-event-hook\"' \"$MCP_MARKER\" && grep -qF '\"script_digest\"' \"$MCP_MARKER\""
+# A first, matching provision is not drift and must stay quiet.
+check "a first provision is not reported as stale" bash -c \
+  "grep -qF '\"stale_image\": false' \"$MCP_MARKER\""
+
+# Now the case #806 is about: this container's scripts are OLDER than a set that
+# already provisioned the same ~/.claude. Seeded with a far-future high-water
+# mark and a digest that cannot match, which is exactly what a pre-migration
+# image looks like to a config dir a current image has touched.
+MCP_STALE_CONFIG="$MCP_TEST_ROOT/claude-home-stale"
+mkdir -p "$MCP_STALE_CONFIG"
+cat > "$MCP_STALE_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "newest_script_epoch": 4102444800,
+  "newest_script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "newest_seen_at": "2100-01-01T00:00:00Z",
+  "script_epoch": 4102444800,
+  "script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scripts": {},
+  "stale_image": false
+}
+MARKER
+MCP_STALE_LOG="$MCP_TEST_ROOT/stale.log"
+CLAUDE_CONFIG_DIR="$MCP_STALE_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_STALE_LOG" || true
+
+check "an image older than one already seen here warns loudly" bash -c \
+  "grep -qF 'are OLDER than the newest set' \"$MCP_STALE_LOG\""
+check "the stale verdict is recorded in the marker" bash -c \
+  "grep -qF '\"stale_image\": true' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# A stale container writes its own provenance too, but must not erase the
+# evidence that something newer was here - otherwise the next stale run is quiet.
+check "a stale provision does not lower the high-water mark" bash -c \
+  "grep -qF '\"newest_script_epoch\": 4102444800' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# Best-effort like the rest of the script: staleness is reported, never fatal.
+check "sync-claude-mcp still exits 0 on a stale image" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
 rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
@@ -408,6 +491,9 @@ check "claude-event-hook is installed and executable" bash -c "test -x /usr/loca
 check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/claude-event-hook"
 check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
 check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
+# #809: the worktree-context SessionStart hook ships beside them.
+check "worktree-context-hook is installed and executable" bash -c "test -x /usr/local/bin/worktree-context-hook"
+check "worktree-context-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/worktree-context-hook"
 
 # The hook shim must skip PreToolUse for the odoo MCP server's own tools (it
 # logs those dispatches server-side, #326/#340) and must still log every other
@@ -625,13 +711,70 @@ check "sync-claude-hooks creates settings.json when absent" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && test -f \"$HK_A/settings.json\""
 check "created settings.json is valid JSON" bash -c "jq . \"$HK_A/settings.json\" >/dev/null"
 check "settings.json contains the feature PreToolUse hook (match-all matcher)" bash -c \
-  "[ \"\$(jq -r '.hooks.PreToolUse[0].matcher' \"$HK_A/settings.json\")\" = '*' ] && jq -e '.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook PreToolUse\"))' \"$HK_A/settings.json\" >/dev/null"
+  "[ \"\$(jq -r '.hooks.PreToolUse[0].matcher' \"$HK_A/settings.json\")\" = '*' ] && jq -e '.hooks.PreToolUse[] | select((.hooks[].command | contains(\"/hooks/claude-event-hook\")) and (.hooks[].command | endswith(\" PreToolUse\")))' \"$HK_A/settings.json\" >/dev/null"
 check "settings.json contains all seven feature hook events" bash -c \
   "for ev in SessionStart UserPromptSubmit PreToolUse SubagentStart SubagentStop Stop SessionEnd; do jq -e --arg e \"\$ev\" '.hooks[\$e][] | select(.hooks[].command | contains(\"claude-event-hook\"))' \"$HK_A/settings.json\" >/dev/null || exit 1; done"
+
+# (a2) #803: settings.json is SHARED with the host through the ~/.claude bind
+# mount, so a container-absolute command resolves on exactly one side and every
+# host session's hooks exit-127. The shim is therefore published INTO the shared
+# config dir and referenced through a per-machine expansion. Guard both halves.
+check "sync-claude-hooks publishes the event shim into the shared config dir" bash -c \
+  "test -x \"$HK_A/hooks/claude-event-hook\" && cmp -s /usr/local/bin/claude-event-hook \"$HK_A/hooks/claude-event-hook\""
+check "no feature hook command bakes in a container-only absolute path (#803)" bash -c \
+  "! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
+check "the written hook command resolves and exits 0 in-container" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" ODOO_TASK_TRACKER_DIR=\"$HOOKS_TEST_ROOT/state\" sh -c \"\$cmd\" </dev/null"
+
+# The #803 regression test proper: evaluate the very same command literal on a
+# machine that has only ~/.claude - no CLAUDE_CONFIG_DIR, and the config dir at a
+# DIFFERENT absolute path, exactly as the host sees the other end of the mount.
+# The shim there is swapped for a tracer, so this asserts the command really ran
+# the config-dir copy with the event name as argv[1], not anything image-local.
+HK_HOST="$HOOKS_TEST_ROOT/hosthome"
+mkdir -p "$HK_HOST/.claude/hooks"
+cat > "$HK_HOST/.claude/hooks/claude-event-hook" <<TRACER
+#!/bin/sh
+printf '%s' "\$1" > "$HK_HOST/fired"
+exit 0
+TRACER
+chmod 0755 "$HK_HOST/.claude/hooks/claude-event-hook"
+check "the written hook command also resolves on the host side of the mount (#803)" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; env -u CLAUDE_CONFIG_DIR HOME=\"$HK_HOST\" sh -c \"\$cmd\" </dev/null && [ \"\$(cat \"$HK_HOST/fired\")\" = 'SessionStart' ]"
+
+# (a3) #809: a SECOND SessionStart hook, worktree-context-hook, rides the same
+# merge. It states the worktree Bash syntax constraint up front instead of
+# leaving every .claude/worktrees session to rediscover it by being refused. It
+# gets the same publish-then-reference treatment as the event shim (#803), and it
+# must fire for a worktree cwd ONLY - a SessionStart hook's stdout lands in the
+# session context verbatim, so a stray byte on a normal session is pure noise.
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p/.claude/worktrees/task-1"}' \
+  > "$HOOKS_TEST_ROOT/wt-payload.json"
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p"}' \
+  > "$HOOKS_TEST_ROOT/plain-payload.json"
+
+check "sync-claude-hooks publishes the worktree-context hook into the shared config dir (#809)" bash -c \
+  "test -x \"$HK_A/hooks/worktree-context-hook\" && cmp -s /usr/local/bin/worktree-context-hook \"$HK_A/hooks/worktree-context-hook\""
+check "settings.json registers the worktree-context hook on SessionStart (#809)" bash -c \
+  "[ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+check "the worktree-context hook command resolves on both sides of the mount (#809)" bash -c \
+  "jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q 'worktree-context-hook' && ! jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
+check "the written worktree-context command runs and emits a SessionStart envelope (#809)" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[] | .hooks[] | .command | select(contains(\"worktree-context-hook\"))' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" sh -c \"\$cmd\" < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -e '.hookSpecificOutput.hookEventName == \"SessionStart\" and ((.hookSpecificOutput.additionalContext | length) > 200)' >/dev/null"
+check "worktree-context-hook stays silent and exits 0 for a non-worktree cwd (#809)" bash -c \
+  "out=\"\$(/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/plain-payload.json\")\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+check "the emitted context says its constraint list is not exhaustive (#809)" bash -c \
+  "/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -r '.hookSpecificOutput.additionalContext' | grep -qi 'not exhaustive'"
 
 # (b) Running the sync TWICE yields no duplicate feature entries.
 check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+# #809: the worktree hook's command contains no `claude-event-hook`, so it is
+# only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
+# would survive the strip and be re-appended, accumulating one duplicate per
+# container create - re-run twice more and pin the count at exactly one.
+check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '2' ]"
 
 # (c) A pre-seeded user setting AND a user-authored hook survive the merge.
 HK_B="$HOOKS_TEST_ROOT/b"
@@ -651,6 +794,27 @@ check "a user-authored hook survives the merge" bash -c \
 check "the feature hook is added alongside the user's (two PreToolUse groups)" bash -c \
   "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '2' ]"
 
+# (c2) #803 migration: the stale container-absolute entries an earlier container
+# wrote into the user's real settings.json are stripped and REPLACED, not left to
+# sit beside the new ones - the marker is a substring of both forms.
+HK_D="$HOOKS_TEST_ROOT/d"
+mkdir -p "$HK_D"
+cat > "$HK_D/settings.json" <<'JSON'
+{ "hooks": {
+    "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
+  } }
+JSON
+check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '1' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+
+# (c3) With no shim to publish and none already in place, writing the entries
+# would hand every session a command that resolves nowhere - the #803 failure
+# mode. Refuse instead: no settings.json is created.
+HK_E="$HOOKS_TEST_ROOT/e"
+mkdir -p "$HK_E"
+check "sync-claude-hooks writes no entries when no shim can be published (#803)" bash -c \
+  "PERSONAL_FEATURES_HOOK_CMD=\"$HOOKS_TEST_ROOT/absent-shim\" CLAUDE_CONFIG_DIR=\"$HK_E\" /usr/local/bin/sync-claude-hooks && test ! -e \"$HK_E/settings.json\""
+
 # (d) A corrupt/unparseable settings.json is left strictly alone (never destroy
 # the user's real config).
 HK_C="$HOOKS_TEST_ROOT/c"
@@ -658,6 +822,71 @@ mkdir -p "$HK_C"
 printf '{ this is : not json ' > "$HK_C/settings.json"
 check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" bash -c \
   "before=\$(cat \"$HK_C/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_C\" /usr/local/bin/sync-claude-hooks; rc=\$?; [ \$rc -eq 0 ] && [ \"\$before\" = \"\$(cat \"$HK_C/settings.json\")\" ]"
+
+# --- #805: every hook command is resolved, not just the two that broke first ---
+# The feature used to assert exactly two of the ten commands settings.json
+# references - the odoo-sdk console scripts in install.sh (#496) and
+# mempalace-recall.sh in mempalace-repair (#744) - each added reactively after
+# the thing it guarded had already broken. Everything else was provisioned on
+# trust, including odoo-api-guard.sh, which exit-127'd 73 times while silently
+# permitting every call it was installed to block. Both one-offs are deleted and
+# their coverage is asserted here, against the one routine that replaced them.
+
+# The BUILD-time half: the programs a feature hook command execs. HOOK_DEPS is
+# overridable so these drive the routine rather than the real toolchain.
+check "--check-deps passes when every hook dependency resolves" bash -c \
+  "PERSONAL_FEATURES_HOOK_DEPS='jq sh' /usr/local/bin/sync-claude-hooks --check-deps"
+check "--check-deps fails and names a hook dependency that does not resolve" bash -c \
+  "if PERSONAL_FEATURES_HOOK_DEPS='jq definitely-not-installed-805' /usr/local/bin/sync-claude-hooks --check-deps 2>\"$HOOKS_TEST_ROOT/deps.err\"; then exit 1; fi; grep -q 'definitely-not-installed-805' \"$HOOKS_TEST_ROOT/deps.err\""
+# install.sh calls exactly this after linking the console scripts, which is what
+# used to be the hand-written loop; gated on odoo-mcp like the PATH checks above
+# so it no-ops when no SDK wheel was bundled.
+check "the real hook dependencies resolve when the SDK is installed (#496 coverage)" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || /usr/local/bin/sync-claude-hooks --check-deps"
+# The PROVISION-time half: every command the settings file actually references.
+# It can only run here - settings.json lives in the bind-mounted config dir and
+# does not exist at image-build time.
+HK_F="$HOOKS_TEST_ROOT/f"
+mkdir -p "$HK_F"
+cat > "$HK_F/settings.json" <<JSON
+{ "hooks": {
+    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/mempalace-recall.sh"}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/odoo-api-guard.sh"}]},
+                    {"matcher":"Edit","hooks":[{"type":"command","command":"jq --version"}]} ]
+  } }
+JSON
+# Present but not executable is the same failure as absent: /bin/sh exit-127s it.
+printf '#!/bin/sh\n' > "$HK_F/odoo-api-guard.sh"
+chmod 0644 "$HK_F/odoo-api-guard.sh"
+check "sync-claude-hooks resolves every command in the settings file" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks 2>\"$HK_F/err\""
+check "it names a referenced hook script that is missing (#744 coverage)" bash -c \
+  "grep -q 'mempalace-recall.sh' \"$HK_F/err\""
+check "it never creates the missing hook script" bash -c \
+  "! test -e \"$HK_F/hooks/mempalace-recall.sh\""
+check "it names a referenced hook script that is present but not executable" bash -c \
+  "grep -q 'odoo-api-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
+check "it says nothing about a command that does resolve" bash -c \
+  "! grep -q 'jq --version' \"$HK_F/err\""
+# A hook the user owns is theirs to fix: report it, but never fail container
+# create over a file this feature does not own and deliberately never writes.
+check "a user-owned hook that does not resolve still exits 0" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks >/dev/null 2>&1"
+check "the feature's own entries raise no resolution error" bash -c \
+  "! grep -q 'feature-owned' \"$HK_F/err\""
+
+# Resolving a command must never RUN it: these strings are user config, and the
+# audit expands them with the shell. A command carrying a substitution is refused
+# and reported, not evaluated.
+HK_G="$HOOKS_TEST_ROOT/g"
+mkdir -p "$HK_G"
+cat > "$HK_G/settings.json" <<JSON
+{ "hooks": { "SessionStart": [ {"hooks":[{"type":"command","command":"\$(touch $HK_G/EXECUTED) x"}]} ] } }
+JSON
+check "sync-claude-hooks never executes a hook command while resolving it" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_G\" /usr/local/bin/sync-claude-hooks 2>\"$HK_G/err\" && ! test -e \"$HK_G/EXECUTED\""
+check "a command it cannot resolve by inspection is reported, not passed silently" bash -c \
+  "grep -q 'left unchecked' \"$HK_G/err\""
 
 rm -rf "$HOOKS_TEST_ROOT"
 
@@ -739,21 +968,21 @@ check "mempalace-repair leaves a corrupt config.json untouched and exits 0" bash
 # --- mempalace-as-only-memory asserts (#744) ----------------------------------
 # Native Claude auto-memory is off in the shared settings.json and the native
 # memory files were mined into the palace, so mempalace is the only memory left
-# and three things have to hold: hooks.auto_save true, identity.txt present, and
-# an executable SessionStart recall hook. The repair step REPORTS on all three
-# and repairs none of them - except a wholly absent identity.txt, which it seeds.
-# Driven against the same MEMPALACE_MOUNT sandbox as the checks above, plus a
-# sandbox CLAUDE_CONFIG_DIR so the real claude-home is never read.
+# and two things have to hold here: hooks.auto_save true and identity.txt
+# present. The repair step REPORTS on both and repairs neither - except a wholly
+# absent identity.txt, which it seeds. (The third, the SessionStart recall hook,
+# moved to sync-claude-hooks with #805; see the block above.) Driven against the
+# same MEMPALACE_MOUNT sandbox as the checks above.
 
-# The sandbox every assert case below starts from: a home, a mount, a fake
-# claude-home, and a config.json whose palace_path already agrees (so step 3
-# stays quiet and only the step-4 output is under test).
-_ASSERT_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\" \"\$d/claude/hooks\"; printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":true}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" CLAUDE_CONFIG_DIR=\"\$d/claude\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
+# The sandbox every assert case below starts from: a home, a mount, and a
+# config.json whose palace_path already agrees (so step 3 stays quiet and only
+# the step-4 output is under test).
+_ASSERT_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":true}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
 
 # A true hooks.auto_save with everything else in place is the healthy container:
 # the assert step must say nothing at all on stderr.
-check "mempalace-repair is silent when auto_save, identity and recall hook are all good" bash -c \
-  "$_ASSERT_SETUP printf 'agent: devcontainer-claude\n' > \"\$d/mount/identity.txt\"; printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod +x \"\$d/claude/hooks/mempalace-recall.sh\"; err=\"\$(_run 2>&1 >/dev/null)\"; [ -z \"\$err\" ]"
+check "mempalace-repair is silent when auto_save and identity are both good" bash -c \
+  "$_ASSERT_SETUP printf 'agent: devcontainer-claude\n' > \"\$d/mount/identity.txt\"; err=\"\$(_run 2>&1 >/dev/null)\"; [ -z \"\$err\" ]"
 
 # The #744 bug itself: auto_save was false, so every Stop/SessionEnd/PreCompact
 # hook fire saved nothing and nothing said so.
@@ -785,20 +1014,17 @@ check "mempalace-repair leaves an existing identity.txt byte-identical" bash -c 
 check "mempalace-repair does not re-seed identity.txt on a second run" bash -c \
   "$_ASSERT_SETUP _run >/dev/null 2>&1; before=\"\$(cat \"\$d/mount/identity.txt\")\"; _run >/dev/null 2>&1 && [ \"\$before\" = \"\$(cat \"\$d/mount/identity.txt\")\" ]"
 
-# The recall hook is hand-maintained and named by path from settings.json, so a
-# missing or non-executable file fails the hook on every session start. Warn -
-# and never create it, since a stub would recall nothing while looking healthy.
-check "mempalace-repair warns when the recall hook is missing" bash -c \
-  "$_ASSERT_SETUP _run 2>&1 >/dev/null | grep -q 'mempalace-recall.sh'"
-
-check "mempalace-repair never creates the recall hook" bash -c \
-  "$_ASSERT_SETUP _run >/dev/null 2>&1; ! test -e \"\$d/claude/hooks/mempalace-recall.sh\""
-
-check "mempalace-repair warns when the recall hook is not executable" bash -c \
-  "$_ASSERT_SETUP printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod 0644 \"\$d/claude/hooks/mempalace-recall.sh\"; _run 2>&1 >/dev/null | grep -q 'not executable'"
+# The SessionStart recall hook used to be asserted here too. It is not any more
+# (#805): it was one of exactly two hand-written assertions over the ten commands
+# settings.json references, so sync-claude-hooks now resolves them all and
+# mempalace-recall.sh is covered by the general rule. Its guards live with that
+# rule, in the #805 block above - including the #744 decision this step encoded,
+# that the file is warned about and never created.
+check "mempalace-repair no longer carries its own recall-hook assertion (#805)" bash -c \
+  "! grep -q 'mempalace-recall.sh' /usr/local/bin/mempalace-repair"
 
 # Every branch above is advisory: none of them may change the exit status.
-check "mempalace-repair still exits 0 with all three asserts failing" bash -c \
+check "mempalace-repair still exits 0 with both asserts failing" bash -c \
   "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run >/dev/null 2>&1; [ \$? -eq 0 ]"
 
 # --- mempalace workspace init, run-once (#643 follow-up) ----------------------
@@ -876,6 +1102,196 @@ check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash
 # regression here fails the suite instead of wedging it.
 check "real mempalace init completes headless and writes rooms" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
+
+# --- the shared mempalace MCP hub (#764) --------------------------------------
+# mempalace hands the MCP writer lease to one process per palace, so a container
+# where every session spawns its own server has exactly one session that can
+# write and N-1 that fail at write time with -32001. The fix is one long-lived
+# `mempalace serve` per container, started from postStartCommand - which
+# `devcontainer features test` does not run, so the script is driven by hand
+# here. MEMPALACE_HUB_CMD substitutes a stub for the real binary so these assert
+# the launcher's policy, not mempalace's server. Port 8799 throughout, never the
+# 8765 default, so nothing here can collide with a real hub.
+check "mempalace-hub is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-hub"
+check "mempalace-hub passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/mempalace-hub"
+
+# Pre-created 0666 for the same reason as mempal-dir.sh: install.sh cannot know
+# which account the dev container CLI runs postStartCommand as, and the hub's
+# only diagnostics live in this file.
+check "the hub log is pre-created and writable by any uid" bash -c \
+  "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
+
+check "mempalace-hub status reports no hub when nothing is listening" bash -c \
+  "MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
+check "mempalace-hub rejects an unknown action" bash -c \
+  "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
+
+# A stub that records its argv and the environment the launcher hands it, then
+# outlives the launcher - the detach path has to be exercised, not simulated.
+_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\";"
+
+check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
+
+# The idle-exit watchdog exists for abandoned PER-SESSION servers; on the one
+# process the container shares it is a self-inflicted outage whose next repair
+# is the next container start.
+check "mempalace-hub disables the hub's idle-exit watchdog" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -qx 'idle=0' \"\$d/bin/stub.calls\""
+
+# A background child still holding the lifecycle command's pipes would keep the
+# dev container CLI waiting on it forever, so the launcher must return on its
+# own timeout even though the hub it started is still alive.
+check "mempalace-hub does not block on the hub it started" bash -c \
+  "$_HUB_STUB_SETUP s=\$(date +%s); /usr/local/bin/mempalace-hub >/dev/null 2>&1; [ \$(( \$(date +%s) - s )) -lt 20 ]"
+
+# Every failure is a warning: no hub is the pre-#764 behaviour, which is
+# degraded (one writer among N sessions), not broken.
+check "mempalace-hub exits 0 when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1"
+check "mempalace-hub warns when the hub never answers" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
+check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
+  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub 2>/dev/null"
+check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
+  "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
+
+# The pinned mempalace must actually be able to serve a shared transport; if a
+# version bump ever drops `serve`, the whole design goes with it.
+check "the pinned mempalace ships a 'serve' subcommand" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || mempalace serve --help 2>&1 | grep -q -- '--port'"
+# What the sessions launch. Since 3.9.0 this console script is the hub-aware
+# proxy (mempalace.mcp_proxy:main), not the server - which is why no session MCP
+# config has to be rewritten for any of this to work.
+check "the mempalace-mcp console script is on PATH" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || command -v mempalace-mcp >/dev/null 2>&1"
+
+# End-to-end against the REAL binary, on an isolated HOME so the container's own
+# palace and hub are untouched: start, confirm the endpoint answers, confirm a
+# second start is a no-op rather than a second hub, then stop it via the pid in
+# mempalace's own per-palace registry record (no dependency on pkill).
+check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
+
+# --- the odoo-ls language server (#746) ---------------------------------------
+# The server is what gives a Claude Code session Odoo-aware diagnostics,
+# go-to-definition and hover. It is installed as a pinned, checksum-verified
+# GitHub release asset, so a bump that forgets a digest, or an upstream re-cut of
+# a tag, shows up here as a missing binary rather than as a container that
+# quietly has no language intelligence.
+check "the odoo-ls server binary is installed" bash -c \
+  "test -x /usr/local/share/odoo-ls/odoo_ls_server"
+# Bump this string whenever ODOO_LS_VERSION moves - same contract as the pinned
+# Claude Code version above.
+check "odoo-ls is pinned to 1.6.0" bash -c \
+  "/usr/local/share/odoo-ls/odoo_ls_server --version | grep -qF '1.6.0'"
+
+# The server resolves its stdlib/stub roots relative to its OWN binary before
+# falling back to the cwd, and without stdlib stubs it resolves nothing while
+# still starting and answering - a silent failure. So the co-location is the
+# assertion, not the download.
+check "typeshed stubs sit next to the binary, where the server looks for them" bash -c \
+  "test -d /usr/local/share/odoo-ls/typeshed/stdlib && test -d /usr/local/share/odoo-ls/typeshed/stubs"
+# With no writable log directory the rolling file appender's build is an
+# .expect(), i.e. a panic before the server ever speaks LSP. install.sh cannot
+# know which uid runs a session, so this is the guaranteed fallback.
+check "the server's fallback log directory is writable by any uid" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls/logs)\" = '777' ]"
+
+# The launcher is what the odoo-dev plugin's .lsp.json names as `command`;
+# Claude Code resolves it on PATH and refuses to run a bundled binary.
+check "odoo-ls-server is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/odoo-ls-server"
+check "odoo-ls-server passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/odoo-ls-server"
+check "odoo-ls-config is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/odoo-ls-config"
+check "odoo-ls-config passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/odoo-ls-config"
+
+# stdio is the server's DEFAULT transport and --use-tcp is what switches away
+# from it; there is no --stdio flag to pass and passing one is a startup error.
+# #746 asked the question, so guard the answer. Comment lines are stripped
+# first: the launcher explains both flags in prose right where it declines to
+# pass them, and a grep that could not tell the two apart would fail on the
+# explanation rather than on the code.
+check "the launcher passes no --stdio flag (stdio is the default transport)" bash -c \
+  "! grep -v '^[[:space:]]*#' /usr/local/bin/odoo-ls-server | grep -qF -- '--stdio'"
+check "the launcher never switches the server to TCP" bash -c \
+  "! grep -v '^[[:space:]]*#' /usr/local/bin/odoo-ls-server | grep -qF -- '--use-tcp'"
+
+# ODOO_LS_DISABLE is the kill switch that needs no Claude Code restart policy
+# behind it. It must start nothing and still exit 0: a non-zero exit reads to
+# Claude Code as a crash and burns the restart budget.
+check "ODOO_LS_DISABLE starts nothing and exits 0" bash -c \
+  "[ -z \"\$(ODOO_LS_DISABLE=1 ODOO_LS_BIN=/bin/echo /usr/local/bin/odoo-ls-server 2>/dev/null)\" ]"
+check "a missing server binary exits 0 with a warning rather than crash-looping" bash -c \
+  "ODOO_LS_BIN=/definitely/not/here /usr/local/bin/odoo-ls-server 2>&1 >/dev/null | grep -q 'no Odoo language intelligence'"
+
+# The generated container-wide config and a project's own odools.toml are never
+# both in play: the server merges its sources agree-or-error for scalars, so
+# passing both would turn a legitimate per-project override of odoo_path or
+# python_path into a config error. ODOO_LS_BIN=/bin/echo makes the launcher
+# print the argv it would have exec'd.
+_OLS_FAKE="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/proj/sub\"; printf '[[config]]\nname = \"default\"\n' > \"\$d/gen.toml\";"
+check "the generated config is passed when the project has none" bash -c \
+  "$_OLS_FAKE ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -qF -- \"--config-path \$d/gen.toml\""
+check "a project's own odools.toml suppresses the generated one" bash -c \
+  "$_OLS_FAKE touch \"\$d/proj/odools.toml\"; ! ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj/sub\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -q -- '--config-path'"
+# The launcher PREPENDS its own flags so a caller's arguments stay last and win -
+# both the .lsp.json `args` list and the hand-run `odoo-ls-server --version` the
+# post-rebuild checklist tells people to use. A config has to be in play for the
+# launcher to exec anything at all (see below), and postCreateCommand does not
+# run under `devcontainer features test`, so point it at a throwaway one.
+check "the launcher passes the caller's own arguments through, last" bash -c \
+  "$_OLS_FAKE ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" odoo-ls-server --version | grep -qF '1.6.0'"
+# The plugin registers .py for every project, not only Odoo ones. With no config
+# anywhere the server would index a whole tree to answer nothing, because
+# without odoo_path it resolves no model, no field and no xmlid - so start
+# nothing, and still exit 0 rather than burn the restart budget.
+check "no config anywhere starts nothing and exits 0" bash -c \
+  "$_OLS_FAKE [ -z \"\$(ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/absent.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null)\" ]"
+check "the launcher creates the log directory it names (the server will not)" bash -c \
+  "$_OLS_FAKE ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" ODOO_LS_LOGS_DIR=\"\$d/logs\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server >/dev/null 2>&1; test -d \"\$d/logs\""
+# A log directory the server cannot write to is a PANIC before it speaks LSP
+# (exit 101), and the default path is shared across accounts, so one session run
+# as root can leave one the next session cannot write. The flag has to be
+# dropped, not passed, so the 0777 fallback next to the binary takes over.
+# Skipped under a root remote user, for whom nothing is unwritable.
+check "an unwritable log directory drops the flag instead of panicking the server" bash -c \
+  "[ \"\$(id -u)\" = '0' ] || { $_OLS_FAKE mkdir -p \"\$d/ro\"; chmod 0555 \"\$d/ro\"; ! ODOO_LS_BIN=/bin/echo ODOO_LS_CONFIG=\"\$d/gen.toml\" ODOO_LS_LOGS_DIR=\"\$d/ro\" CLAUDE_PROJECT_DIR=\"\$d/proj\" /usr/local/bin/odoo-ls-server 2>/dev/null | grep -q -- '--logs-directory'; }"
+
+# odoo-ls-config derives the config from paths that only exist once the
+# container does, and must never fail container creation.
+_OLS_TREE="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/odoo/addons\" \"\$d/ent\" \"\$d/ws\";"
+check "odoo-ls-config writes nothing when the container has no Odoo source" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/absent\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+# A stale config outlives the container it described; every path setting is
+# resolved against the filesystem, so a stale entry is a hard config error -
+# worse than no config at all.
+check "odoo-ls-config removes a stale config when the Odoo source is gone" bash -c \
+  "$_OLS_TREE touch \"\$d/out.toml\"; ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/absent\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+check "odoo-ls-config writes odoo_path and every addons path it can see" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/ent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"odoo_path = \\\"\$d/odoo\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/odoo/addons\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/ent\\\"\" \"\$d/out.toml\" && grep -qF \"\\\"\$d/ws\\\"\" \"\$d/out.toml\""
+# An addons path that does not exist is a hard config error at server startup,
+# so a directory that is absent must simply not be named.
+check "odoo-ls-config omits an enterprise directory that is not there" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && ! grep -qF 'absent' \"\$d/out.toml\""
+# The JS half of the server shells out to tsserver and reports a diagnostic on
+# every session when it is missing; typescript is not installed here.
+check "odoo-ls-config turns off the server's JS half (no tsserver in this image)" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF 'disable_javascript = true' \"\$d/out.toml\""
+check "ODOO_LS_SKIP_CONFIG opts out entirely" bash -c \
+  "$_OLS_TREE ODOO_LS_SKIP_CONFIG=1 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" /usr/local/bin/odoo-ls-config >/dev/null && ! test -e \"\$d/out.toml\""
+
+# End-to-end against the REAL server: the config odoo-ls-config generates has to
+# be one the server actually accepts. A rejected key or an unresolvable path is
+# reported over LSP, not on exit status, so drive it in --parse mode instead -
+# that is the one mode where the server reports on stdout and then stops.
+check "the real server accepts a generated config in --parse mode" bash -c \
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null; cd \"\$d\" && /usr/local/share/odoo-ls/odoo_ls_server --parse --tracked-folders \"\$d/ws\" --config-path \"\$d/out.toml\" --output \"\$d/parse.json\" --logs-directory \"\$d\" >/dev/null 2>&1; test -f \"\$d/parse.json\""
 
 # Regression guard for #233: the credential-holding config dirs must be 0700,
 # not the umask default 0755, or real secrets (e.g. ~/.claude/.credentials.json,

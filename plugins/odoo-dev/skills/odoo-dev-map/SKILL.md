@@ -44,12 +44,16 @@ One step per skill; no orchestrator. Route from here.
 | Skill | Does | Invoke when |
 |---|---|---|
 | `odoo-dev:odoo-devcontainer` | Devcontainer env map, CLI, ORM and frontend references | Always, inside an Odoo devcontainer |
+| `odoo-dev:odoo-populate-db` | Seed a local DB from a named model profile; fails loudly where `odoo populate` exits 0 | "seed a dev database", benchmark volume, a populate run that silently half-finished |
 | `odoo-dev:odoo-upgrade` | Port modules 16 → 17 → 18 → 19; full lifecycle SOP; Studio inventory | "upgrade this module", "what breaks?" |
 | `odoo-dev:principles` | Engineering principles for design decisions | Any code generation or review |
 | `odoo-dev:odoo-dev-map` | This router | Work spans more than one step |
 
-Outside this plugin: `ingest`, `process`, `query` and `lint` are personal Second
-Brain skills and are not part of any Odoo workflow.
+Outside this plugin: `ingest`, `process`, `query`, `lint` and
+`llm-wiki-workspace` are personal Second Brain skills and are not part of any
+Odoo workflow. They are the user's own, not the devcontainer feature's, so
+`check-stray-skills.sh` never reports them and the feature's cleanup never
+deletes them (#778).
 
 ## Agent Map
 

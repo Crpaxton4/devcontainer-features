@@ -2,15 +2,15 @@
 description: Open a client-visible draft pull request in a forked odoo-dev-pr — either one finished, gate-cleared Odoo task branch, or a release promoting merged work one hop up the environment chain.
 argument-hint: <task-id> | release <from-branch> <to-branch>
 arguments: [task, from_branch, to_branch]
-allowed-tools: Bash(echo:*), Bash(grep:*), Bash(ls:*), Bash(mkdir:*), Bash(test:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh:*)
 disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-pr
 background: false
 ---
 
-TASK ROUTE ARTIFACTS: !`echo "$task" | grep -qE '^[0-9]+$' && ls -d "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" 2>/dev/null || echo 'NOT THE TASK ROUTE — the first argument is not an Odoo task id with a directory already on disk'`
-RELEASE ROUTE ARTIFACTS: !`echo "$task" | grep -qx release && echo "$from_branch/$to_branch" | grep -E '^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$' | grep -qv '\.\.' && mkdir -p "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/releases/$from_branch-to-$to_branch" && echo "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/releases/$from_branch-to-$to_branch" || echo 'NOT THE RELEASE ROUTE — the arguments are not the word release followed by two plain branch names'`
+TASK ROUTE ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NOT THE TASK ROUTE — the first argument is not an Odoo task id with a directory already on disk' -- "$task"`
+RELEASE ROUTE ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh release --create --else 'NOT THE RELEASE ROUTE — the arguments are not the word release followed by two plain branch names' -- "$task" "$from_branch" "$to_branch"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
 GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
@@ -57,7 +57,7 @@ cannot ask one.
 This is the task route's `--for pr` pre-gate, run by the command before you were
 dispatched, and it is the only gate that has run so far:
 
-!`echo "$task" | grep -qE '^[0-9]+$' && test -d "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" && ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" --for pr || echo 'NO PASSING --for pr GATE'`
+!`${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh --for pr --soft -- "$task"`
 
 Read that line three ways:
 
@@ -71,11 +71,13 @@ Read that line three ways:
 
 **The release route is deliberately not pre-gated, and restoring a pre-gate here
 would break every release.** `gate.sh --for release` reads `00-context.json` with
-`flow_confirmed: true` and a `60-release.json` manifest, and neither of those exists
-before you have built the manifest, so a pre-gate would report a missing manifest on
-every promotion and block work that is perfectly sound. On the release route you run
-the gate yourself, against the release directory above, **after** you have written
-`60-release.json` and before anything leaves the machine.
+`flow_confirmed: true` and a `60-release.json` manifest. The release directory starts
+out holding neither: `odoo-dev:odoo-release` writes `00-context.json` itself in its
+step 1, from the resolver, and the manifest only exists once it has been built. So a
+pre-gate here would report both as missing on every promotion and block work that is
+perfectly sound. On the release route you run the gate yourself, against the release
+directory above, **after** you have written `60-release.json` and before anything
+leaves the machine.
 
 The pre-gate is a fast, legible failure seconds after someone types the command, and
 it is not the enforcement. The enforcement is the `PreToolUse` hook this plugin
@@ -104,9 +106,14 @@ Return contract, typed out in full in each Bash call. On the task route:
     <ARTIFACT above> put <TASK ROUTE ARTIFACTS above> 40-coderabbit <file>
     <ARTIFACT above> put <TASK ROUTE ARTIFACTS above> 50-pr <file>
 
-On the release route, one stage and one only:
+On the release route, two stages:
 
+    <ARTIFACT above> put <RELEASE ROUTE ARTIFACTS above> 00-context -
     <ARTIFACT above> put <RELEASE ROUTE ARTIFACTS above> 60-release <file>
+
+`00-context` is the resolver output, written only when the stage is absent — the
+routed skill carries the guarded form, so take it from there rather than typing an
+unguarded put.
 
 Final message: the artifact path, then plain English for a person who has read
 none of this.

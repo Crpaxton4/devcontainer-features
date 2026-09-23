@@ -6,11 +6,24 @@
 # says yes or no. It spawns nothing, fixes nothing, and asks no agent anything.
 # Every blocker below exists because a real run once went green without it.
 #
-# Usage: gate.sh <artifacts_dir> [--for pr|release]   (default: pr)
+# Usage: gate.sh [--for pr|release] [--soft] [--] <artifacts_dir|task-id>  (default: pr)
+#
+# <artifacts_dir> may be given as a bare Odoo task id — anything matching ^[0-9]+$ —
+# which resolves against the state dir to <state>/tasks/<id>. Anything else is a
+# path and is used exactly as given, so every caller that already passes a
+# fully-resolved directory is unaffected. The rule lives in state-dir.sh, sourced
+# below, so gate.sh and artifact.sh cannot drift apart on what an id is.
+#
+# --soft never exits non-zero. A usage error, an unresolvable directory and a red
+# verdict all end with `NO PASSING --for <mode> GATE` on stdout and exit 0. It is
+# for a command's `!`…`` preamble and nothing else: a non-zero exit there aborts the
+# whole command expansion, so the agent is never dispatched and the shell's error
+# becomes the user's error message. Nothing that READS the exit code — gate-hook.sh,
+# the test suite — passes it, which is why the codes below are unchanged without it.
 #
 # Last stdout line: {"ok","for","checked":[],"blockers":[{"blocker","detail"}],
 #                    "warnings":[{"warning","detail"}],"revisions":{}}
-# Exit codes: 0 pass | 1 at least one blocker | 2 usage
+# Exit codes: 0 pass | 1 at least one blocker | 2 usage      (--soft: 0 always)
 #
 # A warning is a check that ran, found something a human should see, and did not
 # stop the run. `ok` and the exit code are driven by `blockers` alone, so
@@ -24,18 +37,56 @@
 # from "green on the first".
 set -euo pipefail
 
-[ $# -ge 1 ] || { echo "usage: gate.sh <artifacts_dir> [--for pr|release]" >&2; exit 2; }
-DIR="$1"; shift
-FOR=pr
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --for) FOR="${2:?--for needs pr|release}"; shift 2 ;;
-    *) echo "gate.sh: unknown option $1" >&2; exit 2 ;;
-  esac
-done
-case "$FOR" in pr|release) ;; *) echo "gate.sh: --for must be pr or release" >&2; exit 2 ;; esac
-[ -d "$DIR" ] || { echo "gate.sh: artifacts dir not found: $DIR" >&2; exit 2; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=state-dir.sh
+. "$HERE/state-dir.sh"
 
+FOR=pr
+SOFT=0
+DIR=""
+have_dir=0
+endopts=0
+
+# The only exit that --soft may take. The reason always goes to stderr, so a command
+# file with a real mistake in it is still diagnosable; only the exit code is softened.
+give_up() {
+  echo "gate.sh: $1" >&2
+  if [ "$SOFT" -eq 1 ]; then
+    echo "NO PASSING --for $FOR GATE"
+    exit 0
+  fi
+  exit 2
+}
+
+# Options may come before or after the directory: gate-hook.sh and the test suite
+# write `gate.sh <dir> --for pr`, and a preamble that puts the substituted argument
+# last behind `--` is the shape a worktree-isolated session can verify.
+while [ $# -gt 0 ]; do
+  if [ "$endopts" -eq 0 ]; then
+    case "$1" in
+      --) endopts=1; shift; continue ;;
+      --soft) SOFT=1; shift; continue ;;
+      --for)
+        [ $# -ge 2 ] || give_up "--for needs pr|release"
+        case "$2" in
+          pr | release) FOR="$2" ;;
+          *) give_up "--for must be pr or release" ;;
+        esac
+        shift 2; continue ;;
+      -?*) give_up "unknown option $1" ;;
+    esac
+  fi
+  [ "$have_dir" -eq 0 ] || give_up "unexpected argument: $1"
+  DIR="$1"; have_dir=1; shift
+done
+
+[ "$have_dir" -eq 1 ] || give_up "no artifacts dir given. usage: gate.sh [--for pr|release] [--soft] [--] <artifacts_dir|task-id>"
+DIR="$(odoo_dev_artifacts_dir "$DIR")"
+[ -d "$DIR" ] || give_up "artifacts dir not found: $DIR"
+
+# The verdict's own exit status has to be readable here rather than ending the
+# script through `set -e`, because --soft turns a red one into a marker.
+set +e
 node --input-type=module -e '
 import { existsSync, readFileSync } from "fs";
 const [dir, mode] = process.argv.slice(1);
@@ -200,3 +251,12 @@ console.log(JSON.stringify({
 }));
 process.exit(blockers.length === 0 ? 0 : 1);
 ' -- "$DIR" "$FOR"
+rc=$?
+
+# A red verdict under --soft still prints its blockers first, then the marker, so the
+# command body reads exactly the two lines it always did.
+if [ "$SOFT" -eq 1 ] && [ "$rc" -ne 0 ]; then
+  echo "NO PASSING --for $FOR GATE"
+  exit 0
+fi
+exit "$rc"
