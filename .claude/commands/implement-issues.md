@@ -371,6 +371,13 @@ the text and decide. The three to recognise:
   progress in the ops worktree named in the state file. Resolve there,
   `git add`, re-run the identical command; the script continues that rebase
   rather than restarting it.
+- **A conflict reported by `gh pr update-branch` instead** → **the remedy above
+  does not apply.** That command runs on the server, so no rebase exists locally
+  and there is nothing to `git add`. It happens when a node found `BEHIND` at
+  merge time cannot be fast-forwarded. The script says so and names the branch;
+  cut a worktree on it, `rebase origin/main`, resolve, force-push, remove the
+  worktree, then re-run the identical command. Two nodes hit this in one wave
+  when several workers extended the same line of `install.sh`.
 - **`gh pr merge` denied by the permission classifier** → **degrade to
   handoff**: print the exact command, wait for the user's "merged", re-run.
 
