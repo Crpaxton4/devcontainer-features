@@ -1,0 +1,26 @@
+schema_version: "1.1"
+name: push-it-up-for-the-client
+description: >-
+  In-domain PR request in everyday phrasing, not the skill's canonical wording.
+  Should fire odoo-dev:odoo-pr and must not open the PR by hand from Bash.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    the sale order report tweak is done on my branch and the tour passes. push it up and let the client see it
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-odoo-pr
+    tool: Skill
+    input_match: "odoo-pr"
+    min: 1
+  - type: tool_used
+    name: no-bare-gh-pr-create
+    tool: Bash
+    input_match: "gh pr create"
+    max: 0
+expected_outcome: >-
+  The odoo-pr skill is invoked; the PR is not opened with a bare gh pr create.

@@ -92,6 +92,20 @@ HOOK_MARKERS='["claude-event-hook","worktree-context-hook"]'
 HOOK_DEPS=()
 IFS=' ' read -r -a HOOK_DEPS <<< "${PERSONAL_FEATURES_HOOK_DEPS:-odoo-sdk odoo-mcp odoo-tui}" || true
 
+# The provision marker (#806) — the one piece of state about this machine's
+# feature scripts that outlives the image, because it lives in the shared,
+# host-persisted config dir. #804 adds the runtime heartbeat to the SAME file
+# rather than a second breadcrumb of its own; see check_hook_heartbeat below.
+PROVISION_MARKER_NAME='personal-features-provision.json'
+
+# How long a silence is allowed before it is reported. A week is chosen against
+# the failure it is sized for: the #804 outage ran three months, while an
+# ordinary gap between container creates is days at most, and a machine genuinely
+# idle for a week reports once and then goes quiet again as soon as any session
+# records an event. Overridable so the feature test can drive the comparison
+# without waiting a week.
+HOOK_STALE_SECONDS="${PERSONAL_FEATURES_HOOK_STALE_SECONDS:-604800}"
+
 note() { echo "sync-claude-hooks: $1" >&2; }
 
 # --- hook command resolvability (#805) ---------------------------------------
@@ -215,6 +229,99 @@ audit_hook_commands() {
     return "$fatal"
 }
 
+# --- the runtime half of the same question (#804) ------------------------------
+# audit_hook_commands above answers "does this command resolve, here, now". #804
+# is the observation that the answer can stop being yes at any time afterwards
+# and nothing notices: a hook that cannot execute produces no event AND NO
+# SIGNAL, so 3,506 events went missing over three months and the only trace was a
+# string in the transcripts. The tracker's own tables cannot show it — the
+# signature is the ABSENCE of rows, which looks exactly like a quiet week.
+#
+# Neither half of the pair can be written by the failing component: whatever
+# breaks the hook (an unlinked console script, #496; a command that resolves on
+# only one side of the mount, #803) stops the shim before any failure counter it
+# holds could run. So the breadcrumb is written by the path that SUCCEEDS —
+# claude-event-hook stamps last_event_epoch/last_event_at after `odoo-sdk`
+# actually exits 0 — and the comparison is made here, by a different program at a
+# different time, which is the only arrangement where a total failure of the hook
+# still produces a report.
+#
+# Reported, never fatal, and never a reason to fail closed: #804 explicitly does
+# not ask the hook to block, only that its silence stop being indistinguishable
+# from its success.
+
+# Write hook_watch_since into the marker, preserving every other key. This is the
+# zero point for a config dir that has never recorded an event: without it, "no
+# heartbeat" on a brand-new machine is indistinguishable from "no heartbeat for
+# three months", and the check would either cry wolf on the first create or stay
+# silent forever. Same atomic-rename and 0666 discipline as the marker's other
+# writers, and best-effort throughout.
+mark_hook_watch() {
+    local marker="$1" now="$2" base tmp
+    base=''
+    if [ -r "$marker" ]; then
+        base="$(jq -c 'if type == "object" then . else empty end' "$marker" 2>/dev/null || true)"
+    fi
+    [ -n "$base" ] || base='{}'
+    tmp="$(mktemp "$(dirname "$marker")/.pf-heartbeat.XXXXXX" 2>/dev/null)" || return 0
+    if printf '%s' "$base" | jq --argjson now "$now" '. + {hook_watch_since: $now}' \
+        > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        chmod 0666 "$tmp" 2>/dev/null || true
+        mv -f "$tmp" "$marker" 2>/dev/null || rm -f "$tmp"
+    else
+        rm -f "$tmp"
+    fi
+    return 0
+}
+
+# Read one numeric field out of the marker, defaulting to 0 for absent, malformed
+# or non-numeric. A marker we cannot parse means "no evidence", never a failure.
+marker_number() {
+    local value
+    value="$(jq -r --arg key "$2" '
+        if type == "object" and (.[$key] | type) == "number" then (.[$key] | floor) else 0 end
+    ' "$1" 2>/dev/null || true)"
+    case "${value:-}" in
+    '' | *[!0-9]*) value=0 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+check_hook_heartbeat() {
+    local marker="$1" now last since age at
+    now="$(date -u +%s)"
+    last=0
+    since=0
+    at='unknown'
+    if [ -r "$marker" ]; then
+        last="$(marker_number "$marker" last_event_epoch)"
+        since="$(marker_number "$marker" hook_watch_since)"
+        at="$(jq -r 'if type == "object" and (.last_event_at | type) == "string"
+                     then .last_event_at else "unknown" end' "$marker" 2>/dev/null || true)"
+        [ -n "${at:-}" ] || at='unknown'
+    fi
+
+    if [ "$last" -gt 0 ]; then
+        age=$(( now - last ))
+        if [ "$age" -gt "$HOOK_STALE_SECONDS" ]; then
+            note "WARNING: the feature-owned Claude Code hooks have not recorded a successful event since $at ($(( age / 86400 ))d ago). The shim stamps that timestamp only after 'odoo-sdk log-event' exits 0, so a silence this long means every event since then was dropped - and a dropped event leaves NO other trace, which is how 3,506 of them went unnoticed for three months (#804). Check that the hook command in $SETTINGS resolves on the machine running the session (#803) and that 'odoo-sdk' is runnable there (#496); evidence in $marker."
+        fi
+        return 0
+    fi
+
+    if [ "$since" -le 0 ]; then
+        # First create that ever looked. Record the zero point and say nothing.
+        mark_hook_watch "$marker" "$now"
+        return 0
+    fi
+
+    age=$(( now - since ))
+    if [ "$age" -gt "$HOOK_STALE_SECONDS" ]; then
+        note "WARNING: no feature-owned Claude Code hook has EVER recorded a successful event in the $(( age / 86400 ))d this config dir has been watched. The hooks are wired into $SETTINGS but nothing is reaching the tracker, so every event in that window was dropped silently (#804). Check that the hook command resolves on the machine running the session (#803) and that 'odoo-sdk' is runnable there (#496); evidence in $marker."
+    fi
+    return 0
+}
+
 # --- mode dispatch -----------------------------------------------------------
 # --check-deps is the build-time half described above: it resolves HOOK_DEPS and
 # nothing else, touches no config and needs no mount, so it runs before the
@@ -253,6 +360,11 @@ SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
 # dir is on a different filesystem from /tmp, so the default mktemp location
 # would defeat the atomicity this relies on).
 mkdir -p "$CLAUDE_CONFIG_DIR"
+
+# Report a hook that has stopped producing events BEFORE anything below can exit
+# early (#804). A refused write or an unpublishable shim are themselves reasons
+# the heartbeat would have stopped, so the report must not be downstream of them.
+check_hook_heartbeat "$CLAUDE_CONFIG_DIR/$PROVISION_MARKER_NAME" || true
 
 # --- publish the shim where BOTH sides of the bind mount can reach it (#803) --
 # $CLAUDE_CONFIG_DIR is the one directory the container and the host agree on:

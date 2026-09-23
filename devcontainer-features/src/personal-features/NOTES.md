@@ -164,6 +164,48 @@ The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] &
 
 The same wrapper also passes `--append-system-prompt-file "$CLAUDE_CONFIG_DIR/system-prompt-append.md"` (#740) for **session** invocations — no arguments at all, or a first argument that is a flag — so session-wide style and policy rules arrive as *system* prompt rather than as user-turn context that drifts over a long session. That file is **local-only and hand-maintained** in the bind-mounted claude-home: the Feature never ships it and never creates it, and the flag is injected only when it is actually present, so a container without one behaves exactly as it did before. Subcommands are skipped deliberately — `claude plugin …`, `claude mcp …`, anything whose first argument is not a flag, reject the option outright. No VS Code setting is involved: the wrapper **replaces the npm `claude` binary in place**, so everything that resolves `claude` through `PATH` — an IDE-launched session included — already runs it.
 
+**Where the wrapper itself lives (#807).** For a while the two halves of that
+mechanism updated on different clocks: `system-prompt-append.md` lives in the
+bind mount, so every edit to it is live immediately, while the wrapper that reads
+it was baked into the image and changed only on rebuild. A container whose image
+predated `--append-system-prompt-file` therefore passed no flag at all — every
+standing rule in the file absent from every session, for the better part of two
+weeks here, with nothing reporting it. Editing the file appeared to work and did
+nothing.
+
+Two things close that gap, neither of them new machinery:
+
+- **The wrapper is published into the mount, beside the rules it delivers.**
+  `publish-claude-wrapper` (feature-contributed `postCreateCommand`, before the
+  hook sync) copies the image's wrapper to
+  `$CLAUDE_CONFIG_DIR/personal-features/claude-wrapper` with the same
+  stage-`chmod`-rename discipline `sync-claude-hooks` uses for the #803 hook
+  shim, and the wrapper on `PATH` execs that copy when one is there. A wrapper
+  published by **any** container on this machine is then the wrapper every other
+  container runs, without a rebuild. The real Claude binary cannot travel with
+  the copy — its path carries the publishing image's Node version — so the
+  on-`PATH` stub hands its own over in `CLAUDE_REAL_BIN`, and re-entry is ruled
+  out by comparing `$0` against the shared path rather than by an environment
+  flag (a flag would leak into the session and make a nested `claude` skip the
+  shared copy). With no published copy the invocation is byte-identical to the
+  pre-#807 wrapper.
+- **Staleness is reported through the marker that already exists.** The wrapper
+  is fingerprinted by the #806 provision marker
+  (`$CLAUDE_CONFIG_DIR/personal-features-provision.json`), so an image older than
+  one this config dir has already seen announces itself there — one breadcrumb,
+  not a second one for this defect. `publish-claude-wrapper` adds the direct
+  check the issue asked for on top: one `grep` against the file `claude`
+  resolves to, warning loudly at container create when it carries no
+  `--append-system-prompt-file`, louder still when `system-prompt-append.md`
+  exists and is therefore being dropped right now.
+
+**What this does not fix.** A container whose image predates this change has
+neither the delegating wrapper nor the publisher, so nothing here reaches it —
+the same limit #806 documented ("a checker shipped in the image is exactly as
+absent from an old image as the step it would check"). Both halves above are
+forward-looking; the cure for an already-stale container is still a no-cache
+rebuild, and the point of the warning is that you now find out you need one.
+
 ## Claude Code lifecycle hooks (odoo-sdk event capture)
 
 This Feature provisions a set of Claude Code lifecycle hooks that record session
@@ -242,8 +284,8 @@ build time. Each half runs at the only moment its subject exists.
 **Necessary, not sufficient.** This resolves a command *at provision time*. It
 cannot say the command will still resolve, or still work, when a hook actually
 fires — `odoo-api-guard.sh` resolved fine at provision time and exit-127'd
-anyway, for reasons still undiagnosed. The runtime half of that problem is #804
-and is deliberately not attempted here.
+anyway, for reasons still undiagnosed. The runtime half of that problem is #804,
+below.
 
 **Resolution never executes anything.** The command strings are user config, and
 expanding them means handing them to a shell. Any command carrying a control
@@ -251,6 +293,51 @@ operator, a redirection or a command substitution is therefore **refused and
 reported as unverifiable** rather than expanded; with those screened out and
 globbing disabled, the expansion can perform parameter and tilde expansion and
 word splitting, and nothing else.
+
+**A hook that stops working says so (#804).** The shim's contract is to exit 0 on
+every path — a tracker that blocks a session because its own database is
+unreachable is worse than a tracker that misses a row — but failing *open* had
+become the same thing as failing *silently*. 3,506 events were dropped over
+roughly three months from two unrelated causes (#496's unlinked console scripts,
+#803's container-absolute command) and both presented identically: nothing at
+all. The tracker's own tables cannot show it, because the signature is the
+**absence** of rows, which is indistinguishable from a quiet week.
+
+A failure counter written by the shim cannot close that gap — the shim is the
+thing that is broken, and in both of those outages not one line of it ran. So the
+breadcrumb is written by the path that **succeeds**, and read by a different
+program at a different time:
+
+- `claude-event-hook` stamps `last_event_at` / `last_event_epoch` /
+  `last_event_hook` into the provision marker, chained onto the `odoo-sdk` call
+  with `&&` so it attests the *whole* path — hook resolved, shim ran, SDK exited
+  0 — rather than just the first link. It rides the same detached background job,
+  so it costs the session nothing, and is throttled to one write a minute so a
+  `PreToolUse`-per-tool-call workload does not churn the bind-mounted config dir.
+- `sync-claude-hooks` compares that stamp against now on every container create
+  and reports a silence longer than `PERSONAL_FEATURES_HOOK_STALE_SECONDS`
+  (default seven days), naming the last successful write and pointing at the two
+  causes worth checking first. A config dir that has never recorded an event is
+  not evidence of an outage on the first create that looks, so `hook_watch_since`
+  records the zero point and the *next* create measures from it. The report runs
+  before anything that can exit early, because a shim that cannot be published is
+  itself one of the reasons the stamp would have stopped.
+
+**It reuses #806's marker rather than adding a second one.** Both facts are about
+the same subject — what this machine's feature scripts have actually done — and
+`personal-features-provision.json` already lives in the one directory the
+container and the host share, already outlives the image, and already needs no
+mount and no `containerEnv` var of its own. `sync-claude-mcp` rebuilds that
+record from scratch on every create, so it explicitly carries the runtime fields
+forward; without that the provision-time write would erase the evidence the
+runtime check reads, restoring the defect by accident. Nothing is added to
+`settings.json`: no new hook entry, no new marker, no new program — the
+mechanism is two existing scripts writing and reading one existing file.
+
+**Still not fail-closed.** #804 asks only that the silence stop being
+indistinguishable from success. A stale heartbeat is a warning on stderr; the
+merge still runs, the hooks are still wired up, and the container create still
+exits 0.
 
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
 forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
@@ -479,12 +566,42 @@ down.) Content hash *and* mtime are both needed: the mtime says which build is
 older, the hash keeps a rebuild of unchanged scripts from being reported as
 drift. A 60-second slack absorbs filesystem timestamp granularity.
 
+**It is also the container's general "this is what state X is actually in"
+file, and deliberately so.** The mempalace hub's liveness record (#780) is a
+`mempalace_hub` key in this same document, written by `mempalace-hub` from
+`postStartCommand` and from its supervisor — not a second breadcrumb under a
+second name. Anything else that needs a fact to outlive the image should land
+here too. Two rules come with that: a writer **merges** its key into whatever
+the file already holds rather than replacing the document, and `sync-claude-mcp`
+— which does rebuild the document from scratch on every create — must carry
+every other owner's key forward explicitly, or each container start silently
+erases it.
+
 It adds no mount and no `containerEnv` variable — the marker lives inside a
 directory the Feature already mounts — and, like everything else in
 `sync-claude-mcp`, it is best-effort: a marker that cannot be read, written or
 parsed warns and the run still exits 0. No step was added to the
 `postCreateCommand` chain, which is an `&&` chain where any failing step aborts
 container create and suppresses `postStartCommand`.
+
+**It also carries the runtime hook heartbeat (#804).** `claude-event-hook`
+stamps `last_event_*` into this same marker between provisions and
+`sync-claude-hooks` reads it on the next create — one file, two facts about what
+this machine's feature scripts have actually done, rather than a second
+breadcrumb with its own filename and its own staleness rule.
+
+**The marker is shared state, and preserve is the default (#868).** The record
+is rewritten on every provision, so `sync-claude-mcp` starts from the marker it
+found and overwrites only the fields *it* owns — `schema`, `issue`,
+`provisioned_at`, `script_epoch`, `script_digest`, `scripts`, the three
+`newest_*` high-water-mark fields and `stale_image`, all of which describe the
+scripts in *this* container and would be a lie if inherited. Every other key
+belongs to another writer and is carried forward untouched; nothing is dropped.
+Adding a key to this marker from anywhere else therefore needs **no edit in
+`sync-claude-mcp`**. It used to: a hand-maintained allowlist of key names lived
+in `sync-claude-mcp`, so a key its owner forgot to add there was silently erased
+on the next container create and its reader then reported "never seen" where the
+truth was "erased" — the very failure mode this marker exists to make visible.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
@@ -518,15 +635,25 @@ That matters because the stdio registration is **not ours to change**: it lives 
 - `supervisord`/`s6` would mean a new package, a new config file and a new failure mode, for one process.
 - `postStartCommand` is the only lifecycle hook that fires on **every** container start — create, a stop/start of an existing container, and a host reboot — which is exactly the "survives a container restart" requirement, and it costs one JSON key. It is declared on the Feature (a [documented Feature property](https://containers.dev/implementors/features/#lifecycle-hooks), collected alongside any the consuming `devcontainer.json` declares rather than overriding them) and runs as the `remoteUser`, which is what the registry lookup needs: the hub and its clients must agree on `$HOME`, or `~/.mempalace/server/…` names two different directories and the client concludes there is no hub. Everything that matters here — Claude Code, its plugin hooks, your shells — runs as the `remoteUser` too, so they agree; a session `su`'d to another account would not find the hub and would quietly serve its own palace copy instead.
 
-What `postStartCommand` does **not** give is restart-on-crash within a single container run. The honest mitigation is that a dead hub is not an outage: `mcp_proxy` falls back to serving the session locally and says so on the tool result itself, so the agent driving the session is told its memory backend changed shape. `mempalace-hub` can also be re-run by hand at any time. One real consequence of the lifecycle ordering is worth knowing: a failing `postCreateCommand` skips `postStartCommand` entirely, so a broken `mempalace-repair` takes the hub down with it.
+What `postStartCommand` does **not** give, on its own, is restart-on-crash within a single container run. That gap was #780, and the argument that used to close it — "a dead hub degrades rather than breaks, `mcp_proxy` just serves the session locally and says so on the tool result" — describes precisely the pre-#764 topology: N sessions, N direct storage clients, one writer lease between them. A hub that dies mid-session therefore **reinstates the bug the hub exists to prevent**, silently, and surfaces it only at write time, at the end of a session, after the work that produced the memory is already done. Absence was indistinguishable from health.
 
-**`mempalace-hub` is idempotent and never fatal.** `start` (the default) probes `/healthz` — mempalace's own liveness route, and the only credential-free one — before doing anything, so running it on every container start can never produce two hubs. Then it truncates its log (nothing rotates a log inside a container, and one hub run is the only bounded unit that keeps the diagnostics), launches `mempalace serve` under `setsid` (or `nohup` on an image without util-linux) with stdin on `/dev/null` and both output streams on the log — a background child still holding the lifecycle command's pipes would keep the dev container CLI waiting on it forever — and then polls `/healthz` until it answers. It polls rather than watching a pid because `setsid` may or may not fork, so `$!` answers a different question than the one that matters.
+**So `start` no longer launches the server; it launches a supervisor (#780).** `mempalace-hub supervise` is the same script re-exec'd under `setsid`, running `mempalace serve` as its child and re-running it when it exits — with a delay between restarts (`MEMPALACE_HUB_RESTART_DELAY`, 5s), a consecutive-restart budget (`MEMPALACE_HUB_MAX_RESTARTS`, 5), and a reset of that budget once a run has lasted long enough to have been useful (`MEMPALACE_HUB_HEALTHY_SECS`, 300s). The budget is what separates a crash from a crash loop: a hub that cannot bind at all stops retrying and says so, instead of spinning for the life of the container. The supervisor also exits if something else has taken the port in the meantime — restarting into a bind that can never succeed is the one failure it must not amplify.
 
-Every failure path exits 0 with a warning naming the consequence: no `mempalace` on PATH, an unwritable log, or a bind that never answers. A container with no hub is exactly the pre-#764 behaviour — degraded, not broken — and not worth failing container start over. `mempalace-hub status` reports the endpoint, and `MEMPALACE_SKIP_HUB=1` opts out; `MEMPALACE_HUB_CMD`/`_HOST`/`_PORT`/`_LOG`/`_WAIT` exist for the feature test and for debugging.
+Nothing here is `systemd`, `supervisord` or a second installed file; it is a loop in the launcher already being installed, which is why it did not cost a package, a config file or a new failure mode.
 
-**`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set in the launcher's environment rather than in `containerEnv` precisely so per-session servers keep the watchdog they were designed for.
+**The signal half reuses #806's provision marker rather than inventing a second breadcrumb.** `mempalace-hub` merges one `mempalace_hub` key — state, detail, restart count, URL, log path, timestamp — into `$CLAUDE_CONFIG_DIR/personal-features-provision.json`, the file `sync-claude-mcp` already writes for image staleness. Same directory, same host bind mount, **no new mount and no new `containerEnv` var**, so `persisted-paths.tsv` and its parity set are untouched. `sync-claude-mcp` rebuilds that document from scratch on every container create, so it now carries the `mempalace_hub` key forward explicitly; without that, each container start would erase exactly the state worth keeping. States recorded: `live`, `restarting`, `gave_up`, `stopped`, `no_response`, `absent`, `skipped`. `mempalace-hub status` prints the last recorded state when nothing is answering, so "there is no hub" can be told apart from "the supervisor gave up forty minutes ago, here is the log".
 
-**No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount, so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log is container-local, under `/usr/local/share/personal-features/`, pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
+**`mempalace-hub stop` exists mostly so the supervisor can be got rid of.** It clears the pid file and signals the recorded server pid; the supervisor re-reads that file after every run and exits when its own stamp is gone, so no signal ever has to reach a shell blocked on its child. Killing the server without it is, correctly, treated as a crash and restarted — which is why the feature test stops the hub it starts rather than killing it.
+
+One consequence of the lifecycle ordering is still worth knowing and is **not** fixed by any of this: a failing `postCreateCommand` skips `postStartCommand` entirely, so a broken `mempalace-repair` takes the hub down with it and no supervisor is ever started to notice.
+
+**`mempalace-hub` is idempotent and never fatal.** `start` (the default) probes `/healthz` — mempalace's own liveness route, and the only credential-free one — before doing anything, so running it on every container start can never produce two hubs. Then it truncates its log (nothing rotates a log inside a container, and one hub run is the only bounded unit that keeps the diagnostics), detaches the supervisor under `setsid` (or `nohup` on an image without util-linux) with stdin on `/dev/null` and both output streams on the log — a background child still holding the lifecycle command's pipes would keep the dev container CLI waiting on it forever — and then polls `/healthz` until it answers. It polls rather than watching a pid because `setsid` may or may not fork, so `$!` answers a different question than the one that matters.
+
+Every failure path exits 0 with a warning naming the consequence: no `mempalace` on PATH, an unwritable log, or a bind that never answers. A container with no hub is exactly the pre-#764 behaviour — degraded, not broken — and not worth failing container start over. `MEMPALACE_SKIP_HUB=1` opts out; `MEMPALACE_HUB_CMD`/`_HOST`/`_PORT`/`_LOG`/`_WAIT`/`_PIDFILE`/`_MARKER`/`_MAX_RESTARTS`/`_RESTART_DELAY`/`_HEALTHY_SECS` exist for the feature test and for debugging.
+
+**`MEMPALACE_MCP_IDLE_HOURS=0` is set for the hub, and only for the hub.** mempalace's MCP server self-terminates after 8 idle hours so abandoned *per-session* servers stop accumulating ChromaDB file handles. Applied to the one process the whole container shares, that watchdog is a self-inflicted outage whose next repair is the next container start — possibly days away. It is set on every `serve` the supervisor launches, rather than in `containerEnv`, precisely so per-session servers keep the watchdog they were designed for. The supervisor would now restart an idle-exited hub, but a hub that never exits is still the cheaper answer.
+
+**No new persisted path.** The hub's registry record, its bearer token (never generated for a loopback bind) and the palace itself all live under the existing `~/.mempalace` → `/usr/local/share/mempalace` mount; the liveness record lives in the `~/.claude` → `/usr/local/share/claude-home` mount the provision marker already uses. So `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched by this. The log and the pid file are container-local, under `/usr/local/share/personal-features/`, both pre-created mode `0666` for the same reason `mempal-dir.sh` is: `install.sh` cannot know which account will run the lifecycle command.
 
 ## The Odoo language server (odoo-ls)
 

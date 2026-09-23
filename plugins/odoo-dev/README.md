@@ -89,6 +89,45 @@ not by `disallowedTools`, which never covered Bash and still does not.
 `odoo-dev-tester` is the single definition of "passes" for **both** delivery and
 upgrade, so there is exactly one bar.
 
+#### Dispatch — how these five actually get run
+
+A roster nothing spawns is a roster that costs review and returns nothing, and that
+is what these were: across ~900 measured `Task` spawns, `odoo-dev-pr` and
+`odoo-dev-scoper` had never run once, and the other three had two spawns between
+them (#802). The router named every agent — the [router-completeness gate](#verify)
+only ever asserted the name appears — and then told the model to *recommend a slash
+command*, which is a path the model does not have: each command in `commands/`
+carries `disable-model-invocation: true`. So the roster read healthy and dispatched
+nothing.
+
+Three things changed, and the first is the load-bearing one:
+
+- **Routing ends in a `Task` call.** `odoo-dev:odoo-dev-map` now carries a
+  *How to dispatch* procedure — resolve the three absolute paths, emit one `Task`
+  per stage, run the gate between stages — and says outright that naming the owning
+  agent in prose has routed nothing. The slash commands stay the user's shortcut;
+  they were never the model's.
+- **`subagent_type` is the namespaced name.** `odoo-dev:odoo-dev-builder`, and the
+  same shape for the other four. A bare name does not resolve, and falling back to
+  `general-purpose` drops every `skills:` preload, `disallowedTools` entry and hook
+  these definitions carry.
+- **Each `description:` says when to dispatch, what to put in the prompt, and what
+  comes back.** A description is the entire dispatch surface — the router sees
+  nothing else — so it now opens with the caller-side condition ("dispatch this
+  rather than editing module files in the main session"), keeps the quoted trigger
+  phrasings, states the spawn-prompt contract (artifacts directory, artifact script
+  and gate script as absolute paths, plus the one stage-specific value), states the
+  return (an artifact path and at most five lines), and names the sibling agent that
+  owns the adjacent work. The implicit prompt contract was the quiet blocker: an
+  agent whose body demands three absolute paths its description never mentions is
+  one a caller cannot prompt correctly, so the caller does the work inline instead.
+
+Dispatch is regression-tested rather than asserted: `evals/dispatch-*` grade
+`tool: Task` against each of the five agent names, five should-trigger cases and two
+near-misses, so a route that collapses back to `general-purpose` fails the suite.
+`claude plugin eval` is early-access gated, so those cases are checked structurally
+here and run wherever early access is enabled.
+
 ### What `skills:` frontmatter actually does
 
 Measured on 2026-09-07 against Claude Code **2.1.247**, by reading the CLI's own
@@ -453,7 +492,7 @@ notices them.
 | Hook | Fires on | Denies |
 |---|---|---|
 | [`bash-allowlist.sh`](hooks/bash-allowlist.sh) | Every `Bash` call whose payload reports `agent_type` `odoo-dev-tester` | Anything outside the allowlist below |
-| [`gate-hook.sh`](hooks/gate-hook.sh) | Any `Bash` call that invokes `pr-open.sh`, `release-pr.sh` or `gh pr create`, from any agent | A PR whose task artifacts fail `gate.sh --for pr`, or a promotion whose release directory fails `gate.sh --for release`. Also, for the two scripts of our own, a call whose artifacts or release dir cannot be resolved |
+| [`gate-hook.sh`](hooks/gate-hook.sh) | Any `Bash` call that invokes `pr-open.sh`, `release-pr.sh`, `gh pr create` or `git commit`, from any agent | A PR whose task artifacts fail `gate.sh --for pr`, or a promotion whose release directory fails `gate.sh --for release`. Also, for the two scripts of our own, a call whose artifacts or release dir cannot be resolved. And a commit carrying changes to a module whose `__manifest__.py` version has not moved |
 
 **The tester allowlist.** `odoo-dev-tester` may run `artifact.sh`, `run-tests.sh`,
 `browser-ensure.sh`, `gate.sh`, `module-classify.sh`, and read-only `git`
@@ -479,7 +518,8 @@ denied, while the same unparseable payload for anyone else is allowed.
 
 **The gate at the tool boundary.** `gate.sh` was always the one deterministic step
 in the chain, and nothing made anybody run it. `gate-hook.sh` runs it where the PR
-is actually opened, on three command shapes.
+is actually opened, on three command shapes. A fourth shape, `git commit`, runs no
+`gate.sh` at all and is described further down.
 
 On the two task-keyed shapes it takes the worktree from `pr-open.sh`'s first
 argument (or the payload `cwd` for `gh pr create`), reads the branch, takes the
@@ -519,8 +559,37 @@ one artifacts dir. The task id resolved, so the PR is inside the workflow whiche
 command opened it, and one task with its evidence filed in two places is an
 inconsistency the hook names rather than guesses past.
 
+**The fourth shape: `git commit` and the manifest bump.** "Always run
+`bump_manifest_version.py` before committing module changes" is the one rule this
+plugin asks a session to remember on *every* commit, and [#799](https://github.com/Crpaxton4/devcontainer-features/issues/799)
+measured what remembering is worth: adherence to a recurring rule decays with turn
+depth and is back at the no-rule baseline by roughly the eleventh response after
+the skill loads, while the rule text has not changed a character. Rewording does
+not fix that. Mechanism does, so the rule stopped being prose that is trusted and
+became a denial at the tool boundary.
+
+A `git commit` is denied when it would carry changes to a module — a directory with
+a `__manifest__.py`, found by walking up from each changed path, the same test
+[`module-classify.sh`](scripts/module-classify.sh) uses — whose manifest `version`
+is the same as it is at the base commit. The question is whether the version
+*moved*, not whether the script is what moved it: a hand edit is a bump. `-a` widens
+the change set to tracked work-tree modifications and `--amend` moves the base to
+the tip's parent, both because that is what the commit would actually carry. The
+deny names the module and the version it is stuck on.
+
+Like `gh pr create`, `git commit` is an ordinary command in every repository on the
+machine, so everything the hook cannot decide passes in silence: no module in the
+change set, no repository, a merge, rebase, cherry-pick or revert in progress, a
+module absent at the base (a first commit has no earlier version to move away from),
+a manifest that is not in the commit at all (a removal bumps nothing), a manifest
+with no readable `version`, and `--git-dir`/`--work-tree`, which move the repository
+somewhere the hook does not follow. An explicit pathspec also passes: it narrows the
+commit to a subset the hook does not reconstruct. That last one is the accepted
+bypass, and it is the same trade the `gh pr create` narrowing makes — silence about
+work we cannot attribute beats denying it.
+
 ```bash
-bash scripts/tests/hooks.test.sh    # 68 assertions, offline
+bash scripts/tests/hooks.test.sh    # 102 assertions, offline
 ```
 
 ---
@@ -669,7 +738,7 @@ devcontainer-features/
     ├── skills/     16 skills; odoo-dev-map is the router
     ├── agents/     5 subagents, all named odoo-dev-*
     ├── scripts/    artifact.sh, gate.sh, bootstrap-state.sh, check-stray-skills.sh, validate.sh
-    ├── evals/      20 trigger-accuracy cases
+    ├── evals/      29 trigger-accuracy cases
     └── README.md
 ```
 
@@ -750,7 +819,7 @@ scripts/validate.sh
 
 Manifest, inventory, frontmatter limits, body size, router completeness, agent
 definitions, namespacing, hard-coded paths, stray skills, eval-suite structure,
-ten offline test suites, shell syntax, and release-version drift. Offline: no
+sixteen offline test suites, shell syntax, and release-version drift. Offline: no
 network, no docker, no Odoo, no repos tree.
 
 ### Continuous integration
@@ -763,7 +832,7 @@ jobs run the per-skill script test suites and a pinned shellcheck. It carries no
 secrets, asks for nothing beyond the read-only default token, and makes no network
 call except to install its tooling.
 
-No gate is local-only. Eighteen of the nineteen need nothing but bash, coreutils,
+No gate is local-only. All but one need nothing but bash, coreutils,
 git and node, all of which a stock runner already has. The remaining one shells out to
 `claude plugin validate --strict`, and the workflow installs the Claude Code CLI so
 that one runs on the runner too: `plugin validate` reads the manifest off disk, needs
@@ -786,6 +855,31 @@ neither can do otherwise:
   actually has, so a tool the runner lacks is simply left out of that case's bin dir
   instead of failing it. That is the design — what a case omits is the point of it.
 
+**The script test suites live in two registries, and a gate now keeps them in
+agreement.** `validate.sh` runs an explicit `run_suite` list; the workflow's
+`script-tests` job runs `find plugins/odoo-dev -name '*.test.sh' -type f`, so it runs
+everything on disk. The explicit list is deliberately a subset: a few suites reach
+their real subject only where CI provisions what it needs — `studio-inventory` exits
+early without `psql`, and the parity and tool-contract suites **SKIP** their
+installed-SDK cases without the pip-installed `odoo_sdk` their own jobs set up. None
+of them *fails* off a runner; they quietly check less, which is why running them from
+`validate.sh` would print a **PASS** for a suite whose point went unexercised.
+
+Until [#781](https://github.com/Crpaxton4/devcontainer-features/issues/781) nothing
+reconciled the two, and the cost was not an unrun test — CI's `find` sweep runs them
+all — but that reading either registry alone gave a confident wrong answer. A reviewer
+read `validate.sh`, concluded a suite was dead code in CI, and was wrong; the gap had
+been measured three times at three different values, because it moved every time
+anyone added a suite.
+
+So every `*.test.sh` on disk must now be either registered in `validate.sh` or named
+in [`check-suite-registry.sh`](scripts/check-suite-registry.sh)'s `CI_ONLY` list with
+the reason `validate.sh` must not run it. There is no third state. The gate asserts no
+total — a count would be the same two-copies-of-a-number defect it exists to remove —
+and it fails on a stale exemption as readily as on a missing registration, so an
+entry cannot outlive its suite. Run `check-suite-registry.sh --list` to see every
+suite and its disposition in one place.
+
 ### Releases
 
 The repo-root [`release-please.yaml`](../../.github/workflows/release-please.yaml)
@@ -805,10 +899,39 @@ Commit titles on every PR. A non-conventional title would cut no release.
 
 ### Trigger accuracy
 
-[`evals/`](evals/) holds 20 cases — 10 that should fire a specific skill and 10
+[`evals/`](evals/) holds 29 cases — 17 that should fire a specific skill and 12
 near-misses that share a trigger word but are out of domain ("upgrade the npm
 dependencies", "quote this sentence as a blockquote"), split train/validation. They
 catch descriptions cannibalizing each other before real work does.
+
+Two of the should-fire cases are phrased the way the request actually arrives
+("push it up and let the client see it") rather than in the skill's own canonical
+wording, and they carry a second grader asserting the prohibited command never ran:
+
+```yaml
+graders:
+  - type: tool_used
+    name: no-bare-gh-pr-create
+    tool: Bash
+    input_match: "gh pr create"
+    max: 0
+```
+
+Without it, "the model opened the PR by hand" and "the model did nothing" are the
+same signal — and only the first is a bypass of the standard `odoo-dev:odoo-pr` owns.
+
+A grader's `tool:` picks the namespace its `input_match` is read against, and
+`validate.sh` checks it there:
+
+| `tool:` | `input_match:` must be | checked against |
+|---|---|---|
+| `Skill` | a bundled skill name, bare or `odoo-dev:`-prefixed, or the plain plugin name `odoo-dev` for a whole-namespace assertion | [`skills/`](skills/) |
+| `Task` | a bundled agent name, bare or `odoo-dev:`-prefixed | [`agents/`](agents/) |
+| anything else (`Bash`, …) | a literal command substring, in no namespace | nothing — but it may not *be* a bundled skill or agent name, which only ever means the `tool:` is wrong |
+
+Every grader in a case is read, not just the first, so grader order is free. A
+should-fire case still has to assert `min: 1` on a `Skill` or `Task` grader; a
+near-miss still has to assert `max: 0`.
 
 ```bash
 claude plugin eval odoo-dev@devcontainer-features --ablation with-without

@@ -99,6 +99,113 @@ check "wrapper leaves 'claude mcp' un-flagged" bash -c \
 check "wrapper leaves a bare prompt argument un-flagged" bash -c \
   "$SPA_RUN 'summarise this' </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\""
 
+# --- #807: the wrapper is published into the bind mount, beside the rules -----
+# The prompt file lives in the mount and is always current; the wrapper reading
+# it lived only in the image and was current only until the next edit, so an
+# older image silently passed no flag at all. The wrapper now prefers a copy
+# published into $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper at
+# container-create time, which is reachable from both ends of the mount.
+check "wrapper looks for a published copy in the bind-mounted config dir" bash -c \
+  "grep -qF -- '\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features/claude-wrapper' \"\$(command -v claude)\""
+check "wrapper execs the published copy when one is there" bash -c \
+  "grep -qF -- 'exec \"\$SHARED_WRAPPER\" \"\$@\"' \"\$(command -v claude)\""
+# Re-entry is ruled out by comparing \$0 against the shared path, NOT by an
+# environment flag - a flag would leak into the session and make a nested
+# `claude` skip the shared copy.
+check "wrapper guards re-entry on \$0, not on an environment flag" bash -c \
+  "grep -qF -- '[ \"\$0\" != \"\$SHARED_WRAPPER\" ]' \"\$(command -v claude)\""
+# The real binary's path carries this image's Node version, so it cannot travel
+# with the published copy; the on-PATH stub hands its own over instead.
+check "wrapper hands the real binary to the published copy via CLAUDE_REAL_BIN" bash -c \
+  "grep -qF -- 'export CLAUDE_REAL_BIN' \"\$(command -v claude)\" && grep -qF -- 'CLAUDE_REAL_BIN:-' \"\$(command -v claude)\""
+
+# install.sh writes the wrapper to a stable image path FIRST and installs onto
+# PATH from there, so publish-claude-wrapper has a source outside the mount to
+# copy - exactly as /usr/local/bin/claude-event-hook is the source for the hook
+# sync. The two must be the same bytes or the published copy is not the wrapper.
+check "the wrapper source exists in the image outside the bind mount" bash -c \
+  "test -x /usr/local/share/personal-features/claude-wrapper"
+check "the wrapper source is byte-identical to the claude on PATH" bash -c \
+  "cmp -s /usr/local/share/personal-features/claude-wrapper \"\$(command -v claude)\""
+
+# Functional half: with a published copy in place the stub must exec it and pass
+# its own REAL through, rather than running its own baked logic.
+mkdir -p "$SPA_CONFIG/personal-features"
+cat > "$SPA_CONFIG/personal-features/claude-wrapper" <<'SHARED'
+#!/bin/sh
+printf 'argv=%s real=%s\n' "$*" "${CLAUDE_REAL_BIN:-unset}" > "$CLAUDE_CONFIG_DIR/shared.out"
+exit 0
+SHARED
+chmod +x "$SPA_CONFIG/personal-features/claude-wrapper"
+
+check "wrapper delegates to the published copy, args intact" bash -c \
+  "$SPA_RUN -c </dev/null && grep -qF -- 'argv=-c' \"$SPA_CONFIG/shared.out\""
+check "wrapper passes its own real binary to the published copy" bash -c \
+  "grep -qF -- 'real=$SPA_ROOT/real-claude' \"$SPA_CONFIG/shared.out\""
+# The published copy is the SAME script, reached with \$0 equal to the shared
+# path, so it must fall through to the delivery logic instead of re-execing
+# itself forever. Exercise that directly.
+cp "$SPA_ROOT/claude" "$SPA_CONFIG/personal-features/claude-wrapper"
+chmod +x "$SPA_CONFIG/personal-features/claude-wrapper"
+check "the published copy does not re-exec itself (no delegation loop)" bash -c \
+  "$SPA_RUN -c </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md -c' \"$SPA_ARGV\""
+rm -rf "$SPA_CONFIG/personal-features"
+
+# --- publish-claude-wrapper: the runtime publisher + the flag audit (#807) ----
+check "publish-claude-wrapper is installed and executable" bash -c \
+  "test -x /usr/local/bin/publish-claude-wrapper"
+check "publish-claude-wrapper passes shell syntax check" bash -c \
+  "bash -n /usr/local/bin/publish-claude-wrapper"
+
+PCW_ROOT="$(mktemp -d)"
+PCW_A="$PCW_ROOT/config-a"
+mkdir -p "$PCW_A"
+check "publish-claude-wrapper publishes the wrapper into the config dir" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$PCW_A\" /usr/local/bin/publish-claude-wrapper && test -x \"$PCW_A/personal-features/claude-wrapper\""
+check "the published wrapper is byte-identical to the image's source" bash -c \
+  "cmp -s /usr/local/share/personal-features/claude-wrapper \"$PCW_A/personal-features/claude-wrapper\""
+# Refreshed on every container create, like the #803 hook shim: a re-run must
+# converge rather than accumulate, and must overwrite a stale copy.
+printf 'stale\n' > "$PCW_A/personal-features/claude-wrapper"
+check "publish-claude-wrapper refreshes a stale published copy" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$PCW_A\" /usr/local/bin/publish-claude-wrapper && cmp -s /usr/local/share/personal-features/claude-wrapper \"$PCW_A/personal-features/claude-wrapper\""
+check "publish-claude-wrapper leaves no temp files behind" bash -c \
+  "[ \"\$(find \"$PCW_A/personal-features\" -type f | wc -l)\" = '1' ]"
+# No config dir means no shared directory to publish into: skip, never fail -
+# a nonzero exit here would break the postCreateCommand chain behind it.
+check "publish-claude-wrapper skips cleanly with CLAUDE_CONFIG_DIR unset" bash -c \
+  "env -u CLAUDE_CONFIG_DIR /usr/local/bin/publish-claude-wrapper"
+check "publish-claude-wrapper exits 0 when its source is missing" bash -c \
+  "PERSONAL_FEATURES_CLAUDE_WRAPPER_SRC=\"$PCW_ROOT/absent-wrapper\" CLAUDE_CONFIG_DIR=\"$PCW_ROOT/config-b\" /usr/local/bin/publish-claude-wrapper"
+
+# The audit: one grep against the file `claude` resolves to. Drive it with a fake
+# `claude` first on PATH that carries no flag - the exact shape of the pre-#740
+# image this issue was raised from - and assert it is reported, loudly, and that
+# the run still exits 0.
+PCW_FAKE="$PCW_ROOT/fakebin"
+mkdir -p "$PCW_FAKE"
+cat > "$PCW_FAKE/claude" <<'FAKECLAUDE'
+#!/bin/sh
+exit 0
+FAKECLAUDE
+chmod +x "$PCW_FAKE/claude"
+PCW_C="$PCW_ROOT/config-c"
+mkdir -p "$PCW_C"
+printf 'a standing rule\n' > "$PCW_C/system-prompt-append.md"
+check "publish-claude-wrapper reports a wrapper that delivers no prompt file" bash -c \
+  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
+check "publish-claude-wrapper still exits 0 when it reports one" bash -c \
+  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper >/dev/null 2>&1"
+# ...and says nothing about the real wrapper, which does pass the flag.
+check "publish-claude-wrapper is quiet about a wrapper that does deliver it" bash -c \
+  "! CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
+
+# The staleness half is NOT a second breadcrumb: the wrapper is fingerprinted by
+# the #806 provision marker, so an image older than one this config dir has
+# already seen announces itself through that one file.
+check "the #806 provision marker fingerprints the claude wrapper (#807)" bash -c \
+  "grep -qF -- '/usr/local/share/personal-features/claude-wrapper' /usr/local/bin/sync-claude-mcp"
+
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
 check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
@@ -474,6 +581,77 @@ check "a stale provision does not lower the high-water mark" bash -c \
 # Best-effort like the rest of the script: staleness is reported, never fatal.
 check "sync-claude-mcp still exits 0 on a stale image" bash -c \
   "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
+# The marker is shared with #804: claude-event-hook stamps the runtime heartbeat
+# into it BETWEEN provisions, and this record is rewritten on every container
+# create. If the provision-time write did not carry the heartbeat forward it
+# would erase the one piece of evidence the staleness check reads, which is the
+# #804 defect restored by accident. Seed the runtime fields and re-provision.
+MCP_HB_CONFIG="$MCP_TEST_ROOT/claude-home-heartbeat"
+mkdir -p "$MCP_HB_CONFIG"
+cat > "$MCP_HB_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "last_event_at": "2026-01-02T03:04:05Z",
+  "last_event_epoch": 1767322445,
+  "last_event_hook": "PreToolUse",
+  "hook_watch_since": 1767000000
+}
+MARKER
+check "a provision carries the runtime hook heartbeat forward (#804)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_HB_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1; jq -e '.last_event_epoch == 1767322445 and .last_event_at == \"2026-01-02T03:04:05Z\" and .hook_watch_since == 1767000000 and (.script_digest | type) == \"string\"' \"$MCP_HB_CONFIG/personal-features-provision.json\" >/dev/null"
+
+# #868: the heartbeat is only the first co-owner of this marker, and the
+# carry-forward used to be a hand-maintained allowlist of key names living in
+# another feature's code - so a key nobody remembered to name there vanished on
+# the next container create, and its reader reported "never seen" where the
+# truth was "erased". The property asserted here is the general one: a key this
+# script does not own survives a provision, whatever it is called. Adding a key
+# to the marker must need no edit in sync-claude-mcp.
+MCP_FK_CONFIG="$MCP_TEST_ROOT/claude-home-foreign-keys"
+mkdir -p "$MCP_FK_CONFIG"
+cat > "$MCP_FK_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "mempalace_hub": { "state": "reachable", "checked_at": "2026-01-02T03:04:05Z" },
+  "a_key_no_one_named_in_sync_claude_mcp": "keep-me",
+  "provisioned_at": "1999-01-01T00:00:00Z",
+  "script_digest": "must-be-overwritten",
+  "stale_image": true
+}
+MARKER
+CLAUDE_CONFIG_DIR="$MCP_FK_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>&1 || true
+
+check "a provision preserves a marker key it does not own (#868)" bash -c \
+  "jq -e '.a_key_no_one_named_in_sync_claude_mcp == \"keep-me\" and .mempalace_hub.state == \"reachable\" and .mempalace_hub.checked_at == \"2026-01-02T03:04:05Z\"' \"$MCP_FK_CONFIG/personal-features-provision.json\" >/dev/null"
+# The other half of the same contract: the fields this run DOES own describe the
+# scripts in this container, so they must be rewritten, never inherited stale.
+check "a provision still overwrites the fields it owns (#868)" bash -c \
+  "jq -e '.script_digest != \"must-be-overwritten\" and (.script_digest | length) == 64 and .provisioned_at != \"1999-01-01T00:00:00Z\" and .stale_image == false and (.scripts | has(\"sync-claude-mcp\"))' \"$MCP_FK_CONFIG/personal-features-provision.json\" >/dev/null"
+
+# The hub liveness record (#780) lives in this same marker, written from
+# postStartCommand - which runs AFTER this script. This writer rebuilds the
+# document from scratch every create, so without an explicit carry-forward it
+# would erase, on every container start, exactly the state worth keeping: what
+# the hub was doing when the container last stopped.
+MCP_HUB_CONFIG="$MCP_TEST_ROOT/claude-home-hub"
+mkdir -p "$MCP_HUB_CONFIG"
+cat > "$MCP_HUB_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "mempalace_hub": {
+    "issue": "780",
+    "state": "gave_up",
+    "restarts": 5
+  }
+}
+MARKER
+CLAUDE_CONFIG_DIR="$MCP_HUB_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>&1 || true
+
+check "sync-claude-mcp keeps the hub liveness record it finds in the marker" bash -c \
+  "grep -qF '\"state\": \"gave_up\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\" && grep -qF '\"script_digest\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\""
 
 rm -rf "$MCP_TEST_ROOT"
 
@@ -888,6 +1066,116 @@ check "sync-claude-hooks never executes a hook command while resolving it" bash 
 check "a command it cannot resolve by inspection is reported, not passed silently" bash -c \
   "grep -q 'left unchecked' \"$HK_G/err\""
 
+# --- #804: a hook that stops producing events has to say so -------------------
+# #805 above resolves a command at PROVISION time; it cannot say the command will
+# still work when a hook fires. That is the whole of #804: a hook that cannot
+# execute produces no event AND no signal, so 3,506 events were dropped over
+# three months and the absence of rows looked exactly like a quiet week. The
+# breadcrumb is written by the path that SUCCEEDS (claude-event-hook, only after
+# odoo-sdk exits 0) and compared by a different program at a different time
+# (sync-claude-hooks), because whatever breaks the hook also stops any counter
+# the hook itself would write. It rides in the #806 provision marker rather than
+# in a breadcrumb of its own - one file holding both facts about this config dir.
+
+# (a) the writing half, driven through the real shim with the odoo-sdk stub.
+export HK_HB="$HOOKS_TEST_ROOT/hb"
+mkdir -p "$HK_HB"
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook records a heartbeat after a successful event (#804)" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" CLAUDE_CONFIG_DIR="$HK_HB" /usr/local/bin/claude-event-hook PreToolUse
+  # The write rides the same DETACHED background job as the SDK call, so poll.
+  for _ in $(seq 1 50); do
+    test -f "$HK_HB/personal-features-provision.json" && break
+    sleep 0.2
+  done
+  jq -e ".last_event_epoch > 0 and (.last_event_at | type) == \"string\" and .last_event_hook == \"PreToolUse\"" \
+    "$HK_HB/personal-features-provision.json" >/dev/null
+'
+# The marker is #806s file: the heartbeat must extend it, never replace it.
+export HK_HB2="$HOOKS_TEST_ROOT/hb2"
+mkdir -p "$HK_HB2"
+cat > "$HK_HB2/personal-features-provision.json" <<'MARKER'
+{ "schema": 1, "issue": "806", "script_digest": "keep-me", "stale_image": false }
+MARKER
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "the heartbeat preserves the #806 provenance keys in the same marker" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"Stop\",\"cwd\":\"/tmp\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" CLAUDE_CONFIG_DIR="$HK_HB2" /usr/local/bin/claude-event-hook Stop
+  for _ in $(seq 1 50); do
+    jq -e ".last_event_epoch > 0" "$HK_HB2/personal-features-provision.json" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  jq -e ".script_digest == \"keep-me\" and .issue == \"806\" and .last_event_epoch > 0" \
+    "$HK_HB2/personal-features-provision.json" >/dev/null
+'
+# The #496 shape, and the reason the breadcrumb cannot be the hook is own failure
+# counter: with no odoo-sdk the shim exits before anything of its own runs, so
+# the ONLY observable is that the timestamp stopped moving.
+export HK_HB3="$HOOKS_TEST_ROOT/hb3"
+mkdir -p "$HK_HB3"
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "no heartbeat is recorded when odoo-sdk cannot be run (#496 shape)" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" \
+    | PATH=/usr/bin:/bin CLAUDE_CONFIG_DIR="$HK_HB3" /usr/local/bin/claude-event-hook PreToolUse
+  sleep 1
+  ! test -e "$HK_HB3/personal-features-provision.json"
+'
+
+# (b) the reporting half, driven against seeded markers rather than elapsed time:
+# the timestamps below are years old, so they clear the week-long default outright
+# and the check is exercised exactly as it ships (PERSONAL_FEATURES_HOOK_STALE_SECONDS
+# exists for tuning, and is deliberately NOT used here).
+HK_I="$HOOKS_TEST_ROOT/i"
+mkdir -p "$HK_I"
+printf '{"schema":1,"last_event_epoch":1700000000,"last_event_at":"2023-11-14T22:13:20Z"}\n' \
+  > "$HK_I/personal-features-provision.json"
+check "sync-claude-hooks reports a heartbeat that stopped moving (#804)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_I\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_I/err\" && grep -q 'not recorded a successful event since 2023-11-14T22:13:20Z' \"$HK_I/err\""
+# Reported, never fatal, and never fail-closed: #804 asks only that the silence
+# stop being indistinguishable from success.
+check "a stale heartbeat still exits 0 and still wires the hooks up" bash -c \
+  "jq -e '.hooks.PreToolUse[0].hooks[0].command' \"$HK_I/settings.json\" >/dev/null"
+
+HK_J="$HOOKS_TEST_ROOT/j"
+mkdir -p "$HK_J"
+printf '{"schema":1,"last_event_epoch":%s,"last_event_at":"recent"}\n' "$(date -u +%s)" \
+  > "$HK_J/personal-features-provision.json"
+check "a moving heartbeat says nothing at all" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_J\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_J/err\"; ! grep -q '#804' \"$HK_J/err\""
+
+# A config dir that has never recorded an event is not evidence of an outage on
+# the first create that looks - it is evidence of nothing yet. Record the zero
+# point instead, so "no heartbeat, ever" becomes measurable from the NEXT create.
+HK_K="$HOOKS_TEST_ROOT/k"
+mkdir -p "$HK_K"
+check "a config dir with no heartbeat yet is quiet" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_K\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_K/err\"; ! grep -q '#804' \"$HK_K/err\""
+check "but it records the zero point the next create measures from" bash -c \
+  "jq -e '.hook_watch_since > 0' \"$HK_K/personal-features-provision.json\" >/dev/null"
+
+HK_L="$HOOKS_TEST_ROOT/l"
+mkdir -p "$HK_L"
+printf '{"schema":1,"hook_watch_since":1}\n' > "$HK_L/personal-features-provision.json"
+check "a config dir watched for ages with no event ever is reported" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_L\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_L/err\" && grep -q 'has EVER recorded a successful event' \"$HK_L/err\""
+
+# The report must not be downstream of the merge: an unpublishable shim is itself
+# one of the reasons the heartbeat would have stopped, and that create is exactly
+# when someone needs to be told.
+HK_M="$HOOKS_TEST_ROOT/m"
+mkdir -p "$HK_M"
+printf '{"schema":1,"last_event_epoch":1700000000,"last_event_at":"2023-11-14T22:13:20Z"}\n' \
+  > "$HK_M/personal-features-provision.json"
+check "the staleness report survives a create that writes no hook entries" bash -c \
+  "PERSONAL_FEATURES_HOOK_CMD=\"$HOOKS_TEST_ROOT/absent-shim\" CLAUDE_CONFIG_DIR=\"$HK_M\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_M/err\" && grep -q '#804' \"$HK_M/err\" && test ! -e \"$HK_M/settings.json\""
+
+# #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
+# on every container create. The #804 mechanism deliberately adds NO hook entry,
+# so assert the settings file still carries only the two known feature programs.
+check "the heartbeat mechanism adds no hook entry of its own" bash -c \
+  "! jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\" | grep -qvE 'claude-event-hook|worktree-context-hook'"
+
 rm -rf "$HOOKS_TEST_ROOT"
 
 # --- mempalace palace root symlink (#596, #643) -------------------------------
@@ -1123,14 +1411,27 @@ check "mempalace-hub passes shell syntax check" bash -c \
 check "the hub log is pre-created and writable by any uid" bash -c \
   "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
 
+# MEMPALACE_HUB_MARKER is overridden here and everywhere below: `status`
+# records what it saw (#780), and the default target is the real, host-persisted
+# provision marker, which no check may write to.
 check "mempalace-hub status reports no hub when nothing is listening" bash -c \
-  "MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
+  "MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
 check "mempalace-hub rejects an unknown action" bash -c \
   "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
 
 # A stub that records its argv and the environment the launcher hands it, then
 # outlives the launcher - the detach path has to be exercised, not simulated.
-_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\";"
+#
+# Every knob that names a file is pointed into the temp dir: the supervisor
+# outlives the check that started it, and must not write the container's real
+# pid file, log or provision marker while doing so. MEMPALACE_HUB_MAX_RESTARTS=0
+# keeps the leftover supervisor from re-running the stub for minutes afterwards;
+# the restart budget gets its own checks below.
+_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_MAX_RESTARTS=0;"
+
+# A stub that exits immediately, for the restart budget. Same call record as the
+# long-lived one, so a restart is counted by grepping its argv log.
+_HUB_CRASH_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nexit 9\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_RESTART_DELAY=0 MEMPALACE_HUB_HEALTHY_SECS=3600;"
 
 check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
   "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
@@ -1154,9 +1455,51 @@ check "mempalace-hub exits 0 when the hub never answers" bash -c \
 check "mempalace-hub warns when the hub never answers" bash -c \
   "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
 check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
-  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub 2>/dev/null"
+  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub 2>/dev/null"
 check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
   "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
+
+# --- the hub supervisor and its liveness record (#780) ------------------------
+# postStartCommand fires once per container start, so before this a hub that
+# died mid-session was never restarted - and the fallback it left behind (every
+# session serving its own palace copy, one writer lease between them) is exactly
+# the #764 bug, reinstated silently and surfacing only at write time. `start`
+# now detaches `supervise`, which re-runs `mempalace serve` when it exits, and
+# every state transition is recorded in the provision marker #806 already keeps
+# in $CLAUDE_CONFIG_DIR - the same file and the same mechanism, one new key.
+check "the hub pid file is pre-created and writable by any uid" bash -c \
+  "test -f /usr/local/share/personal-features/mempalace-hub.pid && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.pid)\" = '666' ]"
+
+# start must hand off to the supervisor, not run the server as its own child:
+# the restart loop is the whole point, and it has to outlive the launcher.
+check "mempalace-hub start detaches the supervisor" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q '^supervisor=' \"\$d/hub.pid\" && grep -q '^server=' \"\$d/hub.pid\""
+
+# One serve run plus MEMPALACE_HUB_MAX_RESTARTS restarts, then it stops - a hub
+# that cannot bind at all must not spin forever.
+check "the supervisor restarts a hub that exits" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=2 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; [ \"\$(grep -c -- 'serve --host' \"\$d/bin/stub.calls\")\" = '3' ]"
+check "the supervisor gives up once the restart budget is spent" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise 2>&1 | grep -q 'giving up'"
+
+# The signal half of #780: giving up is recorded where it outlives the container
+# log, in the marker #806 writes - so "no hub" can be told apart from "a hub
+# that crashed out an hour ago" without waiting for a -32001.
+check "a spent restart budget is recorded in the provision marker" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"state\": \"gave_up\"' \"\$d/marker.json\""
+check "mempalace-hub status reports the state the supervisor last recorded" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; /usr/local/bin/mempalace-hub status 2>/dev/null | grep -q \"last recorded state 'gave_up'\""
+# Reuse, not a second breadcrumb: the default path is #806's marker, and the
+# hub's key is merged into whatever that file already holds.
+check "the hub liveness record defaults to the #806 provision marker" bash -c \
+  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub"
+check "the hub record is merged into the marker, not written over it" bash -c \
+  "$_HUB_CRASH_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+
+# Clearing the pid file is what stops the supervisor - no signal has to reach a
+# shell blocked on its child - and the server it was watching goes with it.
+check "mempalace-hub stop stops the hub it started" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; p=\"\$(sed -n 's/^server=//p' \"\$d/hub.pid\")\"; test -n \"\$p\" && /usr/local/bin/mempalace-hub stop >/dev/null 2>&1 && sleep 2 && ! kill -0 \"\$p\" 2>/dev/null"
 
 # The pinned mempalace must actually be able to serve a shared transport; if a
 # version bump ever drops `serve`, the whole design goes with it.
@@ -1170,10 +1513,13 @@ check "the mempalace-mcp console script is on PATH" bash -c \
 
 # End-to-end against the REAL binary, on an isolated HOME so the container's own
 # palace and hub are untouched: start, confirm the endpoint answers, confirm a
-# second start is a no-op rather than a second hub, then stop it via the pid in
-# mempalace's own per-palace registry record (no dependency on pkill).
+# second start is a no-op rather than a second hub, then stop it. `stop` has to
+# come first now - killing the server out from under a supervisor is a crash,
+# and the supervisor would restart it and leave a stray hub behind. The kill
+# through mempalace's own per-palace registry record stays as the backstop (no
+# dependency on pkill).
 check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
-  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; /usr/local/bin/mempalace-hub stop >/dev/null 2>&1; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
 
 # --- the odoo-ls language server (#746) ---------------------------------------
 # The server is what gives a Claude Code session Odoo-aware diagnostics,
