@@ -458,6 +458,58 @@ _SESSION_SOURCE_PREDICATE = (
     f"({_DEVELOPMENT_SOURCE_PREDICATE} OR {_REVIEW_SOURCE_PREDICATE})"
 )
 
+#: Payload key under which an event records the task ids it carries ONLY because
+#: those tasks had an active run when it was written — attribution rule 2,
+#: ``--attach-active-run`` (#779). The key is owned by
+#: :class:`~odoo_sdk.commands.log_event.LogEventCommand`, which is the single
+#: writer of the ``events`` append and the single place that knows WHICH rule
+#: attributed each id; a caller-supplied payload never gets to set it.
+#:
+#: It exists so the reaper's staleness clock can be attachment-independent
+#: (:meth:`LocalStateClient.latest_unattached_event_timestamp_for_task`) without
+#: changing what a row attributes to for BILLING: the id stays in ``task_ids``,
+#: so session derivation, upload, and every report are untouched — only the
+#: liveness question "is anyone still working this run?" reads the marker.
+#: Recorded as the id LIST rather than a boolean because one event can attach to
+#: several runs while explicitly naming another task, and the forgotten run in a
+#: busy container must age out even while its neighbours stay live.
+#:
+#: Per-id attribution provenance in the payload follows the ``unvalidated_task_ids``
+#: precedent (#378 item 1), which likewise keeps ids OUT of the liveness/triage
+#: reading of a row without changing the row's ``task_ids``. Unlike that key this
+#: one is defined here, in the layer that READS it, so the writer and the reader
+#: cannot drift apart on the spelling.
+ATTACHED_TASK_IDS_PAYLOAD_KEY = "attached_run_task_ids"
+
+# The attachment-independent staleness clock (#779), read by the reaper through
+# :meth:`LocalStateClient.latest_unattached_event_timestamp_for_task`. Same shape
+# as the plain latest-event clock — fan the event's ``task_ids`` out with
+# ``json_each`` and take the string ``MAX`` of a uniform UTC isoformat — minus the
+# rows that carry this task id ONLY by attachment. The exclusion is per task id
+# (``attached.value = task_each.value``), not per row: one event can be
+# attachment-only for a forgotten run while explicitly naming another task, and
+# only the forgotten run's clock must ignore it. ``json_valid`` guards the
+# CHECK-less ``payload`` column so a malformed legacy row cannot raise here.
+_LATEST_UNATTACHED_EVENT_SQL = f"""
+SELECT MAX(events.timestamp)
+FROM events, json_each(events.task_ids) AS task_each
+WHERE task_each.value = ?
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(
+          COALESCE(
+              CASE WHEN json_valid(events.payload)
+                   THEN json_extract(
+                       events.payload, '$.{ATTACHED_TASK_IDS_PAYLOAD_KEY}'
+                   )
+              END,
+              '[]'
+          )
+      ) AS attached
+      WHERE attached.value = task_each.value
+  )
+"""
+
 
 # CTE that reproduces the legacy gap-based sessionization directly over ``events``
 # at query time. The inactivity gap is bound at execution (SQLite views cannot
@@ -1248,14 +1300,18 @@ class LocalStateClient:
     def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]:
         """Return the most recent event timestamp attributed to ``task_id``, or None.
 
-        The staleness clock for the reaper (#366): a run's "last activity" is the
-        latest event carrying its task id — the same ``task_ids`` array the
-        derivation and ``--attach-active-run`` write to. Events fan out over their
-        task ids with ``json_each`` (a hook event can carry several), so a task
-        matches whenever it appears anywhere in the array. Timestamps are stored as
-        one uniform UTC isoformat, so a string ``MAX`` is the true chronological
-        maximum. The task id is bound as text because ``task_ids`` holds string ids.
-        Returns ``None`` when the task has no events on record.
+        Every event carrying the task id counts, whatever attributed it — the same
+        ``task_ids`` array the derivation and ``--attach-active-run`` write to.
+        Events fan out over their task ids with ``json_each`` (a hook event can
+        carry several), so a task matches whenever it appears anywhere in the
+        array. Timestamps are stored as one uniform UTC isoformat, so a string
+        ``MAX`` is the true chronological maximum. The task id is bound as text
+        because ``task_ids`` holds string ids. Returns ``None`` when the task has
+        no events on record.
+
+        This is the "any traffic at all" clock. It is deliberately NOT the reaper's
+        staleness clock — see
+        :meth:`latest_unattached_event_timestamp_for_task` for why (#779).
         """
         with self._connect() as conn:
             row = conn.execute(
@@ -1264,6 +1320,41 @@ class LocalStateClient:
                 "WHERE task_each.value = ?",
                 (str(task_id),),
             ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] is not None else None
+
+    def latest_unattached_event_timestamp_for_task(
+        self, task_id: int
+    ) -> Optional[datetime]:
+        """Return the task's latest ATTACHMENT-INDEPENDENT event time, or None (#779).
+
+        The staleness clock for the reaper (#366), fixed to be non-circular. The
+        clock used to be :meth:`latest_event_timestamp_for_task`, which every
+        ``--attach-active-run`` write refreshed: an event attached to a run *because
+        the run was active* was then read back as evidence the run was alive, so a
+        forgotten-but-live run in a busy container never aged out and kept tagging
+        every session. The 12h threshold was only reachable once the whole container
+        went quiet — the dead-container case, not the live one.
+
+        Attachment-derived attribution is therefore excluded here. The command layer
+        records, in each event's payload under
+        :data:`ATTACHED_TASK_IDS_PAYLOAD_KEY`, exactly the task ids that event
+        carries ONLY because their run happened to be active (attribution rule 2);
+        an id explicitly named by the caller, recovered from the session branch, or
+        carried by an ingested ``commit``/``chatter`` event is never listed, because
+        each of those names the task independently of any run being active. The
+        ``NOT EXISTS`` in :data:`_LATEST_UNATTACHED_EVENT_SQL` drops an event from
+        THIS task's clock when the task is in that list, per task id — an event may
+        be attachment-only for one task and explicit for another, and only the
+        former must be ignored.
+
+        Rows written before #779 carry no marker and so keep counting, which is the
+        safe direction on upgrade: an existing run's clock cannot jump backwards and
+        make a live run abruptly reapable. ``json_valid`` guards a payload that is
+        not JSON (the column carries no CHECK) so this hot hook path can never raise
+        on one malformed legacy row. Returns ``None`` when no such event exists.
+        """
+        with self._connect() as conn:
+            row = conn.execute(_LATEST_UNATTACHED_EVENT_SQL, (str(task_id),)).fetchone()
         return datetime.fromisoformat(row[0]) if row and row[0] is not None else None
 
     def get_aborted_runs(self) -> list[TaskRun]:

@@ -2,14 +2,14 @@
 description: Produce independent evidence for one Odoo task in a forked odoo-dev-tester — unit tests and browser tours on a throwaway database, plus an Odoo review lens over the diff.
 argument-hint: <task-id>
 arguments: [task]
-allowed-tools: Bash(echo:*), Bash(grep:*), Bash(ls:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*)
 disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-tester
 background: false
 ---
 
-ARTIFACTS: !`echo "$task" | grep -qE '^[0-9]+$' && ls -d "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" 2>/dev/null || echo 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id with a directory already on disk'`
+ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id with a directory already on disk' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
 GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
