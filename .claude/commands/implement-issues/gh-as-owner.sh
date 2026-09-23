@@ -120,7 +120,26 @@ pr-create)
 
     SLUG=$(slug_of "$WT")
     auth_as "${SLUG%%/*}"
-    exec gh pr create -R "$SLUG" "$@"
+
+    # `gh pr create` reads the head branch from the current directory, and -R
+    # only names the repo. Running it without entering the worktree opened PRs
+    # from whatever the caller happened to be on - which for a hand-made child
+    # worker is the main checkout on main, so three PRs proposed merging main
+    # INTO a sibling's stacked branch, carrying unrelated commits and none of
+    # the worker's own. See #841.
+    #
+    # `push` one branch above never had this bug because it passes -C "$WT".
+    # This is the same instruction, spelled the way gh requires it.
+    #
+    # --head is passed explicitly rather than relying on the cd alone: it is the
+    # difference between "gh inferred the right thing" and "gh was told", and an
+    # inferred head is what failed here. A caller that passes its own --head
+    # still wins, since later flags override earlier ones.
+    HEAD_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD) ||
+        die "worktree is not on a branch (detached HEAD): $WT"
+
+    cd "$WT" || die "cannot enter worktree: $WT"
+    exec gh pr create -R "$SLUG" --head "$HEAD_BRANCH" "$@"
     ;;
 
 gh)
