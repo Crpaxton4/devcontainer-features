@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: dispatch-tester-before-pr
+description: Should dispatch the odoo-dev-tester subagent for independent evidence.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The branch for Odoo task 4821 is finished. Before I open the PR I want independent evidence it works — run the unit tests and the tours and tell me the counts.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-tester
+    tool: Task
+    input_match: "odoo-dev-tester"
+    min: 1
+expected_outcome: A Task call spawns odoo-dev-tester rather than the suite being run in the main session.

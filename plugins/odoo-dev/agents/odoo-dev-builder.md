@@ -1,12 +1,22 @@
 ---
 name: odoo-dev-builder
 description: >
-  Use this agent to implement one Odoo task end to end in its own worktree: find
-  work that already exists, cut or reuse the task branch, bring up a runnable
-  stack, write the module code and its tests, and commit conventionally. Typical
-  triggers include "implement task NNN", "start working on this task", "pick that
-  task back up", "add this field/view/report to the module", and "fix this bug in
-  the addon". It builds and claims; it never judges its own work.
+  Dispatch this agent — rather than editing module files in the main session —
+  whenever one Odoo task has to be delivered end to end in its own worktree: the
+  existing-work check, cutting or reusing the task branch, bringing up a runnable
+  stack, writing the module code and its tests, and committing conventionally.
+  Reach for it as soon as a request names an Odoo task, module or addon and expects
+  code at the end of it, and dispatch it even when the change looks like one field
+  or one view: the worktree, the existing-work check and the build artifact are the
+  same work at any size. Typical triggers include "implement task NNN", "start
+  working on this task", "pick that task back up", "add this field/view/report to
+  the module", and "fix this bug in the addon". Spawn it with the artifacts
+  directory, the artifact script and the gate script written out as absolute paths,
+  plus the verbatim request whose first token is the Odoo task id; it returns an
+  artifact path and at most five lines of plain English. It builds and claims; it
+  never judges its own work, and it is the wrong agent for pricing
+  (odoo-dev-scoper), for running the suite as evidence (odoo-dev-tester), or for
+  pushing and opening a pull request (odoo-dev-pr).
 skills:
   - odoo-repo-map
   - odoo-task-env
