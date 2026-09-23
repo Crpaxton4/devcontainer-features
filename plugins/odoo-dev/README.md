@@ -662,7 +662,7 @@ devcontainer-features/
     ├── skills/     16 skills; odoo-dev-map is the router
     ├── agents/     5 subagents, all named odoo-dev-*
     ├── scripts/    artifact.sh, gate.sh, bootstrap-state.sh, check-stray-skills.sh, validate.sh
-    ├── evals/      20 trigger-accuracy cases
+    ├── evals/      29 trigger-accuracy cases
     └── README.md
 ```
 
@@ -798,7 +798,7 @@ Commit titles on every PR. A non-conventional title would cut no release.
 
 ### Trigger accuracy
 
-[`evals/`](evals/) holds 22 cases — 12 that should fire a specific skill and 10
+[`evals/`](evals/) holds 29 cases — 17 that should fire a specific skill and 12
 near-misses that share a trigger word but are out of domain ("upgrade the npm
 dependencies", "quote this sentence as a blockquote"), split train/validation. They
 catch descriptions cannibalizing each other before real work does.
