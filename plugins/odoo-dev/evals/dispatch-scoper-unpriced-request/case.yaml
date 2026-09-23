@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: dispatch-scoper-unpriced-request
+description: Should dispatch the odoo-dev-scoper subagent for an unpriced Odoo request.
+tags: [trigger, positive, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The client wants a portal page in Odoo where their customers can see delivery status. Nobody has priced it yet — I need the hours and a design doc before we commit to anything.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-scoper
+    tool: Task
+    input_match: "odoo-dev-scoper"
+    min: 1
+expected_outcome: A Task call spawns odoo-dev-scoper rather than an estimate being hand-composed inline.

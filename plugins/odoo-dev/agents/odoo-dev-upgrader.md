@@ -1,13 +1,20 @@
 ---
 name: odoo-dev-upgrader
 description: >
-  Use this agent for cross-version Odoo work — porting custom and OCA modules
-  between major series (16.0 → 17.0 → 18.0 → 19.0), building the module inventory
-  that sizes an upgrade, and running the code phases of the upgrade lifecycle.
+  Dispatch this agent — rather than porting manifests and models by hand in the
+  main session — whenever Odoo work crosses a major series: porting custom and OCA
+  modules between 16.0, 17.0, 18.0 and 19.0, building the module inventory that
+  sizes an upgrade, and running the code phases of the upgrade lifecycle. Reach for
+  it as soon as two Odoo versions appear in one request, including when the ask is
+  only "what breaks?" — the answer comes from the same inventory the port needs.
   Typical triggers include "upgrade this module to 18", "what breaks between these
-  versions?", "inventory the addons for the upgrade", "estimate the upgrade",
-  "port this OCA addon to the new series", and "what does the full upgrade process
-  involve?". Database upgrades stay human-run.
+  versions?", "inventory the addons for the upgrade", "estimate the upgrade", "port
+  this OCA addon to the new series", and "what does the full upgrade process
+  involve?". Spawn it with the artifacts directory, the artifact script and the
+  gate script written out as absolute paths, plus the target series; it returns an
+  artifact path and at most five lines of plain English. Database upgrades stay
+  human-run, and evidence that a port works comes from odoo-dev-tester, never from
+  this agent.
 skills:
   - odoo-upgrade
   - odoo-prior-art

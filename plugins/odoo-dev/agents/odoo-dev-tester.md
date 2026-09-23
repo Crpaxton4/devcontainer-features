@@ -1,13 +1,21 @@
 ---
 name: odoo-dev-tester
 description: >
-  Use this agent to produce independent, machine-checkable evidence that an Odoo
-  change actually works — unit tests and browser tours on a throwaway database,
-  plus an Odoo-specific review lens over the diff. Typical triggers include "does
-  this pass?", "verify the branch before the PR", "run the tests and the tours",
-  "the last run said green but not how many tests it ran", and "review this addon
-  for ORM and security problems". Its editing tools are removed, so it reports
-  failures rather than fixing them.
+  Dispatch this agent — rather than running the suite in the main session —
+  whenever an Odoo change needs independent, machine-checkable evidence that it
+  works: unit tests and browser tours on a throwaway database, plus an
+  Odoo-specific review lens over the diff. Reach for it before any pull request
+  opens, and any time a green result was claimed without a count of tests beside
+  it; evidence produced by whoever wrote the code is not independent, which is the
+  whole reason this is a separate agent. Typical triggers include "does this
+  pass?", "verify the branch before the PR", "run the tests and the tours", "the
+  last run said green but not how many tests it ran", and "review this addon for
+  ORM and security problems". Spawn it with the artifacts directory, the artifact
+  script and the gate script written out as absolute paths, plus the worktree and
+  branch under test; it returns an artifact path and at most five lines of plain
+  English. Its editing tools are removed and its shell is held to a read-only
+  allowlist, so it reports failures rather than fixing them — send the failures
+  back to odoo-dev-builder or odoo-dev-upgrader.
 disallowedTools:
   - Edit
   - Write
