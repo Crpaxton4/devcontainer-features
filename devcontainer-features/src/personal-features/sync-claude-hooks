@@ -15,25 +15,45 @@
 # server-side, #326/#340), so we register PreToolUse with a match-all matcher
 # and let the shim enforce the exclusion.
 #
+# THE SETTINGS FILE IS SHARED WITH THE HOST (#803). Because that mount is
+# two-way, the host's own Claude Code sessions read the very same settings.json
+# this script writes. A container-absolute command therefore resolves in exactly
+# ONE of the two places that run it: on the host every feature hook exit-127s
+# (`/bin/sh: 1: /usr/local/bin/claude-event-hook: not found`) and every event it
+# was meant to record is silently dropped. So we do not write a container path.
+# Instead the shim is PUBLISHED into the shared config dir and referenced through
+# a per-machine expansion — see HOOK_SHIM/SHIM_CMD below.
+#
 # CARE WITH THE USER'S CONFIG: settings.json is the user's real file and may
 # hold their own settings AND their own hooks. This merge therefore:
 #   * creates the file (as {}) if absent;
-#   * replaces ONLY feature-owned hook entries — identified by the
-#     `claude-event-hook` command marker — on re-run, so it is idempotent and
-#     never accumulates duplicates;
+#   * replaces ONLY feature-owned hook entries — identified by the HOOK_MARKERS
+#     command markers — on re-run, so it is idempotent and never accumulates
+#     duplicates;
 #   * preserves every user-owned setting and every user-authored hook untouched;
 #   * writes only after producing valid JSON (atomic temp-file swap);
 #   * leaves a corrupt/unparseable settings.json ALONE and warns, never
 #     destroying user config.
 set -euo pipefail
 
-# Absolute command path baked into the hook entries: robust regardless of the
-# PATH the hook runtime sees, and the stable marker used to find our own entries
-# on re-merge. Overridable so tests can point the entries at a fixture binary.
+# The event shim IMPLEMENTATION to publish: the copy install.sh placed in the
+# image, outside the bind mount. Overridable so tests can publish a fixture
+# binary instead. NOTE the changed meaning since #803 — this names the file we
+# COPY, not the command we write into settings.json; that is always SHIM_CMD.
 HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
-# Substring that uniquely identifies a feature-owned hook command. Kept separate
-# from HOOK_CMD so an override of the path in tests doesn't weaken the marker.
-HOOK_MARKER="claude-event-hook"
+
+# Substrings that identify a feature-owned hook command, used to strip our own
+# entries before re-appending them (this is what makes the merge idempotent).
+# Kept separate from the commands themselves so an override of the source path in
+# tests can't weaken the markers, and kept as a LIST so a later hook whose
+# command does not contain `claude-event-hook` can be matched too.
+#
+# CONTRACT FOR ANYONE ADDING A HOOK ENTRY BELOW: every command you add must be
+# matched by at least one marker here. An entry no marker matches is never
+# stripped on re-run, so it accumulates one duplicate copy on every container
+# create. Add a new hook whose command is a different program -> add its
+# identifying substring to this array in the same change.
+HOOK_MARKERS='["claude-event-hook"]'
 
 note() { echo "sync-claude-hooks: $1" >&2; }
 
@@ -60,12 +80,56 @@ SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
 # would defeat the atomicity this relies on).
 mkdir -p "$CLAUDE_CONFIG_DIR"
 
+# --- publish the shim where BOTH sides of the bind mount can reach it (#803) --
+# $CLAUDE_CONFIG_DIR is the one directory the container and the host agree on:
+# /usr/local/share/claude-home in here, ~/.claude out there, the same bytes
+# either way. Copying the shim into it makes the hook command resolvable on the
+# host without the host having installed anything — and, because it is the real
+# implementation rather than a stub, host sessions record their events instead of
+# merely failing quietly. The copy is refreshed on every container create, so it
+# tracks the image's version of the shim.
+HOOK_DIR="$CLAUDE_CONFIG_DIR/hooks"
+HOOK_SHIM="$HOOK_DIR/claude-event-hook"
+
+# The command literal written into settings.json. Claude Code runs hook commands
+# through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
+# HOOK TIME: $CLAUDE_CONFIG_DIR in the container, ~/.claude on a host that does
+# not set it — the two ends of the same mount, hence the same file. Single-quoted
+# so THIS script never expands it; double quotes are inside the literal so a
+# $HOME containing spaces still resolves.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook"'
+
+mkdir -p "$HOOK_DIR"
+if [ -r "$HOOK_CMD" ]; then
+    # Same atomic-rename discipline as the settings write below: stage inside
+    # $HOOK_DIR (same filesystem), then rename. A hook already executing keeps
+    # the old inode, so a mid-session republish can never run a half-copied file.
+    SHIM_TMP="$(mktemp -p "$HOOK_DIR")"
+    if cp "$HOOK_CMD" "$SHIM_TMP" 2>/dev/null; then
+        chmod 0755 "$SHIM_TMP"
+        mv "$SHIM_TMP" "$HOOK_SHIM"
+    else
+        rm -f "$SHIM_TMP"
+        note "could not copy $HOOK_CMD to $HOOK_SHIM."
+    fi
+fi
+
+# Refuse to write a command that resolves nowhere — the #803 failure mode. With
+# no shim published and none left by an earlier run, writing the entries anyway
+# would give every session a 127 per event, so leave settings.json alone.
+if [ ! -x "$HOOK_SHIM" ]; then
+    note "no event shim at $HOOK_SHIM (and none to publish from $HOOK_CMD); not writing hook entries."
+    exit 0
+fi
+
 # The feature-owned hooks block. Each event maps to a dedicated group carrying
 # only our command, so the marker-based removal below can strip exactly our
 # entries without touching user groups. All seven event names are verified
 # against the current Claude Code hooks reference; PreToolUse uses a match-all
-# matcher (the shim excludes mcp__odoo-mcp__* itself).
-OURS="$(jq -n --arg cmd "$HOOK_CMD" '
+# matcher (the shim excludes mcp__odoo-mcp__* itself). Every command here must
+# be matched by HOOK_MARKERS — see the contract note beside it.
+OURS="$(jq -n --arg cmd "$SHIM_CMD" '
   {
     "SessionStart":     [ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ],
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
@@ -92,23 +156,30 @@ else
 fi
 
 # Merge: for each event we own, drop any pre-existing group whose hooks include
-# our marker command (removing a prior run's entries — this is what makes the
-# merge idempotent), then append our fresh group. Groups without our marker —
+# a marker command (removing a prior run's entries — this is what makes the
+# merge idempotent), then append our fresh group. Groups matching no marker —
 # i.e. every user-authored hook — are preserved verbatim, as is every other
 # top-level setting. `.hooks[$ev]` is coerced to [] only when it is absent or
 # not an array, so a user's own array is respected and a malformed scalar can't
 # crash the reduce.
+#
+# The markers also carry the #803 MIGRATION: `claude-event-hook` is a substring
+# of the old container-absolute command too, so the stale
+# /usr/local/bin/claude-event-hook entries an earlier container wrote into the
+# user's settings.json are stripped here and replaced by the shared-path ones.
 TMP_OUT="$(mktemp -p "$CLAUDE_CONFIG_DIR")"
 if jq \
     --argjson ours "$OURS" \
-    --arg marker "$HOOK_MARKER" '
+    --argjson markers "$HOOK_MARKERS" '
     .hooks = (.hooks // {})
     | reduce ($ours | keys_unsorted[]) as $ev (.;
         .hooks[$ev] = (
             ( (.hooks[$ev] // []) | if type == "array" then . else [] end )
             | map(select(
-                ( [ (.hooks // [])[]? | .command? // "" ]
-                  | any(contains($marker)) ) | not
+                ( [ (.hooks // [])[]? | .command? // "" ] ) as $cmds
+                | any($cmds[]; . as $c
+                    | any($markers[]; . as $m | $c | contains($m)))
+                | not
               ))
         ) + $ours[$ev]
       )
