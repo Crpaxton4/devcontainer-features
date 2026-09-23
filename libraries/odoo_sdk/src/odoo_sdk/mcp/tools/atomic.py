@@ -387,6 +387,14 @@ def make_task_note_tool(registry: Registry):
         ``"mimetype"``. ``dedupe_key`` makes the call idempotent: a retried
         call with an already-seen key skips the post and returns the existing
         message id.
+
+        Task chatter is CLIENT-VISIBLE, and no tool removes a note or unlinks
+        an attachment once posted. Attach only deliverables the client asked
+        to receive. Do NOT attach internal engineering material — scripts,
+        logs, test or benchmark output, tracebacks, machine paths, or working
+        analysis. Detail that will not fit the 300-char note belongs in the
+        pull request, the commit history, or an internal channel; reference it
+        from the note rather than attaching it.
         """
         return registry["task_note"].execute(
             task_id, note, attachments=attachments, dedupe_key=dedupe_key
