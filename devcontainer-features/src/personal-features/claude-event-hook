@@ -207,6 +207,66 @@ set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
 [ -n "$REPO" ] && set -- "$@" --repo "$REPO"
 [ -n "$PAYLOAD" ] && set -- "$@" --payload "$PAYLOAD"
 
+# --- the runtime breadcrumb (#804) -------------------------------------------
+# This shim's contract is to exit 0 on every path, which means failing OPEN. The
+# defect #804 names is that failing open is currently the same thing as failing
+# SILENTLY: 3,506 events were dropped over three months and the only trace was a
+# `Failed with non-blocking status code` string buried in transcripts. The
+# absence of rows is indistinguishable from a quiet week, so the tracker's own
+# tables can never show it.
+#
+# A counter this shim writes on FAILURE cannot close that gap, because the shim
+# is the thing that is broken: when the hook command does not resolve (#803) or
+# `odoo-sdk` is not on PATH (#496) not one line of this file runs. The only
+# reliable signal is therefore written by the path that SUCCEEDS — a
+# last-successful-write timestamp that stops moving the moment anything upstream
+# of it breaks, whatever the cause. sync-claude-hooks compares it on every
+# container create and says so when it has stopped moving; see
+# check_hook_heartbeat there for the reporting half.
+#
+# It is deliberately recorded in the #806 provision marker rather than in a file
+# of its own: that marker already exists for exactly this purpose (state about
+# this machine's feature scripts that outlives the image), already lives in the
+# one directory the container and the host share, and already needs no mount and
+# no containerEnv var of its own. One marker, two facts about it.
+#
+# The write is gated on `odoo-sdk` actually EXITING 0, not merely on this shim
+# having reached the fork, so the breadcrumb attests the whole path — hook
+# resolved, shim ran, SDK wrote the row — rather than just the first link of it.
+# It rides inside the same detached background job, so it costs the session
+# nothing, and it is throttled to one write a minute so a PreToolUse-per-tool-
+# call workload does not churn the bind-mounted config dir. `mv` over a temp file
+# in the same directory keeps the marker atomic for the provision-time reader,
+# and 0666 matches the mode install.sh gives it (nothing here can know which uid
+# provisioned the container, and the marker holds no secret). Every failure is
+# swallowed: a breadcrumb that cannot be written must never disturb a session.
+record_heartbeat() {
+    [ "$HAVE_JQ" -eq 1 ] || return 0
+    _hb_dir="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}"
+    [ -d "$_hb_dir" ] || return 0
+    _hb_marker="$_hb_dir/personal-features-provision.json"
+    _hb_in=""
+    if [ -r "$_hb_marker" ]; then
+        _hb_in="$(jq -c 'if type == "object" then . else empty end' "$_hb_marker" 2>/dev/null || true)"
+    fi
+    [ -n "$_hb_in" ] || _hb_in='{}'
+    _hb_tmp="$(mktemp "$_hb_dir/.pf-heartbeat.XXXXXX" 2>/dev/null)" || return 0
+    if printf '%s' "$_hb_in" \
+        | jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             --arg hook "$HOOK_NAME" \
+             --argjson now "$(date -u +%s)" \
+             'if (.last_event_epoch | type) == "number" and (.last_event_epoch > ($now - 60))
+              then empty
+              else . + {last_event_at: $at, last_event_epoch: $now, last_event_hook: $hook}
+              end' > "$_hb_tmp" 2>/dev/null && [ -s "$_hb_tmp" ]; then
+        chmod 0666 "$_hb_tmp" 2>/dev/null || true
+        mv -f "$_hb_tmp" "$_hb_marker" 2>/dev/null || rm -f "$_hb_tmp"
+    else
+        rm -f "$_hb_tmp"
+    fi
+    return 0
+}
+
 # Fire-and-forget: fork the SDK call into a detached background subshell and
 # return immediately, so the hook never makes a tool call wait on cat+jq+the
 # Python interpreter+SQLite (hundreds of ms; up to the 10s timeout worst case).
@@ -214,7 +274,8 @@ set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
 # depends on stdin staying open. The extra subshell wrapper `( ... & )` reparents
 # the job to init and suppresses any job-control notice, keeping stdout clean.
 # Runtime is still bounded by `timeout`, and any nonzero exit is swallowed inside
-# the background job — this shim itself always exits 0.
-( timeout 10 odoo-sdk "$@" >/dev/null 2>&1 & ) 2>/dev/null
+# the background job — this shim itself always exits 0. The breadcrumb is chained
+# onto the SDK call with `&&` so it records a write that actually happened.
+( timeout 10 odoo-sdk "$@" >/dev/null 2>&1 && record_heartbeat & ) 2>/dev/null
 
 exit 0

@@ -315,7 +315,31 @@ const fs = require("fs"), path = require("path");
 const E = process.argv[1];
 if (!fs.existsSync(E)) { console.log("  FAIL evals/ missing"); process.exit(1); }
 let bad = 0, pos = 0, neg = 0, train = 0, val = 0;
+const PLUGIN = "odoo-dev";
 const skills = new Set(fs.readdirSync(path.join(E, "..", "skills")));
+const agents = new Set(fs.readdirSync(path.join(E, "..", "agents"))
+  .filter((a) => a.endsWith(".md")).map((a) => a.slice(0, -3)));
+// A grader names one of three things, and the tool picks which namespace it is
+// read against: Skill -> a bundled skill, Task -> a bundled agent, anything else
+// (Bash and friends) -> a literal command string with no namespace at all. The
+// old first-match-wins regex over the whole file assumed Skill for every case,
+// so a Bash or Task grader was reported as a skill that is not bundled.
+const unquote = (s) => (s || "").trim().replace(/^["\x27]|["\x27]$/g, "").trim();
+const bare = (s) => s.replace(new RegExp(`^${PLUGIN}:`), "");
+function graders(t) {
+  const out = [];
+  const body = t.split(/^graders:[ \t]*$/m)[1];
+  if (body === undefined) return out;
+  let cur = null;
+  for (const line of body.split("\n")) {
+    if (/^\S/.test(line)) break;            // dedent back to a top-level key ends the block
+    let m = line.match(/^\s+-\s*([A-Za-z_]+):(.*)$/);
+    if (m) { cur = {}; out.push(cur); cur[m[1]] = m[2]; continue; }
+    m = line.match(/^\s+([A-Za-z_]+):(.*)$/);
+    if (m && cur) cur[m[1]] = m[2];
+  }
+  return out;
+}
 for (const d of fs.readdirSync(E).sort()) {
   const f = path.join(E, d, "case.yaml");
   if (!fs.existsSync(f)) continue;
@@ -326,16 +350,34 @@ for (const d of fs.readdirSync(E).sort()) {
   if (!/^plugins: \[odoo-dev\]$/m.test(t)) { console.log(`  FAIL ${d}: plugins must be [odoo-dev]`); bad++; }
   const isPos = /positive/.test(t), isNeg = /negative/.test(t);
   if (isPos === isNeg) { console.log(`  FAIL ${d}: must be tagged positive or negative, not both or neither`); bad++; }
+  const gs = graders(t);
+  if (gs.length === 0) { console.log(`  FAIL ${d}: no graders`); bad++; }
+  for (const g of gs) {
+    const tool = unquote(g.tool), im = unquote(g.input_match);
+    if (!tool) { console.log(`  FAIL ${d}: grader without a tool`); bad++; continue; }
+    if (!im) { console.log(`  FAIL ${d}: ${tool} grader without an input_match`); bad++; continue; }
+    if (tool === "Skill") {
+      if (!skills.has(bare(im)) && bare(im) !== PLUGIN)
+        { console.log(`  FAIL ${d}: asserts skill "${im}", which is not bundled`); bad++; }
+    } else if (tool === "Task") {
+      if (!agents.has(bare(im)))
+        { console.log(`  FAIL ${d}: asserts agent "${im}", which is not bundled`); bad++; }
+    } else if (skills.has(bare(im)) || agents.has(bare(im))) {
+      // a command-string grader that names a bundled skill or agent is a mis-set tool:
+      console.log(`  FAIL ${d}: ${tool} grader matches "${im}", which is a bundled skill or agent name`); bad++;
+    }
+  }
+  const mins = gs.filter((g) => Number(unquote(g.min)) >= 1);
+  const maxes = gs.filter((g) => Number(unquote(g.max)) === 0);
   if (isPos) {
     pos++;
-    const m = t.match(/input_match: "(.+)"/);
-    if (!m) { console.log(`  FAIL ${d}: no input_match`); bad++; }
-    else if (!skills.has(m[1])) { console.log(`  FAIL ${d}: asserts skill "${m[1]}", which is not bundled`); bad++; }
-    if (!/min: 1/.test(t)) { console.log(`  FAIL ${d}: positive case must assert min: 1`); bad++; }
+    if (mins.length === 0) { console.log(`  FAIL ${d}: positive case must assert min: 1`); bad++; }
+    else if (!mins.some((g) => ["Skill", "Task"].includes(unquote(g.tool))))
+      { console.log(`  FAIL ${d}: positive case must assert min: 1 on a Skill or Task grader`); bad++; }
   }
   if (isNeg) {
     neg++;
-    if (!/max: 0/.test(t)) { console.log(`  FAIL ${d}: near-miss case must assert max: 0`); bad++; }
+    if (maxes.length === 0) { console.log(`  FAIL ${d}: near-miss case must assert max: 0`); bad++; }
   }
   if (/(\[|, )train\]/.test(t)) train++;
   if (/validation\]/.test(t)) val++;

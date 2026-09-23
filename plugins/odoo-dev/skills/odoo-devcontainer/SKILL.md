@@ -92,4 +92,6 @@ call before it.
 - Single DB instance: `odoo`. No multi-DB awareness needed
 - Venv already active in odoo binary. Manual activation only for pip ops
 - Enterprise addons at `/var/lib/odoo/addons/$ODOO_VERSION` -> auto-cloned, already in `addons_path`
-- Always run `bump_manifest_version.py` before committing module changes
+- Always run `bump_manifest_version.py` before committing module changes — the
+  plugin's `PreToolUse` gate hook denies a `git commit` that carries module changes
+  with the manifest version standing still, so this one is enforced, not trusted

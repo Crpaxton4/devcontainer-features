@@ -27,7 +27,14 @@ class TaskNoteCommand(Command):
         "attached to the posted message via 'attachments': a list of file "
         "specs, each either {'path': <local file path>} or "
         "{'content': <base64 bytes>, 'name': <filename>} with an optional "
-        "'mimetype'. Pass an optional 'dedupe_key' to make the call "
+        "'mimetype'. Task chatter is CLIENT-VISIBLE, and there is no tool "
+        "that removes a note or unlinks an attachment once posted, so attach "
+        "only deliverables the client asked to receive. Do NOT attach "
+        "internal engineering material — scripts, logs, test or benchmark "
+        "output, tracebacks, machine paths, or working analysis. That "
+        "evidence belongs in the pull request, the commit history, or an "
+        "internal channel; link to it from the note instead of attaching it. "
+        "Pass an optional 'dedupe_key' to make the call "
         "idempotent: a retried call with a key already seen for this task "
         "skips the post and returns the existing message id. Requires an "
         "active tracking session."
@@ -52,6 +59,9 @@ class TaskNoteCommand(Command):
         :param attachments: Optional list of file specs (``path`` or
             ``content`` + ``name``, optional ``mimetype``) uploaded as
             ``ir.attachment`` records and linked to the posted message (#604).
+            The chatter is client-visible and nothing in the toolset unlinks
+            an attachment afterwards (#767), so pass deliverables only — never
+            scripts, logs, or internal analysis.
         :param dedupe_key: Optional idempotency key (#631). A key already seen
             for this task short-circuits BEFORE any side effect — no attachment
             upload, no local append, no chatter post — and returns the message

@@ -93,11 +93,15 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
   "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_sdk.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
     || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
   subj="scenario-hook-e2e-$$"
+  # CLAUDE_CONFIG_DIR is sandboxed alongside the throwaway DB so the #804
+  # breadcrumb below lands here and never in the real config dir.
+  mkdir -p "$STATE/claude"
   printf "{\"session_id\":\"s-%s\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$$" "$subj" \
-    | ODOO_TASK_TRACKER_DIR="$STATE" /usr/local/bin/claude-event-hook PreToolUse
+    | ODOO_TASK_TRACKER_DIR="$STATE" CLAUDE_CONFIG_DIR="$STATE/claude" /usr/local/bin/claude-event-hook PreToolUse
+  landed=0
   # The shim fires the SDK write in a DETACHED background job, so poll the DB.
   for _ in $(seq 1 50); do
-    "$SDK_BIN/python" - "$DB" "$subj" <<PY && { rm -rf "$STATE"; exit 0; }
+    "$SDK_BIN/python" - "$DB" "$subj" <<PY && { landed=1; break; }
 import json, sqlite3, sys
 from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE
 db, subj = sys.argv[1], sys.argv[2]
@@ -115,7 +119,24 @@ sys.exit(0)
 PY
     sleep 0.2
   done
-  echo "no billing-eligible claude:PreToolUse row for subject $subj ever landed" >&2
+  if [ "$landed" != 1 ]; then
+    echo "no billing-eligible claude:PreToolUse row for subject $subj ever landed" >&2
+    rm -rf "$STATE"
+    exit 1
+  fi
+  # #804: the row landing is only half of it. A hook that stops working produces
+  # no event AND no signal, so the same real invocation must also move the
+  # last-successful-write breadcrumb in the #806 provision marker - that stamp is
+  # the only thing a later container create can read to tell an outage apart from
+  # a quiet week. It is chained onto the SDK call in the same detached job, so it
+  # can arrive a beat after the row.
+  for _ in $(seq 1 50); do
+    jq -e ".last_event_epoch > 0 and .last_event_hook == \"PreToolUse\"" \
+      "$STATE/claude/personal-features-provision.json" >/dev/null 2>&1 \
+      && { rm -rf "$STATE"; exit 0; }
+    sleep 0.2
+  done
+  echo "the event landed but the #804 heartbeat in $STATE/claude never moved" >&2
   rm -rf "$STATE"
   exit 1
 '
