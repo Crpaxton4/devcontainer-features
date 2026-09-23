@@ -792,6 +792,71 @@ printf '{ this is : not json ' > "$HK_C/settings.json"
 check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" bash -c \
   "before=\$(cat \"$HK_C/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_C\" /usr/local/bin/sync-claude-hooks; rc=\$?; [ \$rc -eq 0 ] && [ \"\$before\" = \"\$(cat \"$HK_C/settings.json\")\" ]"
 
+# --- #805: every hook command is resolved, not just the two that broke first ---
+# The feature used to assert exactly two of the ten commands settings.json
+# references - the odoo-sdk console scripts in install.sh (#496) and
+# mempalace-recall.sh in mempalace-repair (#744) - each added reactively after
+# the thing it guarded had already broken. Everything else was provisioned on
+# trust, including odoo-api-guard.sh, which exit-127'd 73 times while silently
+# permitting every call it was installed to block. Both one-offs are deleted and
+# their coverage is asserted here, against the one routine that replaced them.
+
+# The BUILD-time half: the programs a feature hook command execs. HOOK_DEPS is
+# overridable so these drive the routine rather than the real toolchain.
+check "--check-deps passes when every hook dependency resolves" bash -c \
+  "PERSONAL_FEATURES_HOOK_DEPS='jq sh' /usr/local/bin/sync-claude-hooks --check-deps"
+check "--check-deps fails and names a hook dependency that does not resolve" bash -c \
+  "if PERSONAL_FEATURES_HOOK_DEPS='jq definitely-not-installed-805' /usr/local/bin/sync-claude-hooks --check-deps 2>\"$HOOKS_TEST_ROOT/deps.err\"; then exit 1; fi; grep -q 'definitely-not-installed-805' \"$HOOKS_TEST_ROOT/deps.err\""
+# install.sh calls exactly this after linking the console scripts, which is what
+# used to be the hand-written loop; gated on odoo-mcp like the PATH checks above
+# so it no-ops when no SDK wheel was bundled.
+check "the real hook dependencies resolve when the SDK is installed (#496 coverage)" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || /usr/local/bin/sync-claude-hooks --check-deps"
+# The PROVISION-time half: every command the settings file actually references.
+# It can only run here - settings.json lives in the bind-mounted config dir and
+# does not exist at image-build time.
+HK_F="$HOOKS_TEST_ROOT/f"
+mkdir -p "$HK_F"
+cat > "$HK_F/settings.json" <<JSON
+{ "hooks": {
+    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/mempalace-recall.sh"}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/odoo-api-guard.sh"}]},
+                    {"matcher":"Edit","hooks":[{"type":"command","command":"jq --version"}]} ]
+  } }
+JSON
+# Present but not executable is the same failure as absent: /bin/sh exit-127s it.
+printf '#!/bin/sh\n' > "$HK_F/odoo-api-guard.sh"
+chmod 0644 "$HK_F/odoo-api-guard.sh"
+check "sync-claude-hooks resolves every command in the settings file" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks 2>\"$HK_F/err\""
+check "it names a referenced hook script that is missing (#744 coverage)" bash -c \
+  "grep -q 'mempalace-recall.sh' \"$HK_F/err\""
+check "it never creates the missing hook script" bash -c \
+  "! test -e \"$HK_F/hooks/mempalace-recall.sh\""
+check "it names a referenced hook script that is present but not executable" bash -c \
+  "grep -q 'odoo-api-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
+check "it says nothing about a command that does resolve" bash -c \
+  "! grep -q 'jq --version' \"$HK_F/err\""
+# A hook the user owns is theirs to fix: report it, but never fail container
+# create over a file this feature does not own and deliberately never writes.
+check "a user-owned hook that does not resolve still exits 0" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks >/dev/null 2>&1"
+check "the feature's own entries raise no resolution error" bash -c \
+  "! grep -q 'feature-owned' \"$HK_F/err\""
+
+# Resolving a command must never RUN it: these strings are user config, and the
+# audit expands them with the shell. A command carrying a substitution is refused
+# and reported, not evaluated.
+HK_G="$HOOKS_TEST_ROOT/g"
+mkdir -p "$HK_G"
+cat > "$HK_G/settings.json" <<JSON
+{ "hooks": { "SessionStart": [ {"hooks":[{"type":"command","command":"\$(touch $HK_G/EXECUTED) x"}]} ] } }
+JSON
+check "sync-claude-hooks never executes a hook command while resolving it" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_G\" /usr/local/bin/sync-claude-hooks 2>\"$HK_G/err\" && ! test -e \"$HK_G/EXECUTED\""
+check "a command it cannot resolve by inspection is reported, not passed silently" bash -c \
+  "grep -q 'left unchecked' \"$HK_G/err\""
+
 rm -rf "$HOOKS_TEST_ROOT"
 
 # --- mempalace palace root symlink (#596, #643) -------------------------------
@@ -872,21 +937,21 @@ check "mempalace-repair leaves a corrupt config.json untouched and exits 0" bash
 # --- mempalace-as-only-memory asserts (#744) ----------------------------------
 # Native Claude auto-memory is off in the shared settings.json and the native
 # memory files were mined into the palace, so mempalace is the only memory left
-# and three things have to hold: hooks.auto_save true, identity.txt present, and
-# an executable SessionStart recall hook. The repair step REPORTS on all three
-# and repairs none of them - except a wholly absent identity.txt, which it seeds.
-# Driven against the same MEMPALACE_MOUNT sandbox as the checks above, plus a
-# sandbox CLAUDE_CONFIG_DIR so the real claude-home is never read.
+# and two things have to hold here: hooks.auto_save true and identity.txt
+# present. The repair step REPORTS on both and repairs neither - except a wholly
+# absent identity.txt, which it seeds. (The third, the SessionStart recall hook,
+# moved to sync-claude-hooks with #805; see the block above.) Driven against the
+# same MEMPALACE_MOUNT sandbox as the checks above.
 
-# The sandbox every assert case below starts from: a home, a mount, a fake
-# claude-home, and a config.json whose palace_path already agrees (so step 3
-# stays quiet and only the step-4 output is under test).
-_ASSERT_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\" \"\$d/claude/hooks\"; printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":true}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" CLAUDE_CONFIG_DIR=\"\$d/claude\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
+# The sandbox every assert case below starts from: a home, a mount, and a
+# config.json whose palace_path already agrees (so step 3 stays quiet and only
+# the step-4 output is under test).
+_ASSERT_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/mount\"; printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":true}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" MEMPALACE_PALACE_PATH=\"\$d/mount/palace\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
 
 # A true hooks.auto_save with everything else in place is the healthy container:
 # the assert step must say nothing at all on stderr.
-check "mempalace-repair is silent when auto_save, identity and recall hook are all good" bash -c \
-  "$_ASSERT_SETUP printf 'agent: devcontainer-claude\n' > \"\$d/mount/identity.txt\"; printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod +x \"\$d/claude/hooks/mempalace-recall.sh\"; err=\"\$(_run 2>&1 >/dev/null)\"; [ -z \"\$err\" ]"
+check "mempalace-repair is silent when auto_save and identity are both good" bash -c \
+  "$_ASSERT_SETUP printf 'agent: devcontainer-claude\n' > \"\$d/mount/identity.txt\"; err=\"\$(_run 2>&1 >/dev/null)\"; [ -z \"\$err\" ]"
 
 # The #744 bug itself: auto_save was false, so every Stop/SessionEnd/PreCompact
 # hook fire saved nothing and nothing said so.
@@ -918,20 +983,17 @@ check "mempalace-repair leaves an existing identity.txt byte-identical" bash -c 
 check "mempalace-repair does not re-seed identity.txt on a second run" bash -c \
   "$_ASSERT_SETUP _run >/dev/null 2>&1; before=\"\$(cat \"\$d/mount/identity.txt\")\"; _run >/dev/null 2>&1 && [ \"\$before\" = \"\$(cat \"\$d/mount/identity.txt\")\" ]"
 
-# The recall hook is hand-maintained and named by path from settings.json, so a
-# missing or non-executable file fails the hook on every session start. Warn -
-# and never create it, since a stub would recall nothing while looking healthy.
-check "mempalace-repair warns when the recall hook is missing" bash -c \
-  "$_ASSERT_SETUP _run 2>&1 >/dev/null | grep -q 'mempalace-recall.sh'"
-
-check "mempalace-repair never creates the recall hook" bash -c \
-  "$_ASSERT_SETUP _run >/dev/null 2>&1; ! test -e \"\$d/claude/hooks/mempalace-recall.sh\""
-
-check "mempalace-repair warns when the recall hook is not executable" bash -c \
-  "$_ASSERT_SETUP printf '#!/bin/sh\n' > \"\$d/claude/hooks/mempalace-recall.sh\"; chmod 0644 \"\$d/claude/hooks/mempalace-recall.sh\"; _run 2>&1 >/dev/null | grep -q 'not executable'"
+# The SessionStart recall hook used to be asserted here too. It is not any more
+# (#805): it was one of exactly two hand-written assertions over the ten commands
+# settings.json references, so sync-claude-hooks now resolves them all and
+# mempalace-recall.sh is covered by the general rule. Its guards live with that
+# rule, in the #805 block above - including the #744 decision this step encoded,
+# that the file is warned about and never created.
+check "mempalace-repair no longer carries its own recall-hook assertion (#805)" bash -c \
+  "! grep -q 'mempalace-recall.sh' /usr/local/bin/mempalace-repair"
 
 # Every branch above is advisory: none of them may change the exit status.
-check "mempalace-repair still exits 0 with all three asserts failing" bash -c \
+check "mempalace-repair still exits 0 with both asserts failing" bash -c \
   "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run >/dev/null 2>&1; [ \$? -eq 0 ]"
 
 # --- mempalace workspace init, run-once (#643 follow-up) ----------------------

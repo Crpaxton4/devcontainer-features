@@ -338,13 +338,20 @@ if [ -f "${_sdk_wheels[0]}" ]; then
     # registration below) all degrade to a *silent* no-op when an entry
     # point is missing, so without this the failure only ever shows up as
     # "the event table is empty" weeks later (#496).
-    for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
-        if [ ! -x "/usr/local/bin/$_entry" ] || ! command -v "$_entry" >/dev/null 2>&1; then
-            echo "ERROR: odoo_sdk console script '$_entry' is not executable on PATH after install (expected $_SDK_ENV/bin/$_entry -> /usr/local/bin/$_entry)." >&2
-            echo "The bundled wheel installed but did not provide this entry point; hooks and CLI tooling that depend on it would silently no-op, so failing the build instead." >&2
-            exit 1
-        fi
-    done
+    #
+    # The hand-written loop that used to live here is gone (#805): the list of
+    # programs the feature's hook path depends on, and the routine that resolves
+    # them, now live together in sync-claude-hooks as HOOK_DEPS/--check-deps,
+    # beside the hook commands themselves and under the same "add a hook -> add
+    # its dependency" contract. This is the half of that check that CAN run at
+    # build time; the commands in settings.json cannot be checked until the
+    # ~/.claude mount is live, so sync-claude-hooks audits those at
+    # container-create time instead.
+    if ! /usr/local/bin/sync-claude-hooks --check-deps; then
+        echo "ERROR: the odoo_sdk console scripts are not all executable on PATH after install (expected $_SDK_ENV/bin/<script> -> /usr/local/bin/<script>)." >&2
+        echo "The bundled wheel installed but did not provide every entry point; hooks and CLI tooling that depend on them would silently no-op, so failing the build instead." >&2
+        exit 1
+    fi
 else
     # The only remaining skip path, and it is a packaging condition, not a
     # base-image one: wheels are bundled at release/CI time (see
@@ -417,6 +424,19 @@ fi
 # script also makes the repair exercisable by the feature test - which is the
 # only way to test it, since `devcontainer features test` runs no
 # postCreateCommand.
+#
+# The script below no longer has a step 4c. The SessionStart recall hook used to
+# be checked there (#805): it was one of exactly two hand-written assertions over
+# the ten commands the shared settings.json references, and the other eight -
+# odoo-api-guard.sh among them - were provisioned on trust. sync-claude-hooks now
+# resolves EVERY command in that file at container-create time, so
+# mempalace-recall.sh is covered by the general rule rather than by a rule of its
+# own, and is reported exactly when settings.json actually references it. The
+# #744 decision it encoded is kept verbatim there: warn, never create - a stub
+# would look like a working recall while recalling nothing. This note lives out
+# here rather than in the heredoc because everything inside the heredoc is
+# shipped verbatim into /usr/local/bin/mempalace-repair, where commentary about
+# install.sh's own history does not belong.
 cat > /usr/local/bin/mempalace-repair << 'MEMPALACE_REPAIR'
 #!/bin/sh
 set -eu
@@ -428,12 +448,13 @@ set -eu
 #   2. remove the stray `~` directory an unexpanded --palace argument creates at
 #      the mount root;
 #   3. rewrite config.json's palace_path to agree with MEMPALACE_PALACE_PATH;
-#   4. assert the three things mempalace-as-only-memory needs - hooks.auto_save,
-#      identity.txt and the SessionStart recall hook (#744) - warn-only.
+#   4. assert the two things mempalace-as-only-memory needs that are its own -
+#      hooks.auto_save and identity.txt (#744) - warn-only. The third, the
+#      SessionStart recall hook, moved to sync-claude-hooks, which resolves every
+#      command settings.json references rather than this one alone (#805).
 #
-# HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root,
-# CLAUDE_CONFIG_DIR the shared claude-home step 4 looks for the recall hook in,
-# and MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; all exist so
+# HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root and
+# MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; both exist so
 # the feature test can drive this against a sandbox instead of the real palace.
 # Every step is idempotent and none is fatal on its own.
 
@@ -622,18 +643,6 @@ if [ ! -e "$MEMPALACE_IDENTITY" ]; then
     else
         echo "WARNING: mempalace-repair: $MEMPALACE_IDENTITY is missing and could not be seeded; 'mempalace wake-up' will start with no identity (#744)" >&2
     fi
-fi
-
-# 4c. the SessionStart recall hook. Hand-maintained, and referenced by path from
-# the shared settings.json, so a missing or non-executable file makes Claude Code
-# report a failing hook on every single session start and injects no drawers.
-# NEVER created here: this feature does not own the file, and a stub would look
-# like a working recall while recalling nothing.
-MEMPALACE_RECALL_HOOK="${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/hooks/mempalace-recall.sh"
-if [ ! -f "$MEMPALACE_RECALL_HOOK" ]; then
-    echo "WARNING: mempalace-repair: $MEMPALACE_RECALL_HOOK is missing; the SessionStart recall hook referenced from settings.json will fail on every session and inject no palace drawers (#744)" >&2
-elif [ ! -x "$MEMPALACE_RECALL_HOOK" ]; then
-    echo "WARNING: mempalace-repair: $MEMPALACE_RECALL_HOOK is not executable; the SessionStart recall hook will fail on every session. Run 'chmod +x $MEMPALACE_RECALL_HOOK' (#744)" >&2
 fi
 MEMPALACE_REPAIR
 chmod 0755 /usr/local/bin/mempalace-repair
