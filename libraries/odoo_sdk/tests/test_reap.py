@@ -1,17 +1,22 @@
 """Unit tests for the stale-run reaper helpers (:mod:`odoo_sdk.reap`, #366).
 
-These exercise the staleness predicate, the ``last activity`` clock (latest event
-for the run's task, falling back to ``started_at``), the env-driven threshold used
-by the ``--attach-active-run`` exclusion, and the best-effort anchor close that
-lets a reap succeed even when Odoo is unreachable.
+These exercise the staleness predicate, the ``last activity`` clock (latest
+ATTACHMENT-INDEPENDENT event for the run's task, falling back to ``started_at``),
+the env-driven threshold used by the ``--attach-active-run`` exclusion, and the
+best-effort anchor close that lets a reap succeed even when Odoo is unreachable.
+
+The clock's attachment-independence is the #779 fix: an event that carries a task
+id only because that task's run was active must not be read back as evidence the
+run is alive, or a forgotten run in a busy container never ages out.
 """
 
+import json
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from odoo_sdk.state import EventRecord
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY, EventRecord
 from odoo_sdk.reap import (
     DEFAULT_REAP_THRESHOLD_HOURS,
     REAP_THRESHOLD_ENV,
@@ -38,6 +43,24 @@ def _event(task_id: int, ts: datetime) -> EventRecord:
         task_ids=[str(task_id)],
         repo="",
         subject="work",
+    )
+
+
+def _attached_event(
+    ts: datetime, task_ids: list[int], attached: list[int]
+) -> EventRecord:
+    """A hook event whose ``attached`` ids came from ``--attach-active-run`` alone."""
+    return EventRecord(
+        id=None,
+        source="claude:PostToolUse",
+        timestamp=ts,
+        task_ids=[str(task_id) for task_id in task_ids],
+        repo="",
+        subject="Bash",
+        payload={
+            "tool": "Bash",
+            ATTACHED_TASK_IDS_PAYLOAD_KEY: [str(task_id) for task_id in attached],
+        },
     )
 
 
@@ -71,6 +94,53 @@ class TestLatestEventTimestamp(unittest.TestCase):
         self.assertIsNone(self.db.latest_event_timestamp_for_task(999))
 
 
+class TestUnattachedEventTimestamp(unittest.TestCase):
+    """The attachment-independent staleness clock (#779)."""
+
+    def setUp(self) -> None:
+        self.db = make_state_db()
+
+    def test_attachment_only_events_do_not_count(self) -> None:
+        self.db.add_event(_event(1, _hours_ago(20)))
+        self.db.add_event(_attached_event(_hours_ago(1), [1], [1]))
+        # The plain clock sees the fresh hook event; the staleness clock does not.
+        plain = self.db.latest_event_timestamp_for_task(1)
+        self.assertLess(abs((plain - _hours_ago(1)).total_seconds()), 2)
+        unattached = self.db.latest_unattached_event_timestamp_for_task(1)
+        self.assertLess(abs((unattached - _hours_ago(20)).total_seconds()), 2)
+
+    def test_exclusion_is_per_task_not_per_row(self) -> None:
+        # One hook event, two active runs: attached to the forgotten task 1,
+        # explicitly attributed to task 2. Only task 1 must ignore it.
+        self.db.add_event(_attached_event(_hours_ago(1), [1, 2], [1]))
+        self.assertIsNone(self.db.latest_unattached_event_timestamp_for_task(1))
+        self.assertIsNotNone(self.db.latest_unattached_event_timestamp_for_task(2))
+
+    def test_explicitly_attributed_events_count(self) -> None:
+        self.db.add_event(_attached_event(_hours_ago(1), [1], []))
+        self.assertIsNotNone(self.db.latest_unattached_event_timestamp_for_task(1))
+
+    def test_pre_779_rows_without_a_marker_count(self) -> None:
+        # Rows written before the marker existed keep counting, so upgrading
+        # cannot make a live run abruptly reapable.
+        self.db.add_event(_event(1, _hours_ago(1)))
+        self.assertIsNotNone(self.db.latest_unattached_event_timestamp_for_task(1))
+
+    def test_malformed_payload_does_not_raise(self) -> None:
+        # ``payload`` carries no json_valid CHECK, and this runs on the hot hook
+        # path, so one corrupt legacy row must not break attribution for everyone.
+        self.db.add_event(_event(1, _hours_ago(1)))
+        with self.db._connect() as conn:  # noqa: SLF001 (test reaches into store)
+            conn.execute("UPDATE events SET payload = 'not json'")
+        self.assertIsNotNone(self.db.latest_unattached_event_timestamp_for_task(1))
+
+    def test_marker_is_stored_as_written(self) -> None:
+        self.db.add_event(_attached_event(_hours_ago(1), [1], [1]))
+        with self.db._connect() as conn:  # noqa: SLF001 (test reaches into store)
+            payload = conn.execute("SELECT payload FROM events").fetchone()[0]
+        self.assertEqual(json.loads(payload)[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["1"])
+
+
 class TestStaleness(unittest.TestCase):
     def setUp(self) -> None:
         self.db = make_state_db()
@@ -94,6 +164,39 @@ class TestStaleness(unittest.TestCase):
         self.db.add_event(_event(1, _hours_ago(1)))
         threshold = threshold_from_hours(12)
         self.assertFalse(is_run_stale(self.db, run, threshold))
+
+    def test_forgotten_run_ages_out_despite_attached_traffic(self) -> None:
+        # The #779 regression. A busy container keeps firing hooks that attach to
+        # the forgotten run; under the old clock each one refreshed exactly the
+        # timestamp the reaper reads, so the run never crossed the threshold and
+        # kept tagging every session. Attachment is not liveness.
+        run = self._run(1, started_hours_ago=30)
+        for hours in (24, 12, 6, 1):
+            self.db.add_event(_attached_event(_hours_ago(hours), [1], [1]))
+        threshold = threshold_from_hours(12)
+        self.assertTrue(is_run_stale(self.db, run, threshold))
+        self.assertEqual(
+            [r.task_id for r in stale_active_runs(self.db, threshold)], [1]
+        )
+
+    def test_explicitly_attributed_event_keeps_run_fresh(self) -> None:
+        # The other half: naming the task (an explicit --task-id, an MCP call
+        # carrying task_id, a commit or chatter message the resync ingests) is
+        # attachment-independent evidence, so the run must NOT be reaped.
+        run = self._run(1, started_hours_ago=30)
+        self.db.add_event(_attached_event(_hours_ago(1), [1], []))
+        self.assertFalse(is_run_stale(self.db, run, threshold_from_hours(12)))
+
+    def test_busy_neighbour_does_not_keep_a_forgotten_run_fresh(self) -> None:
+        # Two active runs, one worked (2) and one forgotten (1): every hook event
+        # carries both ids, but only task 2's is corroborated. The forgotten run
+        # ages out while the worked one stays alive.
+        forgotten = self._run(1, started_hours_ago=30)
+        worked = self._run(2, started_hours_ago=30)
+        self.db.add_event(_attached_event(_hours_ago(1), [1, 2], [1]))
+        threshold = threshold_from_hours(12)
+        self.assertTrue(is_run_stale(self.db, forgotten, threshold))
+        self.assertFalse(is_run_stale(self.db, worked, threshold))
 
     def test_old_run_without_events_is_stale(self) -> None:
         run = self._run(1, started_hours_ago=20)
