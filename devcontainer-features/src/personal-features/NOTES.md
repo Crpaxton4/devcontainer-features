@@ -395,6 +395,38 @@ install skips the cleanup rather than leaving the machine with neither copy,
 and each removal is logged on its own line; like everything else in
 `sync-claude-mcp`, the cleanup is best-effort and never fails container create.
 
+**One set of names, two groups, one gate (#778).** The deleter here and the
+reporter in `plugins/odoo-dev/scripts/check-stray-skills.sh` used to disagree:
+this list carried six names, that one carried five — the same five minus
+`client-status-report` — and nothing reconciled them. That is silent in both
+directions. A name only the deleter knows about is `rm -rf`'d by a script that
+never mentions it, and a name only the reporter knows about keeps the gate red
+forever because nothing removes it. Both files now carry the same six, split
+into the two groups that actually need different handling:
+
+| Group | Names | Why it is on the list | Advice when found |
+|---|---|---|---|
+| Plugin-shadowed | `discovery-notes`, `fibonacci-estimate`, `odoo-code-review`, `odoo-design-doc`, `odoo-quote` | Moved into `odoo-dev` (#695-#699, #701-#708); the plugin still ships them, so a loose copy loads *alongside* a live twin | Delete the loose copy; the plugin twin stays |
+| Retired, no twin | `client-status-report` | Retired outright (#700). No plugin copy, no packaged source, nothing replaces it — it shadows nothing but is still feature-seeded debris spending description budget every turn | Delete; there is nothing to fall back on |
+
+The plugin-shadowed five are not a fourth hand-maintained copy: they are
+`odoo_sdk.skills.PACKAGED_SKILL_NAMES`, the packaged sources the plugin's copies
+are generated from and the list `check-skill-parity.sh` already checks against.
+`.github/scripts/test_stray_skill_parity.py` gates all of it — the two lists
+against each other, both against the packaged names, and each claimed group
+against what the plugin actually ships on disk — so editing one file alone now
+fails CI instead of drifting.
+
+**Not on either list, deliberately: `ingest`, `lint`, `llm-wiki-workspace`,
+`process`, `query`.** These turn up in `$CLAUDE_CONFIG_DIR/skills` beside the
+strays on a real machine, which is why #778 listed them, but this Feature never
+seeded them and no plugin ships them — they are the user's own personal skills
+(`plugins/odoo-dev/skills/odoo-dev-map/SKILL.md` records them as Second Brain
+skills, outside every Odoo workflow). Reporting them would be a false positive
+and deleting them would be data loss, since the remedy here is `rm -rf`. The
+parity gate asserts neither list ever acquires one, and the Feature test seeds
+two of them as decoys that must survive a cleanup run.
+
 ## Provision marker: telling a stale image from a current one (#806)
 
 Every step in `sync-claude-mcp` reports what it *did*. None of them can report

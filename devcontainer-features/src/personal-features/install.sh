@@ -986,14 +986,35 @@ fi
 # name list is literal: anything not on it, including every user-authored
 # skill, is untouched. Best-effort like the rest of this script: a removal that
 # fails warns and the run still exits 0.
+#
+# The list is split into the same two groups check-stray-skills.sh reports
+# (#778), because the two used to disagree: that script carried only the five
+# plugin-shadowed names while this loop deleted six, so client-status-report was
+# removed here by a script that never mentioned it and the report could go quiet
+# while this still had work to do. The two lists are now gated against each
+# other by .github/scripts/test_stray_skill_parity.py - edit one, edit both.
+#
+# stale_shadowed: moved into the odoo-dev plugin, which still ships them.
+#   Mirrors odoo_sdk.skills.PACKAGED_SKILL_NAMES, the sources those copies are
+#   generated from.
+# stale_retired:  retired outright (#700) with no plugin twin and no
+#   replacement. Still feature-seeded debris, so still deleted here - it simply
+#   has nothing to fall back on, which is why it is named separately.
+#
+# Deliberately absent from both: ingest, lint, llm-wiki-workspace, process and
+# query. They show up beside these in $CLAUDE_CONFIG_DIR/skills but this feature
+# never seeded them and no plugin ships them - they are the user's own personal
+# skills, and `rm -rf` on a name this feature does not own is data loss.
+stale_shadowed="discovery-notes fibonacci-estimate odoo-code-review odoo-design-doc odoo-quote"
+stale_retired="client-status-report"
 if [ "$odoo_dev_installed" -eq 1 ]; then
-    for stale_skill in discovery-notes fibonacci-estimate odoo-code-review odoo-design-doc odoo-quote client-status-report; do
+    for stale_skill in $stale_shadowed $stale_retired; do
         stale_dir="$CLAUDE_CONFIG_DIR/skills/$stale_skill"
         [ -f "$stale_dir/SKILL.md" ] || continue
         if rm -rf "$stale_dir"; then
             echo "sync-claude-mcp: removed stale loose skill '$stale_skill' from $CLAUDE_CONFIG_DIR/skills (this feature no longer ships loose skills, #738)"
         else
-            echo "WARNING: sync-claude-mcp: could not remove the stale loose skill copy at $stale_dir; it shadows the plugin's own copy until you delete it by hand" >&2
+            echo "WARNING: sync-claude-mcp: could not remove the stale loose skill copy at $stale_dir; it keeps loading as a personal skill until you delete it by hand" >&2
         fi
     done
 fi

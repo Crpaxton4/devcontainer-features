@@ -346,11 +346,12 @@ bare alias, which would put `/pr` and `/test` in the global namespace.
 | [`artifact.sh`](scripts/artifact.sh) | `artifact.sh put\|get\|list\|stages <dir> [stage] [file]` | The only sanctioned way to write a handoff artifact. Schema-validates, writes atomically, never overwrites |
 | [`gate.sh`](scripts/gate.sh) | `gate.sh <dir> [--for pr\|release]` | Fail-closed evidence check. Exits 1 on any blocker so `&&` cannot skip it |
 | [`bootstrap-state.sh`](scripts/bootstrap-state.sh) | `bootstrap-state.sh [--dir <path>]` | Seeds the external state dir. Idempotent; seeds only what is absent |
-| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports leftover pre-migration loose copies of plugin skills (safe to delete). Never deletes |
+| [`check-stray-skills.sh`](scripts/check-stray-skills.sh) | `check-stray-skills.sh [--json]` | Reports leftover pre-migration loose copies of the six feature-seeded skills — the five with plugin twins, plus the retired `client-status-report` (#778). Safe to delete; never deletes, and never names a skill the user owns |
 | [`validate.sh`](scripts/validate.sh) | `validate.sh [--quiet]` | Every CI gate in one call. Offline. Skips the `claude plugin validate` gate visibly when that CLI is absent; `REQUIRE_CLAUDE=1` turns the skip into a failure |
 | [`tests/gate.test.sh`](scripts/tests/gate.test.sh) | `bash scripts/tests/gate.test.sh` | 24 gate assertions, one fixture per blocker |
 | [`tests/setup.test.sh`](scripts/tests/setup.test.sh) | `bash scripts/tests/setup.test.sh` | 34 assertions over `setup.sh`, each running it with a PATH that genuinely lacks the tool under test |
 | [`tests/hooks.test.sh`](scripts/tests/hooks.test.sh) | `bash scripts/tests/hooks.test.sh` | 68 assertions over both `PreToolUse` hooks, driven by synthetic payloads |
+| [`tests/check-stray-skills.test.sh`](scripts/tests/check-stray-skills.test.sh) | `bash scripts/tests/check-stray-skills.test.sh` | 13 assertions over the stray report: every feature-seeded name reported, no user-owned skill ever named, and the suggested `rm -rf` listing only what was found |
 
 ---
 
