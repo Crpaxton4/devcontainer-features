@@ -583,8 +583,8 @@ check "sync-claude-mcp still exits 0 on a stale image" bash -c \
   "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
 
 # The marker is shared with #804: claude-event-hook stamps the runtime heartbeat
-# into it BETWEEN provisions, and this record is rebuilt from scratch on every
-# container create. Without an explicit carry-forward the provision-time write
+# into it BETWEEN provisions, and this record is rewritten on every container
+# create. If the provision-time write did not carry the heartbeat forward it
 # would erase the one piece of evidence the staleness check reads, which is the
 # #804 defect restored by accident. Seed the runtime fields and re-provision.
 MCP_HB_CONFIG="$MCP_TEST_ROOT/claude-home-heartbeat"
@@ -600,6 +600,35 @@ cat > "$MCP_HB_CONFIG/personal-features-provision.json" <<'MARKER'
 MARKER
 check "a provision carries the runtime hook heartbeat forward (#804)" bash -c \
   "CLAUDE_CONFIG_DIR=\"$MCP_HB_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1; jq -e '.last_event_epoch == 1767322445 and .last_event_at == \"2026-01-02T03:04:05Z\" and .hook_watch_since == 1767000000 and (.script_digest | type) == \"string\"' \"$MCP_HB_CONFIG/personal-features-provision.json\" >/dev/null"
+
+# #868: the heartbeat is only the first co-owner of this marker, and the
+# carry-forward used to be a hand-maintained allowlist of key names living in
+# another feature's code - so a key nobody remembered to name there vanished on
+# the next container create, and its reader reported "never seen" where the
+# truth was "erased". The property asserted here is the general one: a key this
+# script does not own survives a provision, whatever it is called. Adding a key
+# to the marker must need no edit in sync-claude-mcp.
+MCP_FK_CONFIG="$MCP_TEST_ROOT/claude-home-foreign-keys"
+mkdir -p "$MCP_FK_CONFIG"
+cat > "$MCP_FK_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "mempalace_hub": { "state": "reachable", "checked_at": "2026-01-02T03:04:05Z" },
+  "a_key_no_one_named_in_sync_claude_mcp": "keep-me",
+  "provisioned_at": "1999-01-01T00:00:00Z",
+  "script_digest": "must-be-overwritten",
+  "stale_image": true
+}
+MARKER
+CLAUDE_CONFIG_DIR="$MCP_FK_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>&1 || true
+
+check "a provision preserves a marker key it does not own (#868)" bash -c \
+  "jq -e '.a_key_no_one_named_in_sync_claude_mcp == \"keep-me\" and .mempalace_hub.state == \"reachable\" and .mempalace_hub.checked_at == \"2026-01-02T03:04:05Z\"' \"$MCP_FK_CONFIG/personal-features-provision.json\" >/dev/null"
+# The other half of the same contract: the fields this run DOES own describe the
+# scripts in this container, so they must be rewritten, never inherited stale.
+check "a provision still overwrites the fields it owns (#868)" bash -c \
+  "jq -e '.script_digest != \"must-be-overwritten\" and (.script_digest | length) == 64 and .provisioned_at != \"1999-01-01T00:00:00Z\" and .stale_image == false and (.scripts | has(\"sync-claude-mcp\"))' \"$MCP_FK_CONFIG/personal-features-provision.json\" >/dev/null"
 
 rm -rf "$MCP_TEST_ROOT"
 

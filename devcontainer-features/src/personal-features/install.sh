@@ -902,7 +902,21 @@ fi
 # already mounts. Best-effort like the rest of this script: a marker that cannot be read
 # or written warns, and the run still exits 0.
 pf_marker="$CLAUDE_CONFIG_DIR/personal-features-provision.json"
-pf_scripts="/usr/local/bin/sync-claude-mcp /usr/local/bin/sync-claude-hooks /usr/local/bin/claude-event-hook /usr/local/bin/mempalace-repair /usr/local/bin/resolve-mempal-dir /usr/local/bin/create-pr /usr/local/bin/publish-claude-wrapper /usr/local/share/personal-features/claude-wrapper"
+# One fingerprinted path per line. A feature that adds a script appends its own
+# line here and touches nothing else, so two such features do not land on the
+# same line of the same file (#868).
+pf_scripts=""
+pf_add_script() {
+    pf_scripts="${pf_scripts:+$pf_scripts }$1"
+}
+pf_add_script /usr/local/bin/sync-claude-mcp
+pf_add_script /usr/local/bin/sync-claude-hooks
+pf_add_script /usr/local/bin/claude-event-hook
+pf_add_script /usr/local/bin/mempalace-repair
+pf_add_script /usr/local/bin/resolve-mempal-dir
+pf_add_script /usr/local/bin/create-pr
+pf_add_script /usr/local/bin/publish-claude-wrapper
+pf_add_script /usr/local/share/personal-features/claude-wrapper
 if command -v python3 >/dev/null 2>&1; then
     PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
 import hashlib, json, os, sys, time
@@ -969,29 +983,38 @@ stale = bool(scripts) and (seen_epoch - epoch) > 60 and seen_digest != combined
 if not stale:
     seen_epoch, seen_digest, seen_at = max(seen_epoch, epoch), combined, iso(now)
 
-record = {
-    "schema": 1,
-    "issue": "806",
-    "provisioned_at": iso(now),
-    "script_epoch": epoch,
-    "script_digest": combined,
-    "scripts": scripts,
-    "newest_script_epoch": seen_epoch,
-    "newest_script_digest": seen_digest,
-    "newest_seen_at": seen_at,
-    "stale_image": stale,
-}
-
-# The RUNTIME half of the same marker (#804). claude-event-hook stamps
-# last_event_* into this file between provisions, and sync-claude-hooks reads it
-# on the next container create to report a hook that has stopped producing
-# events. This record is rebuilt from scratch every provision, so without an
-# explicit carry-forward the provision-time write would erase the very evidence
-# the runtime check is looking for - and the outage would go back to being
-# invisible, which is the #804 defect exactly.
-for _key in ("last_event_at", "last_event_epoch", "last_event_hook", "hook_watch_since"):
-    if _key in previous:
-        record[_key] = previous[_key]
+# This marker is SHARED state, not a file private to this script: the runtime
+# hook heartbeat (#804) is stamped into it between provisions, and other writers
+# keep their own keys here rather than each inventing a breadcrumb file. The
+# document is rewritten on every provision, so the default has to be PRESERVE:
+# start from what was already there and overwrite only the fields below, which
+# this provision run owns. A key this script does not know about belongs to
+# another writer; carrying it forward costs nothing, whereas dropping it makes
+# the reader of that key say "never seen" when the truth is "erased" - the exact
+# failure mode this marker exists to make visible (#868). Adding a key elsewhere
+# therefore needs no edit here. Nothing is dropped: no key has ever needed
+# resetting, and a reset belongs next to the writer that owns the key.
+#
+# The owned fields all describe the scripts in THIS container, so none of them
+# may be inherited stale from the previous marker - that would be a lie about
+# the current image and would defeat the staleness check (#806). The three
+# newest_* high-water-mark fields are owned too: they are computed from the
+# previous marker above, deliberately, so a stale run cannot lower them.
+record = dict(previous)
+record.update(
+    {
+        "schema": 1,
+        "issue": "806",
+        "provisioned_at": iso(now),
+        "script_epoch": epoch,
+        "script_digest": combined,
+        "scripts": scripts,
+        "newest_script_epoch": seen_epoch,
+        "newest_script_digest": seen_digest,
+        "newest_seen_at": seen_at,
+        "stale_image": stale,
+    }
+)
 
 if stale:
     sys.stderr.write(
