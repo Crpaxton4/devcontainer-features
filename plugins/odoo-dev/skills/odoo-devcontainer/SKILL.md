@@ -38,6 +38,7 @@ Anything is being written, read, run, or debugged inside an Odoo devcontainer â€
 | Module Structure    | Create/read module layout, directory conventions              | [module-structure.md](./references/module-structure.md) |
 | Logging             | Log levels, filtering, log files                              | [logging.md](./references/logging.md)                   |
 | Debugging           | VSCode launch configs, attach, pdb/ipdb, --workers=0          | [debugging.md](./references/debugging.md)               |
+| Language Server     | Odoo diagnostics/definitions missing or wrong, odools.toml, turning odoo-ls off | [language-server.md](./references/language-server.md) |
 | Odoo.sh             | Connecting to odoo.sh to troubleshoot                         | [odoo-sh.md](./references/odoo-sh.md)                   |
 | Commits             | Writing commit messages, versioning                           | [commits.md](./references/commits.md)                   |
 | ORM Fields          | Define fields, compute/related/store, field kwargs            | [orm/fields.md](./references/orm/fields.md)             |

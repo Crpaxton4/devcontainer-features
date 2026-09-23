@@ -21,6 +21,18 @@
 #      SDK install, which is how the fixture test suite runs it.
 # None available is exit 2 (the gate could not run), never a silent pass.
 #
+# A tier is selected only when it actually WORKS, not when it merely looks
+# present (#775). `command -v odoo-sdk` proves a file exists under that name
+# and nothing more: git worktrees do not get their own .venv, so every
+# concurrent worker resolves one shared console script that can be stale,
+# half-rewritten, or built from a different SDK version than the checkout.
+# Such a script resolves on PATH and then dies on import — or parses its own
+# arguments and rejects `sync-skills` outright. Under `set -euo pipefail`
+# (below) that killed the gate instead of falling through to the tiers that
+# would have worked. So tier 1 is probed with `odoo-sdk --help` first, and
+# every live tier is run as a *tested* command: a failure is reported on
+# stderr and drops to the next source rather than aborting the run.
+#
 # The five names are also asserted present in the regenerated set, so a
 # packaged skill that stops being generated fails here rather than passing
 # vacuously; a sixth packaged skill added upstream is diffed automatically
@@ -73,23 +85,59 @@ scratch="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skill-parity.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 REGEN="$scratch/skills"
 
+regen_via=""
+
+# try_regen <label> <cmd...> — run one live regeneration tier into a clean
+# $REGEN and set regen_via only if it succeeded. Called from a condition, so
+# `set -e` is suspended for the body and a failing tier reports and returns
+# instead of aborting the gate. $REGEN is wiped before and after a failed
+# attempt so a half-written tree can never be mistaken for the next tier's
+# output. The command's own stderr is left to flow through to the caller.
+try_regen() {
+  local label="$1"; shift
+  rm -rf "$REGEN"
+  if "$@" >/dev/null; then
+    regen_via="$label"
+    return 0
+  fi
+  rm -rf "$REGEN"
+  echo "skill parity: regeneration via '$label' failed — falling through to the next source" >&2
+  return 1
+}
+
+# Tier 1 — the installed console script, gated on it actually running.
 if command -v odoo-sdk >/dev/null 2>&1; then
-  regen_via="odoo-sdk sync-skills --dest"
-  odoo-sdk sync-skills --dest "$REGEN" >/dev/null
-elif python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
-  regen_via="python3 -m odoo_sdk.cli sync-skills --dest"
-  python3 -m odoo_sdk.cli sync-skills --dest "$REGEN" >/dev/null
-elif [ -d "$SDK_SRC" ]; then
+  if odoo-sdk --help >/dev/null 2>&1; then
+    try_regen "odoo-sdk sync-skills --dest" \
+      odoo-sdk sync-skills --dest "$REGEN" || true
+  else
+    echo "skill parity: odoo-sdk is on PATH but 'odoo-sdk --help' does not run (stale or broken console script) — falling through to the next source" >&2
+  fi
+fi
+
+# Tier 2 — the same code through the module, for an install with no console
+# script (or one that tier 1 just rejected).
+if [ -z "$regen_via" ] && python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
+  try_regen "python3 -m odoo_sdk.cli sync-skills --dest" \
+    python3 -m odoo_sdk.cli sync-skills --dest "$REGEN" || true
+fi
+
+# Tier 3 — the offline direct copy, equivalent by definition for a checkout.
+if [ -z "$regen_via" ] && [ -d "$SDK_SRC" ]; then
   regen_via="direct copy from $SDK_SRC"
+  rm -rf "$REGEN"
   mkdir -p "$REGEN"
   for name in "${PACKAGED[@]}"; do
     # A missing source dir is reported by the presence check below, not here.
     if [ -d "$SDK_SRC/$name" ]; then cp -R "$SDK_SRC/$name" "$REGEN/$name"; fi
   done
-else
+fi
+
+if [ -z "$regen_via" ]; then
   cat >&2 <<MSG
 skill parity: cannot regenerate the packaged skills — odoo-sdk is not on
-PATH, odoo_sdk is not importable, and no packaged sources at:
+PATH (or does not run), odoo_sdk is not importable, and no packaged sources
+at:
 
   $SDK_SRC
 

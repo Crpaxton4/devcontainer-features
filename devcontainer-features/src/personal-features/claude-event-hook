@@ -13,6 +13,8 @@
 # `agent_type`/`agent_id`). This shim extracts a compact subject, resolves the
 # session branch and repo from `cwd` for task/repo attribution (#574, #742), and
 # forwards a trimmed payload carrying the hook event type and session id (#575)
+# plus the session context a billing narrative is written from — `cwd`,
+# `transcript_path`, and the truncated first user prompt (#710) —
 # to the SDK, which
 # resolves the HOST-provisioned CENTRAL tracker DB (#369 — one DB shared by every
 # project, located via ODOO_TASK_TRACKER_DIR) and appends one row to its `events`
@@ -119,17 +121,35 @@ if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
 fi
 
 # Forward a trimmed payload: the session id and hook event type (the two
-# triage-context fields with no dedicated event column, #575) plus the tool/agent
-# identifiers, keeping the row small and free of prompt/tool_input contents (which
-# can be large or sensitive). The hook event type is taken from $HOOK_NAME (the
-# argv the settings.json matcher passes), not the JSON, so it is always present
-# and authoritative even when a payload omits `hook_event_name`. Any jq failure
-# degrades to no payload.
+# triage-context fields with no dedicated event column, #575), the tool/agent
+# identifiers, and — since #710 — the session context a billing narrative can be
+# written from: `cwd`, `transcript_path`, and the FIRST user prompt.
+#
+# Why the prompt (#710): a hook-only session (no commit, no PR, no chatter) used
+# to bill as the bare `[/] session <task>|<event>`, because the row carried
+# nothing that said what the session was for. The prompt is the one field that
+# does. `tool_input` remains excluded — it is the large/sensitive field, and it
+# says what a single tool call did, not what the session was for. The prompt is
+# collapsed to one line and hard-capped at 200 characters here, at the point of
+# capture, so neither a pasted stack trace nor a pasted document can ever reach
+# the events table. `transcript_path` is a path, not content: it lets a later
+# summariser read ~/.claude/projects/<dashed-cwd>/<session_id>.jsonl on demand
+# rather than this shim copying transcript text into every row.
+#
+# The hook event type is taken from $HOOK_NAME (the argv the settings.json
+# matcher passes), not the JSON, so it is always present and authoritative even
+# when a payload omits `hook_event_name`. `with_entries` drops the nulls, so an
+# event kind that carries no prompt/cwd/transcript simply omits those keys and
+# the row stays as small as it was. Any jq failure degrades to no payload.
 PAYLOAD=""
 if [ "$HAVE_JQ" -eq 1 ] && [ -n "$STDIN_JSON" ]; then
     PAYLOAD="$(printf '%s' "$STDIN_JSON" \
         | jq -c --arg hook "$HOOK_NAME" \
-            '{session_id, tool_name, agent_type, agent_id, source, hook_event_name: $hook} | with_entries(select(.value != null))' \
+            '{session_id, tool_name, agent_type, agent_id, source, cwd, transcript_path,
+              prompt: (if (.prompt // "") == "" then null
+                       else (.prompt | tostring | gsub("\\s+"; " ") | .[0:200]) end),
+              hook_event_name: $hook}
+             | with_entries(select(.value != null))' \
         2>/dev/null || true)"
 fi
 

@@ -15,27 +15,221 @@
 # server-side, #326/#340), so we register PreToolUse with a match-all matcher
 # and let the shim enforce the exclusion.
 #
+# A SECOND, UNRELATED HOOK rides the same merge (#809): `worktree-context-hook`,
+# a SessionStart hook that prints the worktree Bash syntax constraint into the
+# session context when the cwd is inside a `.claude/worktrees` checkout. It is a
+# separate program because the event shim must never write to stdout and this one
+# exists only to write to stdout.
+#
+# THE SETTINGS FILE IS SHARED WITH THE HOST (#803). Because that mount is
+# two-way, the host's own Claude Code sessions read the very same settings.json
+# this script writes. A container-absolute command therefore resolves in exactly
+# ONE of the two places that run it: on the host every feature hook exit-127s
+# (`/bin/sh: 1: /usr/local/bin/claude-event-hook: not found`) and every event it
+# was meant to record is silently dropped. So we do not write a container path.
+# Instead the shim is PUBLISHED into the shared config dir and referenced through
+# a per-machine expansion — see HOOK_SHIM/SHIM_CMD below.
+#
 # CARE WITH THE USER'S CONFIG: settings.json is the user's real file and may
 # hold their own settings AND their own hooks. This merge therefore:
 #   * creates the file (as {}) if absent;
-#   * replaces ONLY feature-owned hook entries — identified by the
-#     `claude-event-hook` command marker — on re-run, so it is idempotent and
-#     never accumulates duplicates;
+#   * replaces ONLY feature-owned hook entries — identified by the HOOK_MARKERS
+#     command markers — on re-run, so it is idempotent and never accumulates
+#     duplicates;
 #   * preserves every user-owned setting and every user-authored hook untouched;
 #   * writes only after producing valid JSON (atomic temp-file swap);
 #   * leaves a corrupt/unparseable settings.json ALONE and warns, never
 #     destroying user config.
+#
+# IT ALSO RESOLVES EVERY HOOK COMMAND (#805). A hook entry naming a command that
+# cannot be executed is not an inert entry: Claude Code exit-127s it, and for a
+# PreToolUse guard an exit-127 reads to the harness as an ALLOW, so a prohibition
+# enforced by a broken guard is not enforced at all. `odoo-api-guard.sh` failed
+# that way 73 times across five sessions with nothing reporting it. See
+# check_hook_deps / audit_hook_commands below for the two halves of the check and
+# for why they run where they do.
 set -euo pipefail
 
-# Absolute command path baked into the hook entries: robust regardless of the
-# PATH the hook runtime sees, and the stable marker used to find our own entries
-# on re-merge. Overridable so tests can point the entries at a fixture binary.
+usage() { echo "usage: sync-claude-hooks [--check-deps]" >&2; }
+
+# The event shim IMPLEMENTATION to publish: the copy install.sh placed in the
+# image, outside the bind mount. Overridable so tests can publish a fixture
+# binary instead. NOTE the changed meaning since #803 — this names the file we
+# COPY, not the command we write into settings.json; that is always SHIM_CMD.
 HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
-# Substring that uniquely identifies a feature-owned hook command. Kept separate
-# from HOOK_CMD so an override of the path in tests doesn't weaken the marker.
-HOOK_MARKER="claude-event-hook"
+
+# The worktree-context hook IMPLEMENTATION to publish (#809): a second, separate
+# SessionStart hook that states the worktree Bash syntax constraint up front. It
+# is a different program from the event shim on purpose — the event shim's
+# contract forbids it to write to stdout at all, and this one exists precisely to
+# write to stdout. Same override discipline so tests can publish a fixture.
+WORKTREE_HOOK_CMD="${PERSONAL_FEATURES_WORKTREE_HOOK_CMD:-/usr/local/bin/worktree-context-hook}"
+
+# Substrings that identify a feature-owned hook command, used to strip our own
+# entries before re-appending them (this is what makes the merge idempotent).
+# Kept separate from the commands themselves so an override of the source path in
+# tests can't weaken the markers, and kept as a LIST so a later hook whose
+# command does not contain `claude-event-hook` can be matched too.
+#
+# CONTRACT FOR ANYONE ADDING A HOOK ENTRY BELOW: every command you add must be
+# matched by at least one marker here. An entry no marker matches is never
+# stripped on re-run, so it accumulates one duplicate copy on every container
+# create. Add a new hook whose command is a different program -> add its
+# identifying substring to this array in the same change.
+HOOK_MARKERS='["claude-event-hook","worktree-context-hook"]'
+
+# The programs a feature-owned hook command goes on to EXEC. Resolving the hook
+# command itself is only half of what a working hook needs: claude-event-hook
+# shells out to `odoo-sdk log-event` and guards that call on `command -v`, so an
+# unlinked console script turns every feature hook into a dead no-op whose first
+# symptom is an empty event table weeks later (#496). odoo-mcp and odoo-tui ship
+# in the same wheel, so listing all three also catches a half-installed wheel at
+# the one moment it is cheap to fix.
+#
+# SAME CONTRACT AS HOOK_MARKERS: add a hook whose command shells out to a program
+# -> add that program here in the same change. Overridable so the feature test can
+# drive --check-deps against names it controls rather than the real toolchain.
+HOOK_DEPS=()
+IFS=' ' read -r -a HOOK_DEPS <<< "${PERSONAL_FEATURES_HOOK_DEPS:-odoo-sdk odoo-mcp odoo-tui}" || true
 
 note() { echo "sync-claude-hooks: $1" >&2; }
+
+# --- hook command resolvability (#805) ---------------------------------------
+# This replaces two hand-written one-offs, each added reactively after the thing
+# it guarded had already broken: install.sh's odoo-sdk entry-point loop (#496)
+# and mempalace-repair's mempalace-recall.sh check (#744). They covered two of
+# the commands reachable from settings.json; every other one was provisioned on
+# trust. Both are deleted in favour of the two routines below, which check the
+# whole set rather than the two that happened to bite.
+#
+# WHY THE CHECK IS SPLIT IN TWO, AND WHERE EACH HALF RUNS. settings.json lives in
+# the bind-mounted config dir, which does not exist at image-build time - that is
+# the entire reason this script runs from postCreateCommand instead of install.sh
+# (see the header). So "resolve every command in settings.json" is necessarily a
+# PROVISION-time check: audit_hook_commands, run below on the file we just wrote.
+# HOOK_DEPS is the mirror image: those programs live in the image and nowhere
+# else, so resolving them is a BUILD-time check (`--check-deps`, called from
+# install.sh) where a broken wheel fails the build instead of shipping. One
+# routine per subject, each run at the only time its subject exists.
+#
+# NECESSARY, NOT SUFFICIENT (#804). This resolves a command at provision time. It
+# cannot say the command will still resolve, or still work, at hook time -
+# odoo-api-guard.sh resolves fine here and exit-127'd 73 times later. The runtime
+# half of that problem is #804 and is deliberately not attempted here.
+
+# Expand a hook command to the program it will exec, WITHOUT running any part of
+# it. Claude Code runs hook commands through `/bin/sh -c`, so the honest way to
+# find the program is to let a shell expand and word-split the string - but the
+# string is user config, and an `eval` over user config must never be able to RUN
+# anything. Any command carrying a control operator, a redirection or a
+# substitution is therefore refused (return 2 -> reported as unverifiable) rather
+# than expanded; with those screened out and globbing disabled,
+# `eval "set -- $cmd"` can do parameter expansion, tilde expansion and word
+# splitting, and nothing else.
+hook_program() {
+    # shellcheck disable=SC2016  # these are literal characters to screen FOR, not expansions
+    case $1 in
+    *'$('* | *'`'* | *';'* | *'&'* | *'|'* | *'<'* | *'>'* | *'
+'*)
+        return 2
+        ;;
+    esac
+    (
+        set -f
+        eval "set -- $1" 2>/dev/null || exit 2
+        [ "$#" -gt 0 ] || exit 2
+        printf '%s\n' "$1"
+    )
+}
+
+# A program word resolves if it names an existing executable (path form) or if a
+# shell can find it (bare name). `command -v` is the bare-name half because it
+# covers PATH lookups and shell builtins alike - both things /bin/sh can run.
+hook_program_ok() {
+    case $1 in
+    */*) [ -x "$1" ] ;;
+    *) command -v -- "$1" >/dev/null 2>&1 ;;
+    esac
+}
+
+# BUILD-time half: every program a feature-owned hook command execs must be
+# runnable. Non-zero on the first failure, so install.sh can fail the build.
+check_hook_deps() {
+    local dep rc=0
+    for dep in "${HOOK_DEPS[@]}"; do
+        if hook_program_ok "$dep"; then
+            continue
+        fi
+        note "ERROR: '$dep' is not runnable, but a feature-owned Claude Code hook command depends on it. claude-event-hook guards on 'command -v' and no-ops SILENTLY when it is missing, so every feature hook would be a dead no-op and the first symptom would be an empty event table weeks later (#496, #805)."
+        rc=1
+    done
+    return "$rc"
+}
+
+# Every command in the hooks block of $1, one per line, as
+# <event> TAB <feature|user> TAB <command>. Ownership is the HOOK_MARKERS test -
+# the same one the merge strips by - so a user's own hooks are reported as
+# theirs. Every traversal is type-guarded: a malformed hooks block is the user's
+# file to fix and must not crash the sync.
+hook_commands_tsv() {
+    jq -r --argjson markers "$HOOK_MARKERS" '
+      (.hooks | if type == "object" then . else {} end)
+      | to_entries[]
+      | .key as $ev
+      | (.value | if type == "array" then . else [] end)[]
+      | (if type == "object" then .hooks else null end
+         | if type == "array" then . else [] end)[]
+      | (if type == "object" then . else {} end)
+      | select((.type // "command") == "command")
+      | (.command // "") | select(type == "string" and length > 0) | . as $c
+      | [ $ev,
+          (if any($markers[]; . as $m | $c | contains($m)) then "feature" else "user" end),
+          $c ]
+      | @tsv
+    ' "$1" 2>/dev/null
+}
+
+# PROVISION-time half: resolve every command the settings file now references,
+# ours and the user's alike. Ours failing is our bug and is fatal (it can only
+# mean the shim guard above was defeated). The user's failing is reported and
+# never repaired: this feature does not own those files, and writing a stub would
+# look like a working hook while doing nothing - the #744 decision, kept.
+audit_hook_commands() {
+    local file="$1" ev owner cmd prog fatal=0
+    while IFS=$'\t' read -r ev owner cmd; do
+        [ -n "${cmd:-}" ] || continue
+        if ! prog="$(hook_program "$cmd")"; then
+            note "NOTE: the $ev hook command [$cmd] carries a shell operator or a substitution, so the program it runs cannot be identified without executing it; left unchecked (#805)."
+            continue
+        fi
+        if hook_program_ok "$prog"; then
+            continue
+        fi
+        if [ "$owner" = "feature" ]; then
+            note "ERROR: the feature-owned $ev hook command [$cmd] resolves to '$prog', which is not executable here; Claude Code would exit-127 it on every $ev (#805)."
+            fatal=1
+        else
+            note "WARNING: the $ev hook command [$cmd] resolves to '$prog', which is missing or not executable. Claude Code will exit-127 it on every $ev, so the hook does nothing at all - and a guard hook that cannot execute reads to the harness as an ALLOW, so whatever it was installed to enforce is not enforced (#805). Not created here: this feature does not own that file, and a stub would look like a working hook while doing nothing (#744)."
+        fi
+    done < <(hook_commands_tsv "$file")
+    return "$fatal"
+}
+
+# --- mode dispatch -----------------------------------------------------------
+# --check-deps is the build-time half described above: it resolves HOOK_DEPS and
+# nothing else, touches no config and needs no mount, so it runs before the
+# CLAUDE_CONFIG_DIR gate below and is safe to call from install.sh.
+if [ "${1:-}" = "--check-deps" ]; then
+    if check_hook_deps; then
+        exit 0
+    fi
+    exit 1
+fi
+if [ "$#" -gt 0 ]; then
+    note "unknown argument: $1"
+    usage
+    exit 2
+fi
 
 # CLAUDE_CONFIG_DIR is the user-scope Claude config root (it overrides ~/.claude).
 # Without it we don't know where settings.json lives, so there is nothing to do.
@@ -60,14 +254,93 @@ SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
 # would defeat the atomicity this relies on).
 mkdir -p "$CLAUDE_CONFIG_DIR"
 
+# --- publish the shim where BOTH sides of the bind mount can reach it (#803) --
+# $CLAUDE_CONFIG_DIR is the one directory the container and the host agree on:
+# /usr/local/share/claude-home in here, ~/.claude out there, the same bytes
+# either way. Copying the shim into it makes the hook command resolvable on the
+# host without the host having installed anything — and, because it is the real
+# implementation rather than a stub, host sessions record their events instead of
+# merely failing quietly. The copy is refreshed on every container create, so it
+# tracks the image's version of the shim.
+HOOK_DIR="$CLAUDE_CONFIG_DIR/hooks"
+HOOK_SHIM="$HOOK_DIR/claude-event-hook"
+WORKTREE_SHIM="$HOOK_DIR/worktree-context-hook"
+
+# The command literal written into settings.json. Claude Code runs hook commands
+# through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
+# HOOK TIME: $CLAUDE_CONFIG_DIR in the container, ~/.claude on a host that does
+# not set it — the two ends of the same mount, hence the same file. Single-quoted
+# so THIS script never expands it; double quotes are inside the literal so a
+# $HOME containing spaces still resolves.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook"'
+
+# Same treatment for the worktree-context hook (#809): publish the real file into
+# the shared config dir and reference it through the same per-machine expansion.
+# A bare /usr/local/bin path here would reintroduce #803 exactly.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+WORKTREE_SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/worktree-context-hook"'
+
+# publish_shim <implementation-in-image> <destination-under-$HOOK_DIR>
+# Same atomic-rename discipline as the settings write below: stage inside
+# $HOOK_DIR (same filesystem), then rename. A hook already executing keeps the
+# old inode, so a mid-session republish can never run a half-copied file. An
+# unreadable source is not an error here — the callers decide what a missing
+# shim means for their own entries.
+publish_shim() {
+    _src="$1"
+    _dst="$2"
+    [ -r "$_src" ] || return 0
+    _tmp="$(mktemp -p "$HOOK_DIR")"
+    if cp "$_src" "$_tmp" 2>/dev/null; then
+        chmod 0755 "$_tmp"
+        mv "$_tmp" "$_dst"
+    else
+        rm -f "$_tmp"
+        note "could not copy $_src to $_dst."
+    fi
+}
+
+mkdir -p "$HOOK_DIR"
+publish_shim "$HOOK_CMD" "$HOOK_SHIM"
+publish_shim "$WORKTREE_HOOK_CMD" "$WORKTREE_SHIM"
+
+# Refuse to write a command that resolves nowhere — the #803 failure mode. With
+# no shim published and none left by an earlier run, writing the entries anyway
+# would give every session a 127 per event, so leave settings.json alone.
+if [ ! -x "$HOOK_SHIM" ]; then
+    note "no event shim at $HOOK_SHIM (and none to publish from $HOOK_CMD); not writing hook entries."
+    exit 0
+fi
+
+# The worktree-context SessionStart entry (#809) is added only when its shim is
+# actually in place. Unlike the event shim this is not worth refusing the whole
+# merge over: with no worktree hook the session just goes back to rediscovering
+# the constraint by being refused, which is the status quo, whereas a command
+# that resolves nowhere costs every session a 127. Its marker stays in
+# HOOK_MARKERS either way, so an entry left by an earlier run is still stripped.
+if [ -x "$WORKTREE_SHIM" ]; then
+    WORKTREE_GROUPS="$(jq -n --arg cmd "$WORKTREE_SHIM_CMD" \
+        '[ { "hooks": [ {"type":"command","command":$cmd} ] } ]')"
+else
+    note "no worktree-context shim at $WORKTREE_SHIM; omitting its SessionStart entry."
+    WORKTREE_GROUPS='[]'
+fi
+
 # The feature-owned hooks block. Each event maps to a dedicated group carrying
 # only our command, so the marker-based removal below can strip exactly our
 # entries without touching user groups. All seven event names are verified
 # against the current Claude Code hooks reference; PreToolUse uses a match-all
-# matcher (the shim excludes mcp__odoo-mcp__* itself).
-OURS="$(jq -n --arg cmd "$HOOK_CMD" '
+# matcher (the shim excludes mcp__odoo-mcp__* itself). Every command here must
+# be matched by HOOK_MARKERS — see the contract note beside it.
+#
+# SessionStart carries TWO feature groups: the event shim first (so the
+# `.hooks.SessionStart[0]` the #803 tests pin stays the event shim), then the
+# worktree-context hook. They are separate groups because they are separate
+# programs with opposite stdout contracts.
+OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" '
   {
-    "SessionStart":     [ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ],
+    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt),
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
     "PreToolUse":       [ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ],
     "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],
@@ -92,23 +365,30 @@ else
 fi
 
 # Merge: for each event we own, drop any pre-existing group whose hooks include
-# our marker command (removing a prior run's entries — this is what makes the
-# merge idempotent), then append our fresh group. Groups without our marker —
+# a marker command (removing a prior run's entries — this is what makes the
+# merge idempotent), then append our fresh group. Groups matching no marker —
 # i.e. every user-authored hook — are preserved verbatim, as is every other
 # top-level setting. `.hooks[$ev]` is coerced to [] only when it is absent or
 # not an array, so a user's own array is respected and a malformed scalar can't
 # crash the reduce.
+#
+# The markers also carry the #803 MIGRATION: `claude-event-hook` is a substring
+# of the old container-absolute command too, so the stale
+# /usr/local/bin/claude-event-hook entries an earlier container wrote into the
+# user's settings.json are stripped here and replaced by the shared-path ones.
 TMP_OUT="$(mktemp -p "$CLAUDE_CONFIG_DIR")"
 if jq \
     --argjson ours "$OURS" \
-    --arg marker "$HOOK_MARKER" '
+    --argjson markers "$HOOK_MARKERS" '
     .hooks = (.hooks // {})
     | reduce ($ours | keys_unsorted[]) as $ev (.;
         .hooks[$ev] = (
             ( (.hooks[$ev] // []) | if type == "array" then . else [] end )
             | map(select(
-                ( [ (.hooks // [])[]? | .command? // "" ]
-                  | any(contains($marker)) ) | not
+                ( [ (.hooks // [])[]? | .command? // "" ] ) as $cmds
+                | any($cmds[]; . as $c
+                    | any($markers[]; . as $m | $c | contains($m)))
+                | not
               ))
         ) + $ours[$ev]
       )
@@ -118,6 +398,16 @@ if jq \
     # mv is a true atomic rename — a reader never sees a half-written file.
     mv "$TMP_OUT" "$SETTINGS"
     note "merged feature hooks into $SETTINGS."
+    # With the file final, resolve every command it now references - ours and the
+    # user's (#805). Deliberately AFTER the write: the audit reports on the file
+    # sessions will actually run, and a user-owned hook we do not own must never
+    # stop the feature's own entries from being wired up.
+    if ! audit_hook_commands "$SETTINGS"; then
+        if [ "$BASE_FILE" != "$SETTINGS" ]; then
+            rm -f "$BASE_FILE"
+        fi
+        exit 1
+    fi
 else
     rm -f "$TMP_OUT"
     note "failed to build a valid merged settings.json; leaving $SETTINGS untouched."
