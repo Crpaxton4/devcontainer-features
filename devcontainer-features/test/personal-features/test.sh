@@ -475,6 +475,25 @@ check "a stale provision does not lower the high-water mark" bash -c \
 check "sync-claude-mcp still exits 0 on a stale image" bash -c \
   "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
 
+# The marker is shared with #804: claude-event-hook stamps the runtime heartbeat
+# into it BETWEEN provisions, and this record is rebuilt from scratch on every
+# container create. Without an explicit carry-forward the provision-time write
+# would erase the one piece of evidence the staleness check reads, which is the
+# #804 defect restored by accident. Seed the runtime fields and re-provision.
+MCP_HB_CONFIG="$MCP_TEST_ROOT/claude-home-heartbeat"
+mkdir -p "$MCP_HB_CONFIG"
+cat > "$MCP_HB_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "last_event_at": "2026-01-02T03:04:05Z",
+  "last_event_epoch": 1767322445,
+  "last_event_hook": "PreToolUse",
+  "hook_watch_since": 1767000000
+}
+MARKER
+check "a provision carries the runtime hook heartbeat forward (#804)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_HB_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1; jq -e '.last_event_epoch == 1767322445 and .last_event_at == \"2026-01-02T03:04:05Z\" and .hook_watch_since == 1767000000 and (.script_digest | type) == \"string\"' \"$MCP_HB_CONFIG/personal-features-provision.json\" >/dev/null"
+
 rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
@@ -887,6 +906,116 @@ check "sync-claude-hooks never executes a hook command while resolving it" bash 
   "CLAUDE_CONFIG_DIR=\"$HK_G\" /usr/local/bin/sync-claude-hooks 2>\"$HK_G/err\" && ! test -e \"$HK_G/EXECUTED\""
 check "a command it cannot resolve by inspection is reported, not passed silently" bash -c \
   "grep -q 'left unchecked' \"$HK_G/err\""
+
+# --- #804: a hook that stops producing events has to say so -------------------
+# #805 above resolves a command at PROVISION time; it cannot say the command will
+# still work when a hook fires. That is the whole of #804: a hook that cannot
+# execute produces no event AND no signal, so 3,506 events were dropped over
+# three months and the absence of rows looked exactly like a quiet week. The
+# breadcrumb is written by the path that SUCCEEDS (claude-event-hook, only after
+# odoo-sdk exits 0) and compared by a different program at a different time
+# (sync-claude-hooks), because whatever breaks the hook also stops any counter
+# the hook itself would write. It rides in the #806 provision marker rather than
+# in a breadcrumb of its own - one file holding both facts about this config dir.
+
+# (a) the writing half, driven through the real shim with the odoo-sdk stub.
+export HK_HB="$HOOKS_TEST_ROOT/hb"
+mkdir -p "$HK_HB"
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "claude-event-hook records a heartbeat after a successful event (#804)" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" CLAUDE_CONFIG_DIR="$HK_HB" /usr/local/bin/claude-event-hook PreToolUse
+  # The write rides the same DETACHED background job as the SDK call, so poll.
+  for _ in $(seq 1 50); do
+    test -f "$HK_HB/personal-features-provision.json" && break
+    sleep 0.2
+  done
+  jq -e ".last_event_epoch > 0 and (.last_event_at | type) == \"string\" and .last_event_hook == \"PreToolUse\"" \
+    "$HK_HB/personal-features-provision.json" >/dev/null
+'
+# The marker is #806s file: the heartbeat must extend it, never replace it.
+export HK_HB2="$HOOKS_TEST_ROOT/hb2"
+mkdir -p "$HK_HB2"
+cat > "$HK_HB2/personal-features-provision.json" <<'MARKER'
+{ "schema": 1, "issue": "806", "script_digest": "keep-me", "stale_image": false }
+MARKER
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "the heartbeat preserves the #806 provenance keys in the same marker" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"Stop\",\"cwd\":\"/tmp\"}" \
+    | PATH="$HOOK_STUB_BIN:$PATH" CLAUDE_CONFIG_DIR="$HK_HB2" /usr/local/bin/claude-event-hook Stop
+  for _ in $(seq 1 50); do
+    jq -e ".last_event_epoch > 0" "$HK_HB2/personal-features-provision.json" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  jq -e ".script_digest == \"keep-me\" and .issue == \"806\" and .last_event_epoch > 0" \
+    "$HK_HB2/personal-features-provision.json" >/dev/null
+'
+# The #496 shape, and the reason the breadcrumb cannot be the hook is own failure
+# counter: with no odoo-sdk the shim exits before anything of its own runs, so
+# the ONLY observable is that the timestamp stopped moving.
+export HK_HB3="$HOOKS_TEST_ROOT/hb3"
+mkdir -p "$HK_HB3"
+# shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
+check "no heartbeat is recorded when odoo-sdk cannot be run (#496 shape)" bash -c '
+  printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" \
+    | PATH=/usr/bin:/bin CLAUDE_CONFIG_DIR="$HK_HB3" /usr/local/bin/claude-event-hook PreToolUse
+  sleep 1
+  ! test -e "$HK_HB3/personal-features-provision.json"
+'
+
+# (b) the reporting half, driven against seeded markers rather than elapsed time:
+# the timestamps below are years old, so they clear the week-long default outright
+# and the check is exercised exactly as it ships (PERSONAL_FEATURES_HOOK_STALE_SECONDS
+# exists for tuning, and is deliberately NOT used here).
+HK_I="$HOOKS_TEST_ROOT/i"
+mkdir -p "$HK_I"
+printf '{"schema":1,"last_event_epoch":1700000000,"last_event_at":"2023-11-14T22:13:20Z"}\n' \
+  > "$HK_I/personal-features-provision.json"
+check "sync-claude-hooks reports a heartbeat that stopped moving (#804)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_I\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_I/err\" && grep -q 'not recorded a successful event since 2023-11-14T22:13:20Z' \"$HK_I/err\""
+# Reported, never fatal, and never fail-closed: #804 asks only that the silence
+# stop being indistinguishable from success.
+check "a stale heartbeat still exits 0 and still wires the hooks up" bash -c \
+  "jq -e '.hooks.PreToolUse[0].hooks[0].command' \"$HK_I/settings.json\" >/dev/null"
+
+HK_J="$HOOKS_TEST_ROOT/j"
+mkdir -p "$HK_J"
+printf '{"schema":1,"last_event_epoch":%s,"last_event_at":"recent"}\n' "$(date -u +%s)" \
+  > "$HK_J/personal-features-provision.json"
+check "a moving heartbeat says nothing at all" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_J\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_J/err\"; ! grep -q '#804' \"$HK_J/err\""
+
+# A config dir that has never recorded an event is not evidence of an outage on
+# the first create that looks - it is evidence of nothing yet. Record the zero
+# point instead, so "no heartbeat, ever" becomes measurable from the NEXT create.
+HK_K="$HOOKS_TEST_ROOT/k"
+mkdir -p "$HK_K"
+check "a config dir with no heartbeat yet is quiet" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_K\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_K/err\"; ! grep -q '#804' \"$HK_K/err\""
+check "but it records the zero point the next create measures from" bash -c \
+  "jq -e '.hook_watch_since > 0' \"$HK_K/personal-features-provision.json\" >/dev/null"
+
+HK_L="$HOOKS_TEST_ROOT/l"
+mkdir -p "$HK_L"
+printf '{"schema":1,"hook_watch_since":1}\n' > "$HK_L/personal-features-provision.json"
+check "a config dir watched for ages with no event ever is reported" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_L\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_L/err\" && grep -q 'has EVER recorded a successful event' \"$HK_L/err\""
+
+# The report must not be downstream of the merge: an unpublishable shim is itself
+# one of the reasons the heartbeat would have stopped, and that create is exactly
+# when someone needs to be told.
+HK_M="$HOOKS_TEST_ROOT/m"
+mkdir -p "$HK_M"
+printf '{"schema":1,"last_event_epoch":1700000000,"last_event_at":"2023-11-14T22:13:20Z"}\n' \
+  > "$HK_M/personal-features-provision.json"
+check "the staleness report survives a create that writes no hook entries" bash -c \
+  "PERSONAL_FEATURES_HOOK_CMD=\"$HOOKS_TEST_ROOT/absent-shim\" CLAUDE_CONFIG_DIR=\"$HK_M\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_M/err\" && grep -q '#804' \"$HK_M/err\" && test ! -e \"$HK_M/settings.json\""
+
+# #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
+# on every container create. The #804 mechanism deliberately adds NO hook entry,
+# so assert the settings file still carries only the two known feature programs.
+check "the heartbeat mechanism adds no hook entry of its own" bash -c \
+  "! jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\" | grep -qvE 'claude-event-hook|worktree-context-hook'"
 
 rm -rf "$HOOKS_TEST_ROOT"
 

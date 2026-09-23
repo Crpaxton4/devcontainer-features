@@ -930,6 +930,17 @@ record = {
     "stale_image": stale,
 }
 
+# The RUNTIME half of the same marker (#804). claude-event-hook stamps
+# last_event_* into this file between provisions, and sync-claude-hooks reads it
+# on the next container create to report a hook that has stopped producing
+# events. This record is rebuilt from scratch every provision, so without an
+# explicit carry-forward the provision-time write would erase the very evidence
+# the runtime check is looking for - and the outage would go back to being
+# invisible, which is the #804 defect exactly.
+for _key in ("last_event_at", "last_event_epoch", "last_event_hook", "hook_watch_since"):
+    if _key in previous:
+        record[_key] = previous[_key]
+
 if stale:
     sys.stderr.write(
         "WARNING: sync-claude-mcp: the personal-features scripts in this container are OLDER than the newest set "
