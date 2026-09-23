@@ -13,14 +13,16 @@
 # status and its own stderr, unmodified - no `||`, no retries, no error
 # translation, no re-checking of conditions the tools already enforce.
 #
-# One deliberate exception, added after the first real run: a merge refused
-# because required checks have not registered or finished yet is this script
-# racing the head SHA it just force-pushed, not a signal about the PR. It waits
-# (see "Check settling"). Every other refusal still ends the run unmodified.
+# One deliberate exception, added after the first real run and widened after the
+# second: a refused merge is this script racing the head SHA it just force-
+# pushed, not a signal about the PR. merge_node waits (see "Settling"), and
+# decides whether to keep waiting from re-queried FACTS rather than from the
+# wording of the refusal. Every other step still ends the run unmodified.
 #
 # Deliberately NOT re-implemented, because the tools already guarantee it:
 #
-#   green-checks / mergeable / unresolved threads   gh pr merge refuses, and says why
+#   conflicts / red checks / unresolved threads     gh pr merge refuses; merge_node
+#                                                   then re-queries which it was
 #   "did the remote move under us"                  git push --force-with-lease
 #   conflict detection and file enumeration         git rebase exits nonzero and
 #                                                   leaves itself in progress
@@ -346,7 +348,7 @@ sync_node() {
 
 merge_node() {
     local pr=$1 key out rc waited=0 base_before base_now
-    local fatal state mergeable mstate isdraft red pending
+    local fatal state mergeable mstate isdraft red pending resync_rc resync_out
     key="$pr:merge"
     is_done "$key" && return 0
     base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
@@ -434,6 +436,26 @@ merge_node() {
                 printf '  merge a node computed against a base that has moved.\n' >&2
                 exit "$rc"
             fi
+        fi
+
+        # BEHIND is the one non-fatal state that waiting does NOT clear. It is a
+        # real answer with a real remedy - re-sync - and the inversion above
+        # would otherwise sit on it for the whole timeout and then fail.
+        #
+        # Reachable because `$pr:sync` is a done-key: once recorded, sync_node
+        # returns immediately, so a base that advances AFTER that key is written
+        # leaves the node permanently behind with nothing left to fix it. Any
+        # merge landing between this node's sync and its merge does exactly that,
+        # which on a multi-node train is the normal case rather than a rare one.
+        if [[ -z $fatal && $mstate == BEHIND ]]; then
+            resync_rc=0
+            resync_out=$(gh pr update-branch "$pr" -R "$SLUG" 2>&1) || resync_rc=$?
+            if ((resync_rc != 0)) &&
+                ! printf '%s' "$resync_out" | grep -qiE "$ALREADY_CURRENT_RE"; then
+                printf '%s\n' "$resync_out" >&2
+                exit "$resync_rc"
+            fi
+            printf 'stack-merge: #%s was BEHIND; re-synced and retrying\n' "$pr" >&2
         fi
 
         if [[ -n $fatal ]] || ((waited >= CHECK_TIMEOUT)); then
