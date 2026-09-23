@@ -460,6 +460,9 @@ check "claude-event-hook is installed and executable" bash -c "test -x /usr/loca
 check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/claude-event-hook"
 check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
 check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
+# #809: the worktree-context SessionStart hook ships beside them.
+check "worktree-context-hook is installed and executable" bash -c "test -x /usr/local/bin/worktree-context-hook"
+check "worktree-context-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/worktree-context-hook"
 
 # The hook shim must skip PreToolUse for the odoo MCP server's own tools (it
 # logs those dispatches server-side, #326/#340) and must still log every other
@@ -708,9 +711,39 @@ chmod 0755 "$HK_HOST/.claude/hooks/claude-event-hook"
 check "the written hook command also resolves on the host side of the mount (#803)" bash -c \
   "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; env -u CLAUDE_CONFIG_DIR HOME=\"$HK_HOST\" sh -c \"\$cmd\" </dev/null && [ \"\$(cat \"$HK_HOST/fired\")\" = 'SessionStart' ]"
 
+# (a3) #809: a SECOND SessionStart hook, worktree-context-hook, rides the same
+# merge. It states the worktree Bash syntax constraint up front instead of
+# leaving every .claude/worktrees session to rediscover it by being refused. It
+# gets the same publish-then-reference treatment as the event shim (#803), and it
+# must fire for a worktree cwd ONLY - a SessionStart hook's stdout lands in the
+# session context verbatim, so a stray byte on a normal session is pure noise.
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p/.claude/worktrees/task-1"}' \
+  > "$HOOKS_TEST_ROOT/wt-payload.json"
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p"}' \
+  > "$HOOKS_TEST_ROOT/plain-payload.json"
+
+check "sync-claude-hooks publishes the worktree-context hook into the shared config dir (#809)" bash -c \
+  "test -x \"$HK_A/hooks/worktree-context-hook\" && cmp -s /usr/local/bin/worktree-context-hook \"$HK_A/hooks/worktree-context-hook\""
+check "settings.json registers the worktree-context hook on SessionStart (#809)" bash -c \
+  "[ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+check "the worktree-context hook command resolves on both sides of the mount (#809)" bash -c \
+  "jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q 'worktree-context-hook' && ! jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
+check "the written worktree-context command runs and emits a SessionStart envelope (#809)" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[] | .hooks[] | .command | select(contains(\"worktree-context-hook\"))' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" sh -c \"\$cmd\" < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -e '.hookSpecificOutput.hookEventName == \"SessionStart\" and ((.hookSpecificOutput.additionalContext | length) > 200)' >/dev/null"
+check "worktree-context-hook stays silent and exits 0 for a non-worktree cwd (#809)" bash -c \
+  "out=\"\$(/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/plain-payload.json\")\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+check "the emitted context says its constraint list is not exhaustive (#809)" bash -c \
+  "/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -r '.hookSpecificOutput.additionalContext' | grep -qi 'not exhaustive'"
+
 # (b) Running the sync TWICE yields no duplicate feature entries.
 check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+# #809: the worktree hook's command contains no `claude-event-hook`, so it is
+# only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
+# would survive the strip and be re-appended, accumulating one duplicate per
+# container create - re-run twice more and pin the count at exactly one.
+check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '2' ]"
 
 # (c) A pre-seeded user setting AND a user-authored hook survive the merge.
 HK_B="$HOOKS_TEST_ROOT/b"
