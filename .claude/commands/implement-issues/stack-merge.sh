@@ -267,58 +267,43 @@ head_branch() { jq -r --arg pr "$1" '.heads[$pr].branch' "$STATE"; }
 head_sha() { jq -r --arg pr "$1" '.heads[$pr].sha' "$STATE"; }
 
 # --------------------------------------------------------------------------
-# Check settling
+# Settling
 # --------------------------------------------------------------------------
 # The one place this script waits rather than failing. Restacking a child force-
 # pushes a new head SHA, which discards every check result and leaves the PR
 # with required checks that have not been *registered* yet, let alone run. The
-# merge attempt that follows in the same breath then fails with "Required status
-# check ... is expected".
+# merge attempt that follows in the same breath is then refused - and so is the
+# one after a `gh pr update-branch`, for the same reason.
 #
-# That is not `gh pr merge` refusing on a red or contested PR, which is a real
-# signal and still stops the run. It is this script racing its own push. Waiting
-# for the checks it just invalidated is the script cleaning up after itself.
+# Two rules, learned across five halts and three separate fixes to this file:
+#
+#   1. With deleteBranchOnMerge on, GitHub is a CONCURRENT WRITER on every
+#      branch and PR this train touches. It retargets orphaned children, deletes
+#      merged heads, and recomputes mergeability, all asynchronously, all while
+#      this script is issuing its next command. So every step that MUTATES a ref
+#      or a PR must succeed when GitHub has already performed it. Not "check
+#      whether it is needed, then do it" - that check can never be atomic with
+#      the act. Do it, and accept the already-done answer.
+#
+#   2. Every step that READS a derived property must tolerate GitHub not having
+#      computed it yet. `mergeable`, `mergeStateStatus` and check status are all
+#      derived, all recomputed after any change to a head or a base, and all
+#      transiently UNKNOWN rather than stale-but-valid during that window.
+#
+# merge_node used to encode rule 2 as a list of retryable refusal STRINGS. Three
+# fixes each added one more - #790 "Base branch was modified", #795 "Pull Request
+# is not mergeable", #849 "Head branch is out of date" - and the list was the
+# bug: GitHub's refusal prose is user-facing copy, not a contract, and nothing
+# bounds it. The default is now inverted there. A refusal means "not settled"
+# unless a re-queried FACT says the PR is genuinely unmergeable, so a fourth
+# unseen phrase costs a wait rather than a dead train.
+#
+# The two regexes that survive are both rule 1, not rule 2: they match the
+# answer to a mutation that was already performed, which is a bounded set.
 CHECK_POLL=${STACK_MERGE_CHECK_POLL:-30}
 CHECK_TIMEOUT=${STACK_MERGE_CHECK_TIMEOUT:-900}
-CHECK_PENDING_RE='is expected|Required status check|checks are pending|not yet complete|still (running|pending)|in progress'
-
-# "Base branch was modified. Review and try the merge again." is GitHub's
-# optimistic-lock error, and it is ambiguous on its face. It fires both when the
-# base genuinely advanced (the node's rebase is stale and must be redone) and
-# when GitHub is merely still recomputing mergeability after a burst of
-# mutations - a retarget, a force-push and a branch deletion landing back to
-# back is enough. The two are separable without guessing: compare the base tip
-# now against the base tip the merge was attempted against.
-BASE_MOVED_RE='Base branch was modified'
-
-# The general rule behind the three preceding constants, learned the hard way
-# across four halts in one run: with deleteBranchOnMerge on, GitHub is a
-# CONCURRENT WRITER on every branch and PR this train touches. It retargets
-# orphaned children, it deletes merged heads, and it recomputes mergeability -
-# all asynchronously, all while the script is issuing its next command.
-#
-# So every step that mutates a ref or a PR must succeed when GitHub has already
-# performed it. Not "check whether it is needed, then do it" - that check can
-# never be atomic with the act. Do it, and accept the already-done answer.
-#
-# There is a SECOND rule, distinct from the first and the source of four of this
-# run's failures on its own:
-#
-#   Every step that reads a DERIVED property must tolerate GitHub not having
-#   computed it yet.
-#
-# `mergeable`, `mergeStateStatus` and check status are all derived, all
-# recomputed asynchronously after any change to a head or a base, and all
-# transiently UNKNOWN rather than stale-but-valid during that window. A refusal
-# sourced from one of them is not evidence about the PR until the value settles.
-# Since every node is now synced immediately before it is merged, and mutating
-# the head is exactly what forces the recompute, every node can hit this.
-#
-# The discipline both rules share: re-query the underlying fact and decide from
-# that, never from the error string alone.
 REF_GONE_RE='Reference does not exist|HTTP 422|Not Found|HTTP 404'
 ALREADY_CURRENT_RE='already up[ -]?to[ -]?date|not behind|no new commits'
-NOT_MERGEABLE_RE='is not mergeable|Pull Request is not mergeable'
 
 # --------------------------------------------------------------------------
 # Steps
@@ -360,7 +345,8 @@ sync_node() {
 }
 
 merge_node() {
-    local pr=$1 key out rc waited=0 retryable base_before base_now
+    local pr=$1 key out rc waited=0 base_before base_now
+    local fatal state mergeable mstate isdraft red pending
     key="$pr:merge"
     is_done "$key" && return 0
     base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
@@ -384,23 +370,62 @@ merge_node() {
             break
         fi
 
-        retryable=0
-        if printf '%s' "$out" | grep -qE "$CHECK_PENDING_RE"; then
-            retryable=1
-        elif printf '%s' "$out" | grep -qiE "$NOT_MERGEABLE_RE"; then
-            # Derived-property rule. sync_node rewrote this head moments ago, so
-            # `mergeable` is very likely still being recomputed. Decide from the
-            # re-queried value, not from the refusal: only CONFLICTING is a real
-            # answer, and UNKNOWN means "not computed yet" rather than "no".
-            if [[ $(gh pr view "$pr" -R "$SLUG" --json mergeable --jq .mergeable) != CONFLICTING ]]; then
-                retryable=1
-            fi
-        elif printf '%s' "$out" | grep -qE "$BASE_MOVED_RE"; then
+        # The refusal TEXT is not consulted. Three previous fixes each added one
+        # more string to a retryable-pattern list - #790 "Base branch was
+        # modified", #795 "Pull Request is not mergeable", #849 "Head branch is
+        # out of date" - and the fourth shape would have needed a fourth string.
+        # The enumeration was the bug: GitHub's refusal prose is user-facing
+        # copy, not a contract, and there is no bound on it.
+        #
+        # So the default is inverted. A refusal is treated as GitHub not having
+        # settled UNLESS a re-queried fact says the PR is genuinely unmergeable.
+        # Only facts are fatal, and each one below is a specific, checkable
+        # state rather than a phrase.
+        fatal=""
+
+        state=$(gh pr view "$pr" -R "$SLUG" \
+            --json mergeable,mergeStateStatus,isDraft \
+            --jq '[.mergeable, .mergeStateStatus, (.isDraft|tostring)] | join(" ")')
+        mergeable=$(printf '%s' "$state" | cut -d' ' -f1)
+        mstate=$(printf '%s' "$state" | cut -d' ' -f2)
+        isdraft=$(printf '%s' "$state" | cut -d' ' -f3)
+
+        # A real conflict. UNKNOWN means "not computed yet", never "no".
+        [[ $mergeable == CONFLICTING || $mstate == DIRTY ]] &&
+            fatal="#$pr has merge conflicts (mergeable=$mergeable, mergeStateStatus=$mstate)"
+        [[ -z $fatal && $isdraft == true ]] &&
+            fatal="#$pr is a draft; mark it ready for review first"
+
+        # A red check never goes green by waiting. A pending one is the case
+        # this loop exists for, so the two are separated by conclusion, not by
+        # rollup state.
+        if [[ -z $fatal ]]; then
+            red=$(gh pr view "$pr" -R "$SLUG" --json statusCheckRollup --jq '
+                [ .statusCheckRollup[]?
+                  | select((.conclusion // "") | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE"))
+                  | (.name // .context // "check") ] | join(", ")')
+            [[ -n $red ]] && fatal="#$pr has failing checks: $red"
+        fi
+
+        # BLOCKED with nothing still running is a rule this script cannot
+        # satisfy by waiting - a missing approval, an unresolved thread. Waiting
+        # out the full timeout on that is a slow way to report it.
+        if [[ -z $fatal && $mstate == BLOCKED ]]; then
+            pending=$(gh pr view "$pr" -R "$SLUG" --json statusCheckRollup --jq '
+                [ .statusCheckRollup[]?
+                  | select((.status // "") | IN("QUEUED","IN_PROGRESS","PENDING","WAITING","REQUESTED")) ] | length')
+            ((pending == 0)) &&
+                fatal="#$pr is BLOCKED with no checks still running - a required review or an unresolved thread, which this script will not merge past"
+        fi
+
+        # The one base-branch case that is genuinely fatal, kept from #790: the
+        # base really advanced, so this node was rebased onto a tip that is no
+        # longer current and merging it would land work computed against the
+        # wrong history. Decided by comparing tips, not by reading the message.
+        if [[ -z $fatal ]]; then
             git -C "$REPO" fetch origin --quiet
             base_now=$(git -C "$REPO" rev-parse "origin/$BASE")
-            if [[ $base_now == "$base_before" ]]; then
-                retryable=1
-            else
+            if [[ $base_now != "$base_before" ]]; then
                 printf '%s\n' "$out" >&2
                 printf 'stack-merge: %s really did advance, %s -> %s.\n' \
                     "$BASE" "${base_before:0:7}" "${base_now:0:7}" >&2
@@ -411,12 +436,18 @@ merge_node() {
             fi
         fi
 
-        if ((retryable == 0)) || ((waited >= CHECK_TIMEOUT)); then
+        if [[ -n $fatal ]] || ((waited >= CHECK_TIMEOUT)); then
             printf '%s\n' "$out" >&2
+            if [[ -n $fatal ]]; then
+                printf 'stack-merge: %s\n' "$fatal" >&2
+            else
+                printf 'stack-merge: #%s never settled in %ss. Last observed: mergeable=%s mergeStateStatus=%s\n' \
+                    "$pr" "$CHECK_TIMEOUT" "$mergeable" "$mstate" >&2
+            fi
             exit "$rc"
         fi
-        printf 'stack-merge: #%s not settled yet (%ss/%ss), waiting %ss: %s\n' \
-            "$pr" "$waited" "$CHECK_TIMEOUT" "$CHECK_POLL" "${out%%$'\n'*}" >&2
+        printf 'stack-merge: #%s not settled yet (%ss/%ss, mergeable=%s %s), waiting %ss: %s\n' \
+            "$pr" "$waited" "$CHECK_TIMEOUT" "$mergeable" "$mstate" "$CHECK_POLL" "${out%%$'\n'*}" >&2
         sleep "$CHECK_POLL"
         waited=$((waited + CHECK_POLL))
     done
