@@ -45,6 +45,8 @@ One entry per **exact Odoo `project.project` name**:
 
 **`repo_path` exists because the flat repos tree is convention, not law.** `repos-dir.sh` need directory whose immediate subdirectory names equal `repo`. Bind mount cannot supply one: Odoo devcontainer mount client repo at `/mnt/extra-addons`, name fixed by addons path, never match `repo`, and no `REPOS_DIR` value bridge that — `REPOS_DIR=/mnt` still leave folder named `extra-addons`. Record absolute path on entry instead. Project carrying `repo_path` never consult `repos-dir.sh` at all: `add` check that path exist, `project-resolve.sh` report it as `repo_path` and sniff `origin` from it, so `remote` fill in instead of stay null. Relative path rejected — resolve against whatever directory caller stand in, exactly guesswork this map exist to stop. `repo` stay required and stay bare folder name: it the lookup key, independent of where checkout mounted.
 
+**`.odoo-repos-dir` marker exist because host with one clone cannot be inferred.** Sweep count >= 2 git subdirs because `$PWD` is first candidate: accept one and parent of any single checkout start masquerading as the tree, false positive far harder to notice than the false negative. Machine holding exactly one repo therefore declare tree once — `touch <tree>/.odoo-repos-dir` — and marker outrank the count, same authority as `REPOS_DIR`, which script never count either. Marker also resolve tree still empty, state fresh host clone into. Setting `REPOS_DIR` stay equally valid, just per-shell rather than per-machine.
+
 **`release_assignee` / `release_reviewer` exist so the release route never has to ask.** Who owns a release PR is a property of the project, not of the run, and `odoo-dev:odoo-release` runs inside a subagent that cannot put a question to the user. Recorded once, read every release. Absent = unanswered: ask the user and record the answer, never infer one from commit authorship.
 
 **`:task` is reserved first element of `branch_flow`, standing for per-task branch.** Chain's first element is where task work start from, and on most project that not shared branch at all — task branch cut fresh per unit of work, exist on no remote. Writing ordinary name there (old `dev` convention) claim branch every consumer walking chain believe in and none can resolve; `gh api repos/<owner>/<repo>/branches/dev` return 404 on every mapped remote. Record `:task` instead. Colon forbidden anywhere in git ref name, so token can never collide with branch anyone could create, and chain readable without guessing at index 0.
@@ -75,7 +77,7 @@ Every script print one JSON object as last stdout line.
 
 | Script | Use |
 |--------|-----|
-| `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
+| `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first, then sweep `$PWD` + candidates for a dir carrying `.odoo-repos-dir` marker or >= 2 git subdirs. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
 | `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | **Only** sanctioned way to read or edit map |
 | `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | Full resolution, plus next environment in chain |
 
@@ -148,5 +150,6 @@ Writes atomic (temp file → validate → `.bak` → rename), so rejected edit n
 ## Verify
 
 ```bash
-bash <base directory>/scripts/tests/repo-map.test.sh   # offline; no network, no repos tree, no Odoo
+bash <base directory>/scripts/tests/repo-map.test.sh    # offline; no network, no repos tree, no Odoo
+bash <base directory>/scripts/tests/repos-dir.test.sh  # offline; resolver only — explicit REPOS_DIR, sweep, marker
 ```

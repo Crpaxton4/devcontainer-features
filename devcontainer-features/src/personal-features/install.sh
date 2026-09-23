@@ -154,6 +154,12 @@ install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 # feature-owned hooks block into the live, mounted $CLAUDE_CONFIG_DIR/
 # settings.json — the build-time directory is shadowed by the ~/.claude mount,
 # same reason the retired skills sync ran from postCreateCommand (see above).
+# THIS COPY IS NOT THE ONE settings.json NAMES (#803): that file is shared with
+# the host, where /usr/local/bin/claude-event-hook does not exist, so every host
+# hook exit-127'd. sync-claude-hooks now republishes this binary into
+# $CLAUDE_CONFIG_DIR/hooks/ — reachable from both ends of the mount — and points
+# the hook entries there. This install stays the build-time source of truth the
+# runtime sync copies from.
 install -m 0755 "$(dirname "$0")/claude-event-hook" /usr/local/bin/claude-event-hook
 install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-hooks
 

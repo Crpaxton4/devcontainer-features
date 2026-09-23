@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # repo-map.sh — the ONLY sanctioned way to read or edit repo-map.json.
-# Guarantees: schema-validated content, atomic writes (tmp + mv), one .bak of
-# the prior version, distinct exit codes.
+# Guarantees: schema-validated content, one .bak of the prior version, distinct
+# exit codes, and a write that lands by renaming a scratch file within $MAP's own
+# directory — so no reader ever sees a half-written map, and a write rejected by
+# validation leaves neither a live map it failed nor a scratch file behind.
+# NOT guaranteed: mutual exclusion. Two mutating invocations that overlap each
+# read the map, write their own scratch file, and the later rename wins, so one
+# update is silently lost and the .bak holds only the loser. Serialise callers
+# yourself; this script takes no lock.
 #
 # Usage:
 #   repo-map.sh get "<project name>"
@@ -187,6 +193,23 @@ validate_file() { node --input-type=module -e "$VALIDATE_JS" -- "$1"; }
 
 # Every mutation lands the same way: write tmp, validate tmp, .bak the live file,
 # rename. A map that fails validation therefore never becomes the live map.
+#
+# Two rules hold at every one of the five call sites, and each is load-bearing:
+#
+#   tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+#   trap 'rm -f "$tmp"' EXIT
+#
+# mktemp rather than a fixed "$MAP.tmp", because a fixed path is shared: two
+# invocations running at once write the same file and the second clobbers the
+# first, so both exit 0 while one update is gone. Beside $MAP rather than in
+# $TMPDIR, because the rename below is only atomic within one filesystem — and
+# the mktemp'd file being mode 0600 is a deliberate tightening of a file that
+# only its owner has any business reading.
+#
+# The trap is the only thing that removes it. `set -euo pipefail` aborts this
+# function at the failing validate_file, before cp and mv, so a rejected write
+# would otherwise leave its scratch file next to the map forever. After a
+# successful mv there is nothing left at that path and the rm is a no-op.
 commit_tmp() {
   local tmp="$1"
   local warns
@@ -279,7 +302,8 @@ case "$cmd" in
       [ -d "$REPOS_DIR/$repo" ] || die "repo folder not found: $REPOS_DIR/$repo (pass --repo-path /abs/path when the checkout is not under the repos tree, or --no-repo-check pre-rebuild)"
     fi
     validate_file "$MAP"
-    tmp="$MAP.tmp"
+    tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, tmp] = process.argv.slice(1);
@@ -329,7 +353,8 @@ case "$cmd" in
     [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes or --repo-path"
     check_repo_path "$repo_path" "$repo_check"
     validate_file "$MAP"
-    tmp="$MAP.tmp"
+    tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, tmp, ...updates] = process.argv.slice(1);
@@ -359,7 +384,8 @@ case "$cmd" in
       esac
     done
     validate_file "$MAP"
-    tmp="$MAP.tmp"
+    tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, flow, confirmed, tmp] = process.argv.slice(1);
@@ -380,7 +406,8 @@ case "$cmd" in
     [ $# -eq 3 ] || die "usage: repo-map.sh set-release-owners \"<project name>\" <assignee> <reviewer|none>"
     project="$1"; rel_assignee="$2"; rel_reviewer="$3"
     validate_file "$MAP"
-    tmp="$MAP.tmp"
+    tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, assignee, reviewer, tmp] = process.argv.slice(1);
@@ -398,7 +425,8 @@ case "$cmd" in
   remove)
     [ $# -eq 1 ] || die "usage: repo-map.sh remove \"<project name>\""
     validate_file "$MAP"
-    tmp="$MAP.tmp"
+    tmp="$(mktemp "$MAP.tmp.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, tmp] = process.argv.slice(1);

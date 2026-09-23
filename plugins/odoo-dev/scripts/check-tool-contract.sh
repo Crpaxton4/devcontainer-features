@@ -35,6 +35,18 @@
 #                                  for an install without the console script.
 # None available is exit 2 (the gate could not run), never a silent pass.
 #
+# A source is used only when it actually WORKS, not when it merely looks
+# present (#775). `command -v odoo-sdk` proves a file exists under that name
+# and nothing more: git worktrees do not get their own .venv, so every
+# concurrent worker resolves one shared console script that can be stale,
+# half-rewritten, or built from a different SDK version than the checkout.
+# Such a script resolves on PATH and then dies on import — or parses its own
+# arguments and rejects `cmd` outright. Under `set -euo pipefail` (below) that
+# killed the gate outright, since `pipefail` propagates the crash out of the
+# `odoo-sdk cmd --list --json | python3` pipeline. So source 2 is probed with
+# `odoo-sdk --help` first and its failure drops to source 3 instead of
+# aborting the run.
+#
 # Scanned: skills/ agents/ commands/ hooks/ scripts/ under the plugin root.
 # Excluded: scripts/tests/ (fixtures reference unknown names on purpose) and
 # this script itself (its own documentation names the patterns).
@@ -104,30 +116,67 @@ fi
 
 # --- the actual surface -----------------------------------------------------------
 
-if [ -n "$SURFACE_FILE" ]; then
-  [ -f "$SURFACE_FILE" ] || { echo "tool contract: surface file not found: $SURFACE_FILE" >&2; exit 2; }
-  SURFACE="$(grep -vE '^[[:space:]]*(#|$)' "$SURFACE_FILE" | LC_ALL=C sort -u)"
-elif command -v odoo-sdk >/dev/null 2>&1; then
-  SURFACE="$(odoo-sdk cmd --list --json | python3 -c '
+surface_via_cli() {
+  odoo-sdk cmd --list --json | python3 -c '
 import json, sys
 for entry in json.load(sys.stdin):
     print(entry["name"])
-' | LC_ALL=C sort -u)"
-elif python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
-  SURFACE="$(python3 -c '
+'
+}
+
+surface_via_module() {
+  python3 -c '
 from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 print("\n".join(sorted(BUILTIN_COMMANDS)))
-')"
+'
+}
+
+# resolve_surface <label> <fn> — capture one live source into SURFACE. Called
+# from a condition, so `set -euo pipefail` is suspended for the body and a
+# source that crashes reports and returns instead of aborting the gate. The
+# source's own stderr flows through to the caller.
+resolve_surface() {
+  local label="$1" fn="$2" out
+  if ! out="$("$fn")"; then
+    echo "tool contract: '$label' failed — falling through to the next source" >&2
+    return 1
+  fi
+  SURFACE="$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | LC_ALL=C sort -u)"
+  [ -n "$SURFACE" ]
+}
+
+SURFACE=""
+
+if [ -n "$SURFACE_FILE" ]; then
+  [ -f "$SURFACE_FILE" ] || { echo "tool contract: surface file not found: $SURFACE_FILE" >&2; exit 2; }
+  SURFACE="$(grep -vE '^[[:space:]]*(#|$)' "$SURFACE_FILE" | LC_ALL=C sort -u)"
 else
-  cat >&2 <<'MSG'
+  # Source 2 — the installed console script, gated on it actually running.
+  if command -v odoo-sdk >/dev/null 2>&1; then
+    if odoo-sdk --help >/dev/null 2>&1; then
+      resolve_surface "odoo-sdk cmd --list --json" surface_via_cli || SURFACE=""
+    else
+      echo "tool contract: odoo-sdk is on PATH but 'odoo-sdk --help' does not run (stale or broken console script) — falling through to the next source" >&2
+    fi
+  fi
+
+  # Source 3 — the builtin mapping, for an install with no console script (or
+  # one that source 2 just rejected).
+  if [ -z "$SURFACE" ] && python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
+    resolve_surface "odoo_sdk.commands.builtin.BUILTIN_COMMANDS" surface_via_module || SURFACE=""
+  fi
+
+  if [ -z "$SURFACE" ]; then
+    cat >&2 <<'MSG'
 tool contract: cannot resolve the command surface — odoo-sdk is not on PATH
-and odoo_sdk is not importable. Install the SDK first:
+(or does not run) and odoo_sdk is not importable. Install the SDK first:
 
   python3 -m pip install ./libraries/odoo_sdk
 
 or pass an explicit listing with --surface-file <path>.
 MSG
-  exit 2
+    exit 2
+  fi
 fi
 
 if [ -z "$SURFACE" ]; then

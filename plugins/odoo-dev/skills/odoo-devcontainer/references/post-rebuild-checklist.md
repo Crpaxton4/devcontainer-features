@@ -82,6 +82,14 @@ sides. Then:
 git -C "$(REPOS_DIR= <plugin root>/skills/odoo-repo-map/scripts/repos-dir.sh --raw)"/<any repo> status
 ```
 
+That form clears `REPOS_DIR` on purpose, so it exercises the sweep — which needs
+the tree to hold **two or more** clones, or to carry the marker file. A host with
+exactly one clone declares it once and the sweep finds it from then on:
+
+```bash
+touch /abs/path/to/repos/.odoo-repos-dir
+```
+
 ## 4. GitHub
 
 ```bash
@@ -105,6 +113,7 @@ Individually, if one of them fails and you want it alone:
 
 ```bash
 bash <plugin root>/skills/odoo-repo-map/scripts/tests/repo-map.test.sh
+bash <plugin root>/skills/odoo-repo-map/scripts/tests/repos-dir.test.sh
 bash <plugin root>/skills/odoo-task-env/scripts/tests/existing-work.test.sh
 bash <plugin root>/skills/odoo-task-env/scripts/tests/task-env.test.sh
 bash <plugin root>/skills/odoo-test-run/scripts/tests/run-tests.test.sh

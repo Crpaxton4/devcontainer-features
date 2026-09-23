@@ -9,6 +9,12 @@
 #
 # Failures asserted by the skill they must name and by the regeneration
 # command the message must carry, not by exit code alone.
+#
+# Because the suite runs without a working odoo-sdk, the CLI tier would never
+# be exercised at all — which is how #775 survived. So two cases put a stub
+# `odoo-sdk` early on PATH (one that does not import, one that imports but has
+# no sync-skills subcommand) and assert the gate falls through to a tier that
+# works instead of dying on it.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +76,72 @@ if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "no committed copy.*odoo-quot
   ok "missing copy: exits 1 and names odoo-quote"
 else
   bad "missing copy: expected exit 1 naming odoo-quote, got rc=$rc: $out"
+fi
+
+# --- a broken odoo-sdk on PATH must fall through, not kill the gate (#775) ------
+
+# Git worktrees share the main checkout's .venv, so a concurrent worker can
+# leave the one console script every worker resolves stale or half-rewritten.
+# `command -v` still finds it; running it does not work. Under the gate's
+# `set -euo pipefail` that used to abort the run outright, so tier 1 was fatal
+# rather than a tier. Two stubs, one per way a console script can be broken.
+stub_bin="$work/broken-bin"
+mkdir -p "$stub_bin"
+
+# (a) does not import at all — `--help` itself fails.
+cat > "$stub_bin/odoo-sdk" <<'STUB'
+#!/usr/bin/env bash
+echo "ModuleNotFoundError: No module named 'odoo_sdk'" >&2
+exit 1
+STUB
+chmod +x "$stub_bin/odoo-sdk"
+
+out="$(PATH="$stub_bin:$PATH" bash "$SUT" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "byte-identical"; then
+  ok "broken odoo-sdk (no import): falls through to a working tier"
+else
+  bad "broken odoo-sdk (no import): expected exit 0, got rc=$rc: $out"
+fi
+if printf '%s' "$out" | grep -qF "via odoo-sdk sync-skills --dest"; then
+  bad "broken odoo-sdk (no import): claimed to regenerate via the broken CLI: $out"
+else
+  ok "broken odoo-sdk (no import): did not credit the broken CLI"
+fi
+
+# (b) imports and answers --help, but rejects sync-skills — an older SDK build
+# left on PATH by a shared venv. The --help probe alone cannot see this, so
+# the tier must also be judged by whether the regeneration itself worked.
+cat > "$stub_bin/odoo-sdk" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--help" ]; then
+  echo "usage: odoo-sdk [-h] {list,report} ..."
+  exit 0
+fi
+echo "odoo-sdk: error: argument command: invalid choice: '${1:-}'" >&2
+exit 2
+STUB
+chmod +x "$stub_bin/odoo-sdk"
+
+out="$(PATH="$stub_bin:$PATH" bash "$SUT" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "byte-identical"; then
+  ok "stale odoo-sdk (no sync-skills): falls through to a working tier"
+else
+  bad "stale odoo-sdk (no sync-skills): expected exit 0, got rc=$rc: $out"
+fi
+if printf '%s' "$out" | grep -q "falling through"; then
+  ok "stale odoo-sdk (no sync-skills): says on stderr that it fell through"
+else
+  bad "stale odoo-sdk (no sync-skills): fell through silently: $out"
+fi
+
+# A broken tier 1 must still not become a silent pass when nothing else works.
+out="$(PATH="$stub_bin:$PATH" bash "$SUT" --sdk-src "$work/no-such-src" 2>&1)"; rc=$?
+if python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
+  echo "SKIP broken-tier-1 exhaustion case (an importable odoo_sdk takes precedence)"
+elif [ "$rc" -eq 2 ]; then
+  ok "broken odoo-sdk with no other source: exits 2, never a silent pass"
+else
+  bad "broken odoo-sdk with no other source: expected exit 2, got $rc: $out"
 fi
 
 # --- no regeneration source must refuse to run (exit 2), never pass -------------
