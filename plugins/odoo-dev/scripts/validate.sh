@@ -296,6 +296,14 @@ run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-test
 run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
+run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
+run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
+# Registered on purpose, and note what it makes true: gate 21 reconciles this
+# block against disk, and its own suite is IN the block it reconciles. That is
+# deliberate — an unregistered reconciler would be the first thing its own check
+# would have caught, and the list would have an exemption for the gate that
+# polices exemptions.
+run_suite "check-suite-registry.test.sh" "$HERE/tests/check-suite-registry.test.sh"
 
 # --- 12. eval suite --------------------------------------------------------------
 # `claude plugin eval` is early-access gated, so the suite cannot be RUN here. The
@@ -860,6 +868,35 @@ else
     done <<< "$lsp_cmds"
     detail "$lsp_n command(s) declared in .lsp.json, checked against ${lsp_install#"$lsp_repo_root"/}"
   fi
+fi
+
+# --- 21. the two test-suite registries agree --------------------------------------
+# Gate 11 above runs an explicit list. The workflow's script-tests job runs
+# `find plugins/odoo-dev -name '*.test.sh' -type f`. Nothing kept the two in
+# agreement, so a suite could be on disk, run in CI, and be invisible here.
+#
+# The harm is not an unrun test — CI's find sweep runs every one of them. It is
+# that this script's own verdict, "all gates passed", was a statement about the
+# explicit list while reading as a statement about the plugin. #781 records a
+# reviewer reading this file and concluding a suite was "dead code in CI" that
+# would "land green having never run its own tests". CI had run it and logged
+# PASS. The gap between the two lists had by then been measured three times at
+# three different values, because it moved every time anyone added a suite.
+#
+# So every *.test.sh on disk must now be either registered in gate 11 or named
+# in check-suite-registry.sh's CI_ONLY list with the reason validate.sh must not
+# run it. There is no third state, and no count is asserted anywhere: a total
+# hardcoded here would be the same number-in-two-places defect wearing this
+# gate's clothes, and would break the first time a sibling branch added a suite.
+gate "test suite registries agree (gate 11 vs the workflow's find sweep)"
+suite_registry_out="$(bash "$HERE/check-suite-registry.sh" 2>&1)"
+suite_registry_rc=$?
+if [ "$suite_registry_rc" -eq 0 ]; then
+  ok "every *.test.sh on disk is registered above or named CI-only with a reason"
+  detail "run check-suite-registry.sh --list to see each suite and its disposition"
+else
+  bad "the explicit list in gate 11 and the suites on disk disagree"
+  echo "$suite_registry_out" | sed 's/^/       /'
 fi
 
 printf '\n'
