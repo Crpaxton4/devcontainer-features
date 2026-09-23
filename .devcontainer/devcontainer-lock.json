@@ -19,6 +19,11 @@
       "version": "1.0.0",
       "resolved": "ghcr.io/jsburckhardt/devcontainer-features/uv@sha256:542a0bc2203205b3c696de650ba862f280b20af3543493cc232edd9ac35791f7",
       "integrity": "sha256:542a0bc2203205b3c696de650ba862f280b20af3543493cc232edd9ac35791f7"
+    },
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+      "version": "1.0.2",
+      "resolved": "ghcr.io/rocker-org/devcontainer-features/apt-packages@sha256:87a4d7750a596a5db034ba8508782f31aebdc2ffe955c66aaecb33d9de2ecdae",
+      "integrity": "sha256:87a4d7750a596a5db034ba8508782f31aebdc2ffe955c66aaecb33d9de2ecdae"
     }
   }
 }
