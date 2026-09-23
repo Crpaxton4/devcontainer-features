@@ -164,6 +164,48 @@ The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] &
 
 The same wrapper also passes `--append-system-prompt-file "$CLAUDE_CONFIG_DIR/system-prompt-append.md"` (#740) for **session** invocations — no arguments at all, or a first argument that is a flag — so session-wide style and policy rules arrive as *system* prompt rather than as user-turn context that drifts over a long session. That file is **local-only and hand-maintained** in the bind-mounted claude-home: the Feature never ships it and never creates it, and the flag is injected only when it is actually present, so a container without one behaves exactly as it did before. Subcommands are skipped deliberately — `claude plugin …`, `claude mcp …`, anything whose first argument is not a flag, reject the option outright. No VS Code setting is involved: the wrapper **replaces the npm `claude` binary in place**, so everything that resolves `claude` through `PATH` — an IDE-launched session included — already runs it.
 
+**Where the wrapper itself lives (#807).** For a while the two halves of that
+mechanism updated on different clocks: `system-prompt-append.md` lives in the
+bind mount, so every edit to it is live immediately, while the wrapper that reads
+it was baked into the image and changed only on rebuild. A container whose image
+predated `--append-system-prompt-file` therefore passed no flag at all — every
+standing rule in the file absent from every session, for the better part of two
+weeks here, with nothing reporting it. Editing the file appeared to work and did
+nothing.
+
+Two things close that gap, neither of them new machinery:
+
+- **The wrapper is published into the mount, beside the rules it delivers.**
+  `publish-claude-wrapper` (feature-contributed `postCreateCommand`, before the
+  hook sync) copies the image's wrapper to
+  `$CLAUDE_CONFIG_DIR/personal-features/claude-wrapper` with the same
+  stage-`chmod`-rename discipline `sync-claude-hooks` uses for the #803 hook
+  shim, and the wrapper on `PATH` execs that copy when one is there. A wrapper
+  published by **any** container on this machine is then the wrapper every other
+  container runs, without a rebuild. The real Claude binary cannot travel with
+  the copy — its path carries the publishing image's Node version — so the
+  on-`PATH` stub hands its own over in `CLAUDE_REAL_BIN`, and re-entry is ruled
+  out by comparing `$0` against the shared path rather than by an environment
+  flag (a flag would leak into the session and make a nested `claude` skip the
+  shared copy). With no published copy the invocation is byte-identical to the
+  pre-#807 wrapper.
+- **Staleness is reported through the marker that already exists.** The wrapper
+  is fingerprinted by the #806 provision marker
+  (`$CLAUDE_CONFIG_DIR/personal-features-provision.json`), so an image older than
+  one this config dir has already seen announces itself there — one breadcrumb,
+  not a second one for this defect. `publish-claude-wrapper` adds the direct
+  check the issue asked for on top: one `grep` against the file `claude`
+  resolves to, warning loudly at container create when it carries no
+  `--append-system-prompt-file`, louder still when `system-prompt-append.md`
+  exists and is therefore being dropped right now.
+
+**What this does not fix.** A container whose image predates this change has
+neither the delegating wrapper nor the publisher, so nothing here reaches it —
+the same limit #806 documented ("a checker shipped in the image is exactly as
+absent from an old image as the step it would check"). Both halves above are
+forward-looking; the cure for an already-stale container is still a no-cache
+rebuild, and the point of the warning is that you now find out you need one.
+
 ## Claude Code lifecycle hooks (odoo-sdk event capture)
 
 This Feature provisions a set of Claude Code lifecycle hooks that record session
@@ -242,8 +284,8 @@ build time. Each half runs at the only moment its subject exists.
 **Necessary, not sufficient.** This resolves a command *at provision time*. It
 cannot say the command will still resolve, or still work, when a hook actually
 fires — `odoo-api-guard.sh` resolved fine at provision time and exit-127'd
-anyway, for reasons still undiagnosed. The runtime half of that problem is #804
-and is deliberately not attempted here.
+anyway, for reasons still undiagnosed. The runtime half of that problem is #804,
+below.
 
 **Resolution never executes anything.** The command strings are user config, and
 expanding them means handing them to a shell. Any command carrying a control
@@ -251,6 +293,51 @@ operator, a redirection or a command substitution is therefore **refused and
 reported as unverifiable** rather than expanded; with those screened out and
 globbing disabled, the expansion can perform parameter and tilde expansion and
 word splitting, and nothing else.
+
+**A hook that stops working says so (#804).** The shim's contract is to exit 0 on
+every path — a tracker that blocks a session because its own database is
+unreachable is worse than a tracker that misses a row — but failing *open* had
+become the same thing as failing *silently*. 3,506 events were dropped over
+roughly three months from two unrelated causes (#496's unlinked console scripts,
+#803's container-absolute command) and both presented identically: nothing at
+all. The tracker's own tables cannot show it, because the signature is the
+**absence** of rows, which is indistinguishable from a quiet week.
+
+A failure counter written by the shim cannot close that gap — the shim is the
+thing that is broken, and in both of those outages not one line of it ran. So the
+breadcrumb is written by the path that **succeeds**, and read by a different
+program at a different time:
+
+- `claude-event-hook` stamps `last_event_at` / `last_event_epoch` /
+  `last_event_hook` into the provision marker, chained onto the `odoo-sdk` call
+  with `&&` so it attests the *whole* path — hook resolved, shim ran, SDK exited
+  0 — rather than just the first link. It rides the same detached background job,
+  so it costs the session nothing, and is throttled to one write a minute so a
+  `PreToolUse`-per-tool-call workload does not churn the bind-mounted config dir.
+- `sync-claude-hooks` compares that stamp against now on every container create
+  and reports a silence longer than `PERSONAL_FEATURES_HOOK_STALE_SECONDS`
+  (default seven days), naming the last successful write and pointing at the two
+  causes worth checking first. A config dir that has never recorded an event is
+  not evidence of an outage on the first create that looks, so `hook_watch_since`
+  records the zero point and the *next* create measures from it. The report runs
+  before anything that can exit early, because a shim that cannot be published is
+  itself one of the reasons the stamp would have stopped.
+
+**It reuses #806's marker rather than adding a second one.** Both facts are about
+the same subject — what this machine's feature scripts have actually done — and
+`personal-features-provision.json` already lives in the one directory the
+container and the host share, already outlives the image, and already needs no
+mount and no `containerEnv` var of its own. `sync-claude-mcp` rebuilds that
+record from scratch on every create, so it explicitly carries the runtime fields
+forward; without that the provision-time write would erase the evidence the
+runtime check reads, restoring the defect by accident. Nothing is added to
+`settings.json`: no new hook entry, no new marker, no new program — the
+mechanism is two existing scripts writing and reading one existing file.
+
+**Still not fail-closed.** #804 asks only that the silence stop being
+indistinguishable from success. A stale heartbeat is a warning on stderr; the
+merge still runs, the hooks are still wired up, and the container create still
+exits 0.
 
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
 forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
@@ -485,6 +572,25 @@ directory the Feature already mounts — and, like everything else in
 parsed warns and the run still exits 0. No step was added to the
 `postCreateCommand` chain, which is an `&&` chain where any failing step aborts
 container create and suppresses `postStartCommand`.
+
+**It also carries the runtime hook heartbeat (#804).** `claude-event-hook`
+stamps `last_event_*` into this same marker between provisions and
+`sync-claude-hooks` reads it on the next create — one file, two facts about what
+this machine's feature scripts have actually done, rather than a second
+breadcrumb with its own filename and its own staleness rule.
+
+**The marker is shared state, and preserve is the default (#868).** The record
+is rewritten on every provision, so `sync-claude-mcp` starts from the marker it
+found and overwrites only the fields *it* owns — `schema`, `issue`,
+`provisioned_at`, `script_epoch`, `script_digest`, `scripts`, the three
+`newest_*` high-water-mark fields and `stale_image`, all of which describe the
+scripts in *this* container and would be a lie if inherited. Every other key
+belongs to another writer and is carried forward untouched; nothing is dropped.
+Adding a key to this marker from anywhere else therefore needs **no edit in
+`sync-claude-mcp`**. It used to: a hand-maintained allowlist of key names lived
+in `sync-claude-mcp`, so a key its owner forgot to add there was silently erased
+on the next container create and its reader then reported "never seen" where the
+truth was "erased" — the very failure mode this marker exists to make visible.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 

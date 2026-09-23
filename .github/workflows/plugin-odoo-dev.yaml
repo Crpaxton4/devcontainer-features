@@ -88,9 +88,25 @@ jobs:
   # The per-skill script regression suites, run directly rather than through
   # validate.sh, so a suite failure names the suite in the step log without a
   # scroll through the gate output. Every *.test.sh under the plugin runs —
-  # enumerated by find, so a new suite is picked up without editing this file
-  # (validate.sh gate 11 keeps its own explicit list; studio-inventory.test.sh
-  # runs only here).
+  # enumerated by find, so a new suite is picked up without editing this file.
+  #
+  # validate.sh gate 11 keeps its own explicit list, which is deliberately a
+  # SUBSET of what this job runs: a few suites reach their real subject only
+  # where CI provisions what it needs (studio-inventory exits early without
+  # psql; the parity and tool-contract suites SKIP their installed-SDK cases
+  # without the pip-installed odoo_sdk that jobs 4 and 5 set up). They do not
+  # fail off a runner — they quietly check less, so running them from
+  # validate.sh would print PASS for a suite whose point went unexercised.
+  # The number of such suites moves, so do not name them here — that is how
+  # this comment became wrong once already (#781), by naming one CI-only suite
+  # when there were four. The list with a reason per entry lives in
+  # plugins/odoo-dev/scripts/check-suite-registry.sh, and validate.sh gate 21
+  # reconciles it against the same `find` this job runs: a suite that is
+  # neither registered in gate 11 nor named there now fails CI, so the two
+  # registries can no longer drift apart unnoticed.
+  #
+  # Keep the find below identical to the one check-suite-registry.sh uses, or
+  # gate 21 is reconciling against a set this job does not run.
   script-tests:
     name: "plugin script test suites"
     runs-on: ubuntu-latest

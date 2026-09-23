@@ -168,6 +168,16 @@ install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-h
 # Published into $CLAUDE_CONFIG_DIR/hooks/ by the same runtime sync, for the same
 # #803 reason; this install is its build-time source of truth.
 install -m 0755 "$(dirname "$0")/worktree-context-hook" /usr/local/bin/worktree-context-hook
+# publish-claude-wrapper (#807): the runtime half of the `claude` wrapper, which
+# is generated further down. The wrapper is what DELIVERS
+# system-prompt-append.md, and it used to exist only inside the image while the
+# rules it delivers live in the bind mount - so the rules updated on every edit
+# and their reader updated only on rebuild, silently. This script publishes the
+# wrapper into $CLAUDE_CONFIG_DIR at container-create time (same #803 reason the
+# hook sync runs from postCreateCommand: a build-time write there is shadowed by
+# the mount) and reports an on-PATH wrapper that carries no
+# --append-system-prompt-file at all.
+install -m 0755 "$(dirname "$0")/publish-claude-wrapper" /usr/local/bin/publish-claude-wrapper
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).
@@ -237,12 +247,50 @@ rm "$WRAPPER_PATH"
 # they must be left alone. `\${1#-}` != `\$1` is the POSIX test for "starts with
 # a dash"; a `case` statement would read more naturally but would resurrect the
 # subcommand-allowlist shape this wrapper deliberately does not have.
-cat > "$WRAPPER_PATH" << EOF
+#
+# THE WRAPPER IS ALSO ITS OWN SHARED COPY (#807). The prompt file lives in the
+# bind mount and is therefore always current; the wrapper that reads it lived
+# only in the image and was therefore current only until the next edit. On this
+# machine that gap ran for the better part of two weeks across an unknown number
+# of sessions, and nothing reported it: the flag was simply never passed, so
+# every standing rule in the file was absent from all of them. So the wrapper now
+# consults $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper - the copy
+# publish-claude-wrapper publishes at container-create time from the same source
+# - and execs it when one is there. Same shape as #803's published hook shim,
+# and the same reason: that directory is the one place both ends of the mount
+# agree on, so a wrapper published by ANY container on this machine reaches every
+# other one without a rebuild.
+#
+# The real binary cannot travel with the published copy (its path carries this
+# image's Node version), so the stub passes its own through CLAUDE_REAL_BIN and
+# the published copy prefers it over the path baked into whichever image wrote
+# it. Re-entry is ruled out by comparing "$0" against the shared path rather than
+# by an environment flag, so a nested `claude` still goes through the shared
+# copy. A published copy that is absent, unreadable or non-executable leaves the
+# invocation byte-identical to the pre-#807 wrapper.
+#
+# The identical bytes are written to a stable image path FIRST and installed onto
+# PATH from there: publish-claude-wrapper needs a source outside the mount to
+# copy from, exactly like /usr/local/bin/claude-event-hook is for the hook sync.
+WRAPPER_SRC_DIR=/usr/local/share/personal-features
+WRAPPER_SRC="$WRAPPER_SRC_DIR/claude-wrapper"
+install -d -m 0755 "$WRAPPER_SRC_DIR"
+cat > "$WRAPPER_SRC" << EOF
 #!/bin/sh
 set -e
 
 REAL="$REAL_CLAUDE_BIN"
+if [ -n "\${CLAUDE_REAL_BIN:-}" ] && [ -x "\${CLAUDE_REAL_BIN:-}" ]; then
+    REAL="\$CLAUDE_REAL_BIN"
+fi
 PROMPT_FILE="\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/system-prompt-append.md"
+SHARED_WRAPPER="\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features/claude-wrapper"
+
+if [ "\$0" != "\$SHARED_WRAPPER" ] && [ -x "\$SHARED_WRAPPER" ]; then
+    CLAUDE_REAL_BIN="\$REAL"
+    export CLAUDE_REAL_BIN
+    exec "\$SHARED_WRAPPER" "\$@"
+fi
 
 if [ -f "\$PROMPT_FILE" ] && { [ \$# -eq 0 ] || [ "\${1#-}" != "\$1" ]; }; then
     if [ \$# -eq 0 ] && [ -t 0 ]; then
@@ -257,7 +305,8 @@ else
     exec "\$REAL" "\$@"
 fi
 EOF
-chmod +x "$WRAPPER_PATH"
+chmod 0755 "$WRAPPER_SRC"
+install -m 0755 "$WRAPPER_SRC" "$WRAPPER_PATH"
 
 # --- Python libraries -------------------------------------------------------
 # Wheels are bundled into this feature at release time. Installed into an
@@ -845,12 +894,29 @@ fi
 #
 # Deliberately NOT odoo-dev-specific: it fingerprints the feature-owned scripts
 # themselves, so every step any of them ever gains is covered by the same
-# marker - no per-migration assertion to remember to add. Adds no mount and no
-# containerEnv var; the marker lives inside a directory the feature already
-# mounts. Best-effort like the rest of this script: a marker that cannot be read
+# marker - no per-migration assertion to remember to add. The `claude` wrapper
+# is fingerprinted alongside them (#807) for exactly that reason: a wrapper too
+# old to deliver the standing rules is the same defect wearing a different hat,
+# and it announces itself here rather than needing its own breadcrumb. Adds no
+# mount and no containerEnv var; the marker lives inside a directory the feature
+# already mounts. Best-effort like the rest of this script: a marker that cannot be read
 # or written warns, and the run still exits 0.
 pf_marker="$CLAUDE_CONFIG_DIR/personal-features-provision.json"
-pf_scripts="/usr/local/bin/sync-claude-mcp /usr/local/bin/sync-claude-hooks /usr/local/bin/claude-event-hook /usr/local/bin/mempalace-repair /usr/local/bin/resolve-mempal-dir /usr/local/bin/create-pr"
+# One fingerprinted path per line. A feature that adds a script appends its own
+# line here and touches nothing else, so two such features do not land on the
+# same line of the same file (#868).
+pf_scripts=""
+pf_add_script() {
+    pf_scripts="${pf_scripts:+$pf_scripts }$1"
+}
+pf_add_script /usr/local/bin/sync-claude-mcp
+pf_add_script /usr/local/bin/sync-claude-hooks
+pf_add_script /usr/local/bin/claude-event-hook
+pf_add_script /usr/local/bin/mempalace-repair
+pf_add_script /usr/local/bin/resolve-mempal-dir
+pf_add_script /usr/local/bin/create-pr
+pf_add_script /usr/local/bin/publish-claude-wrapper
+pf_add_script /usr/local/share/personal-features/claude-wrapper
 if command -v python3 >/dev/null 2>&1; then
     PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
 import hashlib, json, os, sys, time
@@ -917,18 +983,38 @@ stale = bool(scripts) and (seen_epoch - epoch) > 60 and seen_digest != combined
 if not stale:
     seen_epoch, seen_digest, seen_at = max(seen_epoch, epoch), combined, iso(now)
 
-record = {
-    "schema": 1,
-    "issue": "806",
-    "provisioned_at": iso(now),
-    "script_epoch": epoch,
-    "script_digest": combined,
-    "scripts": scripts,
-    "newest_script_epoch": seen_epoch,
-    "newest_script_digest": seen_digest,
-    "newest_seen_at": seen_at,
-    "stale_image": stale,
-}
+# This marker is SHARED state, not a file private to this script: the runtime
+# hook heartbeat (#804) is stamped into it between provisions, and other writers
+# keep their own keys here rather than each inventing a breadcrumb file. The
+# document is rewritten on every provision, so the default has to be PRESERVE:
+# start from what was already there and overwrite only the fields below, which
+# this provision run owns. A key this script does not know about belongs to
+# another writer; carrying it forward costs nothing, whereas dropping it makes
+# the reader of that key say "never seen" when the truth is "erased" - the exact
+# failure mode this marker exists to make visible (#868). Adding a key elsewhere
+# therefore needs no edit here. Nothing is dropped: no key has ever needed
+# resetting, and a reset belongs next to the writer that owns the key.
+#
+# The owned fields all describe the scripts in THIS container, so none of them
+# may be inherited stale from the previous marker - that would be a lie about
+# the current image and would defeat the staleness check (#806). The three
+# newest_* high-water-mark fields are owned too: they are computed from the
+# previous marker above, deliberately, so a stale run cannot lower them.
+record = dict(previous)
+record.update(
+    {
+        "schema": 1,
+        "issue": "806",
+        "provisioned_at": iso(now),
+        "script_epoch": epoch,
+        "script_digest": combined,
+        "scripts": scripts,
+        "newest_script_epoch": seen_epoch,
+        "newest_script_digest": seen_digest,
+        "newest_seen_at": seen_at,
+        "stale_image": stale,
+    }
+)
 
 if stale:
     sys.stderr.write(

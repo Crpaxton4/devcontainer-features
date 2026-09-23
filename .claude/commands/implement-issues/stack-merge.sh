@@ -478,6 +478,24 @@ merge_node() {
             if ((resync_rc != 0)) &&
                 ! printf '%s' "$resync_out" | grep -qiE "$ALREADY_CURRENT_RE"; then
                 printf '%s\n' "$resync_out" >&2
+                # Why the refusal matters is decided from the fact, not the text.
+                # A re-sync that cannot run because the branch conflicts is the
+                # ONE failure here that Phase 8 misdescribes: `gh pr update-branch`
+                # is server-side, so unlike a `git rebase` conflict there is no
+                # rebase in progress in the ops worktree and nothing to `git add`.
+                # Saying so beats letting the caller follow a remedy that has
+                # nothing to act on.
+                if [[ $(gh pr view "$pr" -R "$SLUG" --json mergeable --jq .mergeable) == CONFLICTING ]]; then
+                    printf 'stack-merge: #%s conflicts with %s and cannot be brought up to date.\n' \
+                        "$pr" "$BASE" >&2
+                    printf '  This came from gh pr update-branch, which runs on the server, so\n' >&2
+                    printf '  there is NO rebase in progress here to resolve. Phase 8 second bullet\n' >&2
+                    printf '  does not apply. Rebase the branch yourself:\n' >&2
+                    printf '    git worktree add <path> %s\n' "$(head_branch "$pr")" >&2
+                    printf '    git -C <path> rebase origin/%s\n' "$BASE" >&2
+                    printf '  resolve, force-push, remove that worktree, then re-run this\n' >&2
+                    printf '  identical command.\n' >&2
+                fi
                 exit "$resync_rc"
             fi
             printf 'stack-merge: #%s was BEHIND; re-synced and retrying\n' "$pr" >&2

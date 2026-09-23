@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# publish-claude-wrapper — put the `claude` wrapper where the rules it delivers
+# already live, and say so when the wrapper on PATH does not deliver them (#807).
+#
+# WHY THIS EXISTS: `system-prompt-append.md` is hand-maintained in the
+# bind-mounted $CLAUDE_CONFIG_DIR, so every edit to it is live immediately. The
+# wrapper that passes `--append-system-prompt-file` for it was baked into the
+# image, so it changed only on rebuild. That inversion is the defect: the rules
+# updated on every edit, their reader updated on rebuild, and the gap between the
+# two was invisible — an image predating the flag simply never passed it, and
+# every standing rule in the file was absent from every session with nothing
+# reporting it.
+#
+# Publication has to happen at container-create time, not at image-build time:
+# $CLAUDE_CONFIG_DIR is bind-mounted over at runtime, so anything install.sh
+# writes under it is shadowed by the mount and silently discarded. That is the
+# same reason sync-claude-hooks runs from the feature-contributed
+# postCreateCommand, and this script runs from the same place.
+#
+# WHAT THE PUBLISHED COPY BUYS. The wrapper installed on PATH consults
+# $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper first and execs it when one
+# is there (see the wrapper heredoc in install.sh). That directory is the one
+# place both ends of the mount agree on — /usr/local/share/claude-home in here,
+# ~/.claude out there — so a wrapper published by ANY container on this machine
+# becomes the wrapper every other container runs, without a rebuild. The real
+# Claude binary does not travel with it (its path carries the publishing image's
+# Node version), so the on-PATH stub hands its own over in CLAUDE_REAL_BIN.
+#
+# WHAT IT DOES NOT BUY, AND WHY THE AUDIT BELOW EXISTS. A container whose image
+# predates this change has neither the delegating wrapper nor this script, so
+# nothing here reaches it — the same limit #806 documented for provisioning
+# steps generally ("a checker shipped in the image is exactly as absent from an
+# old image as the step it would check"). The audit is therefore the forward
+# half: from here on, a wrapper that carries no `--append-system-prompt-file`
+# says so on every container create instead of looking healthy while loading
+# nothing. The staleness half is already solved and is NOT duplicated here — the
+# wrapper is fingerprinted by the #806 provision marker
+# ($CLAUDE_CONFIG_DIR/personal-features-provision.json, written by
+# sync-claude-mcp), so an image older than one this config dir has already seen
+# announces itself through that one breadcrumb rather than a second.
+#
+# Best-effort throughout, like the rest of the runtime provisioning: every
+# failure warns and the script still exits 0, because refusing container create
+# over a wrapper refresh would be worse than the staleness it guards against.
+set -euo pipefail
+
+note() { echo "publish-claude-wrapper: $1" >&2; }
+
+# The wrapper IMPLEMENTATION to publish: the copy install.sh wrote into the
+# image, outside the bind mount. Byte-identical to the one it installed on PATH.
+# Overridable on the same terms as sync-claude-hooks' PERSONAL_FEATURES_HOOK_CMD,
+# so the feature test can publish a fixture instead of the real wrapper.
+WRAPPER_SRC="${PERSONAL_FEATURES_CLAUDE_WRAPPER_SRC:-/usr/local/share/personal-features/claude-wrapper}"
+
+# CLAUDE_CONFIG_DIR is the user-scope Claude config root and the container end of
+# the ~/.claude bind mount. Without it there is no shared directory to publish
+# into and no prompt file to reason about, so there is nothing to do.
+if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
+    note "CLAUDE_CONFIG_DIR is unset; nothing to publish (skipping)."
+    exit 0
+fi
+
+WRAPPER_DIR="$CLAUDE_CONFIG_DIR/personal-features"
+PUBLISHED="$WRAPPER_DIR/claude-wrapper"
+PROMPT_FILE="$CLAUDE_CONFIG_DIR/system-prompt-append.md"
+
+# Namespaced under the config dir rather than dropped at its top level: this is
+# the feature's own directory inside the user's real ~/.claude, so nothing here
+# can collide with a file Claude Code or the user owns.
+mkdir -p "$WRAPPER_DIR"
+
+# Same atomic-rename discipline as sync-claude-hooks' publish_shim: stage inside
+# the destination directory (hence the same filesystem, which the bind mount and
+# /tmp are not), chmod, then rename. A `claude` session already executing keeps
+# the old inode, so a republish mid-session can never exec a half-copied file.
+publish_wrapper() {
+    local src="$1" dst="$2" tmp
+    if [ ! -r "$src" ]; then
+        note "no wrapper to publish at $src; leaving $dst as it is."
+        return 1
+    fi
+    tmp="$(mktemp -p "$WRAPPER_DIR")" || {
+        note "could not stage a temp file in $WRAPPER_DIR; $dst not refreshed."
+        return 1
+    }
+    if cp "$src" "$tmp" 2>/dev/null; then
+        # World-readable and world-executable for the same reason the #806
+        # marker is world-writable: install.sh cannot know which uid runs
+        # postCreateCommand, let alone which uid runs `claude` afterwards, and
+        # the wrapper holds no secret.
+        chmod 0755 "$tmp"
+        mv "$tmp" "$dst"
+        return 0
+    fi
+    rm -f "$tmp"
+    note "could not copy $src to $dst."
+    return 1
+}
+
+if publish_wrapper "$WRAPPER_SRC" "$PUBLISHED"; then
+    echo "publish-claude-wrapper: published the claude wrapper to $PUBLISHED"
+fi
+
+# --- the audit: is the wrapper on PATH actually delivering the rules? ---------
+# One grep against the file `claude` resolves to, which is what the issue asked
+# for. It is deliberately a text test rather than an invocation: running the real
+# binary to find out would start a session, and the flag is injected by a literal
+# in the wrapper, so its presence in the file is exactly the question.
+ON_PATH="$(command -v claude 2>/dev/null || true)"
+if [ -z "$ON_PATH" ]; then
+    note "no 'claude' on PATH; not auditing the wrapper."
+    exit 0
+fi
+
+if grep -qF -- '--append-system-prompt-file' "$ON_PATH" 2>/dev/null; then
+    exit 0
+fi
+
+# Two warnings, because the two cases are not equally bad. With the prompt file
+# present the rules in it are being dropped RIGHT NOW; without it, nothing is
+# being lost yet and the message is a heads-up for the day one is written.
+if [ -f "$PROMPT_FILE" ]; then
+    note "ERROR: the 'claude' on PATH ($ON_PATH) passes no --append-system-prompt-file, but $PROMPT_FILE exists. Every standing rule in that file is absent from every session started in this container, and nothing else reports it - editing the file appears to work and does nothing. This image predates the wrapper that delivers it; rebuild the container without cache to converge (#807)."
+else
+    note "NOTE: the 'claude' on PATH ($ON_PATH) passes no --append-system-prompt-file. Nothing is being dropped today because $PROMPT_FILE does not exist, but a rule written there would be silently ignored in this container until it is rebuilt (#807)."
+fi
+
+# Still 0: this is a report about the image, not a failure of this run, and a
+# nonzero exit here would break the postCreateCommand chain for every step after
+# it.
+exit 0
