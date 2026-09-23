@@ -145,12 +145,20 @@ for (const d of fs.readdirSync(skills).sort()) {
   if (desc.length > 300) { console.log(`  FAIL ${d}: description ${desc.length} chars > 300`); bad++; }
   // when_to_use is no longer carried in frontmatter — the router concatenates it
   // onto the description, so it is routing surface too, and its prose now lives
-  // in the body. This cap stays as the guard for a skill that reintroduces it.
-  if (desc.length + when.length > 1536) {
-    console.log(`  FAIL ${d}: description + when_to_use ${desc.length + when.length} chars > 1536`); bad++;
+  // in the body (#745/#749). Presence is the failure now, not length: the old
+  // check bounded description + when_to_use together, which let a reintroduced
+  // field through as long as the pair stayed small, and reported a sum that left
+  // the reader to work out which half overran. Each field is capped on its own —
+  // description at 300 above, when_to_use at 1536 here — so a total over 1536 is
+  // now reachable; the trade is an error that names the offending field.
+  if (/^when_to_use:/m.test(fm)) {
+    console.log(`  FAIL ${d}: when_to_use is not carried in frontmatter (see #745/#749); fold it into description`); bad++;
+  }
+  if (when.length > 1536) {
+    console.log(`  FAIL ${d}: when_to_use ${when.length} chars > 1536`); bad++;
   }
 }
-if (bad === 0) console.log("  PASS every skill: name matches dir, description within limits");
+if (bad === 0) console.log("  PASS every skill: name matches dir, description within its cap, no when_to_use");
 process.exit(bad === 0 ? 0 : 1);
 ' "$SKILLS" || fails=$((fails + 1))
 
