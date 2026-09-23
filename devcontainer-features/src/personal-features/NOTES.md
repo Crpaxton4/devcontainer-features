@@ -577,11 +577,20 @@ container create and suppresses `postStartCommand`.
 stamps `last_event_*` into this same marker between provisions and
 `sync-claude-hooks` reads it on the next create — one file, two facts about what
 this machine's feature scripts have actually done, rather than a second
-breadcrumb with its own filename and its own staleness rule. Because the record
-above is rebuilt from scratch every provision, `last_event_at`,
-`last_event_epoch`, `last_event_hook` and `hook_watch_since` are explicitly
-carried forward from the previous marker; without that, the provision-time write
-would erase exactly the evidence the runtime check exists to read.
+breadcrumb with its own filename and its own staleness rule.
+
+**The marker is shared state, and preserve is the default (#868).** The record
+is rewritten on every provision, so `sync-claude-mcp` starts from the marker it
+found and overwrites only the fields *it* owns — `schema`, `issue`,
+`provisioned_at`, `script_epoch`, `script_digest`, `scripts`, the three
+`newest_*` high-water-mark fields and `stale_image`, all of which describe the
+scripts in *this* container and would be a lie if inherited. Every other key
+belongs to another writer and is carried forward untouched; nothing is dropped.
+Adding a key to this marker from anywhere else therefore needs **no edit in
+`sync-claude-mcp`**. It used to: a hand-maintained allowlist of key names lived
+in `sync-claude-mcp`, so a key its owner forgot to add there was silently erased
+on the next container create and its reader then reported "never seen" where the
+truth was "erased" — the very failure mode this marker exists to make visible.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
