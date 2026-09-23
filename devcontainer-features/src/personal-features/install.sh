@@ -418,6 +418,19 @@ fi
 # script also makes the repair exercisable by the feature test - which is the
 # only way to test it, since `devcontainer features test` runs no
 # postCreateCommand.
+#
+# The script below no longer has a step 4c. The SessionStart recall hook used to
+# be checked there (#805): it was one of exactly two hand-written assertions over
+# the ten commands the shared settings.json references, and the other eight -
+# odoo-api-guard.sh among them - were provisioned on trust. sync-claude-hooks now
+# resolves EVERY command in that file at container-create time, so
+# mempalace-recall.sh is covered by the general rule rather than by a rule of its
+# own, and is reported exactly when settings.json actually references it. The
+# #744 decision it encoded is kept verbatim there: warn, never create - a stub
+# would look like a working recall while recalling nothing. This note lives out
+# here rather than in the heredoc because everything inside the heredoc is
+# shipped verbatim into /usr/local/bin/mempalace-repair, where commentary about
+# install.sh's own history does not belong.
 cat > /usr/local/bin/mempalace-repair << 'MEMPALACE_REPAIR'
 #!/bin/sh
 set -eu
@@ -625,16 +638,6 @@ if [ ! -e "$MEMPALACE_IDENTITY" ]; then
         echo "WARNING: mempalace-repair: $MEMPALACE_IDENTITY is missing and could not be seeded; 'mempalace wake-up' will start with no identity (#744)" >&2
     fi
 fi
-
-# 4c. the SessionStart recall hook USED TO BE CHECKED HERE and no longer is
-# (#805). It was one of exactly two hand-written assertions over the ten commands
-# the shared settings.json references, and the other eight - odoo-api-guard.sh
-# among them - were provisioned on trust. sync-claude-hooks now resolves EVERY
-# command in that file at container-create time, so mempalace-recall.sh is
-# covered by the general rule rather than by a rule of its own, and is reported
-# exactly when settings.json actually references it. The #744 decision it encoded
-# is kept verbatim there: warn, never create - a stub would look like a working
-# recall while recalling nothing.
 MEMPALACE_REPAIR
 chmod 0755 /usr/local/bin/mempalace-repair
 
