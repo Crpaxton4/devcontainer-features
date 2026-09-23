@@ -57,6 +57,22 @@ the syntax in words instead.
 If a line rendered blank rather than failing, the `allowed-tools` prefix did not
 match that command's `-C`/`-R` form. Widen it rather than proceeding on memory.
 
+**A fix to this file does not reach a session that already loaded it.** The
+session reads this command once and replays that copy; editing it on disk, even
+committing and merging it, changes nothing for a run already under way. Observed
+directly: a session held a pre-fix copy of the preflight block across a resume,
+and the failure it quoted back was a line that no longer existed in the repo.
+
+So if you halt on a defect in *this file*, say so explicitly in the halt report
+and say that continuing needs a **new** session rather than a resume of yours.
+Everything that session had — its plan, its dispatched workers, its worktrees —
+is lost, which makes a defect here far more expensive than one anywhere else.
+Read the whole file before Phase 1 and raise every problem you can see in one
+halt, rather than discovering them one run at a time.
+
+`stack-merge.sh` is not affected. It is a script invoked through Bash, so each
+invocation reads the file on disk and a fix to it lands immediately.
+
 ## Identity — derived from the repo, never configured
 
 The account comes from the repo itself. Run this before anything that touches
