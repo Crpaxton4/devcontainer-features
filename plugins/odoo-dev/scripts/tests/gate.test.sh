@@ -11,6 +11,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/../gate.sh"
 ART="$HERE/../artifact.sh"
+SD="$HERE/../state-dir.sh"
 FIX="$HERE/fixtures/gate"
 
 pass=0; fail=0
@@ -216,7 +217,139 @@ expect_waiver_reject "no file" \
 expect_waiver_reject "a line that is neither a number nor null" \
   '{"waived":[{"file":"models/sale_order.py","line":"12","reason":"a line given as a string"}]}'
 
-rm -rf "$EMPTY" "$RETRY" "$MAL" "$NOMANIFEST" "${WAIVER_TMP[@]}"
+# --- state-dir.sh: bare task ids and the fail-soft CLI ---------------------------
+# The commands used to open with an inline mkdir/grep/&&/|| preamble that a
+# worktree-isolated session refuses to run, which made /odoo-dev:pr unreachable from
+# the one place odoo-dev-builder is documented to work. The shell moved in here, so
+# these cases are what stops it moving back out.
+
+STATE="$(mktemp -d)"
+mkdir -p "$STATE/tasks"
+cp -r "$FIX/all-green" "$STATE/tasks/30412"
+mkdir -p "$STATE/tasks/30413"
+
+# sd <args...> — state-dir.sh against the scratch state dir. Prints "rc|output".
+sd() {
+  local out rc
+  out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$SD" "$@" 2>/dev/null)"; rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+# expect_sd <label> <want rc|output> <args...>
+expect_sd() {
+  local label="$1" want="$2"; shift 2
+  local got; got="$(sd "$@")"
+  if [ "$got" = "$want" ]; then ok "state-dir.sh: $label"
+  else bad "state-dir.sh: $label — wanted [$want], got [$got]"; fi
+}
+
+expect_sd "resolves a bare task id"      "0|$STATE/tasks/30412" task --else M -- 30412
+expect_sd "creates on demand"            "0|$STATE/tasks/777"   task --create --else M -- 777
+expect_sd "will not invent a task dir"   "0|M"                  task --else M -- 999
+expect_sd "prose is not a task id"       "0|M"                  task --create --else M -- Create
+expect_sd "an empty argument is not one" "0|M"                  task --create --else M -- ''
+expect_sd "a path is not a task id"      "0|M"                  task --create --else M -- /tmp
+expect_sd "release route resolves"       "0|$STATE/releases/UAT-to-main" \
+  release --create --else M -- release UAT main
+expect_sd "release needs its sentinel"   "0|M" release --create --else M -- 30412 UAT main
+expect_sd "release refuses traversal"    "0|M" release --create --else M -- release ../etc main
+expect_sd "release refuses a dotted-out branch" "0|M" release --create --else M -- release a..b main
+expect_sd "the state dir itself"         "0|$STATE"
+
+# Nothing above may have created a directory a well-formed invocation could not ask
+# for. `tasks/Create` is the bug this assertion is named after.
+junk="$(find "$STATE" -mindepth 1 -maxdepth 2 -type d \
+        -not -name tasks -not -name releases \
+        -not -name '3041[23]' -not -name 777 -not -name UAT-to-main | sort)"
+if [ -z "$junk" ]; then ok "state-dir.sh: created no directory a bad argument asked for"
+else bad "state-dir.sh: junk under the state dir: $junk"; fi
+
+# A malformed CLI call is a bug in the command file, not something a user typed, so
+# it is the one thing that still exits non-zero.
+env ODOO_DEV_STATE_DIR="$STATE" bash "$SD" bogus >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && ok "state-dir.sh: an unknown mode is still a usage error" \
+  || bad "state-dir.sh: unknown mode exited $rc, wanted 2"
+
+# --- gate.sh: bare task ids and --soft -------------------------------------------
+# gate.sh takes the same argument the same way, so /odoo-dev:pr can pre-gate with a
+# single unconditional call instead of a chain the worktree guard refuses.
+out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr -- 30412 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '"ok":true'; then
+  ok "gate.sh: a bare task id resolves against the state dir"
+else
+  bad "gate.sh: bare task id: rc=$rc out=$out"
+fi
+
+# Options before the directory and options after it are the same invocation.
+out="$(bash "$GATE" --for release -- "$FIX/release-green" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 0 ] && ok "gate.sh: options may precede the directory" \
+  || bad "gate.sh: leading options: rc=$rc out=$out"
+
+# --soft must never exit non-zero — a non-zero exit inside !`…` aborts the whole
+# command expansion — and a red verdict must still arrive with its blockers, because
+# the command body reads the JSON line and the marker line separately.
+out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr --soft -- 30413 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && printf '%s' "$out" | grep -q '"blocker":"no_tests"' \
+   && printf '%s' "$out" | grep -qx 'NO PASSING --for pr GATE'; then
+  ok "gate.sh --soft: a red verdict exits 0 with its blockers and the marker"
+else
+  bad "gate.sh --soft red: rc=$rc out=$out"
+fi
+
+# A pass under --soft must NOT carry the marker, or the body reads every run as red.
+out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr --soft -- 30412 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '"ok":true' \
+   && ! printf '%s' "$out" | grep -q 'NO PASSING'; then
+  ok "gate.sh --soft: a clean verdict carries no marker"
+else
+  bad "gate.sh --soft clean: rc=$rc out=$out"
+fi
+
+# The release route hits the same injection with an argument that is not a task id,
+# and an unusable argument under --soft is a marker, never a shell error.
+for arg in '' 'Create' 'release' '../../etc'; do
+  out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr --soft -- "$arg" 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qx 'NO PASSING --for pr GATE'; then
+    ok "gate.sh --soft: exits 0 with the marker on [$arg]"
+  else
+    bad "gate.sh --soft on [$arg]: rc=$rc out=$out"
+  fi
+done
+
+# Even a usage error, which is the one thing --soft cannot be allowed to turn into a
+# non-zero exit either.
+out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --soft --for bogus -- 30412 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qx 'NO PASSING --for pr GATE'; then
+  ok "gate.sh --soft: a usage error is a marker, not an aborted expansion"
+else
+  bad "gate.sh --soft usage: rc=$rc out=$out"
+fi
+
+# Without --soft the exit codes are exactly what gate-hook.sh reads: 1 is a verdict,
+# everything else is "could not run" and denies.
+env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr -- 30413 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 1 ] && ok "gate.sh: blockers still exit 1 without --soft" \
+  || bad "gate.sh: blockers exited $rc, wanted 1"
+
+env ODOO_DEV_STATE_DIR="$STATE" bash "$GATE" --for pr -- 999 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && ok "gate.sh: an unresolvable dir is still usage, exit 2" \
+  || bad "gate.sh: unresolvable dir exited $rc, wanted 2"
+
+bash "$GATE" >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && ok "gate.sh: no argument is still usage, exit 2" \
+  || bad "gate.sh: no argument exited $rc, wanted 2"
+
+# artifact.sh takes the same argument the same way, so a chain never has to spell the
+# state dir out twice.
+if env ODOO_DEV_STATE_DIR="$STATE" bash "$ART" list 30412 2>/dev/null \
+     | grep -q "\"dir\":\"$STATE/tasks/30412\""; then
+  ok "artifact.sh: a bare task id resolves against the state dir"
+else
+  bad "artifact.sh: bare task id did not resolve"
+fi
+
+rm -rf "$EMPTY" "$RETRY" "$MAL" "$NOMANIFEST" "$STATE" "${WAIVER_TMP[@]}"
 
 echo
 echo "gate.test.sh: $pass passed, $fail failed"

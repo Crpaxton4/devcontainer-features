@@ -12,6 +12,11 @@
 #   artifact.sh list <artifacts_dir>
 #   artifact.sh stages
 #
+# <artifacts_dir> may be given as a bare Odoo task id — anything matching ^[0-9]+$ —
+# which resolves against the state dir to <state>/tasks/<id>. Anything else is a path
+# and is used exactly as given. gate.sh takes the same argument the same way, and
+# both get the rule from state-dir.sh rather than restating it.
+#
 # NEVER OVERWRITES. A second put of the same stage lands at <stage>.2.json, then
 # .3.json. This is the point, not a limitation. A chain must be able to recover
 # from a red test — the builder fixes and re-runs — so `get` and gate.sh read the
@@ -26,6 +31,10 @@
 #
 # Exit codes: 0 ok | 2 usage | 3 unknown stage | 4 invalid payload | 5 nothing to get
 set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=state-dir.sh
+. "$HERE/state-dir.sh"
 
 die() { echo "artifact.sh: $*" >&2; exit "${2:-2}"; }
 
@@ -96,6 +105,7 @@ case "${1:-}" in
 esac
 
 DIR="${1:-}"; [ -n "$DIR" ] || die "missing <artifacts_dir>"; shift
+DIR="$(odoo_dev_artifacts_dir "$DIR")"
 
 if [ "$cmd" = list ]; then
   [ -d "$DIR" ] || die "artifacts dir not found: $DIR" 5

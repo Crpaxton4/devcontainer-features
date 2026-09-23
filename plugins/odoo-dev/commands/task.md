@@ -2,14 +2,14 @@
 description: Deliver one Odoo task in a forked odoo-dev-builder — existing-work check, worktree and branch, running stack, module code, tests, conventional commits.
 argument-hint: <task-id>
 arguments: [task]
-allowed-tools: Bash(echo:*), Bash(grep:*), Bash(mkdir:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*)
 disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-builder
 background: false
 ---
 
-ARTIFACTS: !`echo "$task" | grep -qE '^[0-9]+$' && mkdir -p "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" && echo "${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/tasks/$task" || echo 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id'`
+ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --create --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
 GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
