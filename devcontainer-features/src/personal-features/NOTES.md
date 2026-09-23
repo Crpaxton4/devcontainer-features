@@ -179,6 +179,31 @@ time by the feature-contributed `postCreateCommand` (which runs
 `CLAUDE_CONFIG_DIR` are shadowed by the `~/.claude` bind mount, so the merge has
 to happen at runtime — the same pattern the skills sync uses.
 
+**Where the hook command points (#803).** That `settings.json` is the host's real
+`~/.claude/settings.json`, so the **host** runs the very same hook commands this
+container writes. A container-absolute command therefore resolves on exactly one
+side: for as long as the entries said `/usr/local/bin/claude-event-hook`, every
+host session's hooks failed with `/bin/sh: 1: …: not found` and dropped every
+event they were meant to record — 11,965 of them, all host-side, none from a
+container. So `sync-claude-hooks` now **publishes the shim into the shared config
+directory** as `$CLAUDE_CONFIG_DIR/hooks/claude-event-hook` (refreshed from the
+image on every container create) and writes the entries as
+
+```
+"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook" <EventName>
+```
+
+Claude Code runs hook commands through `/bin/sh -c`, so that expansion is
+resolved **per machine at hook time**: `/usr/local/share/claude-home/hooks/…` in
+the container, `~/.claude/hooks/…` on a host that sets no `CLAUDE_CONFIG_DIR` —
+the two ends of the same bind mount, hence the same file. Nothing has to be
+installed on the host, and because the published file is the real shim rather
+than a stub, host sessions **record** their events (or no-op silently where
+`odoo-sdk` isn't installed) instead of failing. Stale absolute-path entries left
+in a settings.json by an older container are stripped and replaced on the next
+sync. If no shim can be published and none is already in place, the sync writes
+no entries at all rather than hand a session a command that resolves nowhere.
+
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
 forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
 following events are wired (verified against the current Claude Code hooks
@@ -218,9 +243,10 @@ installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 **Opting out.** The merge only ever replaces its own entries (identified by the
 `claude-event-hook` command) and preserves all your other settings and hooks. To
 disable the capture, remove the `claude-event-hook` entries from
-`~/.claude/settings.json` (they will be re-added on the next container create) —
-or, to disable it permanently, drop the `sync-claude-hooks` step from the
-Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
+`~/.claude/settings.json` (they — and the published
+`~/.claude/hooks/claude-event-hook` — will be re-added on the next container
+create) — or, to disable it permanently, drop the `sync-claude-hooks` step from
+the Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
 untouched (and a warning printed) rather than overwritten.
 
 ## Odoo consulting skills (where they live now)

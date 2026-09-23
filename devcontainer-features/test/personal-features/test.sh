@@ -625,9 +625,36 @@ check "sync-claude-hooks creates settings.json when absent" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && test -f \"$HK_A/settings.json\""
 check "created settings.json is valid JSON" bash -c "jq . \"$HK_A/settings.json\" >/dev/null"
 check "settings.json contains the feature PreToolUse hook (match-all matcher)" bash -c \
-  "[ \"\$(jq -r '.hooks.PreToolUse[0].matcher' \"$HK_A/settings.json\")\" = '*' ] && jq -e '.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook PreToolUse\"))' \"$HK_A/settings.json\" >/dev/null"
+  "[ \"\$(jq -r '.hooks.PreToolUse[0].matcher' \"$HK_A/settings.json\")\" = '*' ] && jq -e '.hooks.PreToolUse[] | select((.hooks[].command | contains(\"/hooks/claude-event-hook\")) and (.hooks[].command | endswith(\" PreToolUse\")))' \"$HK_A/settings.json\" >/dev/null"
 check "settings.json contains all seven feature hook events" bash -c \
   "for ev in SessionStart UserPromptSubmit PreToolUse SubagentStart SubagentStop Stop SessionEnd; do jq -e --arg e \"\$ev\" '.hooks[\$e][] | select(.hooks[].command | contains(\"claude-event-hook\"))' \"$HK_A/settings.json\" >/dev/null || exit 1; done"
+
+# (a2) #803: settings.json is SHARED with the host through the ~/.claude bind
+# mount, so a container-absolute command resolves on exactly one side and every
+# host session's hooks exit-127. The shim is therefore published INTO the shared
+# config dir and referenced through a per-machine expansion. Guard both halves.
+check "sync-claude-hooks publishes the event shim into the shared config dir" bash -c \
+  "test -x \"$HK_A/hooks/claude-event-hook\" && cmp -s /usr/local/bin/claude-event-hook \"$HK_A/hooks/claude-event-hook\""
+check "no feature hook command bakes in a container-only absolute path (#803)" bash -c \
+  "! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
+check "the written hook command resolves and exits 0 in-container" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" ODOO_TASK_TRACKER_DIR=\"$HOOKS_TEST_ROOT/state\" sh -c \"\$cmd\" </dev/null"
+
+# The #803 regression test proper: evaluate the very same command literal on a
+# machine that has only ~/.claude - no CLAUDE_CONFIG_DIR, and the config dir at a
+# DIFFERENT absolute path, exactly as the host sees the other end of the mount.
+# The shim there is swapped for a tracer, so this asserts the command really ran
+# the config-dir copy with the event name as argv[1], not anything image-local.
+HK_HOST="$HOOKS_TEST_ROOT/hosthome"
+mkdir -p "$HK_HOST/.claude/hooks"
+cat > "$HK_HOST/.claude/hooks/claude-event-hook" <<TRACER
+#!/bin/sh
+printf '%s' "\$1" > "$HK_HOST/fired"
+exit 0
+TRACER
+chmod 0755 "$HK_HOST/.claude/hooks/claude-event-hook"
+check "the written hook command also resolves on the host side of the mount (#803)" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; env -u CLAUDE_CONFIG_DIR HOME=\"$HK_HOST\" sh -c \"\$cmd\" </dev/null && [ \"\$(cat \"$HK_HOST/fired\")\" = 'SessionStart' ]"
 
 # (b) Running the sync TWICE yields no duplicate feature entries.
 check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
@@ -650,6 +677,27 @@ check "a user-authored hook survives the merge" bash -c \
   "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
 check "the feature hook is added alongside the user's (two PreToolUse groups)" bash -c \
   "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '2' ]"
+
+# (c2) #803 migration: the stale container-absolute entries an earlier container
+# wrote into the user's real settings.json are stripped and REPLACED, not left to
+# sit beside the new ones - the marker is a substring of both forms.
+HK_D="$HOOKS_TEST_ROOT/d"
+mkdir -p "$HK_D"
+cat > "$HK_D/settings.json" <<'JSON'
+{ "hooks": {
+    "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
+  } }
+JSON
+check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '1' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+
+# (c3) With no shim to publish and none already in place, writing the entries
+# would hand every session a command that resolves nowhere - the #803 failure
+# mode. Refuse instead: no settings.json is created.
+HK_E="$HOOKS_TEST_ROOT/e"
+mkdir -p "$HK_E"
+check "sync-claude-hooks writes no entries when no shim can be published (#803)" bash -c \
+  "PERSONAL_FEATURES_HOOK_CMD=\"$HOOKS_TEST_ROOT/absent-shim\" CLAUDE_CONFIG_DIR=\"$HK_E\" /usr/local/bin/sync-claude-hooks && test ! -e \"$HK_E/settings.json\""
 
 # (d) A corrupt/unparseable settings.json is left strictly alone (never destroy
 # the user's real config).
