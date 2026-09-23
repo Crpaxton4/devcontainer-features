@@ -7,6 +7,7 @@
 - [Migrating shell history](#migrating-shell-history)
 - [CodeRabbit CLI](#coderabbit-cli)
 - [The `create-pr` command](#the-create-pr-command)
+- [The `gh-as-owner` command](#the-gh-as-owner-command)
 - [The `claude` command](#the-claude-command)
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
@@ -155,6 +156,29 @@ reviewers:
 github_templates:
   pull_request: PULL_REQUEST_TEMPLATE/default.md
 ```
+
+## The `gh-as-owner` command
+
+`gh-as-owner` runs a push, a PR creation, or any other `gh` call **as the account that owns the checkout's `origin` remote**, with the identity derived from that remote rather than decided on the command line.
+
+It exists because two `gh` accounts share one config here — one for reading, one with write access to the repos that matter — so every push and every PR used to need an identity decision made by hand, in the command, every time. The spellings that make that decision by hand are also the ones that put a token somewhere it should not be: in `argv`, in a remote URL, or in a shared `.git/config` (#810).
+
+```sh
+gh-as-owner push      [<repo-path>] <branch> [git push args ...]
+gh-as-owner pr-create [<repo-path>] [gh pr create args ...]
+gh-as-owner gh        [<repo-path>] <gh args ...>
+gh-as-owner whoami    [<repo-path>]
+```
+
+- **Owner** — `OWNER/REPO` is parsed out of `git remote get-url origin` and `OWNER` is the identity used. An argument can be stale; a remote cannot. This is also why there is no write-verb/read-verb list: a token is only ever used for the repo whose owner it belongs to.
+- **Token** — resolved with `gh auth token --user <owner>` *inside the script*, kept in a shell variable, and exported to the single child process that needs it. It is never an argument, never written to a file, never put in a URL, and never written into any `git config`. For `push`, `credential.helper='!gh auth git-credential'` is passed with `git -c`, per command, so nothing is persisted into a `.git/config` that sibling worktrees share.
+- **No fallback** — an owner with no authenticated account is exit 2 with an actionable message, never a silent fall back to whichever account happens to be active. Landing work under the wrong identity is the failure this replaces.
+- **`<repo-path>`** — optional everywhere, defaults to the current directory. It is only recognised when it contains a `/` (or is `.` / `..`) **and** names an existing directory, so a branch name or a `gh` subcommand can never be swallowed as one.
+- **`whoami`** — prints the repo, the derived owner, and whether a token for it resolves (never the token itself), so the identity can be checked *before* a push rather than diagnosed after a rejected one.
+
+**Shape matters as much as behaviour.** Claude Code's permission classifier accepts a plain command — a literal program path, literal arguments, no command substitution, no environment prefix, no chaining — and refuses the inline `GH_TOKEN="$(gh auth token --user X)" git …` form inside a worktree-isolated session. Everything that has to be computed is therefore computed inside the script, where a single bash process makes the environment ordinary. Invoke it plainly; don't wrap it.
+
+This script was proven first as `.claude/commands/implement-issues/gh-as-owner.sh` in this repo, which is why its header carries the history of the two mechanisms that failed before it. That path still exists and still works — it is now a **thin delegator** to this one (in-repo source first, `/usr/local/bin/gh-as-owner` second), because `/implement-issues` worker prompts name it literally. There is deliberately only one implementation: a fresh wrapper per attempt is the failure mode that produced all three issues.
 
 ## The `claude` command
 

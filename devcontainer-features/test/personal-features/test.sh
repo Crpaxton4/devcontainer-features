@@ -320,6 +320,96 @@ check "PR_AUTOMATION_CONFIG_DIR points at the bind mount" bash -c \
   "[ \"\$PR_AUTOMATION_CONFIG_DIR\" = '/usr/local/share/pr-automation' ]"
 check "pr-automation config dir exists" bash -c "test -d /usr/local/share/pr-automation"
 
+# --- gh-as-owner (#810) -------------------------------------------------------
+# Runs a push / PR / gh call as the account that owns the checkout's origin
+# remote. Relocated here from .claude/commands/implement-issues/ so it is
+# machine-wide rather than scoped to one command's worker sessions; that path is
+# now a delegator. Smoke checks first.
+check "gh-as-owner is installed and executable" bash -c "test -x /usr/local/bin/gh-as-owner"
+check "gh-as-owner passes shell syntax check" bash -c "bash -n /usr/local/bin/gh-as-owner"
+check "gh-as-owner --help lists every subcommand" bash -c \
+  "out=\"\$(/usr/local/bin/gh-as-owner --help)\"; for s in push pr-create gh whoami; do case \"\$out\" in *\"\$s\"*) ;; *) exit 1 ;; esac; done"
+# Argument handling: every rejection is exit 2, never a fallback to whichever
+# account happens to be active - that fallback is how work lands under the
+# wrong identity.
+check "gh-as-owner with no subcommand exits 2" bash -c \
+  "/usr/local/bin/gh-as-owner >/dev/null 2>&1; [ \$? -eq 2 ]"
+check "gh-as-owner rejects an unknown subcommand with exit 2" bash -c \
+  "/usr/local/bin/gh-as-owner no-such-verb >/dev/null 2>&1; [ \$? -eq 2 ]"
+check "gh-as-owner push without a branch exits 2" bash -c \
+  "/usr/local/bin/gh-as-owner push >/dev/null 2>&1; [ \$? -eq 2 ]"
+check "gh-as-owner rejects a path that is not a git checkout" bash -c \
+  "d=\"\$(mktemp -d)\"; /usr/local/bin/gh-as-owner whoami \"\$d\" >/dev/null 2>&1; rc=\$?; rm -rf \"\$d\"; [ \$rc -eq 2 ]"
+
+# Behavioural: the token must reach the child process through the environment
+# and through nothing else. A stub gh stands in for the real one (CI has no
+# auth), records the argv it was handed, and reports whether it inherited
+# GH_TOKEN - so "in argv" and "in the environment" can be told apart.
+GAO_ROOT="$(mktemp -d)"
+GAO_REPO="$GAO_ROOT/repo"
+GAO_BIN="$GAO_ROOT/bin"
+GAO_TOKEN="stub-value-standing-in-for-a-token-810"
+mkdir -p "$GAO_REPO" "$GAO_BIN"
+git -C "$GAO_REPO" init -q
+git -C "$GAO_REPO" remote add origin https://github.com/testowner/testrepo.git
+cat > "$GAO_BIN/gh" <<'STUB'
+#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
+    printf 'resolve-token-for %s\n' "$4" >> "$GAO_LOG"
+    printf '%s\n' "$GAO_FAKE_TOKEN"
+    exit 0
+fi
+printf 'argv %s\n' "$*" >> "$GAO_LOG"
+if [ -n "${GH_TOKEN:-}" ]; then
+    printf 'env-token present\n' >> "$GAO_LOG"
+else
+    printf 'env-token absent\n' >> "$GAO_LOG"
+fi
+if [ "${GH_TOKEN:-}" = "$GAO_FAKE_TOKEN" ]; then
+    printf 'env-token matches\n' >> "$GAO_LOG"
+fi
+exit 0
+STUB
+chmod +x "$GAO_BIN/gh"
+
+GAO_LOG="$GAO_ROOT/calls" GAO_FAKE_TOKEN="$GAO_TOKEN" PATH="$GAO_BIN:$PATH" \
+  /usr/local/bin/gh-as-owner gh "$GAO_REPO" issue view 1 >/dev/null 2>&1 || true
+
+# The owner is derived from the origin remote, not passed in and not the active
+# account: the stub is asked for testowner's token specifically.
+check "gh-as-owner resolves the token for the owner of the origin remote" bash -c \
+  "grep -qF 'resolve-token-for testowner' \"$GAO_ROOT/calls\""
+# The leading <repo-path> is consumed by the wrapper; the child sees only the
+# gh arguments, and no token among them.
+check "gh-as-owner passes only the gh arguments through, with no token in argv" bash -c \
+  "grep -qxF 'argv issue view 1' \"$GAO_ROOT/calls\""
+check "gh-as-owner never puts the token in the child's argv" bash -c \
+  "! grep -qF '$GAO_TOKEN' \"$GAO_ROOT/calls\""
+# ...and it does arrive, by the one route that is allowed.
+check "gh-as-owner exports the token to the child it runs" bash -c \
+  "grep -qxF 'env-token matches' \"$GAO_ROOT/calls\""
+# Nothing is written anywhere: not into .git/config, not into a URL, not into a
+# file beside the checkout. This is the property #810 is about.
+check "gh-as-owner writes no token to disk" bash -c \
+  "! grep -rqF '$GAO_TOKEN' \"$GAO_ROOT\""
+check "gh-as-owner writes no credential helper into the repo config" bash -c \
+  "! git -C \"$GAO_REPO\" config --local --get-regexp '^credential\\.' >/dev/null 2>&1"
+check "gh-as-owner leaves the origin remote URL untouched" bash -c \
+  "[ \"\$(git -C \"$GAO_REPO\" remote get-url origin)\" = 'https://github.com/testowner/testrepo.git' ]"
+
+# whoami reports the derived identity without acting and without printing the
+# token - the check that can be run before a push rather than after a failure.
+GAO_LOG="$GAO_ROOT/whoami-calls" GAO_FAKE_TOKEN="$GAO_TOKEN" PATH="$GAO_BIN:$PATH" \
+  /usr/local/bin/gh-as-owner whoami "$GAO_REPO" > "$GAO_ROOT/whoami.out" 2>&1 || true
+check "gh-as-owner whoami names the derived owner" bash -c \
+  "grep -qF 'testowner/testrepo' \"$GAO_ROOT/whoami.out\""
+check "gh-as-owner whoami reports the owner as authenticated when a token resolves" bash -c \
+  "grep -qF 'authenticated: yes' \"$GAO_ROOT/whoami.out\""
+check "gh-as-owner whoami never prints the token" bash -c \
+  "! grep -qF '$GAO_TOKEN' \"$GAO_ROOT/whoami.out\""
+
+rm -rf "$GAO_ROOT"
+
 # CodeRabbit CLI (best-effort install; check the binary is present + on PATH)
 check "coderabbit is installed" bash -c "test -x \"\$(command -v coderabbit)\""
 check "coderabbit config dir exists" bash -c "test -d /usr/local/share/coderabbit-config"

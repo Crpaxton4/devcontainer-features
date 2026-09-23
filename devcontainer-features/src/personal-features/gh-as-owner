@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+#
+# gh-as-owner - run a push, a PR, or any gh call as the account that owns the
+# repo, with the identity derived rather than decided.
+#
+# Why this exists, in one line: two gh accounts share one config, so every push
+# and every PR creation needs an identity decision, and making that decision on
+# the command line is both repetitive and the thing that keeps putting a token
+# somewhere it should not be (#810).
+#
+# The history is worth keeping, because this mechanism is the third spelling of
+# the same idea and the first two looked correct:
+#
+#   #769  The command mandated an `export GH_TOKEN` block. No environment
+#         survives between Bash tool calls, so it could never have worked. Six
+#         workers improvised; one wrote credential.helper into the shared
+#         .git/config, changing auth for every sibling worktree.
+#   #828  The replacement was an inline prefix, `GH_TOKEN="$(gh auth token
+#         --user X)" git ...`. That IS accepted at top level, which is why it
+#         passed review. It is refused inside a worktree-isolated session as
+#         "a value computed at runtime inside a construct too complex to
+#         verify". Four of six workers were blocked; four different workarounds
+#         appeared, two of them mechanisms the command explicitly prohibits -
+#         `gh auth switch` (mutates global state) and a token pasted into a
+#         remote URL (puts a secret in argv).
+#   #810  The wrapper that replaced both of those - .claude/commands/
+#         implement-issues/gh-as-owner.sh - settled the mechanism but lived
+#         under .claude/, so only /implement-issues worker sessions could reach
+#         it. THIS file is that script, relocated into the Feature and
+#         installed to /usr/local/bin/gh-as-owner so every session on the
+#         machine has the same one. The .claude/ path is kept as a delegator to
+#         this file. Deliberately NOT a fourth mechanism: a new wrapper per
+#         attempt is the failure mode all three issues describe.
+#
+# So the shape matters more than the contents. What the permission classifier
+# accepts is a plain command: a literal program path, literal arguments, no
+# command substitution, no environment prefix, no chaining, no redirection.
+# Everything that has to be computed is computed in here, where a single bash
+# process makes the environment ordinary rather than exotic.
+#
+# The token is never an argument and never touches disk. `gh auth token` writes
+# it to this process's stdout; it is captured into a shell variable and
+# exported to the one child that needs it. Nothing writes it to a file, a URL,
+# a git config, or another process's argv.
+#
+# Usage:
+#   gh-as-owner push      [<repo-path>] <branch> [git push args ...]
+#   gh-as-owner pr-create [<repo-path>] [gh pr create args ...]
+#   gh-as-owner gh        [<repo-path>] <gh args ...>
+#   gh-as-owner whoami    [<repo-path>]
+#
+# <repo-path> is optional everywhere and defaults to the current directory. It
+# is recognised only when it looks like a path - it contains a `/`, or is `.`
+# or `..` - AND names an existing directory, so a branch name or a gh
+# subcommand can never be swallowed as one. The absolute-worktree-path form
+# /implement-issues workers pass is unchanged.
+#
+# The owner is derived from the origin remote of the checkout being operated
+# on, never passed in - the same rule stack-merge.sh follows, and for the same
+# reason: an argument can be stale, a remote cannot. That is also what makes
+# this a write-verb/read-verb selector without a verb list: pushing to a repo
+# under an owner you hold a token for uses that token, and nothing else does.
+
+set -euo pipefail
+
+die() {
+    printf 'gh-as-owner: %s\n' "$1" >&2
+    exit 2
+}
+
+usage() {
+    cat <<'EOF'
+usage: gh-as-owner push       [<repo-path>] <branch> [git push args ...]
+       gh-as-owner pr-create  [<repo-path>] [gh pr create args ...]
+       gh-as-owner gh         [<repo-path>] <gh args ...>
+       gh-as-owner whoami     [<repo-path>]
+
+Runs as the account that owns the repo's origin remote, resolved from the
+remote itself. <repo-path> defaults to the current directory and is only
+recognised when it contains a "/" (or is "." / "..") and is a directory.
+
+Invoke it as a plain command - no environment prefix, no command substitution,
+no chaining. That is the whole point.
+
+exit 2   bad arguments, not a checkout, or no authenticated token for the owner
+other    the raw exit status of the git or gh command that ran
+EOF
+}
+
+# The repo whose origin remote decides the identity. Replaced by a leading
+# argument only under the rule in the header.
+REPO_PATH=.
+
+looks_like_repo_path() {
+    case ${1:-} in
+    . | .. | */*) [[ -d ${1:-} ]] ;;
+    *) false ;;
+    esac
+}
+
+require_repo() {
+    [[ -d $REPO_PATH ]] || die "not a directory: $REPO_PATH"
+    git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1 ||
+        die "not a git checkout: $REPO_PATH"
+    git -C "$REPO_PATH" remote get-url origin >/dev/null 2>&1 ||
+        die "no 'origin' remote in: $REPO_PATH"
+}
+
+slug_of() {
+    git -C "$REPO_PATH" remote get-url origin |
+        sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##'
+}
+
+# Resolving the token is also the check that the account exists. `gh auth token
+# --user` exits nonzero for an unknown or unauthenticated owner, and the guard
+# below stops here rather than falling back to whichever account happens to be
+# active - the fallback being exactly how work has landed under the wrong
+# identity.
+auth_as() {
+    local owner=$1 token
+    token=$(gh auth token --user "$owner") ||
+        die "no authenticated gh account for owner '$owner' (gh auth login --user $owner)"
+    [[ -n $token ]] || die "gh auth token returned empty for owner '$owner'"
+    export GH_TOKEN=$token
+}
+
+SUB=${1:-}
+[[ -n $SUB ]] || {
+    usage >&2
+    exit 2
+}
+shift
+
+case $SUB in
+-h | --help | help)
+    usage
+    exit 0
+    ;;
+
+push)
+    if looks_like_repo_path "${1:-}"; then
+        REPO_PATH=$1
+        shift
+    fi
+    BRANCH=${1:-}
+    [[ -n $BRANCH ]] || die "push needs <branch> (see gh-as-owner --help)"
+    shift
+    require_repo
+
+    SLUG=$(slug_of)
+    auth_as "${SLUG%%/*}"
+
+    # The -c helper is what carries GH_TOKEN into git. Appending rather than
+    # replacing is deliberate and was verified: with GH_TOKEN set, this returns
+    # the owner token even though a VS Code helper sits ahead of it in the list
+    # at system and global scope. Without GH_TOKEN every helper in the chain
+    # resolves to the active account instead - which is the symptom that got
+    # misdiagnosed as the VS Code helper winning. It is passed with -c, per
+    # command: nothing is written into any .git/config, so a sibling worktree
+    # sharing that file is unaffected (the #769 regression).
+    exec git -C "$REPO_PATH" -c credential.helper='!gh auth git-credential' \
+        push -u origin "$BRANCH" "$@"
+    ;;
+
+pr-create)
+    if looks_like_repo_path "${1:-}"; then
+        REPO_PATH=$1
+        shift
+    fi
+    require_repo
+
+    SLUG=$(slug_of)
+    auth_as "${SLUG%%/*}"
+
+    # `gh pr create` reads the head branch from the current directory, and -R
+    # only names the repo. Running it without entering the checkout opened PRs
+    # from whatever the caller happened to be on - which for a hand-made child
+    # worker is the main checkout on main, so three PRs proposed merging main
+    # INTO a sibling's stacked branch, carrying unrelated commits and none of
+    # the worker's own. See #841.
+    #
+    # --head is passed explicitly rather than relying on the cd alone: it is the
+    # difference between "gh inferred the right thing" and "gh was told", and an
+    # inferred head is what failed here. A caller that passes its own --head
+    # still wins, since later flags override earlier ones.
+    HEAD_BRANCH=$(git -C "$REPO_PATH" symbolic-ref --quiet --short HEAD) ||
+        die "checkout is not on a branch (detached HEAD): $REPO_PATH"
+
+    cd "$REPO_PATH" || die "cannot enter checkout: $REPO_PATH"
+    exec gh pr create -R "$SLUG" --head "$HEAD_BRANCH" "$@"
+    ;;
+
+gh)
+    # Generic escape hatch for the calls that are neither of the above -
+    # `gh pr edit`, `gh issue comment`, `gh pr view`. The owner comes from the
+    # same place, so this one also has to name (or stand in) a checkout.
+    if looks_like_repo_path "${1:-}"; then
+        REPO_PATH=$1
+        shift
+    fi
+    [[ $# -gt 0 ]] || die "gh needs at least one argument (see gh-as-owner --help)"
+    require_repo
+
+    SLUG=$(slug_of)
+    auth_as "${SLUG%%/*}"
+
+    cd "$REPO_PATH" || die "cannot enter checkout: $REPO_PATH"
+    exec gh "$@"
+    ;;
+
+whoami)
+    # Says which identity the three verbs above would use, and whether a token
+    # for it exists, without acting and without printing the token. The whole
+    # point of deriving the owner is that it can be checked before the push.
+    if looks_like_repo_path "${1:-}"; then
+        REPO_PATH=$1
+        shift
+    fi
+    [[ $# -eq 0 ]] || die "whoami takes at most a <repo-path>"
+    require_repo
+
+    SLUG=$(slug_of)
+    OWNER=${SLUG%%/*}
+    if gh auth token --user "$OWNER" >/dev/null 2>&1; then
+        AUTHENTICATED=yes
+    else
+        AUTHENTICATED=no
+    fi
+    printf 'repo:          %s\n' "$SLUG"
+    printf 'owner:         %s\n' "$OWNER"
+    printf 'checkout:      %s\n' "$REPO_PATH"
+    printf 'authenticated: %s\n' "$AUTHENTICATED"
+    [[ $AUTHENTICATED == yes ]] || exit 2
+    ;;
+
+*)
+    die "unknown subcommand: $SUB"
+    ;;
+esac

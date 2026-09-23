@@ -136,6 +136,20 @@ done < "$_MANIFEST"
 # containers — the script tolerates missing config at every level).
 install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 
+# gh-as-owner (#810): runs a push, a PR, or any gh call as the account that owns
+# the checkout's origin remote, with the owner derived from that remote instead
+# of decided on the command line. Two gh accounts share one config here, so the
+# identity decision was being made by hand every time - and the spellings that
+# make it by hand are the ones that put a token into argv, into a remote URL, or
+# into a shared .git/config. This resolves the token inside one process and
+# exports it to exactly one child; it is never an argument and never written
+# anywhere. It was proven under .claude/commands/implement-issues/ first (see
+# its header for the two mechanisms that failed before it); this install is what
+# makes it machine-wide rather than scoped to one command's worker sessions, and
+# that .claude/ path is now a delegator to this copy. Needs gh on PATH, which
+# the hard dependsOn on the github-cli Feature guarantees.
+install -m 0755 "$(dirname "$0")/gh-as-owner" /usr/local/bin/gh-as-owner
+
 # --- Claude consulting skills: NOT shipped loose any more (#738) ------------
 # This feature used to stage its consulting skills under /usr/local/share/
 # personal-features/skills and publish them into $CLAUDE_CONFIG_DIR/skills with
@@ -915,6 +929,7 @@ pf_add_script /usr/local/bin/claude-event-hook
 pf_add_script /usr/local/bin/mempalace-repair
 pf_add_script /usr/local/bin/resolve-mempal-dir
 pf_add_script /usr/local/bin/create-pr
+pf_add_script /usr/local/bin/gh-as-owner
 pf_add_script /usr/local/bin/publish-claude-wrapper
 pf_add_script /usr/local/share/personal-features/claude-wrapper
 if command -v python3 >/dev/null 2>&1; then
