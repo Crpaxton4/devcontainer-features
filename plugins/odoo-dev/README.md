@@ -704,7 +704,7 @@ scripts/validate.sh
 
 Manifest, inventory, frontmatter limits, body size, router completeness, agent
 definitions, namespacing, hard-coded paths, stray skills, eval-suite structure,
-ten offline test suites, shell syntax, and release-version drift. Offline: no
+sixteen offline test suites, shell syntax, and release-version drift. Offline: no
 network, no docker, no Odoo, no repos tree.
 
 ### Continuous integration
