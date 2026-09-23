@@ -1,6 +1,6 @@
 ---
 name: odoo-dev-map
-description: "Router for the odoo-dev plugin: resolves which skill or subagent owns a multi-step Odoo request and builds the spawn prompt, never doing the stage work. Use for scoping, delivery, testing, PR and release, upgrade, or what the Odoo workflow is."
+description: "Router for the odoo-dev plugin: resolves which skill or subagent owns a multi-step Odoo request, then emits the Task spawn itself, never doing the stage work. Use for scoping, delivery, testing, PR and release, upgrade, which agent to dispatch, or what the Odoo workflow is."
 user-invocable: false
 ---
 
@@ -12,7 +12,9 @@ tests, or opening a PR from here, you took a wrong turn — dispatch instead.
 
 ## When to use
 
-An Odoo request takes more than one step and it is not obvious which skill or subagent owns which part; someone asks what the Odoo workflow is, what order the stages run in, which agent to dispatch next, or what has to be true before work ships; a spawn prompt has to be built for a subagent; or a chain has stalled and the next stage has to be identified.
+An Odoo request takes more than one step and it is not obvious which skill or subagent owns which part; someone asks what the Odoo workflow is, what order the stages run in, which agent to dispatch next, or what has to be true before work ships; a subagent has to be spawned and its prompt built; or a chain has stalled and the next stage has to be identified.
+
+Routing ends in a `Task` call, not in a recommendation. If reading this skill leaves you about to tell someone which agent they should run, go to **Agent Map → How to dispatch** and run it instead.
 
 ## Skill Map
 
@@ -57,18 +59,59 @@ deletes them (#778).
 
 ## Agent Map
 
-Plain subagents. Dispatch one; it returns an artifact path and a short summary.
+Plain subagents. **Routing to one means emitting a `Task` call. Naming the agent in
+prose is not routing** — a reply that says which agent owns the stage and then stops
+has dispatched nothing, and the stage work then gets done inline by whoever was
+asked, which is the failure this map exists to prevent.
 
-| Agent | Owns | Writes |
+| Agent | Dispatch when the request is | Writes |
 |---|---|---|
-| `odoo-dev-scoper` | Discovery, prior-art verdict, estimate, design doc | `05-scope.json` |
-| `odoo-dev-builder` | One task, one worktree: code, tests, conventional commits | `10-env.json`, `20-build.json` |
-| `odoo-dev-tester` | Independent evidence: tests, tours, Odoo review lens. Cannot edit code | `30-test.json`, `35-review.json` |
-| `odoo-dev-pr` | CodeRabbit loop, draft PR, release, chatter notes | `40-coderabbit.json`, `45-waiver.json`, `50-pr.json`, `60-release.json` |
-| `odoo-dev-upgrader` | Cross-version porting lifecycle, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
+| `odoo-dev-scoper` | Unpriced and unscoped: discovery, prior-art verdict, estimate, design doc | `05-scope.json` |
+| `odoo-dev-builder` | One Odoo task to deliver: one worktree, code, tests, conventional commits | `10-env.json`, `20-build.json` |
+| `odoo-dev-tester` | Asking whether it passes: tests, tours, Odoo review lens. Cannot edit code | `30-test.json`, `35-review.json` |
+| `odoo-dev-pr` | Ready to leave the machine: CodeRabbit loop, draft PR, release, chatter notes | `40-coderabbit.json`, `45-waiver.json`, `50-pr.json`, `60-release.json` |
+| `odoo-dev-upgrader` | Crossing a major series: porting lifecycle, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
 
 `odoo-dev-tester` is the single definition of "passes" for **both** delivery and
 upgrade, so there is exactly one bar.
+
+### How to dispatch
+
+Three steps, and none of them is optional.
+
+1. Resolve the three absolute paths described under **Handoff** below — the
+   artifacts directory, `artifact.sh` and `gate.sh`. Resolve them here, once, for
+   the whole chain.
+2. Emit one `Task` call per stage. `subagent_type` is the agent name carrying the
+   plugin prefix; `prompt` is the **Spawn prompt template** filled in, with those
+   three paths written out in full as literals.
+3. Run `gate.sh` between two stages yourself, then dispatch the next one. Never ask
+   an agent whether its own work passed.
+
+```
+Task(
+  subagent_type: "odoo-dev:odoo-dev-builder",
+  description: "Deliver Odoo task 4821",
+  prompt: "<the Spawn prompt template below, filled in>"
+)
+```
+
+The five values `subagent_type` may take, spelled exactly:
+`odoo-dev:odoo-dev-scoper`, `odoo-dev:odoo-dev-builder`, `odoo-dev:odoo-dev-tester`,
+`odoo-dev:odoo-dev-pr`, `odoo-dev:odoo-dev-upgrader`. A bare name without the
+`odoo-dev:` prefix does not resolve, and a request routed to `general-purpose`
+instead loses every skill preload, tool restriction and hook these five carry.
+
+One dispatch at a time. The chain is sequential — the gate between two stages reads
+what the stage before it wrote — so two agents spawned in parallel on one task
+produce two artifact revisions and no verdict.
+
+**When not to dispatch.** A single lookup a skill answers on its own — which repo,
+which branch, which series, what the workflow order is — costs more as a spawn than
+it saves; answer it here. Dispatch when the unit of work is a whole stage: a scope,
+a build, an evidence run, a pull request, a port. Size is not the test — a one-field
+change is still a build stage, because it still needs the worktree, the
+existing-work check and the artifact.
 
 ## Workflows
 
@@ -174,11 +217,11 @@ far.
 A second hook holds `odoo-dev-tester` to a read-only Bash allowlist, so "the tester
 cannot edit code" is now a property of the harness rather than a rule in a prompt.
 
-## Commands — the normal way to dispatch
+## Commands — the user's shortcut, not yours
 
 Each agent has a slash command that does the resolving described above and
-dispatches that one agent. Typing one is the normal path; the template below it is
-the fallback.
+dispatches that one agent. It is the shortest path **for the person typing**; it is
+not a path you have.
 
 | Type | Dispatches |
 |---|---|
@@ -207,17 +250,21 @@ leaves the machine.
 No command chains to another: you run the gate between stages and type the next one
 yourself.
 
-Recommend a command to the user rather than typing it for them — these are
-user-invocable only, so you cannot invoke one through the Skill tool.
+Every one of these carries `disable-model-invocation: true`, so you cannot type one
+and the Skill tool will not reach one. **That is a limit on the command, not a
+licence to stop at a recommendation.** Answering an Odoo request with "run
+`/odoo-dev:task 4821`" and nothing else leaves the work undone, and it is how a
+roster of five agents goes a whole release without being dispatched once. When the
+person has already asked for the work, dispatch it yourself with the `Task` call
+above; mention the command afterwards, in one line, as the shorter way to do the
+same thing next time.
 
 ## Spawn prompt template
 
-Reach for this when no command fits: a re-run against an artifacts directory that
-is keyed by neither a task id nor a pair of branches, or any hand-shaped dispatch.
-A release promotion is no longer one of those — `/odoo-dev:pr release <from-branch>
-<to-branch>` dispatches it.
-A hand-filled prompt is still a valid dispatch and always will be — it is simply no
-longer the first thing to reach for.
+This is what goes in the `prompt` field of every `Task` call you emit — a model-side
+dispatch always fills this in, because a slash command is not available to you. The
+same template also covers a hand-shaped re-run against an artifacts directory keyed
+by neither a task id nor a pair of branches.
 
 Every element is load-bearing — a subagent gets none of your conversation.
 

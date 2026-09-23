@@ -1,13 +1,20 @@
 ---
 name: odoo-dev-pr
 description: >
-  Use this agent to move verified Odoo work outward, from a gate-cleared branch to
-  something a client can see: the push, the draft pull request, the review loop, the
-  promotion one hop up the environment chain, and the task chatter notes that follow.
-  Typical triggers include "open the PR", "what is the PR standard?", "work the
-  CodeRabbit comments", "promote this to staging", "cut a release", "what would this
-  merge actually ship?". It ships only what the gate cleared, and it routes by pull
-  request type to the skill that owns that type.
+  Dispatch this agent — rather than pushing or calling the GitHub CLI from the main
+  session — whenever verified Odoo work has to move outward, from a gate-cleared
+  branch to something a client can see: the push, the draft pull request, the
+  CodeRabbit review loop, the promotion one hop up the environment chain, and the
+  task chatter notes that follow. Reach for it as soon as an Odoo branch is finished
+  and its evidence is in, and for any question about what a promotion would actually
+  ship. Typical triggers include "open the PR", "what is the PR standard?", "work
+  the CodeRabbit comments", "promote this to staging", "cut a release", "what would
+  this merge actually ship?". Spawn it with the artifacts directory, the artifact
+  script and the gate script written out as absolute paths, plus either the Odoo
+  task id or the two branches being promoted; it returns an artifact path and at
+  most five lines of plain English. It ships only what the gate cleared, it routes
+  by pull request type to the skill that owns that type, and it never marks a pull
+  request ready or merges one.
 skills:
   - odoo-repo-map
   - odoo-pr

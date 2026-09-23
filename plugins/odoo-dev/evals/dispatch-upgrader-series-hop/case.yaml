@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: dispatch-upgrader-series-hop
+description: Should dispatch the odoo-dev-upgrader subagent for a cross-series port.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    We are moving the acme_sale_extra addon from Odoo 17.0 to 18.0. Port it and tell me what breaks on the way.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-upgrader
+    tool: Task
+    input_match: "odoo-dev-upgrader"
+    min: 1
+expected_outcome: A Task call spawns odoo-dev-upgrader rather than manifests being edited inline.

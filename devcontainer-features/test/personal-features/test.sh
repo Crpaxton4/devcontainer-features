@@ -720,6 +720,29 @@ check "a provision preserves a marker key it does not own (#868)" bash -c \
 check "a provision still overwrites the fields it owns (#868)" bash -c \
   "jq -e '.script_digest != \"must-be-overwritten\" and (.script_digest | length) == 64 and .provisioned_at != \"1999-01-01T00:00:00Z\" and .stale_image == false and (.scripts | has(\"sync-claude-mcp\"))' \"$MCP_FK_CONFIG/personal-features-provision.json\" >/dev/null"
 
+# The hub liveness record (#780) lives in this same marker, written from
+# postStartCommand - which runs AFTER this script. This writer rebuilds the
+# document from scratch every create, so without an explicit carry-forward it
+# would erase, on every container start, exactly the state worth keeping: what
+# the hub was doing when the container last stopped.
+MCP_HUB_CONFIG="$MCP_TEST_ROOT/claude-home-hub"
+mkdir -p "$MCP_HUB_CONFIG"
+cat > "$MCP_HUB_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "mempalace_hub": {
+    "issue": "780",
+    "state": "gave_up",
+    "restarts": 5
+  }
+}
+MARKER
+CLAUDE_CONFIG_DIR="$MCP_HUB_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>&1 || true
+
+check "sync-claude-mcp keeps the hub liveness record it finds in the marker" bash -c \
+  "grep -qF '\"state\": \"gave_up\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\" && grep -qF '\"script_digest\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\""
+
 rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
@@ -1478,14 +1501,27 @@ check "mempalace-hub passes shell syntax check" bash -c \
 check "the hub log is pre-created and writable by any uid" bash -c \
   "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
 
+# MEMPALACE_HUB_MARKER is overridden here and everywhere below: `status`
+# records what it saw (#780), and the default target is the real, host-persisted
+# provision marker, which no check may write to.
 check "mempalace-hub status reports no hub when nothing is listening" bash -c \
-  "MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
+  "MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
 check "mempalace-hub rejects an unknown action" bash -c \
   "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
 
 # A stub that records its argv and the environment the launcher hands it, then
 # outlives the launcher - the detach path has to be exercised, not simulated.
-_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\";"
+#
+# Every knob that names a file is pointed into the temp dir: the supervisor
+# outlives the check that started it, and must not write the container's real
+# pid file, log or provision marker while doing so. MEMPALACE_HUB_MAX_RESTARTS=0
+# keeps the leftover supervisor from re-running the stub for minutes afterwards;
+# the restart budget gets its own checks below.
+_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_MAX_RESTARTS=0;"
+
+# A stub that exits immediately, for the restart budget. Same call record as the
+# long-lived one, so a restart is counted by grepping its argv log.
+_HUB_CRASH_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nexit 9\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_RESTART_DELAY=0 MEMPALACE_HUB_HEALTHY_SECS=3600;"
 
 check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
   "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
@@ -1509,9 +1545,51 @@ check "mempalace-hub exits 0 when the hub never answers" bash -c \
 check "mempalace-hub warns when the hub never answers" bash -c \
   "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
 check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
-  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub 2>/dev/null"
+  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub 2>/dev/null"
 check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
   "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
+
+# --- the hub supervisor and its liveness record (#780) ------------------------
+# postStartCommand fires once per container start, so before this a hub that
+# died mid-session was never restarted - and the fallback it left behind (every
+# session serving its own palace copy, one writer lease between them) is exactly
+# the #764 bug, reinstated silently and surfacing only at write time. `start`
+# now detaches `supervise`, which re-runs `mempalace serve` when it exits, and
+# every state transition is recorded in the provision marker #806 already keeps
+# in $CLAUDE_CONFIG_DIR - the same file and the same mechanism, one new key.
+check "the hub pid file is pre-created and writable by any uid" bash -c \
+  "test -f /usr/local/share/personal-features/mempalace-hub.pid && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.pid)\" = '666' ]"
+
+# start must hand off to the supervisor, not run the server as its own child:
+# the restart loop is the whole point, and it has to outlive the launcher.
+check "mempalace-hub start detaches the supervisor" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q '^supervisor=' \"\$d/hub.pid\" && grep -q '^server=' \"\$d/hub.pid\""
+
+# One serve run plus MEMPALACE_HUB_MAX_RESTARTS restarts, then it stops - a hub
+# that cannot bind at all must not spin forever.
+check "the supervisor restarts a hub that exits" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=2 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; [ \"\$(grep -c -- 'serve --host' \"\$d/bin/stub.calls\")\" = '3' ]"
+check "the supervisor gives up once the restart budget is spent" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise 2>&1 | grep -q 'giving up'"
+
+# The signal half of #780: giving up is recorded where it outlives the container
+# log, in the marker #806 writes - so "no hub" can be told apart from "a hub
+# that crashed out an hour ago" without waiting for a -32001.
+check "a spent restart budget is recorded in the provision marker" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"state\": \"gave_up\"' \"\$d/marker.json\""
+check "mempalace-hub status reports the state the supervisor last recorded" bash -c \
+  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; /usr/local/bin/mempalace-hub status 2>/dev/null | grep -q \"last recorded state 'gave_up'\""
+# Reuse, not a second breadcrumb: the default path is #806's marker, and the
+# hub's key is merged into whatever that file already holds.
+check "the hub liveness record defaults to the #806 provision marker" bash -c \
+  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub"
+check "the hub record is merged into the marker, not written over it" bash -c \
+  "$_HUB_CRASH_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+
+# Clearing the pid file is what stops the supervisor - no signal has to reach a
+# shell blocked on its child - and the server it was watching goes with it.
+check "mempalace-hub stop stops the hub it started" bash -c \
+  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; p=\"\$(sed -n 's/^server=//p' \"\$d/hub.pid\")\"; test -n \"\$p\" && /usr/local/bin/mempalace-hub stop >/dev/null 2>&1 && sleep 2 && ! kill -0 \"\$p\" 2>/dev/null"
 
 # The pinned mempalace must actually be able to serve a shared transport; if a
 # version bump ever drops `serve`, the whole design goes with it.
@@ -1525,10 +1603,13 @@ check "the mempalace-mcp console script is on PATH" bash -c \
 
 # End-to-end against the REAL binary, on an isolated HOME so the container's own
 # palace and hub are untouched: start, confirm the endpoint answers, confirm a
-# second start is a no-op rather than a second hub, then stop it via the pid in
-# mempalace's own per-palace registry record (no dependency on pkill).
+# second start is a no-op rather than a second hub, then stop it. `stop` has to
+# come first now - killing the server out from under a supervisor is a crash,
+# and the supervisor would restart it and leave a stray hub behind. The kill
+# through mempalace's own per-palace registry record stays as the backstop (no
+# dependency on pkill).
 check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
-  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
+  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; /usr/local/bin/mempalace-hub stop >/dev/null 2>&1; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
 
 # --- the odoo-ls language server (#746) ---------------------------------------
 # The server is what gives a Claude Code session Odoo-aware diagnostics,
