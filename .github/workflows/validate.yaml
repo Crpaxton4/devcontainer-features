@@ -54,5 +54,6 @@ jobs:
             devcontainer-features/src/second-brain/second-brain-verify \
             setup.sh \
             .claude/commands/implement-issues/stack-merge.sh \
+            .claude/commands/implement-issues/gh-as-owner.sh \
             devcontainer-features/test/personal-features/*.sh \
             devcontainer-features/test/second-brain/*.sh

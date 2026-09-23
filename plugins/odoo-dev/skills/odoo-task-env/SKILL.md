@@ -130,7 +130,7 @@ Run this skill twice for one task must converge, not accumulate:
 
 | Variable | Default | Why you would change it |
 |---|---|---|
-| `REPOS_DIR` | resolved by `odoo-repo-map/scripts/repos-dir.sh` | Non-standard repos tree |
+| `REPOS_DIR` | resolved by `odoo-repo-map/scripts/repos-dir.sh` | Non-standard repos tree. Sweep want >= 2 git subdirs; tree holding one clone declare itself with `touch <tree>/.odoo-repos-dir` instead of exporting this every shell |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |
 | `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort `odoo-sdk` tracking probes (existing-work `tracking`, worktree `start_task`) |
