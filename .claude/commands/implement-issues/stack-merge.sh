@@ -348,7 +348,7 @@ sync_node() {
 
 merge_node() {
     local pr=$1 key out rc waited=0 base_before base_now
-    local fatal state mergeable mstate isdraft red pending resync_rc resync_out
+    local fatal state mergeable mstate isdraft red review unresolved resync_rc resync_out
     key="$pr:merge"
     is_done "$key" && return 0
     base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
@@ -409,15 +409,35 @@ merge_node() {
             [[ -n $red ]] && fatal="#$pr has failing checks: $red"
         fi
 
-        # BLOCKED with nothing still running is a rule this script cannot
-        # satisfy by waiting - a missing approval, an unresolved thread. Waiting
-        # out the full timeout on that is a slow way to report it.
+        # BLOCKED means a rule this script cannot satisfy by waiting - a missing
+        # approval, an unresolved thread. But `mergeStateStatus` is itself a
+        # DERIVED property, carrying exactly the staleness this file documents
+        # for `mergeable`, and GitHub reports BLOCKED transiently while it
+        # recomputes a PR whose base just moved. Every merge in a train moves the
+        # base, so every node after the first can see it.
+        #
+        # The first version of this clause concluded "a required review or an
+        # unresolved thread" from an ABSENCE - BLOCKED plus no pending checks -
+        # and falsely blocked #825 (#852). That absence is satisfied trivially
+        # during a recompute, because a node whose checks have all completed
+        # legitimately has none pending. On a repo requiring no review at all it
+        # could only ever fire as a false positive.
+        #
+        # So: name the cause or keep waiting. A positive fact, never an absence -
+        # the same rule the inversion above rests on, applied one level in.
         if [[ -z $fatal && $mstate == BLOCKED ]]; then
-            pending=$(gh pr view "$pr" -R "$SLUG" --json statusCheckRollup --jq '
-                [ .statusCheckRollup[]?
-                  | select((.status // "") | IN("QUEUED","IN_PROGRESS","PENDING","WAITING","REQUESTED")) ] | length')
-            ((pending == 0)) &&
-                fatal="#$pr is BLOCKED with no checks still running - a required review or an unresolved thread, which this script will not merge past"
+            review=$(gh pr view "$pr" -R "$SLUG" --json reviewDecision --jq '.reviewDecision // ""')
+            unresolved=$(gh api graphql -f query="
+                { repository(owner: \"$OWNER\", name: \"${SLUG#*/}\") {
+                    pullRequest(number: $pr) {
+                      reviewThreads(first: 100) { nodes { isResolved } } } } }" \
+                --jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false)] | length') || unresolved=0
+
+            if [[ $review == REVIEW_REQUIRED || $review == CHANGES_REQUESTED ]]; then
+                fatal="#$pr is BLOCKED by review (reviewDecision=$review), which this script will not merge past"
+            elif ((unresolved > 0)); then
+                fatal="#$pr is BLOCKED by $unresolved unresolved review thread(s), which this script will not merge past"
+            fi
         fi
 
         # The one base-branch case that is genuinely fatal, kept from #790: the
