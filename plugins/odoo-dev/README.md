@@ -19,6 +19,10 @@ to the skill or agent that owns it, and never does the stage work itself.
 Reference a skill as `odoo-dev:<name>`. Frontmatter names stay bare; the namespace
 is derived.
 
+**You cannot switch one of these skills off with `skillOverrides`.** It is the
+documented way to disable a skill and it does nothing here, silently — see
+[Turning skills off](#turning-skills-off) for why, and for what does work.
+
 ### Delivery — the doer chain
 
 One step per skill, no orchestrator. Run one, several, or all.
@@ -535,6 +539,48 @@ claude plugin install odoo-dev@devcontainer-features
 ```
 
 The repo is private, so both commands go through your existing `gh`/git credentials.
+
+### Turning skills off
+
+**`skillOverrides` cannot disable a skill this plugin ships, and never says so.**
+Claude Code resolves a skill's listing state with (de-minified from the shipped
+binary):
+
+```js
+if (e.type !== "prompt" || e.source === "plugin") return "on";
+let r = /* skillOverrides lookup, qualified then unqualified */;
+```
+
+The `source === "plugin"` arm returns before `skillOverrides` is read at all. So
+`"odoo-dev:odoo-quote": "off"` is inert, and so is the bare `"odoo-quote": "off"` —
+the unqualified fallback that makes the mechanism forgiving about naming everywhere
+else sits on the line the plugin arm skipped. There is no error, no warning, and no
+effect. The `/skills` picker is the same story from the other side: its list skips
+anything whose `loadedFrom` is not `skills`, `syncedSkills` or `commands_DEPRECATED`,
+so plugin skills never appear in it to be toggled.
+
+An override aimed at one of the five generated consulting skills looks like it worked,
+which is how dead entries survive. It matched the loose pre-migration copy in
+`<config>/skills/` — not plugin-sourced, so reachable — and left the bundled twin
+standing. Clear the strays with [`check-stray-skills.sh`](scripts/check-stray-skills.sh)
+and the override goes visibly inert.
+
+What actually works today:
+
+| Want | Do |
+|---|---|
+| None of it | Disable the whole plugin: `/plugin`, or `"enabledPlugins": {"odoo-dev@devcontainer-features": false}`. All 16 skills or none — that is the only granularity the loader offers |
+| Only the consulting skills, individually switchable | Do **not** install the plugin. Sync the five packaged skills into `.claude/skills/` instead (`odoo-sdk sync-skills --dest .claude/skills`). Those load as user skills, so `skillOverrides` reaches them by either name. Never do this alongside an install — see [Local development](#local-development) for why two copies collide |
+| One plugin skill off, plugin installed | Not supported. Nothing in `settings.json` reaches it |
+
+`disable-model-invocation: true` in a skill's frontmatter *is* honoured for plugin
+skills — it drops the skill from the model-facing listing and refuses Skill-tool
+invocation — but it is an author switch compiled into the shipped copy, identical for
+every consumer, so it is not the opt-out this section is about. This plugin does not
+set it: `odoo-dev:discovery-notes` already carries `user-invocable: false`, and the
+pair would leave it invocable by nobody, while
+[`odoo-dev:odoo-dev-map`](skills/odoo-dev-map/SKILL.md) routes to the rest by asking
+the model to invoke them.
 
 ### Updating
 
