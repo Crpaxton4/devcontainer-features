@@ -449,7 +449,7 @@ notices them.
 | Hook | Fires on | Denies |
 |---|---|---|
 | [`bash-allowlist.sh`](hooks/bash-allowlist.sh) | Every `Bash` call whose payload reports `agent_type` `odoo-dev-tester` | Anything outside the allowlist below |
-| [`gate-hook.sh`](hooks/gate-hook.sh) | Any `Bash` call that invokes `pr-open.sh`, `release-pr.sh` or `gh pr create`, from any agent | A PR whose task artifacts fail `gate.sh --for pr`, or a promotion whose release directory fails `gate.sh --for release`. Also, for the two scripts of our own, a call whose artifacts or release dir cannot be resolved |
+| [`gate-hook.sh`](hooks/gate-hook.sh) | Any `Bash` call that invokes `pr-open.sh`, `release-pr.sh`, `gh pr create` or `git commit`, from any agent | A PR whose task artifacts fail `gate.sh --for pr`, or a promotion whose release directory fails `gate.sh --for release`. Also, for the two scripts of our own, a call whose artifacts or release dir cannot be resolved. And a commit carrying changes to a module whose `__manifest__.py` version has not moved |
 
 **The tester allowlist.** `odoo-dev-tester` may run `artifact.sh`, `run-tests.sh`,
 `browser-ensure.sh`, `gate.sh`, `module-classify.sh`, and read-only `git`
@@ -475,7 +475,8 @@ denied, while the same unparseable payload for anyone else is allowed.
 
 **The gate at the tool boundary.** `gate.sh` was always the one deterministic step
 in the chain, and nothing made anybody run it. `gate-hook.sh` runs it where the PR
-is actually opened, on three command shapes.
+is actually opened, on three command shapes. A fourth shape, `git commit`, runs no
+`gate.sh` at all and is described further down.
 
 On the two task-keyed shapes it takes the worktree from `pr-open.sh`'s first
 argument (or the payload `cwd` for `gh pr create`), reads the branch, takes the
@@ -515,8 +516,37 @@ one artifacts dir. The task id resolved, so the PR is inside the workflow whiche
 command opened it, and one task with its evidence filed in two places is an
 inconsistency the hook names rather than guesses past.
 
+**The fourth shape: `git commit` and the manifest bump.** "Always run
+`bump_manifest_version.py` before committing module changes" is the one rule this
+plugin asks a session to remember on *every* commit, and [#799](https://github.com/Crpaxton4/devcontainer-features/issues/799)
+measured what remembering is worth: adherence to a recurring rule decays with turn
+depth and is back at the no-rule baseline by roughly the eleventh response after
+the skill loads, while the rule text has not changed a character. Rewording does
+not fix that. Mechanism does, so the rule stopped being prose that is trusted and
+became a denial at the tool boundary.
+
+A `git commit` is denied when it would carry changes to a module — a directory with
+a `__manifest__.py`, found by walking up from each changed path, the same test
+[`module-classify.sh`](scripts/module-classify.sh) uses — whose manifest `version`
+is the same as it is at the base commit. The question is whether the version
+*moved*, not whether the script is what moved it: a hand edit is a bump. `-a` widens
+the change set to tracked work-tree modifications and `--amend` moves the base to
+the tip's parent, both because that is what the commit would actually carry. The
+deny names the module and the version it is stuck on.
+
+Like `gh pr create`, `git commit` is an ordinary command in every repository on the
+machine, so everything the hook cannot decide passes in silence: no module in the
+change set, no repository, a merge, rebase, cherry-pick or revert in progress, a
+module absent at the base (a first commit has no earlier version to move away from),
+a manifest that is not in the commit at all (a removal bumps nothing), a manifest
+with no readable `version`, and `--git-dir`/`--work-tree`, which move the repository
+somewhere the hook does not follow. An explicit pathspec also passes: it narrows the
+commit to a subset the hook does not reconstruct. That last one is the accepted
+bypass, and it is the same trade the `gh pr create` narrowing makes — silence about
+work we cannot attribute beats denying it.
+
 ```bash
-bash scripts/tests/hooks.test.sh    # 68 assertions, offline
+bash scripts/tests/hooks.test.sh    # 102 assertions, offline
 ```
 
 ---
