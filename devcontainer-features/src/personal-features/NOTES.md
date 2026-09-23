@@ -279,6 +279,65 @@ install skips the cleanup rather than leaving the machine with neither copy,
 and each removal is logged on its own line; like everything else in
 `sync-claude-mcp`, the cleanup is best-effort and never fails container create.
 
+## Provision marker: telling a stale image from a current one (#806)
+
+Every step in `sync-claude-mcp` reports what it *did*. None of them can report
+what an older copy of the script *would* have done — a container whose image
+predates a migration simply runs a script that lacks it, prints nothing about
+it, and looks exactly like a container where that migration ran and succeeded.
+That is what #806 turned out to be: the `#723` marketplace migration was
+correct and had simply never been in the image on that machine, so every
+Claude session there kept loading `odoo-dev@odoo-dev` from a repo this project
+retired, three weeks behind the tree in front of it — and the container-create
+log that would have said so was long gone.
+
+**No checker shipped inside the image can close that gap**, because a checker
+baked into the image is exactly as absent from an old image as the step it
+would check. The only state that outlives the image is `$CLAUDE_CONFIG_DIR` —
+the host's bind-mounted `~/.claude`, shared by every container the machine
+builds. So `sync-claude-mcp` records the provenance of *this* container's
+feature scripts there, in `~/.claude/personal-features-provision.json`, and
+compares it against the newest set that ever provisioned the same config dir:
+
+```
+$ cat ~/.claude/personal-features-provision.json
+{
+  "provisioned_at": "2026-09-23T03:06:08Z",
+  "script_digest": "fef269073a2a…",
+  "script_epoch": 1790128289,
+  "scripts": { "sync-claude-mcp": "a07e942c…", "claude-event-hook": "08f7e708…", … },
+  "newest_script_epoch": 1790128289,
+  "newest_seen_at": "2026-09-23T03:06:08Z",
+  "stale_image": false
+}
+```
+
+An image whose scripts are older than a set already seen in that config dir
+gets a loud `WARNING` on every container create, naming both build timestamps
+and pointing at the marker — rather than the `ls -la /usr/local/bin/…` plus
+`grep -c` archaeology #806 needed to establish the same fact. The high-water
+mark (`newest_*`) is carried forward independently of the current run, so a
+stale container writing its own provenance cannot erase the evidence that
+something newer was here and go quiet on the next create.
+
+**Deliberately not odoo-dev-specific.** It fingerprints the feature-owned
+scripts themselves — `sync-claude-mcp`, `sync-claude-hooks`,
+`claude-event-hook`, `mempalace-repair`, `resolve-mempal-dir`, `create-pr` —
+by SHA-256 content hash plus newest mtime, so *every* step any of them ever
+gains is covered by the same marker, with no per-migration assertion to
+remember to add. (The alternative #806 floats, an assertion against the
+retired-marketplace list, only ever catches the one migration already written
+down.) Content hash *and* mtime are both needed: the mtime says which build is
+older, the hash keeps a rebuild of unchanged scripts from being reported as
+drift. A 60-second slack absorbs filesystem timestamp granularity.
+
+It adds no mount and no `containerEnv` variable — the marker lives inside a
+directory the Feature already mounts — and, like everything else in
+`sync-claude-mcp`, it is best-effort: a marker that cannot be read, written or
+parsed warns and the run still exits 0. No step was added to the
+`postCreateCommand` chain, which is an `&&` chain where any failing step aborts
+container create and suppresses `postStartCommand`.
+
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
 The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
