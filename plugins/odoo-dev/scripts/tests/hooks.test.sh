@@ -16,6 +16,12 @@
 # when the hook can attribute it to a task. release-pr.sh is keyed by a branch pair
 # rather than by a worktree and is gated like pr-open.sh. The same worktree therefore denies under one
 # shape and passes in silence under the other, and both halves are asserted.
+#
+# The `git commit` shape at the end of part (b) is judged on a repository rather
+# than on an artifacts dir, so it builds its own fixture repo with two modules and
+# moves the index or the work tree before each case. Its allowed cases matter as
+# much as its denied ones: this shape fires on a command every repository on the
+# machine runs, so each thing the hook declines to decide is asserted by name.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -356,6 +362,166 @@ denied "$GATEHOOK" "gate: two candidate artifact dirs for one task id" "matches 
   odoo-dev-pr "$PR $GREEN acme/erp staging --title T --body-file /tmp/body.md"
 denied "$GATEHOOK" "gate: two candidate artifact dirs, reached by gh pr create" "matches 2 directories" \
   odoo-dev-pr "gh pr create --fill" "$GREEN"
+
+# --- shape four: git commit, gated on the manifest version bump ------------------
+# The only shape that is not about a PR. It engages on the change set a commit
+# would carry, so every case below moves the index or the work tree first and then
+# asserts what the hook says about the commit that would follow. Nothing here
+# consults ODOO_DEV_STATE_DIR: the evidence for this shape is the repository.
+
+MOD="$WT/modrepo"
+mkdir -p "$MOD/stockflow_sync/models" "$MOD/addons/nested_mod"
+git init -q -b main "$MOD" 2>/dev/null \
+  || { git init -q "$MOD"; git -C "$MOD" symbolic-ref HEAD refs/heads/main; }
+# gitq — the fixture's own git, never the hook's. Local hooks are disabled so a
+# machine with a global commit-msg policy still runs this suite.
+gitq() { git -C "$MOD" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
+# manifest <path> <version> — the smallest thing module-classify.sh's version
+# expression, and therefore the hook's, will read.
+manifest() { printf "{\n    'name': 'fixture',\n    'version': '%s',\n}\n" "$2" > "$1"; }
+
+manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.0.0
+manifest "$MOD/addons/nested_mod/__manifest__.py" 17.0.2.0.0
+printf '# base\n' > "$MOD/stockflow_sync/models/sale.py"
+printf '# base\n' > "$MOD/addons/nested_mod/api.py"
+printf '# readme\n' > "$MOD/README.md"
+gitq add -A
+gitq commit -q --no-verify -m "chore: fixture modules"
+
+# (1) A module changed, the manifest standing still. The reason must name the
+# module and the version it is stuck on, because "denied" alone would stay green
+# if the hook started denying every commit.
+printf '# changed\n' >> "$MOD/stockflow_sync/models/sale.py"
+gitq add stockflow_sync/models/sale.py
+denied "$GATEHOOK" "gate: git commit touching a module with no manifest bump" \
+  "without moving the manifest version" \
+  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
+denied "$GATEHOOK" "gate: the deny names the module and its stuck version" \
+  "stockflow_sync (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
+
+# The repository is the payload cwd unless `-C` moves it, and the same commit
+# denies from an unrelated cwd when it does.
+denied "$GATEHOOK" "gate: git -C into the module repo from elsewhere" \
+  "without moving the manifest version" \
+  odoo-dev-builder "git -C $MOD commit -m \"feat: sync stock\"" "$PLAIN"
+# --git-dir moves the repository somewhere the hook does not follow.
+allowed "$GATEHOOK" "gate: git --git-dir is not followed" \
+  odoo-dev-builder "git --git-dir=$MOD/.git commit -m x" "$PLAIN"
+# An explicit pathspec narrows the commit to a subset the hook does not
+# reconstruct. This is the documented bypass, asserted so nobody removes it by
+# accident and nobody adds it back by accident either.
+allowed "$GATEHOOK" "gate: git commit with an explicit pathspec" \
+  odoo-dev-builder 'git commit -m "feat: sync stock" stockflow_sync' "$MOD"
+allowed "$GATEHOOK" "gate: git commit with a pathspec after --" \
+  odoo-dev-builder 'git commit -m "feat: sync stock" -- stockflow_sync' "$MOD"
+
+# (2) The same change with the version moved. The hook asks whether the version
+# differs from the base, not whether bump_manifest_version.py is what moved it —
+# a hand edit is a bump.
+manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
+gitq add stockflow_sync/__manifest__.py
+allowed "$GATEHOOK" "gate: git commit with the manifest version moved" \
+  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
+gitq commit -q --no-verify -m "feat: sync stock"
+
+# (3) A file outside every module is not a module change.
+printf '# more\n' >> "$MOD/README.md"
+gitq add README.md
+allowed "$GATEHOOK" "gate: git commit touching no module" \
+  odoo-dev-builder 'git commit -m "docs: readme"' "$MOD"
+gitq commit -q --no-verify -m "docs: readme"
+
+# (4) A nested module is found by walking up to the nearest __manifest__.py, so a
+# repo that keeps its addons under addons/ is gated like a flat one.
+printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
+gitq add addons/nested_mod/api.py
+denied "$GATEHOOK" "gate: a nested module is found by walking up" \
+  "addons/nested_mod (still 17.0.2.0.0)" \
+  odoo-dev-builder 'git commit -m "fix: api"' "$MOD"
+gitq reset -q --hard HEAD
+
+# (5) The first commit of a new module has no earlier version to move away from.
+mkdir -p "$MOD/brand_new"
+manifest "$MOD/brand_new/__manifest__.py" 17.0.1.0.0
+printf '# new\n' > "$MOD/brand_new/models.py"
+gitq add brand_new
+allowed "$GATEHOOK" "gate: the first commit of a new module" \
+  odoo-dev-builder 'git commit -m "feat: brand_new"' "$MOD"
+gitq commit -q --no-verify -m "feat: brand_new"
+
+# (6) Deleting a module removes code and bumps nothing.
+gitq rm -r -q brand_new
+allowed "$GATEHOOK" "gate: removing a module" \
+  odoo-dev-builder 'git commit -m "chore: drop brand_new"' "$MOD"
+gitq commit -q --no-verify -m "chore: drop brand_new"
+
+# (7) -a widens the commit to tracked work-tree changes, and the two forms must
+# disagree on the same state: nothing is staged, so a plain commit carries no
+# module and passes, while -a carries the module and is denied.
+printf '# unstaged\n' >> "$MOD/stockflow_sync/models/sale.py"
+allowed "$GATEHOOK" "gate: an unstaged module change, committed without -a" \
+  odoo-dev-builder 'git commit -m "feat: more sync"' "$MOD"
+denied "$GATEHOOK" "gate: an unstaged module change, committed with -am" \
+  "stockflow_sync (still 17.0.1.1.0)" \
+  odoo-dev-builder 'git commit -am "feat: more sync"' "$MOD"
+# `-ma` is `-m a`, not `-m` plus `-a`: the letters after a value-taking one are
+# its value. Read as `-a` it would pick up the work-tree change above and deny,
+# so this is the same state as the two cases above and the parse is what decides.
+allowed "$GATEHOOK" "gate: -ma is -m a and carries no -a" \
+  odoo-dev-builder 'git commit -ma' "$MOD"
+gitq checkout -- stockflow_sync/models/sale.py
+
+# (8) --amend rewrites the tip, so the comparison base is the tip's parent. The
+# bump in the commit being amended still counts, and reverting it is caught.
+printf '# amended\n' >> "$MOD/stockflow_sync/models/sale.py"
+manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.2.0
+gitq add -A
+gitq commit -q --no-verify -m "feat: amendable"
+printf '# amended twice\n' >> "$MOD/stockflow_sync/models/sale.py"
+gitq add stockflow_sync/models/sale.py
+allowed "$GATEHOOK" "gate: --amend over a commit that already bumped" \
+  odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
+manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
+gitq add stockflow_sync/__manifest__.py
+denied "$GATEHOOK" "gate: --amend that puts the version back" \
+  "without moving the manifest version" \
+  odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
+gitq reset -q --hard HEAD
+
+# (9) A merge in progress is not somebody editing a module.
+printf '# merged\n' >> "$MOD/stockflow_sync/models/sale.py"
+gitq add stockflow_sync/models/sale.py
+: > "$MOD/.git/MERGE_HEAD"
+allowed "$GATEHOOK" "gate: a commit with a merge in progress" \
+  odoo-dev-builder 'git commit --no-edit' "$MOD"
+rm -f "$MOD/.git/MERGE_HEAD"
+denied "$GATEHOOK" "gate: the same commit once the merge marker is gone" \
+  "without moving the manifest version" \
+  odoo-dev-builder 'git commit --no-edit' "$MOD"
+gitq reset -q --hard HEAD
+
+# (10) Everything the hook cannot decide passes in silence, because `git commit`
+# is an ordinary command in every repository on the machine.
+allowed "$GATEHOOK" "gate: git commit in a repo with no modules" \
+  odoo-dev-builder 'git commit -m "chore: whatever"' "$RED"
+allowed "$GATEHOOK" "gate: git commit outside any git repository" \
+  odoo-dev-builder 'git commit -m "chore: whatever"' "$PLAIN"
+allowed "$GATEHOOK" "gate: git commit with no cwd to resolve" \
+  odoo-dev-builder 'git commit -m "chore: whatever"' "$GONE"
+allowed "$GATEHOOK" "gate: a read-only git subcommand" \
+  odoo-dev-builder 'git status --short' "$MOD"
+allowed "$GATEHOOK" "gate: the word commit as an argument, not a subcommand" \
+  odoo-dev-builder 'git log --format=%s -1 commit' "$MOD"
+# A mention is not an invocation here either: the name of the rule inside a
+# message is prose, and the heredoc body is data.
+printf '# mentioned\n' >> "$MOD/stockflow_sync/models/sale.py"
+gitq add stockflow_sync/models/sale.py
+allowed "$GATEHOOK" "gate: git commit named inside a heredoc body" \
+  odoo-dev-builder "$(printf '%s\n' "cat <<'EOF'" "git commit -m x" "EOF")" "$MOD"
+allowed "$GATEHOOK" "gate: grep for the word" \
+  odoo-dev-builder 'grep -rn "git commit" docs/' "$MOD"
+gitq reset -q --hard HEAD
 
 rm -rf "$STATE" "$WT"
 
