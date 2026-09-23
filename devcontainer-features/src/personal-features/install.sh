@@ -154,6 +154,12 @@ install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 # feature-owned hooks block into the live, mounted $CLAUDE_CONFIG_DIR/
 # settings.json — the build-time directory is shadowed by the ~/.claude mount,
 # same reason the retired skills sync ran from postCreateCommand (see above).
+# THIS COPY IS NOT THE ONE settings.json NAMES (#803): that file is shared with
+# the host, where /usr/local/bin/claude-event-hook does not exist, so every host
+# hook exit-127'd. sync-claude-hooks now republishes this binary into
+# $CLAUDE_CONFIG_DIR/hooks/ — reachable from both ends of the mount — and points
+# the hook entries there. This install stays the build-time source of truth the
+# runtime sync copies from.
 install -m 0755 "$(dirname "$0")/claude-event-hook" /usr/local/bin/claude-event-hook
 install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-hooks
 
@@ -804,6 +810,148 @@ elif claude plugin install --scope user odoo-dev@devcontainer-features; then
     odoo_dev_installed=1
 else
     echo "WARNING: sync-claude-mcp: could not install the 'odoo-dev' plugin; install it later with 'claude plugin install --scope user odoo-dev@devcontainer-features' - the next container create will also retry." >&2
+fi
+
+# --- provision marker: make "these scripts are old" a visible state (#806) ---
+# Everything above reports only what it DID. A feature script too old to carry a
+# step reports nothing at all - and the container-create log it would have
+# reported into is long gone by the time anyone wonders - so a container still
+# running pre-#723 scripts is indistinguishable from one where that migration
+# ran and succeeded. That, not the migration, was the defect in #806.
+#
+# Nothing baked into the image can close the gap by itself: a checker shipped in
+# the image is exactly as absent from an old image as the step it would check.
+# The only state that outlives the image is $CLAUDE_CONFIG_DIR - the host's
+# bind-mounted ~/.claude, shared by every container this machine builds - so the
+# provenance of THIS container's feature scripts is recorded there, and compared
+# against the newest set that ever provisioned this config dir. An image older
+# than one already seen here then says so, on every container create, instead of
+# looking healthy while running retired behaviour.
+#
+# Deliberately NOT odoo-dev-specific: it fingerprints the feature-owned scripts
+# themselves, so every step any of them ever gains is covered by the same
+# marker - no per-migration assertion to remember to add. Adds no mount and no
+# containerEnv var; the marker lives inside a directory the feature already
+# mounts. Best-effort like the rest of this script: a marker that cannot be read
+# or written warns, and the run still exits 0.
+pf_marker="$CLAUDE_CONFIG_DIR/personal-features-provision.json"
+pf_scripts="/usr/local/bin/sync-claude-mcp /usr/local/bin/sync-claude-hooks /usr/local/bin/claude-event-hook /usr/local/bin/mempalace-repair /usr/local/bin/resolve-mempal-dir /usr/local/bin/create-pr"
+if command -v python3 >/dev/null 2>&1; then
+    PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
+import hashlib, json, os, sys, time
+
+marker = os.environ["PF_MARKER"]
+paths = os.environ["PF_SCRIPTS"].split()
+
+# Fingerprint = content hash per script, plus the newest mtime across them. The
+# hash answers "is this the same build"; the mtime answers "which build is
+# older". Both are needed: a rebuild of unchanged scripts moves the mtime
+# forward without changing behaviour, and must not be reported as drift.
+scripts = {}
+epoch = 0
+for path in paths:
+    try:
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        mtime = int(os.stat(path).st_mtime)
+    except OSError:
+        continue
+    scripts[os.path.basename(path)] = digest
+    epoch = max(epoch, mtime)
+
+combined = hashlib.sha256(
+    "".join("%s:%s\n" % (name, scripts[name]) for name in sorted(scripts)).encode()
+).hexdigest()
+
+
+def iso(value):
+    if not value:
+        return "unknown"
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+# Any unexpected shape means "no previous marker", never a failure - same
+# defensive stance as the marketplace parse above.
+previous = {}
+try:
+    with open(marker) as handle:
+        loaded = json.load(handle)
+    if isinstance(loaded, dict):
+        previous = loaded
+except Exception:
+    previous = {}
+
+# High-water mark, carried forward separately from the current run, so a stale
+# container writing its own (older) provenance cannot erase the evidence that
+# something newer was here.
+seen_epoch = as_int(previous.get("newest_script_epoch"))
+seen_digest = previous.get("newest_script_digest")
+seen_at = previous.get("newest_seen_at") or "unknown"
+now = int(time.time())
+
+# 60s of slack absorbs filesystem timestamp granularity; the digest test keeps
+# a same-content rebuild quiet.
+stale = bool(scripts) and (seen_epoch - epoch) > 60 and seen_digest != combined
+if not stale:
+    seen_epoch, seen_digest, seen_at = max(seen_epoch, epoch), combined, iso(now)
+
+record = {
+    "schema": 1,
+    "issue": "806",
+    "provisioned_at": iso(now),
+    "script_epoch": epoch,
+    "script_digest": combined,
+    "scripts": scripts,
+    "newest_script_epoch": seen_epoch,
+    "newest_script_digest": seen_digest,
+    "newest_seen_at": seen_at,
+    "stale_image": stale,
+}
+
+if stale:
+    sys.stderr.write(
+        "WARNING: sync-claude-mcp: the personal-features scripts in this container are OLDER than the newest set "
+        "that ever provisioned %s. This image was built %s; a container sharing this config dir ran scripts built %s. "
+        "Steps this repo added in between are simply absent here - they emit nothing, so the container looks healthy "
+        "while running retired behaviour (#806). Rebuild the container without cache to converge. Evidence: %s\n"
+        % (os.path.dirname(marker) or marker, iso(epoch), iso(seen_epoch), marker)
+    )
+
+try:
+    if os.path.dirname(marker):
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+    tmp = marker + ".tmp"
+    with open(tmp, "w") as handle:
+        json.dump(record, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    try:
+        # Same reasoning as the mempal-dir env file: install.sh cannot know which
+        # uid runs postCreateCommand, and the marker holds no secret.
+        os.chmod(tmp, 0o666)
+    except OSError:
+        pass
+    os.replace(tmp, marker)
+except OSError as exc:
+    sys.stderr.write(
+        "WARNING: sync-claude-mcp: could not write the provision marker %s (%s); a container running stale feature "
+        "scripts cannot be told apart from a current one here (#806)\n" % (marker, exc)
+    )
+    raise SystemExit(0)
+
+sys.stdout.write(
+    "sync-claude-mcp: recorded feature-script provenance in %s (built %s, digest %s)\n"
+    % (marker, iso(epoch), combined[:12])
+)
+' || echo "WARNING: sync-claude-mcp: the provision marker at $pf_marker could not be reconciled; a container running stale feature scripts cannot be told apart from a current one here (#806)" >&2
+else
+    echo "WARNING: sync-claude-mcp: python3 is not on PATH, so no provision marker was recorded at $pf_marker; a container running stale feature scripts cannot be told apart from a current one here (#806)" >&2
 fi
 
 # Stale loose skill copies, left behind by pre-migration containers (#738).
