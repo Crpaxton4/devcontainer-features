@@ -421,6 +421,15 @@ class TestTaskNoteCommand(unittest.TestCase):
         # description (which becomes the tool description) names it.
         self.assertIn("300", TaskNoteCommand._description)
 
+    def test_description_states_attachment_audience(self):
+        # #767: the attachment spec was documented in full with no statement
+        # of who sees the result, so agents attached internal artifacts to a
+        # customer-facing thread. The audience must travel with the mechanics.
+        description = TaskNoteCommand._description
+        self.assertIn("CLIENT-VISIBLE", description)
+        self.assertIn("deliverables the client asked to receive", description)
+        self.assertIn("scripts, logs", description)
+
     def test_raises_when_no_active_session(self):
         db = _tmp_db()
         with (patch(_NOTE_GUARD),):

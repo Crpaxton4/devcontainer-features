@@ -1,0 +1,26 @@
+schema_version: "1.1"
+name: wrap-up-task-branch
+description: >-
+  In-domain PR request phrased as a hand-off rather than as "open the PR", with
+  the bypass grader authored first so grader order cannot hide the skill check.
+tags: [trigger, positive, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    im done with 41288, wrap it up and get it in front of review. base is the 17.0 dev branch
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: no-bare-gh-pr-create
+    tool: Bash
+    input_match: "gh pr create"
+    max: 0
+  - type: tool_used
+    name: fires-odoo-pr
+    tool: Skill
+    input_match: "odoo-pr"
+    min: 1
+expected_outcome: >-
+  The odoo-pr skill is invoked; the PR is not opened with a bare gh pr create.
