@@ -162,6 +162,12 @@ install -m 0755 "$(dirname "$0")/create-pr" /usr/local/bin/create-pr
 # runtime sync copies from.
 install -m 0755 "$(dirname "$0")/claude-event-hook" /usr/local/bin/claude-event-hook
 install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-hooks
+# worktree-context-hook (#809): a second SessionStart hook, unrelated to event
+# capture — it states the worktree Bash syntax constraint in the session context
+# instead of letting every worktree session rediscover it by being refused.
+# Published into $CLAUDE_CONFIG_DIR/hooks/ by the same runtime sync, for the same
+# #803 reason; this install is its build-time source of truth.
+install -m 0755 "$(dirname "$0")/worktree-context-hook" /usr/local/bin/worktree-context-hook
 
 # Installed via npm (rather than the standalone native installer) so it rides
 # on the Node.js runtime provided by the official node Feature (dependsOn).

@@ -15,6 +15,12 @@
 # server-side, #326/#340), so we register PreToolUse with a match-all matcher
 # and let the shim enforce the exclusion.
 #
+# A SECOND, UNRELATED HOOK rides the same merge (#809): `worktree-context-hook`,
+# a SessionStart hook that prints the worktree Bash syntax constraint into the
+# session context when the cwd is inside a `.claude/worktrees` checkout. It is a
+# separate program because the event shim must never write to stdout and this one
+# exists only to write to stdout.
+#
 # THE SETTINGS FILE IS SHARED WITH THE HOST (#803). Because that mount is
 # two-way, the host's own Claude Code sessions read the very same settings.json
 # this script writes. A container-absolute command therefore resolves in exactly
@@ -42,6 +48,13 @@ set -euo pipefail
 # COPY, not the command we write into settings.json; that is always SHIM_CMD.
 HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
 
+# The worktree-context hook IMPLEMENTATION to publish (#809): a second, separate
+# SessionStart hook that states the worktree Bash syntax constraint up front. It
+# is a different program from the event shim on purpose — the event shim's
+# contract forbids it to write to stdout at all, and this one exists precisely to
+# write to stdout. Same override discipline so tests can publish a fixture.
+WORKTREE_HOOK_CMD="${PERSONAL_FEATURES_WORKTREE_HOOK_CMD:-/usr/local/bin/worktree-context-hook}"
+
 # Substrings that identify a feature-owned hook command, used to strip our own
 # entries before re-appending them (this is what makes the merge idempotent).
 # Kept separate from the commands themselves so an override of the source path in
@@ -53,7 +66,7 @@ HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
 # stripped on re-run, so it accumulates one duplicate copy on every container
 # create. Add a new hook whose command is a different program -> add its
 # identifying substring to this array in the same change.
-HOOK_MARKERS='["claude-event-hook"]'
+HOOK_MARKERS='["claude-event-hook","worktree-context-hook"]'
 
 note() { echo "sync-claude-hooks: $1" >&2; }
 
@@ -90,6 +103,7 @@ mkdir -p "$CLAUDE_CONFIG_DIR"
 # tracks the image's version of the shim.
 HOOK_DIR="$CLAUDE_CONFIG_DIR/hooks"
 HOOK_SHIM="$HOOK_DIR/claude-event-hook"
+WORKTREE_SHIM="$HOOK_DIR/worktree-context-hook"
 
 # The command literal written into settings.json. Claude Code runs hook commands
 # through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
@@ -100,20 +114,35 @@ HOOK_SHIM="$HOOK_DIR/claude-event-hook"
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook"'
 
-mkdir -p "$HOOK_DIR"
-if [ -r "$HOOK_CMD" ]; then
-    # Same atomic-rename discipline as the settings write below: stage inside
-    # $HOOK_DIR (same filesystem), then rename. A hook already executing keeps
-    # the old inode, so a mid-session republish can never run a half-copied file.
-    SHIM_TMP="$(mktemp -p "$HOOK_DIR")"
-    if cp "$HOOK_CMD" "$SHIM_TMP" 2>/dev/null; then
-        chmod 0755 "$SHIM_TMP"
-        mv "$SHIM_TMP" "$HOOK_SHIM"
+# Same treatment for the worktree-context hook (#809): publish the real file into
+# the shared config dir and reference it through the same per-machine expansion.
+# A bare /usr/local/bin path here would reintroduce #803 exactly.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+WORKTREE_SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/worktree-context-hook"'
+
+# publish_shim <implementation-in-image> <destination-under-$HOOK_DIR>
+# Same atomic-rename discipline as the settings write below: stage inside
+# $HOOK_DIR (same filesystem), then rename. A hook already executing keeps the
+# old inode, so a mid-session republish can never run a half-copied file. An
+# unreadable source is not an error here — the callers decide what a missing
+# shim means for their own entries.
+publish_shim() {
+    _src="$1"
+    _dst="$2"
+    [ -r "$_src" ] || return 0
+    _tmp="$(mktemp -p "$HOOK_DIR")"
+    if cp "$_src" "$_tmp" 2>/dev/null; then
+        chmod 0755 "$_tmp"
+        mv "$_tmp" "$_dst"
     else
-        rm -f "$SHIM_TMP"
-        note "could not copy $HOOK_CMD to $HOOK_SHIM."
+        rm -f "$_tmp"
+        note "could not copy $_src to $_dst."
     fi
-fi
+}
+
+mkdir -p "$HOOK_DIR"
+publish_shim "$HOOK_CMD" "$HOOK_SHIM"
+publish_shim "$WORKTREE_HOOK_CMD" "$WORKTREE_SHIM"
 
 # Refuse to write a command that resolves nowhere — the #803 failure mode. With
 # no shim published and none left by an earlier run, writing the entries anyway
@@ -123,15 +152,34 @@ if [ ! -x "$HOOK_SHIM" ]; then
     exit 0
 fi
 
+# The worktree-context SessionStart entry (#809) is added only when its shim is
+# actually in place. Unlike the event shim this is not worth refusing the whole
+# merge over: with no worktree hook the session just goes back to rediscovering
+# the constraint by being refused, which is the status quo, whereas a command
+# that resolves nowhere costs every session a 127. Its marker stays in
+# HOOK_MARKERS either way, so an entry left by an earlier run is still stripped.
+if [ -x "$WORKTREE_SHIM" ]; then
+    WORKTREE_GROUPS="$(jq -n --arg cmd "$WORKTREE_SHIM_CMD" \
+        '[ { "hooks": [ {"type":"command","command":$cmd} ] } ]')"
+else
+    note "no worktree-context shim at $WORKTREE_SHIM; omitting its SessionStart entry."
+    WORKTREE_GROUPS='[]'
+fi
+
 # The feature-owned hooks block. Each event maps to a dedicated group carrying
 # only our command, so the marker-based removal below can strip exactly our
 # entries without touching user groups. All seven event names are verified
 # against the current Claude Code hooks reference; PreToolUse uses a match-all
 # matcher (the shim excludes mcp__odoo-mcp__* itself). Every command here must
 # be matched by HOOK_MARKERS — see the contract note beside it.
-OURS="$(jq -n --arg cmd "$SHIM_CMD" '
+#
+# SessionStart carries TWO feature groups: the event shim first (so the
+# `.hooks.SessionStart[0]` the #803 tests pin stays the event shim), then the
+# worktree-context hook. They are separate groups because they are separate
+# programs with opposite stdout contracts.
+OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" '
   {
-    "SessionStart":     [ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ],
+    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt),
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
     "PreToolUse":       [ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ],
     "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],

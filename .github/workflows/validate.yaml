@@ -50,6 +50,7 @@ jobs:
             devcontainer-features/src/personal-features/create-pr \
             devcontainer-features/src/personal-features/claude-event-hook \
             devcontainer-features/src/personal-features/sync-claude-hooks \
+            devcontainer-features/src/personal-features/worktree-context-hook \
             devcontainer-features/src/second-brain/install.sh \
             devcontainer-features/src/second-brain/second-brain-verify \
             setup.sh \

@@ -240,8 +240,50 @@ stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
 installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
+**A second, unrelated `SessionStart` hook: the worktree Bash constraint (#809).**
+The same sync also registers `worktree-context-hook`, which has nothing to do
+with event capture. A session whose cwd is inside a `.claude/worktrees` checkout
+has its Bash calls screened by Claude Code's worktree sandbox, which refuses
+anything it cannot verify stays inside the worktree. That rule is stated
+**nowhere** up front — a scan of every injected attachment in the local
+transcript corpus (hook context, instructions, skill listings, system reminders)
+finds no statement of it — so it is discoverable only by being refused, and it is
+rediscovered from scratch session after session: 252 refusals across 99
+transcripts, **54% of every transcript that ever runs Bash from a worktree**, on
+4.9% of their Bash calls, with no decline over a month. The hook emits a
+`hookSpecificOutput.additionalContext` envelope naming the constraint *before*
+the first command, and emits **nothing at all** for any other cwd (a
+`SessionStart` hook's stdout is added to the session context verbatim, so a stray
+byte would be noise in every session). It always exits 0 — `exit 2` from
+`SessionStart` blocks the session from starting.
+
+It is a separate program from `claude-event-hook` on purpose: that shim's
+contract is "never write to stdout", which is the exact opposite of this one's
+job, and it fires on every session rather than only worktree ones. It gets the
+same publish-then-reference treatment as the event shim (#803) — copied to
+`$CLAUDE_CONFIG_DIR/hooks/worktree-context-hook`, referenced through the
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}` expansion — so the host side of the mount
+resolves it too. If its shim cannot be published the entry is simply omitted;
+unlike the event shim that is not worth refusing the whole merge over, because
+the fallback is only the status quo.
+
+**The text it ships is a declaration, not the sandbox's own rules.** The rules
+live in the Claude Code binary and are published nowhere this repo can read
+(`grep -rn 'isolated in the worktree'` over the tree returns nothing), so the
+list was written from refusals actually observed — compound commands and
+pipelines, `$( )` substitution, `source` of a computed string, `git` in a form
+too complex to verify or `git -C` pointing outside the worktree, `sed` with a
+runtime-computed value, `GIT_CONFIG_GLOBAL` (refused separately as "git-config
+injection"), `gh auth switch` (refused in some sessions and not others), and even
+a bare `bash` token inside an otherwise plain command. The shipped text says in
+so many words that this list is **indicative, not exhaustive**, and that it can
+go stale when the binary changes; a confidently wrong list would be worse than a
+short honest one. When a new refusal shape turns up, add it to
+`src/personal-features/worktree-context-hook`.
+
 **Opting out.** The merge only ever replaces its own entries (identified by the
-`claude-event-hook` command) and preserves all your other settings and hooks. To
+`HOOK_MARKERS` substrings — `claude-event-hook` and `worktree-context-hook`) and
+preserves all your other settings and hooks. To
 disable the capture, remove the `claude-event-hook` entries from
 `~/.claude/settings.json` (they — and the published
 `~/.claude/hooks/claude-event-hook` — will be re-added on the next container

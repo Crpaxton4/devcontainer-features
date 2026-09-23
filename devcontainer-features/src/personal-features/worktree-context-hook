@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# worktree-context-hook — Claude Code `SessionStart` hook that DECLARES the Bash
+# syntax constraint a `.claude/worktrees` session is about to run into, before
+# the first command rather than after it.
+#
+# WHY THIS EXISTS (#809): a session whose cwd is inside a `.claude/worktrees`
+# checkout has its Bash calls screened by the Claude Code binary's worktree
+# sandbox. Anything it cannot verify stays inside the worktree comes back
+# refused. That rule is stated NOWHERE up front — a scan of every injected
+# attachment in the local transcript corpus (hook context, instructions, skill
+# listings, system reminders) finds zero statement of it — so it is discoverable
+# only by being refused, and it is rediscovered from scratch session after
+# session: 252 refusals across 99 transcripts, 54% of every transcript that ever
+# runs Bash from a worktree.
+#
+# This hook does not change the rule and cannot. It only says it out loud.
+#
+# THE TEXT IS A DECLARATION, NOT THE SANDBOX'S OWN RULES. The rules live in the
+# Claude Code binary; `grep -rn 'isolated in the worktree'` over this repo
+# returns nothing, so there is no source of truth here to derive them from. The
+# list below was written from refusals actually observed, which means it is
+# INDICATIVE, NOT EXHAUSTIVE, and it can go stale when the binary changes. The
+# text says so itself — a confidently wrong list is worse than a short honest
+# one. When a new refusal shape is observed, add it here.
+#
+# CONTRACT — this must never disrupt a session:
+#   * ALWAYS exit 0. For SessionStart, exit 2 BLOCKS the session from starting.
+#   * Write to stdout ONLY when the cwd really is a worktree. A SessionStart
+#     hook's plain stdout is added to the session context verbatim, so any
+#     stray byte here becomes noise in every single session.
+#   * Diagnostics, if ever needed, go to stderr.
+#
+# Not folded into `claude-event-hook`: that shim's contract is the exact
+# opposite ("never write to stdout — even plain text is surfaced to the
+# session"), and it fires on every session rather than only worktree ones.
+
+# Deliberately NOT `set -e`/`set -o pipefail`: a failure anywhere in here must
+# degrade to "no context emitted", never to a nonzero exit that the hooks
+# contract would read as a block.
+set -u
+
+# Read the SessionStart payload. Claude Code always provides stdin for hooks;
+# the timeout guards a misconfigured manual invocation from wedging.
+STDIN_JSON=""
+if [ ! -t 0 ]; then
+    STDIN_JSON="$(timeout 5 cat 2>/dev/null || true)"
+fi
+
+# `cwd` is a documented SessionStart field. jq is the only safe way to read it;
+# with no jq, fall back to the process cwd, which Claude Code sets to the
+# project directory — good enough to answer "am I in a worktree?".
+HOOK_CWD=""
+if command -v jq >/dev/null 2>&1; then
+    HOOK_CWD="$(printf '%s' "$STDIN_JSON" | jq -r '.cwd // empty' 2>/dev/null || true)"
+fi
+[ -n "$HOOK_CWD" ] || HOOK_CWD="$PWD"
+
+# Only worktree sessions. Every other session gets nothing at all — no stdout,
+# no context, no cost.
+case "$HOOK_CWD" in
+    */.claude/worktrees|*/.claude/worktrees/*) ;;
+    *) exit 0 ;;
+esac
+
+# Quoted heredoc: nothing in here is expanded by this script. The text is data.
+CONTEXT="$(cat <<'CONTEXT_TEXT'
+Worktree Bash constraint (declared up front so you do not have to discover it by
+being refused).
+
+This session's cwd is inside a .claude/worktrees checkout, so Claude Code
+sandboxes Bash: it refuses any command whose effect it cannot verify stays
+inside this worktree. Prefer ONE plain command per Bash call, with literal
+arguments and absolute paths.
+
+Refusals actually observed from worktree sessions:
+
+  - compound commands - && , || , ; , and pipelines - reported back as "too
+    complex to verify"
+  - command substitution: $( ... ) and backticks
+  - running a string through `source` (or `.`)
+  - `git` named in a form too complex to verify, and `git -C <path>` pointing
+    outside this worktree
+  - `sed` (or any editor) whose script is a runtime-computed value
+  - setting GIT_CONFIG_GLOBAL, refused on a separate "git-config injection"
+    ground
+  - `gh auth switch`, refused in some sessions as unauthorized persistence but
+    not in others
+  - a literal `bash` token appearing inside an otherwise plain command
+
+THIS LIST IS INDICATIVE, NOT EXHAUSTIVE. It was written from refusals seen in
+practice, not from the sandbox's own rules: those live in the Claude Code binary
+and are published nowhere this session can read. Commands it does not mention
+are refused too, the exact boundary moves between sessions, and the list can go
+stale whenever the binary changes. Treat a refusal as information about the
+sandbox, not as a verdict on your intent: decompose into plain single commands
+and carry on rather than re-litigating it.
+CONTEXT_TEXT
+)"
+
+# The documented SessionStart envelope. jq builds it so the text is escaped
+# correctly whatever it contains. Without jq, plain stdout from a SessionStart
+# hook is added to the context anyway, so the fallback still lands.
+if command -v jq >/dev/null 2>&1; then
+    jq -n --arg ctx "$CONTEXT" \
+        '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":$ctx}}' \
+        2>/dev/null || printf '%s\n' "$CONTEXT"
+else
+    printf '%s\n' "$CONTEXT"
+fi
+
+exit 0
