@@ -14,7 +14,12 @@ from odoo_sdk.adapters.state import (  # noqa: F401
     UnknownEventSourceError,
     source_to_event_type,
 )
-from odoo_sdk.state import LocalConfig, LocalStateClient, current_repo_label
+from odoo_sdk.state import (
+    ATTACHED_TASK_IDS_PAYLOAD_KEY,
+    LocalConfig,
+    LocalStateClient,
+    current_repo_label,
+)
 
 # The one ``owner/repo`` normalization rule, borrowed rather than restated
 # (#742). ``_derive_repo_label`` is the same helper ``current_repo_label`` and
@@ -160,6 +165,44 @@ def task_ids_from_branch(branch: Optional[str]) -> list[str]:
     return ids
 
 
+def mark_attached_attribution(
+    payload: Optional[dict[str, Any]], attached_task_ids: list[str]
+) -> Optional[dict[str, Any]]:
+    """Return the payload to persist, recording attachment-only attribution (#779).
+
+    The row's ``task_ids`` are unchanged — an attached id is still billable
+    attribution, and the derivation, upload, and every report must keep seeing it.
+    What is recorded here is *why* each id is there, under the state layer's
+    :data:`~odoo_sdk.state.ATTACHED_TASK_IDS_PAYLOAD_KEY`, so the reaper's
+    staleness clock can ignore the ids this event carries ONLY because their run
+    was active — otherwise the clock is refreshed by the very attachment it is
+    supposed to stop, and a forgotten run never ages out.
+
+    The caller's payload is never mutated (a fresh dict is returned when the key
+    is involved) and an untouched payload is passed through verbatim, including
+    ``None``, so an event with no attachment-only id records exactly what it
+    always did. The command OWNS the key: a caller that supplied one has it
+    replaced or dropped, so no frontend can fake liveness for a wedged run.
+
+    :param payload: The caller's payload, or ``None``.
+    :type payload: Optional[dict[str, Any]]
+    :param attached_task_ids: Ids attributed by attachment alone; may be empty.
+    :type attached_task_ids: list[str]
+    :return: The payload to persist.
+    :rtype: Optional[dict[str, Any]]
+    """
+
+    if attached_task_ids:
+        return {**(payload or {}), ATTACHED_TASK_IDS_PAYLOAD_KEY: attached_task_ids}
+    if payload is None or ATTACHED_TASK_IDS_PAYLOAD_KEY not in payload:
+        return payload
+    return {
+        key: value
+        for key, value in payload.items()
+        if key != ATTACHED_TASK_IDS_PAYLOAD_KEY
+    }
+
+
 class LogEventCommand(Command):
     """Append one row to the local ``events`` timeseries via the command layer.
 
@@ -238,9 +281,11 @@ class LogEventCommand(Command):
         reap threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
         :data:`~odoo_sdk.tracking.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged orphan
         from a dead devcontainer, so attaching an event to it would only accrue
-        phantom billable wall-clock; skipping it freezes its activity clock so it
-        stays reapable. The same staleness predicate ``reap`` uses is applied
-        here, so the two agree on exactly which runs are stale.
+        phantom billable wall-clock; skipping it keeps it reapable. The same
+        staleness predicate ``reap`` uses is applied here, so the two agree on
+        exactly which runs are stale — and since #779 that predicate reads a clock
+        attachment cannot refresh, so a forgotten run ages out even while the
+        container stays busy rather than only once the container falls silent.
 
         :mod:`odoo_sdk.tracking.reap` is imported inside the method rather than at module
         scope: it reaches ``odoo_sdk.billing``, which imports the partially
@@ -280,7 +325,10 @@ class LogEventCommand(Command):
            interface produced without pre-validating it.
         2. Otherwise the event attributes to every non-stale active run, because
            all interaction with a task — read-only inspection included — is
-           active work on it.
+           active work on it. An id that lands here for no reason beyond that run
+           being open is recorded as attachment-only (#779) so it cannot later be
+           read back as evidence the run is alive; see
+           :meth:`resolve_attribution`.
         3. With no active run, the ``<task-id>-<slug>`` convention of the
            caller-stated ``branch`` recovers the task id (#574): a session bound
            to a task branch but never ``start_task``-ed through the FSM still
@@ -310,15 +358,52 @@ class LogEventCommand(Command):
         :rtype: list[str]
         """
 
+        return self.resolve_attribution(task_ids, attach_active_run, branch)[0]
+
+    def resolve_attribution(
+        self,
+        task_ids: Optional[Iterable[Any]] = None,
+        attach_active_run: bool = True,
+        branch: Optional[str] = None,
+    ) -> tuple[list[str], list[str]]:
+        """Apply the attribution policy, reporting WHICH ids are attachment-only.
+
+        The policy itself is :meth:`resolve_task_ids`' — this is the one
+        implementation, returning the same ids plus the subset that rule 2 alone
+        put there, so the two can never disagree about which rule fired.
+
+        An id is attachment-only when the event names it for no reason other than
+        that task having an active run. Rule 1 (an explicit hint) and rule 3 (the
+        ``<task-id>-<slug>`` session branch) therefore contribute none. Nor does a
+        rule-2 id the stated branch *corroborates*: a session sitting on a task's
+        own branch is working that task whether or not a run is open, so its
+        events are genuine liveness evidence for it — only the OTHER runs a busy
+        container happens to have open are attachment-only for that event.
+
+        This subset is what keeps the reaper's staleness clock non-circular
+        (#779); see :func:`mark_attached_attribution` for where it is recorded.
+
+        :param task_ids: Explicit attribution hint; non-task values are dropped.
+        :type task_ids: Optional[Iterable[Any]]
+        :param attach_active_run: Whether to fall back to the active runs and the
+            session branch; see :meth:`resolve_task_ids`.
+        :type attach_active_run: bool
+        :param branch: The caller-stated session branch, or ``None``.
+        :type branch: Optional[str]
+        :return: ``(task ids the event attributes to, the attachment-only subset)``.
+        :rtype: tuple[list[str], list[str]]
+        """
+
         explicit = normalize_task_ids(task_ids)
         if explicit:
-            return explicit
+            return explicit, []
         if not attach_active_run:
-            return []
+            return [], []
+        branch_ids = task_ids_from_branch(branch)
         active = self._active_run_task_ids()
         if active:
-            return active
-        return task_ids_from_branch(branch)
+            return active, [tid for tid in active if tid not in branch_ids]
+        return branch_ids, []
 
     def execute(
         self,
@@ -387,16 +472,19 @@ class LogEventCommand(Command):
         # only the branch the caller explicitly states (see resolve_task_ids), so
         # ``branch`` — not the resolved fallback — is what is handed to it.
         resolved_branch = current_branch_label() if branch is None else branch
+        resolved_ids, attached_ids = self.resolve_attribution(
+            task_ids, attach_active_run, branch
+        )
         record = EventRecord(
             id=None,
             source=source,
             timestamp=timestamp or datetime.now(timezone.utc),
-            task_ids=self.resolve_task_ids(task_ids, attach_active_run, branch),
+            task_ids=resolved_ids,
             repo=current_repo_label() if repo is None else repo,
             branch=resolved_branch,
             pr_num=pr_num,
             subject=subject,
-            payload=payload,
+            payload=mark_attached_attribution(payload, attached_ids),
             external_id=external_id,
         )
         self.state.add_event(record)

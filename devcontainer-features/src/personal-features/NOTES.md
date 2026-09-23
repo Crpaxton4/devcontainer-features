@@ -288,8 +288,50 @@ stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
 installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
+**A second, unrelated `SessionStart` hook: the worktree Bash constraint (#809).**
+The same sync also registers `worktree-context-hook`, which has nothing to do
+with event capture. A session whose cwd is inside a `.claude/worktrees` checkout
+has its Bash calls screened by Claude Code's worktree sandbox, which refuses
+anything it cannot verify stays inside the worktree. That rule is stated
+**nowhere** up front — a scan of every injected attachment in the local
+transcript corpus (hook context, instructions, skill listings, system reminders)
+finds no statement of it — so it is discoverable only by being refused, and it is
+rediscovered from scratch session after session: 252 refusals across 99
+transcripts, **54% of every transcript that ever runs Bash from a worktree**, on
+4.9% of their Bash calls, with no decline over a month. The hook emits a
+`hookSpecificOutput.additionalContext` envelope naming the constraint *before*
+the first command, and emits **nothing at all** for any other cwd (a
+`SessionStart` hook's stdout is added to the session context verbatim, so a stray
+byte would be noise in every session). It always exits 0 — `exit 2` from
+`SessionStart` blocks the session from starting.
+
+It is a separate program from `claude-event-hook` on purpose: that shim's
+contract is "never write to stdout", which is the exact opposite of this one's
+job, and it fires on every session rather than only worktree ones. It gets the
+same publish-then-reference treatment as the event shim (#803) — copied to
+`$CLAUDE_CONFIG_DIR/hooks/worktree-context-hook`, referenced through the
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}` expansion — so the host side of the mount
+resolves it too. If its shim cannot be published the entry is simply omitted;
+unlike the event shim that is not worth refusing the whole merge over, because
+the fallback is only the status quo.
+
+**The text it ships is a declaration, not the sandbox's own rules.** The rules
+live in the Claude Code binary and are published nowhere this repo can read
+(`grep -rn 'isolated in the worktree'` over the tree returns nothing), so the
+list was written from refusals actually observed — compound commands and
+pipelines, `$( )` substitution, `source` of a computed string, `git` in a form
+too complex to verify or `git -C` pointing outside the worktree, `sed` with a
+runtime-computed value, `GIT_CONFIG_GLOBAL` (refused separately as "git-config
+injection"), `gh auth switch` (refused in some sessions and not others), and even
+a bare `bash` token inside an otherwise plain command. The shipped text says in
+so many words that this list is **indicative, not exhaustive**, and that it can
+go stale when the binary changes; a confidently wrong list would be worse than a
+short honest one. When a new refusal shape turns up, add it to
+`src/personal-features/worktree-context-hook`.
+
 **Opting out.** The merge only ever replaces its own entries (identified by the
-`claude-event-hook` command) and preserves all your other settings and hooks. To
+`HOOK_MARKERS` substrings — `claude-event-hook` and `worktree-context-hook`) and
+preserves all your other settings and hooks. To
 disable the capture, remove the `claude-event-hook` entries from
 `~/.claude/settings.json` (they — and the published
 `~/.claude/hooks/claude-event-hook` — will be re-added on the next container
@@ -352,6 +394,65 @@ a same-named directory carrying no `SKILL.md` — is left alone. A failed plugin
 install skips the cleanup rather than leaving the machine with neither copy,
 and each removal is logged on its own line; like everything else in
 `sync-claude-mcp`, the cleanup is best-effort and never fails container create.
+
+## Provision marker: telling a stale image from a current one (#806)
+
+Every step in `sync-claude-mcp` reports what it *did*. None of them can report
+what an older copy of the script *would* have done — a container whose image
+predates a migration simply runs a script that lacks it, prints nothing about
+it, and looks exactly like a container where that migration ran and succeeded.
+That is what #806 turned out to be: the `#723` marketplace migration was
+correct and had simply never been in the image on that machine, so every
+Claude session there kept loading `odoo-dev@odoo-dev` from a repo this project
+retired, three weeks behind the tree in front of it — and the container-create
+log that would have said so was long gone.
+
+**No checker shipped inside the image can close that gap**, because a checker
+baked into the image is exactly as absent from an old image as the step it
+would check. The only state that outlives the image is `$CLAUDE_CONFIG_DIR` —
+the host's bind-mounted `~/.claude`, shared by every container the machine
+builds. So `sync-claude-mcp` records the provenance of *this* container's
+feature scripts there, in `~/.claude/personal-features-provision.json`, and
+compares it against the newest set that ever provisioned the same config dir:
+
+```
+$ cat ~/.claude/personal-features-provision.json
+{
+  "provisioned_at": "2026-09-23T03:06:08Z",
+  "script_digest": "fef269073a2a…",
+  "script_epoch": 1790128289,
+  "scripts": { "sync-claude-mcp": "a07e942c…", "claude-event-hook": "08f7e708…", … },
+  "newest_script_epoch": 1790128289,
+  "newest_seen_at": "2026-09-23T03:06:08Z",
+  "stale_image": false
+}
+```
+
+An image whose scripts are older than a set already seen in that config dir
+gets a loud `WARNING` on every container create, naming both build timestamps
+and pointing at the marker — rather than the `ls -la /usr/local/bin/…` plus
+`grep -c` archaeology #806 needed to establish the same fact. The high-water
+mark (`newest_*`) is carried forward independently of the current run, so a
+stale container writing its own provenance cannot erase the evidence that
+something newer was here and go quiet on the next create.
+
+**Deliberately not odoo-dev-specific.** It fingerprints the feature-owned
+scripts themselves — `sync-claude-mcp`, `sync-claude-hooks`,
+`claude-event-hook`, `mempalace-repair`, `resolve-mempal-dir`, `create-pr` —
+by SHA-256 content hash plus newest mtime, so *every* step any of them ever
+gains is covered by the same marker, with no per-migration assertion to
+remember to add. (The alternative #806 floats, an assertion against the
+retired-marketplace list, only ever catches the one migration already written
+down.) Content hash *and* mtime are both needed: the mtime says which build is
+older, the hash keeps a rebuild of unchanged scripts from being reported as
+drift. A 60-second slack absorbs filesystem timestamp granularity.
+
+It adds no mount and no `containerEnv` variable — the marker lives inside a
+directory the Feature already mounts — and, like everything else in
+`sync-claude-mcp`, it is best-effort: a marker that cannot be read, written or
+parsed warns and the run still exits 0. No step was added to the
+`postCreateCommand` chain, which is an `&&` chain where any failing step aborts
+container create and suppresses `postStartCommand`.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
@@ -422,7 +523,7 @@ Every failure path exits 0 with a warning naming the consequence: no `mempalace`
 
 **No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
 
-**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. Nothing checks the two agree — `claude plugin validate` reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252) — so renaming the launcher means editing the plugin in the same change.
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. A gate in `plugins/odoo-dev/scripts/validate.sh` now holds the two together: it extracts every `command` in `.lsp.json` and fails unless `install.sh` writes a file of that name into a `bin` directory (#787). It is a name check and cannot prove the generated script runs, but it catches the rename — whose failure mode is otherwise a language server that never starts and never says why. `claude plugin validate` is no help here: it reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252). Renaming the launcher still means editing the plugin in the same change; the gate is what makes forgetting loud.
 
 ## Additional tooling
 

@@ -392,6 +392,58 @@ check "sync-claude-mcp exits 0 when the odoo-dev plugin install fails" bash -c \
 check "sync-claude-mcp keeps the loose copies when the plugin install fails" bash -c \
   "test -f \"$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md\""
 
+# --- sync-claude-mcp: the provision marker (#806) -----------------------------
+# A container running pre-migration feature scripts used to be indistinguishable
+# from one where the migration ran: the steps it lacks emit nothing. The marker
+# records, in the host-persisted $CLAUDE_CONFIG_DIR, which build of the
+# feature-owned scripts last provisioned this config dir - so an image older
+# than one already seen here says so instead of looking healthy.
+MCP_MARKER="$MCP_CONFIG/personal-features-provision.json"
+
+check "sync-claude-mcp writes the provision marker" bash -c \
+  "test -f \"$MCP_MARKER\""
+# The fingerprint is of the feature-owned SCRIPTS, not of the odoo-dev
+# migration: every step any of them ever gains is covered by the same marker.
+check "the provision marker fingerprints the feature-owned scripts" bash -c \
+  "grep -qF '\"sync-claude-mcp\"' \"$MCP_MARKER\" && grep -qF '\"claude-event-hook\"' \"$MCP_MARKER\" && grep -qF '\"script_digest\"' \"$MCP_MARKER\""
+# A first, matching provision is not drift and must stay quiet.
+check "a first provision is not reported as stale" bash -c \
+  "grep -qF '\"stale_image\": false' \"$MCP_MARKER\""
+
+# Now the case #806 is about: this container's scripts are OLDER than a set that
+# already provisioned the same ~/.claude. Seeded with a far-future high-water
+# mark and a digest that cannot match, which is exactly what a pre-migration
+# image looks like to a config dir a current image has touched.
+MCP_STALE_CONFIG="$MCP_TEST_ROOT/claude-home-stale"
+mkdir -p "$MCP_STALE_CONFIG"
+cat > "$MCP_STALE_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "newest_script_epoch": 4102444800,
+  "newest_script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "newest_seen_at": "2100-01-01T00:00:00Z",
+  "script_epoch": 4102444800,
+  "script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scripts": {},
+  "stale_image": false
+}
+MARKER
+MCP_STALE_LOG="$MCP_TEST_ROOT/stale.log"
+CLAUDE_CONFIG_DIR="$MCP_STALE_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_STALE_LOG" || true
+
+check "an image older than one already seen here warns loudly" bash -c \
+  "grep -qF 'are OLDER than the newest set' \"$MCP_STALE_LOG\""
+check "the stale verdict is recorded in the marker" bash -c \
+  "grep -qF '\"stale_image\": true' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# A stale container writes its own provenance too, but must not erase the
+# evidence that something newer was here - otherwise the next stale run is quiet.
+check "a stale provision does not lower the high-water mark" bash -c \
+  "grep -qF '\"newest_script_epoch\": 4102444800' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# Best-effort like the rest of the script: staleness is reported, never fatal.
+check "sync-claude-mcp still exits 0 on a stale image" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
 rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
@@ -408,6 +460,9 @@ check "claude-event-hook is installed and executable" bash -c "test -x /usr/loca
 check "claude-event-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/claude-event-hook"
 check "sync-claude-hooks is installed and executable" bash -c "test -x /usr/local/bin/sync-claude-hooks"
 check "sync-claude-hooks passes shell syntax check" bash -c "bash -n /usr/local/bin/sync-claude-hooks"
+# #809: the worktree-context SessionStart hook ships beside them.
+check "worktree-context-hook is installed and executable" bash -c "test -x /usr/local/bin/worktree-context-hook"
+check "worktree-context-hook passes shell syntax check" bash -c "bash -n /usr/local/bin/worktree-context-hook"
 
 # The hook shim must skip PreToolUse for the odoo MCP server's own tools (it
 # logs those dispatches server-side, #326/#340) and must still log every other
@@ -656,9 +711,39 @@ chmod 0755 "$HK_HOST/.claude/hooks/claude-event-hook"
 check "the written hook command also resolves on the host side of the mount (#803)" bash -c \
   "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; env -u CLAUDE_CONFIG_DIR HOME=\"$HK_HOST\" sh -c \"\$cmd\" </dev/null && [ \"\$(cat \"$HK_HOST/fired\")\" = 'SessionStart' ]"
 
+# (a3) #809: a SECOND SessionStart hook, worktree-context-hook, rides the same
+# merge. It states the worktree Bash syntax constraint up front instead of
+# leaving every .claude/worktrees session to rediscover it by being refused. It
+# gets the same publish-then-reference treatment as the event shim (#803), and it
+# must fire for a worktree cwd ONLY - a SessionStart hook's stdout lands in the
+# session context verbatim, so a stray byte on a normal session is pure noise.
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p/.claude/worktrees/task-1"}' \
+  > "$HOOKS_TEST_ROOT/wt-payload.json"
+printf '%s' '{"hook_event_name":"SessionStart","session_id":"t","cwd":"/workspaces/p"}' \
+  > "$HOOKS_TEST_ROOT/plain-payload.json"
+
+check "sync-claude-hooks publishes the worktree-context hook into the shared config dir (#809)" bash -c \
+  "test -x \"$HK_A/hooks/worktree-context-hook\" && cmp -s /usr/local/bin/worktree-context-hook \"$HK_A/hooks/worktree-context-hook\""
+check "settings.json registers the worktree-context hook on SessionStart (#809)" bash -c \
+  "[ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+check "the worktree-context hook command resolves on both sides of the mount (#809)" bash -c \
+  "jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q 'worktree-context-hook' && ! jq -r '.hooks.SessionStart[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
+check "the written worktree-context command runs and emits a SessionStart envelope (#809)" bash -c \
+  "cmd=\"\$(jq -r '.hooks.SessionStart[] | .hooks[] | .command | select(contains(\"worktree-context-hook\"))' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" sh -c \"\$cmd\" < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -e '.hookSpecificOutput.hookEventName == \"SessionStart\" and ((.hookSpecificOutput.additionalContext | length) > 200)' >/dev/null"
+check "worktree-context-hook stays silent and exits 0 for a non-worktree cwd (#809)" bash -c \
+  "out=\"\$(/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/plain-payload.json\")\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+check "the emitted context says its constraint list is not exhaustive (#809)" bash -c \
+  "/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -r '.hookSpecificOutput.additionalContext' | grep -qi 'not exhaustive'"
+
 # (b) Running the sync TWICE yields no duplicate feature entries.
 check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+# #809: the worktree hook's command contains no `claude-event-hook`, so it is
+# only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
+# would survive the strip and be re-appended, accumulating one duplicate per
+# container create - re-run twice more and pin the count at exactly one.
+check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '2' ]"
 
 # (c) A pre-seeded user setting AND a user-authored hook survive the merge.
 HK_B="$HOOKS_TEST_ROOT/b"
