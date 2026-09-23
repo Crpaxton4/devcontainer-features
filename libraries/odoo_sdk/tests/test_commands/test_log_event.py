@@ -24,6 +24,7 @@ from odoo_sdk.commands.log_event import (
     task_ids_from_branch,
 )
 from odoo_sdk.reap import REAP_THRESHOLD_ENV
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from tests.support import make_state_db, make_state_db_path
 
 #: Patch targets for the two best-effort git lookups the command performs. Every
@@ -335,6 +336,83 @@ class TestAttributionPolicy(unittest.TestCase):
     def test_execute_normalizes_the_explicit_hint(self) -> None:
         self.command.execute(source="agent", task_ids=[42])
         self.assertEqual(self.db.get_events()[0].task_ids, ["42"])
+
+
+class TestAttachmentProvenance(unittest.TestCase):
+    """Rule-2 ids are recorded as attachment-only so liveness stays honest (#779).
+
+    The id itself still lands in ``task_ids`` — an attached event is billable
+    attribution and the derivation must keep seeing it. What the marker changes is
+    only whether the reaper may read that event back as evidence the run is alive.
+    """
+
+    def setUp(self) -> None:
+        self.db = make_state_db()
+        self.command = LogEventCommand(state=self.db)
+        for target in (REPO_LABEL, BRANCH_LABEL):
+            patcher = patch(target, return_value="")
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _payload(self) -> Optional[dict]:
+        return self.db.get_events()[0].payload
+
+    def test_attached_ids_are_marked(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.db.create_run(202, "Task B", 1, "Proj")
+        self.command.execute(source="claude:PostToolUse", payload={"tool": "Bash"})
+        event = self.db.get_events()[0]
+        self.assertEqual(sorted(event.task_ids), ["101", "202"])
+        self.assertEqual(
+            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
+        )
+        # The caller's own payload keys survive untouched.
+        self.assertEqual(event.payload["tool"], "Bash")
+
+    def test_marker_is_added_to_a_payloadless_event(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(source="claude:Stop")
+        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
+
+    def test_explicit_hint_is_not_marked(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(
+            source="agent", payload={"tool": "get_task"}, task_ids=[101]
+        )
+        self.assertEqual(self._payload(), {"tool": "get_task"})
+
+    def test_branch_recovery_is_not_marked(self) -> None:
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertIsNone(self._payload())
+
+    def test_branch_corroborated_active_run_is_not_marked(self) -> None:
+        # The session is sitting on the task's own branch, so its events name the
+        # task for a reason beyond the run being open: genuine liveness evidence.
+        self.db.create_run(28788, "Task A", 1, "Proj")
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertIsNone(self._payload())
+
+    def test_only_the_uncorroborated_run_is_marked(self) -> None:
+        self.db.create_run(28788, "Worked", 1, "Proj")
+        self.db.create_run(101, "Forgotten", 1, "Proj")
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
+
+    def test_caller_supplied_marker_is_never_trusted(self) -> None:
+        # The command owns the key: no frontend gets to fake liveness for a
+        # wedged run (or fake staleness for a live one) by stating it.
+        self.command.execute(
+            source="agent",
+            task_ids=[42],
+            payload={"tool": "x", ATTACHED_TASK_IDS_PAYLOAD_KEY: ["99"]},
+        )
+        self.assertEqual(self._payload(), {"tool": "x"})
+
+    def test_callers_payload_is_not_mutated(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        payload = {"tool": "Bash"}
+        self.command.execute(source="claude:PostToolUse", payload=payload)
+        self.assertEqual(payload, {"tool": "Bash"})
 
 
 class TestProvenanceResolution(unittest.TestCase):

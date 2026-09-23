@@ -7,6 +7,7 @@ injected into commands alongside :class:`~odoo_sdk.client.client.OdooClient`.
 
 from .config import LocalConfig, OdooConnectionSettings
 from .db import (
+    ATTACHED_TASK_IDS_PAYLOAD_KEY,
     LocalStateClient,
     SCHEMA_DDL,
     assert_tracker_db_present,
@@ -27,6 +28,7 @@ from .models import (
 )
 
 __all__ = [
+    "ATTACHED_TASK_IDS_PAYLOAD_KEY",
     "LocalStateClient",
     "LocalConfig",
     "OdooConnectionSettings",

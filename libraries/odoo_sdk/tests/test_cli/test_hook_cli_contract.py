@@ -35,6 +35,7 @@ from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.adapters.state_persistence import _CLAUDE_SOURCE_PREFIX
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE, tracker_db_path
 from odoo_sdk.state.summary import _CWD_KEY, _PROMPT_KEY, summarize_session_context
@@ -214,8 +215,17 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         self.assertEqual(event.subject, "Bash")
         # --attach-active-run must have attached BOTH active runs' task ids.
         self.assertEqual(sorted(event.task_ids), ["101", "202"])
-        # --payload must have persisted verbatim.
-        self.assertEqual(event.payload, {"session_id": "s-1", "tool_name": "Bash"})
+        # --payload must have persisted verbatim, alongside the attachment-only
+        # provenance the command records for the ids rule 2 alone attributed
+        # (#779) — the marker is additive and never rewrites a caller's keys.
+        self.assertEqual(
+            event.payload,
+            {
+                "session_id": "s-1",
+                "tool_name": "Bash",
+                ATTACHED_TASK_IDS_PAYLOAD_KEY: event.task_ids,
+            },
+        )
 
         # The persisted row must satisfy the billing predicate — this is what
         # makes a hook event sessionize/bill. A prefix drift would persist a row

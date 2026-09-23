@@ -279,15 +279,21 @@ Three properties follow from that mechanism and are worth keeping:
   not whether it is a task id, so `/odoo-dev:pr Create a release PR from UAT to
   main` came back as a raw `ls: cannot access '.../tasks/Create'`, and the `mkdir -p`
   commands failed the other way by silently creating an artifacts directory named
-  after a word of prose. Every injection in `commands/` now validates the id as
-  numeric, reaches `mkdir -p` only once it has, and ends in a fail-soft tail that
-  emits a marker such as `NO ARTIFACTS DIRECTORY` and exits 0. Each command body
-  says what the dispatched agent must do when it reads a marker instead of a path:
-  stop, and give the person the form the command takes. `/odoo-dev:test` and
-  `/odoo-dev:pr` still resolve their task directory with `ls -d` rather than
-  creating it. Gate 18 in [`validate.sh`](scripts/validate.sh) runs every extracted
-  injection against hostile arguments and fails if one exits non-zero or leaves a
-  junk directory behind.
+  after a word of prose. Every injection in `commands/` is now a single call to
+  [`state-dir.sh`](scripts/state-dir.sh), the one place that knows the state dir: it
+  validates a task id as `^[0-9]+$`, and creates the directory only when passed
+  `--create`. The inline `grep`/`mkdir`/`ls`/`||` chain is gone — a worktree-isolated
+  session cannot statically prove what a runtime-computed value inside an `&&`/`||`
+  chain will run, so it declined the whole expansion and `/odoo-dev:pr` was
+  unreachable from exactly the place `odoo-dev-builder` is documented to work, its own
+  worktree. `--else TEXT` carries the fail-soft marker: `task` and `release` always
+  exit 0 and print the marker rather than failing. Each command body says what the
+  dispatched agent must do when it reads a marker instead of a path: stop, and give
+  the person the form the command takes. `/odoo-dev:test` and `/odoo-dev:pr` call it
+  **without** `--create`, so they still require the task directory to exist rather
+  than creating it. Gate 18 in [`validate.sh`](scripts/validate.sh) runs every
+  extracted injection against hostile arguments and fails if one exits non-zero or
+  leaves a junk directory behind.
 - **The gate in `/odoo-dev:pr` is not the enforcement.** It is the fast, legible
   failure, seconds after typing: the `--for pr` verdict is injected into the body
   before the fork, and a red one arrives as its blockers followed by a

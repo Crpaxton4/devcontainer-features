@@ -204,6 +204,54 @@ in a settings.json by an older container are stripped and replaced on the next
 sync. If no shim can be published and none is already in place, the sync writes
 no entries at all rather than hand a session a command that resolves nowhere.
 
+**Every hook command is resolved, not just the ones that already broke (#805).**
+A hook entry naming a command that cannot be executed is not an inert entry:
+Claude Code runs it through `/bin/sh -c`, gets a 127, and — for a `PreToolUse`
+guard — reads that failure as an **allow**. `odoo-api-guard.sh`, the enforcement
+point for this repo's own prohibition on Odoo RPC and credential access, failed
+exactly that way 73 times across five sessions with the file present and
+executable, and nothing anywhere reported it. Against ten commands referenced
+from the shared `settings.json` the Feature asserted precisely two — the
+`odoo-sdk` console scripts (#496) and `mempalace-recall.sh` (#744) — each added
+reactively, after the thing it guarded had already broken. Both one-offs are
+gone, replaced by one routine in `sync-claude-hooks` that resolves the lot:
+
+- **Provision time**, after the merge: every command in the hooks block of the
+  file that was just written, ours and the user's, is expanded to the program it
+  will exec and resolved (`-x` for a path, `command -v` for a bare name). One of
+  **ours** that does not resolve is fatal — it can only mean the shim guard above
+  was defeated. One of the **user's** is reported, loudly and by name, and never
+  repaired: the Feature does not own those files and writing a stub would look
+  like a working hook while doing nothing (the #744 decision, kept verbatim). A
+  hand-maintained hook the user has yet to install must not fail container
+  create.
+- **Build time**, via `sync-claude-hooks --check-deps` called from `install.sh`:
+  the programs a feature hook command goes on to exec (`HOOK_DEPS` —
+  `odoo-sdk`, which `claude-event-hook` shells out to and silently skips when it
+  is missing, plus the two console scripts from the same wheel). This half
+  **fails the build**, which is what replaced the hand-written entry-point loop.
+
+**The split is forced, not stylistic.** `settings.json` lives in the
+bind-mounted config dir, which does not exist while the image is being built —
+that is the entire reason `sync-claude-hooks` runs from `postCreateCommand` — so
+"resolve every command in `settings.json`" cannot be a build-time check however
+much one would prefer it there. `HOOK_DEPS` is the mirror image: those programs
+live in the image and nowhere else, so resolving them is cheapest and loudest at
+build time. Each half runs at the only moment its subject exists.
+
+**Necessary, not sufficient.** This resolves a command *at provision time*. It
+cannot say the command will still resolve, or still work, when a hook actually
+fires — `odoo-api-guard.sh` resolved fine at provision time and exit-127'd
+anyway, for reasons still undiagnosed. The runtime half of that problem is #804
+and is deliberately not attempted here.
+
+**Resolution never executes anything.** The command strings are user config, and
+expanding them means handing them to a shell. Any command carrying a control
+operator, a redirection or a command substitution is therefore **refused and
+reported as unverifiable** rather than expanded; with those screened out and
+globbing disabled, the expansion can perform parameter and tilde expansion and
+word splitting, and nothing else.
+
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
 forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
 following events are wired (verified against the current Claude Code hooks
@@ -240,8 +288,50 @@ stdout (which the hooks contract could interpret as a permission decision),
 runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
 installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
 
+**A second, unrelated `SessionStart` hook: the worktree Bash constraint (#809).**
+The same sync also registers `worktree-context-hook`, which has nothing to do
+with event capture. A session whose cwd is inside a `.claude/worktrees` checkout
+has its Bash calls screened by Claude Code's worktree sandbox, which refuses
+anything it cannot verify stays inside the worktree. That rule is stated
+**nowhere** up front — a scan of every injected attachment in the local
+transcript corpus (hook context, instructions, skill listings, system reminders)
+finds no statement of it — so it is discoverable only by being refused, and it is
+rediscovered from scratch session after session: 252 refusals across 99
+transcripts, **54% of every transcript that ever runs Bash from a worktree**, on
+4.9% of their Bash calls, with no decline over a month. The hook emits a
+`hookSpecificOutput.additionalContext` envelope naming the constraint *before*
+the first command, and emits **nothing at all** for any other cwd (a
+`SessionStart` hook's stdout is added to the session context verbatim, so a stray
+byte would be noise in every session). It always exits 0 — `exit 2` from
+`SessionStart` blocks the session from starting.
+
+It is a separate program from `claude-event-hook` on purpose: that shim's
+contract is "never write to stdout", which is the exact opposite of this one's
+job, and it fires on every session rather than only worktree ones. It gets the
+same publish-then-reference treatment as the event shim (#803) — copied to
+`$CLAUDE_CONFIG_DIR/hooks/worktree-context-hook`, referenced through the
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}` expansion — so the host side of the mount
+resolves it too. If its shim cannot be published the entry is simply omitted;
+unlike the event shim that is not worth refusing the whole merge over, because
+the fallback is only the status quo.
+
+**The text it ships is a declaration, not the sandbox's own rules.** The rules
+live in the Claude Code binary and are published nowhere this repo can read
+(`grep -rn 'isolated in the worktree'` over the tree returns nothing), so the
+list was written from refusals actually observed — compound commands and
+pipelines, `$( )` substitution, `source` of a computed string, `git` in a form
+too complex to verify or `git -C` pointing outside the worktree, `sed` with a
+runtime-computed value, `GIT_CONFIG_GLOBAL` (refused separately as "git-config
+injection"), `gh auth switch` (refused in some sessions and not others), and even
+a bare `bash` token inside an otherwise plain command. The shipped text says in
+so many words that this list is **indicative, not exhaustive**, and that it can
+go stale when the binary changes; a confidently wrong list would be worse than a
+short honest one. When a new refusal shape turns up, add it to
+`src/personal-features/worktree-context-hook`.
+
 **Opting out.** The merge only ever replaces its own entries (identified by the
-`claude-event-hook` command) and preserves all your other settings and hooks. To
+`HOOK_MARKERS` substrings — `claude-event-hook` and `worktree-context-hook`) and
+preserves all your other settings and hooks. To
 disable the capture, remove the `claude-event-hook` entries from
 `~/.claude/settings.json` (they — and the published
 `~/.claude/hooks/claude-event-hook` — will be re-added on the next container
@@ -465,7 +555,7 @@ Every failure path exits 0 with a warning naming the consequence: no `mempalace`
 
 **No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
 
-**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. Nothing checks the two agree — `claude plugin validate` reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252) — so renaming the launcher means editing the plugin in the same change.
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. A gate in `plugins/odoo-dev/scripts/validate.sh` now holds the two together: it extracts every `command` in `.lsp.json` and fails unless `install.sh` writes a file of that name into a `bin` directory (#787). It is a name check and cannot prove the generated script runs, but it catches the rename — whose failure mode is otherwise a language server that never starts and never says why. `claude plugin validate` is no help here: it reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252). Renaming the launcher still means editing the plugin in the same change; the gate is what makes forgetting loud.
 
 ## Additional tooling
 
@@ -495,7 +585,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
   1. **Symlinks `~/.mempalace` onto the mount.** A large class of mempalace state ignores `MEMPALACE_PALACE_PATH` and is hardcoded under `$HOME/.mempalace` — `config.json` and `people_map.json`, `locks/`, `wal/`, `hook_state/`, `known_entities.json` — and the hooks CLI additionally treats an absent `~/.mempalace` as the user's kill-switch. If it finds a **real directory** there (left by an earlier build, whose contents would otherwise be discarded on the next rebuild — the exact failure #596 fixed and #643 found reintroduced) it migrates the contents onto the mount, never clobbering a file the mount already has, and replaces it with the link. A regular file at that path is a user artifact and is left untouched with a warning.
   2. **Removes the stray `~` directory.** mempalace's MCP server `abspath()`s a literal `~/…` `--palace` argument without `expanduser()`, unlike its CLI sibling, so it resolves against the process cwd and the chroma backend then creates a real directory *named* `~` at the palace root, stranding memories where nothing will ever read them. Matched narrowly on that exact shape, so real palace data is never at risk.
   3. **Reconciles `config.json`'s `palace_path` with `MEMPALACE_PALACE_PATH`.** `Config.palace_path` returns on the env-var branch *before* consulting `config.json` and says nothing when the two disagree, so a `config.json` carried in on the mount from another machine can name a host path that does not exist here and sit there indefinitely — misleading anyone who reads the file, and silently deciding the answer for any code path that reads it directly. Only that key is rewritten; `topic_wings` and `hall_keywords` in the same file are user content and are never touched.
-  4. **Asserts what mempalace-as-only-memory needs, and repairs none of it (#744).** Native Claude auto-memory is switched off in the shared `settings.json` (`autoMemoryEnabled: false`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) and the native memory files were mined into the palace, so there is no longer a fallback when mempalace is misconfigured — and every one of these failures is silent. Three things are checked and **warned** about: `config.json`'s `hooks.auto_save` is `true` (the plugin's Stop/SessionEnd/PreCompact hooks consult that key and save nothing when it is false — which it was, unnoticed, until #744); `identity.txt` exists on the mount (the L0 context `mempalace wake-up` reads); and `$CLAUDE_CONFIG_DIR/hooks/mempalace-recall.sh` exists and is executable (the `SessionStart` recall hook, named by path from `settings.json`, so a missing file fails the hook on every session). `config.json` and the hook script are hand-maintained and are never written here — a generated value or a stubbed hook would mask the loss of the real one, which is the same silent failure in a better disguise. The one exception is a **wholly absent** `identity.txt`: absent means there is no user content to preserve, so a minimal template naming agent id `devcontainer-claude` is seeded and logged. An existing one is never touched. Nothing in this step is fatal.
+  4. **Asserts what mempalace-as-only-memory needs, and repairs none of it (#744).** Native Claude auto-memory is switched off in the shared `settings.json` (`autoMemoryEnabled: false`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) and the native memory files were mined into the palace, so there is no longer a fallback when mempalace is misconfigured — and every one of these failures is silent. Two things are checked here and **warned** about: `config.json`'s `hooks.auto_save` is `true` (the plugin's Stop/SessionEnd/PreCompact hooks consult that key and save nothing when it is false — which it was, unnoticed, until #744); and `identity.txt` exists on the mount (the L0 context `mempalace wake-up` reads). A third used to live here — `$CLAUDE_CONFIG_DIR/hooks/mempalace-recall.sh` exists and is executable — and moved to `sync-claude-hooks` with #805, which resolves **every** command `settings.json` references rather than that one alone, and so reports the recall hook exactly when the file actually names it. `config.json` and the hook script are hand-maintained and are never written here — a generated value or a stubbed hook would mask the loss of the real one, which is the same silent failure in a better disguise. The one exception is a **wholly absent** `identity.txt`: absent means there is no user content to preserve, so a minimal template naming agent id `devcontainer-claude` is seeded and logged. An existing one is never touched. Nothing in this step is fatal.
 
   **`mempalace init` runs once per workspace, and its artifacts are ignored machine-wide (#643).** `init` is worth running: the `rooms` list in the `mempalace.yaml` it writes is what routes mined files into rooms, and without it mining collapses into a single `general` room. (`config.json`'s `topic_wings`/`hall_keywords` are a keyword→hall map, not a substitute.) But `init`'s artifacts **cannot be redirected** — it resolves `entities.json`, `mempalace.yaml` and `.mempalace/` from its `--dir` argument, and exposes no `--output`/`--central`/`--palace-path` option, no `config.json` key, and no `MEMPALACE_*` env var that moves them. Upstream's own answer is appending a two-line block to each project's `.gitignore`, which dirties every repo it touches and does not scale across a tree of working repos.
 
