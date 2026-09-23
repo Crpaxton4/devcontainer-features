@@ -392,6 +392,58 @@ check "sync-claude-mcp exits 0 when the odoo-dev plugin install fails" bash -c \
 check "sync-claude-mcp keeps the loose copies when the plugin install fails" bash -c \
   "test -f \"$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md\""
 
+# --- sync-claude-mcp: the provision marker (#806) -----------------------------
+# A container running pre-migration feature scripts used to be indistinguishable
+# from one where the migration ran: the steps it lacks emit nothing. The marker
+# records, in the host-persisted $CLAUDE_CONFIG_DIR, which build of the
+# feature-owned scripts last provisioned this config dir - so an image older
+# than one already seen here says so instead of looking healthy.
+MCP_MARKER="$MCP_CONFIG/personal-features-provision.json"
+
+check "sync-claude-mcp writes the provision marker" bash -c \
+  "test -f \"$MCP_MARKER\""
+# The fingerprint is of the feature-owned SCRIPTS, not of the odoo-dev
+# migration: every step any of them ever gains is covered by the same marker.
+check "the provision marker fingerprints the feature-owned scripts" bash -c \
+  "grep -qF '\"sync-claude-mcp\"' \"$MCP_MARKER\" && grep -qF '\"claude-event-hook\"' \"$MCP_MARKER\" && grep -qF '\"script_digest\"' \"$MCP_MARKER\""
+# A first, matching provision is not drift and must stay quiet.
+check "a first provision is not reported as stale" bash -c \
+  "grep -qF '\"stale_image\": false' \"$MCP_MARKER\""
+
+# Now the case #806 is about: this container's scripts are OLDER than a set that
+# already provisioned the same ~/.claude. Seeded with a far-future high-water
+# mark and a digest that cannot match, which is exactly what a pre-migration
+# image looks like to a config dir a current image has touched.
+MCP_STALE_CONFIG="$MCP_TEST_ROOT/claude-home-stale"
+mkdir -p "$MCP_STALE_CONFIG"
+cat > "$MCP_STALE_CONFIG/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "newest_script_epoch": 4102444800,
+  "newest_script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "newest_seen_at": "2100-01-01T00:00:00Z",
+  "script_epoch": 4102444800,
+  "script_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scripts": {},
+  "stale_image": false
+}
+MARKER
+MCP_STALE_LOG="$MCP_TEST_ROOT/stale.log"
+CLAUDE_CONFIG_DIR="$MCP_STALE_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_STALE_LOG" || true
+
+check "an image older than one already seen here warns loudly" bash -c \
+  "grep -qF 'are OLDER than the newest set' \"$MCP_STALE_LOG\""
+check "the stale verdict is recorded in the marker" bash -c \
+  "grep -qF '\"stale_image\": true' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# A stale container writes its own provenance too, but must not erase the
+# evidence that something newer was here - otherwise the next stale run is quiet.
+check "a stale provision does not lower the high-water mark" bash -c \
+  "grep -qF '\"newest_script_epoch\": 4102444800' \"$MCP_STALE_CONFIG/personal-features-provision.json\""
+# Best-effort like the rest of the script: staleness is reported, never fatal.
+check "sync-claude-mcp still exits 0 on a stale image" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_STALE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
 rm -rf "$MCP_TEST_ROOT"
 
 # --- Claude Code lifecycle hooks delivery (#327) ------------------------------
