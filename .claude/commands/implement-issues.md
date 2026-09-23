@@ -291,8 +291,12 @@ One template, filled per worker.
     - `persisted-paths.tsv` ↔ `devcontainer-feature.json` ↔ `setup.sh` ↔
       `setup.ps1` must move together.
     - `plugins/odoo-dev/scripts/validate.sh` carries hard-coded inventory counts
-      (15 skills / 5 agents / 5 commands) plus a router-completeness gate in
-      `skills/odoo-dev-map/SKILL.md`.
+      for skills, agents and commands, plus a router-completeness gate in
+      `skills/odoo-dev-map/SKILL.md`. **Read the current numbers out of
+      `validate.sh` — do not quote them from here.** This bullet used to name
+      them and drifted (#847): it said 15 skills while the gate asserted 16. A
+      count copied into prose is a second registry, which is the same defect as
+      #781 one directory up, in the file that exists to warn about it.
   - `devcontainer-features/src/*/README.md` are generated — edit `NOTES.md`.
 - `## Deliverable`
   - Branch `<type>/<issue>-<slug>`.
@@ -355,9 +359,14 @@ status and stderr of the `git` or `gh` command that failed.** There is no
 exit-code taxonomy to memorise and the script does not translate errors. Read
 the text and decide. The three to recognise:
 
-- **`gh pr merge` refusing** because checks are red or still running, or because
-  review threads are unresolved → fix or wait (CI is roughly 3.5–5.5 min), then
-  re-run the **identical** command.
+- **`gh pr merge` refusing** → the script now handles this itself. It ignores the
+  wording of the refusal entirely and re-queries the facts, waiting while GitHub
+  settles and stopping only when a fact names a real cause: a conflict, a draft,
+  a check whose *conclusion* is a failure, a review that is genuinely required,
+  or a base that genuinely advanced. So a refusal reaching you has already been
+  classified — read the `stack-merge:` line under it, which names the cause.
+  Three separate fixes (#790, #795, #849) each added one more refusal string to
+  a list before that default was inverted; do not add a fourth.
 - **`git rebase` stopping on a conflict** → git has already left the rebase in
   progress in the ops worktree named in the state file. Resolve there,
   `git add`, re-run the identical command; the script continues that rebase
@@ -376,6 +385,10 @@ Three bespoke exit codes:
 - **`23`** — the train reached its end with PRs still unmerged, which means a
   bug in the script itself. **Do not reap and do not report the stack as
   landed.** The message names the unmerged PRs.
+- **`24`** — every PR merged, but an issue named by a `Closes` line is still
+  open. GitHub honours a closing keyword only when the PR's base is the default
+  branch, so a stacked child's `Closes` is inert until the train retargets it
+  (#846). Nothing has been reaped. The message names the issues.
 
 **Re-derive PR state from `gh` after any failed train — never from the stack
 expression.** The train mutates PRs you did not name: merging a parent can
