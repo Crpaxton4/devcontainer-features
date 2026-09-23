@@ -734,7 +734,7 @@ scripts/validate.sh
 
 Manifest, inventory, frontmatter limits, body size, router completeness, agent
 definitions, namespacing, hard-coded paths, stray skills, eval-suite structure,
-ten offline test suites, shell syntax, and release-version drift. Offline: no
+sixteen offline test suites, shell syntax, and release-version drift. Offline: no
 network, no docker, no Odoo, no repos tree.
 
 ### Continuous integration
@@ -747,7 +747,7 @@ jobs run the per-skill script test suites and a pinned shellcheck. It carries no
 secrets, asks for nothing beyond the read-only default token, and makes no network
 call except to install its tooling.
 
-No gate is local-only. Eighteen of the nineteen need nothing but bash, coreutils,
+No gate is local-only. All but one need nothing but bash, coreutils,
 git and node, all of which a stock runner already has. The remaining one shells out to
 `claude plugin validate --strict`, and the workflow installs the Claude Code CLI so
 that one runs on the runner too: `plugin validate` reads the manifest off disk, needs
@@ -769,6 +769,31 @@ neither can do otherwise:
 - **`setup.test.sh`** hands each case a curated `PATH` built from whatever the machine
   actually has, so a tool the runner lacks is simply left out of that case's bin dir
   instead of failing it. That is the design — what a case omits is the point of it.
+
+**The script test suites live in two registries, and a gate now keeps them in
+agreement.** `validate.sh` runs an explicit `run_suite` list; the workflow's
+`script-tests` job runs `find plugins/odoo-dev -name '*.test.sh' -type f`, so it runs
+everything on disk. The explicit list is deliberately a subset: a few suites reach
+their real subject only where CI provisions what it needs — `studio-inventory` exits
+early without `psql`, and the parity and tool-contract suites **SKIP** their
+installed-SDK cases without the pip-installed `odoo_sdk` their own jobs set up. None
+of them *fails* off a runner; they quietly check less, which is why running them from
+`validate.sh` would print a **PASS** for a suite whose point went unexercised.
+
+Until [#781](https://github.com/Crpaxton4/devcontainer-features/issues/781) nothing
+reconciled the two, and the cost was not an unrun test — CI's `find` sweep runs them
+all — but that reading either registry alone gave a confident wrong answer. A reviewer
+read `validate.sh`, concluded a suite was dead code in CI, and was wrong; the gap had
+been measured three times at three different values, because it moved every time
+anyone added a suite.
+
+So every `*.test.sh` on disk must now be either registered in `validate.sh` or named
+in [`check-suite-registry.sh`](scripts/check-suite-registry.sh)'s `CI_ONLY` list with
+the reason `validate.sh` must not run it. There is no third state. The gate asserts no
+total — a count would be the same two-copies-of-a-number defect it exists to remove —
+and it fails on a stale exemption as readily as on a missing registration, so an
+entry cannot outlive its suite. Run `check-suite-registry.sh --list` to see every
+suite and its disposition in one place.
 
 ### Releases
 
