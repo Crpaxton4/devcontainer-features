@@ -221,6 +221,14 @@ mark_complete() {
     mv "$tmp" "$STATE"
 }
 
+# Unconditional, before either path. Every remote-tracking ref this script reads
+# - origin/$BASE for the rebase target and for the base-moved comparison,
+# origin/<child> for the checkout the force-push then leases against - has to be
+# current, and a resume is precisely the case where they are not: the run stopped,
+# a human fixed something, and time passed. Fetching only while creating the state
+# file made the first attempt correct and every resume operate on a stale view.
+git -C "$REPO" fetch origin --quiet
+
 if [[ -f $STATE ]]; then
     prev=$(jq -r '.signature' "$STATE")
     # The one bespoke exit code: same id, different stack. Nothing is mutated.
@@ -235,8 +243,6 @@ if [[ -f $STATE ]]; then
 else
     mkdir -p "$STATE_DIR"
     OPS=$STATE_DIR/ops-$ID
-
-    git -C "$REPO" fetch origin --quiet
 
     # Head branch and tip SHA are captured once, up front, while every PR in the
     # stack is still open. A merged parent's branch is deleted, so the SHA is
@@ -255,11 +261,6 @@ else
         --arg base "$BASE" --arg ops "$OPS" --argjson heads "$heads" \
         '{id: $id, signature: $sig, repo: $repo, base: $base,
           ops_worktree: $ops, heads: $heads, done: [], cursor: null}' >"$STATE"
-
-    # One reusable ops worktree per run rather than one per child: fewer moving
-    # parts, and it is the path recorded in the state file for a human or an
-    # agent to go and resolve a conflict in.
-    git -C "$REPO" worktree add --detach "$OPS" "origin/$BASE"
 fi
 
 head_branch() { jq -r --arg pr "$1" '.heads[$pr].branch' "$STATE"; }
@@ -525,8 +526,21 @@ if [[ -n $blocked ]]; then
     printf 'The ops worktree must check each one out to rebase it, and git permits\n' >&2
     printf 'only one worktree per branch. Remove those worktrees:\n' >&2
     printf '  git -C %s worktree remove <path>\n' "$REPO" >&2
-    printf 'then re-run this identical command. Nothing has been changed.\n' >&2
+    printf 'then re-run this identical command. No PR, branch or worktree has\n' >&2
+    printf 'been changed.\n' >&2
     exit 21
+fi
+
+# One reusable ops worktree per run rather than one per child: fewer moving
+# parts, and it is the path recorded in the state file for a human or an agent
+# to go and resolve a conflict in.
+#
+# Created here, after the availability guard, rather than alongside the state
+# file: exit 21 promises nothing was changed, and creating a worktree first made
+# that promise false. Guarded on the path because a resume inherits the worktree
+# the first attempt left behind, mid-rebase and all.
+if [[ ! -d $OPS ]]; then
+    git -C "$REPO" worktree add --detach "$OPS" "origin/$BASE"
 fi
 
 # --------------------------------------------------------------------------
