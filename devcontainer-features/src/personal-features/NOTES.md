@@ -164,6 +164,48 @@ The wrapper injects `--ide` only for the zero-argument TTY case (`[ $# -eq 0 ] &
 
 The same wrapper also passes `--append-system-prompt-file "$CLAUDE_CONFIG_DIR/system-prompt-append.md"` (#740) for **session** invocations — no arguments at all, or a first argument that is a flag — so session-wide style and policy rules arrive as *system* prompt rather than as user-turn context that drifts over a long session. That file is **local-only and hand-maintained** in the bind-mounted claude-home: the Feature never ships it and never creates it, and the flag is injected only when it is actually present, so a container without one behaves exactly as it did before. Subcommands are skipped deliberately — `claude plugin …`, `claude mcp …`, anything whose first argument is not a flag, reject the option outright. No VS Code setting is involved: the wrapper **replaces the npm `claude` binary in place**, so everything that resolves `claude` through `PATH` — an IDE-launched session included — already runs it.
 
+**Where the wrapper itself lives (#807).** For a while the two halves of that
+mechanism updated on different clocks: `system-prompt-append.md` lives in the
+bind mount, so every edit to it is live immediately, while the wrapper that reads
+it was baked into the image and changed only on rebuild. A container whose image
+predated `--append-system-prompt-file` therefore passed no flag at all — every
+standing rule in the file absent from every session, for the better part of two
+weeks here, with nothing reporting it. Editing the file appeared to work and did
+nothing.
+
+Two things close that gap, neither of them new machinery:
+
+- **The wrapper is published into the mount, beside the rules it delivers.**
+  `publish-claude-wrapper` (feature-contributed `postCreateCommand`, before the
+  hook sync) copies the image's wrapper to
+  `$CLAUDE_CONFIG_DIR/personal-features/claude-wrapper` with the same
+  stage-`chmod`-rename discipline `sync-claude-hooks` uses for the #803 hook
+  shim, and the wrapper on `PATH` execs that copy when one is there. A wrapper
+  published by **any** container on this machine is then the wrapper every other
+  container runs, without a rebuild. The real Claude binary cannot travel with
+  the copy — its path carries the publishing image's Node version — so the
+  on-`PATH` stub hands its own over in `CLAUDE_REAL_BIN`, and re-entry is ruled
+  out by comparing `$0` against the shared path rather than by an environment
+  flag (a flag would leak into the session and make a nested `claude` skip the
+  shared copy). With no published copy the invocation is byte-identical to the
+  pre-#807 wrapper.
+- **Staleness is reported through the marker that already exists.** The wrapper
+  is fingerprinted by the #806 provision marker
+  (`$CLAUDE_CONFIG_DIR/personal-features-provision.json`), so an image older than
+  one this config dir has already seen announces itself there — one breadcrumb,
+  not a second one for this defect. `publish-claude-wrapper` adds the direct
+  check the issue asked for on top: one `grep` against the file `claude`
+  resolves to, warning loudly at container create when it carries no
+  `--append-system-prompt-file`, louder still when `system-prompt-append.md`
+  exists and is therefore being dropped right now.
+
+**What this does not fix.** A container whose image predates this change has
+neither the delegating wrapper nor the publisher, so nothing here reaches it —
+the same limit #806 documented ("a checker shipped in the image is exactly as
+absent from an old image as the step it would check"). Both halves above are
+forward-looking; the cure for an already-stale container is still a no-cache
+rebuild, and the point of the warning is that you now find out you need one.
+
 ## Claude Code lifecycle hooks (odoo-sdk event capture)
 
 This Feature provisions a set of Claude Code lifecycle hooks that record session

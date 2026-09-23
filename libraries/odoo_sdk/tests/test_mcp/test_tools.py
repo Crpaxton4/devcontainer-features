@@ -1302,6 +1302,15 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         # well as in the command-sourced description.
         self.assertIn("300", self._make().__doc__)
 
+    def test_docstring_states_the_attachment_audience(self):
+        # #767: this docstring is the ONLY surface an MCP client sees when no
+        # prompt is loaded, so the client-visible warning must live here too
+        # rather than only in the implement_task workflow.
+        doc = self._make().__doc__
+        self.assertIn("CLIENT-VISIBLE", doc)
+        self.assertIn("deliverables the client asked", doc)
+        self.assertIn("scripts,", doc)
+
     def test_attachments_forwarded_to_command(self):
         fn = self._make()
         specs = [{"path": "/tmp/report.csv"}]

@@ -59,7 +59,7 @@ Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the bra
 
 **Commits.** Conventional commits, scope = module name, per `odoo-devcontainer/references/commits.md`. Tidy history before PR exists: rebase fixups away, aim for one succinct commit or coherent sequence.
 
-**Manifest version bumped** for every changed module — on odoo.sh module only updated when commit bumps `__manifest__.py`.
+**Manifest version bumped** for every changed module — on odoo.sh module only updated when commit bumps `__manifest__.py`. Once per pull request, not once per commit. The body restates the resulting state under `### EXTREMELY IMPORTANT`, so a module that reaches step 3 unbumped fails here, not there.
 
 **Size.** Keep the pull request small: best under 500 changed lines (additions plus deletions), and under 1000 is still acceptable. Past that, review quality collapses — the reviewer starts skimming, and the findings that matter are the ones missed. Split the work into stacked pull requests instead, each one independently reviewable and each leaving the codebase in a working state.
 
@@ -81,7 +81,9 @@ Reviews take 7–30 minutes. `status` other than `complete` exits **3** and repo
 
 ## 3. Write the body
 
-From `references/pr-template.md`. Every section present; `- n/a` over missing heading. The body carries the task link, the two module lists, and one short paragraph per module.
+From `references/pr-template.md`. Every section present; `- n/a` over missing heading. The body carries the task link, the two module lists, the `### Deploy` command, the `### EXTREMELY IMPORTANT` checklist led by the manifest-version line, and one short paragraph per module.
+
+Lists of module names are not a deploy instruction. The release manager reads this body to decide what to type, so **Deploy** carries one `odoo-bin` invocation with only the flags that have operands — `-i` alone, `-u` alone, or both — and a removal-only PR carries the explanation instead of a command.
 
 The module lists are never written from memory. Classify them:
 
@@ -91,7 +93,7 @@ The module lists are never written from memory. Classify them:
 
 `{"install":[],"update":[],"removed":[],"details":[…]}`
 
-`install` is every module whose `__manifest__.py` is new in this PR, so it needs `-i`; `update` is every module already installed, so it needs `-u`; `removed` gets no command at all. `odoo-dev:odoo-release` calls the same script, so a PR and the release that ships it cannot disagree about what installs.
+`install` is every module whose `__manifest__.py` is new in this PR, so it needs `-i`; `update` is every module already installed, so it needs `-u`; `removed` gets no command at all. `details[]` carries `version_from`, `version_to` and `bumped` per module, and that is what the manifest-version line is written from — never from memory. Nothing here needs collecting twice: the lists, the command and the checklist all come out of this one payload. `odoo-dev:odoo-release` calls the same script, so a PR and the release that ships it cannot disagree about what installs.
 
 Title:
 
@@ -103,7 +105,7 @@ type(module): <task name> [task <id>]
 
 ## 4. Published-surface rule
 
-PR body and Odoo chatter are client-visible. The body carries the task link, the module lists, and the per-module description — no test output, no logs, no tracebacks, no machine paths, no CodeRabbit text.
+PR body and Odoo chatter are client-visible. The body carries the task link, the module lists, the deploy command, the manifest-version checklist, and the per-module description — no test output, no logs, no tracebacks, no machine paths, no CodeRabbit text.
 
 Full logs stay at `log_file`.
 

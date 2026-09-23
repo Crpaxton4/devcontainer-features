@@ -7,7 +7,7 @@
 # hook runs the gate at the tool boundary instead, so the PR cannot be opened
 # without it.
 #
-# It engages on exactly three shapes, and it treats them differently on purpose.
+# It engages on exactly four shapes, and it treats them differently on purpose.
 #
 #   pr-open.sh    is this plugin's own script, so every invocation of it is inside
 #                 the workflow by definition. If the artifacts dir cannot be
@@ -31,6 +31,21 @@
 #                 no task id in the branch name, no such directory, no worktree,
 #                 or not a git repository at all — the call is ALLOWED in silence,
 #                 because this plugin must not reach outside its own workflow.
+#
+#   git commit    is the fourth shape and the only one that is not about a PR. It
+#                 enforces the one rule this plugin asks a session to remember on
+#                 every single commit — bump the module's manifest version — which
+#                 #799 measured decaying with turn depth while the rule text stays
+#                 put. A commit that would carry changes to a module whose
+#                 __manifest__.py version has not moved is DENIED. Like
+#                 `gh pr create` it is an ordinary command in every repository on
+#                 the machine, so everything it cannot decide passes in silence:
+#                 no module in the change set, no repository, a merge or rebase in
+#                 progress, a module that does not exist at the base commit, or an
+#                 explicit pathspec, which narrows the commit to a subset this hook
+#                 does not try to reconstruct. That last one is the deliberate
+#                 bypass, and it is the same trade the `gh pr create` narrowing
+#                 makes: silence about work we cannot attribute beats denying it.
 #
 # A shape is matched in command position, never as a substring of the command
 # text. Heredoc bodies are dropped first, because the body of a heredoc is data
@@ -93,6 +108,10 @@ if ! fields="$(printf '%s' "$payload" | node -e '
 const SQ = "\x27";
 const unquote = (t) => t.replace(/^["\x27]+/, "").replace(/["\x27]+$/, "");
 const base = (t) => { const u = unquote(t); const i = u.lastIndexOf("/"); return i < 0 ? u : u.slice(i + 1); };
+// join(dir, arg) — `git -C <arg>` resolved against the directory it runs in. An
+// empty arg resolves to nothing rather than to the directory itself, because
+// `git -C ""` is a call the hook cannot attribute to any repository.
+const join = (dir, arg) => (!arg ? "" : arg.startsWith("/") ? arg : !dir ? "" : dir.replace(/\/+$/, "") + "/" + arg);
 
 // heredocsOn(line) — every heredoc the line opens, in the order their bodies
 // follow. The scan tracks quoting, so a << inside a quoted argument is not taken
@@ -332,6 +351,57 @@ process.stdin.on("end", () => {
       return emit("gh", cwd, "");
     }
   }
+
+  // Shape four: `git commit`. The repository is the payload cwd unless a leading
+  // `-C` moves it; `--git-dir` and `--work-tree` move it somewhere this hook
+  // cannot follow, and a commit it cannot locate is one it says nothing about.
+  // Only the flags that change WHAT the commit would carry are reported: `-a`
+  // widens it to every tracked modification, `--amend` rewrites the tip so the
+  // comparison base is its parent. An explicit pathspec narrows the commit to a
+  // subset the hook does not attempt to reconstruct, and narrows it in silence.
+  const VALUED = ["-m", "--message", "-F", "--file", "-C", "--reuse-message",
+    "-c", "--reedit-message", "--fixup", "--squash", "--author", "--date",
+    "-t", "--template", "--trailer", "--pathspec-from-file"];
+  // A short cluster ends in the only letter that can take the next token.
+  const CLUSTER = /^-[A-Za-z]+$/;
+  const TAKES = "mFCct";
+  for (const call of cmds) {
+    if (base(call[0]) !== "git") continue;
+    let repo = cwd;
+    let opaque = false;
+    let i = 1;
+    for (; i < call.length; i += 1) {
+      const a = call[i];
+      if (!a.startsWith("-")) break;
+      if (a === "-C") { repo = join(repo, call[i + 1] || ""); i += 1; continue; }
+      if (a === "-c") { i += 1; continue; }
+      if (a === "--git-dir" || a === "--work-tree" || a === "--namespace") { opaque = true; i += 1; continue; }
+      if (/^--(git-dir|work-tree|namespace)=/.test(a)) { opaque = true; continue; }
+    }
+    if (call[i] !== "commit") continue;
+    if (opaque || !repo) return emit("none", "", "");
+    const flags = [];
+    let pathspec = false;
+    for (let j = i + 1; j < call.length; j += 1) {
+      const a = call[j];
+      if (a === "--") { pathspec = j + 1 < call.length; break; }
+      if (!a.startsWith("-")) { pathspec = true; break; }
+      if (a === "--amend") { flags.push("amend"); continue; }
+      if (a === "--all") { flags.push("all"); continue; }
+      if (VALUED.indexOf(a) >= 0) { j += 1; continue; }
+      if (!CLUSTER.test(a)) continue;
+      // A short cluster is boolean flags until one that takes a value, and that
+      // one swallows the rest of its own token or, if it ends it, the next one.
+      // `-ma` is therefore `-m a` and carries no `-a`, which is why the letters
+      // are read in order rather than searched for.
+      for (let k = 1; k < a.length; k += 1) {
+        if (TAKES.indexOf(a[k]) >= 0) { if (k === a.length - 1) j += 1; break; }
+        if (a[k] === "a") flags.push("all");
+      }
+    }
+    if (pathspec) return emit("none", "", "");
+    return emit("commit", repo, flags.join(" "));
+  }
   return emit("none", "", "");
 });
 ' 2>/dev/null)"; then
@@ -339,7 +409,9 @@ process.stdin.on("end", () => {
   # the gate. A pr-open.sh or release-pr.sh call is inside the workflow and is
   # refused loudly. A bare `gh pr create` cannot be attributed to a task even in
   # principle here, so it follows the rule every unattributable PR follows and
-  # passes through. These tests stay substring tests on purpose: with node gone
+  # passes through, and a `git commit` passes for the same reason — without a
+  # parser there is no change set to read. These tests stay substring tests on
+  # purpose: with node gone
   # there is nothing left to parse the command with, and a loud refusal is the
   # whole point of the branch.
   case "$payload" in
@@ -359,6 +431,110 @@ note="$(printf '%s\n' "$fields" | sed -n 3p)"
 # A `gh pr create` whose payload carries no worktree cannot be tied to a task, and
 # an unattributable PR is not this plugin's business. See the header comment.
 [ "$mode" = "gh-unattributable" ] && exit 0
+
+# manifest_version — the version string of an Odoo manifest read on stdin, or
+# nothing when there is no readable one. Same expression module-classify.sh uses,
+# so what the commit gate calls a bump and what the PR calls a bump are the same
+# thing. Both quote styles appear in the wild; the first `version` key wins.
+manifest_version() {
+  node -e '
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => { raw += d; });
+process.stdin.on("end", () => {
+  const m = /["\x27]version["\x27]\s*:\s*["\x27]([^"\x27]+)["\x27]/.exec(raw);
+  process.stdout.write(m ? m[1] : "");
+});
+' 2>/dev/null
+}
+
+# Shape four: a `git commit` carrying module changes with the manifest version
+# standing still. This is the one rule in the plugin that a session is asked to
+# remember on every commit, and #799 measured what remembering is worth — the
+# obligation decays with turn depth while the rule text does not change. So it
+# stops being an obligation here and becomes a denial at the tool boundary.
+#
+# A module is a directory carrying __manifest__.py, the same test
+# module-classify.sh uses, found by walking up from each changed path. Everything
+# the hook cannot decide passes in silence, because `git commit` is an ordinary
+# command in every repository on the machine and this plugin must not police work
+# it does not own. It says nothing when: the directory is not a work tree, a
+# merge, rebase, cherry-pick or revert is in progress, the base commit does not
+# exist, nothing about a module is being committed, the module is not present at
+# the base (a first commit has no earlier version to move away from), the module's
+# manifest is not in the commit at all (a removal bumps nothing), or either
+# manifest has no readable version key.
+if [ "$mode" = "commit" ]; then
+  repo="$worktree"
+  amend=no; all=no
+  case " $note " in *" amend "*) amend=yes ;; esac
+  case " $note " in *" all "*) all=yes ;; esac
+
+  [ -d "$repo" ] || exit 0
+  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+  gitdir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || exit 0
+  [ -n "$gitdir" ] || exit 0
+  for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    [ -e "$gitdir/$marker" ] && exit 0
+  done
+
+  # --amend replaces the tip, so what the commit would carry is measured against
+  # the tip's parent. Amending a root commit has no parent and is left alone.
+  base_rev=HEAD
+  [ "$amend" = yes ] && base_rev='HEAD^'
+  git -C "$repo" rev-parse --verify -q "$base_rev^{commit}" >/dev/null 2>&1 || exit 0
+
+  # The index is what `git commit` writes; `-a` adds every tracked modification
+  # in the work tree on top of it, and neither form picks up an untracked file.
+  changed="$(git -C "$repo" diff --cached --name-only "$base_rev" 2>/dev/null)"
+  if [ "$all" = yes ]; then
+    changed="$changed
+$(git -C "$repo" diff --name-only "$base_rev" 2>/dev/null)"
+  fi
+
+  modules=""
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    dir="$(dirname "$path")"
+    while [ "$dir" != "." ] && [ "$dir" != "/" ] && [ -n "$dir" ]; do
+      if [ -f "$repo/$dir/__manifest__.py" ] \
+         || git -C "$repo" cat-file -e "$base_rev:$dir/__manifest__.py" 2>/dev/null; then
+        modules="$modules$dir
+"
+        break
+      fi
+      dir="$(dirname "$dir")"
+    done
+  done <<EOF
+$changed
+EOF
+  modules="$(printf '%s' "$modules" | sed '/^$/d' | sort -u)"
+  [ -n "$modules" ] || exit 0
+
+  stale=""
+  while IFS= read -r mod; do
+    [ -n "$mod" ] || continue
+    old="$(git -C "$repo" show "$base_rev:$mod/__manifest__.py" 2>/dev/null)"
+    [ -n "$old" ] || continue
+    if [ "$all" = yes ]; then
+      new=""
+      [ -f "$repo/$mod/__manifest__.py" ] && new="$(cat "$repo/$mod/__manifest__.py" 2>/dev/null)"
+    else
+      new="$(git -C "$repo" show ":$mod/__manifest__.py" 2>/dev/null)"
+    fi
+    [ -n "$new" ] || continue
+    oldv="$(printf '%s' "$old" | manifest_version)"
+    newv="$(printf '%s' "$new" | manifest_version)"
+    [ -n "$oldv" ] && [ -n "$newv" ] || continue
+    [ "$oldv" != "$newv" ] && continue
+    stale="$stale, $mod (still $oldv)"
+  done <<EOF
+$modules
+EOF
+
+  [ -n "$stale" ] || exit 0
+  deny "The odoo-dev gate hook blocks this commit: it changes ${stale#, } without moving the manifest version. Run \`bump_manifest_version.py <module>\` from skills/odoo-devcontainer/scripts/ and stage the manifest, then commit again. An unbumped module deploys and then does nothing until someone runs -u by hand, and the commit is the last place that is cheap to fix."
+fi
 
 WHY="A PR that cannot be traced back to its evidence does not open. Run gate.sh yourself against the task artifacts dir and fix what it names, or call pr-open.sh with the worktree as its first argument."
 RELEASE_WHY="A promotion that cannot be traced back to its manifest does not open. Write 60-release.json into the release directory through artifact.sh, run gate.sh --for release against it, and fix what it names."
