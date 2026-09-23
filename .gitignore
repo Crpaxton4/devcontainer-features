@@ -15,6 +15,7 @@ CLAUDE.md
 !.claude/commands/implement-issues/
 .claude/commands/implement-issues/*
 !.claude/commands/implement-issues/stack-merge.sh
+!.claude/commands/implement-issues/gh-as-owner.sh
 
 # Node
 node_modules/
