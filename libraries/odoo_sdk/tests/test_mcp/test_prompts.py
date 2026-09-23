@@ -313,6 +313,16 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("2-4 short bullets", content)
         self.assertIn("one-line summary", content)
 
+    def test_note_style_states_chatter_is_client_visible(self):
+        # #767: the attachment affordance was documented with no statement of
+        # audience, so agents posted internal artifacts to a customer thread.
+        content = _build_messages(_make_task())[1]
+        start = content.index("## Note Style")
+        style = content[start : content.index("## Tool Reference")]
+        self.assertIn("client-visible", style)
+        self.assertIn("deliverables the client asked to receive", style)
+        self.assertIn("scripts, logs", style)
+
     def test_second_message_requires_python_unit_tests(self):
         msgs = _build_messages(_make_task())
         content = msgs[1]
