@@ -79,33 +79,43 @@ The account comes from the repo itself. Run this before anything that touches
 GitHub, and repeat it inside every worker's own preflight so no worker inherits
 or assumes an active account:
 
-**`GH_TOKEN` must be set inline, as a prefix on the one command that needs it.**
-Not exported in a prior statement. Two independent reasons, and each one alone
-is fatal:
-
-- Your Bash calls keep **no exported environment** between them, exactly as they
-  keep no working directory. An `export` in call N is gone by call N+1.
-- The permission classifier refuses a bare `gh` that depends on an
-  ambient token. Only the inline-prefix form is accepted.
-
-So every authenticated command carries its own token:
+**Never build the authenticated command yourself. Call the wrapper.**
 
 ```bash
-GH_TOKEN="$(gh auth token --user "$(git -C /workspaces/devcontainer-features remote get-url origin \
-  | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##' \
-  | cut -d/ -f1)")" \
-  gh pr create -R <owner>/<repo> ...
+.claude/commands/implement-issues/gh-as-owner.sh push <abs worktree path> <branch>
+.claude/commands/implement-issues/gh-as-owner.sh pr-create <abs worktree path> --base main --title "..." --body "..."
+.claude/commands/implement-issues/gh-as-owner.sh gh <any other gh args>
 ```
 
-and `git push`, which reaches GitHub through `gh`'s credential helper, carries
-it the same way — via `-c`, **never** by writing the helper into the repo's
-config:
+That is the whole interface. It resolves the owner from the checkout's own
+origin remote, resolves that owner's token, and runs the command — all inside
+one bash process, where the token is never an argument and never touches disk.
 
-```bash
-GH_TOKEN="$(gh auth token --user <owner>)" \
-  git -C <abs worktree path> -c credential.helper='!gh auth git-credential' \
-  push -u origin <branch>
-```
+The reason it is a script rather than a documented command is not style. It is
+the second attempt at this problem, and the first one looked correct:
+
+- **#769** mandated an `export GH_TOKEN` block. No exported environment survives
+  between your Bash calls, so it could never have worked. Six workers
+  improvised; one wrote `credential.helper` into the shared `.git/config`.
+- **#828** replaced it with an inline prefix,
+  `GH_TOKEN="$(gh auth token --user X)" git …`. That form *is* accepted at top
+  level, which is why it passed review — and is refused inside a
+  worktree-isolated worker session, which is where this command actually runs
+  it. Five of five workers were blocked. Five different push mechanisms and four
+  different PR-create mechanisms appeared, two of them things this section
+  explicitly prohibits.
+
+What the classifier accepts inside an isolated session is a **plain command**:
+a literal program path, literal arguments, no command substitution, no
+environment prefix, no chaining. At least two separate rules reject the inline
+form — one on expression complexity, one on git-config injection — so simplify
+the expression and it is still refused. Nothing inside a script is inspected,
+which is why the computation belongs in one.
+
+If the wrapper itself is refused or fails, **stop and report it**. Do not
+reconstruct the command by hand. A worker that invents its own auth invents a
+different one from every sibling, and that is how a token ends up in a remote
+URL or in global `gh` state.
 
 `git config credential.helper` is **not** an acceptable substitute. `.git/config`
 is shared by every worktree in the repo, so one worker writing it silently
@@ -248,11 +258,14 @@ One template, filled per worker.
   run must carry `-C <abs path>` and every `gh` command must carry
   `-R <owner>/<repo>` — your Bash calls keep no working directory **and no
   exported environment** between them."*
-- **Both inline-`GH_TOKEN` forms from the Identity section above**, pasted
-  verbatim — the `gh` one and the `git push` one. Hand the worker the form that
-  works; a worker that has to invent its own auth at push time will invent a
-  different one from every sibling, which is Phase 7's named failure mode
-  arriving by design rather than by accident.
+- **The three `gh-as-owner.sh` invocations from the Identity section above**,
+  pasted verbatim, with the absolute worktree path substituted. Tell the worker
+  these are the only authenticated forms it may use, and that a refusal or
+  failure from the wrapper is a stop-and-report rather than a cue to build its
+  own. A worker that invents its own auth at push time invents a different one
+  from every sibling — that is Phase 7's named failure mode arriving by design
+  rather than by accident, and it has now happened twice, to six workers and
+  then to five.
 - `Read the issue first: gh issue view <n> -R <owner>/<repo>`
 - `## The change` — numbered steps with `file:line` pointers from Phase 2.
 - `## Hard constraints`
