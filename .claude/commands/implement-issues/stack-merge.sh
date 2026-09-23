@@ -62,6 +62,9 @@ usage: stack-merge.sh --repo <abs-path> --id <id> --stack <pr>[:<parent-pr>] ...
 exit 0   the stack landed
 exit 2   bad arguments
 exit 20  this --id is already in flight with a different stack; nothing mutated
+exit 21  a child branch is checked out in another worktree; nothing mutated
+exit 23  the train ended with PRs still unmerged (a bug in this script)
+exit 24  every PR merged but an issue named by a closing keyword is still open
 other    the raw exit status of the git or gh command that failed
 EOF
 }
@@ -304,6 +307,7 @@ head_sha() { jq -r --arg pr "$1" '.heads[$pr].sha' "$STATE"; }
 # answer to a mutation that was already performed, which is a bounded set.
 CHECK_POLL=${STACK_MERGE_CHECK_POLL:-30}
 CHECK_TIMEOUT=${STACK_MERGE_CHECK_TIMEOUT:-900}
+STALE_TIMEOUT=${STACK_MERGE_STALE_TIMEOUT:-1800}
 REF_GONE_RE='Reference does not exist|HTTP 422|Not Found|HTTP 404'
 ALREADY_CURRENT_RE='already up[ -]?to[ -]?date|not behind|no new commits'
 
@@ -347,8 +351,9 @@ sync_node() {
 }
 
 merge_node() {
-    local pr=$1 key out rc waited=0 base_before base_now
+    local pr=$1 key out rc waited=0 stale_waited=0 base_before base_now
     local fatal state mergeable mstate isdraft red review unresolved resync_rc resync_out
+    local stale pending head_sha running
     key="$pr:merge"
     is_done "$key" && return 0
     base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
@@ -478,20 +483,58 @@ merge_node() {
             printf 'stack-merge: #%s was BEHIND; re-synced and retrying\n' "$pr" >&2
         fi
 
-        if [[ -n $fatal ]] || ((waited >= CHECK_TIMEOUT)); then
+        # A check the rollup still calls pending, whose workflow run has already
+        # finished, is a stale READ - not a check that is running. Observed: a
+        # three-second check served as IN_PROGRESS for about ten minutes, which
+        # burned over half of one node's 900s budget (#854). A lag only ~1.5x
+        # longer would have timed out a fully green PR and reported it as the
+        # PR's fault.
+        #
+        # The workflow runs for the head SHA are the fact that names the cause -
+        # the same principle the inversion above rests on. If none of them is
+        # still running, nothing can be pending except GitHub catching up, so
+        # that wait is charged to a separate budget rather than to the one meant
+        # for real CI. A query failure leaves running=-1, which charges the
+        # normal budget: the conservative direction.
+        stale=0
+        pending=$(gh pr view "$pr" -R "$SLUG" --json statusCheckRollup --jq '
+            [ .statusCheckRollup[]?
+              | select((.status // "") | IN("QUEUED","IN_PROGRESS","PENDING","WAITING","REQUESTED")) ] | length')
+        if ((pending > 0)); then
+            head_sha=$(gh pr view "$pr" -R "$SLUG" --json headRefOid --jq .headRefOid)
+            running=$(gh run list -R "$SLUG" --commit "$head_sha" --limit 100 --json status --jq '
+                [ .[] | select(.status | IN("queued","in_progress","requested","waiting","pending")) ] | length') ||
+                running=-1
+            ((running == 0)) && stale=1
+        fi
+
+        if [[ -n $fatal ]] || ((waited >= CHECK_TIMEOUT)) || ((stale_waited >= STALE_TIMEOUT)); then
             printf '%s\n' "$out" >&2
             if [[ -n $fatal ]]; then
                 printf 'stack-merge: %s\n' "$fatal" >&2
+            elif ((stale_waited >= STALE_TIMEOUT)); then
+                printf 'stack-merge: #%s: the check rollup never caught up in %ss. Every workflow run for its head had finished, so this is GitHub lagging rather than CI running.\n' \
+                    "$pr" "$STALE_TIMEOUT" >&2
             else
                 printf 'stack-merge: #%s never settled in %ss. Last observed: mergeable=%s mergeStateStatus=%s\n' \
                     "$pr" "$CHECK_TIMEOUT" "$mergeable" "$mstate" >&2
             fi
             exit "$rc"
         fi
-        printf 'stack-merge: #%s not settled yet (%ss/%ss, mergeable=%s %s), waiting %ss: %s\n' \
-            "$pr" "$waited" "$CHECK_TIMEOUT" "$mergeable" "$mstate" "$CHECK_POLL" "${out%%$'\n'*}" >&2
+
+        if ((stale)); then
+            printf 'stack-merge: #%s rollup is behind (%ss/%ss stale, %s check(s) read pending, 0 workflow runs still going), waiting %ss\n' \
+                "$pr" "$stale_waited" "$STALE_TIMEOUT" "$pending" "$CHECK_POLL" >&2
+        else
+            printf 'stack-merge: #%s not settled yet (%ss/%ss, mergeable=%s %s), waiting %ss: %s\n' \
+                "$pr" "$waited" "$CHECK_TIMEOUT" "$mergeable" "$mstate" "$CHECK_POLL" "${out%%$'\n'*}" >&2
+        fi
         sleep "$CHECK_POLL"
-        waited=$((waited + CHECK_POLL))
+        if ((stale)); then
+            stale_waited=$((stale_waited + CHECK_POLL))
+        else
+            waited=$((waited + CHECK_POLL))
+        fi
     done
     printf '%s\n' "$out"
     add_done "$key"
@@ -644,6 +687,36 @@ if [[ -n $unlanded ]]; then
     printf '  This is a bug in this script - it should have stopped at the first\n' >&2
     printf '  failure. Nothing has been reaped. Do not treat the stack as landed.\n' >&2
     exit 23
+fi
+
+# The same promise, one level out: the run exists to close issues, not to merge
+# PRs. GitHub honours a closing keyword ONLY when the PR's base is the default
+# branch (#846), so a stacked child's `Closes #N` is inert until restack_child
+# retargets it. That ordering currently discharges it - observed 4/4 on the run
+# that added this - but nothing asserted it, and an assertion is the difference
+# between "it worked" and "it cannot silently stop working".
+#
+# The failure it guards is quiet by construction: every PR merges, the train
+# exits 0, the caller reaps, and a subset of issues - precisely the stacked ones
+# - stay open with nothing saying why. The next run then reads them as
+# outstanding and may re-plan work that is already on main.
+unclosed=""
+for pr in "${ORDER[@]}"; do
+    while read -r n; do
+        [[ -n $n ]] || continue
+        [[ $(gh issue view "$n" -R "$SLUG" --json state --jq .state) == CLOSED ]] ||
+            unclosed+=" #$n (named by PR #$pr)"
+    done < <(gh pr view "$pr" -R "$SLUG" --json body --jq .body |
+        grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' |
+        grep -oE '[0-9]+')
+done
+if [[ -n $unclosed ]]; then
+    printf 'stack-merge: every PR merged, but these issues are still open:%s\n' "$unclosed" >&2
+    printf '  A PR body named them with a closing keyword and GitHub did not act on it.\n' >&2
+    printf '  The usual cause is a PR merged while its base was still another branch:\n' >&2
+    printf '  the keyword only fires against the default branch. Nothing has been\n' >&2
+    printf '  reaped. Close them by hand or re-check the retarget step.\n' >&2
+    exit 24
 fi
 
 set_cursor ""
