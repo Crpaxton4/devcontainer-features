@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: dispatch-pr-after-gate
+description: Should dispatch the odoo-dev-pr subagent once the gate is clear.
+tags: [trigger, positive, validation]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Odoo task 4821 is verified and the gate came back green. Take it from here — push the branch, open the pull request for the client, and note the task.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-pr
+    tool: Task
+    input_match: "odoo-dev-pr"
+    min: 1
+expected_outcome: A Task call spawns odoo-dev-pr rather than gh being driven from the main session.

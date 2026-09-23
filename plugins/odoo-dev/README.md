@@ -85,6 +85,45 @@ not by `disallowedTools`, which never covered Bash and still does not.
 `odoo-dev-tester` is the single definition of "passes" for **both** delivery and
 upgrade, so there is exactly one bar.
 
+#### Dispatch — how these five actually get run
+
+A roster nothing spawns is a roster that costs review and returns nothing, and that
+is what these were: across ~900 measured `Task` spawns, `odoo-dev-pr` and
+`odoo-dev-scoper` had never run once, and the other three had two spawns between
+them (#802). The router named every agent — the [router-completeness gate](#verify)
+only ever asserted the name appears — and then told the model to *recommend a slash
+command*, which is a path the model does not have: each command in `commands/`
+carries `disable-model-invocation: true`. So the roster read healthy and dispatched
+nothing.
+
+Three things changed, and the first is the load-bearing one:
+
+- **Routing ends in a `Task` call.** `odoo-dev:odoo-dev-map` now carries a
+  *How to dispatch* procedure — resolve the three absolute paths, emit one `Task`
+  per stage, run the gate between stages — and says outright that naming the owning
+  agent in prose has routed nothing. The slash commands stay the user's shortcut;
+  they were never the model's.
+- **`subagent_type` is the namespaced name.** `odoo-dev:odoo-dev-builder`, and the
+  same shape for the other four. A bare name does not resolve, and falling back to
+  `general-purpose` drops every `skills:` preload, `disallowedTools` entry and hook
+  these definitions carry.
+- **Each `description:` says when to dispatch, what to put in the prompt, and what
+  comes back.** A description is the entire dispatch surface — the router sees
+  nothing else — so it now opens with the caller-side condition ("dispatch this
+  rather than editing module files in the main session"), keeps the quoted trigger
+  phrasings, states the spawn-prompt contract (artifacts directory, artifact script
+  and gate script as absolute paths, plus the one stage-specific value), states the
+  return (an artifact path and at most five lines), and names the sibling agent that
+  owns the adjacent work. The implicit prompt contract was the quiet blocker: an
+  agent whose body demands three absolute paths its description never mentions is
+  one a caller cannot prompt correctly, so the caller does the work inline instead.
+
+Dispatch is regression-tested rather than asserted: `evals/dispatch-*` grade
+`tool: Task` against each of the five agent names, five should-trigger cases and two
+near-misses, so a route that collapses back to `general-purpose` fails the suite.
+`claude plugin eval` is early-access gated, so those cases are checked structurally
+here and run wherever early access is enabled.
+
 ### What `skills:` frontmatter actually does
 
 Measured on 2026-09-07 against Claude Code **2.1.247**, by reading the CLI's own
@@ -653,7 +692,7 @@ devcontainer-features/
     ├── skills/     16 skills; odoo-dev-map is the router
     ├── agents/     5 subagents, all named odoo-dev-*
     ├── scripts/    artifact.sh, gate.sh, bootstrap-state.sh, check-stray-skills.sh, validate.sh
-    ├── evals/      20 trigger-accuracy cases
+    ├── evals/      29 trigger-accuracy cases
     └── README.md
 ```
 
@@ -814,7 +853,7 @@ Commit titles on every PR. A non-conventional title would cut no release.
 
 ### Trigger accuracy
 
-[`evals/`](evals/) holds 22 cases — 12 that should fire a specific skill and 10
+[`evals/`](evals/) holds 29 cases — 17 that should fire a specific skill and 12
 near-misses that share a trigger word but are out of domain ("upgrade the npm
 dependencies", "quote this sentence as a blockquote"), split train/validation. They
 catch descriptions cannibalizing each other before real work does.

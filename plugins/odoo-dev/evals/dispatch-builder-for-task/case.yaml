@@ -1,0 +1,18 @@
+schema_version: "1.1"
+name: dispatch-builder-for-task
+description: Should dispatch the odoo-dev-builder subagent, not build inline.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Odoo task 4821 is the discount field on the sale order line for Acme. Go ahead and implement it — cut the branch, write the module code and the tests, and commit.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-builder
+    tool: Task
+    input_match: "odoo-dev-builder"
+    min: 1
+expected_outcome: A Task call spawns odoo-dev-builder rather than the work being done in the main session.

@@ -1,12 +1,21 @@
 ---
 name: odoo-dev-scoper
 description: >
-  Use this agent when an Odoo request needs to be understood and priced before
-  anyone writes code — discovery capture, a build-vs-adopt prior-art verdict, an
-  hours estimate, and a solution design doc. Typical triggers include "quote
-  this", "estimate this change request", "scope the integration", "do we need to
-  build this?", "run discovery for the client", and "write the design doc". It
-  produces the scope artifact the builder works from; it never touches a repo.
+  Dispatch this agent — rather than hand-composing an estimate in the main
+  session — whenever an Odoo request has to be understood and priced before anyone
+  writes code: discovery capture, a build-vs-adopt prior-art verdict, an hours
+  estimate on the Fibonacci ladder, and a solution design doc. Reach for it the
+  moment an Odoo request arrives with no scope attached, and always before a build
+  is dispatched, because the artifact it writes is what the builder reads. Typical
+  triggers include "quote this", "estimate this change request", "scope the
+  integration", "do we need to build this?", "run discovery for the client", and
+  "write the design doc". Spawn it with the artifacts directory, the artifact
+  script and the gate script written out as absolute paths, plus the verbatim
+  request whose first token is the Odoo task id; it returns an artifact path and at
+  most five lines of plain English. It produces the scope artifact the builder
+  works from; it never touches a repo, and it is the wrong agent for cutting a
+  branch (odoo-dev-builder), running tests (odoo-dev-tester), or opening a pull
+  request (odoo-dev-pr).
 skills:
   - odoo-repo-map
   - odoo-prior-art
