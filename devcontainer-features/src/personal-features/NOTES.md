@@ -433,7 +433,7 @@ Every failure path exits 0 with a warning naming the consequence: no `mempalace`
 
 **No new persisted path.** The binary and stubs are baked into the image, the generated config is derived state regenerated on every create, and the logs are container-local — so `persisted-paths.tsv`, `devcontainer-feature.json`'s `mounts`/`containerEnv`, `setup.sh` and `setup.ps1` are all untouched.
 
-**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. Nothing checks the two agree — `claude plugin validate` reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252) — so renaming the launcher means editing the plugin in the same change.
+**One name links two trees.** `plugins/odoo-dev/.lsp.json` names `odoo-ls-server` as its `command`, and this Feature is what puts a script by that name on `PATH`. A gate in `plugins/odoo-dev/scripts/validate.sh` now holds the two together: it extracts every `command` in `.lsp.json` and fails unless `install.sh` writes a file of that name into a `bin` directory (#787). It is a name check and cannot prove the generated script runs, but it catches the rename — whose failure mode is otherwise a language server that never starts and never says why. `claude plugin validate` is no help here: it reads only the manifest and does not look at `.lsp.json` at all (measured against 2.1.252). Renaming the launcher still means editing the plugin in the same change; the gate is what makes forgetting loud.
 
 ## Additional tooling
 
