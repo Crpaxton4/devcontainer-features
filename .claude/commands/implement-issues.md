@@ -21,17 +21,17 @@ Origin: !`git -C /workspaces/devcontainer-features remote get-url origin`
 
 Owner/repo: !`git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##'`
 
-Authenticated accounts: !`gh auth status 2>&1 | grep -E 'Logged in to|Active account'`
+Authenticated accounts: !`gh auth status 2>&1 | grep -E 'Logged in to|Active account' || echo '(no account lines matched — run gh auth status by hand)'`
 
 Local HEAD: !`git -C /workspaces/devcontainer-features log -1 --format='%h %s'`
 
-Behind origin/main: !`git -C /workspaces/devcontainer-features fetch origin --quiet && git -C /workspaces/devcontainer-features rev-list --count HEAD..origin/main`
+Behind origin/main: !`git -C /workspaces/devcontainer-features fetch origin --quiet && git -C /workspaces/devcontainer-features rev-list --count HEAD..origin/main || echo 'FETCH-FAILED'`
 
 Ahead of origin/main: !`git -C /workspaces/devcontainer-features rev-list --count origin/main..HEAD`
 
 Uncommitted: !`git -C /workspaces/devcontainer-features status --porcelain`
 
-Repo-local credential helper (must print nothing): !`git -C /workspaces/devcontainer-features config --local --get-all credential.helper`
+Repo-local credential helper (must print `(none)`): !`git -C /workspaces/devcontainer-features config --local --get-all credential.helper || echo '(none)'`
 
 Worktrees: !`git -C /workspaces/devcontainer-features worktree list`
 
@@ -39,8 +39,23 @@ Open issues: !`gh issue list -R "$(git -C /workspaces/devcontainer-features remo
 
 Open PRs: !`gh pr list -R "$(git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')" --state open --json number,title,author,isDraft --template '{{range .}}#{{.number}} [{{.author.login}}]{{if .isDraft}} (draft){{end}} {{.title}}{{"\n"}}{{end}}'`
 
-If any line above rendered blank, the `allowed-tools` prefix did not match that
-command's `-C`/`-R` form. Widen it rather than proceeding on memory.
+**Every injection above must exit 0, including when it finds nothing.** A
+non-zero exit does not render a blank line — it aborts the whole command load
+with a `Shell command failed for pattern` error whose body is empty, so no phase
+below this point is ever reached. Two of these commands report "nothing found"
+as exit 1: `git config --get-all` when the key is unset, and `grep` when nothing
+matches. Both are the *healthy* case here, which is why each one ends in an
+`|| echo` giving the empty result a name. Any injection added later needs the
+same treatment.
+
+Keep bang-backtick sequences out of the prose in this file. The exact rule the
+loader uses to recognise an injection is not documented here and has not been
+tested; what *is* known is that a failing injection takes the whole file down
+with it, so an example that happens to be recognised would cost a run. Describe
+the syntax in words instead.
+
+If a line rendered blank rather than failing, the `allowed-tools` prefix did not
+match that command's `-C`/`-R` form. Widen it rather than proceeding on memory.
 
 ## Identity — derived from the repo, never configured
 
@@ -98,9 +113,14 @@ Resolve all of these before planning:
 
 - **Behind origin/main is non-zero** → rebase or restate the baseline. Planning
   against a stale tree produces workers that conflict with code already landed.
+- **Behind origin/main printed `FETCH-FAILED`** → stop. The fetch did not
+  complete, so every count and every base below is computed against whatever
+  this checkout last saw. The sentinel exists because the alternative — letting
+  the injection exit non-zero — aborts the command load with no usable message.
 - **Token for the derived owner unavailable** → stop. Do not fall back to the
   active account.
-- **Repo-local `credential.helper` is set** → stop, and remove it with
+- **Repo-local `credential.helper` is set** — the preflight line printed
+  anything other than `(none)` → stop, and remove it with
   `git -C "$REPO" config --local --remove-section credential` before dispatching.
   Nothing in this command writes it, so a value there was left by a worker that
   improvised its auth. `.git/config` is shared by every worktree, so that entry
@@ -405,9 +425,10 @@ findings list from preflight onward, and file it before you report back.
 - A worker's `Report back` line that **contradicted the issue's assumptions**.
   That is the highest-signal input this command produces and it is the one most
   likely to get dropped.
-- Anything in **this command or `stack-merge.sh`** that misfired: a blank `!`
-  injection, an `allowed-tools` prefix that did not match, a stack the script
-  refused, a step that still had to be hand-driven.
+- Anything in **this command or `stack-merge.sh`** that misfired: a preflight
+  injection that rendered blank or aborted the load, an `allowed-tools` prefix
+  that did not match, a stack the script refused, a step that still had to be
+  hand-driven.
 
 **Do not file for** things you fixed inline (the PR is the record), transient
 network or rate-limit blips, anything the user caused deliberately, or anything
