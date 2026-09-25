@@ -28,7 +28,8 @@ The ladder: **1, 2, 3, 5, 8, 13, 21, 34, 55, 89**. Use `0` only for an aspect th
 1. **Decompose into leaves.** One leaf = one independently-estimable unit of work. Split until each leaf is something you can picture someone doing.
 2. **Anchor the ladder before you use it** (see below). An unanchored Fibonacci number is a vibe with extra steps.
 3. **Snap each leaf to the ladder.** Nearest rung; ties go down.
-4. **Roll up: parents carry the raw sum *and* the nearest Fibonacci.** Never only the rounded value — the next section explains what that costs.
+4. **Roll up: the ladder is applied per leaf, and the parent carries the raw sum.** Snap leaves, never the parent: the parent's headline is the sum of its snapped leaves, with the nearest Fibonacci shown *beside* it and never instead of it. The next section explains what reporting only the rounded value costs.
+5. **Calibrate the sum against the whole.** Leaves are sized so they sum to the quote of the whole — a leaf is never sized in isolation. Before reporting, check the sum against what comparable whole tasks actually cost, citing the logged hours.
 
 ## The aggregation trap — the part people get wrong
 
@@ -41,6 +42,7 @@ So:
 - **Always show the raw sum beside the Fibonacci.** Two columns, not one.
 - **Compare scope options on the sum, never on the rounded total.** "What if we drop X?" is a question the rounded number physically cannot answer.
 - **Use the Fibonacci for the headline** — the commitment, the bucket, the thing that goes on the card.
+- **Check the sum against reality before you report it.** Leaves sized in isolation each look defensible and still sum to several times what the job costs. When the sum of the leaves lands far above what comparable whole tasks actually cost — cite the logged hours — re-cut the leaves rather than accept the sum.
 
 If someone asks you to report only the rounded total, say plainly what it will hide before you do it.
 
