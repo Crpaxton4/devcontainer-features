@@ -227,7 +227,7 @@ def _derived_description(
       history that never passed through the FSM). Tool tallies live HERE (#710).
 
     With neither half the bare ``[/] session {key}`` fallback stands. Derived
-    text is internal/local and carries NO length cap — the 300-character limit
+    text is internal/local and carries NO length cap — the 500-character limit
     applies only to posted chatter bodies, never to timesheet names.
 
     Best-effort by design: the description is display metadata, so a derivation

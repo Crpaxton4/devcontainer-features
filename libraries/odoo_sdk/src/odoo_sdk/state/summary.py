@@ -18,7 +18,7 @@ they can bill from.
 
 Length policy (maintainer decision, #626): derived run summaries — like event
 payloads and timesheet names — are internal/local text and carry NO length
-limit. The 300-character cap (``enforce_chatter_body_limit``) applies ONLY to
+limit. The 500-character cap (``enforce_chatter_body_limit``) applies ONLY to
 chatter bodies posted to Odoo (``task_note`` / ``task_question``) and must never
 be applied here. The one bound that does exist is per-ITEM and applies only to
 the #710 headline (:data:`_HEADLINE_ITEM_CHARS`): the tally, the commits, and

@@ -18,10 +18,16 @@ from .protocols import RpcClient, StateStore
 #:
 #: Scope (maintainer decision, #626): this cap applies ONLY to chatter bodies
 #: posted to Odoo (``task_note`` / ``task_question``). Internal/local text —
-#: derived run summaries, event payloads, timesheet entry names — carries NO
-#: length limit and must never be routed through
+#: derived run summaries, event payloads, timesheet entry names, and interim
+#: (``interim=True``) ``task_note`` bodies, which never reach the chatter —
+#: carries NO length limit and must never be routed through
 #: :func:`enforce_chatter_body_limit`.
-MAX_CHATTER_BODY_CHARS = 300
+#:
+#: Raised 300 -> 500 by #901: a run now posts ONE consolidated chatter note
+#: instead of a per-checkpoint stream, and 300 characters split a single
+#: coherent finding across several posted messages — which was itself a
+#: driver of the note volume the issue was filed about.
+MAX_CHATTER_BODY_CHARS = 500
 
 
 def enforce_chatter_body_limit(body: str, label: str) -> None:

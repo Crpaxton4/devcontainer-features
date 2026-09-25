@@ -162,11 +162,13 @@ events:
 
 ### Length policy (#626)
 
-The 300-character cap (`enforce_chatter_body_limit`, `odoo_sdk/commands/command.py`)
+The 500-character cap (`enforce_chatter_body_limit`, `odoo_sdk/commands/command.py`;
+raised from 300 by #901)
 applies ONLY to chatter bodies posted to Odoo (`task_note` / `task_question`).
-Event payloads, derived run summaries (`task_runs.run_summary`), and timesheet
-entry names are internal/local text and carry NO length limit — none of them may
-be routed through the chatter limit.
+Event payloads, derived run summaries (`task_runs.run_summary`), timesheet
+entry names, and interim (`task_note(..., interim=True)`) note bodies — which
+are appended to the session log and never posted — are internal/local text and
+carry NO length limit; none of them may be routed through the chatter limit.
 
 ### Derived run summaries (#626)
 

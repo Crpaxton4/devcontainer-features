@@ -1372,7 +1372,7 @@ class LocalStateClient:
 
         The summary is computed by ``stop_task`` from the run's recorded events
         and notes (:func:`odoo_sdk.state.summary.summarize_run_activity`) and is
-        internal/local text: it is deliberately NOT subject to the 300-character
+        internal/local text: it is deliberately NOT subject to the 500-character
         chatter cap (``enforce_chatter_body_limit``), which applies only to
         chatter bodies posted to Odoo (``task_note`` / ``task_question``).
         """
