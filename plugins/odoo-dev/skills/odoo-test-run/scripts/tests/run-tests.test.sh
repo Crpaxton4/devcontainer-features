@@ -49,11 +49,20 @@ done
 # odoo.__file__ is, so the stub stands in for that interpreter. There is no real
 # Odoo here to import, which is the point: the answer must come from the process
 # that would run the tests, never from a config file.
+#
+# It answers ONLY that question and execs the real python3 for everything else.
+# A stub that exited 0 for every invocation also answered browser-ensure.sh's
+# "import websocket" probe, which silently made the no-browser refusal below
+# unreachable on any host that ships Chrome: green in a devcontainer, red on a
+# CI runner. A stub must never widen its own remit.
 mkdir -p "$work/core-addons"
+real_python3="$(command -v python3 || true)"
 cat > "$bin/python3" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "$work/core-addons"
-exit 0
+case "\${2-}" in
+  *"import odoo"*) printf '%s\n' "$work/core-addons"; exit 0 ;;
+esac
+exec "${real_python3:-/usr/bin/python3}" "\$@"
 STUB
 chmod +x "$bin"/*
 
@@ -280,8 +289,35 @@ expect "tour success counted" "$(field "$out" tours_passed)" "1"
 expect "toured run passes"   "$(field "$out" passed)" "true"
 
 # --with-tours must refuse rather than run blind when no browser is available.
+#
+# "No browser available" is MANUFACTURED here rather than assumed: every
+# candidate Odoo looks for is shadowed on PATH by an executable that fails
+# --version, which is precisely what browser-ensure.sh's usable() rejects and
+# what Odoo itself treats as no browser at all. Relying on the host not to have
+# Chrome made this case pass in a devcontainer and fail on a CI runner, where
+# google-chrome is installed — a test that passes because of what the machine
+# lacks is testing the machine.
+nobrowser="$work/nobrowser"; mkdir -p "$nobrowser"
+for candidate in google-chrome chromium chromium-browser google-chrome-stable; do
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$nobrowser/$candidate"
+done
+chmod +x "$nobrowser"/*
+
+# The refusal has to come from the browser search itself, not from some later
+# check that happens to be unsatisfiable here — so assert on the reason too.
+berr="$work/browser-ensure.err"
 rc=0
-PATH="$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 \
+PATH="$nobrowser:$bin:$PATH" ODOO_BROWSER_BIN="" \
+  PLAYWRIGHT_BROWSERS_PATH="$work/no-browsers" \
+  bash "$(dirname "$SUT")/browser-ensure.sh" >/dev/null 2>"$berr" || rc=$?
+expect "browser-ensure refuses when every candidate is unusable" "$rc" "6"
+case "$(cat "$berr")" in *"no usable headless browser found"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL refusal should name the browser search: $(cat "$berr")" >&2 ;; esac
+
+rc=0
+PATH="$nobrowser:$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 \
+  ODOO_FAKE_ARGS="$work/args" ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" \
+  WORKTREE_ADDONS_BASE="$work/addons" \
   ODOO_BROWSER_BIN="" PLAYWRIGHT_BROWSERS_PATH="$work/no-browsers" \
   bash "$SUT" myrepo 4242 mymodule --with-tours >/dev/null 2>&1 || rc=$?
 expect "no browser + --with-tours exits 6" "$rc" "6"
