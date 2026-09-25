@@ -22,10 +22,12 @@ needs (column semantics, writing rules) lives in the skill, not in the file.
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
             -o /mnt/extra-addons/acme_upgrade_16_to_19_workbook.xlsx
 
-Prints a validation report — unenriched modules, over-long cells, requirements
-with weak or non-"shall" wording, unknown source modules, modules with no
-requirement, and near-duplicate requirements across agent groups. Read it: it
-is the only check that the fan-out agents followed the briefs.
+Prints a validation report — unenriched modules, over-long cells, inventory
+cells outside their documented vocabulary (Functional area, OCA repo, OCA
+alternative), requirements with weak or non-"shall" wording, unknown source
+modules, modules with no requirement, and near-duplicate requirements across
+agent groups. Read it: it is the only check that the fan-out agents followed
+the briefs.
 """
 
 import argparse
@@ -41,19 +43,36 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BASE_COLUMNS = ["Module Name", "Module Purpose", "Source version", "LoC",
-                "Dependencies", "3rd party app?", "3rd party app link",
-                "OCA repo", "Complexity/risk", "Upgrade action",
-                "Functional area"]
+BASE_COLUMNS = ["Module Name", "Display Name", "Module Purpose",
+                "Source version", "LoC", "Dependencies", "Dependency origin",
+                "3rd party app?", "3rd party app link", "OCA repo",
+                "Complexity/risk", "Upgrade action", "Functional area"]
 EVIDENCE_COLUMNS = ["Module", "native? evidence", "OCA alternative evidence",
                     "Vendor release", "Complexity rationale",
                     "Upgrade action rationale", "Notes"]
 FR_KEYS = {"tmp_id", "requirement", "type", "functional_area", "actor",
            "sources", "evidence", "status_source", "status_note", "handled",
            "handled_by", "handled_notes", "verification", "notes"}
+# The ONE closed functional-area vocabulary. Both halves of the workbook are
+# validated against this list — the inventory's "Functional area" column and
+# every requirement's functional_area — so the two cannot drift apart and an
+# area copied from a module row into a requirement always passes.
 AREA_ORDER = ["Sales", "CRM", "Purchasing", "Inventory", "Manufacturing",
               "Accounting", "HR", "Website/Portal", "Reporting", "Integration",
               "Technical/Base"]
+# "OCA repo": verified org location, or the negative literal. Anything else is
+# provenance prose — it belongs in the Evidence sheet, not a client-facing cell.
+# The two literals are written by module_inventory.oca_seed (same names there)
+# and by odoo-prior-art/scripts/oca_check.py; this is the reader of both.
+OCA_NONE = "none"
+OCA_UNVERIFIED = "claimed — run oca_check.py"
+OCA_REPO_RE = re.compile(r"^OCA/[A-Za-z0-9._-]+(?: \([^()]*\))?$")
+# "OCA <major> alternative": none, an already-OCA statement for a module that
+# IS the upstream module, or up to three candidates.
+OCA_ALREADY_RE = re.compile(
+    r"^already OCA: [A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+OCA_ALT_RE = re.compile(
+    r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+ \((?:full|partial)\)$")
 STATUSES = {"active", "dead", "broken"}
 STUDIO_COLUMNS = ["kind", "technical_name", "model", "label", "owner_module",
                   "active", "classification", "detail"]
@@ -157,6 +176,57 @@ def validate_ticket(row):
                f"resolution — record the written waiver")
 
 
+def validate_area(area):
+    """The inventory column answers to the same closed list as the
+    requirements (AREA_ORDER), so an area copied from a module row into a
+    requirement always passes. Compound values (`Sales / Reporting`) fail
+    here on purpose: a module can produce requirements in two areas, and the
+    bucket is assigned per REQUIREMENT, not per module."""
+    if area not in AREA_ORDER:
+        yield (f"Functional area {area!r} is not one of the "
+               f"{len(AREA_ORDER)} buckets ({', '.join(AREA_ORDER)}) — "
+               f"assign exactly one; secondary areas go in Module Purpose")
+
+
+def validate_oca_repo(cell):
+    """`none`, or `OCA/<repo>` (optionally `(series,…)`), `; `-joined."""
+    if cell == OCA_NONE:
+        return
+    if cell == OCA_UNVERIFIED:
+        yield ("OCA repo still carries the offline seed "
+               f"{OCA_UNVERIFIED!r} — run oca_check.py before building")
+        return
+    if not cell:
+        yield f"OCA repo is empty — write {OCA_NONE!r} when nothing matched"
+        return
+    for part in cell.split("; "):
+        if not OCA_REPO_RE.match(part):
+            yield (f"OCA repo part {part!r} is neither {OCA_NONE!r} nor "
+                   f"OCA/<repo> — scan provenance goes to the Evidence sheet")
+
+
+def validate_oca_alt(cell, column, oca_repo):
+    """`none`, `already OCA: <repo>/<module>`, or `<repo>/<module>
+    (full|partial)` — up to three, `; `-joined.
+
+    A module that IS the OCA module is not an alternative to itself: when
+    the OCA repo column names a verified upstream, `none` is false.
+    """
+    if cell == "TODO-AI":
+        return
+    if cell == OCA_NONE:
+        if OCA_REPO_RE.match(oca_repo):
+            yield (f"{column} is {OCA_NONE!r} but OCA repo names {oca_repo} "
+                   f"— this module IS the OCA module: "
+                   f"already OCA: <repo>/<module>")
+        return
+    for part in cell.split("; "):
+        if not (OCA_ALREADY_RE.match(part) or OCA_ALT_RE.match(part)):
+            yield (f"{column} part {part!r} is not {OCA_NONE!r}, "
+                   f"'already OCA: <repo>/<module>', or "
+                   f"'<repo>/<module> (full|partial)'")
+
+
 def build_inventory(workbook, workdir, source, native_column, oca_column,
                     problems):
     enrich = {e["module"]: e for e in load_group_json(workdir, "enrich_*.json")}
@@ -166,7 +236,10 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
 
     inventory_rows, evidence_rows, by_module = [], [], {}
     for seeded in csv.DictReader(source.open(encoding="utf-8-sig")):
-        module = seeded["Module Name"].split(" ")[0]
+        # Module Name is the technical name and nothing else — it is the key
+        # the enrichment JSON, the requirement sources and the Traceability
+        # sheet all join on, so it is used whole, never split.
+        module = seeded["Module Name"].strip()
         enriched = enrich.get(module)
         alternative = alternatives.get(module)
         if not enriched:
@@ -195,6 +268,16 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
                                   or row["Functional area"])
         row[native_column] = native
         row[oca_column] = alternative.get("oca_alt", "TODO-AI")
+
+        oca_repo = (row.get("OCA repo") or "").strip()
+        checks = itertools.chain(
+            validate_area((row.get("Functional area") or "").strip()),
+            validate_oca_repo(oca_repo),
+            validate_oca_alt((row[oca_column] or "").strip(), oca_column,
+                             oca_repo))
+        for message in checks:
+            problems.append(f"{module}: {message}")
+
         inventory_rows.append([row.get(c, "") for c in columns])
         by_module[module] = row
 
@@ -211,8 +294,8 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
     sheet.append(columns)
     for row in inventory_rows:
         sheet.append(row)
-    style_sheet(sheet, [40, 70, 14, 8, 40, 12, 34, 34, 12, 16, 16, 44, 50],
-                "B2")
+    style_sheet(sheet, [28, 36, 70, 14, 8, 40, 18, 12, 34, 34, 12, 16, 16,
+                        44, 50], "B2")
 
     evidence = workbook.create_sheet("Inventory Evidence")
     evidence.append(EVIDENCE_COLUMNS)

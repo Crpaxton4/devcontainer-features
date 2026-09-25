@@ -68,23 +68,25 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 
 `convert-to-code` rows belong in the estimate. A Studio field left as a manual field is re-created by hand after every upgrade and is invisible to code review forever.
 
-## Columns (13)
+## Columns (15)
 
 | # | Column | Filled by | Semantics |
 |---|--------|-----------|-----------|
-| 1 | Module Name | script | `technical_name (Manifest display name)` |
-| 2 | Module Purpose | script → AI | manifest `summary`, else first `description` line, else `TODO-AI`. AI refine vague ones from module code |
-| 3 | Source version | script | manifest `version` verbatim. Series prefix hint hop count to target, but manifests go stale (never bumped since older series) — treat as hint, confirm against `$ODOO_VERSION`. No series prefix (`1.0`, `1.0.1`) reveal nothing: assume `$ODOO_VERSION` |
-| 4 | LoC | script | Non-blank lines in `.py .xml .js .css .scss .csv`; skip `static/lib`, `node_modules`, `__pycache__`, `.po`; respect manifest `cloc_exclude` |
-| 5 | Dependencies | script | manifest `depends`, `;`-joined, classified against devcontainer: bare = core, `[E]` = enterprise, `[C]` = local custom, `[?]` = not found anywhere. `[E]` rows need enterprise checkout on addons path to install/test; resolve every `[?]` before planning |
-| 6 | 3rd party app? | script → AI | `Yes` = purchased/downloaded vendor or app-store module (`price` key, or clearly vendor product). `No` = in-house client code (whichever integrator wrote it) AND OCA community. `TODO-AI` = OPL-1 but no price: check `author`/`website` — many shops license in-house modules OPL-1 |
-| 7 | 3rd party app link | script → AI | manifest `website`; priced modules fall back to `https://apps.odoo.com/apps/modules/{target}/{name}`. AI verify link point at actual app; if generic (bare domain, repo root) or network unavailable, keep manifest value as-is, flag in planning review |
-| 8 | OCA repo | script → `oca_check.py` | Script seed `claimed — run oca_check.py` when manifest author contain `Odoo Community Association (OCA)` — claim, not proof (see below). `oca_check.py` replace with **verified** org location `OCA/<repo> (series,…)` or empty it |
-| 9 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
-| 10 | Upgrade action | script seeds → AI proposes → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop). One of: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), `drop` (dead/unused/superseded). Blank when genuinely unsure. Final call = human planning review |
-| 11 | Functional area | AI | ONE bucket: Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Drive per-department test planning; secondary areas go in Purpose text |
-| 12 | `<major> native?` | AI (phase 1) | Does target-version standard (community **or** enterprise) do some/all of this? `no`, or `yes/partial: <how/where in target>`. Whole cell ≤ 50 chars — column is scanned, not read |
-| 13 | `OCA <major> alternative` | AI (phase 2) | `none`, or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
+| 1 | Module Name | script | Technical name — the module directory name, and nothing else. No display name, no parentheses. Every other artifact join on this cell: enrichment `module` key, requirement `sources`, Traceability, Evidence. Consumers read it whole, never split it |
+| 2 | Display Name | script | manifest `name` verbatim, empty when the manifest carry none. Human label for reading; never join on it |
+| 3 | Module Purpose | script → AI | manifest `summary`, else first `description` line, else `TODO-AI`. AI refine vague ones from module code |
+| 4 | Source version | script | manifest `version` verbatim. Series prefix hint hop count to target, but manifests go stale (never bumped since older series) — treat as hint, confirm against `$ODOO_VERSION`. No series prefix (`1.0`, `1.0.1`) reveal nothing: assume `$ODOO_VERSION` |
+| 5 | LoC | script | Non-blank lines in `.py .xml .js .css .scss .csv`; skip `static/lib`, `node_modules`, `__pycache__`, `.po`; respect manifest `cloc_exclude` |
+| 6 | Dependencies | script | manifest `depends`, `; `-joined, names ONLY — a usable dependency list, nothing to strip. Sort the port plan by its topological order |
+| 7 | Dependency origin | script | One token per dependency, same order and separator as column 6 — zip the two. `core` = target/source community (`odoo/addons`), `E` = enterprise (`/var/lib/odoo/addons/$ODOO_VERSION`), `C` = local custom (a scanned path), `?` = not found anywhere. Says where the scan found it ON THE SCANNING MACHINE, so it is scan provenance, not a property of the dependency. `E` rows need an enterprise checkout on the addons path to install/test; resolve every `?` before planning |
+| 8 | 3rd party app? | script → AI | `Yes` = purchased/downloaded vendor or app-store module (`price` key, or clearly vendor product). `No` = in-house client code (whichever integrator wrote it) AND OCA community. `TODO-AI` = OPL-1 but no price: check `author`/`website` — many shops license in-house modules OPL-1 |
+| 9 | 3rd party app link | script → AI | manifest `website`; priced modules fall back to `https://apps.odoo.com/apps/modules/{target}/{name}`. AI verify link point at actual app; if generic (bare domain, repo root) or network unavailable, keep manifest value as-is, flag in planning review |
+| 10 | OCA repo | script → `oca_check.py` | Exactly one of: `none` (no OCA repo ships it — the ONLY negative value), or the **verified** org location `OCA/<repo> (series,…)`, `; `-joined when several repos ship the name. Script seed `claimed — run oca_check.py` when manifest author contain `Odoo Community Association (OCA)` — claim, not proof (see below) — and `none` otherwise. Never write the scan that proved `none` into the cell: that provenance go to the Evidence sheet's OCA alternative evidence column. `build_workbook.py` reject anything else |
+| 11 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
+| 12 | Upgrade action | script seeds → AI proposes → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop). One of: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), `drop` (dead/unused/superseded). Blank when genuinely unsure. Final call = human planning review |
+| 13 | Functional area | AI | ONE bucket from the SAME closed 11-value list the requirements use (`AREA_ORDER` in `build_workbook.py`, validated in both places so the two cannot drift): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: the bucket is assigned **per requirement**, not per module — a module that produce requirements in two areas get one bucket here (the area its primary user sit in) and each requirement get its own. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
+| 14 | `<major> native?` | AI (phase 1) | Does target-version standard (community **or** enterprise) do some/all of this? `no`, or `yes/partial: <how/where in target>`. Whole cell ≤ 50 chars — column is scanned, not read |
+| 15 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
 
 Header text carry target major: Odoo 19 project ⇒ `19 native?`, `OCA 19 alternative`. Build script derive both from `--target-version`.
 
@@ -121,7 +123,7 @@ Run it with ALL series in one pass (`--series 16.0,17.0,18.0,19.0`): same cost, 
 
 Read `MISMATCH` lines it prints:
 - *claims OCA but not found* — fork, renamed module, or module hosted outside org (e.g. partner's own GitHub): treat as custom code to port, not `replace`.
-- *found but author doesn't claim OCA* — name collision: diff against OCA module before trusting match. Record the doubt in the cell (`[name match only; local copy = <lineage>, diff before replacing]`).
+- *found but author doesn't claim OCA* — name collision: diff against OCA module before trusting match. The `OCA repo` cell stay the bare verified location (the column take no prose — see column 10); record the doubt in the Evidence sheet's Notes: `name match only; local copy = <lineage>, diff before replacing`.
 - Found on some series but not target series ⇒ OCA port not exist yet: `keep` (port it, consider contributing upstream) or wait.
 
 ## Phase 1 — enrichment fan-out
@@ -139,7 +141,7 @@ Give every agent: module dir, seed CSV path, and the source trees —
 
 Confirm paths exist before briefing — `odoo-dev:odoo-devcontainer` skill list what's checked out.
 
-JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_evidence`, `notes`. Semantics = columns 2/6/7/9/10/11/12 above + evidence sheet.
+JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_evidence`, `notes`. Semantics = columns 3/8/9/11/12/13/14 above + evidence sheet.
 
 Method each agent follow (order matters — verdict come from greps, not memory):
 
@@ -169,6 +171,6 @@ Script print a validation report and exit 1 when non-empty: modules missing enri
 - Port effort per module ≈ LoC band × hop count (Source version → target), weighted by Complexity. JS-heavy and report-heavy modules dominate.
 - Dependency depth matter: modules depended on by others port FIRST; broken base module block chain. Sort plan by topological order of Dependencies column.
 - `3rd party app? = Yes` rows = separate workstream: **download target-version release** from vendor/store, don't port code. Effort = re-purchase/licence check + config re-validation + regression test. No target-version release ⇒ escalate to `Upgrade action` decision (port anyway / replace / drop).
-- **OCA modules = `3rd party app? = No` but follow same replace-if-released logic** — externally maintained, never in-house code. Target series listed in `OCA repo` ⇒ `replace`; not listed ⇒ `keep` (port it, consider contributing upstream). Before setting `replace`, diff local copy against upstream series branch — local patches common; if diverged, port delta onto new release or upstream it (`oca-port` automate much of this).
+- **OCA modules = `3rd party app? = No` but follow same replace-if-released logic** — externally maintained, never in-house code. Their `OCA <major> alternative` cell read `already OCA: <repo>/<module>`, never `none` and never the bare upstream name: the module IS the OCA module, so nothing is being offered as an alternative to it. Target series listed in `OCA repo` ⇒ `replace`; not listed ⇒ `keep` (port it, consider contributing upstream). Before setting `replace`, diff local copy against upstream series branch — local patches common; if diverged, port delta onto new release or upstream it (`oca-port` automate much of this).
 - Rows where `<major> native?` is `yes/partial` or `OCA <major> alternative` is not `none` = candidates to NOT port at all. Biggest lever on total cost, especially on fresh-database projects — see [oca-base-review.md](./oca-base-review.md).
 - Functional area column ⇒ group rows per department for end-user test plan; each `keep`/`replace` row need at least one user acceptance scenario in its area.
