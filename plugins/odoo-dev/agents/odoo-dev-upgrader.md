@@ -59,11 +59,91 @@ skill: load the one for the series you are porting *into*, every time.
    Odoo or an OCA module on the target series already does it. The cheapest port is
    the one you delete instead. Verdicts drive `keep` / `replace` /
    `merge-into-standard` per module.
-3. `odoo-upgrade` — inventory (`module_inventory.py`, `studio_inventory.py`), then
+3. `odoo-upgrade` — inventory (`module_inventory.py`, `studio_inventory.py`,
+   `build_workbook.py` — all three; see **Inventory and workbook** below), then
    the porting checklist, then `upgrade_code` where the target is ≥ 18, then
    migration scripts where anything was renamed.
 4. Hand to `odoo-dev-tester` for evidence. A ported module meets the same bar as
    new work — the same gate, no exceptions for "it only moved versions".
+
+## Inventory and workbook
+
+The inventory exists in order to produce one client-readable workbook. Two scripts
+seed it, a third builds it, and the run is not finished until the third one is green.
+
+- **Seed.** `module_inventory.py` writes the seed CSV (`inventory.csv`, whatever
+  you passed to `-o`); `studio_inventory.py` writes `studio.csv` / `studio.json`
+  when the client uses Studio. Both outputs are seeds, and a seed is read-only from
+  the moment it exists.
+- **Enrich.** The port track and the inventory fan-out record every per-module
+  finding as `enrich_*.json` (and `oca_alt_*.json`) records in the same work dir.
+  **Never edit the seed CSV in place.** `build_workbook.py` does not read an
+  enriched CSV: it reads the seed plus those records, so a verdict written into the
+  CSV is a verdict the workbook cannot see, and the Evidence-sheet columns have no
+  CSV equivalent at all. Partial records are fine — the build merges them field by
+  field and falls back to the seed for any key a record omits — so a port that
+  settles one module writes one record for that module and nothing else.
+  `references/inventory.md` is the contract for the record keys and their
+  semantics: open it and follow it rather than working from memory, and never leave
+  a `TODO-AI` sentinel in a column you are delivering.
+- **Build.** One command, pointed at the work dir the seeds went into:
+
+  ```
+  python3 <odoo-upgrade skill base directory>/scripts/build_workbook.py --workdir <ARTIFACTS dir from your prompt>/inventory --target-version <target series> -o <ARTIFACTS dir from your prompt>/inventory/<client>_upgrade_workbook.xlsx
+  ```
+
+  Add `--studio <work dir>/studio.csv` when a Studio inventory was taken and
+  `--tickets <work dir>/tickets.csv` when support tickets were supplied. Omit each
+  flag when its file does not exist; neither is invented.
+
+The run is not complete until that command prints `problems: 0` and exits 0. A
+non-zero count is a list of agents to re-run — the module with no enrichment row,
+the over-long `native?` cell, the `TODO-AI` left in a delivered column — not a list
+of cells to fix by hand. Hand-editing the seed CSV to silence a problem destroys the
+only check that the fan-out followed the brief, and it cannot produce the Evidence
+rows in any case. An upgrade run that stops at the inventory data leaves the most
+valuable output of the exercise unbuilt.
+
+## Checkpoint
+
+You stop at 40 turns whether or not the port is finished, and nobody can read your
+transcript to find out how far you got — reading it overflows the context that would
+resume you. So the state of the run lives in a file rather than in your head:
+`<ARTIFACTS dir from your prompt>/progress.json`, one row per unit of work. A unit is
+one module for the port track and one agent group for the inventory fan-out.
+
+```json
+{
+  "run": "acme 16.0 -> 19.0 port",
+  "updated": "2026-09-25T14:02:11Z",
+  "units": [
+    { "unit": "acme_sale_pricing", "kind": "module", "status": "done",
+      "note": "upgrade_code + 3 xpath fixes, committed" },
+    { "unit": "acme_stock_labels", "kind": "module", "status": "in-progress",
+      "note": "manifest bumped; views/XML pass not started" },
+    { "unit": "enrich_g3 (Accounting, 11 modules)", "kind": "agent-group",
+      "status": "not-started", "note": "" },
+    { "unit": "acme_vendor_portal", "kind": "module", "status": "failed",
+      "note": "apps.odoo.com served HTML where the .zip was expected - login wall, human action item raised" }
+  ]
+}
+```
+
+- `status` is exactly one of `done`, `in-progress`, `not-started`, `failed`. There is
+  no fifth word and no `partial`. `note` is free text and is where the reason for a
+  `failed` row goes; a `failed` row without a reason is a row nobody can act on.
+- **Read the file first on every dispatch**, before any other artifact. If it exists
+  it is authoritative: resume from the rows and never restart a unit already marked
+  `done`, however cheap redoing it looks.
+- **Flush after every unit.** Rewrite the whole file the moment a unit changes state,
+  not at the end of the run — a checkpoint written once at the end is exactly the
+  state you have already lost. Flush again before you stop at the turn limit, and
+  make your final message name the unit you were on.
+- **Derive the counters, never type them.** Every "N done / M remaining" in the
+  completion report is counted from the rows at the moment it is written. A summary
+  maintained beside the rows goes stale against them and then misleads the person who
+  trusts it — a header still showing zero commits after four commits exist is worse
+  than no header.
 
 ## Lessons
 

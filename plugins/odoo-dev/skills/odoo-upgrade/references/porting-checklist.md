@@ -4,11 +4,38 @@ Workflow: upgrade pass over ALL modules (steps 1–6 per module, dependency/topo
 
 ## 0. Preconditions
 
-- Inventory CSV exist; module's `Upgrade action` = `keep`. (`replace` ⇒ download vendor/OCA release instead; `merge-into-standard`/`drop` ⇒ remove from addons, note data implications for human-run DB upgrade.)
+- Inventory CSV exist; module's `Upgrade action` = `keep`. (`replace` ⇒ download vendor/OCA release instead, under [Replace](#replace-obtaining-the-target-series-build) below; `merge-into-standard`/`drop` ⇒ remove from addons, note data implications for human-run DB upgrade.)
 - Clean git tree, branch for target series.
 - `$ODOO_VERSION` must equal TARGET series for step 7. If not: do upgrade pass anyway, mark every module **untested**, escalate — install loop need target-series devcontainer.
 - Multi-hop (e.g. 16→18): upgrade_code may run ONCE across hops (target odoo-bin carry all scripts); manual work (steps 3–4) done per hop, in sequence, never skip major.
 - 100+ row inventories: batch AI enrichment and porting passes in dependency-ordered chunks (context budget).
+
+## Replace: obtaining the target-series build
+
+Applies to every module whose `Upgrade action` is `replace` — vendor app or OCA
+release. Three rules, none optional; each one is a tree that was once left
+half-applied, with the old module gone, the new one never arrived, and nothing
+saying so.
+
+- **New first, old second — never the other way round.** Never remove a module
+  before its replacement exists on disk AND installs on the target series. Download,
+  unpack into the addons path, install, verify — *then* remove the old copy, and
+  only then commit. A tree where neither copy exists cannot be recovered from the
+  tree itself, and the `ir_model_data` rename migration written alongside it then
+  points at a module that is not there.
+- **HTML where a `.zip` was expected is a login wall, not a 404.** `apps.odoo.com`
+  — and any vendor URL — serves an HTML error page to an unauthenticated
+  download, so an agent cannot tell "needs login" from "does not exist". An HTML body
+  on a `.zip` request is auth-gated by definition: do not retry it, do not parse it,
+  do not scrape around it. Paid modules land in the same place for a second reason:
+  the licence call needs a human with an account regardless.
+- **Record it once, then keep going.** Emit exactly ONE human-action item in the
+  completion report, naming the exact URL, exactly what to download, and the exact
+  path to place it at. Mark that tree incomplete in `progress.json` — the unit's
+  row becomes `failed` with a `note` naming the login wall, which is what
+  "incomplete" means in that four-word vocabulary — and continue with the other
+  trees. One blocked download blocks one module, never the pass; a blocked module
+  that nothing records is the failure these rules exist to prevent.
 
 ## 1. Manifest
 
@@ -41,7 +68,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 ## 6. Wrap up module
 
-- Update inventory CSV row (raise Complexity, flag follow-ups). Commit; next module in topological order.
+- Record the module's findings as an `enrich_<module>.json` record in the inventory work dir (raise Complexity, flag follow-ups) — never edit the seed CSV in place; the CSV is a seed and `build_workbook.py` reads the records, not an enriched CSV. Keys: [inventory.md](./inventory.md). Flip the module's `progress.json` row to `done`. Commit; next module in topological order.
 - Client use Studio? Flag modules with changed views as elevated risk — Studio views layer on custom views, break on DB upgrade; warn human running it.
 
 ## 7. Verification loop (all modules, target devcontainer)
