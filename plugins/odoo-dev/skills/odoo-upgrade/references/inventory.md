@@ -24,9 +24,9 @@ Phase 2 read phase 1 output; phase 3 read both. Never reorder.
 ## Generate seed
 
 ```bash
-python3 <base directory>/scripts/module_inventory.py [ADDONS_PATH ...] [--target-version 19.0] -o /tmp/inv/inventory.csv
-python3 <plugin root>/skills/odoo-prior-art/scripts/oca_check.py [ADDONS_PATH ...] --series 16.0,17.0,18.0,19.0 --csv /tmp/inv/inventory.csv
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv /tmp/inv/studio.csv -o /tmp/inv/studio.json
+python3 <base directory>/scripts/module_inventory.py [ADDONS_PATH ...] [--target-version 19.0] -o <ARTIFACTS>/inventory/inventory.csv
+python3 <plugin root>/skills/odoo-prior-art/scripts/oca_check.py [ADDONS_PATH ...] --series 16.0,17.0,18.0,19.0 --csv <ARTIFACTS>/inventory/inventory.csv
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
 ```
 
 Two directories are referenced above. `<base directory>` is the absolute path on the
@@ -45,17 +45,20 @@ plugin root in the same place.
 - Stdlib only, no installs. Manifests parsed with `ast.literal_eval`, never imported.
 - Unparseable manifest ⇒ row still emitted (LoC counted, purpose flagged `TODO-AI (manifest unparseable…)`) — fix manifest; never let module drop out of estimate silently.
 - `--target-version` only affects generated apps.odoo.com fallback links.
-- One work dir per project (e.g. `/tmp/<client>_inventory`) hold seed CSV + all agent JSON + catalog + `studio.csv` + `tickets.csv`. Everything downstream read from there.
+- One work dir per project — the task artifacts dir, `<ARTIFACTS>/inventory/`, never `/tmp` and never the session scratchpad (session-scoped, destroyed at the session boundary with no error) — hold seed CSV + all agent JSON + catalog + `studio.csv` + `tickets.csv`. Everything downstream read from there. `<ARTIFACTS>` is the absolute artifacts dir handed to the agent; `--artifacts <ARTIFACTS>` make `studio_inventory.py` default its own outputs there.
 
 ## Studio inventory
 
 Code inventory see only what is in git. Studio and other UI-built customization — `x_studio_*` fields, manual models, studio views, base automations, UI server actions and crons, UI reports — live in database rows, so a repo-only inventory silently reports zero. On a Studio-heavy customer that is the larger half of the scope.
 
 ```bash
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv studio.csv -o studio.json
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
+python3 <base directory>/scripts/studio_inventory.py --db <source-copy> --ssh <user@host> --artifacts <ARTIFACTS>
 ```
 
 Read-only (the connection itself is opened read-only), so it is safe against a restored copy. Run it against a COPY, never production.
+
+Source DB normally live only on a staging/odoo.sh build, reachable over ssh alone. `--ssh <user@host>` = the sanctioned transport: same SELECTs, run through `psql` on that host, one read-only session per query, nothing copied and nothing written. No local `psycopg2` needed on that path. Host unreachable ⇒ script exit 2 with the ssh error — report it, never fall back to a look-alike local DB. If anything must be copied to the host, `scp -O` (remote has no sftp subsystem).
 
 Per-row `classification` is a proposal to sort a review, not a verdict:
 
@@ -156,7 +159,7 @@ Agent reply back = one line per module `<module> | <native cell> | <upgrade_acti
 ## Build
 
 ```bash
-python3 <base directory>/scripts/build_workbook.py --workdir /tmp/inv --target-version 19.0 \
+python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/inventory --target-version 19.0 \
         -o /mnt/extra-addons/<client>_upgrade_16_to_19_workbook.xlsx
 ```
 
