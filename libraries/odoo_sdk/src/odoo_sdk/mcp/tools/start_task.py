@@ -28,6 +28,7 @@ zero name searches and zero elicitations (#614), so automation can call this
 headless in any state.
 """
 
+import os
 import re
 import subprocess
 from typing import Any, Callable, Optional, Union
@@ -230,6 +231,30 @@ def _unwind_failed_pop(
     )
 
 
+def _set_upstream(branch_name: str, base_ref: str) -> None:
+    """Point ``branch_name``'s upstream at the base's remote ref (#903).
+
+    Without this the freshly created branch inherits whatever upstream git
+    infers — in practice the remote default — so ``git pull --rebase`` and PR
+    tooling that reads ``branch.<name>.merge`` silently target the wrong base
+    (the stray-PR condition #903 reports). Only a remote ref is meaningful as
+    an upstream, so a local-only fallback base (offline / no ``origin``, see
+    :func:`_resolve_base_ref`) is skipped rather than recorded.
+
+    Best-effort by design: the branch is already created and checked out at
+    this point, and a repo that cannot record an upstream (no remote-tracking
+    ref yet, ancient git) must not fail the whole start flow over it.
+
+    :param branch_name: The freshly created task branch.
+    :type branch_name: str
+    :param base_ref: Ref the branch was forked from, e.g. ``origin/uat``.
+    :type base_ref: str
+    """
+    if not base_ref.startswith("origin/"):
+        return
+    _git("branch", f"--set-upstream-to={base_ref}", branch_name)
+
+
 def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     """Create or switch to ``branch_name``, preserving any local changes.
 
@@ -242,6 +267,10 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     Remote-based (#454): a freshly created branch forks from the fetched
     ``origin/<base>`` tip (see :func:`_resolve_base_ref`), never the possibly
     stale local base ref.
+    Base-tracking (#903): the new branch's upstream is set to that same
+    ``origin/<base>`` (see :func:`_set_upstream`), so a later ``git pull
+    --rebase`` and any PR tooling reading the upstream target the chosen base
+    rather than the remote default.
     Atomic (#542): a pop that fails on the new branch is unwound by
     :func:`_unwind_failed_pop` rather than stranding the user mid-switch.
 
@@ -269,6 +298,7 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
         if created:
             base_ref = _resolve_base_ref(base_branch)
             subprocess.run(["git", "checkout", "-b", branch_name, base_ref], check=True)
+            _set_upstream(branch_name, base_ref)
         else:
             subprocess.run(["git", "checkout", branch_name], check=True)
     except BaseException:
@@ -391,6 +421,22 @@ def _resolve_branch_description(ctx: Any, task_name: str) -> str:
     return _slugify(text.strip()) or fallback
 
 
+#: Environment variable naming the branch task branches must fork from (#903).
+#: Set it once per project (the pre-production branch on repos whose base is not
+#: the GitHub default) and every headless ``start_task`` forks from it.
+_BASE_BRANCH_ENV = "ODOO_SDK_BASE_BRANCH"
+
+
+def _env_base_branch() -> Optional[str]:
+    """Return the base branch configured in the environment, or ``None`` (#903).
+
+    An unset *or* empty/whitespace-only ``ODOO_SDK_BASE_BRANCH`` reads as "not
+    configured" so an exported-but-blank variable falls through to
+    :func:`_default_base_branch` instead of forking from a nameless ref.
+    """
+    return os.environ.get(_BASE_BRANCH_ENV, "").strip() or None
+
+
 def _default_base_branch() -> Optional[str]:
     """Resolve a base branch without prompting (headless automation path, #621).
 
@@ -436,18 +482,40 @@ def _should_request_branch_description(ctx: Any, task_id: int) -> bool:
 
 
 async def _setup_task_branch(
-    ctx: Any, task: dict, *, interactive: bool, description: str
-) -> tuple[Optional[str], bool, Optional[str]]:
+    ctx: Any,
+    task: dict,
+    *,
+    interactive: bool,
+    description: str,
+    base_branch: Optional[str] = None,
+) -> tuple[Optional[str], bool, Optional[str], Optional[str]]:
+    """Ensure the working tree sits on this task's branch; report the base used.
+
+    Base resolution (#903), in strict precedence order: the explicit
+    ``base_branch`` argument, then :func:`_env_base_branch`
+    (``ODOO_SDK_BASE_BRANCH``), and only when neither is configured the
+    interactive branch pick (name-search path) or :func:`_default_base_branch`
+    (headless path). A configured base therefore also *replaces* the
+    elicitation: a caller that already named the base has nothing to be asked.
+
+    :return: ``(branch_name, created, base_branch, error)`` — ``branch_name`` is
+        ``None`` when the tree was already on the task branch or setup failed,
+        and ``base_branch`` names the ref actually forked from (``None`` when no
+        branch was created this call).
+    :rtype: tuple[Optional[str], bool, Optional[str], Optional[str]]
+    """
     task_id = task["id"]
     if _on_task_branch(task_id):
-        return None, False, None
+        return None, False, None, None
 
-    if interactive:
+    base = base_branch or _env_base_branch()
+    if base is None and interactive:
         branches = _list_local_branches()
         if not branches:
             return (
                 None,
                 False,
+                None,
                 "No local git branches found. Ensure the working directory is a git repo.",
             )
 
@@ -457,31 +525,32 @@ async def _setup_task_branch(
             _SelectIndex,
         )
         if result.action != "accept":
-            return None, False, "Branch selection cancelled."
+            return None, False, None, "Branch selection cancelled."
         idx = result.data.selection - 1
         if not (0 <= idx < len(branches)):
-            return None, False, "Invalid branch selection."
-        base_branch = branches[idx]
-    else:
+            return None, False, None, "Invalid branch selection."
+        base = branches[idx]
+    elif base is None:
         # The task_id-only path is headless (#614/#621): no base-branch
         # elicitation — fork from the remote default (or current) branch.
-        base_branch = _default_base_branch()
-        if base_branch is None:
+        base = _default_base_branch()
+        if base is None:
             return (
                 None,
                 False,
+                None,
                 "No base branch found. Ensure the working directory is a git repo.",
             )
 
     branch_name = f"{task_id}-{description}"
 
     try:
-        created = _create_task_branch(branch_name, base_branch)
+        created = _create_task_branch(branch_name, base)
     except _BranchSetupError as exc:
         # Already unwound (#542): report it as an ordinary flow error so the
         # caller sees an actionable message instead of a git stack trace.
-        return None, False, str(exc)
-    return branch_name, created, None
+        return None, False, None, str(exc)
+    return branch_name, created, base, None
 
 
 async def _disambiguate(
@@ -645,6 +714,7 @@ def make_start_task_tool(registry: Registry):
         task_name_query: Optional[str] = None,
         project_name_query: Optional[str] = None,
         task_id: Optional[int] = None,
+        base_branch: Optional[str] = None,
     ) -> Union[dict[str, Any], InputRequiredResult]:
         """Idempotently ensure a RUNNING tracking session on an Odoo project.task.
 
@@ -660,11 +730,17 @@ def make_start_task_tool(registry: Registry):
 
         task_id alone is sufficient and authoritative: it is looked up directly
         with zero name searches and zero elicitation prompts (headless-safe),
-        and a git task branch (<task-id>-<slug>) is set up from the remote
-        default branch when one is needed. Without task_id, searches by
-        task_name_query (and optional project_name_query) with disambiguation
-        prompts. Writes no Odoo timesheet and posts no chatter note (hours are
-        derived by the sessionization upload path).
+        and a git task branch (<task-id>-<slug>) is set up when one is needed.
+        Without task_id, searches by task_name_query (and optional
+        project_name_query) with disambiguation prompts. Writes no Odoo
+        timesheet and posts no chatter note (hours are derived by the
+        sessionization upload path).
+
+        base_branch names the branch to fork the task branch from; it overrides
+        ODOO_SDK_BASE_BRANCH, and when both are unset the remote default branch
+        is used. Pass it on any project whose base is not the GitHub default
+        (#903) — the created branch is forked from origin/<base_branch> and its
+        upstream is set there, and the resolved base comes back in the result.
         """
         selector_error = _missing_selector_error(task_id, task_name_query)
         if selector_error is not None:
@@ -707,8 +783,17 @@ def make_start_task_tool(registry: Registry):
             # Branch setup lives *inside* the rollback scope (#541): running it
             # outside meant a failure between ``checkout -b`` and the auto-stash
             # pop left the user on a dangling task branch with no cleanup.
-            branch_name, branch_created, branch_err = await _setup_task_branch(
-                ctx, task, interactive=task_id is None, description=description
+            (
+                branch_name,
+                branch_created,
+                branch_base,
+                branch_err,
+            ) = await _setup_task_branch(
+                ctx,
+                task,
+                interactive=task_id is None,
+                description=description,
+                base_branch=base_branch,
             )
             if branch_err:
                 return {"error": branch_err}
@@ -719,6 +804,7 @@ def make_start_task_tool(registry: Registry):
                 project_id=project["id"],
                 project_name=project["name"],
                 branch_name=branch_name,
+                base_branch=branch_base,
             )
         except Exception:
             # Raise-based error contract (#223): the start command raises on

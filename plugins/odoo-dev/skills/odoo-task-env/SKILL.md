@@ -31,7 +31,7 @@ At the start of implementing any Odoo task, and whenever a task is picked back u
 
 ## Preconditions
 
-Resolve project first with **`odoo-dev:odoo-repo-map`** — need `repo`, `default_branch`, `odoo_version`. Do not read them off checkout.
+Resolve project first with **`odoo-dev:odoo-repo-map`** — need `repo`, `default_branch`, `odoo_version`. Do not read them off checkout. `default_branch` is the base every later step take — `worktree-ensure.sh <base_branch>` and `start_task`'s `base_branch` both — so nothing downstream guess it.
 
 Load **`odoo-dev:odoo-devcontainer`** for paths, CLI, environment layout.
 
@@ -100,7 +100,7 @@ Probe **both** branch forms: `<id>#<slug>` (humans push) and `<id>-<slug>` (auto
 
 Idempotent, serialized per repo under flock so concurrent callers cannot race `git worktree add`. On reuse branch **read from worktree**, never recomputed from arguments — renamed Odoo task yield new slug, and reporting branch never created hand you something you cannot push.
 
-**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
+**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. Call it with `base_branch=<default_branch from repo-map.sh>` — unset, SDK fall back to `ODOO_SDK_BASE_BRANCH` then remote default, and remote default is **not** the base on most projects here. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
 
 `<resume_branch>` adopted exactly as it stands — never reset, rebased, re-cut. Commits on it are work you continuing.
 
