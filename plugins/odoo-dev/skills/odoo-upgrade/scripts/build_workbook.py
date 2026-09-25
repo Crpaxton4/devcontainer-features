@@ -15,8 +15,8 @@ references/oca-base-review.md, references/functional-requirements.md):
     tickets.csv       optional — Odoo support register, see references/support-tickets.md
 
 Output: one xlsx with Module Inventory / Inventory Evidence / Functional
-Requirements / Traceability, plus Studio and Tickets when those CSVs are
-present, plus CSV siblings. Everything else the reader
+Requirements / Traceability, plus Studio Inventory and Tickets when those CSVs
+are present, plus CSV siblings. Everything else the reader
 needs (column semantics, writing rules) lives in the skill, not in the file.
 
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
@@ -56,10 +56,15 @@ AREA_ORDER = ["Sales", "CRM", "Purchasing", "Inventory", "Manufacturing",
               "Technical/Base"]
 STATUSES = {"active", "dead", "broken"}
 STUDIO_COLUMNS = ["kind", "technical_name", "model", "label", "owner_module",
-                  "active", "classification", "detail"]
+                  "active", "classification", "populated", "detail"]
 TICKET_COLUMNS = ["id", "date", "subject", "token", "status",
                   "blocking_module", "resolution", "link"]
 STUDIO_CLASSIFICATIONS = {"purge", "convert-to-code", "keep-as-data", "review"}
+# Blank is a legal value: only field rows answer the populated question at all.
+STUDIO_POPULATED = {"", "populated", "empty", "n/a"}
+# A view a module ships whose arch was edited in the database is never safe to
+# port unread — the classification is part of the finding, not a suggestion.
+STUDIO_REVIEW_KINDS = {"view-inline-edit"}
 TICKET_STATUSES = {"open", "waiting-odoo", "waiting-us", "resolved", "waived"}
 NATIVE_MAX = 50
 WEAK_WORDS = re.compile(
@@ -139,6 +144,16 @@ def validate_studio(row):
                f"(expected one of {', '.join(sorted(STUDIO_CLASSIFICATIONS))})")
     if not (row.get("technical_name") or "").strip():
         yield "row has no technical_name"
+    populated = (row.get("populated") or "").strip()
+    if populated not in STUDIO_POPULATED:
+        yield (f"unknown populated value {populated!r} (expected one of "
+               f"{', '.join(sorted(v or '(blank)' for v in STUDIO_POPULATED))})")
+    kind = (row.get("kind") or "").strip()
+    if kind in STUDIO_REVIEW_KINDS and classification != "review":
+        yield (f"{kind} row classified {classification!r} — a module view "
+               f"edited in the database is a review row")
+    if kind in STUDIO_REVIEW_KINDS and not (row.get("owner_module") or "").strip():
+        yield f"{kind} row does not name the module whose view was edited"
 
 
 def validate_ticket(row):
@@ -426,7 +441,7 @@ def main():
 
     studio = build_passthrough_sheet(
         workbook, args.studio or default_if_present(args.workdir, "studio.csv"),
-        "Studio", STUDIO_COLUMNS, [14, 34, 24, 30, 20, 8, 18, 40],
+        "Studio Inventory", STUDIO_COLUMNS, [18, 34, 24, 30, 20, 8, 18, 12, 40],
         problems, validate_studio)
     tickets = build_passthrough_sheet(
         workbook, args.tickets or default_if_present(args.workdir, "tickets.csv"),
@@ -436,7 +451,7 @@ def main():
     # Requirements sheets are appended after the inventory ones; the workbook
     # reads inventory-first, so reorder to put requirements second.
     order = ["Module Inventory", "Functional Requirements", "Traceability",
-             "Inventory Evidence", "Studio", "Tickets"]
+             "Inventory Evidence", "Studio Inventory", "Tickets"]
     workbook._sheets.sort(
         key=lambda ws: order.index(ws.title) if ws.title in order else 99)
     workbook.save(args.output)
@@ -448,7 +463,7 @@ def main():
         write_csv(Path(f"{stem}_requirements.csv"), fr[0], fr[1])
         write_csv(Path(f"{stem}_traceability.csv"), trace[0], trace[1])
     if studio:
-        write_csv(Path(f"{stem}_studio.csv"), studio[0], studio[1])
+        write_csv(Path(f"{stem}_studio_inventory.csv"), studio[0], studio[1])
     if tickets:
         write_csv(Path(f"{stem}_tickets.csv"), tickets[0], tickets[1])
 
