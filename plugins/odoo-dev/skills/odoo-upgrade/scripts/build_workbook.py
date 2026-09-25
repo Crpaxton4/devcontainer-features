@@ -14,6 +14,13 @@ references/oca-base-review.md, references/functional-requirements.md):
     studio.csv        optional — studio_inventory.py output (UI-built artifacts)
     tickets.csv       optional — Odoo support register, see references/support-tickets.md
 
+Both agent groups are merged FIELD BY FIELD, per module, across every file in
+the group: an agent may deliver a partial record, and a second file naming the
+same module fills the keys the first left out instead of replacing the record.
+A key carrying different non-empty values in two files is a problem line naming
+the module, the key and both files; the first file read (files sorted by name)
+keeps the cell.
+
 Output: one xlsx with Module Inventory / Inventory Evidence / Functional
 Requirements / Traceability, plus Studio and Tickets when those CSVs are
 present, plus CSV siblings. Everything else the reader
@@ -22,12 +29,14 @@ needs (column semantics, writing rules) lives in the skill, not in the file.
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
             -o /mnt/extra-addons/acme_upgrade_16_to_19_workbook.xlsx
 
-Prints a validation report — unenriched modules, over-long cells, inventory
-cells outside their documented vocabulary (Functional area, OCA repo, OCA
-alternative), requirements with weak or non-"shall" wording, unknown source
-modules, modules with no requirement, and near-duplicate requirements across
-agent groups. Read it: it is the only check that the fan-out agents followed
-the briefs.
+Prints a validation report — unenriched modules, conflicting enrichment
+files, `TODO-AI` sentinels in a delivered column, over-long cells, inventory
+cells outside their documented vocabulary (Functional area, native verdict, OCA
+repo, OCA alternative), requirements with weak or non-"shall" wording, unknown
+source modules, modules with no requirement, and near-duplicate requirements
+across agent groups. Read it: it is the only check that the fan-out agents
+followed the briefs. `problems: 0` means complete AND schema-valid: a column
+still carrying the sentinel is counted, reported and exits non-zero.
 """
 
 import argparse
@@ -80,7 +89,18 @@ TICKET_COLUMNS = ["id", "date", "subject", "token", "status",
                   "blocking_module", "resolution", "link"]
 STUDIO_CLASSIFICATIONS = {"purge", "convert-to-code", "keep-as-data", "review"}
 TICKET_STATUSES = {"open", "waiting-odoo", "waiting-us", "resolved", "waived"}
-NATIVE_MAX = 50
+# "<major> native?" is a VERDICT and nothing else: a closed vocabulary can be
+# filtered and counted in a spreadsheet, which is the single biggest cost lever
+# in the exercise. The explanation lives in "<major> native notes" beside it.
+NATIVE_VERDICTS = ("yes", "yes/partial", "partial", "no")
+NATIVE_NOTES_MAX = 300
+# Every evidence cell is read inside one spreadsheet cell, and it is the
+# reader's only audit trail back to the source tree; a runaway entry displaces
+# the columns beside it. Same cap as references/inventory.md documents.
+EVIDENCE_MAX = 300
+# What the seeding script writes when only an agent can answer. In a column the
+# workbook presents as an answer it is an unanswered question, not a value.
+SENTINEL = "TODO-AI"
 WEAK_WORDS = re.compile(
     r"\b(should|must|will|may|fast|easy|user-friendly|efficient|appropriate|"
     r"normal|few|most|timely|properly|quickly|reliable|intuitive|seamless|"
@@ -92,9 +112,48 @@ TOP_WRAP = Alignment(vertical="top", wrap_text=True)
 
 
 def load_group_json(workdir, pattern):
+    """Every entry in the group, tagged with the file it came from.
+
+    The file name is carried because it is the only thing that makes a
+    conflict actionable: "two files disagree" is useless without their names.
+    """
     merged = []
     for path in sorted(workdir.glob(pattern)):
-        merged.extend(json.loads(path.read_text()))
+        for entry in json.loads(path.read_text()):
+            merged.append((entry, path.name))
+    return merged
+
+
+def merge_group_json(workdir, pattern, problems):
+    """Field-wise merge of one agent group, keyed by module.
+
+    A fan-out writes one file per group, and nothing stops two groups from
+    covering the same module — a record-wise merge would keep whichever file
+    sorted last and silently drop every key the loser held (evidence keys have
+    no seed CSV to fall back on, so they would simply ship empty).
+
+    So: a key set by exactly one file wins; the same value in several files is
+    fine; different non-empty values are a problem line naming the module, the
+    key and both files, and the first file read keeps the cell. An empty value
+    never overwrites a filled one.
+    """
+    merged, source = {}, {}
+    for entry, name in load_group_json(workdir, pattern):
+        module = (entry.get("module") or "").strip()
+        if not module:
+            problems.append(f"{name}: entry with no module key — dropped")
+            continue
+        record = merged.setdefault(module, {})
+        origin = source.setdefault(module, {})
+        for key, value in entry.items():
+            if value in ("", None):
+                continue
+            if key not in record or record[key] in ("", None):
+                record[key], origin[key] = value, name
+            elif record[key] != value:
+                problems.append(
+                    f"{module}: {origin[key]} and {name} disagree on {key} "
+                    f"— keeping {origin[key]}")
     return merged
 
 
@@ -125,6 +184,11 @@ def build_passthrough_sheet(workbook, path, title, columns, widths, problems,
     a human keeping the register). The workbook is where they get READ, next to
     the module inventory they change the cost of, so they are copied in rather
     than regenerated. A missing file is not an error: both sheets are optional.
+
+    A headers-only file is a register that was STAGED and is still empty —
+    which is exactly how the ticket register is meant to start — so it gets
+    its sheet, its CSV sibling and its `0 total` summary line. Only a file
+    that is not there at all returns None.
     """
     if not path or not path.exists():
         return None
@@ -141,8 +205,6 @@ def build_passthrough_sheet(workbook, path, title, columns, widths, problems,
                 for message in validate(row):
                     problems.append(f"{title}: {path.name}:{line_no} {message}")
             rows.append([row.get(c, "") for c in columns])
-    if not rows:
-        return None
     sheet = workbook.create_sheet(title)
     sheet.append(columns)
     for row in rows:
@@ -211,9 +273,10 @@ def validate_oca_alt(cell, column, oca_repo):
 
     A module that IS the OCA module is not an alternative to itself: when
     the OCA repo column names a verified upstream, `none` is false.
+
+    The sentinel is NOT tolerated here: an unanswered column is reported by
+    the sentinel count, which is what makes it exit non-zero.
     """
-    if cell == "TODO-AI":
-        return
     if cell == OCA_NONE:
         if OCA_REPO_RE.match(oca_repo):
             yield (f"{column} is {OCA_NONE!r} but OCA repo names {oca_repo} "
@@ -227,12 +290,54 @@ def validate_oca_alt(cell, column, oca_repo):
                    f"'<repo>/<module> (full|partial)'")
 
 
-def build_inventory(workbook, workdir, source, native_column, oca_column,
-                    problems):
-    enrich = {e["module"]: e for e in load_group_json(workdir, "enrich_*.json")}
-    alternatives = {e["module"]: e
-                    for e in load_group_json(workdir, "oca_alt_*.json")}
-    columns = BASE_COLUMNS + [native_column, oca_column]
+def validate_native(verdict, column, notes_column):
+    """The verdict column answers to a closed four-value list, so the sheet can
+    be filtered on it and the summary can count it."""
+    if verdict not in NATIVE_VERDICTS:
+        yield (f"{column} is {verdict!r} — expected exactly one of "
+               f"{', '.join(NATIVE_VERDICTS)}; the explanation goes in "
+               f"{notes_column!r}")
+
+
+def check_cap(label, value, cap):
+    """One problem line for every documented length cap, in one shape."""
+    if len(value) > cap:
+        yield (f"{label} is {len(value)} chars (max {cap}): {value[:60]}…")
+
+
+def split_native(entry, module, native_column, notes_column, review):
+    """Verdict + description, from either shape of the phase-1 record.
+
+    `native` is the verdict and `native_notes` the description. The legacy
+    shape packed both into `native` as `<verdict>: <text>` inside 50
+    characters, which is what made the description unreadable; it is still
+    accepted — split on the first `: ` — and recorded as a review line, so
+    the brief that produced it gets fixed rather than the data rejected.
+    """
+    verdict = (entry.get("native") or SENTINEL).strip()
+    notes = (entry.get("native_notes") or "").strip()
+    if verdict not in NATIVE_VERDICTS and ": " in verdict:
+        head, _, tail = verdict.partition(": ")
+        if head.strip() in NATIVE_VERDICTS:
+            verdict, notes = head.strip(), notes or tail.strip()
+            review.append(
+                f"{module}: {native_column} carried the legacy "
+                f"'<verdict>: <text>' cell — split into {verdict!r} + "
+                f"{notes_column}; fix the phase-1 brief that wrote it")
+    return verdict, notes
+
+
+def build_inventory(workbook, workdir, source, native_column, notes_column,
+                    oca_column, problems, review):
+    enrich = merge_group_json(workdir, "enrich_*.json", problems)
+    alternatives = merge_group_json(workdir, "oca_alt_*.json", problems)
+    columns = BASE_COLUMNS + [native_column, notes_column, oca_column]
+    # The columns the workbook presents as answers. A sentinel in any of them
+    # is an unanswered question shipped as a verdict.
+    delivered = ["Module Purpose", "3rd party app?", "Complexity/risk",
+                 "Upgrade action", "Functional area", native_column,
+                 notes_column, oca_column]
+    sentinels = Counter()
 
     inventory_rows, evidence_rows, by_module = [], [], {}
     for seeded in csv.DictReader(source.open(encoding="utf-8-sig")):
@@ -248,11 +353,10 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
             problems.append(f"{module}: no OCA alternative row (phase 2)")
         enriched, alternative = enriched or {}, alternative or {}
 
-        native = enriched.get("native", "TODO-AI")
-        if len(native) > NATIVE_MAX:
-            problems.append(
-                f"{module}: {native_column} is {len(native)} chars "
-                f"(max {NATIVE_MAX}): {native}")
+        verdict, native_notes = split_native(enriched, module, native_column,
+                                             notes_column, review)
+        native_evidence = (enriched.get("native_evidence") or "").strip()
+        alt_evidence = (alternative.get("oca_alt_evidence") or "").strip()
 
         row = dict(seeded)
         row["Module Purpose"] = enriched.get("purpose") or row["Module Purpose"]
@@ -266,15 +370,30 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
                                  or row["Upgrade action"])
         row["Functional area"] = (enriched.get("functional_area")
                                   or row["Functional area"])
-        row[native_column] = native
-        row[oca_column] = alternative.get("oca_alt", "TODO-AI")
+        row[native_column] = verdict
+        row[notes_column] = native_notes
+        row[oca_column] = alternative.get("oca_alt", SENTINEL)
 
+        for column in delivered:
+            if (row.get(column) or "").strip() == SENTINEL:
+                sentinels[column] += 1
+                problems.append(f"{module}: {column} is {SENTINEL}")
+
+        area = (row.get("Functional area") or "").strip()
         oca_repo = (row.get("OCA repo") or "").strip()
+        oca_alt = (row.get(oca_column) or "").strip()
+        # A sentinel cell has already been reported, once, by the count above;
+        # running the vocabulary checks on it would say the same thing twice.
         checks = itertools.chain(
-            validate_area((row.get("Functional area") or "").strip()),
+            validate_area(area) if area != SENTINEL else (),
             validate_oca_repo(oca_repo),
-            validate_oca_alt((row[oca_column] or "").strip(), oca_column,
-                             oca_repo))
+            validate_native(verdict, native_column, notes_column)
+            if verdict != SENTINEL else (),
+            check_cap(notes_column, native_notes, NATIVE_NOTES_MAX),
+            check_cap("native? evidence", native_evidence, EVIDENCE_MAX),
+            check_cap("OCA alternative evidence", alt_evidence, EVIDENCE_MAX),
+            validate_oca_alt(oca_alt, oca_column, oca_repo)
+            if oca_alt != SENTINEL else ())
         for message in checks:
             problems.append(f"{module}: {message}")
 
@@ -284,8 +403,7 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
         notes = " | ".join(x for x in [enriched.get("notes", ""),
                                        alternative.get("notes", "")] if x)
         evidence_rows.append([
-            module, enriched.get("native_evidence", ""),
-            alternative.get("oca_alt_evidence", ""),
+            module, native_evidence, alt_evidence,
             enriched.get("vendor_release", ""),
             enriched.get("complexity_rationale", ""),
             enriched.get("upgrade_action_rationale", ""), notes])
@@ -295,7 +413,7 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
     for row in inventory_rows:
         sheet.append(row)
     style_sheet(sheet, [28, 36, 70, 14, 8, 40, 18, 12, 34, 34, 12, 16, 16,
-                        44, 50], "B2")
+                        14, 60, 50], "B2")
 
     evidence = workbook.create_sheet("Inventory Evidence")
     evidence.append(EVIDENCE_COLUMNS)
@@ -303,7 +421,7 @@ def build_inventory(workbook, workdir, source, native_column, oca_column,
         evidence.append(row)
     style_sheet(evidence, [30, 70, 70, 14, 44, 60, 60], "B2")
 
-    return columns, inventory_rows, evidence_rows, by_module
+    return columns, inventory_rows, evidence_rows, by_module, sentinels
 
 
 def load_requirements(workdir, inventory, handled_values, problems):
@@ -494,6 +612,7 @@ def main():
 
     major = args.target_version.split(".")[0]
     native_column = f"{major} native?"
+    notes_column = f"{major} native notes"
     oca_column = f"OCA {major} alternative"
     handled_base = f"base {major}"
     source = args.inventory or args.workdir / "inventory.csv"
@@ -501,8 +620,9 @@ def main():
 
     workbook = Workbook()
     workbook.remove(workbook.active)
-    inv_columns, inv_rows, evidence_rows, inventory = build_inventory(
-        workbook, args.workdir, source, native_column, oca_column, problems)
+    inv_columns, inv_rows, evidence_rows, inventory, sentinels = \
+        build_inventory(workbook, args.workdir, source, native_column,
+                        notes_column, oca_column, problems, review)
     fr, trace, requirements = build_requirements(
         workbook, args.workdir, inventory, native_column, oca_column,
         handled_base, problems, review)
@@ -550,6 +670,9 @@ def main():
         print("status:", dict(Counter(e["status_source"] for e in requirements)))
         print("area:", dict(Counter(e["functional_area"]
                                     for e in requirements)))
+    # Per-column sentinel counts: the difference between "schema-valid" and
+    # "answered". Printed even when empty, so a clean run says so.
+    print("sentinels:", dict(sentinels))
     print(f"problems: {len(problems)}")
     for problem in problems[:80]:
         print("  ", problem)

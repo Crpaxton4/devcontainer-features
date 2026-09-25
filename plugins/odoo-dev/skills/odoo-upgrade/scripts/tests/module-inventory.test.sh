@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # module-inventory.test.sh — plant a miniature addons tree of known shape and
-# assert the columns and the cell literals module_inventory.py writes.
+# assert the columns and the cell literals module_inventory.py writes, then
+# feed a known set of agent JSON to build_workbook.py and assert the report and
+# the CSV siblings it produces from them.
 #
 # Against a real customer tree the script reports whatever is there, which
 # proves it parses manifests but not that a cell says what the workbook and
@@ -13,11 +15,15 @@
 #
 # Stdlib python3 only — no Odoo, no network, no database. A fake `odoo`
 # package is put on PYTHONPATH so "core" dependency classification is decided
-# by the fixture and not by whatever happens to be installed on the machine.
+# by the fixture and not by whatever happens to be installed on the machine,
+# and a fake `openpyxl` (fixtures/openpyxl_stub) so the workbook build runs end
+# to end without the one third-party package this repo would otherwise need.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$(cd "$SCRIPT_DIR/.." && pwd)/module_inventory.py"
+WORKBOOK="$(cd "$SCRIPT_DIR/.." && pwd)/build_workbook.py"
+OPENPYXL_STUB="$SCRIPT_DIR/fixtures/openpyxl_stub"
 work="$(mktemp -d "${TMPDIR:-/tmp}/module-inventory-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
@@ -26,6 +32,17 @@ expect() {
   if [ "$2" = "$3" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1)); echo "FAIL $1: wanted '$3', got '$2'" >&2
   fi
+}
+
+# A report is asserted by the line it must carry, never by its whole text: the
+# summary counters move whenever a column is added, the problem lines do not.
+contains() {  # <label> <haystack> <needle>
+  case "$2" in
+    *"$3"*) pass=$((pass + 1)) ;;
+    *) fail=$((fail + 1))
+       echo "FAIL $1: no '$3' in:" >&2
+       echo "$2" | sed 's/^/       /' >&2 ;;
+  esac
 }
 
 # --- fixture: a fake core tree, so `core` classification is deterministic -----
@@ -91,12 +108,17 @@ PYTHONPATH="$work/pythonpath" ODOO_VERSION="" \
   > "$work/stdout" 2> "$work/stderr"
 expect "exits 0" "$?" "0"
 
-cell() {
-  python3 - "$csv_out" "$1" "$2" <<'PY'
+# Every CSV in this pipeline keys on its first column — Module Name in the
+# inventory, Module in the Evidence and Traceability siblings — so one reader
+# serves all of them.
+csv_cell() {  # <csv> <first-column value> <column>
+  python3 - "$1" "$2" "$3" <<'PY'
 import csv, sys
 with open(sys.argv[1], encoding="utf-8-sig") as fh:
-    for row in csv.DictReader(fh):
-        if row["Module Name"] == sys.argv[2]:
+    reader = csv.DictReader(fh)
+    key = (reader.fieldnames or [""])[0]
+    for row in reader:
+        if row[key] == sys.argv[2]:
             print(row.get(sys.argv[3], "MISSING-COLUMN"))
             break
     else:
@@ -104,12 +126,17 @@ with open(sys.argv[1], encoding="utf-8-sig") as fh:
 PY
 }
 
-header="$(python3 - "$csv_out" <<'PY'
+csv_header() {  # <csv>
+  python3 - "$1" <<'PY'
 import csv, sys
 with open(sys.argv[1], encoding="utf-8-sig") as fh:
     print("|".join(next(csv.reader(fh))))
 PY
-)"
+}
+
+cell() { csv_cell "$csv_out" "$1" "$2"; }
+
+header="$(csv_header "$csv_out")"
 
 # --- the column contract -----------------------------------------------------
 expect "13 columns, in order" "$header" \
@@ -166,6 +193,156 @@ case "$(cell broken_module 'Module Purpose')" in
   *) fail=$((fail + 1))
      echo "FAIL broken manifest purpose: $(cell broken_module 'Module Purpose')" >&2 ;;
 esac
+
+# =============================================================================
+# build_workbook.py — merging the fan-out, and what the report refuses to pass
+# =============================================================================
+# The workbook build is where per-agent JSON becomes the client-facing sheet.
+# Everything asserted below is a contract the fan-out briefs promise and only
+# this script enforces, so each case plants exactly one deviation and reads the
+# report line it must produce.
+#
+# openpyxl is not installed here and must not be: the stub package first on
+# PYTHONPATH lets the real script run end to end, and `save()` writes a JSON
+# transcript instead of a spreadsheet.
+
+SEED_HEADER="Module Name,Display Name,Module Purpose,Source version,LoC,Dependencies,Dependency origin,3rd party app?,3rd party app link,OCA repo,Complexity/risk,Upgrade action,Functional area"
+SEED_ROW="acme,Acme,Extra fields on the sale order,16.0.1.0.0,120,base,core,No,,none,Low,keep,Sales"
+
+# A work dir whose seed CSV and phase-2 file are complete and valid, so the
+# only thing any case is measuring is what it writes into enrich_*.json.
+wb_case() {  # <name> -> echoes the dir
+  local dir="$work/wb/$1"
+  mkdir -p "$dir"
+  printf '%s\n%s\n' "$SEED_HEADER" "$SEED_ROW" > "$dir/inventory.csv"
+  cat > "$dir/oca_alt_g1.json" <<'JSON'
+[{"module": "acme", "oca_alt": "none",
+  "oca_alt_evidence": "grepped acme, sale_acme across the OCA catalog"}]
+JSON
+  printf '%s' "$dir"
+}
+
+wb_run() {  # <dir> -> sets wb_out (stdout+stderr) and wb_status
+  wb_out="$(PYTHONPATH="$OPENPYXL_STUB" python3 "$WORKBOOK" --workdir "$1" \
+    --target-version 19.0 -o "$1/out.xlsx" 2>&1)"
+  wb_status=$?
+}
+
+# --- #908: two files, disjoint keys, one merged record -----------------------
+dir="$(wb_case merge)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "yes/partial"}]
+JSON
+cat > "$dir/enrich_g3.json" <<'JSON'
+[{"module": "acme",
+  "native_notes": "sale.order has carried the same field since 17.0",
+  "native_evidence": "odoo/addons/sale/models/sale_order.py",
+  "vendor_release": "n/a"}]
+JSON
+wb_run "$dir"
+expect "a complete build exits 0" "$wb_status" "0"
+contains "a complete build reports no problems" "$wb_out" "problems: 0"
+contains "a complete build reports no sentinels" "$wb_out" "sentinels: {}"
+
+# --- #925: verdict and description are two columns ---------------------------
+expect "16 columns, verdict and notes beside each other" \
+  "$(csv_header "$dir/out_inventory.csv")" \
+  "Module Name|Display Name|Module Purpose|Source version|LoC|Dependencies|Dependency origin|3rd party app?|3rd party app link|OCA repo|Complexity/risk|Upgrade action|Functional area|19 native?|19 native notes|OCA 19 alternative"
+expect "verdict comes from the file that set it" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
+expect "notes come from the other file" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
+  "sale.order has carried the same field since 17.0"
+expect "an evidence key set by one file alone survives the merge" \
+  "$(csv_cell "$dir/out_evidence.csv" acme 'native? evidence')" \
+  "odoo/addons/sale/models/sale_order.py"
+
+# --- #908: the same key, two values, both files named ------------------------
+dir="$(wb_case conflict)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "yes/partial"}]
+JSON
+cat > "$dir/enrich_g3.json" <<'JSON'
+[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it"}]
+JSON
+wb_run "$dir"
+contains "a conflict names the module, the key and both files" "$wb_out" \
+  "acme: enrich_g1.json and enrich_g3.json disagree on native"
+expect "a conflict keeps the first file's value" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
+expect "a key only the loser set is still merged in" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
+  "nothing in 19 covers it"
+expect "a conflict exits non-zero" "$wb_status" "1"
+
+# --- #925: the legacy single-string cell is split, not rejected --------------
+dir="$(wb_case legacy)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "yes/partial: mail composer has cc/bcc fields",
+  "native_evidence": "addons/mail/wizard/mail_compose_message.py"}]
+JSON
+wb_run "$dir"
+expect "legacy cell yields the verdict" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
+expect "legacy cell yields the description" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
+  "mail composer has cc/bcc fields"
+contains "legacy cell is flagged for review" "$wb_out" "carried the legacy"
+contains "legacy cell does not block the build" "$wb_out" "problems: 0"
+expect "legacy cell exits 0" "$wb_status" "0"
+
+# --- #925: anything outside the four verdicts is a problem -------------------
+dir="$(wb_case verdict)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "maybe", "native_notes": "half of it"}]
+JSON
+wb_run "$dir"
+contains "a verdict outside the vocabulary is rejected" "$wb_out" \
+  "acme: 19 native? is 'maybe' — expected exactly one of yes, yes/partial, partial, no"
+expect "a bad verdict exits non-zero" "$wb_status" "1"
+
+# --- #919: the documented 300-char evidence cap is enforced ------------------
+dir="$(wb_case evidence)"
+python3 - "$dir/enrich_g1.json" <<'PY'
+import json, sys
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump([{"module": "acme", "native": "no",
+                "native_notes": "nothing in 19 covers it",
+                "native_evidence": "x" * 301}], fh)
+PY
+wb_run "$dir"
+contains "301 chars of native evidence is one char too many" "$wb_out" \
+  "acme: native? evidence is 301 chars (max 300)"
+expect "over-long evidence exits non-zero" "$wb_status" "1"
+
+# --- #909: a sentinel in a delivered column is unanswered, not valid ---------
+dir="$(wb_case sentinel)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "purpose": "Extra fields on the sale order"}]
+JSON
+wb_run "$dir"
+contains "a sentinel verdict is a problem line" "$wb_out" \
+  "acme: 19 native? is TODO-AI"
+contains "sentinels are counted per column" "$wb_out" \
+  "sentinels: {'19 native?': 1}"
+expect "a sentinel exits non-zero" "$wb_status" "1"
+
+# --- #911: a headers-only register is staged, not absent ---------------------
+dir="$(wb_case tickets)"
+cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it"}]
+JSON
+printf '%s\n' \
+  "id,date,subject,token,status,blocking_module,resolution,link" \
+  > "$dir/tickets.csv"
+wb_run "$dir"
+contains "a staged register counts itself" "$wb_out" \
+  "tickets: 0 total, 0 still blocking"
+contains "a staged register gets its sheet" "$wb_out" "('Tickets', 0)"
+expect "a staged register gets its CSV sibling, headers intact" \
+  "$(csv_header "$dir/out_tickets.csv")" \
+  "id|date|subject|token|status|blocking_module|resolution|link"
+expect "a staged register is not a problem" "$wb_status" "0"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
