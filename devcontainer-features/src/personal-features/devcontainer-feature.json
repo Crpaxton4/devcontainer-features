@@ -71,6 +71,6 @@
             "type": "bind"
         }
     ],
-    "postCreateCommand": "publish-claude-wrapper && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace && odoo-ls-config",
+    "postCreateCommand": "publish-claude-wrapper && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace; odoo-ls-config",
     "postStartCommand": "mempalace-hub"
 }
