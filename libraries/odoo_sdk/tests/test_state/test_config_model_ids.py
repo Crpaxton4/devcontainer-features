@@ -283,7 +283,7 @@ class TestSetModelIdToml(unittest.TestCase):
         self.assertIn("task = 71", text)
 
     def test_an_entry_in_a_later_section_is_not_mistaken_for_one(self):
-        _, reloaded, _, _ = self._write_and_reload(
+        _, reloaded, text, _ = self._write_and_reload(
             "[model_ids]\n"
             '"res.partner" = 12\n\n'
             "[behavior]\n"
@@ -291,6 +291,18 @@ class TestSetModelIdToml(unittest.TestCase):
         )
         self.assertEqual(reloaded.behavior["resync_window_days"], 5)
         self.assertEqual(reloaded.model_ids["project.task"], 71)
+        # Appended against the section's last entry, not against the blank line
+        # that separates it from [behavior] — the new key must not drift down
+        # into the gap and leave the two sections touching.
+        self.assertEqual(
+            text,
+            "[model_ids]\n"
+            '"res.partner" = 12\n'
+            '"project.task" = 71\n'
+            "\n"
+            "[behavior]\n"
+            "resync_window_days = 5\n",
+        )
 
     def test_the_in_memory_map_is_updated_too(self):
         config, _, _, _ = self._write_and_reload('[connection]\nurl = "https://x"\n')

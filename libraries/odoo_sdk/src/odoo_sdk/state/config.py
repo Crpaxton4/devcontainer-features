@@ -349,6 +349,77 @@ def _unquote_toml_key(key: str) -> str:
     return key
 
 
+def _is_section_header(line: str) -> bool:
+    """Return whether ``line`` is a ``[section]`` header in either format."""
+    stripped = line.strip()
+    return stripped.startswith("[") and stripped.endswith("]")
+
+
+def _model_id_scopes(lines: list[str], is_toml: bool) -> list[Optional[str]]:
+    """Return, per line, the ``[model_ids]`` key prefix that line falls under.
+
+    ``None`` for lines outside the section entirely, ``""`` inside a plain
+    ``[model_ids]``, and the sub-table prefix inside ``[model_ids.<name>]``. A
+    header line carries the scope it opens, so the entry finders can treat the
+    header and its body uniformly.
+    """
+    scopes: list[Optional[str]] = []
+    scope: Optional[str] = None
+    for line in lines:
+        if _is_section_header(line):
+            scope = _model_ids_scope(line.strip(), is_toml)
+        scopes.append(scope)
+    return scopes
+
+
+def _model_id_entry(
+    line: str, scope: Optional[str], is_toml: bool
+) -> Optional[tuple[str, str, str]]:
+    """Return ``(dotted model name, raw key, separator)`` for one entry line.
+
+    ``None`` when the line is not a ``[model_ids]`` entry at all — outside the
+    section, a header, a comment, or blank. INI keys are lower-cased to match
+    ``configparser.optionxform``, which is what the loader reads them through.
+    """
+    if scope is None:
+        return None
+    split = _split_key_value(line, is_toml)
+    if split is None:
+        return None
+    raw_key, separator = split
+    key = _unquote_toml_key(raw_key) if is_toml else raw_key.lower()
+    return scope + key, raw_key, separator
+
+
+def _find_model_id_entry(
+    lines: list[str], scopes: list[Optional[str]], is_toml: bool, target: str
+) -> Optional[tuple[int, str, str]]:
+    """Return ``(line index, raw key, separator)`` for ``target``'s entry, if any."""
+    for index, line in enumerate(lines):
+        entry = _model_id_entry(line, scopes[index], is_toml)
+        if entry is not None and entry[0] == target:
+            return index, entry[1], entry[2]
+    return None
+
+
+def _model_id_append_index(
+    lines: list[str], scopes: list[Optional[str]], is_toml: bool
+) -> Optional[int]:
+    """Return where a new entry belongs in the plain ``[model_ids]`` section.
+
+    Just past its header or its last entry — never past the blank lines and
+    comments trailing it, which read as belonging to whatever section is next.
+    ``None`` when the file has no plain ``[model_ids]`` section to append to.
+    """
+    append_at: Optional[int] = None
+    for index, line in enumerate(lines):
+        if scopes[index] != "":
+            continue
+        if _is_section_header(line) or _model_id_entry(line, "", is_toml):
+            append_at = index + 1
+    return append_at
+
+
 def _rewrite_model_id(text: str, is_toml: bool, model: str, ir_model_id: int) -> str:
     """Return ``text`` with ``model``'s ``[model_ids]`` entry set to ``ir_model_id``.
 
@@ -359,38 +430,24 @@ def _rewrite_model_id(text: str, is_toml: bool, model: str, ir_model_id: int) ->
     when the file has none. Every other line is returned untouched.
     """
     lines = text.splitlines()
-    target = model if is_toml else model.lower()
-    scope: Optional[str] = None
-    has_section = False
-    insert_at: Optional[int] = None
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            scope = _model_ids_scope(stripped, is_toml)
-            if scope == "":
-                has_section = True
-                insert_at = index + 1
-            continue
-        if scope is None:
-            continue
-        entry = _split_key_value(line, is_toml)
-        if entry is None:
-            continue
-        raw_key, separator = entry
-        name = scope + (_unquote_toml_key(raw_key) if is_toml else raw_key.lower())
-        if scope == "":
-            insert_at = index + 1
-        if name == target:
-            indent = line[: len(line) - len(line.lstrip())]
-            lines[index] = f"{indent}{raw_key} {separator} {ir_model_id}"
-            return "\n".join(lines) + "\n"
+    scopes = _model_id_scopes(lines, is_toml)
+    found = _find_model_id_entry(
+        lines, scopes, is_toml, model if is_toml else model.lower()
+    )
+    if found is not None:
+        index, raw_key, separator = found
+        line = lines[index]
+        indent = line[: len(line) - len(line.lstrip())]
+        lines[index] = f"{indent}{raw_key} {separator} {ir_model_id}"
+        return "\n".join(lines) + "\n"
     new_entry = f'"{model}" = {ir_model_id}' if is_toml else f"{model} = {ir_model_id}"
-    if has_section and insert_at is not None:
-        lines.insert(insert_at, new_entry)
-    else:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.extend([f"[{_MODEL_IDS_SECTION}]", new_entry])
+    append_at = _model_id_append_index(lines, scopes, is_toml)
+    if append_at is not None:
+        lines.insert(append_at, new_entry)
+        return "\n".join(lines) + "\n"
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.extend([f"[{_MODEL_IDS_SECTION}]", new_entry])
     return "\n".join(lines) + "\n"
 
 
