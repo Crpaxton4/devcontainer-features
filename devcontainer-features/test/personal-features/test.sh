@@ -1396,9 +1396,19 @@ check "the staleness report survives a create that writes no hook entries" bash 
 
 # #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
 # on every container create. The #804 mechanism deliberately adds NO hook entry,
-# so assert the settings file still carries only the two known feature programs.
+# so assert the settings file still carries only the KNOWN feature programs -
+# five of them since #811, which added the two security guards and the palace
+# recall hook alongside the event shim and the worktree-context hook.
+#
+# Three assertions, not one, so extending the roster cannot quietly weaken this
+# into a tautology: (1) every command in the file is one of the five - an entry
+# from anywhere else, the heartbeat included, fails here; (2) all five are
+# actually present - an allowlist that matches nothing would otherwise pass (1)
+# trivially; (3) no command string appears twice - the duplicate-accumulation
+# failure this check is a sibling of. The event shim's seven entries differ by
+# their event-name argument, so every one of the commands is distinct.
 check "the heartbeat mechanism adds no hook entry of its own" bash -c \
-  "! jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\" | grep -qvE 'claude-event-hook|worktree-context-hook'"
+  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
 
