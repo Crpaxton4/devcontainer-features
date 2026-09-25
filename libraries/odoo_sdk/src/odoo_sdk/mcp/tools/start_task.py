@@ -481,6 +481,76 @@ def _should_request_branch_description(ctx: Any, task_id: int) -> bool:
     return not _on_task_branch(task_id)
 
 
+async def _elicit_base_branch(ctx: Any) -> tuple[Optional[str], Optional[str]]:
+    """Ask the caller to pick a local branch to fork from; return (base, error).
+
+    The name-search path's one remaining base prompt: it runs only when no base
+    was configured (:func:`_resolve_base_branch`), and exactly one of the two
+    returned values is non-``None``.
+
+    :param ctx: FastMCP context providing ``elicit``.
+    :type ctx: Any
+    :return: The chosen branch, or an error string for an empty repo, a
+        cancelled prompt, or an out-of-range selection.
+    :rtype: tuple[Optional[str], Optional[str]]
+    """
+    branches = _list_local_branches()
+    if not branches:
+        return (
+            None,
+            "No local git branches found. Ensure the working directory is a git repo.",
+        )
+
+    numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
+    result = await ctx.elicit(
+        f"Select base branch to fork from:\n{numbered}\nSelect number:",
+        _SelectIndex,
+    )
+    if result.action != "accept":
+        return None, "Branch selection cancelled."
+    idx = result.data.selection - 1
+    if not (0 <= idx < len(branches)):
+        return None, "Invalid branch selection."
+    return branches[idx], None
+
+
+async def _resolve_base_branch(
+    ctx: Any, *, interactive: bool, base_branch: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve the branch the task branch must fork from; return (base, error).
+
+    Precedence (#903), strictly: the explicit ``base_branch`` argument, then
+    ``ODOO_SDK_BASE_BRANCH`` (:func:`_env_base_branch`), and only when neither
+    is configured the fallbacks that *guess* — the interactive branch pick on
+    the name-search path, or :func:`_default_base_branch` (remote HEAD, then
+    the current branch) on the headless ``task_id`` path (#614/#621). A
+    configured base therefore also replaces the elicitation: a caller that
+    already named the base has nothing to be asked, and the remote default is
+    never even probed.
+
+    :param ctx: FastMCP context, used only for the interactive fallback.
+    :type ctx: Any
+    :param interactive: Whether prompting the caller is allowed (name path).
+    :type interactive: bool
+    :param base_branch: Base named by the caller, or ``None``.
+    :type base_branch: Optional[str]
+    :return: The resolved base, or an error string when none could be found.
+    :rtype: tuple[Optional[str], Optional[str]]
+    """
+    base = base_branch or _env_base_branch()
+    if base is not None:
+        return base, None
+    if interactive:
+        return await _elicit_base_branch(ctx)
+    base = _default_base_branch()
+    if base is None:
+        return (
+            None,
+            "No base branch found. Ensure the working directory is a git repo.",
+        )
+    return base, None
+
+
 async def _setup_task_branch(
     ctx: Any,
     task: dict,
@@ -491,12 +561,8 @@ async def _setup_task_branch(
 ) -> tuple[Optional[str], bool, Optional[str], Optional[str]]:
     """Ensure the working tree sits on this task's branch; report the base used.
 
-    Base resolution (#903), in strict precedence order: the explicit
-    ``base_branch`` argument, then :func:`_env_base_branch`
-    (``ODOO_SDK_BASE_BRANCH``), and only when neither is configured the
-    interactive branch pick (name-search path) or :func:`_default_base_branch`
-    (headless path). A configured base therefore also *replaces* the
-    elicitation: a caller that already named the base has nothing to be asked.
+    The base is resolved by :func:`_resolve_base_branch` (#903): explicit
+    argument, then ``ODOO_SDK_BASE_BRANCH``, then a guess.
 
     :return: ``(branch_name, created, base_branch, error)`` — ``branch_name`` is
         ``None`` when the tree was already on the task branch or setup failed,
@@ -508,39 +574,11 @@ async def _setup_task_branch(
     if _on_task_branch(task_id):
         return None, False, None, None
 
-    base = base_branch or _env_base_branch()
-    if base is None and interactive:
-        branches = _list_local_branches()
-        if not branches:
-            return (
-                None,
-                False,
-                None,
-                "No local git branches found. Ensure the working directory is a git repo.",
-            )
-
-        numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(branches))
-        result = await ctx.elicit(
-            f"Select base branch to fork from:\n{numbered}\nSelect number:",
-            _SelectIndex,
-        )
-        if result.action != "accept":
-            return None, False, None, "Branch selection cancelled."
-        idx = result.data.selection - 1
-        if not (0 <= idx < len(branches)):
-            return None, False, None, "Invalid branch selection."
-        base = branches[idx]
-    elif base is None:
-        # The task_id-only path is headless (#614/#621): no base-branch
-        # elicitation — fork from the remote default (or current) branch.
-        base = _default_base_branch()
-        if base is None:
-            return (
-                None,
-                False,
-                None,
-                "No base branch found. Ensure the working directory is a git repo.",
-            )
+    base, base_err = await _resolve_base_branch(
+        ctx, interactive=interactive, base_branch=base_branch
+    )
+    if base is None:
+        return None, False, None, base_err
 
     branch_name = f"{task_id}-{description}"
 
