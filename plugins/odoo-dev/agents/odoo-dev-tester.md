@@ -127,7 +127,7 @@ unit here is one test suite or one module under test:
 Nowhere, today, as a standalone `progress.json` — and that is a gap in the harness,
 not a licence to work around it. `Edit`, `Write` and `NotebookEdit` are removed from
 you; the `PreToolUse` allowlist permits only `artifact.sh`, `run-tests.sh`,
-`browser-ensure.sh`, `gate.sh`, `module-classify.sh` and read-only `git`, and it
+`browser-ensure.sh`, `module-classify.sh` and read-only `git`, and it
 denies every redirection whose target is not `/dev/null`, so no `>`, no heredoc and
 no `tee` reaches a real path. `artifact.sh` is the one writer you can reach and it
 refuses any stage outside its schema, so `progress` is not a stage it will accept.
