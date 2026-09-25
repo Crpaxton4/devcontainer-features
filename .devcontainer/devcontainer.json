@@ -1,7 +1,11 @@
 {
   "image": "mcr.microsoft.com/devcontainers/python:3.13-bookworm",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:3": {
+    // docker-outside-of-docker, not docker-in-docker: the personal-features
+    // Feature hard-depends on it (#898). Its mempalace hub is a sibling
+    // container on the HOST daemon, shared by every devcontainer, so the socket
+    // this mounts has to be the host's and not a nested daemon's.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "installDockerBuildx": false
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
