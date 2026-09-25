@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_sdk.commands import Command, Registry
+from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_sdk.commands.builtin.get_task import GetTaskCommand
 from odoo_sdk.mcp.prompts.builtin.implement_task import make_implement_task_prompt
 from odoo_sdk.mcp.prompts.builtin.report_incident import report_incident
@@ -375,11 +376,82 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("--base", content)
         self.assertIn("-c CLAUDE.md", content)
 
-    def test_second_message_gives_concrete_note_cadence(self):
+    def test_second_message_inverts_the_note_cadence(self):
+        # #901: the old text said "prefer several small notes", which produced
+        # 13 client-visible chatter messages in one 30-minute run. Checkpoints
+        # are now local (interim=True) and exactly ONE note is posted at STOP.
         content = _build_messages(_make_task())[1]
         self.assertIn("after each coherent", content)
-        self.assertIn("after tests pass", content)
-        self.assertIn("before you stop", content)
+        self.assertIn("interim=True", content)
+        self.assertIn("local session log", content)
+        self.assertIn("consolidated", content)
+        self.assertNotIn("Prefer several small notes", content)
+
+    def test_plan_note_is_local_not_posted_to_chatter(self):
+        # #901: step 2 used to post the plan to chatter as its own message.
+        content = _build_messages(_make_task())[1]
+        analyze = content[content.index("**ANALYZE**") : content.index("**IMPLEMENT**")]
+        self.assertIn(
+            'task_note(42, "Implementation plan: ...", interim=True)', analyze
+        )
+
+    def test_interim_chatter_note_is_the_exception_not_the_cadence(self):
+        # #901: a posted mid-run note is allowed only when blocked or when the
+        # run is long enough that silence is worse than the notification.
+        content = _build_messages(_make_task())[1]
+        implement = content[content.index("**IMPLEMENT**") : content.index("**TEST**")]
+        self.assertIn("ONLY as an exception", implement)
+        self.assertIn("blocked", implement)
+        self.assertIn("long-running", implement)
+        self.assertIn("NEVER one note per file-group", implement)
+
+    def test_stop_step_posts_one_consolidated_note(self):
+        # #901: the STOP step is where the single client-visible note is made,
+        # and it must name the four things that note has to carry.
+        content = _build_messages(_make_task())[1]
+        stop = content[content.index("**STOP**") :]
+        self.assertIn("ONE consolidated chatter note", stop)
+        self.assertIn("what changed", stop)
+        self.assertIn("tests you ran", stop)
+        self.assertIn("review outcome", stop)
+        self.assertIn("PR link", stop)
+
+    def test_note_style_allows_the_full_chatter_budget(self):
+        # #901: with one note per run, the "several small notes" guidance is
+        # gone and the note may spend the whole (raised) cap.
+        content = _build_messages(_make_task())[1]
+        style = content[
+            content.index("## Note Style") : content.index("## Tool Reference")
+        ]
+        self.assertIn("One consolidated note per run", style)
+        self.assertIn(str(MAX_CHATTER_BODY_CHARS), style)
+        self.assertNotIn("Prefer several small notes", style)
+
+    def test_tool_reference_distinguishes_interim_from_posted_notes(self):
+        # #901: the table is what an agent reads when deciding how to call the
+        # tool, so the two modes must be told apart there.
+        content = _build_messages(_make_task())[1]
+        table = content[
+            content.index("## Tool Reference") : content.index("## Guard Conditions")
+        ]
+        row = next(line for line in table.splitlines() if "`task_note`" in line)
+        self.assertIn("interim=True", row)
+        self.assertIn("local session log only", row)
+        self.assertIn("client-visible", row)
+        self.assertIn(str(MAX_CHATTER_BODY_CHARS), row)
+
+    def test_tool_reference_names_the_artifacts_dir_and_next_stage(self):
+        # #784 part (b): the workflow ended at STOP with no pointer to where
+        # evidence is recorded or which stage runs next, so work started here
+        # could never reach /odoo-dev:pr.
+        content = _build_messages(_make_task())[1]
+        table = content[
+            content.index("## Tool Reference") : content.index("## Guard Conditions")
+        ]
+        self.assertIn("artifacts directory", table)
+        self.assertIn("plugins/odoo-dev/scripts/artifact.sh", table)
+        self.assertIn("30-test.json", table)
+        self.assertIn("/odoo-dev:pr", table)
 
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])
