@@ -320,6 +320,18 @@ One template, filled per worker.
     linting and compiling against, and breaks their gates for reasons that
     appear nowhere in their own diffs. Confine dependency work to `uv lock`,
     which only rewrites the lockfile.
+
+    Reads resolve to the main checkout too, which is the half that bites
+    silently: the SDK's editable install is one absolute path into
+    `/workspaces/devcontainer-features/libraries/odoo_sdk/src`, so `import
+    odoo_sdk` from any worktree lands on **main's** source unless the run says
+    otherwise. Run the SDK's pytest from `<abs worktree path>/libraries/odoo_sdk`
+    — the ini `pythonpath` there pins that checkout's `src/` — or put
+    `PYTHONPATH=<abs worktree path>/libraries/odoo_sdk/src` on the *same command
+    line* as pytest, since exported environment does not survive between Bash
+    calls. The session-scoped guard in `libraries/odoo_sdk/tests/conftest.py`
+    fails the run loudly when neither holds; a test-only diff would otherwise
+    produce a false PASS against source the run never imported.
   - Do not merge, do not force-push, do not touch another worker's branch.
   - Do not edit shared doc lines unless explicitly assigned them.
   - **Parity traps**, when in scope:
