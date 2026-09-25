@@ -68,7 +68,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 
 `convert-to-code` rows belong in the estimate. A Studio field left as a manual field is re-created by hand after every upgrade and is invisible to code review forever.
 
-## Columns (15)
+## Columns (16)
 
 | # | Column | Filled by | Semantics |
 |---|--------|-----------|-----------|
@@ -85,10 +85,11 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | 11 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
 | 12 | Upgrade action | script seeds → AI proposes → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop). One of: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), `drop` (dead/unused/superseded). Blank when genuinely unsure. Final call = human planning review |
 | 13 | Functional area | AI | ONE bucket from the SAME closed 11-value list the requirements use (`AREA_ORDER` in `build_workbook.py`, validated in both places so the two cannot drift): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: the bucket is assigned **per requirement**, not per module — a module that produce requirements in two areas get one bucket here (the area its primary user sit in) and each requirement get its own. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
-| 14 | `<major> native?` | AI (phase 1) | Does target-version standard (community **or** enterprise) do some/all of this? `no`, or `yes/partial: <how/where in target>`. Whole cell ≤ 50 chars — column is scanned, not read |
-| 15 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
+| 14 | `<major> native?` | AI (phase 1) | The **verdict** and nothing else: exactly one of `yes`, `yes/partial`, `partial`, `no`. Does target-version standard (community **or** enterprise) do some/all of this? A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
+| 15 | `<major> native notes` | AI (phase 1) | How and where the target covers it — the sentence that used to be crammed into column 14. ≤ 300 chars. Empty is allowed when the verdict is `no` and there is nothing to add; the receipt (paths grepped) still go to the Evidence sheet |
+| 16 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
 
-Header text carry target major: Odoo 19 project ⇒ `19 native?`, `OCA 19 alternative`. Build script derive both from `--target-version`.
+Header text carry target major: Odoo 19 project ⇒ `19 native?`, `19 native notes`, `OCA 19 alternative`. Build script derive both from `--target-version`.
 
 ## Inventory Evidence sheet
 
@@ -97,8 +98,8 @@ Verdict columns are short by design, so every one of them need a receipt. One ro
 | Column | From | Content |
 |--------|------|---------|
 | Module | — | technical name |
-| native? evidence | phase 1 | ≤ 300 chars. Path(s) in target tree, or `none found after grepping X, Y`. MUST cite ≥ 1 path or the grep terms tried |
-| OCA alternative evidence | phase 2 | ≤ 300 chars. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
+| native? evidence | phase 1 | ≤ 300 chars, enforced by `build_workbook.py`. Path(s) in target tree, or `none found after grepping X, Y`. MUST cite ≥ 1 path or the grep terms tried |
+| OCA alternative evidence | phase 2 | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
 | Vendor release | phase 1 | `yes` / `no` / `unknown` / `n/a` (n/a = in-house) — is there a target-series build of the vendor app? |
 | Complexity rationale | phase 1 | ≤ 120 chars |
 | Upgrade action rationale | phase 1 | ≤ 160 chars |
@@ -130,6 +131,8 @@ Read `MISMATCH` lines it prints:
 
 Read-only agents, ~10-12 modules each, grouped by functional area (same-area modules share target-version greps). Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents. Each write ONE JSON array to its own path in the work dir: `enrich_g<N>.json`.
 
+Records may be partial, and two groups may cover the same module. `build_workbook.py` merge every `enrich_*.json` — and every `oca_alt_*.json` — **field by field** per module: a key set by exactly one file win, the same value in several files is fine, and two files setting one key to different non-empty values is a problem line naming the module, the key and BOTH files (`acme: enrich_g1.json and enrich_g3.json disagree on native`) with the first file read keeping the cell. So a re-run can write only the keys it re-derived, and nothing an earlier group established is destroyed by a later file that simply omit it. Empty value never overwrite a filled one.
+
 Give every agent: module dir, seed CSV path, and the source trees —
 
 | Tree | Path (devcontainer) |
@@ -141,7 +144,7 @@ Give every agent: module dir, seed CSV path, and the source trees —
 
 Confirm paths exist before briefing — `odoo-dev:odoo-devcontainer` skill list what's checked out.
 
-JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_evidence`, `notes`. Semantics = columns 3/8/9/11/12/13/14 above + evidence sheet.
+JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`. Semantics = columns 3/8/9/11/12/13/14/15 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation.
 
 Method each agent follow (order matters — verdict come from greps, not memory):
 
@@ -151,9 +154,11 @@ Method each agent follow (order matters — verdict come from greps, not memory)
 4. Decide `native` + evidence. `no` is a fine answer; unsupported `yes/partial` is not.
 5. Decide remaining fields. Vendor-product check on `author`/`website` every row: free LGPL vendor modules carry no `price` key and masquerade as in-house code — vendor lineage means `replace` via vendor release, not in-house port. In-house OPL-1 ⇒ `third_party = No`.
 
-`native` cell examples (all ≤ 50 chars): `yes/partial: mail composer has cc/bcc fields`, `yes/partial: stock.picking has date_done`, `yes/partial: account 'send & print' wizard`.
+`native` / `native_notes` pairs: `yes/partial` + `mail composer has cc/bcc fields`; `yes/partial` + `stock.picking has carried date_done since 17.0`; `no` + `19 dropped the payment provider this module extends`.
 
-Agent reply back = one line per module `<module> | <native cell> | <upgrade_action>` — enough to spot a group that skipped the greps without reading its JSON.
+A `native` cell still carrying the old one-string shape (`yes/partial: <text>`) is accepted: the build split it on the first `: ` and print a non-blocking review line. Fix the brief that produced it — the data is already merged.
+
+Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a group that skipped the greps without reading its JSON.
 
 ## Build
 
@@ -164,7 +169,7 @@ python3 <base directory>/scripts/build_workbook.py --workdir /tmp/inv --target-v
 
 Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` + `fr_*.json` into the 4-sheet workbook (+ CSV siblings). Requirements JSON optional — absent ⇒ 2 sheets.
 
-Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, over-long `native?` cells, requirements without `shall` or carrying weak words, unknown source modules, modules with no requirement. Near-duplicate requirements print separately as a non-blocking review list. Read both and re-run the offending agents — it is the only check that the fan-out followed the brief.
+Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, two enrichment files disagreeing on one key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells, requirements without `shall` or carrying weak words, unknown source modules, modules with no requirement. Near-duplicate requirements print separately as a non-blocking review list. Read both and re-run the offending agents — it is the only check that the fan-out followed the brief.
 
 ## Interpretation for estimating
 
@@ -172,5 +177,5 @@ Script print a validation report and exit 1 when non-empty: modules missing enri
 - Dependency depth matter: modules depended on by others port FIRST; broken base module block chain. Sort plan by topological order of Dependencies column.
 - `3rd party app? = Yes` rows = separate workstream: **download target-version release** from vendor/store, don't port code. Effort = re-purchase/licence check + config re-validation + regression test. No target-version release ⇒ escalate to `Upgrade action` decision (port anyway / replace / drop).
 - **OCA modules = `3rd party app? = No` but follow same replace-if-released logic** — externally maintained, never in-house code. Their `OCA <major> alternative` cell read `already OCA: <repo>/<module>`, never `none` and never the bare upstream name: the module IS the OCA module, so nothing is being offered as an alternative to it. Target series listed in `OCA repo` ⇒ `replace`; not listed ⇒ `keep` (port it, consider contributing upstream). Before setting `replace`, diff local copy against upstream series branch — local patches common; if diverged, port delta onto new release or upstream it (`oca-port` automate much of this).
-- Rows where `<major> native?` is `yes/partial` or `OCA <major> alternative` is not `none` = candidates to NOT port at all. Biggest lever on total cost, especially on fresh-database projects — see [oca-base-review.md](./oca-base-review.md).
+- Rows where `<major> native?` is `yes`, `yes/partial` or `partial`, or `OCA <major> alternative` is not `none` = candidates to NOT port at all. Biggest lever on total cost, especially on fresh-database projects — see [oca-base-review.md](./oca-base-review.md).
 - Functional area column ⇒ group rows per department for end-user test plan; each `keep`/`replace` row need at least one user acceptance scenario in its area.
