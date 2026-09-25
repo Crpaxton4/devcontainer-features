@@ -154,9 +154,11 @@ Writebacks are **script-driven and deterministic** — reads may go through MCP 
 
 The note carries the link; the activity carries the review request as a real `mail.activity` — the old `[ACTIVITY]` marker-in-a-note workaround is retired now that the activity commands exist. Schedule the activity only when `pr-open.sh` said `"action": "created"`: a rerun that edited the existing PR already has its review activity, and a second one is noise. If an earlier review request became stale (the PR was superseded), close it with `writeback.sh done <task_id> --match "<old pr_url>"` rather than leaving it open.
 
+No `start_task` is needed before the note: `writeback.sh` starts (or re-uses) the tracking session itself, because `task_note` requires a running session and `start_task` is idempotent (#891).
+
 Each call prints the CLI's JSON result on success; on failure it passes the CLI's `{"error":{"type","message"}}` envelope through and exits non-zero — report the failure, never silently skip the writeback.
 
-**300-character cap is hard reject, not truncation** — the script pre-checks it for fast feedback, but the SDK refuses a longer body outright either way. Keep note to link and one clause; detail lives in PR. `--dedupe-key` makes rerun idempotent instead of spamming chatter.
+**500-character cap is hard reject, not truncation** — the script pre-checks it for fast feedback, but the SDK refuses a longer body outright either way. Keep note to link and one clause; detail lives in PR. `--dedupe-key` makes rerun idempotent instead of spamming chatter.
 
 Never write timesheet hours from here. Hours reach Odoo through the odoo-tui/CLI upload path alone, and a second writer for a billed number is duplicate state nobody reconciles.
 
