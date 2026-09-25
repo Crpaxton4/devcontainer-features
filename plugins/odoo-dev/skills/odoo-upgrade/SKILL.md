@@ -12,7 +12,7 @@ Code porting between major versions. DB upgrade (upgrade.odoo.com / odoo.sh) = h
 Environment = Odoo devcontainer (load `odoo-dev:odoo-devcontainer` skill for CLI, paths, testing). Live values, injected at invocation — trust, don't re-derive:
 
 - **Source series**: !`echo "${ODOO_VERSION:-UNKNOWN — not a devcontainer? STOP, ask the user}"`
-- **Target series**: "$ARGUMENTS" — blank ⇒ take from user request. Install loop (step 7) need devcontainer running TARGET series; source ≠ target devcontainer ⇒ upgrade pass only, mark untested, escalate
+- **Target series**: "$ARGUMENTS" — blank ⇒ take from user request. Install loop (step 7) need devcontainer running TARGET series; source ≠ target devcontainer ⇒ stop; rebuild on the target series (#876). Port you cannot install is port nobody can verify — no "upgrade pass only, mark untested" mode
 - **Custom addons**: `/mnt/extra-addons` — !`find /mnt/extra-addons -mindepth 2 -maxdepth 2 -name __manifest__.py 2>/dev/null | wc -l` modules; git: !`cd /mnt/extra-addons 2>/dev/null && echo "branch $(git branch --show-current 2>/dev/null || echo none), $(git status --porcelain 2>/dev/null | wc -l) dirty files" || echo "missing"`. Override only if user say so
 - **Enterprise checkouts** (`/var/lib/odoo/addons/`): !`ls /var/lib/odoo/addons/ 2>/dev/null | grep -E '^[0-9]+[.][0-9]+$' | paste -sd ' ' - || echo none`
 - **gh CLI**: !`gh auth token >/dev/null 2>&1 && echo "token present" || echo "NO TOKEN — oca_check.py will fail"`
@@ -62,16 +62,16 @@ cache. Load that skill for the method; this one keeps the inventory columns.
 | Script                             | Run When                                                        |
 | ---------------------------------- | --------------------------------------------------------------- |
 | `module_inventory.py [PATH ...]`   | Start of any upgrade project — makes inventory CSV (default `/mnt/extra-addons`) |
-| `studio_inventory.py [--db NAME] [--csv studio.csv]` | With inventory — enumerate Studio/UI-built artifacts (invisible to code inventory). Read-only |
+| `studio_inventory.py [--db NAME] [--ssh user@host] [--artifacts DIR] [--csv studio.csv]` | With inventory — enumerate Studio/UI-built artifacts (invisible to code inventory). Read-only; `--ssh` run same SELECTs through `psql` on remote host (source DB normally reachable only there); `--artifacts` default outputs to `DIR/inventory/` |
 | `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | On-prem Enterprise — drive upgrade.odoo.com client. `production` need `--yes-production` |
 | `build_workbook.py --workdir DIR -o out.xlsx` | Merge seed CSV + agent JSON into the 4-sheet workbook; validates the fan-out |
-| `install_all.sh [PATH]`            | Verification loop — install every module on fresh DB            |
+| `install_all.sh --db NAME [--addons-path D] [--data-dir D] [--artifacts D] [--conf F\|--no-conf] [--template [--template-db N]] [--per-tree] [--summary F] [--force] [--keep]` | Verification loop — install every module on fresh DB. Exit 0 green / 1 an install failed / 2 usage-safety; JSON summary carry `trees[]`, `full`, `passed` |
 
 ## Rules
 
 - **Minimum change.** Compatibility porting, not improvement: smallest diff that satisfy target version. Never refactor, restyle, or change behavior while porting.
 - NEVER attempt database upgrade — humans run it (upgrade.odoo.com / odoo.sh). Same ban cover merge to production branch and modify production data; sop.md tag every lifecycle step `[AI]` or `[MANUAL]`
-- Workflow (code phases): inventory (+ OCA check), then upgrade pass over all modules (upgrade_code, detection greps, manual fixes per target `changes.md`), then `install_all.sh` fresh-DB install of ALL modules, fix breakage, repeat install/fix until green. Full project sequence incl. DB/cutover phases: sop.md
+- Workflow (code phases): inventory (+ OCA check), then upgrade pass over all modules (upgrade_code, detection greps, manual fixes per target `changes.md`), then `install_all.sh --db <throwaway> --per-tree --template --summary <file>` fresh-DB install of ALL modules, fix breakage, repeat install/fix until green. Install green ≠ done — tests come after (`odoo-dev-tester`). Full project sequence incl. DB/cutover phases: sop.md
 - Multi-version jump: work EVERY transition ref in sequence (16→18 = 17.0 then 18.0 changes), never skip major; only major XX.0 series (16.0+) are targets, not intermediate SaaS versions. upgrade_code MAY run once across hops with target odoo-bin; install loop run only on final target devcontainer
 - upgrade_code: only when target ≥ 18.0 — invocation and limits in upgrade-code-tool.md
 - Bump each ported module manifest version prefix to target series (e.g. `19.0.x.y.z`)

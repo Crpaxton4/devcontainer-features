@@ -59,10 +59,11 @@ skill: load the one for the series you are porting *into*, every time.
    Odoo or an OCA module on the target series already does it. The cheapest port is
    the one you delete instead. Verdicts drive `keep` / `replace` /
    `merge-into-standard` per module.
-3. `odoo-upgrade` — inventory (`module_inventory.py`, `studio_inventory.py`,
-   `build_workbook.py` — all three; see **Inventory and workbook** below), then
-   the porting checklist, then `upgrade_code` where the target is ≥ 18, then
-   migration scripts where anything was renamed.
+3. `odoo-upgrade` — inventory (`module_inventory.py`, `studio_inventory.py` —
+   with `--ssh user@host` when your prompt named an ssh host for the source
+   database — and `build_workbook.py`: all three; see **Inventory and workbook**
+   below), then the porting checklist, then `upgrade_code` where the target is
+   ≥ 18, then migration scripts where anything was renamed.
 4. Hand to `odoo-dev-tester` for evidence. A ported module meets the same bar as
    new work — the same gate, no exceptions for "it only moved versions".
 
@@ -155,8 +156,8 @@ surfaces a gotcha the skill does not cover. Do not fold it into the skill mid-pr
 
 ## Return contract
 
-Reuse the delivery stages — the upgrade path is verified by the same gate as
-delivery, so it writes the same artifacts:
+Reuse the delivery stages — an upgrade meets the same bar as new work, so it
+writes the same artifacts:
 
 ```
 <ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> 10-env <file>
@@ -169,13 +170,42 @@ Bash call. Your Bash calls inherit no environment from the router and keep no st
 from one call to the next, so a variable name is not a path: it expands to nothing
 and the command runs without it.
 
+Every inventory output lands under `<ARTIFACTS dir from your prompt>/inventory/` —
+the seed CSV, `studio.csv` and `studio.json`, the per-module records, the
+workbook. Never `/tmp`, and never the session scratchpad: that directory is
+session-scoped, a compaction or a session boundary destroys it without an error,
+and the inventory is the deliverable the estimate and the port are both built from.
+
 `20-build.json` `claims[]` names each ported module and what changed in it;
 `verify_steps[]` says how a person checks that module on the target series.
-`worktree` and `branch` must match `10-env.json` — the gate blocks on drift.
+`worktree` and `branch` must match `10-env.json`.
+
+`claims[]` also carries the completion report, and your final message repeats it as
+three lists under these three headings, in this order, never folded back into
+prose:
+
+- **produced** — one absolute path per artifact that exists. Where a Studio
+  inventory ran, name `studio.csv` and its `convert-to-code` row count here.
+- **attempted and skipped** — one line per thing you set out to do and did not,
+  each carrying its reason: `studio inventory: ssh host unreachable`, `studio
+  inventory: no ssh host supplied`. A skip nobody was told about is the failure
+  this section exists to prevent — a code-only inventory looks complete and is
+  not.
+- **outstanding** — one line per human action item and what unblocks it: the
+  vendor build behind the apps.odoo.com login wall, the enterprise checkout
+  nobody has aligned, the module that needs a business decision.
+
+An empty list is written as the word `none`, because a missing list reads as
+"nothing was skipped".
+
+Every "N done / M remaining" in that report is counted from the `progress.json`
+rows at the moment you write it, never typed from memory — a count maintained
+beside the rows goes stale against them and then misleads the person who trusts it.
 
 Write `00-context.json` too if you were the first to resolve the project.
 
-Final message: the artifact path, then at most 5 lines of plain English.
+Final message: the artifact path, those three lists, then at most 5 lines of plain
+English.
 
 ## Boundaries
 
