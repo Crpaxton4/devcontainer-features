@@ -57,9 +57,15 @@ def make_get_uid_tool(registry: Registry):
 
 @atomic_tool("get_models")
 def make_get_models_tool(registry: Registry):
-    def get_models() -> List[Dict[str, Any]]:
-        """Get a list of all models with their names."""
-        return registry["get_models"].execute()
+    def get_models(persist: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get a list of all models with their names, as
+        ``{"models": [...], "persisted": {}}``. ``persist`` names models
+        (e.g. ``["project.task"]``) whose resolved ir.model id is also written
+        into the ``[model_ids]`` section of the SDK config file — the map
+        schedule_activity reads — so the entry need not be typed by hand. When
+        the config cannot be written the read still succeeds and ``warning``
+        says why."""
+        return registry["get_models"].execute(persist=persist)
 
     return get_models
 

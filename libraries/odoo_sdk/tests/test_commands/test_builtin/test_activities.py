@@ -1,4 +1,4 @@
-"""Tests for the ``mail.activity`` tool family (issues #677, #686).
+"""Tests for the ``mail.activity`` tool family (issues #677, #686, #890).
 
 The helpers are driven through a real :class:`OdooClient` wrapping a recording
 fake executor, so the exact domains, fields, and create values that would reach
@@ -15,15 +15,24 @@ fake executor therefore has no ``ir.model`` branch at all — any such call is a
 unexpected call — and :func:`_assert_never_reads_ir_model` states the guarantee
 by name, following the shape ``test_search_knowledge_articles`` uses for the
 identical #444 guard on ``knowledge.article``.
+
+#890 adds the missing half of that story: the map is still the only thing the
+write path reads, but the entry no longer has to be typed in by hand.
+``TestGetModelsFillsTheSchedulingEntryIn`` walks the whole way from the shipped
+config — connection settings, no ``[model_ids]`` section — to a successful
+``schedule_activity``, with one ``get_models`` call in between and no editor.
 """
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.commands.builtin.get_activities import GetActivitiesCommand
+from odoo_sdk.commands.builtin.get_models import GetModelsCommand
 from odoo_sdk.commands.builtin.mark_activity_done import MarkActivityDoneCommand
 from odoo_sdk.commands.builtin.schedule_activity import ScheduleActivityCommand
 from odoo_sdk.commands.builtin.search_activity_types import (
@@ -414,6 +423,88 @@ class TestScheduleActivity(unittest.TestCase):
         with self.assertRaises(ValueError):
             schedule_activity(client, 42, activity_type="Nope", config=_config())
         self.assertEqual(_calls_to(executor, "mail.activity", "create"), [])
+
+
+class _IrModelExecutor(OdooExecutor):
+    """The opposite fake: answers ``ir.model`` and refuses everything else.
+
+    ``get_models`` is the one gated command that may read that table, so it gets
+    its own executor rather than an ``ir.model`` branch on
+    :class:`_RecordingExecutor` — whose whole point is that such a branch does
+    not exist (#686).
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((model, method, args, kwargs))
+        if model != "ir.model":
+            raise AssertionError(f"unexpected call: {model}.{method}")
+        if method in {"search", "search_read"}:
+            return (
+                [row["id"] for row in self._rows]
+                if method == "search"
+                else list(self._rows)
+            )
+        if method == "read":
+            return list(self._rows)
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+
+class TestGetModelsFillsTheSchedulingEntryIn(unittest.TestCase):
+    """The #890 end-to-end: a command fills the map in, not a hand edit.
+
+    #444 and #686 are untouched by this — ``schedule_activity`` still reads the
+    ``[model_ids]`` map and nothing resolves ``ir.model`` at call time. What
+    changes is only how the entry gets there: ``get_models``, which already
+    reads that table under its own gate, writes the id it resolved.
+    """
+
+    def test_schedule_succeeds_after_get_models_persisted_the_id(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            # The shipped state: a config with connection settings and no
+            # [model_ids] section at all.
+            path.write_text('[connection]\nurl = "https://x"\n', encoding="utf-8")
+            with patch.dict("os.environ", {}, clear=True):
+                config = LocalConfig.load(config_path=str(path))
+
+                client, before = _client(type_rows=[[{"id": 4, "name": "To Do"}]])
+                with self.assertRaises(ValueError):
+                    schedule_activity(client, 42, config=config)
+                # It fails closed: nothing was sent to Odoo at all.
+                self.assertEqual(before.calls, [])
+
+                ir_model = _IrModelExecutor(
+                    [
+                        {"id": 71, "model": "project.task", "name": "Task"},
+                        {"id": 84, "model": "crm.lead", "name": "Lead"},
+                    ]
+                )
+                result = GetModelsCommand(
+                    OdooClient(executor=ir_model), config=config
+                ).execute(persist=["project.task"])
+                self.assertEqual(result["persisted"], {"project.task": 71})
+                self.assertNotIn("warning", result)
+
+                # The same call, unchanged, with no hand-edited config between.
+                client, after = _client(type_rows=[[{"id": 4, "name": "To Do"}]])
+                after.uid = 7  # type: ignore[attr-defined]
+                schedule_activity(client, 42, activity_type="To Do", config=config)
+
+            self.assertEqual(
+                _calls_to(after, "mail.activity", "create")[0][2][0]["res_model_id"], 71
+            )
+            # And the scheduling path itself still never touches ir.model.
+            _assert_never_reads_ir_model(after)
+
+            # The entry outlives the process: it was written to the file.
+            with patch.dict("os.environ", {}, clear=True):
+                reloaded = LocalConfig.load(config_path=str(path))
+            self.assertEqual(reloaded.model_id("project.task"), 71)
+            self.assertEqual(reloaded.connection["url"], "https://x")
 
 
 class TestGetActivities(unittest.TestCase):

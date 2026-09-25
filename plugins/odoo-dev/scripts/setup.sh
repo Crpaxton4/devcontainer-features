@@ -213,6 +213,79 @@ else
   fail odoo-mcp "not declared in any global MCP config this script can read" "$MCP_STEP"
 fi
 
+# --- the [model_ids] entry schedule_activity needs (#890) ----------------------------
+# mail.activity stores its target model as a mandatory ir.model id, which the SDK
+# takes from the [model_ids] section of its config rather than by reading
+# ir.model (#444, #686). Ship without the project.task entry and the default call
+# — schedule_activity with only res_id — fails at the END of a task, which is the
+# worst possible moment to discover a config gap. Read-only, and read the way the
+# SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_sdk.*, then
+# ~/.config/odoo_sdk. ODOO_MODEL_IDS counts too — it is the documented override.
+MODEL_IDS_STEP="odoo-sdk cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
+
+sdk_config_path() {
+  local candidate="${ODOO_SDK_CONFIG:-}" f
+  if [ -n "$candidate" ]; then
+    if [ -d "$candidate" ]; then
+      for f in config.toml config.ini; do
+        [ -f "$candidate/$f" ] && { printf '%s' "$candidate/$f"; return 0; }
+      done
+      return 1
+    fi
+    [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+    return 1
+  fi
+  for f in ./.odoo_sdk.toml ./.odoo_sdk.ini \
+           "$HOME/.config/odoo_sdk/config.toml" "$HOME/.config/odoo_sdk/config.ini"; do
+    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+
+# has_project_task_id <config file> — every spelling the SDK loader accepts: a
+# quoted or unquoted key under [model_ids], and the [model_ids.project] sub-table.
+has_project_task_id() {
+  awk '
+    BEGIN { prefix = "skip" }
+    /^[[:space:]]*\[/ {
+      section = $0
+      sub(/^[[:space:]]*\[[[:space:]]*/, "", section)
+      sub(/[[:space:]]*\].*$/, "", section)
+      if (section == "model_ids")              prefix = ""
+      else if (section == "model_ids.project") prefix = "project."
+      else                                     prefix = "skip"
+      next
+    }
+    prefix == "skip"           { next }
+    /^[[:space:]]*[#;]/        { next }
+    /[=:]/ {
+      key = tolower($0); sub(/[=:].*$/, "", key)
+      value = $0;        sub(/^[^=:]*[=:][[:space:]]*/, "", value)
+      gsub(/[[:space:]"\047]/, "", key)
+      gsub(/[[:space:]"\047]/, "", value)
+      if (prefix key == "project.task" && value ~ /^[1-9][0-9]*$/) found = 1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+case "${ODOO_MODEL_IDS:-}" in
+  *project.task:[1-9]*) model_ids_state="env" ;;
+  *)                    model_ids_state="" ;;
+esac
+sdk_config="$(sdk_config_path || true)"
+if [ -n "$model_ids_state" ]; then
+  pass sdk-model-ids "project.task supplied by ODOO_MODEL_IDS"
+elif [ -z "$sdk_config" ]; then
+  fail sdk-model-ids "no Odoo SDK config file found (\$ODOO_SDK_CONFIG, ./.odoo_sdk.*, ~/.config/odoo_sdk) — schedule_activity has nowhere to read the project.task ir.model id from" \
+    "$MODEL_IDS_STEP"
+elif has_project_task_id "$sdk_config"; then
+  pass sdk-model-ids "[model_ids] project.task in $sdk_config"
+else
+  fail sdk-model-ids "$sdk_config has no [model_ids] entry for project.task — schedule_activity on a task fails with 'No ir.model id is configured'" \
+    "$MODEL_IDS_STEP"
+fi
+
 # --- state dir ---------------------------------------------------------------------
 # Lives outside the plugin tree, so a fresh machine or a skipped bootstrap leaves
 # it missing and repo-map.sh reports a bogus "project unmapped" from a file that

@@ -12,8 +12,12 @@ This module hosts two related concerns of the local state layer:
   behavior by editing a local config file without touching the host launch
   command. A ``[behavior]`` section is reserved for future behavioral flags
   (profiling, log level, ...) without further structural changes, and a
-  ``[model_ids]`` section holds the manually-managed model-name to ``ir.model``
-  id map (see :data:`_MODEL_IDS_SECTION`).
+  ``[model_ids]`` section holds the model-name to ``ir.model`` id map (see
+  :data:`_MODEL_IDS_SECTION`). That map is the single source every caller reads
+  — nothing resolves ``ir.model`` at call time (#444, #686) — but since #890 it
+  no longer has to be typed by hand: :meth:`LocalConfig.set_model_id` writes one
+  entry into the file in place, and the gated ``get_models`` command (which
+  already reads ``ir.model``, under its own gate) calls it.
 * :class:`OdooConnectionSettings` — the resolved, validated connection value
   object consumed by :class:`~odoo_sdk.client.client.OdooClient`. Its
   :meth:`~OdooConnectionSettings.from_sources` factory is a thin validator fed by
@@ -130,9 +134,46 @@ def model_id_unavailable_message(model: str) -> str:
         f'{MODEL_IDS_ENV_VAR}="{model}:<id>". The id must be supplied by hand: '
         "the SDK never reads ir.model, because that administrative table must "
         "not be granted to a least-privileged service account (#444, #686). An "
-        "operator who does hold the privilege can look the id up once with the "
-        "gated get_models tool."
+        "operator who does hold the privilege can look the id up — and write it "
+        "into the config file once — with the gated get_models command: "
+        f"{persist_model_id_command(model)}"
     )
+
+
+def persist_model_id_command(model: str) -> str:
+    """Return the CLI invocation that resolves ``model``'s id and writes it down (#890).
+
+    The one command that closes the gap the hand-managed map leaves open: it is
+    named by :func:`model_id_unavailable_message` and by the odoo-dev plugin's
+    readiness check, so both quote the same string rather than two drifting
+    spellings of it.
+    """
+    return f"""odoo-sdk cmd get_models --args '{{"persist": ["{model}"]}}'"""
+
+
+def model_id_not_persisted_message(model: str, path: Any, reason: str) -> str:
+    """Return the warning text for an id that was resolved but could not be written.
+
+    Persisting is best-effort by design (#890): ``get_models`` still answers the
+    read it was asked for, and reports this instead of raising, so a read-only
+    config directory degrades to the pre-existing hand-edit workflow rather than
+    failing the command.
+    """
+    return (
+        f"Resolved the ir.model id for {model!r} but could not write it to "
+        f"{path}: {reason}. Add it by hand instead "
+        f'(TOML: "{model}" = <id>   INI: {model} = <id>) or export '
+        f'{MODEL_IDS_ENV_VAR}="{model}:<id>".'
+    )
+
+
+class ModelIdsNotWritableError(RuntimeError):
+    """Raised when the ``[model_ids]`` section cannot be persisted to disk (#890).
+
+    Distinct from the :class:`ValueError` a bad id raises: a bad id is a defect
+    worth failing on, while an unwritable config file is an environment fact the
+    caller is expected to report and carry on from.
+    """
 
 
 def _invalid_model_id_message(model: str, value: Any) -> str:
@@ -254,6 +295,204 @@ def _resolve_model_ids(file_values: Mapping[str, Any]) -> dict[str, int]:
     return _coerce_model_id_map(merged)
 
 
+# ── model ids: the writer (#890) ──────────────────────────────────────────────
+#
+# The map stays the single source ``schedule_activity`` reads (#444, #686 are
+# unchanged: nothing resolves ``ir.model`` at call time). What #890 adds is that
+# the ``get_models`` command — the one place that already reads ``ir.model``,
+# under its own gate — can fill an entry in once instead of the operator typing
+# it. The edit is line-based rather than a parse-and-reserialize round trip so
+# that comments, key order, spelling, and every unrelated section survive it: a
+# config file is something a human wrote, and a writer that reformats it is a
+# writer nobody runs twice.
+
+
+def _model_ids_scope(header: str, is_toml: bool) -> Optional[str]:
+    """Return the dotted key prefix a section header contributes, or ``None``.
+
+    ``[model_ids]`` contributes ``""`` (its keys are whole model names) and, in
+    TOML only, ``[model_ids.account]`` contributes ``"account."`` — the same
+    sub-table spelling :func:`_flatten_model_id_table` reconciles on load. Any
+    other header ends the section.
+    """
+    name = header.strip()[1:-1].strip()
+    if name == _MODEL_IDS_SECTION:
+        return ""
+    if is_toml and name.startswith(f"{_MODEL_IDS_SECTION}."):
+        return f"{name[len(_MODEL_IDS_SECTION) + 1:]}."
+    return None
+
+
+def _split_key_value(line: str, is_toml: bool) -> Optional[tuple[str, str]]:
+    """Return ``(raw key, separator)`` for an entry line, or ``None``.
+
+    Blank lines, comments (``#`` in both formats, ``;`` in INI) and section
+    headers are not entries. INI accepts ``:`` as a delimiter alongside ``=``,
+    so whichever appears first wins; TOML only has ``=``.
+    """
+    stripped = line.strip()
+    if not stripped or stripped[0] in "#;[":
+        return None
+    separators = ("=",) if is_toml else ("=", ":")
+    best: Optional[tuple[str, str]] = None
+    for separator in separators:
+        key, found, _ = stripped.partition(separator)
+        if found and (best is None or len(key) < len(best[0])):
+            best = (key.strip(), separator)
+    return best if best and best[0] else None
+
+
+def _unquote_toml_key(key: str) -> str:
+    """Strip the surrounding quotes from a quoted TOML key, if any."""
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+        return key[1:-1]
+    return key
+
+
+def _rewrite_model_id(text: str, is_toml: bool, model: str, ir_model_id: int) -> str:
+    """Return ``text`` with ``model``'s ``[model_ids]`` entry set to ``ir_model_id``.
+
+    Updates the entry in place when the file already spells it in any of the
+    shapes the loader accepts (quoted TOML key, unquoted dotted TOML key, TOML
+    sub-table, INI key in any casing), appends to an existing ``[model_ids]``
+    section when it does not, and creates the section at the end of the file
+    when the file has none. Every other line is returned untouched.
+    """
+    lines = text.splitlines()
+    target = model if is_toml else model.lower()
+    scope: Optional[str] = None
+    has_section = False
+    insert_at: Optional[int] = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            scope = _model_ids_scope(stripped, is_toml)
+            if scope == "":
+                has_section = True
+                insert_at = index + 1
+            continue
+        if scope is None:
+            continue
+        entry = _split_key_value(line, is_toml)
+        if entry is None:
+            continue
+        raw_key, separator = entry
+        name = scope + (_unquote_toml_key(raw_key) if is_toml else raw_key.lower())
+        if scope == "":
+            insert_at = index + 1
+        if name == target:
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[index] = f"{indent}{raw_key} {separator} {ir_model_id}"
+            return "\n".join(lines) + "\n"
+    new_entry = f'"{model}" = {ir_model_id}' if is_toml else f"{model} = {ir_model_id}"
+    if has_section and insert_at is not None:
+        lines.insert(insert_at, new_entry)
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([f"[{_MODEL_IDS_SECTION}]", new_entry])
+    return "\n".join(lines) + "\n"
+
+
+def _resolve_writable_config_path(config_path: Optional[str]) -> Path:
+    """Return the config file the ``[model_ids]`` writer should edit or create.
+
+    Discovery first: an existing file found by :func:`_resolve_local_config_path`
+    is always the one edited, so the writer never creates a second file that the
+    loader would then shadow. Only when no file exists yet is a destination
+    derived, following the same precedence — the ``$ODOO_SDK_CONFIG`` override
+    (a directory, or a path with no suffix, takes ``config.toml`` inside it),
+    else the default ``~/.config/odoo_sdk/config.toml``. The current working
+    directory is deliberately not a creation target: a config dropped beside
+    whatever directory a command happened to run in is a surprise.
+    """
+    existing = _resolve_local_config_path(config_path)
+    if existing is not None:
+        return existing
+    candidate = config_path or os.environ.get(LOCAL_CONFIG_ENV_VAR)
+    if candidate:
+        path = Path(candidate).expanduser()
+        if path.is_dir() or not path.suffix:
+            return path / _CONFIG_DIR_FILENAMES[0]
+        return path
+    return Path(DEFAULT_CONFIG_DIR).expanduser() / _CONFIG_DIR_FILENAMES[0]
+
+
+def _reread_model_id(path: Path, model: str) -> Optional[int]:
+    """Return what the *loader* now reads for ``model`` from ``path``, file only.
+
+    Deliberately bypasses :func:`_resolve_model_ids` so the environment override
+    cannot make an unwritten entry look written (nor a malformed
+    :data:`MODEL_IDS_ENV_VAR` make a written one look unwritten). ``None`` means
+    the loader does not see the entry at all.
+    """
+    file_values = _load_local_config_file(str(path)).get(_MODEL_IDS_SECTION, {})
+    flat = {
+        name: value
+        for name, value in _flatten_model_id_table(file_values).items()
+        if value not in (None, "")
+    }
+    return _coerce_model_id_map(flat).get(str(model).strip())
+
+
+def write_model_id(model: str, ir_model_id: int, config_path: Optional[str]) -> Path:
+    """Persist one ``[model_ids]`` entry to the config file and return its path.
+
+    The module-level writer behind :meth:`LocalConfig.set_model_id`. Written
+    through a temporary file in the same directory and :func:`os.replace`, so a
+    failure part-way cannot leave a half-written config behind, and then read
+    back through the loader: the loader accepts spellings this line-based editor
+    does not model (a root-level ``model_ids = {...}`` inline table, say), and a
+    write the loader would read differently is a corrupted config. On any
+    disagreement the original file is put back and the write is reported as a
+    failure rather than silently believed.
+
+    :param model: Odoo model name, e.g. ``project.task``.
+    :param ir_model_id: The ``ir.model`` id to record; must be a positive int.
+    :param config_path: Explicit config file or directory, or ``None`` to use
+        the same discovery the loader does.
+    :raises ValueError: When ``ir_model_id`` is not a positive integer.
+    :raises ModelIdsNotWritableError: When the destination cannot be written, or
+        the written file does not read back as intended.
+    """
+    coerced = _coerce_model_id(model, ir_model_id)
+    path = _resolve_writable_config_path(config_path)
+    existed = path.is_file()
+    text = ""
+    try:
+        if existed:
+            text = path.read_text(encoding="utf-8")
+            if not os.access(path, os.W_OK):
+                raise PermissionError(f"{path} is not writable")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        updated = _rewrite_model_id(text, path.suffix != ".ini", model, coerced)
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(updated, encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        raise ModelIdsNotWritableError(
+            model_id_not_persisted_message(model, path, str(exc))
+        ) from exc
+    try:
+        confirmed = _reread_model_id(path, model) == coerced
+    except (ValueError, RuntimeError):
+        # A ValueError means the rewritten file no longer loads; a RuntimeError
+        # means no TOML parser is importable, which the read path would have hit
+        # first. Either way the write cannot be trusted.
+        confirmed = False
+    if not confirmed:
+        if existed:
+            path.write_text(text, encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+        raise ModelIdsNotWritableError(
+            model_id_not_persisted_message(
+                model, path, "the file did not read back with the new entry"
+            )
+        )
+    return path
+
+
 # ── LocalConfig ───────────────────────────────────────────────────────────────
 
 # Sensible defaults applied at the lowest precedence (File > Env > Default).
@@ -355,7 +594,12 @@ class LocalConfig:
         connection: Optional[Mapping[str, Optional[str]]] = None,
         behavior: Optional[Mapping[str, Any]] = None,
         model_ids: Optional[Mapping[str, Any]] = None,
+        config_path: Optional[str] = None,
     ):
+        # Remembered rather than resolved: the loader's override may name a file
+        # OR a directory, and :meth:`set_model_id` has to re-run the same
+        # resolution to decide what to edit or create (#890).
+        self._config_path = config_path
         self._connection: dict[str, Optional[str]] = {
             **_CONNECTION_DEFAULTS,
             **(dict(connection) if connection else {}),
@@ -393,7 +637,12 @@ class LocalConfig:
         # ``_resolve_section`` (which walks a fixed key set) and carries its own
         # resolver instead.
         model_ids = _resolve_model_ids(file_data.get(_MODEL_IDS_SECTION, {}))
-        return cls(connection=connection, behavior=behavior, model_ids=model_ids)
+        return cls(
+            connection=connection,
+            behavior=behavior,
+            model_ids=model_ids,
+            config_path=config_path,
+        )
 
     @property
     def connection(self) -> Mapping[str, Optional[str]]:
@@ -441,6 +690,30 @@ class LocalConfig:
         if resolved is None:
             raise ValueError(model_id_unavailable_message(model))
         return resolved
+
+    def set_model_id(self, model: str, ir_model_id: int) -> Path:
+        """Write one ``[model_ids]`` entry to the config file, in place (#890).
+
+        The only writer in this otherwise read-only resolver, and deliberately
+        narrow: it touches exactly one key of one section, preserving every
+        other section, key, comment and spelling in the file. The environment
+        override (:data:`MODEL_IDS_ENV_VAR`) is never written and never read
+        here — it keeps winning or losing by the same precedence as before.
+
+        The in-memory map is updated to match, so a caller that persists and
+        then reads back within the same process sees the new id.
+
+        :param model: Odoo model name, e.g. ``project.task``.
+        :param ir_model_id: The ``ir.model`` id to record.
+        :return: The config file that was written.
+        :raises ValueError: When ``ir_model_id`` is not a positive integer.
+        :raises ModelIdsNotWritableError: When the config file cannot be written;
+            callers report this rather than failing (the hand-edit path still
+            works, and the message says so).
+        """
+        path = write_model_id(model, ir_model_id, self._config_path)
+        self._model_ids[str(model).strip()] = _coerce_model_id(model, ir_model_id)
+        return path
 
     def get(self, key: str, default: Any = None) -> Any:
         """Return one resolved behavior setting, or ``default`` when absent."""
