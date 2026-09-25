@@ -296,6 +296,7 @@ run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-test
 run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
+run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-all.test.sh"
 run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
 run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
 # Registered on purpose, and note what it makes true: gate 21 reconciles this
