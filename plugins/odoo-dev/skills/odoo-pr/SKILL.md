@@ -73,7 +73,9 @@ Prefer `coderabbit:code-reviewer` agent when worktree's own upstream is right co
 <base directory>/scripts/coderabbit-local.sh <worktree> --base <base_branch>
 ```
 
-`{"clean","findings_count","findings":[{"severity","file","comment"}],"status","base"}`
+`{"clean","findings_count","findings":[{"severity","file","comment","suggestions"}],"status","base"}`
+
+`comment` is the finding's text, read from the stream's `codegenInstructions`; `suggestions` is its array of patch hints. Both are capped at 2000 characters per string, so a long finding is truncated rather than quoted whole — open the file and judge the code, never the excerpt alone.
 
 Reviews take 7–30 minutes. `status` other than `complete` exits **3** and reports `clean: false` — unfinished review is not clean review, never report as one.
 
