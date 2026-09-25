@@ -14,7 +14,14 @@
 # literal path. This file is that script, and it is also the single definition of
 # the rules the rest of the plugin has to agree on:
 #
-#   * the state dir is $ODOO_DEV_STATE_DIR, defaulting to $HOME/.local/share/odoo-dev
+#   * the state dir is $ODOO_DEV_STATE_DIR, defaulting to $HOME/.local/share/odoo-dev.
+#     In a devcontainer that variable is normally set for you: the personal-features
+#     Feature bind-mounts host ~/.config/odoo-dev at /usr/local/share/odoo-dev and
+#     points ODOO_DEV_STATE_DIR at it through containerEnv (#884), so state outlives
+#     a rebuild. The $HOME default is what a bare checkout outside that Feature gets,
+#     and inside a container it resolves to image storage a rebuild discards - which
+#     is why nothing in this plugin may hardcode the default a second time; every
+#     caller resolves it through here.
 #   * a task id is ^[0-9]+$ and nothing else, so a word of prose can never become a
 #     directory (see gate 18 in validate.sh, and the `tasks/Create` bug it exists for)
 #   * a release directory is releases/<from>-to-<to>, with each branch name plain

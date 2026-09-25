@@ -17,7 +17,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$HERE/.." && pwd)"
-STATE="${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}"
+# state-dir.sh is the single definition of where state lives (and of the Feature
+# mount that normally supplies $ODOO_DEV_STATE_DIR, #884); never restate it here.
+STATE="$("$HERE/state-dir.sh")"
 
 while [ $# -gt 0 ]; do
   case "$1" in
