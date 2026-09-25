@@ -1598,10 +1598,28 @@ chmod +x "$_HUB_STUB_DIR/bin/fake-healthz"
 
 # Per-check scenario: a private temp dir for the calls log, the marker, the
 # palace mount and the share dir, so no check can touch the container's real
-# mount or the host-persisted provision marker. WAIT=2 keeps the `starting`
-# poll from costing a minute per check.
-_HUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/mount/palace\" \"\$d/mount/locks\" \"\$d/share\"; printf 'mempalace==3.9.0\n' > \"\$d/share/mempalace-hub-requirements.txt\"; export PATH=\"$_HUB_STUB_DIR/bin:\$PATH\" STUB_CALLS=\"\$d/calls\" STUB_HOST_PATH=/host/mempalace MEMPALACE_HUB_SOCKET=\"$_HUB_STUB_DIR/docker.sock\" MEMPALACE_HUB_MOUNT=\"\$d/mount\" MEMPALACE_HUB_SHARE_DIR=\"\$d/share\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_WAIT=2;"
+# mount or the host-persisted provision marker.
+#
+# Two of these knobs exist so no check can depend on whether some name happens
+# to ANSWER on the machine running the suite, which is not hypothetical: the
+# Feature's own postStartCommand runs `mempalace-hub-up` for real before the
+# tests do, and on a CI runner with a working daemon that creates a real hub
+# called `mempalace-hub` and brings it live. A scenario probing that name then
+# records `live` where it meant to record `starting`.
+#
+#   MEMPALACE_HUB_NAME=mempalace-hub-under-test  a name nothing will answer on,
+#     so `status` and the poll see the absence they are written for. The
+#     DEFAULT name is asserted separately, by reading the script.
+#   MEMPALACE_HUB_WAIT=0  do not probe at all - `starting` is then the state
+#     regardless of the network, and costs no wall clock.
+_HUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/mount/palace\" \"\$d/mount/locks\" \"\$d/share\"; printf 'mempalace==3.9.0\n' > \"\$d/share/mempalace-hub-requirements.txt\"; export PATH=\"$_HUB_STUB_DIR/bin:\$PATH\" STUB_CALLS=\"\$d/calls\" STUB_HOST_PATH=/host/mempalace MEMPALACE_HUB_SOCKET=\"$_HUB_STUB_DIR/docker.sock\" MEMPALACE_HUB_MOUNT=\"\$d/mount\" MEMPALACE_HUB_SHARE_DIR=\"\$d/share\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_NAME=mempalace-hub-under-test MEMPALACE_HUB_WAIT=0;"
 
+# The scenarios below rename the hub so nothing they probe can answer, so the
+# real name is asserted here. It is load-bearing twice over: it is what
+# serverinfo.json publishes verbatim for every sibling container to dial, and
+# it is the container name a second devcontainer reconciles against.
+check "the hub is named mempalace-hub by default" bash -c \
+  "grep -qF 'MEMPALACE_HUB_NAME:-mempalace-hub}' /usr/local/bin/mempalace-hub-up"
 check "mempalace-hub-up rejects an unknown action" bash -c \
   "/usr/local/bin/mempalace-hub-up bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
 
@@ -1666,7 +1684,7 @@ check "the frozen dependency set is staged onto the shared mount" bash -c \
 # onnxruntime then refuses to load across (#931).
 _HUB_RUNLINE="$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -F -- 'run -d' \"\$d/calls\" > \"\$d/runline\";"
 check "the hub run names and addresses the container" bash -c \
-  "$_HUB_RUNLINE grep -qF -- '--name mempalace-hub' \"\$d/runline\" && grep -qF -- '--hostname mempalace-hub' \"\$d/runline\" && grep -qF -- '--network mempalace' \"\$d/runline\""
+  "$_HUB_RUNLINE grep -qF -- '--name mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--hostname mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--network mempalace' \"\$d/runline\""
 check "the hub run outlives every devcontainer" bash -c \
   "$_HUB_RUNLINE grep -qF -- '--restart unless-stopped' \"\$d/runline\" && grep -qF -- '--stop-signal SIGINT' \"\$d/runline\""
 check "the hub run is labelled with the dependency-set sha" bash -c \
@@ -1682,13 +1700,22 @@ check "the hub run disables huggingface shared blobs (#931)" bash -c \
 check "the hub run health-checks /healthz" bash -c \
   "$_HUB_RUNLINE grep -qF -- '--health-interval 30s' \"\$d/runline\" && grep -qF -- '/healthz' \"\$d/runline\""
 check "the hub run installs the frozen set and execs the server as pid 1" bash -c \
-  "$_HUB_RUNLINE grep -qF -- 'pip install --user -q -r /hub-requirements.txt' \"\$d/runline\" && grep -qF -- 'exec python -m mempalace serve --host mempalace-hub --port 8765' \"\$d/runline\" && ! grep -qF -- '--init' \"\$d/runline\""
+  "$_HUB_RUNLINE grep -qF -- 'pip install --user -q -r /hub-requirements.txt' \"\$d/runline\" && grep -qF -- 'exec python -m mempalace serve --host mempalace-hub-under-test --port 8765' \"\$d/runline\" && ! grep -qF -- '--init' \"\$d/runline\""
 
 # A hub that is up but has not answered yet is `starting` - an honest
 # intermediate state. #921 was a second, racing writer recording a vaguer state
 # over the accurate one; there is one writer of this key now.
 check "a hub that has not answered yet records 'starting'" bash -c \
   "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
+# The knob the scenarios above rely on, asserted rather than assumed. This is
+# the regression that turned CI red once already: the Feature's own
+# postStartCommand runs `mempalace-hub-up` for real before the suite does, so
+# on a runner with a working daemon a hub named `mempalace-hub` is genuinely
+# live by the time these run, and a scenario that probed it recorded `live`
+# where it meant `starting`. WAIT=0 must mean *do not probe at all*, so that
+# something answering cannot change the outcome.
+check "MEMPALACE_HUB_WAIT=0 records 'starting' even when something answers" bash -c \
+  "$_HUB_SETUP \"$_HUB_STUB_DIR/bin/fake-healthz\" 8799 & hp=\$!; sleep 1; MEMPALACE_HUB_NAME=127.0.0.1 MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$hp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
 
 # A hub already answering is left alone: no rm, no run, no second hub.
 check "an answering hub records 'live' and is not recreated" bash -c \
@@ -1698,9 +1725,9 @@ check "an answering hub records 'live' and is not recreated" bash -c \
 # the sha, and a hub still running last month's resolution is replaced rather
 # than quietly outliving the image that created it.
 check "a hub built from a different dependency set is removed and recreated" bash -c \
-  "$_HUB_SETUP STUB_HUB_STATUS=running STUB_HUB_SHA=deadbeef /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'rm -f mempalace-hub' \"\$d/calls\" && grep -qF -- 'run -d' \"\$d/calls\""
+  "$_HUB_SETUP STUB_HUB_STATUS=running STUB_HUB_SHA=deadbeef /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'rm -f mempalace-hub-under-test' \"\$d/calls\" && grep -qF -- 'run -d' \"\$d/calls\""
 check "a stopped hub with the right dependency set is started, not recreated" bash -c \
-  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; STUB_HUB_STATUS=exited STUB_HUB_SHA=\"\$sha\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'start mempalace-hub' \"\$d/calls\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; STUB_HUB_STATUS=exited STUB_HUB_SHA=\"\$sha\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'start mempalace-hub-under-test' \"\$d/calls\" && ! grep -qF -- 'run -d' \"\$d/calls\""
 
 # #897: a held palace lock is a condition no retry can change, and the file
 # surviving on the mount proves nothing about the holder - which is why the
@@ -1724,9 +1751,9 @@ check "a previous mempalace_hub key's foreign fields are carried forward" bash -
 check "mempalace-hub-up status reports the last recorded state" bash -c \
   "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; /usr/local/bin/mempalace-hub-up status 2>/dev/null | grep -q \"last recorded state 'starting'\""
 check "mempalace-hub-up down stops the hub and records 'stopped'" bash -c \
-  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up down >/dev/null 2>&1 && grep -qF -- 'stop mempalace-hub' \"\$d/calls\" && grep -qF '\"state\": \"stopped\"' \"\$d/marker.json\""
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up down >/dev/null 2>&1 && grep -qF -- 'stop mempalace-hub-under-test' \"\$d/calls\" && grep -qF '\"state\": \"stopped\"' \"\$d/marker.json\""
 check "mempalace-hub-up logs delegates to docker logs" bash -c \
-  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up logs --tail 5 >/dev/null 2>&1; grep -qF -- 'logs --tail 5 mempalace-hub' \"\$d/calls\""
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up logs --tail 5 >/dev/null 2>&1; grep -qF -- 'logs --tail 5 mempalace-hub-under-test' \"\$d/calls\""
 
 # The pinned mempalace must actually be able to serve a shared transport; if a
 # version bump ever drops `serve`, the whole design goes with it.

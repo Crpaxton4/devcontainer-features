@@ -1494,7 +1494,8 @@ set -u
 #   MEMPALACE_HUB_SOCKET         daemon socket         (default: /var/run/docker.sock)
 #   MEMPALACE_HUB_REQUIREMENTS   frozen dependency set install.sh wrote
 #   MEMPALACE_HUB_ENV_FILE       version/image record install.sh wrote
-#   MEMPALACE_HUB_WAIT           seconds to wait for /healthz (default: 60)
+#   MEMPALACE_HUB_WAIT           seconds to wait for /healthz (default: 60;
+#                                0 records `starting` without probing at all)
 #   MEMPALACE_HUB_MARKER         liveness record (default: the #806 provision marker)
 
 HUB="${MEMPALACE_HUB_NAME:-mempalace-hub}"
@@ -1755,6 +1756,13 @@ MEMPALACE_HUB_STALE
 # hub that has not answered yet is `starting`, an honest intermediate state, and
 # not the `no_response` that #921 used to clobber the real one with.
 hub_wait_live() {
+    # Budgeted by WALL CLOCK, not by counting sleeps: a probe whose DNS lookup
+    # blocks is not bounded by urlopen's timeout, so counting alone could stretch
+    # a 60s budget into minutes. The sleep counter is kept as the monotonic
+    # fallback for an image with no `date`. WAIT=0 therefore probes zero times
+    # and records `starting` immediately - which is what the feature test wants,
+    # since it must never depend on whether some name happens to answer.
+    _began="$(date +%s 2>/dev/null || echo 0)"
     _waited=0
     while [ "$_waited" -lt "$WAIT" ]; do
         if hub_alive; then
@@ -1764,6 +1772,10 @@ hub_wait_live() {
         fi
         sleep 2
         _waited=$((_waited + 2))
+        _clock=$(( $(date +%s 2>/dev/null || echo 0) - _began ))
+        if [ "$_clock" -gt "$_waited" ]; then
+            _waited="$_clock"
+        fi
     done
     say "hub container is up but has not answered $URL/healthz within ${WAIT}s"
     say "it is probably still installing its dependency set; 'mempalace-hub-up logs' shows the install, 'mempalace-hub-up status' re-probes"

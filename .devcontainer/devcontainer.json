@@ -5,7 +5,14 @@
     // Feature hard-depends on it (#898). Its mempalace hub is a sibling
     // container on the HOST daemon, shared by every devcontainer, so the socket
     // this mounts has to be the host's and not a nested daemon's.
+    //
+    // moby:false because Debian trixie ships no 'moby-cli'/'moby-engine', and
+    // the Feature hard-fails on that rather than falling back. false installs
+    // Docker CE's 'docker-ce-cli', which is the same client. Must match the
+    // option personal-features' own dependsOn passes, or the two resolve to
+    // different installs of the same Feature.
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false,
       "installDockerBuildx": false
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
