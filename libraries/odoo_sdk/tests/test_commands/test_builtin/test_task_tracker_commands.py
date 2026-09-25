@@ -1076,11 +1076,24 @@ class TestStartTaskCommand(unittest.TestCase):
         self.assertEqual(result["branch_name"], "10-fix-vat")
         self.assertEqual(result["warning"], "heads up")
 
+    def test_echoes_the_base_branch_the_task_branch_was_forked_from(self):
+        # #903: the caller must be able to verify the base from the result
+        # instead of assuming the remote default.
+        client = _client()
+        db = _tmp_db()
+        result = self._start(
+            client,
+            db,
+            **self._base_kwargs(branch_name="10-fix-vat", base_branch="UAT"),
+        )
+        self.assertEqual(result["base_branch"], "UAT")
+
     def test_no_branch_or_warning_keys_when_absent(self):
         client = _client()
         db = _tmp_db()
         result = self._start(client, db, **self._base_kwargs())
         self.assertNotIn("branch_name", result)
+        self.assertNotIn("base_branch", result)
         self.assertNotIn("warning", result)
 
     def test_running_session_is_a_noop_with_already_running_flag(self):
