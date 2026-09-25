@@ -4,9 +4,10 @@ description: "Owns the Odoo quote: context, client vs internal, line items, assu
 user-invocable: false
 ---
 
-<!-- Packaged copy: THIS file (odoo_sdk/skills/odoo-quote/SKILL.md) is the
-     source of truth for the skill body — edit it HERE. The plugin and any
-     other synced copies are generated from it via `odoo-sdk sync-skills`. -->
+<!-- Single source (#784): THIS file is the only copy of the odoo-quote
+     skill body — edit it HERE. The odoo-sdk package used to ship a generated
+     twin under odoo_sdk/skills/ and serve it as an MCP prompt; both are gone,
+     along with `odoo-sdk sync-skills` and the parity gate between them. -->
 
 # Odoo scoping and quote drafting
 

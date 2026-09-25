@@ -286,8 +286,6 @@ One template, filled per worker.
   - Do not merge, do not force-push, do not touch another worker's branch.
   - Do not edit shared doc lines unless explicitly assigned them.
   - **Parity traps**, when in scope:
-    - `libraries/odoo_sdk/src/odoo_sdk/skills/` ↔ `plugins/odoo-dev/skills/`
-      are generated copies; CI fails if only one side moves.
     - `persisted-paths.tsv` ↔ `devcontainer-feature.json` ↔ `setup.sh` ↔
       `setup.ps1` must move together.
     - `plugins/odoo-dev/scripts/validate.sh` carries hard-coded inventory counts

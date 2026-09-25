@@ -51,7 +51,7 @@ def _probe_surface():
 
 
 def _server(tools):
-    return OdooMCPServer(Registry(Mock()), explicit_tools=tools, serve_skills=False)
+    return OdooMCPServer(Registry(Mock()), explicit_tools=tools)
 
 
 def _list_tool_names(server):

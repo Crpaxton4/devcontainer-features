@@ -78,7 +78,6 @@ PLUGIN_ROOT="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd)" || {
 # must NOT also be registered in validate.sh. An opt-out that outlived its suite,
 # or one contradicted by a registration, fails this check.
 CI_ONLY=(
-  "scripts/tests/check-skill-parity.test.sh	the skill-parity job pip-installs libraries/odoo_sdk first; without an installed SDK the suite's regeneration tiers fall through to SKIP, so a local PASS would not mean the generated-skill parity diff held"
   "scripts/tests/check-tool-contract.test.sh	the tool-contract job pip-installs libraries/odoo_sdk first; without it the 'real tree via installed SDK' case SKIPs, which is the case that checks the surface the agents actually call"
   "scripts/tests/gh-url.test.sh	ruled in #781 to stay unregistered: CI's find-based script-tests job already runs it on every push, and registering it would collide on the run_suite block concurrent branches append to"
   "skills/odoo-upgrade/scripts/tests/studio-inventory.test.sh	needs psql; with no Postgres client it exits 0 after printing 'SKIP: psql not available', so validate.sh would print PASS for a suite that executed no case"
