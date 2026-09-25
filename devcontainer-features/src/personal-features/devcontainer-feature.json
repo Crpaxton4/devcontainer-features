@@ -22,7 +22,8 @@
         "MEMPALACE_EMBEDDING_MODEL": "embeddinggemma",
         "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation",
         "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config",
-        "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker"
+        "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker",
+        "ODOO_DEV_STATE_DIR": "/usr/local/share/odoo-dev"
     },
     "mounts": [
         {
@@ -68,6 +69,11 @@
         {
             "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.mempalace",
             "target": "/usr/local/share/mempalace",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo-dev",
+            "target": "/usr/local/share/odoo-dev",
             "type": "bind"
         }
     ],
