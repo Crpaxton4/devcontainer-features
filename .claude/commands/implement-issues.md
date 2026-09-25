@@ -263,8 +263,27 @@ pausing has failed regardless of how good the grouping is.
 
   `/workspaces` is root-owned, so the worktree goes in the session scratchpad,
   not beside the repo.
+
+  The parent's PR number goes into the child's PR body as `Stacked on #N`, on
+  its own line, so the stack is legible from the PR alone.
 - A child dispatches when its parent **pushes its branch**, not when the
-  parent's PR merges.
+  parent's PR merges. The push is the *earliest* moment it may dispatch, not the
+  signal that it is ready. Before releasing a child:
+
+  ```bash
+  git -C "$REPO" diff --stat origin/main...origin/<parent-branch>
+  git -C "$REPO" diff origin/main...origin/<parent-branch> -- <each file the child's prompt names>
+  ```
+
+  Read the `--stat` for every child, and the full diff for every file that
+  child's prompt names. Then **re-derive the child's `file:line` pointers and
+  every interface it depends on** — renamed or deleted files, changed variable
+  and function signatures, moved sections and headings, new preconditions — and
+  **rewrite the child's prompt before dispatching it**. A prompt authored during
+  Phase 3, against the tree as it was before the parent ran, is stale by
+  construction the moment the parent touches the same interface; git will not
+  flag it, because the child's edit applies cleanly to the parent's new file and
+  is simply wrong.
 - Cap roughly 6 workers in flight.
 
 ## Phase 5 — Worker prompt contract
@@ -328,10 +347,15 @@ One template, filled per worker.
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
     means the title is what lands on `main` and what release-please parses.
-- `## Report back` — branch, PR URL, files changed, **and anything that
-  contradicts the issue's assumptions**. Final line exactly `PR: <url>` or
-  `PR: none — <reason>`. Silently dropping scope is failure; a documented,
-  verified blocker is acceptable.
+- `## Report back` — branch, PR URL, files changed, **anything that contradicts
+  the issue's assumptions**, and — required, not optional — **every interface
+  change a downstream worker needs**: files renamed or deleted, changed CLI
+  arguments and flags, new or renamed column names and variables, moved
+  headings and sections, new preconditions or early exits. Report these even
+  when nothing about your own issue was contradicted; a sibling or child briefed
+  on the old shape has no other way to learn it changed. Final line exactly
+  `PR: <url>` or `PR: none — <reason>`. Silently dropping scope is failure; a
+  documented, verified blocker is acceptable.
 
 ## Phase 6 — Steer live workers with `SendMessage`
 
