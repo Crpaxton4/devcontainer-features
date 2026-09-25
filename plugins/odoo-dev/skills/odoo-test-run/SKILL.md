@@ -53,17 +53,31 @@ calls. Spell the base directory out in full there.
 
 ```bash
 <base directory>/scripts/run-tests.sh <repo> <task_id> <module> \
-  [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR]
+  [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] \
+  [--addons-path P] [--data-dir DIR]
 ```
 
 → ```json
-{"passed":true,"db":"...","module":"...","odoo_version":"18.0","mode":"container",
- "tests_run":12,"tours_declared":1,"tours_run":1,"tours_passed":1,
+{"passed":true,"status":"passed","error":null,"db":"...","module":"...",
+ "odoo_version":"18.0","mode":"container","tests_run":12,
+ "suites":[{"module":"my_module","collected":12,"executed":12,"failed":0}],
+ "collected_is_executed":true,
+ "addons_path":"/mnt/extra-addons/.worktrees/task-30412,/usr/lib/python3/dist-packages/odoo/addons",
+ "data_dir":"/tmp/odoo-test-run/data/qoc_test_30412",
+ "tours_declared":1,"tours_run":1,"tours_passed":1,
  "failures":[{"test":"...","error":"AssertionError: 2 != 1"}],
  "log_file":"/tmp/...","log_excerpt":"...","db_dropped":true}
 ```
 
-The database is `<project>_test_<id><suffix>`, created fresh and dropped by a trap on every exit path. The worktree goes **first** on the addons path so its modules shadow the originals. Exit code is `0` whenever the run completed — **a test failure is a result, not a script error**, so read `passed`, never `$?`.
+The database is `<project>_test_<id><suffix>`, created fresh and dropped by a trap on every exit path. Exit code is `0` whenever the run completed — **a test failure is a result, not a script error**, so read `status`, never `$?`.
+
+### The addons path and the data dir are stated, never inherited
+
+`addons_path` is **not** read from `odoo.conf`. The path is built as the worktree **first** — so its modules shadow the originals — then the core addons directories resolved from the running Odoo itself (`odoo.__file__`). Inheriting the ambient config made this run's result depend on directories it has no interest in: one module in one of them that cannot be imported aborts registry load before a single test is collected, and the run then reported `tests_run: 0` with an empty failure list.
+
+`--data-dir` is stated too, per run, under the artifacts directory. Odoo appends `<data_dir>/addons/<series>` to the addons path **whatever `--addons-path` says**, so a run that sets only one of the two flags looks isolated and is not.
+
+Enterprise is opt-in: set `ODOO_ENTERPRISE_ADDONS` to its directory when the module under test needs it. `--addons-path P` replaces the computed path outright, for the rare module whose dependency closure needs something else; `--data-dir DIR` does the same for the data directory.
 
 `--test-tags` takes Odoo's own grammar: `/module`, `/module:Class`, `/module:Class.method`, `-tag` to exclude, comma-separated.
 
@@ -92,10 +106,17 @@ pulling 100 MB over the network or failing the render.
 
 | Field | Gate rule |
 |---|---|
+| `status` | `passed` \| `failed` \| `registry_aborted`. The one field to branch on |
+| `error` | Set only for `registry_aborted`: the decisive log line, quoted. `null` otherwise |
 | `tests_run` | **Must be > 0.** Zero never green, whatever `passed` say elsewhere |
+| `suites[]` | Per module: `collected`, `executed`, `failed`. A module with zero of both ran nothing |
+| `collected_is_executed` | Always `true`: Odoo logs no per-module collected count distinct from the executed one, so the parse reports the same number for both rather than inventing one |
 | `tours_declared` vs `tours_run` | Declared > 0 and run == 0 ⇒ tours did not run. Re-run with `--with-tours` |
 | `failures[].error` | **Extracted exception line** (`AssertionError: 2 != 1`). What you hand back to whoever fixes it |
+| `addons_path`, `data_dir` | What the run actually stated. Check these first when a suite reports nothing |
 | `log_excerpt`, `log_file` | **Internal only.** Never paste into PR body or Odoo chatter |
+
+`status: registry_aborted` means the registry died before a single test was collected — a broken module somewhere on the addons path, a database that would not come up. It is **not** "this module has no tests", which is the reading `tests_run: 0` with an empty failure list used to invite. Fix the cause named in `error` and re-run; nothing about the module under test has been proved either way.
 
 None of this is published. A PR body carries the task link, the module lists, and the per-module description, and nothing here belongs in it. Full logs stay at `log_file` for you.
 
@@ -119,7 +140,8 @@ Run the second one before `odoo-dev:odoo-pr`. Its JSON is what `gate.sh` reads a
 | `WORKTREE_SUBDIR` | `.worktrees` | Match `odoo-dev:odoo-task-env` |
 | `TEST_DB_ROLE` | project name (host mode) | Postgres role that own test databases |
 | `ODOO_SHARED_DB_CONTAINER` | `odoo-shared-db-1` | Host mode only |
-| `ODOO_TEST_ARTIFACTS_DIR` | `$TMPDIR/odoo-test-run` | Where screenshots/screencasts land |
+| `ODOO_TEST_ARTIFACTS_DIR` | `$TMPDIR/odoo-test-run` | Where screenshots/screencasts and the per-run `--data-dir` land |
+| `ODOO_ENTERPRISE_ADDONS` | unset | Enterprise tree, opt-in. Never discovered from `odoo.conf` |
 | `DB_MAXCONN`, `HTTP_PORT_BASE` | `8`, `18000` | Concurrency isolation |
 
 ## Verify

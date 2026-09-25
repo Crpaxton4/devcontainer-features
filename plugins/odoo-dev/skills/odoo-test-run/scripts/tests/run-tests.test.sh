@@ -23,6 +23,12 @@ expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); ech
 field() { node -e 'console.log(String(JSON.parse(process.argv[1])[process.argv[2]] ?? "null"))' "$1" "$2"; }
 nfail() { node -e 'console.log(JSON.parse(process.argv[1]).failures.length)' "$1"; }
 firsterr() { node -e 'const f=JSON.parse(process.argv[1]).failures[0];console.log(f?f.error:"")' "$1"; }
+# suites is the per-module tally; "mod_a:2/2/0" reads collected/executed/failed.
+suites() { node -e 'console.log(JSON.parse(process.argv[1]).suites.map(s=>`${s.module}:${s.collected}/${s.executed}/${s.failed}`).join(" "))' "$1"; }
+# The stub records one argv entry per line, so a fixed-string line match is an
+# exact assertion about what Odoo was actually invoked with.
+argv_has() { grep -qxF -- "$1" "$work/args" && echo yes || echo no; }
+argv_grep() { grep -qF -- "$1" "$work/args" && echo yes || echo no; }
 
 # ---------- stubbed environment ------------------------------------------------
 bin="$work/bin"; mkdir -p "$bin"
@@ -38,11 +44,26 @@ STUB
 for tool in pg_isready createdb dropdb; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/$tool"
 done
+
+# The core addons path is resolved by asking the RUNNING Odoo's interpreter where
+# odoo.__file__ is, so the stub stands in for that interpreter. There is no real
+# Odoo here to import, which is the point: the answer must come from the process
+# that would run the tests, never from a config file.
+mkdir -p "$work/core-addons"
+cat > "$bin/python3" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "$work/core-addons"
+exit 0
+STUB
 chmod +x "$bin"/*
 
+# The conf's addons_path is POISON: it names a tree this run must never inherit.
+# Every assertion below that greps the recorded argv for it is asserting the fix
+# for #887 — a broken sibling directory in the ambient config used to abort the
+# registry and report the run as zero tests and zero failures.
 conf="$work/odoo.conf"
-printf '[options]\naddons_path = %s/addons\n' "$work" > "$conf"
-mkdir -p "$work/addons"
+printf '[options]\naddons_path = %s/poison-from-conf\n' "$work" > "$conf"
+mkdir -p "$work/addons" "$work/poison-from-conf"
 
 run() { # run <log-fixture> <rc> [extra args...]
   local log="$1" rc="$2"; shift 2
@@ -98,11 +119,41 @@ expect "green passes"        "$(field "$out" passed)"     "true"
 expect "green counts tests"  "$(field "$out" tests_run)"  "2"
 expect "mode is container"   "$(field "$out" mode)"       "container"
 expect "green has no failures" "$(nfail "$out")"          "0"
+expect "green status"        "$(field "$out" status)"     "passed"
+expect "green tallies its one suite" "$(suites "$out")"   "mymodule:2/2/0"
 expect "green drops its db"  "$(field "$out" db_dropped)" "true"
 expect "db name carries project+task" "$(field "$out" db)" "myrepo_test_4242"
 
 out="$(run "$twophase" 0)"
 expect "both phases summed" "$(field "$out" tests_run)" "10"
+
+# ---------- addons path and data dir are STATED, never inherited (#887) --------
+out="$(run "$green" 0)"
+expect "addons path is worktree + core, in that order" \
+  "$(argv_has "--addons-path=$work/addons/.worktrees/task-4242,$work/core-addons")" "yes"
+expect "odoo.conf's addons_path never reaches the argv" \
+  "$(argv_grep "$work/poison-from-conf")" "no"
+expect "addons path is reported" "$(field "$out" addons_path)" \
+  "$work/addons/.worktrees/task-4242,$work/core-addons"
+
+# Odoo appends <data_dir>/addons/<series> to the addons path whatever
+# --addons-path says, so an unstated data dir lets the ambient tree back in.
+expect "data dir is stated, under this run's artifacts" \
+  "$(argv_has "--data-dir=$work/artifacts/data/myrepo_test_4242")" "yes"
+expect "data dir is reported" "$(field "$out" data_dir)" "$work/artifacts/data/myrepo_test_4242"
+[ -d "$work/artifacts/data/myrepo_test_4242" ]
+expect "data dir is created" "$?" "0"
+
+mkdir -p "$work/override-addons"
+out="$(run "$green" 0 --addons-path "$work/override-addons")"
+expect "--addons-path override is honoured verbatim" \
+  "$(argv_has "--addons-path=$work/override-addons")" "yes"
+expect "override does not smuggle the conf path back in" \
+  "$(argv_grep "$work/poison-from-conf")" "no"
+expect "override run still passes" "$(field "$out" passed)" "true"
+
+out="$(run "$green" 0 --data-dir "$work/own-data")"
+expect "--data-dir override is honoured" "$(argv_has "--data-dir=$work/own-data")" "yes"
 
 # Screenshot redirection is unconditional, not tied to --with-tours: ANY failing
 # HttpCase saves a screenshot, and the configured path need not be writable here.
@@ -117,6 +168,67 @@ expect "red fails"            "$(field "$out" passed)" "false"
 expect "red counts its test"  "$(field "$out" tests_run)" "1"
 expect "red extracts one failure" "$(nfail "$out")" "1"
 expect "error is the exception line, not the traceback" "$(firsterr "$out")" "AssertionError: 2 != 1"
+expect "red's status is failed, not registry_aborted" "$(field "$out" status)" "failed"
+expect "a failing test is not an aborted registry" "$(field "$out" error)" "null"
+
+# ---------- registry aborted is not "this module has no tests" (#887) ----------
+# The registry dies before collection starts: no test is collected, so tests_run
+# is 0 and no FAIL:/ERROR: line exists to extract. That used to render exactly
+# like a module that ships no tests.
+aborted="$work/aborted.log"
+cat > "$aborted" <<'LOG'
+2026-09-04 16:48:01,000 1 INFO db odoo.modules.loading: loading 1 modules...
+2026-09-04 16:48:02,000 1 ERROR db odoo.modules.loading: Failed to load registry
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/odoo/modules/registry.py", line 88, in new
+    odoo.modules.load_modules(registry, force_demo, status, update_module)
+ImportError: cannot import name '_ignore_tax_lock_date' from 'odoo.addons.account.models.account_move_line'
+2026-09-04 16:48:02,100 1 CRITICAL db odoo.service.server: Failed to initialize database
+LOG
+out="$(run "$aborted" 1)"
+expect "aborted registry gets its own status" "$(field "$out" status)" "registry_aborted"
+expect "aborted registry is never a pass"     "$(field "$out" passed)" "false"
+expect "aborted registry collected no tests"  "$(field "$out" tests_run)" "0"
+expect "aborted registry quotes the decisive error" "$(field "$out" error)" \
+  "ImportError: cannot import name '_ignore_tax_lock_date' from 'odoo.addons.account.models.account_move_line'"
+expect "aborted registry records a failure rather than an empty list" "$(nfail "$out")" "1"
+
+# The looser rule: zero tests plus a traceback is a run that died, whatever
+# logger reported it.
+crashload="$work/crashload.log"
+cat > "$crashload" <<'LOG'
+2026-09-04 16:48:01,000 1 INFO db odoo.service.server: Odoo version 18.0
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/odoo/cli/server.py", line 180, in main
+    rc = odoo.service.server.start(preload=preload, stop=stop)
+psycopg2.OperationalError: could not connect to server
+LOG
+out="$(run "$crashload" 1)"
+expect "zero tests + traceback is an abort" "$(field "$out" status)" "registry_aborted"
+expect "abort quotes the exception line"    "$(field "$out" error)" \
+  "psycopg2.OperationalError: could not connect to server"
+
+# ---------- per-suite collected vs executed ------------------------------------
+# Odoo logs no per-module collected count distinct from the executed one, so the
+# two carry the same number and collected_is_executed says so. What the tally
+# does buy is WHICH module ran nothing at all.
+twosuites="$work/twosuites.log"
+cat > "$twosuites" <<'LOG'
+2026-09-04 16:48:21,163 1 INFO db odoo.addons.mod_a.tests.test_a: Starting TestA.test_one ...
+2026-09-04 16:48:21,663 1 INFO db odoo.addons.mod_a.tests.test_a: Starting TestA.test_two ...
+2026-09-04 16:48:22,163 1 INFO db odoo.addons.mod_b.tests.test_b: Starting TestB.test_one ...
+2026-09-04 16:48:22,900 1 ERROR db odoo.addons.mod_b.tests.test_b: FAIL: TestB.test_one
+Traceback (most recent call last):
+  File "/x/test_b.py", line 9, in test_one
+    self.assertTrue(False)
+AssertionError: False is not true
+2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 1 failed, 0 error(s) of 3 tests when loading database 'db'
+LOG
+out="$(run "$twosuites" 1)"
+expect "per-suite counts, one line per module" "$(suites "$out")" "mod_a:2/2/0 mod_b:1/1/1"
+expect "two suites still sum to the run total"  "$(field "$out" tests_run)" "3"
+expect "collected is flagged as the executed count" "$(field "$out" collected_is_executed)" "true"
+expect "a failing suite fails the run" "$(field "$out" status)" "failed"
 
 # ---------- fail-closed ---------------------------------------------------------
 # An empty log is the shape a crashed or unrecognized run leaves behind. Zero
@@ -124,6 +236,10 @@ expect "error is the exception line, not the traceback" "$(firsterr "$out")" "As
 out="$(run "$work/empty.log" 0)"
 expect "empty log runs no tests" "$(field "$out" tests_run)" "0"
 expect "zero tests is not a pass" "$(field "$out" passed)" "false"
+# No traceback and no loading error: this is a silent zero, not an abort. The two
+# are reported differently on purpose — only one of them names a cause.
+expect "a silent zero is failed, not registry_aborted" "$(field "$out" status)" "failed"
+expect "silent zero has no suites to tally" "$(suites "$out")" ""
 
 # ---------- tours ----------------------------------------------------------------
 mkdir -p "$work/addons/.worktrees/task-4242/mymodule"
