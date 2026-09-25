@@ -32,7 +32,8 @@ needs (column semantics, writing rules) lives in the skill, not in the file.
 Prints a validation report — unenriched modules, conflicting enrichment
 files, `TODO-AI` sentinels in a delivered column, over-long cells, inventory
 cells outside their documented vocabulary (Functional area, native verdict, OCA
-repo, OCA alternative), requirements with weak or non-"shall" wording, unknown
+repo, OCA alternative), requirements with weak wording or no (case-insensitive)
+"shall", a requirement whose `sources` is not a list of module names, unknown
 source modules, modules with no requirement, and near-duplicate requirements
 across agent groups. Read it: it is the only check that the fan-out agents
 followed the briefs. `problems: 0` means complete AND schema-valid: a column
@@ -101,10 +102,48 @@ EVIDENCE_MAX = 300
 # What the seeding script writes when only an agent can answer. In a column the
 # workbook presents as an answer it is an unanswered question, not a value.
 SENTINEL = "TODO-AI"
-WEAK_WORDS = re.compile(
-    r"\b(should|must|will|may|fast|easy|user-friendly|efficient|appropriate|"
-    r"normal|few|most|timely|properly|quickly|reliable|intuitive|seamless|"
-    r"robust|as needed|if possible)\b", re.I)
+# A word inside `backticks` or "double quotes" is a literal the client uses —
+# a delivery type called `normal`, a report called "100% invoiced" — so it is
+# never weak wording. Masked out (length preserved) before the rules run.
+QUOTED_LITERAL = re.compile(r'`[^`]*`|"[^"]*"')
+# The weak-wording rules, one (label, pattern) per defect class, each searched
+# as a predicate over the masked text instead of one flat substring grep: the
+# label is what makes a hit actionable, and the shape of the pattern is what
+# keeps `may` the modal apart from May the month. This list is the source of
+# truth for rule 5 of references/functional-requirements.md — change both
+# together, one doc line per label.
+WEAK_WORDS = [
+    # Modal instead of `shall`, recognised by the bare verb that follows it,
+    # so "in May 2026" and "the will of the client" are left alone.
+    ("modal verb",
+     re.compile(r"(?i:\b(?:should|must|will|may|might|could)\b)"
+                r"(?=\s+(?:not\s+)?(?!of\b|the\b|an?\b)[a-z]{2,}\b)")),
+    # "shall be able to X" states a capability, not a behaviour: untestable.
+    ("superfluous infinitive",
+     re.compile(r"\bshall\s+(?:be\s+(?:able\s+to|capable\s+of)"
+                r"|have\s+the\s+ability\s+to"
+                r"|provide\s+the\s+ability\s+to|support|allow)\b"
+                r"|\bis\s+designed\s+to\b", re.I)),
+    # An open list cannot be accepted or rejected — the client signs a blank.
+    ("open-ended clause",
+     re.compile(r"\betc\.|\band so on\b|\bincluding but not limited to\b"
+                r"|\bsuch as\b|\be\.g\.", re.I)),
+    ("and/or", re.compile(r"\band\s*/\s*or\b", re.I)),
+    ("absolute",
+     re.compile(r"\b(?:always|never|all|every|none)\b|\b100%", re.I)),
+    # A comparative needs its baseline: "faster than the 16.0 report".
+    ("bare comparative",
+     re.compile(r"\b(?:faster|better|more|less|improved|enhanced"
+                r"|optimi[sz]ed)\b(?!\s+than\b)", re.I)),
+    # A pronoun opening a clause has no antecedent a tester can resolve.
+    ("pronoun without antecedent",
+     re.compile(r"(?:^|[,;:]\s*)(?P<w>it|this|that|these|those|they)\b",
+                re.I)),
+    ("vague adjective",
+     re.compile(r"\b(?:fast|easy|user-friendly|efficient|appropriate|normal"
+                r"|few|most|timely|properly|quickly|reliable|intuitive"
+                r"|seamless|robust|as needed|if possible)\b", re.I)),
+]
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
@@ -424,6 +463,69 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
     return columns, inventory_rows, evidence_rows, by_module, sentinels
 
 
+def mask_literals(text):
+    """Blank out `backticked` and "quoted" spans before the wording rules run.
+
+    Length is preserved so clause boundaries either side of the literal read
+    the same to the patterns.
+    """
+    return QUOTED_LITERAL.sub(lambda m: "_" * len(m.group(0)), text)
+
+
+def weak_wording(text):
+    """Every weak-wording rule that fires, as (label, matched text).
+
+    One line per rule, not per occurrence: the author fixes a class of wording,
+    not a list of offsets.
+    """
+    masked = mask_literals(text)
+    hits = []
+    for label, pattern in WEAK_WORDS:
+        match = pattern.search(masked)
+        if match:
+            hits.append((label, match.groupdict().get("w")
+                         or match.group(0)))
+    return hits
+
+
+def normalise_requirement(entry, fallback_id, problems):
+    """Make one entry safe to read with [] everywhere downstream.
+
+    A missing key is already a problem line by the time this runs. The report
+    is the only check that the fan-out agents followed their briefs, so it has
+    to survive a malformed entry rather than be replaced by its traceback: fill
+    what is missing, keep validating, exit non-zero at the end.
+
+    `sources` is the one non-string key, and a one-module requirement reads
+    naturally as a scalar — a bare string is iterable, so left alone it would
+    emit one `unknown source` line per letter. Type it here, once.
+    """
+    entry.setdefault("tmp_id", fallback_id)
+    sources = entry.get("sources", [])
+    kind = type(sources).__name__
+    if isinstance(sources, list):
+        bad = next((m for m in sources if not isinstance(m, str)), None)
+        if bad is not None:
+            kind = f"list containing {type(bad).__name__}"
+    if kind != "list":
+        problems.append(f"{entry['tmp_id']}: sources must be a list of "
+                        f"module names, got {kind}")
+        sources = []
+    entry["sources"] = sources
+    for key in FR_KEYS - {"sources"}:
+        entry.setdefault(key, "")
+
+
+def group_of(tmp_id):
+    """The agent group of a `tmp_id`: everything before the last `-`.
+
+    `A-01` -> `A`, `SALES-07` -> `SALES`, `A1-02` -> `A1`. Comparing the first
+    character alone made `G1`..`G6` — the obvious group naming — one single
+    group, which silently disabled the only cross-group review the fan-out has.
+    """
+    return tmp_id.rsplit("-", 1)[0] if "-" in tmp_id else tmp_id
+
+
 def load_requirements(workdir, inventory, handled_values, problems):
     requirements = []
     for path in sorted(workdir.glob("fr_*.json")):
@@ -434,6 +536,7 @@ def load_requirements(workdir, inventory, handled_values, problems):
             if set(entry) != FR_KEYS:
                 problems.append(f"{tmp_id}: key mismatch "
                                 f"{sorted(set(entry) ^ FR_KEYS)}")
+            normalise_requirement(entry, tmp_id, problems)
             if entry.get("handled") not in handled_values:
                 problems.append(f"{tmp_id}: handled={entry.get('handled')!r}")
             if entry.get("status_source") not in STATUSES:
@@ -443,14 +546,15 @@ def load_requirements(workdir, inventory, handled_values, problems):
                 problems.append(
                     f"{tmp_id}: area={entry.get('functional_area')!r}")
             text = entry.get("requirement", "")
-            weak = WEAK_WORDS.search(text)
-            if weak:
+            for label, word in weak_wording(text):
                 problems.append(
-                    f"{tmp_id}: weak/non-shall word {weak.group(0)!r}: "
-                    f"{text[:80]}")
-            if not re.search(r"\bshall\b", text):
-                problems.append(f'{tmp_id}: no "shall": {text[:80]}')
-            for module in entry.get("sources", []):
+                    f"{tmp_id}: weak wording [{label}] {word!r}: {text[:80]}")
+            # Case-insensitive, and the message says so: a `Shall` capitalised
+            # by an editor is the convention, not a missing keyword.
+            if not re.search(r"\bshall\b", text, re.I):
+                problems.append(f'{tmp_id}: no "shall" (case-insensitive) '
+                                f'in: {text[:80]}')
+            for module in entry["sources"]:
                 if module not in inventory:
                     problems.append(f"{tmp_id}: unknown source {module}")
             requirements.append(entry)
@@ -458,20 +562,20 @@ def load_requirements(workdir, inventory, handled_values, problems):
 
 
 def apply_reconciliation(workdir, requirements):
-    by_tmp = {e["tmp_id"]: e for e in requirements}
+    by_tmp = {e.get("tmp_id", ""): e for e in requirements}
     merges_path = workdir / "fr_merges.json"
     if merges_path.is_file():
         for drop, spec in json.loads(merges_path.read_text()).items():
-            dropped, kept = by_tmp.get(drop), by_tmp.get(spec["keep"])
+            dropped, kept = by_tmp.get(drop), by_tmp.get(spec.get("keep"))
             if not dropped or not kept:
                 continue
-            for module in dropped["sources"]:
-                if module not in kept["sources"]:
+            for module in dropped.get("sources", []):
+                if module not in kept.setdefault("sources", []):
                     kept["sources"].append(module)
-            kept["evidence"] = (kept["evidence"] + " | "
-                                + dropped["evidence"])[:400]
+            kept["evidence"] = (kept.get("evidence", "") + " | "
+                                + dropped.get("evidence", ""))[:400]
             kept["notes"] = " | ".join(
-                x for x in [kept["notes"], spec.get("note", "")] if x)
+                x for x in [kept.get("notes", ""), spec.get("note", "")] if x)
             if spec.get("requirement"):
                 kept["requirement"] = spec["requirement"]
             requirements.remove(dropped)
@@ -481,7 +585,7 @@ def apply_reconciliation(workdir, requirements):
             entry = by_tmp.get(tmp_id)
             if entry:
                 entry["notes"] = " | ".join(
-                    x for x in [entry["notes"], note] if x)
+                    x for x in [entry.get("notes", ""), note] if x)
 
 
 def near_duplicates(requirements, threshold=0.33):
@@ -493,7 +597,8 @@ def near_duplicates(requirements, threshold=0.33):
 
     pairs = []
     for left, right in itertools.combinations(requirements, 2):
-        if left["tmp_id"][0] == right["tmp_id"][0]:
+        if group_of(left.get("tmp_id", "")) == group_of(
+                right.get("tmp_id", "")):
             continue
         a, b = tokens(left["requirement"]), tokens(right["requirement"])
         if a and b:
@@ -516,8 +621,9 @@ def build_requirements(workbook, workdir, inventory, native_column,
     apply_reconciliation(workdir, requirements)
 
     requirements.sort(key=lambda e: (
-        AREA_ORDER.index(e["functional_area"])
-        if e["functional_area"] in AREA_ORDER else 99, e["tmp_id"]))
+        AREA_ORDER.index(e.get("functional_area"))
+        if e.get("functional_area") in AREA_ORDER else 99,
+        e.get("tmp_id", "")))
     for number, entry in enumerate(requirements, 1):
         entry["id"] = f"FR-{number:03d}"
 
@@ -525,12 +631,14 @@ def build_requirements(workbook, workdir, inventory, native_column,
                "Source customization(s)", "Status in source", "Handled?",
                "Handled by", "Handled notes", "Verification", "Evidence",
                "Notes", "Decision (Keep/Drop/Defer)"]
-    rows = [[e["id"], e["requirement"], e["type"], e["functional_area"],
-             e["actor"], "; ".join(e["sources"]),
-             e["status_source"] + (f" — {e['status_note']}"
-                               if e["status_note"] else ""),
-             e["handled"], e["handled_by"], e["handled_notes"],
-             e["verification"], e["evidence"], e["notes"], ""]
+    rows = [[e["id"], e.get("requirement", ""), e.get("type", ""),
+             e.get("functional_area", ""), e.get("actor", ""),
+             "; ".join(e.get("sources", [])),
+             e.get("status_source", "") + (f" — {e.get('status_note')}"
+                                           if e.get("status_note") else ""),
+             e.get("handled", ""), e.get("handled_by", ""),
+             e.get("handled_notes", ""), e.get("verification", ""),
+             e.get("evidence", ""), e.get("notes", ""), ""]
             for e in requirements]
 
     fills = {handled_base: PatternFill("solid", fgColor="E2EFDA"),
@@ -540,10 +648,10 @@ def build_requirements(workbook, workdir, inventory, native_column,
     sheet.append(columns)
     for entry, row in zip(requirements, rows):
         sheet.append(row)
-        fill = fills.get(entry["handled"])
+        fill = fills.get(entry.get("handled"))
         if fill:
             sheet.cell(row=sheet.max_row, column=8).fill = fill
-        if entry["status_source"] != "active":
+        if entry.get("status_source") != "active":
             sheet.cell(row=sheet.max_row, column=7).font = Font(
                 color="C00000", bold=True)
     style_sheet(sheet, [9, 70, 16, 14, 16, 34, 18, 10, 34, 34, 44, 34, 36, 14],
@@ -551,7 +659,7 @@ def build_requirements(workbook, workdir, inventory, native_column,
 
     by_module = defaultdict(list)
     for entry in requirements:
-        for module in entry["sources"]:
+        for module in entry.get("sources", []):
             by_module[module].append(entry)
     trace_columns = ["Module", "Requirement IDs", "# reqs",
                      f"# {handled_base}", "# OCA", "# no",
@@ -560,7 +668,7 @@ def build_requirements(workbook, workdir, inventory, native_column,
     trace_rows = []
     for module in sorted(inventory, key=str.lower):
         entries = by_module.get(module, [])
-        counts = Counter(e["handled"] for e in entries)
+        counts = Counter(e.get("handled") for e in entries)
         trace_rows.append([
             module, ", ".join(e["id"] for e in entries), len(entries),
             counts[handled_base], counts["OCA"], counts["no"],
