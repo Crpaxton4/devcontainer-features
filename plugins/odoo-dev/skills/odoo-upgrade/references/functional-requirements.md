@@ -9,7 +9,7 @@ Run when: fresh-target-database project (client rebuild and adopt selectively), 
 ## Writing rules
 
 1. **Atomic** — one behaviour per requirement. Module doing 6 things ⇒ 6 rows. Two modules doing the same thing ⇒ ONE row, both in sources.
-2. **`shall` only.** Never should / will / must / may.
+2. **`shall` only.** Never should / will / must / may. The check is case-insensitive, so a sentence-initial `Shall` passes as the keyword; the modal-verb rule under rule 5 is what rejects the alternatives.
 3. **EARS syntax**, pick the pattern that fit:
    - Ubiquitous: `The system shall <action>.`
    - Event-driven: `When <trigger>, the system shall <action>.`
@@ -18,7 +18,15 @@ Run when: fresh-target-database project (client rebuild and adopt selectively), 
    - Optional feature: `Where <feature/config>, the system shall <action>.`
    Name the actor when a role act: `When a sales user confirms a sales order, the system shall …`
 4. **Implementation-neutral** — WHAT the business get, not HOW. No model/field/method/xmlid names in requirement text. Write `the system shall record the customer's carrier account number on the delivery`, not `add field ups_account_id on stock.picking`. Technical pointers go in Evidence.
-5. **Testable** — a tester pass/fail it. Spell out numbers, document names, conditions. Ban weak words: fast, easy, user-friendly, efficient, appropriate, normal, few, most, timely, properly, reliable, intuitive.
+5. **Testable** — a tester pass/fail it. Spell out numbers, document names, conditions. The build script rejects these classes of weak wording, one problem line per class, labelled; `WEAK_WORDS` in `scripts/build_workbook.py` is the list these lines are written from. A word inside `backticks` or "double quotes" is a literal the client uses — a delivery type called `normal` — and is never flagged.
+   - `modal verb` — `should` / `must` / `will` / `may` / `might` / `could` carrying the action. Write `shall`. (A date — "in May 2026" — is not a modal and does not fire.)
+   - `superfluous infinitive` — `shall be able to`, `shall be capable of`, `shall have the ability to`, `shall provide the ability to`, `shall support`, `shall allow`, `is designed to`. State the behaviour, not the capability.
+   - `open-ended clause` — `etc.`, `and so on`, `including but not limited to`, `such as`, `e.g.`. An open list can't be vetoed line by line.
+   - `and/or` — two requirements, or name which one.
+   - `absolute` — `always`, `never`, `all`, `every`, `none`, `100%`. Name the set instead.
+   - `bare comparative` — `faster`, `better`, `more`, `less`, `improved`, `enhanced`, `optimised`/`optimized` with no `than <baseline>` after it.
+   - `pronoun without antecedent` — `it`, `this`, `that`, `these`, `those`, `they` opening a clause. Repeat the noun.
+   - `vague adjective` — fast, easy, user-friendly, efficient, appropriate, normal, few, most, timely, properly, quickly, reliable, intuitive, seamless, robust, as needed, if possible.
 6. **Consistent vocabulary** — same term everywhere: sales order, quotation, customer, vendor, purchase order, receipt (incoming transfer), delivery (outgoing transfer), transfer, manufacturing order (MO), work order, bill of materials (BoM), work center, vendor bill, customer invoice, credit note, payment, payment receipt, customer statement, contact, delivery address, invoice address, carrier, shipping account, product, lot/serial, report (printed PDF), list view, form view, chatter, internal note, email.
 7. **Functional only** — skip porting/non-functional concerns ("compatible with 19", "uses OWL") and code-quality facts. Skip behaviour the module doesn't change (plain standard behaviour).
 8. **Dead code still yield a requirement** — business asked for it once, and the client deserve to drop it knowingly rather than silently. Keep those rows brief, flag in Status.
@@ -65,11 +73,11 @@ Inputs per agent: module source; inventory CSV + `enrich_*.json` + `oca_alt_*.js
 
 Each write ONE `fr_<GROUP>.json` array. Keys, exactly: `tmp_id`, `requirement`, `type`, `functional_area`, `actor`, `sources`, `evidence`, `status_source`, `status_note`, `handled`, `handled_by`, `handled_notes`, `verification`, `notes`.
 
-`tmp_id` = `<GROUP>-<nn>` (`A-01`). Final `FR-###` assigned by the build script after sorting by area — agents never number globally, they'd collide.
+`tmp_id` = `<GROUP>-<nn>` (`A-01`). Final `FR-###` assigned by the build script after sorting by area — agents never number globally, they'd collide. The group is everything before the last `-`, compared whole: `A1` and `A2` are two groups, and near-duplicate review runs across groups only.
 
 Method: read the code and list every user-visible behaviour change (fields shown/hidden, buttons, validations, automatic actions, reports, emails, integrations, access rules, crons) → merge identical behaviours across the group's modules → write EARS statement, classify, decide Handled with a grep when prior evidence isn't specific enough for the requirement as written.
 
-Before replying each agent validate its own file: JSON parses, every assigned module appear in some `sources`, no `should/must/will/may`, no weak words. Reply = count per Handled value + one line per requirement.
+Before replying each agent validate its own file: JSON parses, all 14 keys present on every entry, `sources` a list of module names even when there is one, every assigned module in some `sources`, a (case-insensitive) `shall` in every requirement, no weak wording from rule 5. Reply = count per Handled value + one line per requirement.
 
 Execution economy (these agents are the expensive part of the project):
 
@@ -84,7 +92,7 @@ python3 <base directory>/scripts/build_workbook.py --workdir /tmp/inv --target-v
         -o /mnt/extra-addons/<client>_upgrade_16_to_19_workbook.xlsx
 ```
 
-Script sort by functional area, assign `FR-###`, emit Functional Requirements + Traceability sheets, and validate: missing/extra keys, bad Handled/Status/area values, requirements without `shall` or with weak words, unknown source modules, modules with no requirement, and print **near-duplicate requirements across groups** (token overlap ≥ 0.33) as a separate non-blocking review list.
+Script sort by functional area, assign `FR-###`, emit Functional Requirements + Traceability sheets, and validate: missing/extra keys (a missing one is a problem line and the entry still reaches the sheet — the report is what proves the fan-out ran to brief, so it survives a malformed entry), bad Handled/Status/area values, a `sources` that is not a list of module names, requirements with no (case-insensitive) `shall` or with weak wording from rule 5, unknown source modules, modules with no requirement, and print **near-duplicate requirements across groups** (group = everything before the last `-` in `tmp_id`; token overlap ≥ 0.33) as a separate non-blocking review list.
 
 Near-dups are the expected failure of any fan-out — two agents describing the same behaviour from two modules. Review each pair:
 
