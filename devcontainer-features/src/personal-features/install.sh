@@ -1227,6 +1227,15 @@ chmod 0755 /usr/local/bin/resolve-mempal-dir
 # user's to curate, and re-detecting is an explicit `rm mempalace.yaml` away.
 # That is also why --auto-mine is NOT passed: the plugin's own hooks already
 # drive mining, and adding it here would mine twice on every container create.
+#
+# RUN-ONCE IS NOT THE SAME AS NEVER-TOUCH (#875). The script also provisions an
+# `exclude_patterns` key and two `.git/info/exclude` lines, and it does that on
+# an existing mempalace.yaml as well as a fresh one - because the file the user
+# curates is the only place upstream will read those patterns from, and a
+# container created before #875 already has one. The rule that keeps both true
+# is APPEND-ONLY: the key is added only when absent and no other key is ever
+# read back, rewritten or reordered, so a second run changes no byte. See the
+# block beside the functions inside the heredoc for why this is needed at all.
 cat > /usr/local/bin/mempalace-init-workspace << 'MEMPALACE_INIT_WORKSPACE'
 #!/bin/sh
 set -u
@@ -1277,8 +1286,116 @@ if ! command -v "$INIT_CMD" >/dev/null 2>&1; then
     exit 0
 fi
 
+# --- exclude_patterns: keep worktrees out of the mine (#875) ------------------
+# MEMPAL_DIR is the whole workspace repo, and every git worktree under
+# `.worktrees/` or `.claude/worktrees/` is a SECOND full copy of that repo's
+# tree. mempalace 3.9.0 indexes both copies: `miner.load_gitignore_matcher`
+# reads per-directory `.gitignore` files ONLY - never `.git/info/exclude`, which
+# is exactly where worktree paths are excluded - and `palace.SKIP_DIRS` carries
+# no `.worktrees`/`.claude` entry. Measured on one repo with two worktrees:
+# 33,810 duplicate drawers (52% of the wing), a 1.0 GB chroma.sqlite3, and mines
+# long enough to hold the shared hub's writer lease for 40+ minutes while every
+# other session's reads queued behind it (#875).
+#
+# `exclude_patterns` is the key mempalace actually reads - verified in the pinned
+# 3.9.0 source, not the docs: `miner.mine_project` does
+# `config.get("exclude_patterns", [])` and hands the list to
+# `GitignoreMatcher.from_patterns`, which parses a gitignore-inspired subset
+# (trailing `/` for dir-only, leading `/` to anchor, `!` to negate, `**` globs).
+# So it is a TOP-LEVEL list of strings in <MEMPAL_DIR>/mempalace.yaml, and the
+# patterns below are written in that syntax.
+#
+# APPEND-ONLY, NEVER REWRITE - the same run-once policy as the header above, for
+# the same reason. Once mempalace.yaml exists it is the user's to curate, and
+# round-tripping it through a YAML loader would drop comments and reorder keys.
+# So this appends the block only when the top-level key is ABSENT, and does
+# nothing at all when it is present, whatever its value. A second run therefore
+# changes no byte of the file.
+ensure_exclude_patterns() {
+    ep_yaml="$1"
+    [ -f "$ep_yaml" ] || return 0
+    if grep -q '^exclude_patterns[[:space:]]*:' "$ep_yaml" 2>/dev/null; then
+        return 0
+    fi
+    # The leading newline does double duty: it separates the appended block, and
+    # it terminates a final line that was written without a trailing newline, so
+    # `exclude_patterns:` always lands at column 0 and stays a top-level key.
+    if printf '\n%s\n' '# Added by mempalace-init-workspace (#875): each git worktree is a second
+# full copy of this repo, and upstream reads neither .git/info/exclude nor a
+# .worktrees/.claude skip-list. Remove a line to mine that tree again.
+exclude_patterns:
+  - ".worktrees/"
+  - ".claude/"
+  - ".VSCodeCounter/"' >> "$ep_yaml"; then
+        echo "mempalace-init-workspace: appended exclude_patterns to $ep_yaml (#875)"
+    else
+        echo "WARNING: mempalace-init-workspace: could not append exclude_patterns to $ep_yaml; git worktrees under $TARGET will be re-mined as duplicate copies (#875)" >&2
+    fi
+}
+
+# Name the directory holding this repo's `info/exclude`, or nothing when there is
+# no git dir to put one in. An ordinary clone has `<repo>/.git` as a DIRECTORY; a
+# linked worktree has it as a FILE pointing at the real git dir, and there
+# `info/exclude` lives in the COMMON dir, which only git can name. Never creates
+# a git dir that does not exist.
+workspace_git_info_dir() {
+    gid_root="$1"
+    if [ -d "$gid_root/.git" ]; then
+        printf '%s\n' "$gid_root/.git/info"
+        return 0
+    fi
+    if [ -e "$gid_root/.git" ] && command -v git >/dev/null 2>&1; then
+        gid_common="$(cd "$gid_root" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || gid_common=""
+        if [ -n "$gid_common" ] && [ -d "$gid_common" ]; then
+            printf '%s\n' "$gid_common/info"
+            return 0
+        fi
+    fi
+    return 0
+}
+
+# `mempalace init` writes mempalace.yaml and entities.json INTO the repo, and its
+# own .gitignore append is reverted below (#643: the machine-wide
+# core.excludesfile already covers both names, and the append leaves an
+# uncommitted diff in the user's workspace). But core.excludesfile is the HOST's
+# git config, so in a container that never got it - or a repo cloned fresh
+# inside one - those two files show up as untracked anyway. `.git/info/exclude`
+# is the per-repo, never-committed equivalent and is the right home for them.
+# One line each, appended only when absent, so a second run changes nothing.
+ensure_git_info_exclude() {
+    gie_dir="$1"
+    [ -n "$gie_dir" ] || return 0
+    mkdir -p "$gie_dir" 2>/dev/null || return 0
+    gie_file="$gie_dir/exclude"
+    # A file whose last byte is not a newline would have the first appended name
+    # joined onto its final line. `$(tail -c 1)` strips a trailing newline, so it
+    # is empty exactly when the file already ends in one.
+    if [ -s "$gie_file" ] && [ -n "$(tail -c 1 "$gie_file" 2>/dev/null)" ]; then
+        printf '\n' >> "$gie_file" || return 0
+    fi
+    for gie_name in mempalace.yaml entities.json; do
+        if [ -f "$gie_file" ] && grep -qx "$gie_name" "$gie_file" 2>/dev/null; then
+            continue
+        fi
+        if printf '%s\n' "$gie_name" >> "$gie_file"; then
+            echo "mempalace-init-workspace: added $gie_name to $gie_file (#875)"
+        else
+            echo "WARNING: mempalace-init-workspace: could not append to $gie_file; $gie_name will show up as untracked in $TARGET (#875)" >&2
+            return 0
+        fi
+    done
+}
+
+# Both provisioning steps in one call, so the existing-file path and the
+# just-created path get identical treatment.
+provision_workspace_excludes() {
+    ensure_exclude_patterns "$TARGET/mempalace.yaml"
+    ensure_git_info_exclude "$(workspace_git_info_dir "$TARGET")"
+}
+
 if [ -e "$TARGET/mempalace.yaml" ]; then
-    echo "mempalace-init-workspace: $TARGET/mempalace.yaml already exists, leaving it untouched"
+    echo "mempalace-init-workspace: $TARGET/mempalace.yaml already exists, leaving the keys it carries untouched"
+    provision_workspace_excludes
     exit 0
 fi
 
@@ -1354,6 +1471,9 @@ fi
 if "$@" < /dev/null; then
     restore_gitignore
     echo "mempalace-init-workspace: wrote $TARGET/mempalace.yaml"
+    # init writes `wing` and `rooms` and nothing else; exclude_patterns is ours
+    # to add, on the fresh file as well as on one that was already there (#875).
+    provision_workspace_excludes
 else
     rc=$?
     restore_gitignore

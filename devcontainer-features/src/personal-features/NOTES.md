@@ -12,6 +12,7 @@
 - [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
 - [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
+- [The mempalace workspace config (`mempalace.yaml`)](#the-mempalace-workspace-config-mempalaceyaml)
 - [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
 - [The Odoo language server (odoo-ls)](#the-odoo-language-server-odoo-ls)
 - [Additional tooling](#additional-tooling)
@@ -636,6 +637,53 @@ The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` 
 **That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-sdk`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
 
 It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
+
+## The mempalace workspace config (`mempalace.yaml`)
+
+`resolve-mempal-dir` sets `MEMPAL_DIR` to the whole workspace repo, and `mempalace-init-workspace` (`postCreateCommand`) gives that repo a `mempalace.yaml` so mined files land in real rooms rather than one flat `general`. That file is **run-once, never clobbered**: `mempalace init` rewrites it wholesale rather than merging, so once it exists it is yours to curate and re-detecting rooms is an explicit `rm mempalace.yaml` away.
+
+**`exclude_patterns` keeps git worktrees out of the mine (#875).** Every worktree under `.worktrees/` or `.claude/worktrees/` is a second full copy of the repo's tree, and mempalace 3.9.0 indexes it as one: `miner.load_gitignore_matcher` reads per-directory `.gitignore` files **only** — never `.git/info/exclude`, which is exactly where worktree paths are excluded — and `palace.SKIP_DIRS` carries no `.worktrees`/`.claude` entry. Measured on one repo with two worktrees: 33,810 duplicate drawers (52% of the wing), a 1.0 GB `chroma.sqlite3`, and mines long enough to hold the [shared hub](#the-shared-mempalace-mcp-hub)'s writer lease for 40+ minutes while every other session's `mempalace_status` and `mempalace_search` queued behind it.
+
+So the Feature provisions the one knob upstream *does* honour:
+
+```yaml
+exclude_patterns:
+  - ".worktrees/"
+  - ".claude/"
+  - ".VSCodeCounter/"
+```
+
+`exclude_patterns` is a top-level list of strings, verified against the pinned 3.9.0 in site-packages rather than the docs: `miner.mine_project` does `config.get("exclude_patterns", [])` and hands the list to `GitignoreMatcher.from_patterns`, which parses a gitignore-inspired subset — trailing `/` for dir-only, leading `/` to anchor, `!` to negate, `**` globs. `scan_project` then prunes matching **directories** during the walk, so an excluded worktree costs one `stat`, not a recursive scan.
+
+**Appended, never rewritten.** The key is added only when it is absent, at the end of the file, and no other key is ever read back, reordered or reformatted — a second container create changes no byte. That is what lets a run-once file still gain a key it was created without, which matters because every container created before #875 already has one. Delete a line to mine that tree again; replace the key with your own list and the Feature will not touch it.
+
+**`.git/info/exclude` gets `mempalace.yaml` and `entities.json`, one line each.** `mempalace init` writes both files *into* the repo. Its own `.gitignore` append is reverted (#643 — the machine-wide `core.excludesfile` already covers both names, and the append leaves an uncommitted diff in your workspace), but `core.excludesfile` is the **host's** git config: a repo cloned inside a container that never got it shows both files as untracked anyway. `.git/info/exclude` is the per-repo, never-committed equivalent. Append-only and idempotent like the above; nothing is written when there is no git dir, and a linked worktree's `info/exclude` is resolved through `git rev-parse --git-common-dir` rather than assumed to be `<repo>/.git/info`.
+
+**The auto-mine's cadence is upstream's, not this Feature's.** #875 asked for the project auto-mine to move from `Stop` to `SessionEnd` so one mine runs per session instead of per checkpoint. It cannot be done from here, and the evidence is worth writing down so nobody goes looking for a knob that does not exist:
+
+- `hooks_cli._maybe_auto_ingest()` — the function that spawns `mempalace mine "$MEMPAL_DIR" --mode projects` — is called from **both** `hook_stop` and `hook_session_end`. There is no event selector: no `MEMPALACE_*` env var, no `mempalace.yaml` key, no `config.json` key, and no flag on `mempalace hook run` (whose only arguments are `--hook` and `--harness`).
+- The Stop-side call is gated on `SAVE_INTERVAL`, a hardcoded module constant of 15 human messages — so it is every fifteenth exchange, not literally every turn, and it is not configurable.
+- Its only input is the `MEMPAL_DIR` environment variable, which `/etc/bash.bashrc` exports for every shell in the container. Hooks inherit one environment, so there is no way to have it visible at `SessionEnd` and not at `Stop`.
+- The hook **entries** live in the upstream plugin's own `hooks/hooks.json` under `$CLAUDE_CONFIG_DIR/plugins/cache/mempalace/…`, which `sync-claude-mcp`'s `claude plugin update mempalace@mempalace` overwrites on every container create — the same reason the MCP registration is not ours to change. This Feature registers no mempalace hook entry of its own; `sync-claude-hooks` owns only the `claude-event-hook` and `worktree-context-hook` entries.
+
+What the Feature *can* fix is the mine's **cost**, which is what `exclude_patterns` does: the same corpus that stalled the hub for 40 minutes drops from 776 mineable files to 388 with zero worktree paths. The cadence is filed upstream.
+
+**Existing drawers are not purged by any of this.** `exclude_patterns` stops *new* worktree copies being mined; the ones already embedded stay until they are deleted, and deleting them is a one-time owner action — not something a container create should do to a bind-mounted palace that other sessions are reading.
+
+`mempalace_sync` will not do it either: it prunes drawers whose source is *gitignored, deleted or moved*, and it builds its matchers from `.gitignore` files only (`sync.py` imports `load_gitignore_matcher` from the miner). Worktree paths live in `.git/info/exclude`, which is the whole reason they were mined. And `mempalace_delete_by_source` matches the stored `source_file` **exactly** — its only arguments are `source_file` (string, required) and `dry_run` (boolean, default `true`); there is no prefix, no directory root and no `recursive`. So the purge is one call per distinct mined path, driven from a list:
+
+1. `mempalace_status` — record the drawer count.
+2. List the distinct paths, read-only, against the palace's `chroma.sqlite3`:
+   ```sql
+   SELECT DISTINCT string_value FROM embedding_metadata
+    WHERE key = 'source_file'
+      AND (string_value LIKE '/mnt/extra-addons/.worktrees/%'
+        OR string_value LIKE '/mnt/extra-addons/.claude/worktrees/%');
+   ```
+3. For each path, `mempalace_delete_by_source` with `source_file` set to that exact path — `dry_run: true` first to see the match count and sample, then `dry_run: false` to commit. It is irreversible.
+4. `mempalace_status` again — the drop should match the total of the dry runs.
+
+Do it with the hub idle: the deletion takes the same writer lease a mine does.
 
 ## The shared mempalace MCP hub
 
