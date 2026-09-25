@@ -57,7 +57,13 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 3.1 `[AI]` Mechanical rewrite: run `upgrade_code` (target ≥ 18.0), scoped with `--glob` — see [upgrade-code-tool.md](./upgrade-code-tool.md).
 3.2 `[AI]` Semantic port: fix what rewriter cannot, using target-series `changes.md` for EVERY intermediate major in sequence (never skip hop). Minimum change only; follow [porting-checklist.md](./porting-checklist.md).
 3.3 `[AI]` Bump each ported manifest to target series prefix. Migration script folders must sit at exactly manifest version (`migrations/<manifest-version>/`) — folder above manifest version silently skipped by MigrationManager.
-3.4 `[AI]` Verification loop: `install_all.sh` fresh-DB install of ALL modules; fix; repeat until zero tracebacks. Then run module test suites on target series.
+3.4 `[AI]` Verification loop: `install_all.sh --db <throwaway> --data-dir <scratch>/data --template --per-tree --summary <scratch>/install.json [ADDONS_PATH]` — fresh-DB install of ALL modules; fix; repeat until zero tracebacks. Then run module test suites on target series.
+  - `--db` is REQUIRED and must be a throwaway name. The script drops and recreates it, and it refuses a database that already holds modules beyond `base` (pass `--force` only when you mean it). It never takes the target from `odoo.conf` `db_name` — that is the live project database.
+  - `--data-dir` off Odoo's default is part of the isolation, not tidiness: `--addons-path` alone does NOT exclude the enterprise tree, because Odoo appends `<data_dir>/addons/<series>` to the addons path and `data_dir` defaults to `/var/lib/odoo`. Filestore and sessions follow it.
+  - `--template` installs the core dependency closure once into a template database keyed by (Odoo build id, core dependency set), then creates each working DB from it — the per-iteration cost drops to the custom modules. A changed build or dependency set rebuilds the template.
+  - `--per-tree` installs each independent custom dependency tree into its own throwaway DB first and reports per-tree pass/fail with the failing module and the decisive log line, then runs the full install last and only once every tree is green. The loader aborts the whole registry on the first `ParseError`, so a serial full-tree install returns one defect per run no matter how many are present.
+  - `--summary` writes the JSON result (`trees[]`, `full`, `passed`) — the same document as the last stdout line. Odoo's own output goes to one log file per database under the artifacts dir; the paths are in the summary.
+  - Plain `install_all.sh --db <throwaway> [ADDONS_PATH]` with no mode flags is still one database, all modules, one log.
 
 ### Phase 4 — Stored-data audit and migration scripts
 

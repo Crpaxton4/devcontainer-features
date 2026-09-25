@@ -65,13 +65,13 @@ cache. Load that skill for the method; this one keeps the inventory columns.
 | `studio_inventory.py [--db NAME] [--csv studio.csv]` | With inventory — enumerate Studio/UI-built artifacts (invisible to code inventory). Read-only |
 | `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | On-prem Enterprise — drive upgrade.odoo.com client. `production` need `--yes-production` |
 | `build_workbook.py --workdir DIR -o out.xlsx` | Merge seed CSV + agent JSON into the 4-sheet workbook; validates the fan-out |
-| `install_all.sh [PATH]`            | Verification loop — install every module on fresh DB            |
+| `install_all.sh --db NAME [--data-dir DIR] [--template] [--per-tree] [--summary F] [PATH]` | Verification loop — install every module on a THROWAWAY DB. `--db` required (never odoo.conf's `db_name`); `--template` preinstalls the core closure once; `--per-tree` fails one tree at a time before the full install |
 
 ## Rules
 
 - **Minimum change.** Compatibility porting, not improvement: smallest diff that satisfy target version. Never refactor, restyle, or change behavior while porting.
 - NEVER attempt database upgrade — humans run it (upgrade.odoo.com / odoo.sh). Same ban cover merge to production branch and modify production data; sop.md tag every lifecycle step `[AI]` or `[MANUAL]`
-- Workflow (code phases): inventory (+ OCA check), then upgrade pass over all modules (upgrade_code, detection greps, manual fixes per target `changes.md`), then `install_all.sh` fresh-DB install of ALL modules, fix breakage, repeat install/fix until green. Full project sequence incl. DB/cutover phases: sop.md
+- Workflow (code phases): inventory (+ OCA check), then upgrade pass over all modules (upgrade_code, detection greps, manual fixes per target `changes.md`), then `install_all.sh --db <throwaway>` fresh-DB install of ALL modules (add `--template --per-tree --summary F` to cut the loop cost), fix breakage, repeat install/fix until green. Full project sequence incl. DB/cutover phases: sop.md
 - Multi-version jump: work EVERY transition ref in sequence (16→18 = 17.0 then 18.0 changes), never skip major; only major XX.0 series (16.0+) are targets, not intermediate SaaS versions. upgrade_code MAY run once across hops with target odoo-bin; install loop run only on final target devcontainer
 - upgrade_code: only when target ≥ 18.0 — invocation and limits in upgrade-code-tool.md
 - Bump each ported module manifest version prefix to target series (e.g. `19.0.x.y.z`)
