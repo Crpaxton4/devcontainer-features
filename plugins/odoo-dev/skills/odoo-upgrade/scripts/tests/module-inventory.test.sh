@@ -344,5 +344,200 @@ expect "a staged register gets its CSV sibling, headers intact" \
   "id|date|subject|token|status|blocking_module|resolution|link"
 expect "a staged register is not a problem" "$wb_status" "0"
 
+# =============================================================================
+# build_workbook.py — the functional-requirements validator
+# =============================================================================
+# Phase 3 is a fan-out of one agent per group, each writing one fr_<GROUP>.json,
+# and this report is the only thing that reads all of them: it is what proves
+# the agents followed their briefs. So each case plants exactly one defect and
+# reads the line it must produce — and where the point is that a rule must NOT
+# fire, it reads the exact problem count instead, since a count is the only
+# assertion a stray extra line can fail.
+
+# The inventory half kept complete and valid, so every problem a requirements
+# case sees is one it wrote into its own fr_*.json.
+fr_case() {  # <name> -> echoes the dir
+  local dir
+  dir="$(wb_case "$1")"
+  cat > "$dir/enrich_g1.json" <<'JSON'
+[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it",
+  "native_evidence": "grepped sale.order across the 19.0 tree",
+  "vendor_release": "n/a"}]
+JSON
+  printf '%s' "$dir"
+}
+
+# --- #910: a missing key is a problem line, not a KeyError -------------------
+# The entry is short two keys; the run must still reach the report, the
+# counters and the CSV sibling, because one malformed entry anywhere would
+# otherwise suppress the feedback for every other agent in the fan-out.
+dir="$(fr_case fr_missing_key)"
+cat > "$dir/fr_A.json" <<'JSON'
+[{"tmp_id": "A-01",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the date on it",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "a missing key names every key that differs" "$wb_out" \
+  "A-01: key mismatch ['evidence', 'sources']"
+contains "a missing key does not stop the report" "$wb_out" "handled: {'no': 1}"
+expect "a missing key exits non-zero" "$wb_status" "1"
+expect "the entry still reaches the requirements CSV" \
+  "$(csv_cell "$dir/out_requirements.csv" FR-001 'Requirement')" \
+  "When a sales user confirms a sales order, the system shall record the confirmation date."
+expect "the missing key is an empty cell, not a crash" \
+  "$(csv_cell "$dir/out_requirements.csv" FR-001 'Evidence')" ""
+
+# --- #912: a bare string in sources is one line, not one per letter ----------
+dir="$(fr_case fr_sources_string)"
+cat > "$dir/fr_A.json" <<'JSON'
+[{"tmp_id": "A-01",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": "acme", "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the date on it",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "a mistyped sources names the type it got" "$wb_out" \
+  "A-01: sources must be a list of module names, got str"
+# 2 = the type line + the module nothing now covers. Four letters of "acme"
+# would have been four more.
+contains "the string is not iterated letter by letter" "$wb_out" "problems: 2"
+expect "a mistyped sources exits non-zero" "$wb_status" "1"
+
+# --- #917: the shall check is case-insensitive, and says so ------------------
+dir="$(fr_case fr_shall_case)"
+cat > "$dir/fr_A.json" <<'JSON'
+[{"tmp_id": "A-01",
+  "requirement": "When a sales user confirms a sales order, the system Shall record the confirmation date.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the date on it",
+  "notes": ""},
+ {"tmp_id": "A-02",
+  "requirement": "The system records the confirmation date on a sales order.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the date on it",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "the no-shall line states the case rule" "$wb_out" \
+  "A-02: no \"shall\" (case-insensitive) in:"
+# 1 = A-02 alone: a capitalised Shall is the keyword, not a missing one.
+contains "a capitalised Shall passes" "$wb_out" "problems: 1"
+expect "a requirement with no shall exits non-zero" "$wb_status" "1"
+
+# --- #918: weak wording is a labelled rule, not a substring grep -------------
+dir="$(fr_case fr_weak_wording)"
+cat > "$dir/fr_A.json" <<'JSON'
+[{"tmp_id": "A-01",
+  "requirement": "The system shall be able to support all applicable discounts where appropriate.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Apply a discount and read the total",
+  "notes": ""},
+ {"tmp_id": "A-02",
+  "requirement": "When a sales user selects the `normal` delivery type, the system shall reserve the stock.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Select the delivery type and read the reservation",
+  "notes": ""},
+ {"tmp_id": "A-03",
+  "requirement": "The system shall render the vendor report faster than the 16.0 report and may notify the buyer.",
+  "type": "Reporting/Notification", "functional_area": "Sales",
+  "actor": "Sales user",
+  "sources": ["acme"], "evidence": "report/sale_report.xml",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Print the report and time it",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "a capability is not a behaviour" "$wb_out" \
+  "A-01: weak wording [superfluous infinitive] 'shall be able to':"
+contains "an absolute names no set" "$wb_out" "A-01: weak wording [absolute] 'all':"
+contains "the original adjectives still fire" "$wb_out" \
+  "A-01: weak wording [vague adjective] 'appropriate':"
+contains "a modal is caught by the verb after it" "$wb_out" \
+  "A-03: weak wording [modal verb] 'may':"
+# 4 = three on A-01 and one on A-03. A-02's weak word is inside backticks, so
+# it is the client's own term for a delivery type, and A-03's comparative
+# names its baseline with `than`: neither is a defect and neither adds a line.
+contains "a quoted literal and a referenced comparative are not weak" \
+  "$wb_out" "problems: 4"
+expect "weak wording exits non-zero" "$wb_status" "1"
+
+# --- #916: groups are compared whole, not by first character -----------------
+# A1 and A2 share a first character, which is what used to make every pair look
+# intra-group and silently switch duplicate review off.
+dir="$(fr_case fr_groups_differ)"
+cat > "$dir/fr_A1.json" <<'JSON'
+[{"tmp_id": "A1-01",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the delivery.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the delivery",
+  "notes": ""}]
+JSON
+cat > "$dir/fr_A2.json" <<'JSON'
+[{"tmp_id": "A2-01",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the invoice.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the invoice",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "two groups sharing a first character are still two groups" "$wb_out" \
+  "near-duplicate"
+contains "the pair is listed once, for review" "$wb_out" \
+  "to review (not blocking): 1"
+expect "a near-duplicate is not blocking" "$wb_status" "0"
+
+# --- #916: one agent's own file is still its own business --------------------
+dir="$(fr_case fr_groups_same)"
+cat > "$dir/fr_A1.json" <<'JSON'
+[{"tmp_id": "A1-01",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the delivery.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the delivery",
+  "notes": ""},
+ {"tmp_id": "A1-02",
+  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the invoice.",
+  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
+  "sources": ["acme"], "evidence": "models/sale_order.py",
+  "status_source": "active", "status_note": "", "handled": "no",
+  "handled_by": "custom code", "handled_notes": "",
+  "verification": "Confirm a sales order and read the invoice",
+  "notes": ""}]
+JSON
+wb_run "$dir"
+contains "a pair inside one group is not reviewed" "$wb_out" \
+  "to review (not blocking): 0"
+expect "an intra-group pair is clean" "$wb_status" "0"
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
