@@ -28,6 +28,10 @@ Before cutting a worktree, opening a pull request, or planning a release, and an
 mutable state, deliberately outside the plugin tree so a plugin update never touches it.
 `REPO_MAP_FILE` overrides the whole path. The in-tree `repo-map.json.seed` is an empty
 skeleton `bootstrap-state.sh` copies in when the state file is absent, never a live map.
+`repo-map.sh` run that bootstrap itself when the file missing and carry on with the empty
+map it create; map that **exist but not parse or not validate** instead hard exit 4 naming
+the file and the parser complaint, never silently reseeded — reseed would discard every
+project base branch (#906).
 One entry per **exact Odoo `project.project` name**:
 
 | Key | Meaning |

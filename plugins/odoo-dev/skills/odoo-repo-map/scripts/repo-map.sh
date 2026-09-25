@@ -9,6 +9,12 @@
 # update is silently lost and the .bak holds only the loser. Serialise callers
 # yourself; this script takes no lock.
 #
+# A map file that does not exist is created from the in-tree seed by
+# scripts/bootstrap-state.sh and the command carries on. A map that exists but
+# does not parse, or does not validate, is a hard exit 4 naming the file and the
+# parser's complaint - never a silent reseed, which would throw away every
+# project's base branch (#906).
+#
 # Usage:
 #   repo-map.sh get "<project name>"
 #   repo-map.sh list
@@ -83,7 +89,22 @@ MAP="${REPO_MAP_FILE:-${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/repo-ma
 
 die() { echo "repo-map.sh: $*" >&2; exit 2; }
 
-[ -f "$MAP" ] || die "map file not found: $MAP"
+# An absent map is not a user error: it is a machine on which bootstrap-state.sh
+# has never run, and erroring there was a one-line dead end that sent callers back
+# to recalling a base branch from memory (#906). Seed it and carry on — an empty
+# map is a legitimate starting state and `add` grows it. The bootstrap is pointed
+# at $MAP's OWN directory because REPO_MAP_FILE overrides the whole path, and
+# seeding the ambient state dir would create a map nothing goes on to read.
+# A map that is PRESENT and unparseable never reaches this branch: validate_file
+# rejects it with exit 4 below, so a damaged map is never quietly reseeded — that
+# would discard every project's base branch, which is the whole asset here.
+if [ ! -f "$MAP" ]; then
+  bootstrap="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}/scripts/bootstrap-state.sh"
+  [ -x "$bootstrap" ] || die "map file not found: $MAP (and the script that would create it is missing: $bootstrap)"
+  # Its report goes to stderr: stdout belongs to the JSON this command emits.
+  "$bootstrap" --dir "$(dirname "$MAP")" >&2 || die "map file not found: $MAP (bootstrap-state.sh failed to create it)"
+  [ -f "$MAP" ] || die "map file not found: $MAP (bootstrap-state.sh ran but left no map at that path; REPO_MAP_FILE must name a file called repo-map.json)"
+fi
 
 # node does all JSON work; bash never parses or emits JSON by hand.
 run_node() { node --input-type=module -e "$1" -- "$MAP" "${@:2}"; }
@@ -93,7 +114,7 @@ import { readFileSync } from "fs";
 const file = process.argv[1];
 let data;
 try { data = JSON.parse(readFileSync(file, "utf8")); }
-catch (e) { console.error("invalid JSON: " + e.message); process.exit(4); }
+catch (e) { console.error(file + ": invalid JSON: " + e.message); process.exit(4); }
 const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer"];
 // The reserved first element of branch_flow, standing for the per-task branch.
 // A colon cannot appear anywhere in a git ref name, so no branch can ever be
@@ -181,7 +202,7 @@ else {
       if (!KNOWN.includes(k)) errs.push(`${name}: unknown key ${k}`);
   }
 }
-if (errs.length) { console.error(errs.join("\n")); process.exit(4); }
+if (errs.length) { console.error(errs.map((m) => file + ": " + m).join("\n")); process.exit(4); }
 // Printed only when asked, because every other command runs this as a precheck
 // and an unasked-for line here would land in front of the JSON that command emits.
 if (warns.length && process.env.REPO_MAP_WARN === "1") console.log(warns.join("\n"));

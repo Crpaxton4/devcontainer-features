@@ -86,6 +86,57 @@ seed && node -e '
   fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
 out="$(map validate 2>&1)"; check "unknown-key-rejected" 4 $?
 
+# --- absent vs mangled (#906) ---------------------------------------------------
+# The two cases are told apart on whether the file exists, never on whether
+# parsing happens to fail. Absent = a machine bootstrap-state.sh has never run on:
+# seed it and answer the query. Present-but-bad = a real map that got damaged:
+# a hard exit 4 naming the file and the parser's own complaint, with the bytes on
+# disk left exactly as they were - reseeding one would take every project's base
+# branch with it.
+
+# ODOO_DEV_STATE_DIR is pinned on every call here so a bug in the path the
+# bootstrap targets can never reach the developer's real state dir.
+map_at() { local f="$1"; shift; REPO_MAP_FILE="$f" ODOO_DEV_STATE_DIR="$TMP/state" bash "$SCRIPTS/repo-map.sh" "$@"; }
+
+BOOT="$TMP/never-bootstrapped"
+mkdir -p "$BOOT"
+out="$(map_at "$BOOT/repo-map.json" list 2>/dev/null)"; check "absent-map-bootstraps" 0 $?
+check_contains "absent-map-query-answers" "{}" "$out"
+[ -f "$BOOT/repo-map.json" ]; check "absent-map-file-created" 0 $?
+# The bootstrap reports what it did on its own stdout; that must not land in
+# front of the JSON this command emits, or every caller parsing it breaks.
+out="$(map_at "$BOOT/repo-map.json" validate 2>/dev/null)"; check "bootstrapped-map-validates" 0 $?
+[ "$out" = '{"ok": true}' ]; check "bootstrap-report-off-stdout" 0 $?
+# And the seeded map is a working map, not merely a parseable one.
+out="$(map_at "$BOOT/repo-map.json" add Tau tau --no-repo-check --default-branch main)"
+check "bootstrapped-map-accepts-add" 0 $?
+check_contains "bootstrapped-map-add-lands" '"added": "Tau"' "$out"
+
+# Present but not JSON: exit 4, naming the file and quoting the parser verbatim.
+printf '%s\n' '{ "projects": ' > "$TMP/map.json"
+before="$(cat "$TMP/map.json")"
+parse_err="$(node -e 'try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); } catch (e) { console.log(e.message); }' "$TMP/map.json")"
+out="$(map validate 2>&1)"; check "mangled-map-exit-4" 4 $?
+check_contains "mangled-map-names-file" "$TMP/map.json" "$out"
+check_contains "mangled-map-quotes-parser" "$parse_err" "$out"
+[ "$(cat "$TMP/map.json")" = "$before" ]; check "mangled-map-not-reseeded" 0 $?
+# Every command runs the same precheck, so a plain read is refused too.
+out="$(map get Alpha 2>&1)"; check "mangled-map-get-exit-4" 4 $?
+check_contains "mangled-map-get-names-file" "$TMP/map.json" "$out"
+
+# Parses, but is not a map: the top-level key the script reads is missing. Same
+# exit code and the same "which file?" answer, because the repair is the same one.
+printf '%s\n' '{"_doc": "no projects key"}' > "$TMP/map.json"
+out="$(map list 2>&1)"; check "map-missing-projects-exit-4" 4 $?
+check_contains "map-missing-projects-msg" "$TMP/map.json: projects must be an object" "$out"
+
+# A valid map is untouched by any of that: no bootstrap, no rewrite.
+seed
+before="$(cat "$TMP/map.json")"
+out="$(map list)"; check "valid-map-still-lists" 0 $?
+check_contains "valid-map-lists-projects" '"Alpha"' "$out"
+[ "$(cat "$TMP/map.json")" = "$before" ]; check "valid-map-not-rewritten" 0 $?
+
 # --- get / list ---------------------------------------------------------------
 seed
 out="$(map get Alpha)"; check "get-known" 0 $?
