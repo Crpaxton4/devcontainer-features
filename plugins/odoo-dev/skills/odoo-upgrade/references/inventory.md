@@ -10,7 +10,7 @@ Standard deliverable = ONE xlsx, 4 sheets, no legend/README sheets (column meani
 | Functional Requirements | 1/requirement | [functional-requirements.md](./functional-requirements.md) |
 | Traceability | 1/module | derived — module → requirement IDs + counts + inventory verdicts |
 | Inventory Evidence | 1/module | this file — paths/greps behind every verdict |
-| Studio | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed |
+| Studio Inventory | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed; adds `populated` (stored Studio field holds data: `populated`/`empty`/`n/a`) and `view-inline-edit` rows (module view whose arch was edited in the database) |
 | Tickets | 1/ticket | `tickets.csv` — optional, see [support-tickets.md](./support-tickets.md) |
 
 Three phases, each a fan-out of read-only agents writing JSON, then one merge script:
@@ -64,7 +64,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | `convert-to-code` | Behaviour the customer depends on: `x_studio_*` fields, manual models, studio views/reports, unowned server actions and crons | Scaffold a real module, re-express each field as a real field, and write a migration script using upgrade-util `rename_field` to carry the existing column data across — see [migrations.md](./migrations.md). This is quotable work |
 | `keep-as-data` | Legitimately data; migrates with the database (automations on standard models, UI-created records) | Verify after upgrade, no port |
 | `purge` | Inactive/dead | Confirm, then drop |
-| `review` | Not classifiable from the schema alone — notably **inactive views**, which are either abandoned work or an earlier upgrade casualty | A human looks |
+| `review` | Not classifiable from the schema alone — notably **inactive views**, which are either abandoned work or an earlier upgrade casualty, and **`view-inline-edit`** rows, module-owned views whose arch was edited in the database and which the module's next update reverts | A human looks |
 
 `convert-to-code` rows belong in the estimate. A Studio field left as a manual field is re-created by hand after every upgrade and is invisible to code review forever.
 
