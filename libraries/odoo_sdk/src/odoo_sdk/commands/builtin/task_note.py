@@ -15,7 +15,11 @@ from odoo_sdk.services.odoo_helpers import post_chatter_note
 
 @builtin_command
 class TaskNoteCommand(Command):
-    """Post a note to a task's chatter and record it in the local session."""
+    """Post a note to a task's chatter and record it in the local session.
+
+    With ``interim=True`` (#901) only the local record happens: the chatter
+    post — and the follower notification it fires — is skipped entirely.
+    """
 
     _name = "task_note"
     _description = (
@@ -23,7 +27,14 @@ class TaskNoteCommand(Command):
         "local session log. The note is written in Markdown and rendered to "
         "HTML for the chatter, and is limited to "
         f"{MAX_CHATTER_BODY_CHARS} characters (longer notes are rejected, "
-        "not truncated), so keep it simple, direct, and plain. Files can be "
+        "not truncated), so keep it simple, direct, and plain. Chatter notes "
+        "notify every follower on the task, so post ONE consolidated note per "
+        "run, just before stopping. To capture a plan or a checkpoint mid-run, "
+        "pass 'interim': true — that appends to the local session log ONLY: "
+        "nothing is posted to the chatter, no attachments are accepted, no "
+        "dedupe key applies, and the character limit does not apply. Interim "
+        "notes still reach the run summary derived at stop_task, so detail "
+        "captured this way is not lost. Files can be "
         "attached to the posted message via 'attachments': a list of file "
         "specs, each either {'path': <local file path>} or "
         "{'content': <base64 bytes>, 'name': <filename>} with an optional "
@@ -46,6 +57,7 @@ class TaskNoteCommand(Command):
         note: str,
         attachments: Optional[list[dict[str, Any]]] = None,
         dedupe_key: Optional[str] = None,
+        interim: bool = False,
     ) -> dict[str, Any]:
         """Record a note locally, then post it (with optional attachments) to chatter.
 
@@ -55,7 +67,8 @@ class TaskNoteCommand(Command):
         chatter post happens.
 
         :param task_id: Odoo project.task record id.
-        :param note: Note text to post (max ``MAX_CHATTER_BODY_CHARS`` chars).
+        :param note: Note text to post (max ``MAX_CHATTER_BODY_CHARS`` chars;
+            unbounded when ``interim`` is set, since nothing is posted).
         :param attachments: Optional list of file specs (``path`` or
             ``content`` + ``name``, optional ``mimetype``) uploaded as
             ``ir.attachment`` records and linked to the posted message (#604).
@@ -66,11 +79,42 @@ class TaskNoteCommand(Command):
             for this task short-circuits BEFORE any side effect — no attachment
             upload, no local append, no chatter post — and returns the message
             id the first call produced with ``deduplicated: True``. Omitted:
-            behavior unchanged.
+            behavior unchanged. Ignored when ``interim`` is set: an interim
+            note has no chatter post to deduplicate.
+        :param interim: Capture the note in the local session log ONLY (#901).
+            No chatter post, so no follower notification, no attachments
+            (passing them raises :class:`ValueError`), no dedupe key, and no
+            length cap — the body is internal/local text like a derived run
+            summary. The appended note still feeds the run summary
+            ``stop_task`` derives, so an interim checkpoint survives the run
+            without spending a client-visible message on it. Default
+            ``False``: the chatter post is unchanged.
         :return: Confirmation with message id (and attachment ids when files
-            were attached).
+            were attached), or ``{"interim": True, ...}`` when ``interim`` is
+            set and nothing was posted.
         """
         assert_sdk_configured()
+        # Interim notes never reach Odoo, so they take the internal/local text
+        # policy (#626): no chatter cap, no attachments, no dedupe. The local
+        # append is the SAME one the posting path performs, which is what puts
+        # the checkpoint into the derived run summary.
+        if interim:
+            if attachments:
+                raise ValueError(
+                    "attachments are not supported with interim=True: an "
+                    "interim note is never posted to the chatter, so there is "
+                    "no message to attach files to. Post a non-interim note "
+                    "to deliver files."
+                )
+            db = self.state
+            require_active_run(db, task_id)
+            db.append_note(task_id, note)
+            return {
+                "interim": True,
+                "task_id": task_id,
+                "note_len": len(note),
+            }
+
         enforce_chatter_body_limit(note, "note")
         db = self.state
         run = require_active_run(db, task_id)

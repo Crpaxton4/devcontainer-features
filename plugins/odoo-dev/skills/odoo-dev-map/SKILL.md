@@ -328,7 +328,7 @@ a fixed `odoo-sdk cmd` dispatch (`task_note`, `search_activity_types` +
 `[ACTIVITY]` marker-in-a-note workaround — activity intent is a real
 `mail.activity` now.
 
-Odoo chatter has a hard 300-character cap — the SDK rejects a longer body rather
+Odoo chatter has a hard 500-character cap — the SDK rejects a longer body rather
 than truncating it, and `writeback.sh note` pre-checks the same cap.
 
 Never write a timesheet hour from any skill or agent — hours belong to the

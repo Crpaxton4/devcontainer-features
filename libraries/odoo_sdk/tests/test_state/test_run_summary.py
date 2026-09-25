@@ -131,11 +131,25 @@ class TestSummarizeRunActivity(unittest.TestCase):
 
     def test_no_length_cap_is_applied(self):
         # Length policy (#626): derived summaries are internal/local text; the
-        # 300-char cap applies only to chatter posts, never here.
+        # chatter cap applies only to chatter posts, never here.
         notes = [f"checkpoint {i} with plenty of narrative detail" for i in range(30)]
         summary = summarize_run_activity([], notes)
         self.assertGreater(len(summary), MAX_CHATTER_BODY_CHARS)
         self.assertIn("checkpoint 29", summary)
+
+    def test_interim_notes_read_the_same_as_posted_ones(self):
+        # #901: interim notes reach the run via the SAME ``append_note`` row a
+        # posted note writes, so the derivation sees one undifferentiated list
+        # of notes. That is the point — a checkpoint captured locally is still
+        # in the summary ``stop_task`` stores, so nothing is lost by not
+        # posting it. The summarizer is therefore deliberately unaware of the
+        # distinction, and this test pins that.
+        notes = ["plan: split the parser", "parser done", "shipped in #901"]
+        summary = summarize_run_activity([], notes)
+        self.assertEqual(
+            summary,
+            "notes: plan: split the parser | parser done | shipped in #901",
+        )
 
     def test_review_only_events_yield_no_action_tally(self):
         # Review/comment resync events are not agent activity; with nothing
