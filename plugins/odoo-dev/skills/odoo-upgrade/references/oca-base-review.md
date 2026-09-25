@@ -20,8 +20,9 @@ still in [inventory.md](./inventory.md):
 | `no` | `none`, vendor app | `replace` if the vendor ships a target release, else escalate |
 | module is OCA, `self:` present | — | `replace` after diffing the local copy for local patches |
 
-Cell formats for the two inventory columns (`native?` ≤ 50 chars, `OCA alternative`
-≤ 80 chars, ≤ 3 candidates) are in [inventory.md](./inventory.md) columns 14–15.
+Cell formats for the three inventory columns (`native?` = one of `yes`,
+`yes/partial`, `partial`, `no`; `native notes` ≤ 300 chars; `OCA alternative`
+≤ 80 chars, ≤ 3 candidates) are in [inventory.md](./inventory.md) columns 14–16.
 
 Phase-2 fan-out for a whole-codebase inventory — one read-only agent per ~10-12
 modules, each writing `oca_alt_g<N>.json` with keys `module`, `oca_alt`,
