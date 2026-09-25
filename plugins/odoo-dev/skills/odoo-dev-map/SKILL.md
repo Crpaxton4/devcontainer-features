@@ -29,7 +29,7 @@ One step per skill; no orchestrator. Route from here.
 | `odoo-dev:odoo-task-env` | Existing-work check → worktree + task branch → running stack | Starting or resuming a task |
 | `odoo-dev:odoo-test-run` | Unit tests **and** tours on a throwaway DB, fail-closed evidence | Before any PR; "does it pass?" |
 | `odoo-dev:odoo-code-review` | ORM anti-patterns, `sudo()`, N+1, access rights, upgrade safety | Reviewing an addon (pin the series) |
-| `odoo-dev:odoo-pr` | The PR standard: CodeRabbit gate, body, draft + self-assign, chatter note | Branch is finished and verified |
+| `odoo-dev:odoo-pr` | The PR standard: CodeRabbit review, body, draft + self-assign, chatter note | Branch is finished and verified |
 | `odoo-dev:odoo-release` | Manifest → draft release PR → note every included task | Promoting one hop up the chain |
 
 ### Consulting
@@ -69,7 +69,7 @@ asked, which is the failure this map exists to prevent.
 | `odoo-dev-scoper` | Unpriced and unscoped: discovery, prior-art verdict, estimate, design doc | `05-scope.json` |
 | `odoo-dev-builder` | One Odoo task to deliver: one worktree, code, tests, conventional commits | `10-env.json`, `20-build.json` |
 | `odoo-dev-tester` | Asking whether it passes: tests, tours, Odoo review lens. Cannot edit code | `30-test.json`, `35-review.json` |
-| `odoo-dev-pr` | Ready to leave the machine: CodeRabbit loop, draft PR, release, chatter notes | `40-coderabbit.json`, `45-waiver.json`, `50-pr.json`, `60-release.json` |
+| `odoo-dev-pr` | Ready to leave the machine: CodeRabbit loop, draft PR, release, chatter notes | `40-coderabbit.json`, `50-pr.json`, `60-release.json` |
 | `odoo-dev-upgrader` | Crossing a major series: porting lifecycle, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
 
 `odoo-dev-tester` is the single definition of "passes" for **both** delivery and
@@ -79,14 +79,14 @@ upgrade, so there is exactly one bar.
 
 Three steps, and none of them is optional.
 
-1. Resolve the three absolute paths described under **Handoff** below — the
-   artifacts directory, `artifact.sh` and `gate.sh`. Resolve them here, once, for
-   the whole chain.
+1. Resolve the two absolute paths described under **Handoff** below — the
+   artifacts directory and `artifact.sh`. Resolve them here, once, for the whole
+   chain.
 2. Emit one `Task` call per stage. `subagent_type` is the agent name carrying the
    plugin prefix; `prompt` is the **Spawn prompt template** filled in, with those
-   three paths written out in full as literals.
-3. Run `gate.sh` between two stages yourself, then dispatch the next one. Never ask
-   an agent whether its own work passed.
+   two paths written out in full as literals.
+3. Read what a stage wrote yourself before dispatching the next one. Never ask an
+   agent whether its own work passed.
 
 ```
 Task(
@@ -102,9 +102,9 @@ The five values `subagent_type` may take, spelled exactly:
 `odoo-dev:` prefix does not resolve, and a request routed to `general-purpose`
 instead loses every skill preload, tool restriction and hook these five carry.
 
-One dispatch at a time. The chain is sequential — the gate between two stages reads
-what the stage before it wrote — so two agents spawned in parallel on one task
-produce two artifact revisions and no verdict.
+One dispatch at a time. The chain is sequential — each stage reads what the stage
+before it wrote — so two agents spawned in parallel on one task produce two artifact
+revisions and no coherent account of either.
 
 **When not to dispatch.** A single lookup a skill answers on its own — which repo,
 which branch, which series, what the workflow order is — costs more as a spawn than
@@ -121,15 +121,15 @@ existing-work check and the artifact.
 
 **Task delivery**
 
-    odoo-dev-builder  →  odoo-dev-tester  →  gate.sh --for pr  →  odoo-dev-pr
+    odoo-dev-builder  →  odoo-dev-tester  →  odoo-dev-pr
 
 **Version upgrade**
 
-    odoo-dev-upgrader  →  odoo-dev-tester  →  gate.sh --for pr  →  odoo-dev-pr
+    odoo-dev-upgrader  →  odoo-dev-tester  →  odoo-dev-pr
 
 **Release**
 
-    odoo-dev-pr  →  gate.sh --for release  →  draft release PR + task notes
+    odoo-dev-pr  →  draft release PR + task notes
 
 DB upgrades are human-run (upgrade.odoo.com / odoo.sh); agents port code only.
 
@@ -139,8 +139,8 @@ Artifacts on disk, in a per-task directory, written only through `artifact.sh`.
 Chosen over in-prompt returns because artifacts survive compaction, a session
 boundary, a killed subagent, and a human taking over mid-chain.
 
-Resolve three absolute paths here, once, and type them out in full from then on.
-`artifact.sh` and `gate.sh` live in the plugin's own `scripts/` directory, which is
+Resolve two absolute paths here, once, and type them out in full from then on.
+`artifact.sh` lives in the plugin's own `scripts/` directory, which is
 two levels above the `Base directory for this skill:` line injected above this
 body: if that line reads `/home/dev/plugins/odoo-dev/skills/odoo-dev-map`, then the
 plugin root is `/home/dev/plugins/odoo-dev`. The artifacts directory is the one
@@ -166,56 +166,56 @@ mkdir -p /home/dev/.local/share/odoo-dev/tasks/4821
 prompt.** No agent resolves it itself; two agents resolving it independently is how
 half a chain ends up in the wrong directory.
 
-A prompt names the two script files outright rather than one scripts directory,
-because the plugin's `scripts/` and a skill's `scripts/` are different directories,
-and because the agent has to be able to type the whole path in a single Bash call.
+A prompt names the script file outright rather than one scripts directory, because
+the plugin's `scripts/` and a skill's `scripts/` are different directories, and
+because the agent has to be able to type the whole path in a single Bash call.
 
 `artifact.sh` never overwrites: a second put of a stage lands at `<stage>.2.json`.
-`get` and `gate.sh` read the latest revision, and `gate.sh` reports the revision
-count per stage — so a chain can recover from a red test, but never quietly.
+`get` reads the latest revision and `list` shows every one of them — so a chain can
+recover from a red test, but never quietly.
 
-## The gate
+## Workflow principles
 
-```bash
-/home/dev/plugins/odoo-dev/scripts/gate.sh /home/dev/.local/share/odoo-dev/tasks/4821 [--for pr|release]
-```
+There used to be a gate here: `gate.sh`, plus a `PreToolUse` hook that ran it at the
+tool boundary and denied `pr-open.sh`, `gh pr create` and `release-pr.sh` when it
+failed. Both are gone (#904). What replaces them is not a weaker gate; it is a
+different shape, and these four points are the whole of it.
 
-Pure arithmetic over the artifacts, never agent judgement. Exits 1 on any blocker
-so a shell `&&` cannot skip it. **Run it between stages. Never ask an agent
-whether its own work passed.**
+**There are no hard gates.** A stage runs when it is asked to. Evidence that is
+missing gets *reported* — named, in plain English, in the final message of whoever
+found it missing — and never enforced, never silently assumed, and never written by
+the agent that would have been judged by it. An artifact an agent produced about its
+own work is not evidence, so fabricating one to make the shape look right is strictly
+worse than leaving the gap visible.
 
-| Blocker | Fires when |
-|---|---|
-| `no_tests` | `30-test.json` missing, or `tests_run < 1`. Zero is never a pass, and an unparsed log also reports 0 — so a broken parser fails closed |
-| `tours_skipped` | `tours_declared > 0 && tours_run == 0`. Odoo skips tours without a browser and logs the skip as a pass |
-| `tests_failed` | `passed` is anything other than literally `true` |
-| `review_incomplete` | CodeRabbit artifact missing, `status != "complete"`, `findings_count` non-numeric or disagreeing with `findings[]`, or an open finding with no matching entry in `45-waiver.json`. One waiver entry is consumed per finding, so two findings in one file need two entries |
-| `worktree_drift` | `20-build.json` worktree or branch ≠ `10-env.json`. A fix that landed somewhere nobody verified |
-| `unconfirmed_flow` | Release only: `flow_confirmed != true`. Never self-confirm a chain whose last element is production |
-| `untagged_pr` | Release only, and only when `60-release.json` is missing entirely |
+**A step parks rather than improvises.** When a prerequisite is absent and no
+documented fallback covers it, the step stops, says what is missing and where it
+stopped, and ends there. Parking is a correct outcome and it is reported as one — not
+as a failure and not as a step that quietly did something else. What a step must
+never do is manufacture the prerequisite, route around the thing that refused it, or
+carry on past it hoping the gap closes later.
 
-One **warning** rides alongside the blockers, reported but driving neither `ok` nor
-the exit code: `untagged_pr` on a merged PR with no `[task NNN]` tag, or a task id
-inferred rather than tagged. It names the PR numbers and the inferred ids. A merged
-PR carrying no task is the ordinary case — some developers never put one on by
-policy — so it is reported for a human to handle and the release continues. What
-keeps a note off the wrong task is the release skill's own rule, not this check.
+**Agents decide technical matters alone.** Which approach, which field type, which
+base branch, whether a finding is worth fixing: an agent settles these and records
+what it settled. It does not put a menu of technical options to the operator. The
+questions that genuinely need a person are the ones only a person can answer — does
+this ship, does a client see it, has someone vouched for this chain into production —
+and every subagent here runs forked with no way to ask, so those are stops with the
+command handed over, never questions.
 
-The gate is no longer only a convention you are trusted to follow. A `PreToolUse`
-hook shipped with this plugin runs it at the tool boundary: any Bash call that
-invokes `pr-open.sh` or `gh pr create` is held while `gate.sh --for pr` runs
-against the task artifacts dir, and the call is denied with the blocker list if it
-fails. The artifacts dir is resolved from the branch of the worktree being pushed,
-so a branch with no task id, or a task id with no artifacts dir, is denied too —
-a PR that cannot be traced back to its evidence does not open. A call to
-`release-pr.sh` is held the same way against `gate.sh --for release` and the release
-directory built from its `<from>` and `<to>` arguments, because that script calls
-`gh pr create` inside itself and nothing else would ever see it. Run the gate between
-stages anyway; reaching the hook with a red gate means the work already went too
-far.
+**PR sub-steps are idempotent.** "Open the PR" is push, create, assign, note the
+task, schedule the activity — and those fail independently, which is how a branch
+ends up pushed with no pull request, or a pull request open with nothing on the task.
+Progress is recorded in `50-pr.json` as it happens, and a re-run reads it and resumes
+from the last recorded sub-step rather than repeating the ones already done.
+
+A `PreToolUse` hook still ships, and it is now about one thing only: `commit-hook.sh`
+denies a `git commit` that carries module changes without moving the module's
+`__manifest__.py` version. That rule needs no artifact — the evidence for it is the
+repository — which is exactly why it survived the gate it used to live beside.
 
 A second hook holds `odoo-dev-tester` to a read-only Bash allowlist, so "the tester
-cannot edit code" is now a property of the harness rather than a rule in a prompt.
+cannot edit code" is a property of the harness rather than a rule in a prompt.
 
 ## Commands — the user's shortcut, not yours
 
@@ -229,25 +229,17 @@ not a path you have.
 | `/odoo-dev:task <task-id>` | `odoo-dev-builder` |
 | `/odoo-dev:upgrade <task-id> <target series>` | `odoo-dev-upgrader` |
 | `/odoo-dev:test <task-id>` | `odoo-dev-tester` |
-| `/odoo-dev:pr <task-id>` | `odoo-dev-pr` — runs `gate.sh --for pr` first, and a red verdict reaches the agent as a full stop |
-| `/odoo-dev:pr release <from-branch> <to-branch>` | `odoo-dev-pr` — promotes the first branch into the second, and is deliberately not pre-gated |
+| `/odoo-dev:pr <task-id>` | `odoo-dev-pr` — opens the PR for that task from whatever evidence is on disk |
+| `/odoo-dev:pr release <from-branch> <to-branch>` | `odoo-dev-pr` — promotes the first branch into the second |
 
-A command resolves the artifacts directory, the artifact script and the gate script
-once, at the moment it is typed, and writes all three into the agent's prompt as
-absolute literals. Every form but the release one takes the numeric Odoo task id,
-because that is what the artifacts directory is keyed by; a promotion belongs to no
-single task, so it is keyed by its two branches instead, at
-`releases/<from>-to-<to>`. `artifact.sh` and `gate.sh` both take a directory path
-and neither cares how it was named.
+A command resolves the artifacts directory and the artifact script once, at the
+moment it is typed, and writes both into the agent's prompt as absolute literals.
+Every form but the release one takes the numeric Odoo task id, because that is what
+the artifacts directory is keyed by; a promotion belongs to no single task, so it is
+keyed by its two branches instead, at `releases/<from>-to-<to>`. `artifact.sh` takes
+a directory path and does not care how it was named.
 
-The release form is not pre-gated, and that is deliberate rather than an oversight.
-`gate.sh --for release` reads `00-context.json` with `flow_confirmed: true` and a
-`60-release.json` manifest, and neither exists before the agent has built the
-manifest, so pre-running it would fail every promotion before it started. The agent
-runs the release gate itself, after writing `60-release.json` and before anything
-leaves the machine.
-
-No command chains to another: you run the gate between stages and type the next one
+No command chains to another: you read what a stage wrote and type the next one
 yourself.
 
 Every one of these carries `disable-model-invocation: true`, so you cannot type one
@@ -287,7 +279,6 @@ Paths — resolved once per dispatch, here, and written out as absolute paths.
 Your Bash calls inherit no environment from me and keep no state between calls,
 so a variable name in this prompt would not be a path:
   ARTIFACT: /home/dev/plugins/odoo-dev/scripts/artifact.sh
-  GATE: /home/dev/plugins/odoo-dev/scripts/gate.sh
 
 Your job: <one paragraph: objective, boundaries, what NOT to touch>
 
@@ -342,7 +333,7 @@ this skill's base directory — and each is run by its absolute path:
 ```bash
 /home/dev/plugins/odoo-dev/scripts/bootstrap-state.sh     # idempotent; seeds the state dir
 /home/dev/plugins/odoo-dev/scripts/check-stray-skills.sh  # leftover pre-migration loose skill copies
-/home/dev/plugins/odoo-dev/scripts/validate.sh            # every CI gate, including the gate unit tests
+/home/dev/plugins/odoo-dev/scripts/validate.sh            # every CI gate, including the offline test suites
 ```
 
 Mutable state lives at `${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}` —
@@ -359,7 +350,10 @@ After a container rebuild:
 ## History
 
 `action-tasks` and its pipeline were retired on 2026-09-04. It failed because it
-was a rigid orchestration script. This plugin keeps the composable chain and adds
-back exactly one piece of determinism: `gate.sh`, which decides whether evidence
-is good enough to ship. Never an orchestrator. Snapshot in
-`backups/pipeline-retire-*/`.
+was a rigid orchestration script. This plugin keeps the composable chain and no
+orchestrator. Snapshot in `backups/pipeline-retire-*/`.
+
+`gate.sh` and its `PreToolUse` enforcement were removed on 2026-09-25 (#904, #892,
+#895, #899): the one piece of determinism the chain had bought rigidity back with it,
+and a finished branch could not open a pull request without artifacts only one entry
+shape produces. Artifacts stayed; the refusal went. See **Workflow principles**.

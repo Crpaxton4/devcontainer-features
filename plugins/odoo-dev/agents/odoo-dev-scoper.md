@@ -10,7 +10,7 @@ description: >
   triggers include "quote this", "estimate this change request", "scope the
   integration", "do we need to build this?", "run discovery for the client", and
   "write the design doc". Spawn it with the artifacts directory, the artifact
-  script and the gate script written out as absolute paths, plus the verbatim
+  script written out as absolute paths, plus the verbatim
   request whose first token is the Odoo task id; it returns an artifact path and at
   most five lines of plain English. It produces the scope artifact the builder
   works from; it never touches a repo, and it is the wrong agent for cutting a

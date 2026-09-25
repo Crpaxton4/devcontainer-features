@@ -274,7 +274,7 @@ strays="$(bash "$HERE/check-stray-skills.sh" 2>/dev/null)"
 [ -z "$strays" ] && ok "none loaded one level deep" \
   || { bad "leftover pre-migration loose skill copies (safe to delete, see check-stray-skills.sh)"; echo "$strays" | sed 's/^/       /'; }
 
-# --- 11. script regression + gate unit tests -------------------------------------
+# --- 11. script regression unit tests --------------------------------------------
 gate "offline test suites"
 run_suite() {
   local label="$1" script="$2"
@@ -283,7 +283,7 @@ run_suite() {
     bad "$label"; echo "$out" | tail -15 | sed 's/^/       /'
   fi
 }
-run_suite "gate.test.sh"           "$HERE/tests/gate.test.sh"
+run_suite "state-dir.test.sh"      "$HERE/tests/state-dir.test.sh"
 run_suite "setup.test.sh"          "$HERE/tests/setup.test.sh"
 run_suite "hooks.test.sh"          "$HERE/tests/hooks.test.sh"
 run_suite "module-classify.test.sh" "$HERE/tests/module-classify.test.sh"
@@ -403,17 +403,18 @@ while IFS= read -r f; do
 done < <(find "$ROOT" -name '*.sh' -type f | sort)
 [ "$synbad" -eq 0 ] && ok "every .sh parses"
 
-# --- 14. no bare artifact.sh / gate.sh invocation ---------------------------------
+# --- 14. no bare artifact.sh invocation -------------------------------------------
 # Every artifact write in the chain was once `command not found`: the bodies said
 # `artifact.sh put ...` and nothing puts scripts/ on PATH. An invocation is a line
 # whose FIRST non-whitespace token is the bare script name. A backticked prose
 # mention (`artifact.sh` never overwrites) is a reference, not an invocation, and
-# is deliberately left alone.
-gate "no bare artifact.sh / gate.sh invocation"
-bare="$(grep -nE '^[[:space:]]*(artifact|gate)\.sh([[:space:]]|$)' \
+# is deliberately left alone. `artifact.sh` is the only handoff script left to get
+# this wrong since the gate was removed in #904.
+gate "no bare artifact.sh invocation"
+bare="$(grep -nE '^[[:space:]]*artifact\.sh([[:space:]]|$)' \
         "$AGENTS"/*.md "$SKILLS/odoo-dev-map/SKILL.md" 2>/dev/null || true)"
 if [ -z "$bare" ]; then
-  ok "agents + router invoke artifact.sh and gate.sh only through a resolved path"
+  ok "agents + router invoke artifact.sh only through a resolved path"
 else
   bad "bare script invocation — nothing puts scripts/ on PATH, so this is command not found"
   echo "$bare" | sed "s|^$ROOT/||" | sed 's/^/       /'
@@ -434,7 +435,7 @@ const agentsDir = process.argv[1];
 // The handoff paths, which are the ones that actually get run. A body may name them
 // in prose without the sigil ("unless the machine sets ODOO_DEV_STATE_DIR"); what it
 // may not do is write one as something a shell has to expand.
-const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|GATE|CLAUDE_PLUGIN_ROOT|ODOO_DEV_STATE_DIR)\b/;
+const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|CLAUDE_PLUGIN_ROOT|ODOO_DEV_STATE_DIR)\b/;
 
 const teach = () => {
   console.log("       A subagent Bash call inherits no environment from the dispatcher and keeps");
@@ -545,8 +546,8 @@ const fieldsOf = stage => {
 const arraysOf = stage => Object.entries(SCHEMA[stage]?.types ?? {})
   .filter(([, t]) => t === "array").map(([k]) => k);
 
-// Vocabulary a script emits but no stage requires — worktree_drift is a gate.sh
-// block reason, log_excerpt is a run-tests.sh output field. A body may name these.
+// Vocabulary a script emits but no stage requires — log_excerpt is a run-tests.sh
+// output field, for instance. A body may name these.
 // The phantom this gate exists to catch (reasons[]) was in no schema AND emitted by
 // no script, so widening to script keys does not let it through.
 const scriptKeys = new Set();

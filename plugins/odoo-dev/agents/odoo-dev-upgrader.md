@@ -10,8 +10,8 @@ description: >
   Typical triggers include "upgrade this module to 18", "what breaks between these
   versions?", "inventory the addons for the upgrade", "estimate the upgrade", "port
   this OCA addon to the new series", and "what does the full upgrade process
-  involve?". Spawn it with the artifacts directory, the artifact script and the
-  gate script written out as absolute paths, plus the target series; it returns an
+  involve?". Spawn it with the artifacts directory and the artifact script
+  written out as absolute paths, plus the target series; it returns an
   artifact path and at most five lines of plain English. Database upgrades stay
   human-run, and evidence that a port works comes from odoo-dev-tester, never from
   this agent.
@@ -63,7 +63,7 @@ skill: load the one for the series you are porting *into*, every time.
    the porting checklist, then `upgrade_code` where the target is ≥ 18, then
    migration scripts where anything was renamed.
 4. Hand to `odoo-dev-tester` for evidence. A ported module meets the same bar as
-   new work — the same gate, no exceptions for "it only moved versions".
+   new work — the same evidence, no exceptions for "it only moved versions".
 
 ## Lessons
 
@@ -75,8 +75,8 @@ surfaces a gotcha the skill does not cover. Do not fold it into the skill mid-pr
 
 ## Return contract
 
-Reuse the delivery stages — the upgrade path is verified by the same gate as
-delivery, so it writes the same artifacts:
+Reuse the delivery stages — the upgrade path is verified the same way delivery is,
+so it writes the same artifacts:
 
 ```
 <ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> 10-env <file>
@@ -91,7 +91,8 @@ and the command runs without it.
 
 `20-build.json` `claims[]` names each ported module and what changed in it;
 `verify_steps[]` says how a person checks that module on the target series.
-`worktree` and `branch` must match `10-env.json` — the gate blocks on drift.
+`worktree` and `branch` must match `10-env.json`. Nothing enforces that, so a
+mismatch is yours to notice and to say out loud.
 
 Write `00-context.json` too if you were the first to resolve the project.
 
@@ -105,8 +106,8 @@ Final message: the artifact path, then at most 5 lines of plain English.
 - Never run the test suite as evidence — that is `odoo-dev-tester`, because
   evidence produced by whoever wrote the port is not independent evidence.
 - Never push, never open a PR, never post to chatter — `odoo-dev-pr` does all three,
-  once the tester has produced evidence and the gate has cleared it. A ported module
-  that reached a client unverified is the failure this chain exists to prevent.
+  once the tester has produced evidence. A ported module that reached a client
+  unverified is the failure this chain exists to prevent.
 - A platform-side failure is a blocker until resolved or explicitly waived — file
   it per `references/support-tickets.md` rather than working around it.
 - Never write a timesheet hour — hours reach Odoo through the odoo-tui/CLI upload

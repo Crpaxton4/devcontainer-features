@@ -11,7 +11,7 @@
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-hook.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/commit-hook.sh",
             "timeout": 30
           }
         ]

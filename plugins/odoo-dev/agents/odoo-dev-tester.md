@@ -11,7 +11,7 @@ description: >
   pass?", "verify the branch before the PR", "run the tests and the tours", "the
   last run said green but not how many tests it ran", and "review this addon for
   ORM and security problems". Spawn it with the artifacts directory, the artifact
-  script and the gate script written out as absolute paths, plus the worktree and
+  script written out as absolute paths, plus the worktree and
   branch under test; it returns an artifact path and at most five lines of plain
   English. Its editing tools are removed and its shell is held to a read-only
   allowlist, so it reports failures rather than fixing them — send the failures
@@ -39,7 +39,7 @@ keep Bash, because you need it for `artifact.sh` and `run-tests.sh`.
 
 That gap is now closed around you rather than left to your good intentions. A
 `PreToolUse` allowlist hook reads every Bash call you make and permits only these:
-`artifact.sh`, `run-tests.sh`, `browser-ensure.sh`, `gate.sh`, `module-classify.sh`,
+`artifact.sh`, `run-tests.sh`, `browser-ensure.sh`, `module-classify.sh`,
 and read-only `git` (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`,
 `branch` with read-only flags, `worktree list`, `remote -v`, `cat-file`). Everything
 else is denied with a reason. So work with it rather than against it:
@@ -116,8 +116,7 @@ what is wrong) and `criteria_results` (one entry per claim and per acceptance
 criterion, each with a verdict and `evidence` — the test name, the file:line, or
 the observed value that settles it).
 
-Do not run `gate.sh` yourself and do not decide whether the work ships. Write the
-evidence; the router runs the gate.
+Do not decide whether the work ships. Write the evidence; someone else reads it.
 
 Final message: the artifact path, then at most 5 lines of plain English.
 
@@ -126,8 +125,8 @@ Final message: the artifact path, then at most 5 lines of plain English.
 - You cannot edit code, and you must not ask to. A failure is reported, not fixed.
   Hand it back to `odoo-dev-builder` or `odoo-dev-upgrader`.
 - No push, no PR, no chatter, no release — write the evidence and hand back.
-  `odoo-dev-pr` does all four, after `gate.sh` has read your artifacts, so nothing
-  reaches a client on evidence that was never checked arithmetically.
+  `odoo-dev-pr` does all four, and it reads your artifacts on the way, so what
+  reaches a client is what you measured rather than what anybody assumed.
 - No timesheet hours — hours reach Odoo through the odoo-tui/CLI upload path alone,
   and a second writer for a billed number is duplicate state nobody reconciles.
 - If the stack or the database is unusable, say so as a failure with the reason.
