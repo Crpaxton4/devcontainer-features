@@ -212,6 +212,15 @@ check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-co
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# #884: the odoo-dev plugin resolves its state dir as
+# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}. $HOME is container-local
+# image storage, so without this mount every task artifact, repo-map.json and
+# release record is discarded on the next rebuild. containerEnv is the single
+# place the variable is set, so the plugin resolves the mount instead.
+check "odoo-dev state dir exists" bash -c "test -d /usr/local/share/odoo-dev"
+check "ODOO_DEV_STATE_DIR points at the bind mount (#884)" bash -c \
+  "[ \"\$ODOO_DEV_STATE_DIR\" = '/usr/local/share/odoo-dev' ]"
+
 # #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
 # mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
 # lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
@@ -1760,5 +1769,7 @@ check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
 check "shell-history dir is 0777 (any uid can create/append bash_history, #323)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '777' ]"
+check "odoo-dev state dir is chmod 0700 (client task artifacts, #884)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-dev)\" = '700' ]"
 
 reportResults
