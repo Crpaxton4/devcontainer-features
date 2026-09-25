@@ -1,11 +1,11 @@
 ---
 name: odoo-pr
-description: "Turn a tested Odoo task branch into a client-visible pull request: local CodeRabbit review, standard body, self-assigned draft on the right base, review loop, link back on the task. This skill IS the PR standard; do not call gh pr create directly."
+description: "Turn a tested Odoo task branch into a client-visible pull request: local CodeRabbit review, standard body, self-assigned draft on the right base, link back on the task. This skill IS the PR standard; do not call gh pr create directly."
 user-invocable: false
 ---
 # Odoo PR
 
-Finished branch becomes PR that reviewer, client, and release manifest all read. Seven steps, in order. Nothing here blocks on an artifact: missing evidence is reported, never fabricated and never routed around.
+Finished branch becomes PR that reviewer, client, and release manifest all read. Six steps, in order. Nothing here blocks on an artifact: missing evidence is reported, never fabricated and never routed around.
 
 Scripts. This skill's own scripts (`PR_SCRIPTS`) live at `<base directory>/scripts`,
 where `<base directory>` is the absolute path on the `Base directory for this skill:`
@@ -43,7 +43,7 @@ a reason to open a second.
 
 ## When to use
 
-An Odoo task branch is finished and verified and the work has to become visible to the client; someone asks to open, update, or raise a pull request for a task; a PR title or body has to be written; CodeRabbit comments are waiting to be worked; or someone asks what the PR standard is.
+An Odoo task branch is finished and verified and the work has to become visible to the client; someone asks to open, update, or raise a pull request for a task; a PR title or body has to be written; or someone asks what the PR standard is.
 
 ## 1. Preconditions
 
@@ -133,24 +133,17 @@ your own reading of it.
 
 This step is more than one action — push, create, assign, note the task, schedule
 the activity — and they fail independently. Record `50-pr.json` as soon as
-`pr-open.sh` returns, before the writebacks in step 7, so that a re-run resumes from
+`pr-open.sh` returns, before the writebacks in step 6, so that a re-run resumes from
 what is already done instead of opening a second pull request or posting a second
 note. `pr-open.sh` is itself rerun-safe; the writebacks are made rerun-safe by
 `--dedupe-key`.
 
-## 6. Post-open review loop
+Then stop — nothing polls the pull request after it opens. CodeRabbit does not
+review drafts, so whatever it posts arrives only once a human lifts the draft, and
+that human review is where those comments get read; the review of record before the
+push is the local one in step 2.
 
-```bash
-<base directory>/scripts/coderabbit-poll.sh <owner/repo> <pr_number> <since_iso8601>
-```
-
-`{"found","timed_out","comments":[{"id","path","line","body"}]}`
-
-**Maximum two rounds.** Address findings that are right, push, poll again. After two rounds — or when finding needs decision that is not yours — hand off to human with short summary of what unresolved and why. Looping bot against itself past that point makes churn, not quality.
-
-Non-critical improvement ideas from review become follow-up tasks, not blocking comments.
-
-## 7. Write back to the Odoo task
+## 6. Write back to the Odoo task
 
 Writebacks are **script-driven and deterministic** — reads may go through MCP tools, but a write to the task never rides on probing what tools happen to be available. Both writebacks below go through `writeback.sh`, which wraps `odoo-sdk cmd task_note` and the activity commands:
 
