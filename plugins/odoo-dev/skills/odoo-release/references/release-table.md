@@ -83,7 +83,7 @@ Empty sections are omitted, because presence is itself signal: a `No task id` he
 
 ## Chatter note — one per confirmed task
 
-The SDK enforces a **300-character hard cap** on a chatter body and **rejects** anything longer; it does not truncate (`writeback.sh` pre-checks the same cap for fast feedback). So the note carries the link and the table stays in the PR:
+The SDK enforces a **500-character hard cap** on a chatter body and **rejects** anything longer; it does not truncate (`writeback.sh` pre-checks the same cap for fast feedback). So the note carries the link and the table stays in the PR:
 
 ```
 Queued in draft release <from>-><to>: <release_pr_url>
