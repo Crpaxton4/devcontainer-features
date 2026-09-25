@@ -16,6 +16,7 @@ from odoo_sdk.commands.builtin import (
     builtin_command,
     register_builtins,
 )
+from odoo_sdk.state import ModelIdsNotWritableError
 
 TASK_FIELDS = ["name", "project_id", "stage_id", "user_ids", "date_deadline"]
 
@@ -44,17 +45,84 @@ class TestGetEmployeeIdCommand(unittest.TestCase):
 
 
 class TestGetModelsCommand(unittest.TestCase):
-    def test_reads_model_names(self):
+    """The ir.model read, and the opt-in [model_ids] write behind it (#890)."""
+
+    def _client(self, rows=None):
         client = MagicMock()
         models = client.__getitem__.return_value
-        models.search.return_value.read.return_value = [{"model": "res.partner"}]
+        models.search.return_value.read.return_value = rows or [
+            {"id": 71, "model": "project.task", "name": "Task"},
+            {"id": 12, "model": "res.partner", "name": "Contact"},
+        ]
+        return client, models
+
+    def test_reads_model_names(self):
+        client, models = self._client(rows=[{"id": 12, "model": "res.partner"}])
 
         result = GetModelsCommand(client).execute()
 
         client.__getitem__.assert_called_once_with("ir.model")
         models.search.assert_called_once_with([])
         models.search.return_value.read.assert_called_once_with(["model", "name"])
-        self.assertEqual(result, [{"model": "res.partner"}])
+        self.assertEqual(result["models"], [{"id": 12, "model": "res.partner"}])
+
+    def test_writes_nothing_when_persist_is_omitted(self):
+        # Reading ir.model is gated but harmless; writing the config file is
+        # opt-in, so the default call stays a pure read.
+        client, _ = self._client()
+        config = MagicMock()
+
+        result = GetModelsCommand(client, config=config).execute()
+
+        config.set_model_id.assert_not_called()
+        self.assertEqual(result["persisted"], {})
+        self.assertNotIn("warning", result)
+
+    def test_persist_writes_the_named_id_through_the_config(self):
+        client, _ = self._client()
+        config = MagicMock()
+
+        result = GetModelsCommand(client, config=config).execute(
+            persist=["project.task"]
+        )
+
+        config.set_model_id.assert_called_once_with("project.task", 71)
+        self.assertEqual(result["persisted"], {"project.task": 71})
+        self.assertNotIn("warning", result)
+
+    def test_an_unwritable_config_warns_instead_of_failing_the_read(self):
+        client, _ = self._client()
+        config = MagicMock()
+        config.set_model_id.side_effect = ModelIdsNotWritableError("read-only")
+
+        result = GetModelsCommand(client, config=config).execute(
+            persist=["project.task"]
+        )
+
+        # The read the caller asked for must never be lost to a filesystem
+        # permission — the hand-edit path still works, and the warning says so.
+        self.assertEqual(len(result["models"]), 2)
+        self.assertEqual(result["persisted"], {})
+        self.assertIn("read-only", result["warning"])
+
+    def test_a_model_absent_from_ir_model_warns_by_name(self):
+        client, _ = self._client()
+        config = MagicMock()
+
+        result = GetModelsCommand(client, config=config).execute(
+            persist=["not.a.model"]
+        )
+
+        config.set_model_id.assert_not_called()
+        self.assertEqual(result["persisted"], {})
+        self.assertIn("not.a.model", result["warning"])
+
+    def test_description_names_the_persist_argument_and_the_section(self):
+        # LLM-facing: the description is how a caller learns the gap can be
+        # closed by a command rather than by editing a file (#890).
+        description = GetModelsCommand(MagicMock()).description
+        self.assertIn("persist", description)
+        self.assertIn("[model_ids]", description)
 
 
 class TestGetTasksCommand(unittest.TestCase):

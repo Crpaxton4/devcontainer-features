@@ -5,7 +5,11 @@ Both :class:`LocalStateClient` (SQLite-backed task-session FSM) and
 injected into commands alongside :class:`~odoo_sdk.client.client.OdooClient`.
 """
 
-from .config import LocalConfig, OdooConnectionSettings
+from .config import (
+    LocalConfig,
+    ModelIdsNotWritableError,
+    OdooConnectionSettings,
+)
 from .db import (
     ATTACHED_TASK_IDS_PAYLOAD_KEY,
     LocalStateClient,
@@ -31,6 +35,7 @@ __all__ = [
     "ATTACHED_TASK_IDS_PAYLOAD_KEY",
     "LocalStateClient",
     "LocalConfig",
+    "ModelIdsNotWritableError",
     "OdooConnectionSettings",
     "TaskState",
     "TaskRun",

@@ -261,7 +261,39 @@ hasnt "in container: docker is not a failure"           "$miss" docker
 hasnt "in container: devcontainer-cli is not a failure" "$miss" devcontainer-cli
 hasnt "in container: the repos tree is not a failure"   "$miss" repos
 
-# --- 7. usage --------------------------------------------------------------------------
+# --- 7. the [model_ids] entry schedule_activity needs (#890) ----------------------------
+# The default activity call is schedule_activity with only res_id, which reads the
+# project.task ir.model id out of the SDK config. Without the entry it fails at the
+# END of a task. Both halves are asserted: named when absent, silent when present.
+T="$(newtmp)"; BIN="$T/bin"
+mkbin "$BIN" node git python3
+stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
+out="$(env -u ODOO_SDK_CONFIG -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" \
+       ODOO_DEV_STATE_DIR="$T/state" CLAUDE_CONFIG_DIR="$T/cfg" \
+       timeout 60 bash "$SETUP" --check 2>/dev/null)"
+json="$(printf '%s' "$out" | tail -1)"
+assert_shape "no sdk config" "$json"
+has     "no sdk config: sdk-model-ids named in missing[]" "$(jarr "$json" missing)" sdk-model-ids
+has_sub "no sdk config: manual_steps carries the get_models command" \
+        "$(jarr "$json" manual_steps)" "odoo-sdk cmd get_models --args"
+
+mkdir -p "$T/sdk"
+printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n' \
+  > "$T/sdk/config.toml"
+out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+       CLAUDE_CONFIG_DIR="$T/cfg" ODOO_SDK_CONFIG="$T/sdk" \
+       timeout 60 bash "$SETUP" --check 2>/dev/null)"
+json="$(printf '%s' "$out" | tail -1)"
+assert_shape "sdk config with the entry" "$json"
+hasnt "sdk config with the entry: sdk-model-ids is not a failure" \
+      "$(jarr "$json" missing)" sdk-model-ids
+if [ "$(cat "$T/sdk/config.toml")" = "$(printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n')" ]; then
+  ok "sdk config with the entry: the config file is read, never written"
+else
+  bad "sdk config with the entry: setup.sh modified $T/sdk/config.toml"
+fi
+
+# --- 8. usage --------------------------------------------------------------------------
 bash "$SETUP" --nonsense >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && ok "an unknown flag exits 2" || bad "an unknown flag exited $rc, want 2"
 
