@@ -5,12 +5,12 @@ name: "CI - odoo-dev plugin"
 # Odoo, no repos tree — so no job needs secrets or anything beyond the read-only
 # default token; the only network calls install tooling.
 #
-# The SDK sources are in the paths filter because the plugin's contract with
-# the SDK is checked here twice over: five of the plugin's skills are committed
-# generated copies of libraries/odoo_sdk/src/odoo_sdk/skills/ (the skill-parity
-# job fails when an edit there is not regenerated into plugins/odoo-dev/skills/,
-# or vice versa), and every tool name the plugin references must be on the
-# surface `odoo-sdk cmd --list --json` serves (the tool-contract job).
+# The SDK sources are in the paths filter because of the plugin's one remaining
+# contract with the SDK: every tool name the plugin references must be on the
+# surface `odoo-sdk cmd --list --json` serves (the tool-contract job). The
+# skill-parity job that used to sit beside it is gone with #784 — the plugin's
+# skills/ tree is now the single source for those bodies, so there is no second
+# copy to diff it against.
 on:
   push:
     branches:
@@ -153,30 +153,6 @@ jobs:
         run: |
           python -m pip install --quiet ./libraries/odoo_sdk
           bash plugins/odoo-dev/scripts/check-tool-contract.sh
-
-  # Job 5 — skill parity. Five skills (discovery-notes, fibonacci-estimate,
-  # odoo-code-review, odoo-design-doc, odoo-quote) are committed generated
-  # copies of the packaged sources in libraries/odoo_sdk/src/odoo_sdk/skills/.
-  # The script regenerates the packaged set into $RUNNER_TEMP via
-  # `odoo-sdk sync-skills --dest` and diff -r's each against its committed
-  # copy: a hand edit to a generated copy, or an SDK edit that was not synced,
-  # fails here — with the regeneration command in the message — instead of
-  # silently forking the skill body.
-  skill-parity:
-    name: "skill parity (plugins/odoo-dev/scripts/check-skill-parity.sh)"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-
-      - name: "Generated skill copies match the SDK sources"
-        run: |
-          python -m pip install --quiet ./libraries/odoo_sdk
-          bash plugins/odoo-dev/scripts/check-skill-parity.sh
 
   # Static shell lint over every shell script the plugin ships. Pinned
   # shellcheck, downloaded deterministically from the official koalaman release

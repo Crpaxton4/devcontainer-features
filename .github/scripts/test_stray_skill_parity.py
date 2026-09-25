@@ -17,10 +17,11 @@ only the deleter knows about is `rm -rf`'d by a script that never mentions it,
 and a name only the reporter knows about keeps the gate red forever because
 nothing removes it. This module is the thing that now notices.
 
-It also pins the *shadowed* five to :data:`odoo_sdk.skills.PACKAGED_SKILL_NAMES`
-- the packaged sources the plugin copies are generated from, and already the
-source of truth for ``check-skill-parity.sh`` - so "which skills have a plugin
-twin" is answered in one place rather than three.
+It also pins the *shadowed* five to the plugin's own skill listing,
+``plugins/odoo-dev/skills/`` - since #784 the single source for those bodies
+(the SDK's packaged copy and its ``check-skill-parity.sh`` gate are gone) - so
+"which skills have a plugin twin" is answered by what the plugin actually
+ships rather than by a second list that has to be kept in step with it.
 
 Finally it guards the other direction: the five personal skills that sit beside
 the strays on a real machine (``ingest``, ``lint``, ``llm-wiki-workspace``,
@@ -32,7 +33,6 @@ import, no third-party parser - the lists are read out of the shell and Python
 sources as text.
 """
 
-import ast
 import re
 import unittest
 from pathlib import Path
@@ -49,18 +49,7 @@ INSTALL_SH = (
 CHECK_STRAY_SH = (
     REPO_ROOT / "plugins" / "odoo-dev" / "scripts" / "check-stray-skills.sh"
 )
-CHECK_PARITY_SH = (
-    REPO_ROOT / "plugins" / "odoo-dev" / "scripts" / "check-skill-parity.sh"
-)
-SDK_SKILLS_INIT = (
-    REPO_ROOT
-    / "libraries"
-    / "odoo_sdk"
-    / "src"
-    / "odoo_sdk"
-    / "skills"
-    / "__init__.py"
-)
+PLUGIN_SKILLS_DIR = REPO_ROOT / "plugins" / "odoo-dev" / "skills"
 
 # Personal skills observed alongside the strays on the machine that reported
 # #778. The feature never seeded them and no plugin ships them, so they are out
@@ -88,18 +77,18 @@ def _sh_array(source: str, var: str) -> list[str]:
     return match.group(1).split()
 
 
-def _py_tuple(source: str, var: str) -> list[str]:
-    """Return the string entries of a module-level tuple literal."""
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        target = None
-        if isinstance(node, ast.AnnAssign):
-            target = node.target
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-        if isinstance(target, ast.Name) and target.id == var and node.value:
-            return list(ast.literal_eval(node.value))
-    raise AssertionError(f"no {var} = (...) assignment found")
+def _plugin_skill_names() -> frozenset[str]:
+    """Return the skill directory names the odoo-dev plugin actually ships.
+
+    Read off disk, not from a committed list: since #784 the plugin tree is
+    the single source for these bodies, so "does the plugin ship it" has
+    exactly one answer and nothing to drift against.
+    """
+    return frozenset(
+        entry.name
+        for entry in PLUGIN_SKILLS_DIR.iterdir()
+        if (entry / "SKILL.md").is_file()
+    )
 
 
 class TestStraySkillParity(unittest.TestCase):
@@ -109,15 +98,12 @@ class TestStraySkillParity(unittest.TestCase):
     def setUpClass(cls):
         cls.install = INSTALL_SH.read_text(encoding="utf-8")
         cls.check_stray = CHECK_STRAY_SH.read_text(encoding="utf-8")
-        cls.check_parity = CHECK_PARITY_SH.read_text(encoding="utf-8")
-        cls.sdk_init = SDK_SKILLS_INIT.read_text(encoding="utf-8")
+        cls.plugin_skills = _plugin_skill_names()
 
         cls.install_shadowed = _sh_word_list(cls.install, "stale_shadowed")
         cls.install_retired = _sh_word_list(cls.install, "stale_retired")
         cls.report_shadowed = _sh_array(cls.check_stray, "PLUGIN_SHADOWED")
         cls.report_retired = _sh_array(cls.check_stray, "RETIRED_NO_TWIN")
-        cls.packaged = _py_tuple(cls.sdk_init, "PACKAGED_SKILL_NAMES")
-        cls.parity_packaged = _sh_array(cls.check_parity, "PACKAGED")
 
     def test_deleted_set_matches_reported_set(self):
         """install.sh deletes exactly what check-stray-skills.sh reports.
@@ -144,42 +130,29 @@ class TestStraySkillParity(unittest.TestCase):
             sorted(self.install_retired), sorted(self.report_retired)
         )
 
-    def test_shadowed_names_are_the_packaged_skills(self):
-        """The shadowed group is PACKAGED_SKILL_NAMES, not a third copy of it.
+    def test_shadowed_names_are_shipped_by_the_plugin(self):
+        """The shadowed group is anchored on the plugin's skill listing.
 
-        A loose copy "shadows" something only while the plugin still ships that
-        skill, and what the plugin ships is generated from the SDK's packaged
-        sources. Retiring or adding a packaged skill therefore has to move this
-        group with it.
+        A loose copy "shadows" something only while the plugin still ships
+        that skill. Since #784 the plugin tree is the single source for these
+        bodies, so the listing on disk - not a committed second copy of it -
+        is what this group has to agree with.
         """
-        self.assertEqual(sorted(self.report_shadowed), sorted(self.packaged))
-        self.assertEqual(sorted(self.parity_packaged), sorted(self.packaged))
-
-    def test_retired_names_have_no_plugin_twin(self):
-        """A retired name with a packaged twin would be in the wrong group."""
-        for name in self.report_retired:
-            self.assertNotIn(name, self.packaged)
-            self.assertFalse(
-                (
-                    REPO_ROOT / "plugins" / "odoo-dev" / "skills" / name
-                ).exists(),
-                f"{name} is listed as retired but the plugin still ships it",
-            )
-
-    def test_shadowed_names_are_actually_shipped_by_the_plugin(self):
-        """The other half of the same claim, checked on disk."""
         for name in self.report_shadowed:
-            self.assertTrue(
-                (
-                    REPO_ROOT
-                    / "plugins"
-                    / "odoo-dev"
-                    / "skills"
-                    / name
-                    / "SKILL.md"
-                ).is_file(),
+            self.assertIn(
+                name,
+                self.plugin_skills,
                 f"{name} is listed as plugin-shadowed but the plugin does not "
                 f"ship it",
+            )
+
+    def test_retired_names_have_no_plugin_twin(self):
+        """A retired name the plugin still ships would be in the wrong group."""
+        for name in self.report_retired:
+            self.assertNotIn(
+                name,
+                self.plugin_skills,
+                f"{name} is listed as retired but the plugin still ships it",
             )
 
     def test_user_owned_skills_are_on_neither_list(self):
