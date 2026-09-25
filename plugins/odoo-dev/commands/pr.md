@@ -1,8 +1,8 @@
 ---
-description: Open a client-visible draft pull request in a forked odoo-dev-pr — either one finished, gate-cleared Odoo task branch, or a release promoting merged work one hop up the environment chain.
+description: Open a client-visible draft pull request in a forked odoo-dev-pr — either one finished Odoo task branch, or a release promoting merged work one hop up the environment chain.
 argument-hint: <task-id> | release <from-branch> <to-branch>
 arguments: [task, from_branch, to_branch]
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*)
 disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-pr
@@ -12,9 +12,8 @@ background: false
 TASK ROUTE ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NOT THE TASK ROUTE — the first argument is not an Odoo task id with a directory already on disk' -- "$task"`
 RELEASE ROUTE ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh release --create --else 'NOT THE RELEASE ROUTE — the arguments are not the word release followed by two plain branch names' -- "$task" "$from_branch" "$to_branch"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
-GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
-`ARTIFACT` and `GATE` are absolute literal paths, and so is whichever of the two
+`ARTIFACT` is an absolute literal path, and so is whichever of the two
 ARTIFACTS lines resolved. All of them were worked out once by the command before you
 were dispatched. Type each of them out in full in every Bash call. Your Bash calls
 inherit no environment from me and keep no state from one call to the next, so a
@@ -52,43 +51,21 @@ against the branch flow in `odoo-dev:odoo-repo-map` before you run anything. Tha
 a check against recorded data, not a question to put to anyone: you are a fork and
 cannot ask one.
 
-## What the gate said
+## Nothing gates this command
 
-This is the task route's `--for pr` pre-gate, run by the command before you were
-dispatched, and it is the only gate that has run so far:
+There is no pre-gate and no hook standing in front of the pull request. #904 removed
+both: a finished, tested, reviewed branch could not open a pull request without
+artifacts only one particular agent chain produces, and the only way through was to
+hand-write the very files the gate existed to verify. A pull request opens from a
+branch with whatever evidence exists.
 
-!`${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh --for pr --soft -- "$task"`
-
-Read that line three ways:
-
-- A verdict ending in `"ok":true` — the task route is gate-cleared and you may
-  carry on.
-- A verdict listing blockers, followed by `NO PASSING --for pr GATE` — the task
-  route is red. Ship nothing, report those blockers to the person who typed the
-  command, and stop.
-- `NO PASSING --for pr GATE` on its own — the gate never ran, because this is the
-  release route or because no task directory resolved.
-
-**The release route is deliberately not pre-gated, and restoring a pre-gate here
-would break every release.** `gate.sh --for release` reads `00-context.json` with
-`flow_confirmed: true` and a `60-release.json` manifest. The release directory starts
-out holding neither: `odoo-dev:odoo-release` writes `00-context.json` itself in its
-step 1, from the resolver, and the manifest only exists once it has been built. So a
-pre-gate here would report both as missing on every promotion and block work that is
-perfectly sound. On the release route you run the gate yourself, against the release
-directory above, **after** you have written `60-release.json` and before anything
-leaves the machine.
-
-The pre-gate is a fast, legible failure seconds after someone types the command, and
-it is not the enforcement. The enforcement is the `PreToolUse` hook this plugin
-ships, which re-runs the gate at the tool boundary and denies the call outright when
-it fails. It covers both routes. On the task route it resolves the artifacts
-directory from the branch of the worktree being pushed and denies `pr-open.sh` or
-`gh pr create`. On the release route it resolves the release directory from
-`release-pr.sh`'s own `<from>` and `<to>` arguments — the same key the line above
-built — and denies `release-pr.sh` on a `--for release` failure. The two exist for
-different reasons — one tells a person early, the other stops a machine late — so
-neither is redundant and removing either is a regression.
+What that changes for you is what you do with missing evidence: you **report** it,
+you do not route around it and you do not manufacture it. Read whatever artifacts
+are in the directory that resolved above. If a stage you expected is absent, say so
+in your final message in plain English and carry on with what is there. If what is
+missing means the change genuinely should not ship — the tests failed, the review is
+unread — then stop and say that, as a judgement you are making, not as a verdict a
+script handed you.
 
 Context — you have none of my conversation. The request below is verbatim, and its
 first token is either the Odoo task id or the word `release`:
@@ -96,10 +73,9 @@ first token is either the Odoo task id or the word `release`:
 $ARGUMENTS
 
 Read the artifacts in whichever directory resolved above, then follow your own
-invariants: re-run the gate for the stage the routed skill names before anything
-leaves the machine, take the base branch from `odoo-dev:odoo-repo-map`
-`default_branch` rather than the GitHub default, and open the pull request as a
-self-assigned draft with the standard body.
+invariants: take the base branch from `odoo-dev:odoo-repo-map` `default_branch`
+rather than the GitHub default, and open the pull request as a self-assigned draft
+with the standard body.
 
 Return contract, typed out in full in each Bash call. On the task route:
 
@@ -132,9 +108,9 @@ On the release route, cover all four of these and stop:
 - **The draft pull request.** Its url, its assignee, its reviewer.
 - **What happens next**, in one sentence.
 
-Never put any of these in the final message: a blocker or warning code, gate JSON,
-an artifact file name, a script name or flag, `mergeStateStatus`, or any absolute
-path other than the artifacts directory this contract already asks for. They name
+Never put any of these in the final message: an artifact file name, a script name
+or flag, `mergeStateStatus`, or any absolute path other than the artifacts directory
+this contract already asks for. They name
 machinery the reader has no access to and cannot act on. Say what happened and what
 to do about it, in the words a person would use.
 

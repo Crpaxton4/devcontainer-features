@@ -51,4 +51,4 @@ Domain review beyond style — ORM anti-patterns, `sudo()` scope, N+1, access ri
 
 Open as draft. Assign yourself (`--assign-me`): unassigned PR has no owner in review queue, and "who is this waiting on" is question queue exist to answer.
 
-Mark ready only when the CodeRabbit round has settled and the final commit has passed a full test run. That run still gates the PR; its numbers stay internal and never appear in the body.
+Mark ready only when the CodeRabbit round has settled and the final commit has passed a full test run. That run is what the decision rests on; its numbers stay internal and never appear in the body.

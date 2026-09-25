@@ -105,7 +105,7 @@ JSON as the lists, never from memory:
 ```
 
 `bumped: false` on a module in the `update` list is not a box to leave unchecked
-and ship. It is the *Preconditions* gate in step 1 of this skill failing, and the
+and ship. It is the *Preconditions* check in step 1 of this skill failing, and the
 fix is the manifest, not the wording. "Once for this PR" is the other half of the
 rule: one bump per pull request, not one per commit, or the version number stops
 meaning anything.
@@ -129,12 +129,13 @@ behaviour that is different now. The diff already lists the files.
 **Commits are deliberately absent.** The PR timeline lists them already, and a
 hand-maintained copy goes stale within one push.
 
-**The test numbers are deliberately absent too, and testing still gates.**
-`odoo-dev:odoo-test-run` must report tests actually executed, tours actually run,
-and `passed: true` before a PR is opened at all, and `gate.sh` blocks on
-`no_tests`, `tours_skipped` and `tests_failed`. Those numbers live in
-`30-test.json` and stay internal. A branch still cannot ship untested; the evidence
-is simply not something the client needs to read.
+**The test numbers are deliberately absent too, and testing still matters.**
+`odoo-dev:odoo-test-run` reports tests actually executed, tours actually run, and
+`passed: true`, and step 1 of this skill is where those three are read. Nothing
+blocks on them any more — a red run is a stop you make, not one a script makes for
+you. Those numbers live in `30-test.json` and stay internal. A branch that failed
+its tests still does not ship; the evidence is simply not something the client
+needs to read.
 
 ## Published-surface rule
 

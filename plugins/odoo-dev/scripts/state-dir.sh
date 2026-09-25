@@ -23,8 +23,8 @@
 # Two ways in:
 #
 #   sourced — defines odoo_dev_state_dir, odoo_dev_artifacts_dir and
-#             odoo_dev_valid_branch, and does nothing else. gate.sh and artifact.sh
-#             source it so that a bare task id resolves the same way everywhere.
+#             odoo_dev_valid_branch, and does nothing else. artifact.sh sources it
+#             so that a bare task id resolves the same way everywhere.
 #
 #   run     — the CLI the command preambles call:
 #

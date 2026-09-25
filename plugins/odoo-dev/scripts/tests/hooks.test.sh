@@ -10,25 +10,18 @@
 # has. The `existing-work.sh ... 2>/dev/null` case is the sharp one: it must be
 # denied for not being on the allowlist, and specifically NOT for containing `>`.
 #
-# Part (b) runs each resolution failure through both worktree-keyed PR shapes on
-# purpose, because the two answer it differently: pr-open.sh is this plugin's own
-# script and is gated whatever happens, while a bare `gh pr create` is gated only
-# when the hook can attribute it to a task. release-pr.sh is keyed by a branch pair
-# rather than by a worktree and is gated like pr-open.sh. The same worktree therefore denies under one
-# shape and passes in silence under the other, and both halves are asserted.
-#
-# The `git commit` shape at the end of part (b) is judged on a repository rather
-# than on an artifacts dir, so it builds its own fixture repo with two modules and
-# moves the index or the work tree before each case. Its allowed cases matter as
-# much as its denied ones: this shape fires on a command every repository on the
-# machine runs, so each thing the hook declines to decide is asserted by name.
+# Part (b) is the commit hook, which has exactly one shape since the PR and release
+# gates were removed in #904. It is judged on a repository rather than on an
+# artifacts dir, so it builds its own fixture repo with two modules and moves the
+# index or the work tree before each case. Its allowed cases matter as much as its
+# denied ones: this shape fires on a command every repository on the machine runs,
+# so each thing the hook declines to decide is asserted by name.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ALLOWLIST="$ROOT/hooks/bash-allowlist.sh"
-GATEHOOK="$ROOT/hooks/gate-hook.sh"
-FIX="$HERE/fixtures/gate"
+COMMITHOOK="$ROOT/hooks/commit-hook.sh"
 
 pass=0; fail=0
 ok()  { echo "PASS $*"; pass=$((pass + 1)); }
@@ -180,13 +173,10 @@ else
   bad "unparseable payload naming the tester: rc=$RC out=$OUT"
 fi
 
-# --- part (b): the gate at the tool boundary -------------------------------------
-
-STATE="$(mktemp -d)"
-mkdir -p "$STATE/tasks/30412" "$STATE/tasks/30999"
-cp "$FIX/all-green"/*.json  "$STATE/tasks/30412/"
-cp "$FIX/zero-tests"/*.json "$STATE/tasks/30999/"
-export ODOO_DEV_STATE_DIR="$STATE"
+# --- part (b): the commit hook -----------------------------------------------------
+# One shape, `git commit`, judged on the repository rather than on any artifact.
+# The PR and release gates that used to live here went out with gate.sh in #904, so
+# there is nothing left to build an artifacts dir for.
 
 WT="$(mktemp -d)"
 # mkwt <branch> <name> — a worktree is only ever read here, never checked out over.
@@ -201,173 +191,37 @@ mkwt() {
       commit -q --allow-empty --no-verify -m "chore: fixture"
   echo "$d"
 }
-GREEN="$(mkwt 30412-stockflow-sync green)"
-RED="$(mkwt   30999-red-run       red)"
-NOID="$(mkwt  no-task-id-here     noid)"
-ORPHAN="$(mkwt 88888-nothing-here orphan)"
-# A plain directory with no repository anywhere above it, and a path that does not
-# exist at all. Neither can be read for a branch.
+# A git repository with no Odoo module anywhere in it, a plain directory with no
+# repository above it, and a path that does not exist at all.
+NOMOD="$(mkwt 30999-no-modules nomod)"
 PLAIN="$WT/not-a-repo"; mkdir -p "$PLAIN"
 GONE="$WT/no-such-worktree"
 
-PR="bash /plugin/skills/odoo-pr/scripts/pr-open.sh"
+# The commit hook is not the tester hook, and it is no longer the PR hook either:
+# it engages on `git commit` and says nothing about anything else. The three calls
+# it used to hold against gate.sh are asserted here by name, so that removing the
+# gate is a property of the suite rather than an absence in it.
+allowed "$COMMITHOOK" "commit: an unrelated command" odoo-dev-pr "echo hello" "$NOMOD"
+allowed "$COMMITHOOK" "commit: gh pr create is no longer gated" \
+  odoo-dev-pr "gh pr create --draft --title T --body-file /tmp/body.md" "$NOMOD"
+allowed "$COMMITHOOK" "commit: pr-open.sh is no longer gated" \
+  odoo-dev-pr "bash /plugin/skills/odoo-pr/scripts/pr-open.sh $NOMOD acme/erp staging --title T"
+allowed "$COMMITHOOK" "commit: release-pr.sh is no longer gated" \
+  odoo-dev-pr "bash /plugin/skills/odoo-release/scripts/release-pr.sh acme/erp UAT main"
+allowed "$COMMITHOOK" "commit: main session, unrelated command" "" "ls -la" "$NOMOD"
 
-# --- shape one: pr-open.sh, gated whatever happens -------------------------------
-# Every one of these worktrees reappears below under `gh pr create`, where most of
-# them are allowed. The difference is the point: an invocation of our own script is
-# inside the workflow by construction, so failing to find the evidence is a broken
-# workflow rather than somebody else's repository.
+# No cwd in the payload at all: there is no repository to read, so the call passes.
+OUT="$(node -e 'process.stdout.write(JSON.stringify({hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"git commit -m x"}}))' \
+       | bash "$COMMITHOOK" 2>/dev/null)"; RC=$?
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "commit: git commit with no cwd in the payload -> allowed"
+else bad "commit: git commit with no cwd in the payload: rc=$RC out=$OUT"; fi
 
-allowed "$GATEHOOK" "gate: pr-open.sh against a green artifacts dir" \
-  odoo-dev-pr "$PR $GREEN acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh against a red artifacts dir" "no_tests" \
-  odoo-dev-pr "$PR $RED acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh on a branch with no task id" "carries no leading task id" \
-  odoo-dev-pr "$PR $NOID acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh with a task id that has no artifacts dir" "no directory at" \
-  odoo-dev-pr "$PR $ORPHAN acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh against a directory that is not a git worktree" "not a git worktree" \
-  odoo-dev-pr "$PR $PLAIN acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh against a path that does not exist" "is not a directory" \
-  odoo-dev-pr "$PR $GONE acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh with no worktree argument" "without its first positional argument" \
-  odoo-dev-pr "$PR --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: pr-open.sh named through a variable" "not as a resolvable token" \
-  odoo-dev-pr '"$PR_OPEN"pr-open.sh /tmp/wt acme/erp staging'
-denied "$GATEHOOK" "gate: two pr-open.sh in one command" "names pr-open.sh 2 times" \
-  odoo-dev-pr "$PR $GREEN acme/erp staging --title T --body-file /tmp/b && $PR $RED acme/erp staging"
 
-# --- shape two: release-pr.sh, gated on the release directory --------------------
-# It carries no worktree, so the release dir comes from its <from> and <to>
-# positionals as <state>/releases/<from>-to-<to>. It calls `gh pr create` inside
-# itself, so the shape below never sees that call and this is the only stop.
-
-mkdir -p "$STATE/releases/UAT-to-main" "$STATE/releases/staging-to-main" \
-         "$STATE/releases/dev-to-UAT"
-cp "$FIX/release-green"/*.json          "$STATE/releases/UAT-to-main/"
-cp "$FIX/untagged-and-inferred"/*.json  "$STATE/releases/staging-to-main/"
-cp "$FIX/unconfirmed-flow"/*.json       "$STATE/releases/dev-to-UAT/"
-
-RELPR="bash /plugin/skills/odoo-release/scripts/release-pr.sh"
-RELFLAGS="--manifest-file /tmp/m.json --assignee a --reviewer b"
-
-allowed "$GATEHOOK" "gate: release-pr.sh against a clean release dir" \
-  odoo-dev-pr "$RELPR acme/erp UAT main $RELFLAGS"
-
-# The whole point of demoting untagged_pr: a release carrying two unattributable
-# PRs and one inferred id is a warning, and a warning does not stop the tool.
-allowed "$GATEHOOK" "gate: release-pr.sh against a release dir with untagged PRs" \
-  odoo-dev-pr "$RELPR acme/erp staging main $RELFLAGS"
-
-denied "$GATEHOOK" "gate: release-pr.sh against an unconfirmed flow" "unconfirmed_flow" \
-  odoo-dev-pr "$RELPR acme/erp dev UAT $RELFLAGS"
-denied "$GATEHOOK" "gate: release-pr.sh with no release dir for the branch pair" "no directory at" \
-  odoo-dev-pr "$RELPR acme/erp feature main $RELFLAGS"
-denied "$GATEHOOK" "gate: release-pr.sh without its positional arguments" "positional arguments" \
-  odoo-dev-pr "$RELPR $RELFLAGS"
-denied "$GATEHOOK" "gate: release-pr.sh with a branch pair that is not two branch names" "plain branch names" \
-  odoo-dev-pr "$RELPR acme/erp ../../etc main $RELFLAGS"
-denied "$GATEHOOK" "gate: release-pr.sh named through a variable" "not as a resolvable token" \
-  odoo-dev-pr '"$REL"release-pr.sh acme/erp UAT main'
-denied "$GATEHOOK" "gate: two release-pr.sh in one command" "names release-pr.sh 2 times" \
-  odoo-dev-pr "$RELPR acme/erp UAT main $RELFLAGS && $RELPR acme/erp dev UAT $RELFLAGS"
-
-# A mention is not an invocation here either.
-allowed "$GATEHOOK" "gate: grep for release-pr.sh" \
-  odoo-dev-pr "grep -rn release-pr.sh skills/" "$RED"
-
-# --- shape three: a bare gh pr create, gated only when it can be attributed ------
-# gh pr create carries no worktree of its own, so the payload cwd is the worktree.
-# When the branch names a task and its artifacts dir exists, the gate decides.
-allowed "$GATEHOOK" "gate: gh pr create from a green worktree" \
-  odoo-dev-pr "gh pr create --draft --title T --body-file /tmp/body.md" "$GREEN"
-denied "$GATEHOOK" "gate: gh pr create from a red worktree" "no_tests" \
-  odoo-dev-pr "gh pr create --draft --title T --body-file /tmp/body.md" "$RED"
-
-# The narrowing. `gh pr create` is an ordinary command that any repository on the
-# machine may run, so when the hook cannot tie it to a task it says nothing at all.
-# Denying here would police work that has nothing to do with this plugin, and the
-# deliberate cost is that a task branch named without its id can slip past.
-allowed "$GATEHOOK" "gate: gh pr create on a branch with no task id" \
-  odoo-dev-pr "gh pr create --fill" "$NOID"
-allowed "$GATEHOOK" "gate: gh pr create with a task id that has no artifacts dir" \
-  odoo-dev-pr "gh pr create --fill" "$ORPHAN"
-allowed "$GATEHOOK" "gate: gh pr create outside any git repository" \
-  odoo-dev-pr "gh pr create --fill" "$PLAIN"
-allowed "$GATEHOOK" "gate: gh pr create from a cwd that does not exist" \
-  odoo-dev-pr "gh pr create --fill" "$GONE"
-allowed "$GATEHOOK" "gate: gh pr create in the main session, unrelated repo" \
-  "" "gh pr create --draft --title T" "$PLAIN"
-
-# No cwd in the payload at all: the worktree cannot be determined, so there is
-# nothing to attribute the PR to and the call passes.
-OUT="$(node -e 'process.stdout.write(JSON.stringify({hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"gh pr create --fill"}}))' \
-       | bash "$GATEHOOK" 2>/dev/null)"; RC=$?
-if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "gate: gh pr create with no cwd in the payload -> allowed"
-else bad "gate: gh pr create with no cwd in the payload: rc=$RC out=$OUT"; fi
-
-# The gate hook is not the tester hook: it engages on the PR shapes and nothing else.
-allowed "$GATEHOOK" "gate: an unrelated command" odoo-dev-pr "echo hello" "$RED"
-allowed "$GATEHOOK" "gate: gh pr list is a read" odoo-dev-pr "gh pr list --state open" "$RED"
-allowed "$GATEHOOK" "gate: main session, unrelated command" "" "ls -la" "$RED"
-
-# --- a mention is not an invocation ----------------------------------------------
-# The names this hook gates are ordinary words. They turn up in commit messages, in
-# greps, in documentation and in this very test file, and none of those is a PR
-# being opened. Every case below runs with the RED worktree as its cwd, so a hook
-# that matched the name anywhere in the text would deny on no_tests and the test
-# would catch it. This is the regression that made the plugin deny work on its own
-# repository: a `git commit` whose message named the script was refused because the
-# word after the name in the prose was read as a worktree path.
-
-HEREDOC_COMMIT="$(printf '%s\n' \
-  "git commit -q --no-verify -F - <<'EOF'" \
-  "docs: write down what the gate hook matches" \
-  "" \
-  "pr-open.sh is this plugin's own script, so every invocation of it is gated," \
-  "and a bare gh pr create is gated only when it can be attributed to a task." \
-  "EOF")"
-allowed "$GATEHOOK" "gate: a commit message that names both shapes in a heredoc" \
-  odoo-dev-pr "$HEREDOC_COMMIT" "$RED"
-allowed "$GATEHOOK" "gate: grep for the script name" \
-  odoo-dev-pr "grep -rn pr-open.sh hooks/" "$RED"
-allowed "$GATEHOOK" "gate: cat the hook itself" \
-  odoo-dev-pr "cat hooks/gate-hook.sh" "$RED"
-allowed "$GATEHOOK" "gate: the name inside a quoted argument" \
-  odoo-dev-pr 'echo "run pr-open.sh next"' "$RED"
-allowed "$GATEHOOK" "gate: the name in a -m commit message" \
-  odoo-dev-pr 'git commit -m "docs: explain pr-open.sh"' "$RED"
-allowed "$GATEHOOK" "gate: the name in a sed expression" \
-  odoo-dev-pr "sed -i s/pr-open.sh/x/ file.md" "$RED"
-
-# The other half of the same rule: command position still counts, wrapped or bare,
-# first segment or last. Each of these asserts the decision the resolve logic
-# reaches, so none of them can pass by the hook failing to match at all.
-denied "$GATEHOOK" "gate: pr-open.sh invoked bare, no wrapper" "no_tests" \
-  odoo-dev-pr "pr-open.sh $RED acme/repo staging --title t --body-file b --draft"
-denied "$GATEHOOK" "gate: pr-open.sh invoked through bash" "is not a directory" \
-  odoo-dev-pr "bash /path/to/pr-open.sh $GONE acme/repo staging --title t"
-denied "$GATEHOOK" "gate: gh pr create --fill" "no_tests" \
-  odoo-dev-pr "gh pr create --fill" "$RED"
-denied "$GATEHOOK" "gate: gh pr create in a later segment" "no_tests" \
-  odoo-dev-pr "cd $RED && gh pr create --fill" "$RED"
-
-# More than one candidate dir for one task id is a resolution failure, not a coin
-# toss — and it is the one failure that denies under both shapes. The task id
-# resolved, so the PR is inside this workflow whichever command opened it, and one
-# task with its evidence filed in two places is an inconsistency worth naming.
-mkdir -p "$STATE/tasks/30412-stockflow" "$STATE/tasks/30412-other"
-rm -rf "$STATE/tasks/30412"
-denied "$GATEHOOK" "gate: two candidate artifact dirs for one task id" "matches 2 directories" \
-  odoo-dev-pr "$PR $GREEN acme/erp staging --title T --body-file /tmp/body.md"
-denied "$GATEHOOK" "gate: two candidate artifact dirs, reached by gh pr create" "matches 2 directories" \
-  odoo-dev-pr "gh pr create --fill" "$GREEN"
-
-# --- shape four: git commit, gated on the manifest version bump ------------------
-# The only shape that is not about a PR. It engages on the change set a commit
-# would carry, so every case below moves the index or the work tree first and then
-# asserts what the hook says about the commit that would follow. Nothing here
-# consults ODOO_DEV_STATE_DIR: the evidence for this shape is the repository.
+# --- the manifest version bump ---------------------------------------------------
+# The hook engages on the change set a commit would carry, so every case below moves
+# the index or the work tree first and then asserts what the hook says about the
+# commit that would follow. The evidence for this shape is the repository, and
+# nothing else: no artifact, no state dir, no task id.
 
 MOD="$WT/modrepo"
 mkdir -p "$MOD/stockflow_sync/models" "$MOD/addons/nested_mod"
@@ -393,27 +247,27 @@ gitq commit -q --no-verify -m "chore: fixture modules"
 # if the hook started denying every commit.
 printf '# changed\n' >> "$MOD/stockflow_sync/models/sale.py"
 gitq add stockflow_sync/models/sale.py
-denied "$GATEHOOK" "gate: git commit touching a module with no manifest bump" \
+denied "$COMMITHOOK" "commit: git commit touching a module with no manifest bump" \
   "without moving the manifest version" \
   odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
-denied "$GATEHOOK" "gate: the deny names the module and its stuck version" \
+denied "$COMMITHOOK" "commit: the deny names the module and its stuck version" \
   "stockflow_sync (still 17.0.1.0.0)" \
   odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
 
 # The repository is the payload cwd unless `-C` moves it, and the same commit
 # denies from an unrelated cwd when it does.
-denied "$GATEHOOK" "gate: git -C into the module repo from elsewhere" \
+denied "$COMMITHOOK" "commit: git -C into the module repo from elsewhere" \
   "without moving the manifest version" \
   odoo-dev-builder "git -C $MOD commit -m \"feat: sync stock\"" "$PLAIN"
 # --git-dir moves the repository somewhere the hook does not follow.
-allowed "$GATEHOOK" "gate: git --git-dir is not followed" \
+allowed "$COMMITHOOK" "commit: git --git-dir is not followed" \
   odoo-dev-builder "git --git-dir=$MOD/.git commit -m x" "$PLAIN"
 # An explicit pathspec narrows the commit to a subset the hook does not
 # reconstruct. This is the documented bypass, asserted so nobody removes it by
 # accident and nobody adds it back by accident either.
-allowed "$GATEHOOK" "gate: git commit with an explicit pathspec" \
+allowed "$COMMITHOOK" "commit: git commit with an explicit pathspec" \
   odoo-dev-builder 'git commit -m "feat: sync stock" stockflow_sync' "$MOD"
-allowed "$GATEHOOK" "gate: git commit with a pathspec after --" \
+allowed "$COMMITHOOK" "commit: git commit with a pathspec after --" \
   odoo-dev-builder 'git commit -m "feat: sync stock" -- stockflow_sync' "$MOD"
 
 # (2) The same change with the version moved. The hook asks whether the version
@@ -421,14 +275,14 @@ allowed "$GATEHOOK" "gate: git commit with a pathspec after --" \
 # a hand edit is a bump.
 manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
 gitq add stockflow_sync/__manifest__.py
-allowed "$GATEHOOK" "gate: git commit with the manifest version moved" \
+allowed "$COMMITHOOK" "commit: git commit with the manifest version moved" \
   odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
 gitq commit -q --no-verify -m "feat: sync stock"
 
 # (3) A file outside every module is not a module change.
 printf '# more\n' >> "$MOD/README.md"
 gitq add README.md
-allowed "$GATEHOOK" "gate: git commit touching no module" \
+allowed "$COMMITHOOK" "commit: git commit touching no module" \
   odoo-dev-builder 'git commit -m "docs: readme"' "$MOD"
 gitq commit -q --no-verify -m "docs: readme"
 
@@ -436,7 +290,7 @@ gitq commit -q --no-verify -m "docs: readme"
 # repo that keeps its addons under addons/ is gated like a flat one.
 printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
 gitq add addons/nested_mod/api.py
-denied "$GATEHOOK" "gate: a nested module is found by walking up" \
+denied "$COMMITHOOK" "commit: a nested module is found by walking up" \
   "addons/nested_mod (still 17.0.2.0.0)" \
   odoo-dev-builder 'git commit -m "fix: api"' "$MOD"
 gitq reset -q --hard HEAD
@@ -446,13 +300,13 @@ mkdir -p "$MOD/brand_new"
 manifest "$MOD/brand_new/__manifest__.py" 17.0.1.0.0
 printf '# new\n' > "$MOD/brand_new/models.py"
 gitq add brand_new
-allowed "$GATEHOOK" "gate: the first commit of a new module" \
+allowed "$COMMITHOOK" "commit: the first commit of a new module" \
   odoo-dev-builder 'git commit -m "feat: brand_new"' "$MOD"
 gitq commit -q --no-verify -m "feat: brand_new"
 
 # (6) Deleting a module removes code and bumps nothing.
 gitq rm -r -q brand_new
-allowed "$GATEHOOK" "gate: removing a module" \
+allowed "$COMMITHOOK" "commit: removing a module" \
   odoo-dev-builder 'git commit -m "chore: drop brand_new"' "$MOD"
 gitq commit -q --no-verify -m "chore: drop brand_new"
 
@@ -460,15 +314,15 @@ gitq commit -q --no-verify -m "chore: drop brand_new"
 # disagree on the same state: nothing is staged, so a plain commit carries no
 # module and passes, while -a carries the module and is denied.
 printf '# unstaged\n' >> "$MOD/stockflow_sync/models/sale.py"
-allowed "$GATEHOOK" "gate: an unstaged module change, committed without -a" \
+allowed "$COMMITHOOK" "commit: an unstaged module change, committed without -a" \
   odoo-dev-builder 'git commit -m "feat: more sync"' "$MOD"
-denied "$GATEHOOK" "gate: an unstaged module change, committed with -am" \
+denied "$COMMITHOOK" "commit: an unstaged module change, committed with -am" \
   "stockflow_sync (still 17.0.1.1.0)" \
   odoo-dev-builder 'git commit -am "feat: more sync"' "$MOD"
 # `-ma` is `-m a`, not `-m` plus `-a`: the letters after a value-taking one are
 # its value. Read as `-a` it would pick up the work-tree change above and deny,
 # so this is the same state as the two cases above and the parse is what decides.
-allowed "$GATEHOOK" "gate: -ma is -m a and carries no -a" \
+allowed "$COMMITHOOK" "commit: -ma is -m a and carries no -a" \
   odoo-dev-builder 'git commit -ma' "$MOD"
 gitq checkout -- stockflow_sync/models/sale.py
 
@@ -480,11 +334,11 @@ gitq add -A
 gitq commit -q --no-verify -m "feat: amendable"
 printf '# amended twice\n' >> "$MOD/stockflow_sync/models/sale.py"
 gitq add stockflow_sync/models/sale.py
-allowed "$GATEHOOK" "gate: --amend over a commit that already bumped" \
+allowed "$COMMITHOOK" "commit: --amend over a commit that already bumped" \
   odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
 manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
 gitq add stockflow_sync/__manifest__.py
-denied "$GATEHOOK" "gate: --amend that puts the version back" \
+denied "$COMMITHOOK" "commit: --amend that puts the version back" \
   "without moving the manifest version" \
   odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
 gitq reset -q --hard HEAD
@@ -493,37 +347,37 @@ gitq reset -q --hard HEAD
 printf '# merged\n' >> "$MOD/stockflow_sync/models/sale.py"
 gitq add stockflow_sync/models/sale.py
 : > "$MOD/.git/MERGE_HEAD"
-allowed "$GATEHOOK" "gate: a commit with a merge in progress" \
+allowed "$COMMITHOOK" "commit: a commit with a merge in progress" \
   odoo-dev-builder 'git commit --no-edit' "$MOD"
 rm -f "$MOD/.git/MERGE_HEAD"
-denied "$GATEHOOK" "gate: the same commit once the merge marker is gone" \
+denied "$COMMITHOOK" "commit: the same commit once the merge marker is gone" \
   "without moving the manifest version" \
   odoo-dev-builder 'git commit --no-edit' "$MOD"
 gitq reset -q --hard HEAD
 
 # (10) Everything the hook cannot decide passes in silence, because `git commit`
 # is an ordinary command in every repository on the machine.
-allowed "$GATEHOOK" "gate: git commit in a repo with no modules" \
-  odoo-dev-builder 'git commit -m "chore: whatever"' "$RED"
-allowed "$GATEHOOK" "gate: git commit outside any git repository" \
+allowed "$COMMITHOOK" "commit: git commit in a repo with no modules" \
+  odoo-dev-builder 'git commit -m "chore: whatever"' "$NOMOD"
+allowed "$COMMITHOOK" "commit: git commit outside any git repository" \
   odoo-dev-builder 'git commit -m "chore: whatever"' "$PLAIN"
-allowed "$GATEHOOK" "gate: git commit with no cwd to resolve" \
+allowed "$COMMITHOOK" "commit: git commit with no cwd to resolve" \
   odoo-dev-builder 'git commit -m "chore: whatever"' "$GONE"
-allowed "$GATEHOOK" "gate: a read-only git subcommand" \
+allowed "$COMMITHOOK" "commit: a read-only git subcommand" \
   odoo-dev-builder 'git status --short' "$MOD"
-allowed "$GATEHOOK" "gate: the word commit as an argument, not a subcommand" \
+allowed "$COMMITHOOK" "commit: the word commit as an argument, not a subcommand" \
   odoo-dev-builder 'git log --format=%s -1 commit' "$MOD"
 # A mention is not an invocation here either: the name of the rule inside a
 # message is prose, and the heredoc body is data.
 printf '# mentioned\n' >> "$MOD/stockflow_sync/models/sale.py"
 gitq add stockflow_sync/models/sale.py
-allowed "$GATEHOOK" "gate: git commit named inside a heredoc body" \
+allowed "$COMMITHOOK" "commit: git commit named inside a heredoc body" \
   odoo-dev-builder "$(printf '%s\n' "cat <<'EOF'" "git commit -m x" "EOF")" "$MOD"
-allowed "$GATEHOOK" "gate: grep for the word" \
+allowed "$COMMITHOOK" "commit: grep for the word" \
   odoo-dev-builder 'grep -rn "git commit" docs/' "$MOD"
 gitq reset -q --hard HEAD
 
-rm -rf "$STATE" "$WT"
+rm -rf "$WT"
 
 echo
 echo "hooks.test.sh: $pass passed, $fail failed"

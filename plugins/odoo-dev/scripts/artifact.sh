@@ -14,15 +14,15 @@
 #
 # <artifacts_dir> may be given as a bare Odoo task id — anything matching ^[0-9]+$ —
 # which resolves against the state dir to <state>/tasks/<id>. Anything else is a path
-# and is used exactly as given. gate.sh takes the same argument the same way, and
-# both get the rule from state-dir.sh rather than restating it.
+# and is used exactly as given. The rule comes from state-dir.sh rather than being
+# restated here.
 #
 # NEVER OVERWRITES. A second put of the same stage lands at <stage>.2.json, then
 # .3.json. This is the point, not a limitation. A chain must be able to recover
-# from a red test — the builder fixes and re-runs — so `get` and gate.sh read the
-# LATEST revision. What append-only buys is that the recovery is never QUIET: every
-# earlier revision stays on disk, `list` shows them all, and gate.sh reports the
-# revision count per stage, so "green on the third try" can never read as "green".
+# from a red test — the builder fixes and re-runs — so `get` reads the LATEST
+# revision. What append-only buys is that the recovery is never QUIET: every
+# earlier revision stays on disk and `list` shows them all, so "green on the third
+# try" can never read as "green".
 #
 # Validation is required-field presence plus cheap type checks, plus optional
 # per-element checks for array fields, all run before the file is named — a
@@ -68,21 +68,6 @@ const SCHEMA = {
   "40-coderabbit": {
     required: ["status","findings"],
     types: { findings: "array" },
-  },
-  // A waiver is an auditable refusal to fix: one entry per CodeRabbit finding the
-  // gate should stop blocking on, each carrying a reason a human will read. It is
-  // its own stage so agent judgement never lands in the same file as tool output,
-  // and every element is checked so an empty reason cannot pass as one.
-  "45-waiver": {
-    required: ["waived"],
-    types: { waived: "array" },
-    elements: {
-      waived: {
-        file: { type: "string", nonEmpty: true },
-        line: { type: ["number","null"] },
-        reason: { type: "string", nonEmpty: true },
-      },
-    },
   },
   "50-pr": {
     required: ["pr_url","pr_number","draft","base","head","title"],

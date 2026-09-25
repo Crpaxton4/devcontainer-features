@@ -5,11 +5,11 @@ user-invocable: false
 ---
 # Odoo Test Run
 
-Run module tests on disposable database. Report what happened in shape gate can read. Point not "did it print OK" — it **how many tests executed**, and **did tours run at all**.
+Run module tests on disposable database. Report what happened in shape a machine can read. Point not "did it print OK" — it **how many tests executed**, and **did tours run at all**.
 
 ## When to use
 
-An Odoo module has to be proved to work before a pull request opens or after a fix; someone asks whether a module passes; a previous run reported green without saying how many tests it executed; tours are declared but are being skipped, or the headless run has no browser; or a gate needs numbers it can trust.
+An Odoo module has to be proved to work before a pull request opens or after a fix; someone asks whether a module passes; a previous run reported green without saying how many tests it executed; tours are declared but are being skipped, or the headless run has no browser; or a decision to ship needs numbers it can trust.
 
 ## Why the evidence is shaped this way
 
@@ -25,11 +25,11 @@ agent spawn that preloads it. Trust them; do not re-derive them.
 
 - **Browser for tours**: !`bash ${CLAUDE_SKILL_DIR}/scripts/browser-ensure.sh --check 2>/dev/null || echo "browser-ensure.sh did not run — treat the tours as unproven"`
 
-That line predicts the `tours_run: 0` gate failure before a run is spent on it. When
-it reports no browser, `--with-tours` refuses and exits 6, and a run without the flag
-leaves `tours_run` at 0, which the gate rejects for any module whose
-`tours_declared` is above zero. Fix the browser first. The check never installs
-anything, because it also runs at load.
+That line predicts a `tours_run: 0` result before a run is spent on it. When it
+reports no browser, `--with-tours` refuses and exits 6, and a run without the flag
+leaves `tours_run` at 0 — which is not a pass for any module whose `tours_declared`
+is above zero. Fix the browser first. The check never installs anything, because it
+also runs at load.
 
 ## Preconditions
 
@@ -90,7 +90,7 @@ pulling 100 MB over the network or failing the render.
 
 ## Reading the result
 
-| Field | Gate rule |
+| Field | Rule |
 |---|---|
 | `tests_run` | **Must be > 0.** Zero never green, whatever `passed` say elsewhere |
 | `tours_declared` vs `tours_run` | Declared > 0 and run == 0 ⇒ tours did not run. Re-run with `--with-tours` |
@@ -105,11 +105,11 @@ None of this is published. A PR body carries the task link, the module lists, an
 # unit tests only, fast loop while fixing
 <base directory>/scripts/run-tests.sh qocinnovations 30412 my_module --test-tags /my_module
 
-# the run that gates the PR
+# the run the PR decision rests on
 <base directory>/scripts/run-tests.sh qocinnovations 30412 my_module --with-tours
 ```
 
-Run the second one before `odoo-dev:odoo-pr`. Its JSON is what `gate.sh` reads and what `30-test.json` records. It gates the PR; it does not go in the PR body.
+Run the second one before `odoo-dev:odoo-pr`. Its JSON is what `30-test.json` records and what step 1 of that skill reads. It is what the decision to open the PR rests on; it does not go in the PR body.
 
 ## Environment knobs
 

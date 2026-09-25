@@ -1,11 +1,11 @@
 schema_version: "1.1"
-name: dispatch-pr-after-gate
-description: Should dispatch the odoo-dev-pr subagent once the gate is clear.
+name: dispatch-pr-with-evidence
+description: Should dispatch the odoo-dev-pr subagent for a verified branch.
 tags: [trigger, positive, validation]
 plugins: [odoo-dev]
 execution:
   prompt: |
-    Odoo task 4821 is verified and the gate came back green. Take it from here — push the branch, open the pull request for the client, and note the task.
+    Odoo task 4821 is verified and its tests are green. Take it from here — push the branch, open the pull request for the client, and note the task.
   max_turns: 3
   timeout_seconds: 180
 runs: 2
