@@ -1420,7 +1420,68 @@ _INIT_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\" \"\$d/repo\"; printf
 # The whole point: an existing mempalace.yaml is the user's curated file and
 # init must never be re-run over it (init overwrites rather than merges).
 check "mempalace-init-workspace never re-runs over an existing mempalace.yaml" bash -c \
-  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && ! test -e \"\$d/bin/stub.calls\" && [ \"\$(cat \"\$d/repo/mempalace.yaml\")\" = 'wing: mine' ]"
+  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && ! test -e \"\$d/bin/stub.calls\""
+
+# ...and the keys that file already carries survive verbatim. This used to
+# assert the whole file was byte-identical; #875 adds an APPEND, so the
+# assertion is now the property that actually matters - nothing pre-existing is
+# rewritten or reordered.
+check "mempalace-init-workspace rewrites no existing key in mempalace.yaml" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\nrooms:\n  - name: curated\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && [ \"\$(head -n 3 \"\$d/repo/mempalace.yaml\")\" = \"\$(printf 'wing: mine\nrooms:\n  - name: curated')\" ]"
+
+# --- exclude_patterns: keep git worktrees out of the mine (#875) --------------
+# Upstream reads neither .git/info/exclude nor a .worktrees/.claude skip-list,
+# so a repo with worktrees is mined as N full copies of itself - 33,810
+# duplicate drawers and a 40-minute hub stall in #875. `exclude_patterns` in
+# <MEMPAL_DIR>/mempalace.yaml is the one knob upstream does honour
+# (miner.mine_project -> GitignoreMatcher.from_patterns).
+check "mempalace-init-workspace appends exclude_patterns to an existing mempalace.yaml" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null && grep -qx 'exclude_patterns:' \"\$d/repo/mempalace.yaml\" && grep -q '\\.worktrees/' \"\$d/repo/mempalace.yaml\" && grep -q '\\.claude/' \"\$d/repo/mempalace.yaml\" && grep -q '\\.VSCodeCounter/' \"\$d/repo/mempalace.yaml\""
+
+# Append-only means idempotent: a container is created many times over the life
+# of one workspace, and a key appended once per create is a growing file.
+check "mempalace-init-workspace does not duplicate exclude_patterns on a second run" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; cp \"\$d/repo/mempalace.yaml\" \"\$d/first\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; cmp -s \"\$d/first\" \"\$d/repo/mempalace.yaml\" && [ \"\$(grep -cx 'exclude_patterns:' \"\$d/repo/mempalace.yaml\")\" = 1 ]"
+
+# A file that already declares the key is the user's answer, whatever it says.
+check "mempalace-init-workspace leaves an existing exclude_patterns untouched" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\nexclude_patterns:\n  - \\\"vendor/\\\"\n' > \"\$d/repo/mempalace.yaml\"; cp \"\$d/repo/mempalace.yaml\" \"\$d/before\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; cmp -s \"\$d/before\" \"\$d/repo/mempalace.yaml\" && ! grep -q 'worktrees' \"\$d/repo/mempalace.yaml\""
+
+# The appended block must still parse as YAML with the key at TOP level - it is
+# read by mempalace's own loader, not by grep, and an append that landed at the
+# wrong indentation would be a nested key the miner never sees. mempalace's own
+# interpreter is preferred because PyYAML is a dependency of mempalace, not of
+# the base image; a container with neither skips rather than fails.
+_YAML_PY="_py=/usr/local/share/uv/tools/mempalace/bin/python; [ -x \"\$_py\" ] || _py=python3; command -v \"\$_py\" >/dev/null 2>&1 || exit 0; \"\$_py\" -c 'import yaml' 2>/dev/null || exit 0;"
+check "the appended exclude_patterns block is valid top-level YAML" bash -c \
+  "$_INIT_STUB_SETUP $_YAML_PY printf 'wing: mine\nrooms:\n  - name: curated\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; \"\$_py\" -c \"import sys, yaml; c = yaml.safe_load(open(sys.argv[1])); sys.exit(0 if c.get('wing') == 'mine' and c.get('exclude_patterns') == ['.worktrees/', '.claude/', '.VSCodeCounter/'] else 1)\" \"\$d/repo/mempalace.yaml\""
+
+# .git/info/exclude is the per-repo, never-committed home for init's two
+# project-local artifacts. One line each, appended only when absent.
+_GIT_DIR_SETUP="mkdir -p \"\$d/repo/.git/info\";"
+check "mempalace-init-workspace adds both names to .git/info/exclude" bash -c \
+  "$_INIT_STUB_SETUP $_GIT_DIR_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null && grep -qx 'mempalace.yaml' \"\$d/repo/.git/info/exclude\" && grep -qx 'entities.json' \"\$d/repo/.git/info/exclude\""
+check "mempalace-init-workspace adds each .git/info/exclude line only once" bash -c \
+  "$_INIT_STUB_SETUP $_GIT_DIR_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; printf 'node_modules\n' > \"\$d/repo/.git/info/exclude\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null; [ \"\$(grep -cx 'mempalace.yaml' \"\$d/repo/.git/info/exclude\")\" = 1 ] && [ \"\$(grep -cx 'entities.json' \"\$d/repo/.git/info/exclude\")\" = 1 ] && grep -qx 'node_modules' \"\$d/repo/.git/info/exclude\""
+# An exclude file whose last byte is not a newline must not have the first
+# appended name welded onto its final line.
+check "mempalace-init-workspace terminates an unterminated .git/info/exclude first" bash -c \
+  "$_INIT_STUB_SETUP $_GIT_DIR_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; printf 'node_modules' > \"\$d/repo/.git/info/exclude\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null && grep -qx 'node_modules' \"\$d/repo/.git/info/exclude\" && grep -qx 'mempalace.yaml' \"\$d/repo/.git/info/exclude\""
+# No git dir means nothing to write to, and certainly not a git dir to create.
+check "mempalace-init-workspace creates no .git when the repo has none" bash -c \
+  "$_INIT_STUB_SETUP printf 'wing: mine\n' > \"\$d/repo/mempalace.yaml\"; MEMPALACE_INIT_CMD=\"\$d/bin/stub\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null && ! test -e \"\$d/repo/.git\""
+
+# The project auto-mine's HOOK EVENT is upstream's, not this Feature's, and #875
+# asked for it to move from Stop to SessionEnd. It cannot be moved from here,
+# and this pins the finding so a future reader does not go looking for a knob
+# that does not exist: mempalace 3.9.0 calls `_maybe_auto_ingest()` from BOTH
+# `hook_stop` and `hook_session_end`; the entries that fire them live in the
+# plugin's own hooks/hooks.json, which `claude plugin update` rewrites on every
+# container create; and this Feature registers no mempalace hook entry at all.
+# What this PR can and does fix is the mine's COST (exclude_patterns above); the
+# cadence is an upstream ask. Assert the "registers none" half, which is ours.
+check "the Feature registers no mempalace hook entry of its own (#875)" bash -c \
+  "! grep -E '\"(Stop|SessionEnd|PreCompact)\"' /usr/local/bin/sync-claude-hooks | grep -q mempalace"
 
 check "mempalace-init-workspace runs init when mempalace.yaml is absent" bash -c \
   "$_INIT_STUB_SETUP MEMPALACE_INIT_CMD=\"\$d/bin/stub\" PATH=\"\$d/bin:\$PATH\" /usr/local/bin/mempalace-init-workspace \"\$d/repo\" && grep -q 'init' \"\$d/bin/stub.calls\""
