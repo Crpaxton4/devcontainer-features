@@ -1040,9 +1040,112 @@ check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run
 # #809: the worktree hook's command contains no `claude-event-hook`, so it is
 # only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
 # would survive the strip and be re-appended, accumulating one duplicate per
-# container create - re-run twice more and pin the count at exactly one.
+# container create - re-run twice more and pin the count at exactly one. The
+# SessionStart group count is THREE since #811: event shim, worktree context,
+# palace recall.
 check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '2' ]"
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '3' ]"
+
+# --- #811/#812/#813/#907/#832: the shared security policy rides the same merge --
+# The Feature used to ship the MECHANISMS that read this machine's config and
+# almost none of the CONFIG: three hooks and a settings fragment were
+# hand-maintained on one host and named from settings.json by absolute path, so a
+# fresh ~/.claude got every mechanism and no policy, and nothing reported the
+# difference. The hooks are Feature-owned files now and get the same
+# publish-then-reference treatment as the two shims (#803); the fragment gets an
+# additive-only arm in the same jq merge.
+HK_SEC="$HOOKS_TEST_ROOT/sec"
+mkdir -p "$HK_SEC"
+check "sync-claude-hooks runs twice against a fresh config dir (#811)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_SEC\" /usr/local/bin/sync-claude-hooks 2>/dev/null && CLAUDE_CONFIG_DIR=\"$HK_SEC\" /usr/local/bin/sync-claude-hooks 2>\"$HK_SEC/err\""
+check "the three security hooks are published into the shared config dir (#811)" bash -c \
+  "for h in odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do test -x \"$HK_SEC/hooks/\$h\" || exit 1; cmp -s \"/usr/local/share/personal-features/hooks/\$h\" \"$HK_SEC/hooks/\$h\" || exit 1; done"
+# Published exactly ONCE each after two syncs: each basename is in HOOK_MARKERS,
+# so a prior run's entry is stripped before the fresh one is appended. Without
+# that a container create would add one duplicate copy of every guard.
+check "each security hook is registered exactly once after two syncs (#811)" bash -c \
+  "[ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"odoo-api-guard.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"force-push-guard.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ]"
+check "the two guards register as PreToolUse/Bash with a 5s timeout (#811)" bash -c \
+  "[ \"\$(jq '[.hooks.PreToolUse[] | select(.matcher == \"Bash\") | select(.hooks[].timeout == 5)] | length' \"$HK_SEC/settings.json\")\" = '2' ]"
+check "mempalace-recall registers on SessionStart with a 20s timeout (#811)" bash -c \
+  "jq -e '.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\")) | .hooks[] | select(.timeout == 20)' \"$HK_SEC/settings.json\" >/dev/null"
+# Same #803 reason as the event shim, and sharper: a PreToolUse guard whose
+# command exit-127s reads to the harness as an ALLOW, so a container-absolute
+# path here is a prohibition that looks enforced on the host and is not.
+check "no security hook command bakes in a container-only absolute path (#803/#811)" bash -c \
+  "! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_SEC/settings.json\" | grep -q '^/usr/local/'"
+check "the #805 audit reports nothing about the three security hooks (#811)" bash -c \
+  "! grep -qE 'odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' \"$HK_SEC/err\""
+# The guard's own case table, shipped beside it, driven against the installed
+# copy: the narrowed decode rule (#813/#907), the rule named in every denial, and
+# the RPC/credential/production-host families still firing.
+check "odoo-api-guard passes its shipped case table (#813/#907)" bash -c \
+  "/usr/local/share/personal-features/hooks/tests/odoo-api-guard.test.sh /usr/local/share/personal-features/hooks/odoo-api-guard.sh"
+# The #832 limit is a documented decision, not a silent gap: the header has to say
+# so, or the next reader assumes a containment boundary that does not exist.
+check "odoo-api-guard documents the file-then-run limit (#832)" bash -c \
+  "grep -q '#832' /usr/local/share/personal-features/hooks/odoo-api-guard.sh && grep -q '#832' /usr/local/share/personal-features/hooks/force-push-guard.sh"
+
+# The fragment, into a settings.json that holds none of its keys: every one lands.
+check "the settings fragment is valid JSON (#811)" bash -c \
+  "jq . /usr/local/share/personal-features/settings-fragment.json >/dev/null"
+check "the shipped deny list lands whole (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC/settings.json\")\" = \"\$(jq '.permissions.deny | length' /usr/local/share/personal-features/settings-fragment.json)\" ] && jq -e '.permissions.deny | index(\"Bash(pkill*)\")' \"$HK_SEC/settings.json\" >/dev/null"
+check "the shipped env keys land (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq -r '.env.CAVEMAN_DEFAULT_MODE' \"$HK_SEC/settings.json\")\" = 'ultra' ]"
+# ODOO_DEV_STATE_DIR is delivered through containerEnv, not through this fragment;
+# shipping it here too would give one value two owners.
+check "the fragment ships no ODOO_DEV_STATE_DIR (#811)" bash -c \
+  "[ \"\$(jq -r '.env.ODOO_DEV_STATE_DIR // \"absent\"' /usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
+check "the fragment carries no secret-looking key (#811)" bash -c \
+  "! grep -qiE '\"[^\"]*(token|secret|password|api[_-]?key)[^\"]*\"[[:space:]]*:' /usr/local/share/personal-features/settings-fragment.json"
+check "the shipped autoMode.environment lands (#811)" bash -c \
+  "[ \"\$(jq '.autoMode.environment | length' \"$HK_SEC/settings.json\")\" -gt 5 ]"
+# #812: unset means the 0.01 default, which is 8,000 chars at 200k against a
+# 28,779-char listing - the listing truncates, and plugin skills are trimmed
+# before bundled ones, so this repo's own skills lose their descriptions first.
+check "skillListingBudgetFraction is set to 0.05 when absent (#812)" bash -c \
+  "[ \"\$(jq '.skillListingBudgetFraction' \"$HK_SEC/settings.json\")\" = '0.05' ]"
+
+# The same fragment against a settings.json that already holds every one of its
+# keys. The arm is additive-only: it may add policy and may never overwrite or
+# remove the user's. Run twice, because a merge that is right once and wrong on
+# re-run is the duplicate-accumulation bug in a different key.
+HK_SEC2="$HOOKS_TEST_ROOT/sec2"
+mkdir -p "$HK_SEC2"
+cat > "$HK_SEC2/settings.json" <<'JSON'
+{ "skillListingBudgetFraction": 0.1,
+  "env": {"CAVEMAN_DEFAULT_MODE": "lite", "MY_OWN_KEY": "keep"},
+  "autoMode": {"environment": ["my own environment document"]},
+  "permissions": {"deny": ["Bash(my-own-deny*)", "Bash(pkill*)"]} }
+JSON
+check "sync-claude-hooks merges the fragment into a settings.json that owns the same keys (#811)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_SEC2\" /usr/local/bin/sync-claude-hooks 2>/dev/null && CLAUDE_CONFIG_DIR=\"$HK_SEC2\" /usr/local/bin/sync-claude-hooks 2>/dev/null"
+# Union, not replace: a host that adds a deny keeps it across provisions, in its
+# original position, and the Feature's entries are appended after it.
+check "a user-only deny survives the merge and stays first (#811)" bash -c \
+  "[ \"\$(jq -r '.permissions.deny[0]' \"$HK_SEC2/settings.json\")\" = 'Bash(my-own-deny*)' ]"
+check "a shipped deny the user already had is not duplicated (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC2/settings.json\")\" = \"\$(jq '.permissions.deny | unique | length' \"$HK_SEC2/settings.json\")\" ] && [ \"\$(jq '[.permissions.deny[] | select(. == \"Bash(pkill*)\")] | length' \"$HK_SEC2/settings.json\")\" = '1' ]"
+check "the shipped denies are added alongside the user's (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC2/settings.json\")\" = \"\$(jq '(.permissions.deny | length) + 1' /usr/local/share/personal-features/settings-fragment.json)\" ]"
+check "an env key the user already set is not clobbered (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CAVEMAN_DEFAULT_MODE' \"$HK_SEC2/settings.json\")\" = 'lite' ] && [ \"\$(jq -r '.env.MY_OWN_KEY' \"$HK_SEC2/settings.json\")\" = 'keep' ]"
+check "an env key the user did not set is added (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_ENABLE_TODO_TOOLS' \"$HK_SEC2/settings.json\")\" = '1' ]"
+# autoMode.environment is one document, not a set of keys, so there is no sane
+# union: a present array is left completely alone.
+check "a user-authored autoMode.environment is left untouched (#811)" bash -c \
+  "[ \"\$(jq -c '.autoMode.environment' \"$HK_SEC2/settings.json\")\" = '[\"my own environment document\"]' ]"
+check "a user-set skillListingBudgetFraction is kept (#812)" bash -c \
+  "[ \"\$(jq '.skillListingBudgetFraction' \"$HK_SEC2/settings.json\")\" = '0.1' ]"
+
+# With no fragment to read, the hooks block still merges: the two halves fail
+# independently, and a missing policy file must not cost the machine its hooks.
+HK_SEC3="$HOOKS_TEST_ROOT/sec3"
+mkdir -p "$HK_SEC3"
+check "an absent settings fragment is reported and the hooks still merge (#811)" bash -c \
+  "PERSONAL_FEATURES_SETTINGS_FRAGMENT=\"$HOOKS_TEST_ROOT/no-such-fragment.json\" CLAUDE_CONFIG_DIR=\"$HK_SEC3\" /usr/local/bin/sync-claude-hooks 2>\"$HK_SEC3/err\" && grep -q 'no settings fragment' \"$HK_SEC3/err\" && jq -e '.hooks.SessionStart | length > 0' \"$HK_SEC3/settings.json\" >/dev/null && [ \"\$(jq -r '.skillListingBudgetFraction // \"absent\"' \"$HK_SEC3/settings.json\")\" = 'absent' ]"
 
 # (c) A pre-seeded user setting AND a user-authored hook survive the merge.
 HK_B="$HOOKS_TEST_ROOT/b"
@@ -1059,8 +1162,10 @@ check "a pre-seeded user setting survives the merge" bash -c \
   "[ \"\$(jq -r '.model' \"$HK_B/settings.json\")\" = 'opus' ] && [ \"\$(jq -r '.env.FOO' \"$HK_B/settings.json\")\" = 'bar' ]"
 check "a user-authored hook survives the merge" bash -c \
   "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
-check "the feature hook is added alongside the user's (two PreToolUse groups)" bash -c \
-  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '2' ]"
+# Four PreToolUse groups since #811: the user's, the match-all event group, and
+# one Bash-matched group per security guard.
+check "the feature hooks are added alongside the user's (four PreToolUse groups)" bash -c \
+  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
 
 # (c2) #803 migration: the stale container-absolute entries an earlier container
 # wrote into the user's real settings.json are stripped and REPLACED, not left to
@@ -1072,8 +1177,29 @@ cat > "$HK_D/settings.json" <<'JSON'
     "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
   } }
 JSON
+# Three PreToolUse groups afterwards: the replacement match-all event group plus
+# the two security guards (#811). What this pins is that NONE of them carries a
+# container-absolute command and the stale one is gone rather than beside them.
 check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '1' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '3' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+
+# (c2b) #811 migration, the same shape: the guards and the recall hook were named
+# from settings.json by their /usr/local/share/claude-home absolute paths while the
+# files were hand-maintained. Their basenames are HOOK_MARKERS, so those entries
+# are stripped and replaced by the published, per-machine-expanded ones instead of
+# accumulating beside them - and the host side of the mount stops exit-127ing them.
+HK_D2="$HOOKS_TEST_ROOT/d2"
+mkdir -p "$HK_D2"
+cat > "$HK_D2/settings.json" <<'JSON'
+{ "hooks": {
+    "SessionStart": [ {"hooks":[{"type":"command","command":"/usr/local/share/claude-home/hooks/mempalace-recall.sh","timeout":20}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[
+        {"type":"command","command":"/usr/local/share/claude-home/hooks/odoo-api-guard.sh","timeout":5},
+        {"type":"command","command":"/usr/local/share/claude-home/hooks/force-push-guard.sh","timeout":5}]} ]
+  } }
+JSON
+check "the hand-maintained absolute-path security entries are replaced (#811 migration)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_D2\" /usr/local/bin/sync-claude-hooks >/dev/null 2>&1 && ! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_D2/settings.json\" | grep -q '^/usr/local/' && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"odoo-api-guard.sh\"))] | length' \"$HK_D2/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\"))] | length' \"$HK_D2/settings.json\")\" = '1' ]"
 
 # (c3) With no shim to publish and none already in place, writing the entries
 # would hand every session a command that resolves nowhere - the #803 failure
@@ -1114,26 +1240,34 @@ check "the real hook dependencies resolve when the SDK is installed (#496 covera
 # The PROVISION-time half: every command the settings file actually references.
 # It can only run here - settings.json lives in the bind-mounted config dir and
 # does not exist at image-build time.
+#
+# THE FIXTURES ARE USER-OWNED NAMES SINCE #811. They used to be called
+# `mempalace-recall.sh` and `odoo-api-guard.sh`, which are now Feature-owned
+# basenames listed in HOOK_MARKERS - so entries naming them are STRIPPED and
+# replaced by the published, working copies before the audit ever sees them, and
+# this block would silently stop testing the audit at all. What is under test
+# here is the audit's treatment of a command NOBODY in this feature owns, so the
+# fixtures must be names the merge does not touch.
 HK_F="$HOOKS_TEST_ROOT/f"
 mkdir -p "$HK_F"
 cat > "$HK_F/settings.json" <<JSON
 { "hooks": {
-    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/mempalace-recall.sh"}]} ],
-    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/odoo-api-guard.sh"}]},
+    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/users-own-recall.sh"}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/users-own-guard.sh"}]},
                     {"matcher":"Edit","hooks":[{"type":"command","command":"jq --version"}]} ]
   } }
 JSON
 # Present but not executable is the same failure as absent: /bin/sh exit-127s it.
-printf '#!/bin/sh\n' > "$HK_F/odoo-api-guard.sh"
-chmod 0644 "$HK_F/odoo-api-guard.sh"
+printf '#!/bin/sh\n' > "$HK_F/users-own-guard.sh"
+chmod 0644 "$HK_F/users-own-guard.sh"
 check "sync-claude-hooks resolves every command in the settings file" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks 2>\"$HK_F/err\""
 check "it names a referenced hook script that is missing (#744 coverage)" bash -c \
-  "grep -q 'mempalace-recall.sh' \"$HK_F/err\""
+  "grep -q 'users-own-recall.sh' \"$HK_F/err\""
 check "it never creates the missing hook script" bash -c \
-  "! test -e \"$HK_F/hooks/mempalace-recall.sh\""
+  "! test -e \"$HK_F/hooks/users-own-recall.sh\""
 check "it names a referenced hook script that is present but not executable" bash -c \
-  "grep -q 'odoo-api-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
+  "grep -q 'users-own-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
 check "it says nothing about a command that does resolve" bash -c \
   "! grep -q 'jq --version' \"$HK_F/err\""
 # A hook the user owns is theirs to fix: report it, but never fail container
@@ -1262,9 +1396,19 @@ check "the staleness report survives a create that writes no hook entries" bash 
 
 # #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
 # on every container create. The #804 mechanism deliberately adds NO hook entry,
-# so assert the settings file still carries only the two known feature programs.
+# so assert the settings file still carries only the KNOWN feature programs -
+# five of them since #811, which added the two security guards and the palace
+# recall hook alongside the event shim and the worktree-context hook.
+#
+# Three assertions, not one, so extending the roster cannot quietly weaken this
+# into a tautology: (1) every command in the file is one of the five - an entry
+# from anywhere else, the heartbeat included, fails here; (2) all five are
+# actually present - an allowlist that matches nothing would otherwise pass (1)
+# trivially; (3) no command string appears twice - the duplicate-accumulation
+# failure this check is a sibling of. The event shim's seven entries differ by
+# their event-name argument, so every one of the commands is distinct.
 check "the heartbeat mechanism adds no hook entry of its own" bash -c \
-  "! jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\" | grep -qvE 'claude-event-hook|worktree-context-hook'"
+  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
 

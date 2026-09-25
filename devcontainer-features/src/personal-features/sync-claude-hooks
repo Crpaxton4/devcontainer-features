@@ -21,6 +21,16 @@
 # separate program because the event shim must never write to stdout and this one
 # exists only to write to stdout.
 #
+# AND THE SHARED SECURITY POLICY RIDES IT TOO (#811). Three more hooks —
+# odoo-api-guard.sh, force-push-guard.sh, mempalace-recall.sh — plus a settings
+# FRAGMENT (permissions.deny, env, autoMode.environment,
+# skillListingBudgetFraction). Those were hand-maintained on one machine and named
+# from settings.json by absolute path, so a fresh ~/.claude got every mechanism and
+# none of the policy. The hooks get the same publish-then-reference treatment as
+# the two shims; the fragment gets a second jq arm in the merge below whose
+# semantics are additive-only — see the long note beside it — so it can add policy
+# and can never overwrite or remove the user's.
+#
 # THE SETTINGS FILE IS SHARED WITH THE HOST (#803). Because that mount is
 # two-way, the host's own Claude Code sessions read the very same settings.json
 # this script writes. A container-absolute command therefore resolves in exactly
@@ -65,6 +75,25 @@ HOOK_CMD="${PERSONAL_FEATURES_HOOK_CMD:-/usr/local/bin/claude-event-hook}"
 # write to stdout. Same override discipline so tests can publish a fixture.
 WORKTREE_HOOK_CMD="${PERSONAL_FEATURES_WORKTREE_HOOK_CMD:-/usr/local/bin/worktree-context-hook}"
 
+# The three SHARED SECURITY HOOKS (#811). Until now these lived only in the
+# hand-maintained claude-home: settings.json named them by absolute path and no
+# component owned the files, so a fresh ~/.claude got every mechanism and none of
+# the policy. install.sh stages them under /usr/local/share/personal-features/hooks
+# and they are published and registered here exactly like the two shims above.
+#   odoo-api-guard.sh    - PreToolUse/Bash; the Odoo external-API prohibition and
+#                          the credential denies, with the decode rule narrowed to
+#                          decode-piped-into-an-interpreter (#813, #907).
+#   force-push-guard.sh  - PreToolUse/Bash; protected-branch force-push denial.
+#   mempalace-recall.sh  - SessionStart; palace recall as additionalContext. #744
+#                          asserted its existence and refused to STUB it; shipping
+#                          the real script masks nothing, so it is owned now.
+SHARED_HOOKS_DIR="${PERSONAL_FEATURES_SHARED_HOOKS_DIR:-/usr/local/share/personal-features/hooks}"
+
+# The settings FRAGMENT (#811, #812): permissions.deny, env, autoMode.environment
+# and skillListingBudgetFraction, merged into settings.json by the same jq pass
+# that merges the hooks block. Data rather than a script, same ownership argument.
+SETTINGS_FRAGMENT="${PERSONAL_FEATURES_SETTINGS_FRAGMENT:-/usr/local/share/personal-features/settings-fragment.json}"
+
 # Substrings that identify a feature-owned hook command, used to strip our own
 # entries before re-appending them (this is what makes the merge idempotent).
 # Kept separate from the commands themselves so an override of the source path in
@@ -76,7 +105,14 @@ WORKTREE_HOOK_CMD="${PERSONAL_FEATURES_WORKTREE_HOOK_CMD:-/usr/local/bin/worktre
 # stripped on re-run, so it accumulates one duplicate copy on every container
 # create. Add a new hook whose command is a different program -> add its
 # identifying substring to this array in the same change.
-HOOK_MARKERS='["claude-event-hook","worktree-context-hook"]'
+#
+# The three security-hook basenames (#811) are here for the same reason, and with
+# one extra effect: `odoo-api-guard.sh` is a substring of the OLD
+# /usr/local/share/claude-home/hooks/odoo-api-guard.sh command too, so the
+# absolute-path entries an earlier hand-edit left in settings.json are stripped
+# and replaced by the published, per-machine-expanded ones rather than left to sit
+# beside them (the same #803 migration the event shim gets).
+HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","force-push-guard.sh","mempalace-recall.sh"]'
 
 # The programs a feature-owned hook command goes on to EXEC. Resolving the hook
 # command itself is only half of what a working hook needs: claude-event-hook
@@ -377,6 +413,14 @@ check_hook_heartbeat "$CLAUDE_CONFIG_DIR/$PROVISION_MARKER_NAME" || true
 HOOK_DIR="$CLAUDE_CONFIG_DIR/hooks"
 HOOK_SHIM="$HOOK_DIR/claude-event-hook"
 WORKTREE_SHIM="$HOOK_DIR/worktree-context-hook"
+# The three shared security hooks (#811) go to the same place for the same reason:
+# $CLAUDE_CONFIG_DIR is the one path both ends of the mount agree on, so a guard
+# published here runs for host sessions too. A PreToolUse guard that cannot
+# execute reads to the harness as an ALLOW (#805), which is why "the host just
+# doesn't get it" is not an acceptable outcome for these two in particular.
+GUARD_API_SHIM="$HOOK_DIR/odoo-api-guard.sh"
+GUARD_PUSH_SHIM="$HOOK_DIR/force-push-guard.sh"
+RECALL_SHIM="$HOOK_DIR/mempalace-recall.sh"
 
 # The command literal written into settings.json. Claude Code runs hook commands
 # through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
@@ -392,6 +436,16 @@ SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/claude-event-hook"'
 # A bare /usr/local/bin path here would reintroduce #803 exactly.
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 WORKTREE_SHIM_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/worktree-context-hook"'
+
+# And the three security hooks (#811), in exactly the same style. Anything else
+# here — a container path, or the old /usr/local/share/claude-home one — resolves
+# on one side of the mount only.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+GUARD_API_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/odoo-api-guard.sh"'
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+GUARD_PUSH_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/force-push-guard.sh"'
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+RECALL_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/mempalace-recall.sh"'
 
 # publish_shim <implementation-in-image> <destination-under-$HOOK_DIR>
 # Same atomic-rename discipline as the settings write below: stage inside
@@ -416,6 +470,9 @@ publish_shim() {
 mkdir -p "$HOOK_DIR"
 publish_shim "$HOOK_CMD" "$HOOK_SHIM"
 publish_shim "$WORKTREE_HOOK_CMD" "$WORKTREE_SHIM"
+publish_shim "$SHARED_HOOKS_DIR/odoo-api-guard.sh" "$GUARD_API_SHIM"
+publish_shim "$SHARED_HOOKS_DIR/force-push-guard.sh" "$GUARD_PUSH_SHIM"
+publish_shim "$SHARED_HOOKS_DIR/mempalace-recall.sh" "$RECALL_SHIM"
 
 # Refuse to write a command that resolves nowhere — the #803 failure mode. With
 # no shim published and none left by an earlier run, writing the entries anyway
@@ -439,6 +496,52 @@ else
     WORKTREE_GROUPS='[]'
 fi
 
+# The shared security hooks (#811), each registered only once its own shim is in
+# place — same reasoning as the worktree hook. Registering a guard that resolves
+# nowhere would be strictly worse than omitting it: Claude Code exit-127s the
+# command and a PreToolUse exit-127 reads as an ALLOW (#805), i.e. a prohibition
+# that looks enforced and is not. Their markers stay in HOOK_MARKERS either way,
+# so an entry a previous run wrote is still stripped when the shim goes away.
+#
+# Timeouts match what the hand-maintained settings.json used: 20s for the palace
+# recall (it loads an embedding stack and caps itself at 18s internally), 5s for
+# each guard (a regex over one command string; anything slower is a hang).
+if [ -x "$RECALL_SHIM" ]; then
+    RECALL_GROUPS="$(jq -n --arg cmd "$RECALL_CMD" \
+        '[ { "hooks": [ {"type":"command","command":$cmd,"timeout":20} ] } ]')"
+else
+    note "no mempalace-recall hook at $RECALL_SHIM; omitting its SessionStart entry."
+    RECALL_GROUPS='[]'
+fi
+
+GUARD_GROUPS='[]'
+if [ -x "$GUARD_API_SHIM" ]; then
+    GUARD_GROUPS="$(jq -n --argjson acc "$GUARD_GROUPS" --arg cmd "$GUARD_API_CMD" \
+        '$acc + [ { "matcher":"Bash", "hooks": [ {"type":"command","command":$cmd,"timeout":5} ] } ]')"
+else
+    note "no odoo-api-guard at $GUARD_API_SHIM; omitting its PreToolUse entry."
+fi
+if [ -x "$GUARD_PUSH_SHIM" ]; then
+    GUARD_GROUPS="$(jq -n --argjson acc "$GUARD_GROUPS" --arg cmd "$GUARD_PUSH_CMD" \
+        '$acc + [ { "matcher":"Bash", "hooks": [ {"type":"command","command":$cmd,"timeout":5} ] } ]')"
+else
+    note "no force-push-guard at $GUARD_PUSH_SHIM; omitting its PreToolUse entry."
+fi
+
+# The settings fragment (#811, #812). An absent or unparseable fragment degrades to
+# {} — the hooks merge below is worth doing on its own, and a half-read policy file
+# is not something to write into the user's settings.
+FRAGMENT_JSON='{}'
+if [ -r "$SETTINGS_FRAGMENT" ]; then
+    if jq -e . "$SETTINGS_FRAGMENT" >/dev/null 2>&1; then
+        FRAGMENT_JSON="$(cat "$SETTINGS_FRAGMENT")"
+    else
+        note "$SETTINGS_FRAGMENT is not valid JSON; merging hooks only."
+    fi
+else
+    note "no settings fragment at $SETTINGS_FRAGMENT; merging hooks only."
+fi
+
 # The feature-owned hooks block. Each event maps to a dedicated group carrying
 # only our command, so the marker-based removal below can strip exactly our
 # entries without touching user groups. All seven event names are verified
@@ -446,15 +549,21 @@ fi
 # matcher (the shim excludes mcp__odoo-mcp__* itself). Every command here must
 # be matched by HOOK_MARKERS — see the contract note beside it.
 #
-# SessionStart carries TWO feature groups: the event shim first (so the
+# SessionStart carries THREE feature groups: the event shim first (so the
 # `.hooks.SessionStart[0]` the #803 tests pin stays the event shim), then the
-# worktree-context hook. They are separate groups because they are separate
-# programs with opposite stdout contracts.
-OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" '
+# worktree-context hook, then the palace recall (#811). They are separate groups
+# because they are separate programs with different contracts — the event shim must
+# never write to stdout, and the other two exist precisely to write to it.
+#
+# PreToolUse likewise carries the match-all event group first, then one Bash-matched
+# group per security guard (#811). Separate groups rather than one group with two
+# commands, so a guard whose shim is missing drops out on its own.
+OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" \
+               --argjson recall "$RECALL_GROUPS" --argjson guards "$GUARD_GROUPS" '
   {
-    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt),
+    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt + $recall),
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
-    "PreToolUse":       [ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ],
+    "PreToolUse":       ([ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ] + $guards),
     "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],
     "SubagentStop":     [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStop")} ] } ],
     "Stop":             [ { "hooks": [ {"type":"command","command":($cmd+" Stop")} ] } ],
@@ -488,10 +597,41 @@ fi
 # of the old container-absolute command too, so the stale
 # /usr/local/bin/claude-event-hook entries an earlier container wrote into the
 # user's settings.json are stripped here and replaced by the shared-path ones.
+#
+# THE SECOND ARM folds in the settings fragment (#811, #812). Its merge semantics
+# are NOT the hooks block's replace-our-own-entries rule, because none of these
+# keys is exclusively ours — the user's own values sit in the same places:
+#
+#   permissions.deny            UNION, user entries first and in their original
+#                               order, shipped entries appended, no duplicates.
+#                               `$user + ($ship - $user)` does exactly that: jq's
+#                               array `-` removes every element present in the
+#                               right operand. A host that adds a deny keeps it
+#                               across provisions, and the Feature adding one does
+#                               not need a hand-edit on every machine.
+#   env                         PER KEY, added only when ABSENT. `$ship + $user`
+#                               object-merges with the RIGHT side winning, so a
+#                               value the user set stays theirs.
+#   autoMode.environment        set only when ABSENT. It is one document, not a
+#                               set of keys, so there is no sane way to union it —
+#                               a present array is left completely alone.
+#   skillListingBudgetFraction  set only when ABSENT (#812). A single scalar whose
+#                               correct value is a function of how many skills the
+#                               Feature installs, not a preference; the unset
+#                               default of 0.01 truncates the listing on any 200k
+#                               model, and plugin skills are trimmed before bundled
+#                               ones, so the odoo-dev skills lose their
+#                               descriptions first.
+#
+# Every one of these is additive or absent-only: this arm can add policy and can
+# never remove or overwrite a user's. Opting out therefore means editing
+# settings.json, and it sticks for everything except a fragment entry the user
+# deleted, which comes back (see NOTES.md).
 TMP_OUT="$(mktemp -p "$CLAUDE_CONFIG_DIR")"
 if jq \
     --argjson ours "$OURS" \
-    --argjson markers "$HOOK_MARKERS" '
+    --argjson markers "$HOOK_MARKERS" \
+    --argjson frag "$FRAGMENT_JSON" '
     .hooks = (.hooks // {})
     | reduce ($ours | keys_unsorted[]) as $ev (.;
         .hooks[$ev] = (
@@ -504,6 +644,27 @@ if jq \
               ))
         ) + $ours[$ev]
       )
+    | ( ( $frag.permissions.deny // [] ) | if type == "array" then . else [] end ) as $shipdeny
+    | ( if ($shipdeny | length) > 0 then
+          .permissions = ( (.permissions // {}) | if type == "object" then . else {} end )
+          | .permissions.deny = (
+              ( (.permissions.deny // []) | if type == "array" then . else [] end ) as $userdeny
+              | $userdeny + ($shipdeny - $userdeny)
+            )
+        else . end )
+    | ( ( $frag.env // {} ) | if type == "object" then . else {} end ) as $shipenv
+    | ( if ($shipenv | length) > 0 then
+          .env = ( $shipenv + ( (.env // {}) | if type == "object" then . else {} end ) )
+        else . end )
+    | ( if ($frag.autoMode.environment != null)
+           and (( .autoMode.environment // null ) == null) then
+          .autoMode = ( (.autoMode // {}) | if type == "object" then . else {} end )
+          | .autoMode.environment = $frag.autoMode.environment
+        else . end )
+    | ( if ($frag.skillListingBudgetFraction != null)
+           and (.skillListingBudgetFraction == null) then
+          .skillListingBudgetFraction = $frag.skillListingBudgetFraction
+        else . end )
   ' "$BASE_FILE" > "$TMP_OUT" 2>/dev/null && jq -e . "$TMP_OUT" >/dev/null 2>&1; then
     # Only now, with a validated result in hand, replace the real file. TMP_OUT
     # lives in the same directory (hence same filesystem) as $SETTINGS, so this

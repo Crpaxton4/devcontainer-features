@@ -450,6 +450,115 @@ create) — or, to disable it permanently, drop the `sync-claude-hooks` step fro
 the Feature's `postCreateCommand`. A corrupt/unparseable `settings.json` is left
 untouched (and a warning printed) rather than overwritten.
 
+### Shared security policy: three more hooks and a settings fragment (#811)
+
+Until #811 this Feature shipped the *mechanisms* that read this machine's
+configuration and almost none of the *configuration itself*. The Odoo RPC
+prohibition, the credential denies, the production-host boundary and the standing
+session rules existed only as hand-maintained files on one host, named from
+`settings.json` by absolute path and owned by nobody. A new host, a fresh
+`~/.claude`, or a second machine got every mechanism and no policy, and no check
+reported the difference. That is the same shape as #803 (a hook command written
+for one machine's filesystem, 11,965 failures), #805 (`odoo-api-guard.sh`
+exit-127'd 73 times while present and correct — and a `PreToolUse` guard that
+cannot execute is an *allow*) and #807 (a stale wrapper, so every standing rule it
+delivers was silently absent). Three instances is a pattern.
+
+#744's reasoning for *not writing* `mempalace-recall.sh` — "a generated value or a
+stubbed hook would mask the loss of the real one" — is preserved and not
+contradicted. It is an argument against **stubbing**, and it had been conflated
+with an argument against the Feature owning the file at all. Shipping the **real**
+script masks nothing: the behaviour is present by construction.
+
+**What ships.** Four Feature-owned files, staged by `install.sh` under
+`/usr/local/share/personal-features` (inside the image, outside the
+`$CLAUDE_CONFIG_DIR` bind mount, so a build-time write is not shadowed) and
+published/merged by `sync-claude-hooks` at `postCreateCommand` time:
+
+| file | event | timeout | what it enforces |
+|---|---|---|---|
+| `hooks/odoo-api-guard.sh` | `PreToolUse` / `Bash` | 5s | Odoo external-API prohibition, credential denies, production-host boundary |
+| `hooks/force-push-guard.sh` | `PreToolUse` / `Bash` | 5s | no force-push to a protected branch, none with an unprovable destination |
+| `hooks/mempalace-recall.sh` | `SessionStart` | 20s | palace recall as `additionalContext` (reads the palace; never writes it) |
+| `settings-fragment.json` | — | — | `permissions.deny`, `env`, `autoMode.environment`, `skillListingBudgetFraction` |
+
+The three hooks get exactly the treatment the event shim gets (#803): published
+into `$CLAUDE_CONFIG_DIR/hooks/` and referenced as
+`"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/<name>"`, so they resolve on both ends
+of the mount. Their basenames are in `HOOK_MARKERS`, which makes the merge
+idempotent **and** migrates the old `/usr/local/share/claude-home/hooks/...`
+entries: those are stripped and replaced rather than left to sit beside the new
+ones. Each is registered only once its own file is actually in place — a guard
+whose command exit-127s is worse than no guard, because the harness reads that as
+an allow. `hooks/tests/odoo-api-guard.test.sh` ships beside the guard so the
+policy can be re-verified on any provisioned host, not only in CI.
+
+**How the fragment merges.** A second arm in the same `jq` pass as the hooks
+block, and every rule in it is additive or absent-only — it can add policy, and it
+can never overwrite or remove yours:
+
+- `permissions.deny` — **union**. Your entries keep their order and come first;
+  shipped entries are appended; nothing is duplicated. A deny you add survives
+  every future provision, and a deny the Feature adds needs no hand-edit here.
+- `env` — **per key, only when absent**. A value you set stays yours.
+- `autoMode.environment` — **only when absent**. It is one document, not a set of
+  keys, so there is no sane union; a present array is left completely alone.
+- `skillListingBudgetFraction` — **only when absent**, at `0.05` (#812). Unset
+  means the 0.01 default, which is 8,000 characters at 200k context against a
+  28,779-character listing — so the listing truncates to bare names, and the trim
+  protects `source === "bundled"` skills and sacrifices plugin ones, meaning the
+  `odoo-dev` skills lose their descriptions first. It is a ceiling, not an
+  allocation: while the listing fits it costs nothing.
+
+**What deliberately stays local:** anything under `odoo-sdk-config`,
+`identity.txt`, the palace data, any token; and the personal-preference keys
+(`model`, `effortLevel`, `theme`, `tui`, `timeZone`, `statusLine`, `spinnerVerbs`,
+`skillOverrides`). `ODOO_DEV_STATE_DIR` is **not** in the fragment either — it is
+delivered through `containerEnv`, and one value with two owners is a drift bug
+waiting to happen.
+
+**The decode rule's scope (#813, #907).** `odoo-api-guard.sh` used to deny *any*
+base64/hex decode anywhere in a command's text. The intent was sound — an encoded
+payload hides every other marker — but the reach was not: of 53 decodes in the
+corpus, **52 were ordinary tooling**. Thirty-two were the GitHub Contents API read
+idiom (`gh api repos/O/R/contents/PATH --jq '.content' | base64 -d`), which has no
+unencoded variant; eleven were AWS SSM file transfers; the rest were binary
+attachment dumps and, in #907, a read-only `grep` whose *search pattern* merely
+contained the marker string — investigating the guard tripped the guard. All of
+them were denied with a message about Odoo transports, which sent the caller
+looking for a transport problem that did not exist.
+
+The rule now fires only on a **decode piped, within the same pipeline, into
+something that executes it** — `base64 -d` / `base64 --decode` / `b64decode` /
+`xxd -r` / `openssl enc -d` whose output reaches `sh`, `bash`, `python`,
+`python3`, `node`, `perl`, `eval`, `exec` or `source`. A bare decode passes: to
+stdout, to a file, inside a Python program. And **every denial names the rule that
+fired** (`odoo-prod-host`, `odoo-rpc`, `odoo-credentials`,
+`decode-to-interpreter`) rather than echoing the matched literal, so a denial can
+be quoted in an issue without re-tripping the guard — which is how #832 came to be
+filed twice.
+
+**Known limit: the file-then-run bypass (#832).** Both guards reason about the
+text of one Bash command. Writing that command into a file with a file-writing
+tool — which these hooks never see — and then invoking the file presents different
+text, and every rule is stepped around. Observed, not theorised: `/tmp/push-777.sh`
+and `/tmp/w3-try/cred.sh` were created that way during an `/implement-issues` run
+and both ran. The complete fixes are to interpret the target of every `bash <path>`
+(which closes only the direct form) or to forbid write-then-invoke outright (which
+breaks ordinary scripting), so this is **accepted and documented** rather than
+patched, in both guards' headers. Treat them as tripwires against the accidental
+and the routine, not as a containment boundary against a determined caller.
+
+**Opting out, locally.** Edit `~/.claude/settings.json`: remove the hook entries
+you do not want, drop a deny, change an `env` value. The sync never removes a user
+entry and never overwrites a value you have set, so an `env` value, an `autoMode`
+document and a `skillListingBudgetFraction` you edit all stick. The two things
+that *do* come back on the next container create are a **deleted** deny (the union
+re-adds it) and a **deleted** feature hook entry (it is re-appended, like every
+other feature-owned hook). To turn the whole merge off permanently, drop the
+`sync-claude-hooks` step from the Feature's `postCreateCommand`. A
+corrupt/unparseable `settings.json` is still left strictly alone.
+
 ## Odoo consulting skills (where they live now)
 
 This Feature ships no Odoo consulting skills, and as of #738 no machinery for

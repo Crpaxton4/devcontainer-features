@@ -182,6 +182,40 @@ install -m 0755 "$(dirname "$0")/sync-claude-hooks" /usr/local/bin/sync-claude-h
 # Published into $CLAUDE_CONFIG_DIR/hooks/ by the same runtime sync, for the same
 # #803 reason; this install is its build-time source of truth.
 install -m 0755 "$(dirname "$0")/worktree-context-hook" /usr/local/bin/worktree-context-hook
+# --- the shared security policy: three hooks and a settings fragment (#811) ---
+# Until now the Feature shipped the MECHANISMS that read this machine's config and
+# almost none of the CONFIG: the Odoo external-API prohibition, the credential
+# denies, the production-host boundary and the standing session rules existed only
+# as hand-maintained files on one host, referenced from settings.json by absolute
+# path and owned by nobody. A new host got every mechanism and no policy, and
+# nothing reported the difference — the same shape as #803, #805 and #807, three
+# times over.
+#
+# So the three hooks and the settings fragment are Feature-owned files now. They
+# are staged under /usr/local/share/personal-features (inside the image, OUTSIDE
+# the $CLAUDE_CONFIG_DIR bind mount, so a build-time write here is not shadowed);
+# sync-claude-hooks publishes the hooks into $CLAUDE_CONFIG_DIR/hooks at
+# postCreateCommand time and folds the fragment into settings.json.
+#
+# #744's reasoning against WRITING mempalace-recall.sh is preserved and not
+# contradicted: a stub or a generated value would mask the loss of the real file.
+# This ships the real files, so nothing is masked.
+#
+# What deliberately stays local and unshipped: anything under odoo-sdk-config,
+# identity.txt, the palace data, any token; and the personal-preference keys
+# (model, effortLevel, theme, tui, timeZone, statusLine, spinnerVerbs,
+# skillOverrides). The fragment carries policy only.
+install -d -m 0755 /usr/local/share/personal-features/hooks
+install -m 0755 "$(dirname "$0")/hooks/odoo-api-guard.sh" /usr/local/share/personal-features/hooks/odoo-api-guard.sh
+install -m 0755 "$(dirname "$0")/hooks/force-push-guard.sh" /usr/local/share/personal-features/hooks/force-push-guard.sh
+install -m 0755 "$(dirname "$0")/hooks/mempalace-recall.sh" /usr/local/share/personal-features/hooks/mempalace-recall.sh
+install -m 0644 "$(dirname "$0")/settings-fragment.json" /usr/local/share/personal-features/settings-fragment.json
+# The guard's own case table ships beside it, for the reason #811 is about: a
+# policy whose check lives somewhere the provisioned machine cannot reach is a
+# policy nobody can re-verify after touching it. It runs standalone (jq + the
+# guard, nothing else) and the Feature test drives this very copy.
+install -d -m 0755 /usr/local/share/personal-features/hooks/tests
+install -m 0755 "$(dirname "$0")/hooks/tests/odoo-api-guard.test.sh" /usr/local/share/personal-features/hooks/tests/odoo-api-guard.test.sh
 # publish-claude-wrapper (#807): the runtime half of the `claude` wrapper, which
 # is generated further down. The wrapper is what DELIVERS
 # system-prompt-append.md, and it used to exist only inside the image while the
@@ -932,6 +966,15 @@ pf_add_script /usr/local/bin/create-pr
 pf_add_script /usr/local/bin/gh-as-owner
 pf_add_script /usr/local/bin/publish-claude-wrapper
 pf_add_script /usr/local/share/personal-features/claude-wrapper
+# The shared security policy (#811). Fingerprinted for exactly the reason the rest
+# of this list is: an image whose odoo-api-guard.sh predates the narrowed decode
+# rule (#813/#907), or whose fragment predates a deny added here, looks healthy
+# while enforcing the older policy. The fragment is data rather than a script, but
+# the marker hashes file contents, so it belongs in the same set.
+pf_add_script /usr/local/share/personal-features/hooks/odoo-api-guard.sh
+pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
+pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
+pf_add_script /usr/local/share/personal-features/settings-fragment.json
 if command -v python3 >/dev/null 2>&1; then
     PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
 import hashlib, json, os, sys, time
