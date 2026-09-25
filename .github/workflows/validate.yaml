@@ -3,6 +3,15 @@ on:
   workflow_dispatch:
   pull_request:
 
+# Pinned shellcheck version, downloaded deterministically from the official
+# koalaman release - the same pinned-tool philosophy install.sh uses for its
+# own GitHub-release binaries, rather than a third-party action with an opaque
+# bundled version. Dependabot does not bump inline shell/workflow strings;
+# refresh this by hand. Workflow-level so the shellcheck job and the
+# generated-scripts job below can never drift onto two different linters.
+env:
+  SHELLCHECK_VERSION: "0.10.0"
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -24,13 +33,6 @@ jobs:
   # edit to any one shell file is always linted.
   shellcheck:
     runs-on: ubuntu-latest
-    # Pinned shellcheck version, downloaded deterministically from the official
-    # koalaman release - the same pinned-tool philosophy install.sh uses for its
-    # own GitHub-release binaries, rather than a third-party action with an opaque
-    # bundled version. Dependabot does not bump inline shell/workflow strings;
-    # refresh this by hand.
-    env:
-      SHELLCHECK_VERSION: "0.10.0"
     steps:
       - uses: actions/checkout@v7
 
@@ -58,5 +60,46 @@ jobs:
             setup.sh \
             .claude/commands/implement-issues/stack-merge.sh \
             .claude/commands/implement-issues/gh-as-owner.sh \
+            scripts/check-generated-scripts.sh \
+            scripts/tests/check-generated-scripts.test.sh \
             devcontainer-features/test/personal-features/*.sh \
             devcontainer-features/test/second-brain/*.sh
+
+  # The job above lints install.sh as a FILE. It cannot lint the programs
+  # install.sh WRITES: those live in quoted heredocs, which are inert literal
+  # text to every shell parser pointed at install.sh, so a generated script can
+  # be arbitrarily broken while `bash -n install.sh` and shellcheck both stay
+  # green (#872). Worse, the Python inside those bodies is passed to
+  # `python3 -c` as a single-quoted shell string, so one ordinary apostrophe -
+  # in a comment is enough - truncates the program and ships it broken.
+  #
+  # check-generated-scripts.sh extracts each generated program by pattern and
+  # parses THAT, plus every embedded Python program. Its own fixture tests run
+  # first, because a gate nobody tests is how this class of bug gets through.
+  #
+  # Only personal-features/install.sh is passed: second-brain/install.sh writes
+  # no heredocs at all today, and the gate treats "found nothing to check" as a
+  # failure rather than a pass.
+  generated-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: "Install pinned shellcheck"
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+
+      - name: "Test the generated-script gate itself"
+        run: bash scripts/tests/check-generated-scripts.test.sh
+
+      - name: "Syntax-check every generated script and embedded python program"
+        run: bash scripts/check-generated-scripts.sh devcontainer-features/src/personal-features/install.sh

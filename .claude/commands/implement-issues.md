@@ -274,9 +274,12 @@ One template, filled per worker.
     `chore: release main` PR currently holds them.
   - **No local CI.** No devcontainer builds, no Docker, no full suite —
     verification is GitHub PR CI. Sanctioned locally: `bash -n`,
-    `shellcheck -s bash -S error` (pinned 0.10.0), `black --check`,
-    `py_compile`, and `uv lock` when dependencies change (CI runs
-    `uv lock --check`).
+    `shellcheck -s bash -S error` (pinned 0.10.0),
+    `bash scripts/check-generated-scripts.sh` — the gate for `install.sh`
+    heredocs, because `bash -n` cannot see inside a quoted one and an
+    apostrophe in an embedded `python3 -c` program ships a broken generated
+    script (#872) — `black --check`, `py_compile`, and `uv lock` when
+    dependencies change (CI runs `uv lock --check`).
   - **Worktrees do not isolate the Python environment.** Every worker resolves
     the same `.venv` from the main checkout, so one worker running `uv sync`
     or installing a dependency changes the interpreter its siblings are
