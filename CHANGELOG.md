@@ -1,5 +1,25 @@
 # Changelog
 
+## [6.5.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.4.0...personal-features-v6.5.0) (2026-09-28)
+
+
+### Features
+
+* **odoo-sdk:** get_models persists the project.task ir.model id; setup names the missing entry ([#958](https://github.com/Crpaxton4/devcontainer-features/issues/958)) ([ce24a0d](https://github.com/Crpaxton4/devcontainer-features/commit/ce24a0db96a21fa86f0aad15529580154b95ab62))
+* **odoo-sdk:** start_task takes base_branch, with ODOO_SDK_BASE_BRANCH as the env fallback ([#954](https://github.com/Crpaxton4/devcontainer-features/issues/954)) ([0f78d1d](https://github.com/Crpaxton4/devcontainer-features/commit/0f78d1d2efcfb30d4c2890a1240c4ffdcba21368))
+* **personal-features:** persist the odoo-dev state dir as a bind mount ([#943](https://github.com/Crpaxton4/devcontainer-features/issues/943)) ([b83b3e6](https://github.com/Crpaxton4/devcontainer-features/commit/b83b3e64d60f60df8fab76773412fa174424853c))
+* **personal-features:** run one shared mempalace hub container over the host Docker socket ([#939](https://github.com/Crpaxton4/devcontainer-features/issues/939)) ([7223c41](https://github.com/Crpaxton4/devcontainer-features/commit/7223c414fb064a37ff94d2d7714f5ada228364bd))
+* **personal-features:** ship the security hooks and a settings fragment; narrow the decode rule ([#946](https://github.com/Crpaxton4/devcontainer-features/issues/946)) ([7ab2970](https://github.com/Crpaxton4/devcontainer-features/commit/7ab2970a765daf0c4bf253d53c973265b1cceda5))
+
+
+### Bug Fixes
+
+* **odoo-sdk:** one consolidated chatter note per run, interim notes stay local, cap 500 ([#941](https://github.com/Crpaxton4/devcontainer-features/issues/941)) ([45f6cec](https://github.com/Crpaxton4/devcontainer-features/commit/45f6cec446609d1edc8fbf4e29548eb58765d3b2))
+* **odoo-sdk:** pin pytest to the checkout's src and guard against testing the main checkout ([#956](https://github.com/Crpaxton4/devcontainer-features/issues/956)) ([cdb366d](https://github.com/Crpaxton4/devcontainer-features/commit/cdb366dcb164271d5fff8ae551f3b5b280167c6b)), closes [#860](https://github.com/Crpaxton4/devcontainer-features/issues/860)
+* **personal-features:** exclude git worktrees from the mempalace auto-mine ([555a422](https://github.com/Crpaxton4/devcontainer-features/commit/555a4222096622259ad9c53253ba63da7e7fed3a)), closes [#875](https://github.com/Crpaxton4/devcontainer-features/issues/875)
+* **personal-features:** exclude worktrees from the mempalace auto-mine ([#949](https://github.com/Crpaxton4/devcontainer-features/issues/949)) ([555a422](https://github.com/Crpaxton4/devcontainer-features/commit/555a4222096622259ad9c53253ba63da7e7fed3a))
+* **personal-features:** run odoo-ls-config even when an earlier postCreate step fails ([#952](https://github.com/Crpaxton4/devcontainer-features/issues/952)) ([88afee2](https://github.com/Crpaxton4/devcontainer-features/commit/88afee2de52ffe9779bcb5e916437e72adf38976)), closes [#896](https://github.com/Crpaxton4/devcontainer-features/issues/896)
+
 ## [6.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.3.0...personal-features-v6.4.0) (2026-09-23)
 
 
