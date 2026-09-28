@@ -68,7 +68,6 @@ jobs:
     uses: ./.github/workflows/release.yaml
     permissions:
       contents: write
-      pull-requests: write
       packages: write
     secrets: inherit
 
