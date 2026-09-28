@@ -52,6 +52,10 @@ jobs:
             devcontainer-features/src/personal-features/claude-event-hook \
             devcontainer-features/src/personal-features/sync-claude-hooks \
             devcontainer-features/src/personal-features/worktree-context-hook \
+            devcontainer-features/src/personal-features/hooks/odoo-api-guard.sh \
+            devcontainer-features/src/personal-features/hooks/force-push-guard.sh \
+            devcontainer-features/src/personal-features/hooks/mempalace-recall.sh \
+            devcontainer-features/src/personal-features/hooks/tests/odoo-api-guard.test.sh \
             devcontainer-features/src/personal-features/publish-claude-wrapper \
             devcontainer-features/src/second-brain/install.sh \
             devcontainer-features/src/second-brain/second-brain-verify \

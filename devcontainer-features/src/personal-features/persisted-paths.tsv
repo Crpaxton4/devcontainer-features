@@ -37,7 +37,10 @@
 #                    the credential-holding dirs (#233) and the billing DB (#369);
 #                    0777 for shell-history so any container uid can create/append
 #                    bash_history through the bind mount even when it does not own
-#                    the host dir (#323); 0755 otherwise.
+#                    the host dir (#323); also 0700 for the odoo-dev plugin state
+#                    dir (#884), which holds no credentials but does hold client
+#                    task artifacts, repo-map.json and release history; 0755
+#                    otherwise.
 #   provision        who creates the container_target: `container` = install.sh
 #                    mkdir/chown/chmods it at build time (the common case);
 #                    `host` = the host provisions it (setup.sh/setup.ps1) and it is
@@ -51,7 +54,7 @@
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All nine paths are directories today.
+# distinction. All ten paths are directories today.
 #
 # name	host_source	container_target	env_var	env_value	mode	provision
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
@@ -67,3 +70,9 @@ coderabbit-cli	.coderabbit/	/home/vscode/.coderabbit/	-	-	0700	container
 shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777	container
 odoo-tracker	.config/odoo-task-tracker/	/usr/local/share/odoo-task-tracker/	ODOO_TASK_TRACKER_DIR	/usr/local/share/odoo-task-tracker	0700	host
 mempalace	.mempalace/	/usr/local/share/mempalace/	MEMPALACE_PALACE_PATH	/usr/local/share/mempalace/palace	0700	container
+# odoo-dev: the odoo-dev plugin's state dir (#884). Its scripts resolve
+# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}, and in a container $HOME is
+# image storage - so without this mount every task artifact, repo-map.json and
+# release record is discarded on the next rebuild, silently and with no error.
+# ODOO_DEV_STATE_DIR below is what makes the plugin resolve the mount instead.
+odoo-dev	.config/odoo-dev/	/usr/local/share/odoo-dev/	ODOO_DEV_STATE_DIR	/usr/local/share/odoo-dev	0700	container
