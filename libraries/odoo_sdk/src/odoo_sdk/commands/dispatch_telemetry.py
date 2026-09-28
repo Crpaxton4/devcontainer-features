@@ -86,7 +86,7 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
 #: Every key names an identifier, provenance marker, or machine-derived outcome
 #: (``run_summary`` is the automatic narrative ``stop_task`` computes) — never a
 #: caller-supplied free-text input. Payloads are internal/local text with NO
-#: length limit; the 300-character cap (``enforce_chatter_body_limit``) applies
+#: length limit; the 500-character cap (``enforce_chatter_body_limit``) applies
 #: only to chatter bodies posted to Odoo.
 _RESULT_PAYLOAD_KEYS = (
     "run_id",
