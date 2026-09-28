@@ -28,6 +28,7 @@ from odoo_sdk.client import OdooClient
 from odoo_sdk.commands.builtin.resume_task import ResumeTaskCommand
 from odoo_sdk.commands.builtin.start_task import StartTaskCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
+from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.transport.executor import OdooExecutor
@@ -200,7 +201,9 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         with (patch(_NOTE_GUARD),):
             with self.assertRaises(ValueError):
-                TaskNoteCommand(client, state=db).execute(1, "x" * 301)
+                TaskNoteCommand(client, state=db).execute(
+                    1, "x" * (MAX_CHATTER_BODY_CHARS + 1)
+                )
         self.assertEqual(executor.recorded, {})
         self.assertEqual(executor.created_attachments, [])
 
