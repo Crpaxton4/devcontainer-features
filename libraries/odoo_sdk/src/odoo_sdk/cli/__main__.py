@@ -20,9 +20,6 @@ Subcommands:
     prune [--older-than N]  Delete aged hook events past a retention horizon
     cmd <name> [--args J]   Dispatch any registry command; stdout is one JSON doc
     cmd --list [--json]     List every registry command as {name, description}
-    sync-skills             Materialize the packaged skills into a directory
-                            (--target-dir: in-memory MCP sync; --dest: direct
-                            byte-identical copy from package data)
 """
 
 import argparse
@@ -68,7 +65,6 @@ from odoo_sdk.commands.dispatch_telemetry import (
     _emit_tool_event,
     _error_payload,
 )
-from odoo_sdk.cli.sync_skills import cmd_sync_skills
 from odoo_sdk.errors import TrackerStateMissingError
 from odoo_sdk.sessionization import EventType
 from odoo_sdk.tracking.env import assert_sdk_configured
@@ -1115,28 +1111,6 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         help="With --list, print the listing as a JSON array",
     )
-
-    sync_skills_p = subparsers.add_parser(
-        "sync-skills",
-        help="Materialize the packaged skills into a directory "
-        "(exactly one of --target-dir / --dest)",
-    )
-    sync_skills_p.add_argument(
-        "--target-dir",
-        default=None,
-        dest="target_dir",
-        help="Serve-and-sync: download the skills from an in-process MCP "
-        "server into this directory (delete-then-copy for owned names; "
-        "scripts/ files re-marked executable)",
-    )
-    sync_skills_p.add_argument(
-        "--dest",
-        default=None,
-        dest="dest",
-        help="Direct copy: byte-identical owned skill directories from the "
-        "package data into this tree (no MCP server; deterministic, "
-        "used by the plugin skill-parity regeneration workflow)",
-    )
     return parser
 
 
@@ -1185,10 +1159,6 @@ _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
     # touches env config, and an Odoo-needing command surfaces its config error
     # through the boundary as the JSON envelope (never _assert_env plaintext).
     "cmd": (lambda c: cmd_cmd(c.args), False),
-    # ``sync-skills`` is needs_odoo=False: both modes only move packaged skill
-    # files onto disk. The --target-dir server is built over a null RPC client
-    # (no tool ever dispatches), and --dest is a plain package-data copy.
-    "sync-skills": (lambda c: cmd_sync_skills(c.args), False),
 }
 
 # The local-only command names, derived from the table so routing stays a single
