@@ -1101,8 +1101,8 @@ fi
 # other by .github/scripts/test_stray_skill_parity.py - edit one, edit both.
 #
 # stale_shadowed: moved into the odoo-dev plugin, which still ships them.
-#   Mirrors odoo_sdk.skills.PACKAGED_SKILL_NAMES, the sources those copies are
-#   generated from.
+#   Anchored on plugins/odoo-dev/skills/, the single source for those bodies
+#   since #784.
 # stale_retired:  retired outright (#700) with no plugin twin and no
 #   replacement. Still feature-seeded debris, so still deleted here - it simply
 #   has nothing to fall back on, which is why it is named separately.
