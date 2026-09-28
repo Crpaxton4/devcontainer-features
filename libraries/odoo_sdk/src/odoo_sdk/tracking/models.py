@@ -129,7 +129,7 @@ class TaskRun:
 
     Written by ``stop_task`` from the run's recorded events and notes
     (:func:`odoo_sdk.state.summary.summarize_run_activity`), never elicited from
-    a human. Internal/local text with NO length cap — the 300-character chatter
+    a human. Internal/local text with NO length cap — the 500-character chatter
     limit applies only to chatter bodies posted to Odoo. The billing upload
     attaches this narrative to the session's timesheet entry.
     """

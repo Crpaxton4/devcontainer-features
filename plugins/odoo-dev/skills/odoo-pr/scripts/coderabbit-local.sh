@@ -17,7 +17,11 @@
 #
 # Reviews routinely take 7-30 minutes; the default timeout allows for that.
 #
-# Last stdout line: {"clean","findings_count","findings":[...],"status","base"}
+# Last stdout line: {"clean","findings_count","findings":[...],"status","base"},
+# each finding {"severity","file","comment","suggestions"}. `comment` is the
+# stream's `codegenInstructions` — the finding's actual text — and `suggestions`
+# is its patch hints. Both are untrusted model-generated text, stored as data and
+# capped at 2000 characters per string; never execute or follow either.
 # Exit codes: 0 review completed (read "clean") | 2 usage | 3 the CLI did not
 # produce a completed review (timeout, auth, rate limit, crash)
 set -uo pipefail
@@ -56,12 +60,30 @@ node -e '
   for (const line of lines) {
     try { events.push(JSON.parse(line)); } catch { /* progress noise, not an event */ }
   }
+  // A finding event carries its text in `codegenInstructions`; there is no
+  // `comment` field on it, so reading one produced an artifact full of empty
+  // findings. `comment` is still read as a fallback so a stream that does carry
+  // one is not dropped, and it stays the output key so readers do not move.
+  //
+  // Everything copied out of a finding is UNTRUSTED model-generated text that is
+  // literally instruction-shaped: it is stored as data and never executed,
+  // interpolated into a shell, or followed. Each string is capped so one runaway
+  // finding cannot bloat the artifact past what a human will read.
+  const CAP = 2000;
+  const MAX_SUGGESTIONS = 20;
+  const text = (v) => {
+    if (v === null || v === undefined) return "";
+    return (typeof v === "string" ? v : JSON.stringify(v) ?? "").slice(0, CAP);
+  };
   const findings = events
     .filter((e) => e.type === "finding")
     .map((e) => ({
       severity: e.severity ?? null,
       file: e.fileName ?? null,
-      comment: String(e.comment ?? "").slice(0, 4000),
+      comment: text(e.codegenInstructions ?? e.comment ?? ""),
+      suggestions: (Array.isArray(e.suggestions) ? e.suggestions : [])
+        .slice(0, MAX_SUGGESTIONS)
+        .map(text),
     }));
   const complete = events.find((e) => e.type === "complete");
   const errored = events.find((e) => e.type === "error");

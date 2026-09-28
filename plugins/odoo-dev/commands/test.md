@@ -11,9 +11,8 @@ background: false
 
 ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id with a directory already on disk' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
-GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
-Those three are absolute literal paths, resolved once by the command before you
+Those two are absolute literal paths, resolved once by the command before you
 were dispatched. Type each of them out in full in every Bash call. Your Bash calls
 inherit no environment from me and keep no state from one call to the next, so a
 variable name in a command is not a path: it expands to nothing and the command
@@ -59,9 +58,9 @@ path, then at most five lines of plain English.
 
 Boundaries: you cannot edit code and must not ask to — a failure is reported, not
 fixed. You do not push, open a PR, post to chatter, or cut a release, you do not
-write a timesheet hour, and you do not run the gate or decide whether the work
-ships: you write the evidence the gate reads.
+write a timesheet hour, and you do not decide whether the work ships: you write the
+evidence that someone else decides on.
 
 This command dispatches `odoo-dev-tester` and nothing else. It chains to no other
 command and no other command chains to it: the person who typed it drives the
-sequence, one environment per task, and runs the gate over what you filed.
+sequence, one environment per task, and reads what you filed.
