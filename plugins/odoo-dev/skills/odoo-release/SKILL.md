@@ -184,7 +184,7 @@ The note carries the link; the review request is a real `mail.activity` schedule
 
 Wording says **queued** and **draft**, because that is what is true when this runs. Nothing has merged and nothing has deployed. Do not write a note that claims the work shipped.
 
-The 300-character cap is a hard reject, not a truncation — `writeback.sh` pre-checks it, the SDK enforces it. The full table lives in the PR body; the note carries the link. If the branch pair makes it too long, fall back to `Draft release <release_pr_url>`. Budget arithmetic in `references/release-table.md`.
+The 500-character cap is a hard reject, not a truncation — `writeback.sh` pre-checks it, the SDK enforces it. The full table lives in the PR body; the note carries the link. If the branch pair makes it too long, fall back to `Draft release <release_pr_url>`. Budget arithmetic in `references/release-table.md`.
 
 `--dedupe-key` makes a partially completed fan-out safe to resume.
 
@@ -230,7 +230,7 @@ Exit 1 is a stop. Exit 0 with warnings is not.
 
 | File | Read when |
 |---|---|
-| [release-table.md](./references/release-table.md) | Exact table, PR body and chatter formats, plus the 300-character budget |
+| [release-table.md](./references/release-table.md) | Exact table, PR body and chatter formats, plus the 500-character budget |
 | [module-commands.md](./references/module-commands.md) | Building the install/update block — command shapes per hosting, and the manifest-bump rule behind the version table |
 
 Scripts. This skill's own scripts (`RELEASE_SCRIPTS`) live at
