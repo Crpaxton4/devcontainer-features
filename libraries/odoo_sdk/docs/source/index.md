@@ -58,8 +58,18 @@ positive integer is rejected when the config loads, rather than surfacing later
 as an opaque XML-RPC fault.
 
 An operator who *does* hold the privilege populates the section once with the
-gated `get_models` tool. Ask for an unmapped model and the SDK raises a
-`ValueError` naming the exact entry to add:
+gated `get_models` command, which writes the ids it resolved straight into the
+config file — the entry never has to be typed by hand (#890):
+
+```bash
+odoo-sdk cmd get_models --args '{"persist": ["project.task"]}'
+```
+
+`persist` names the models to record; everything else in the file — other
+sections, keys, comments, spelling — is left untouched, and `ODOO_MODEL_IDS` is
+never written. When the config file cannot be written the read still succeeds
+and the result carries a `warning` instead. Ask for an unmapped model and the
+SDK raises a `ValueError` naming the exact entry to add:
 
 ```python
 config.model_id("crm.lead")          # -> None
