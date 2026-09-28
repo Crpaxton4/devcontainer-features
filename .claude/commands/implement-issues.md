@@ -222,8 +222,8 @@ Print:
 - each duplicate call **with the evidence that supports it**,
 - the skip list with reasons,
 - an explicit shared-file risk line naming what no worker may touch:
-  `README.md`, `CHANGELOG.md`, `.release-please-manifest.json`, and the
-  generated `devcontainer-features/src/*/README.md`.
+  `README.md`, `CHANGELOG.md`, `plugins/odoo-dev/CHANGELOG.md`, and
+  `.release-please-manifest.json`.
 
 A wave table is **optional**. When you print one, compute it from the graph
 rather than authoring it: wave 1 is the roots, and a child enters the first
@@ -347,7 +347,9 @@ One template, filled per worker.
       them and drifted (#847): it said 15 skills while the gate asserted 16. A
       count copied into prose is a second registry, which is the same defect as
       #781 one directory up, in the file that exists to warn about it.
-  - `devcontainer-features/src/*/README.md` are generated — edit `NOTES.md`.
+  - There is one `README.md`, at the root; Feature documentation lives in
+    `devcontainer-features/src/<feature>/NOTES.md`. Do not edit `README.md`
+    unless the plan assigns it.
 - `## Deliverable`
   - Branch `<type>/<issue>-<slug>`.
   - Conventional commits; Husky's `commit-msg` hook runs commitlint.

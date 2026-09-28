@@ -1,9 +1,12 @@
 # Personal Dev Container Features
 
-This repo holds two packages: a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`) and a Python SDK for Odoo ERP access (`odoo_sdk`).
+This repo holds a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`, `second-brain`), a Python SDK for Odoo ERP access (`odoo_sdk`), and a Claude Code plugin for Odoo consulting and delivery (`odoo-dev`).
+
+This is the only `README.md` in the repo. Per-Feature documentation lives in `devcontainer-features/src/<feature>/NOTES.md`, and the plugin's skills, agents and commands document themselves in their own files.
 
 - [`personal-features`](#personal-features)
 - [`odoo_sdk`](#odoo_sdk)
+- [odoo-dev plugin](#odoo-dev-plugin)
 - [Repo and Feature structure](#repo-and-feature-structure)
 - [Versioning & releases](#versioning--releases)
 - [Testing](#testing)
@@ -58,6 +61,7 @@ Run this before `devcontainer features test` too, or the test containers fail to
 | `~/.config/odoo_sdk` | `/usr/local/share/odoo-sdk-config` | `ODOO_SDK_CONFIG` — points at the dir; the SDK probes it for `config.toml`/`config.ini`. |
 | `~/.config/pr-automation` | `/usr/local/share/pr-automation` | `PR_AUTOMATION_CONFIG_DIR` — `create-pr`'s global and per-project config. |
 | `~/.config/coderabbit` | `/usr/local/share/coderabbit-config` | `CODERABBIT_CONFIG_DIR` — CodeRabbit CLI config/auth state. |
+| `~/.config/odoo-dev` | `/usr/local/share/odoo-dev` | `ODOO_DEV_STATE_DIR` — the [odoo-dev plugin](#odoo-dev-plugin)'s repo map, upgrade lessons and handoff artifacts. |
 | `~/.config/devcontainer/shell-history` | `/usr/local/share/shell-history` | Bash history, shared across containers and projects. |
 
 See [`devcontainer-features/src/personal-features/NOTES.md`](devcontainer-features/src/personal-features/NOTES.md) for more detail, including the Windows and WSL notes.
@@ -139,14 +143,96 @@ uv run python -m unittest discover -s tests -t .   # run tests
 make coverage     # run tests + enforce 90 % coverage threshold
 ```
 
+## odoo-dev plugin
+
+Odoo consulting and delivery packaged as one Claude Code plugin, at [`plugins/odoo-dev/`](plugins/odoo-dev). The repo root [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) is the marketplace that serves it — there is no server and no registry, so the repo is the whole install path.
+
+```bash
+claude plugin marketplace add Crpaxton4/devcontainer-features
+claude plugin install odoo-dev@devcontainer-features
+claude plugin update  odoo-dev    # version-triggered: refetches only when plugin.json's `version` moved
+```
+
+The repo is private, so both go through your existing `gh`/git credentials. For a fast edit loop, a checkout at `<config>/skills/odoo-dev/` loads in place as `odoo-dev@skills-dir` — never alongside an installed copy, or every skill, agent and command registers twice and competes for the same triggers.
+
+Start at [`odoo-dev:odoo-dev-map`](plugins/odoo-dev/skills/odoo-dev-map/SKILL.md). It routes work to the skill or agent that owns it and never does the stage work itself. What follows is a map; the `SKILL.md` and agent files are the territory.
+
+### Inventory
+
+**16 skills, 5 subagents, 5 slash commands** — the counts [`plugins/odoo-dev/scripts/validate.sh`](plugins/odoo-dev/scripts/validate.sh) asserts. Reference a skill as `odoo-dev:<name>`; frontmatter names stay bare and the namespace is derived. Individual plugin skills cannot be switched off — `skillOverrides` never reaches a plugin-sourced skill — so the only granularity is the whole plugin or none of it.
+
+| Group | Skills (under [`plugins/odoo-dev/skills/`](plugins/odoo-dev/skills)) |
+| --- | --- |
+| Delivery — the doer chain, one step per skill | `odoo-repo-map`, `odoo-prior-art`, `odoo-task-env`, `odoo-test-run`, `odoo-code-review`, `odoo-pr`, `odoo-release` |
+| Consulting | `discovery-notes`, `odoo-quote`, `fibonacci-estimate`, `odoo-design-doc` |
+| Platform | `odoo-devcontainer`, `odoo-populate-db`, `odoo-upgrade`, `principles`, `odoo-dev-map` |
+
+Agents are plain subagents, in [`plugins/odoo-dev/agents/`](plugins/odoo-dev/agents). Their names carry the `odoo-dev-` prefix because plugin agent names are **not** auto-namespaced and would otherwise collide across plugins.
+
+| Agent | Owns | Writes |
+| --- | --- | --- |
+| [`odoo-dev-scoper`](plugins/odoo-dev/agents/odoo-dev-scoper.md) | Discovery, prior-art verdict, estimate, design doc. Never touches a repo | `05-scope.json` |
+| [`odoo-dev-builder`](plugins/odoo-dev/agents/odoo-dev-builder.md) | One task, one worktree: code, tests, conventional commits | `10-env.json`, `20-build.json` |
+| [`odoo-dev-tester`](plugins/odoo-dev/agents/odoo-dev-tester.md) | Independent evidence: tests, tours, the Odoo review lens. **Cannot edit code** | `30-test.json`, `35-review.json` |
+| [`odoo-dev-pr`](plugins/odoo-dev/agents/odoo-dev-pr.md) | Push, local CodeRabbit review, draft PR, promotion, chatter notes | `40-coderabbit.json`, `50-pr.json`, `60-release.json` |
+| [`odoo-dev-upgrader`](plugins/odoo-dev/agents/odoo-dev-upgrader.md) | Cross-version porting, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
+
+One slash command per agent, in [`plugins/odoo-dev/commands/`](plugins/odoo-dev/commands): `/odoo-dev:quote`, `/odoo-dev:task`, `/odoo-dev:upgrade`, `/odoo-dev:test`, and `/odoo-dev:pr` (which also carries the release route, `/odoo-dev:pr release <from> <to>`). Each resolves the paths its agent needs and dispatches it. **No command chains to another** — you type the next one once you have read what the last one returned.
+
+### Dispatch
+
+Routing ends in a `Task` call, not in a recommendation: naming the owning agent in prose dispatches nothing. `subagent_type` is the namespaced name (`odoo-dev:odoo-dev-builder`, and the same shape for the other four) — a bare name does not resolve, and the fallback to `general-purpose` drops every `skills:` preload, `disallowedTools` entry and hook the definition carries.
+
+Every spawn prompt carries two absolute paths, typed out in full in every call: the **artifacts directory** and [`scripts/artifact.sh`](plugins/odoo-dev/scripts/artifact.sh). A subagent's Bash call inherits no environment and keeps no state from the call before it, so a variable name in a command is not a path — it expands to nothing and the command runs without it. There is no evidence gate in front of any of this: the artifacts are evidence an agent reads and reports on, never a precondition that blocks the work.
+
+| Workflow | Chain |
+| --- | --- |
+| Scoping and quoting | `scoper` → `05-scope.json` → `builder` |
+| Task delivery | `builder` → `tester` → `pr` |
+| Version upgrade | `upgrader` → `tester` → `pr` |
+| Release | `pr` → draft release PR + a note on every included task |
+
+### Handoff artifacts
+
+Append-only JSON in a per-task directory, written only through `artifact.sh` — artifacts survive compaction, a session boundary, a killed subagent, and a human taking over mid-chain, and a JSON blob in a prompt survives none of those.
+
+`00-context` · `05-scope` · `10-env` · `20-build` · `30-test` · `35-review` · `40-coderabbit` · `50-pr` · `60-release`
+
+`artifact.sh` validates required fields and cheap types before the file is named, writes atomically, and **never overwrites**: a second put of a stage lands at `<stage>.2.json`, and `get` reads the latest revision while `list` shows them all — so a chain can recover from a red test, but "green on the third try" can never read as "green".
+
+### Hooks
+
+Two `PreToolUse` hooks on `Bash`, declared in [`hooks/hooks.json`](plugins/odoo-dev/hooks/hooks.json) and shipped inside the plugin. Nothing is written to your `settings.json`; enabling or disabling the plugin turns them on and off with everything else, and both stay silent unless they have something to say.
+
+| Hook | Fires on | Denies |
+| --- | --- | --- |
+| [`bash-allowlist.sh`](plugins/odoo-dev/hooks/bash-allowlist.sh) | Every `Bash` call whose payload reports `agent_type` `odoo-dev-tester` | Anything off a short allowlist of sanctioned scripts and read-only `git`. This is what makes "cannot edit code" a property of the harness rather than a promise in a prompt; `disallowedTools` never covered `Bash` |
+| [`commit-hook.sh`](plugins/odoo-dev/hooks/commit-hook.sh) | `git commit`, from any agent | A commit carrying changes to a module whose `__manifest__.py` `version` has not moved since the base commit. Everything it cannot attribute — no module, no repo, a merge in progress, an explicit pathspec — passes in silence |
+
+### State
+
+Mutable state lives **outside** the plugin tree, at `${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}`: `repo-map.json`, `upgrade-lessons/`, and `tasks/<task_id>/`. Inside a container `personal-features` sets `ODOO_DEV_STATE_DIR` to `/usr/local/share/odoo-dev` and bind-mounts host `~/.config/odoo-dev` there, so state outlives a rebuild — the `$HOME` default is what a bare checkout gets, and inside a container it resolves to image storage a rebuild discards. [`scripts/state-dir.sh`](plugins/odoo-dev/scripts/state-dir.sh) is the single definition of that rule; nothing else may hard-code the default. Seed the dir with `plugins/odoo-dev/scripts/bootstrap-state.sh`, which is idempotent and seeds only what is absent.
+
+### Verify
+
+```bash
+plugins/odoo-dev/scripts/setup.sh --check   # is this machine ready? report only, non-zero if not
+plugins/odoo-dev/scripts/validate.sh        # every gate in one call; offline
+```
+
+`validate.sh` covers the manifest and component inventory, frontmatter and body limits, router completeness, agent definitions, namespacing, hard-coded paths, stray skills, eval-suite structure, the offline script test suites, shell syntax, and release-version drift. [`.github/workflows/plugin-odoo-dev.yaml`](.github/workflows/plugin-odoo-dev.yaml) runs it on CI, paths-filtered to the plugin, alongside the per-skill script suites and a pinned shellcheck; it sets `REQUIRE_CLAUDE=1` so the one skippable gate (`claude plugin validate`) becomes a hard failure there, and a green CI run is never one where that gate quietly did not happen.
+
+release-please treats `plugins/odoo-dev` as its own package (component `odoo-dev-plugin`) and bumps `version` in `plugins/odoo-dev/.claude-plugin/plugin.json`, which is the only thing `claude plugin update` reacts to — a merge that does not move that string ships nothing to anyone.
+
 ## Repo and Feature structure
 
-The two packages sit under `devcontainer-features/` and `libraries/`, with shared scripts in `scripts/`:
+The two packages sit under `devcontainer-features/` and `libraries/`, the plugin under `plugins/`, with shared scripts in `scripts/`:
 
 ```
 ├── devcontainer-features
-│   ├── src/personal-features/     # devcontainer Feature — install.sh, skills/, create-pr/, claude-event-hook/, sync-claude-*
-│   └── test/personal-features/    # feature test scenarios
+│   ├── src/personal-features/     # devcontainer Feature — install.sh, hooks/, create-pr/, claude-event-hook/, sync-claude-*, NOTES.md
+│   ├── src/second-brain/          # devcontainer Feature — bind-mounts the host knowledge base, NOTES.md
+│   └── test/                      # feature test scenarios, one dir per Feature
 ├── libraries
 │   └── odoo_sdk/                  # owns src/, tests/, docs/, examples/, tools/ directly
 │       ├── src/odoo_sdk/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, state, transport, tui, utilities
@@ -154,10 +240,12 @@ The two packages sit under `devcontainer-features/` and `libraries/`, with share
 │       ├── docs/source/           # Sphinx docs
 │       ├── examples/, tools/
 │       └── pyproject.toml, Makefile
+├── plugins
+│   └── odoo-dev/                  # Claude Code plugin — skills/, agents/, commands/, hooks/, scripts/, evals/
 └── scripts/                       # google_oauth_setup.py, init_tracker_db.py
 ```
 
-`devcontainer-features/src/personal-features/README.md` is auto-generated by the release workflow from `devcontainer-feature.json` merged with `NOTES.md` — don't hand-edit it.
+Feature documentation lives in `devcontainer-features/src/<feature>/NOTES.md`, next to the code it describes. Nothing generates a README from it, and this file at the root is the repo's only `README.md`.
 
 ## Versioning & releases
 
@@ -170,7 +258,7 @@ Commit messages and PR titles follow [Conventional Commits](https://www.conventi
 
 ### Publishing
 
-Features are published to GHCR by `.github/workflows/release.yaml`, namespaced as `ghcr.io/<owner>/<repo>/<feature-id>:<version>`. *Allow GitHub Actions to create and approve pull requests* needs to be enabled in `Settings > Actions > General > Workflow permissions` for the auto-generated README PR and for release-please's release PRs.
+Features are published to GHCR by `.github/workflows/release.yaml`, namespaced as `ghcr.io/<owner>/<repo>/<feature-id>:<version>`. *Allow GitHub Actions to create and approve pull requests* needs to be enabled in `Settings > Actions > General > Workflow permissions` for release-please's release PRs. The workflow publishes only: it generates no documentation and opens no docs PR.
 
 GHCR packages default to `private`. To use a Feature across projects without per-repo tokens, mark its package `public` from the package's GHCR settings page.
 
