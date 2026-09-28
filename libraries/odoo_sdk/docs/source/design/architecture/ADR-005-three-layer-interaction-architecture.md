@@ -62,7 +62,7 @@ not by directory moves (the package layout is unchanged in this ADR):
 | `services/` | data | Odoo-facing service helpers (amendment, #717): `odoo_helpers`, `activities`, `attachments`, `knowledge`, `mail_status`, `logged_lines` from the dissolved `utilities/` — every module takes an `OdooClient` and talks to Odoo |
 | `utilities/` | shims + shared | dissolved by #717: per-module deprecation shims for every moved path, plus the genuinely shared pure `utilities/html.py`, which stays. Excluded from contracts (shims re-export across layers by design) |
 | `settings.py` | shared kernel | connection-settings value object + validators extracted from `state/config.py` (amendment, #717) so transport stops importing the state layer; `state.config` re-exports them unchanged |
-| `skills/` | core | packaged consulting-skill data + `skill_body` accessors (amendment, #712): pure stdlib, no MCP/CLI imports; surfaces read it, nothing below core does |
+| `skills/` | *(removed)* | packaged consulting-skill data, added as core by #712 and deleted by #784 — see the amendment below |
 | `transport/` | data | RPC/JSON-2 executors + canonical Odoo error taxonomy |
 | `billing/logged.py` | core | core door to the Odoo logged-hours read (amendment, #718) |
 | `client/` | data | `OdooClient` session façade |
@@ -347,6 +347,34 @@ odoo_sdk.errors.OdooError`).
   fallback is core lazily constructing a data-layer default, exactly like
   `Command.state`'s `LocalStateClient()` fallback, and both are legal
   core→data edges.
+
+### Removal of the packaged skills package (amendment, #784, 2026-09-25)
+
+`odoo_sdk/skills/` is gone, and with it the `skill_body` / `skills_root`
+accessors, the `SkillsDirectoryProvider` wiring on `OdooMCPServer` (and its
+`serve_skills` / `skills_root` constructor parameters), the five static MCP
+prompts that read it, and the `odoo-sdk sync-skills` CLI that materialized it.
+
+The layer model is unchanged; one package left it. The reason is ownership, not
+layering: the same five consulting skills existed twice, once as SDK package
+data and once as `plugins/odoo-dev/skills/`, and the two copies were held
+together by a CI parity gate rather than by anything structural. #784 makes the
+plugin the single source. The SDK stays UI-unaware: it owns tools and the two
+*dynamic* prompts whose text is computed from SDK state at call time
+(`implement_task`, `report_incident`); static instructional prose belongs to the
+plugin.
+
+Consequences for this ADR's enforcement:
+
+- `odoo_sdk.skills` is removed from every import-linter contract's source and
+  forbidden lists, and from the `commands : billing : sessionization : tracking
+  : records : query` core layer line.
+- The one ADR-005 named exception granted by #714 —
+  `odoo_sdk.cli.sync_skills -> odoo_sdk.mcp.server`, the single sanctioned
+  surface→surface import — is retired with the module that needed it. Rule 1
+  (surfaces are mutually independent) now has an empty ignore list.
+- The `[tool.setuptools.package-data]` entry shipping `skills/*/SKILL.md` is
+  removed; the SDK wheel carries no skill data.
 
 ## Rejected alternatives
 

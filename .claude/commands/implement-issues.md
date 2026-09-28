@@ -203,15 +203,33 @@ are never assigned, so an empty assignee field carries no information.
 
 ## Phase 3 — Print the plan, then stop
 
+**The stack graph is the single source of every dependency.** Each edge is
+stated once, there, and nowhere else. The worker table's `Base` column and the
+wave/dispatch order are *derived* from it, never authored beside it:
+
+- a root is a node with no incoming edge; its base is `origin/main`,
+- a child's base is `origin/<parent-branch>`, read off its one incoming edge.
+
+**Consistency rule:** a base named in the worker table that does not appear as
+an edge in the stack graph is a plan defect — fix the graph and reprint the
+plan. Never reconcile the other way by editing the table, and never let two
+surfaces state the same dependency in their own words.
+
 Print:
 
-- the layered worker table,
-- the stack graph,
+- the stack graph, first, because everything below is derived from it,
+- the layered worker table, whose `Base` column is read off the graph,
 - each duplicate call **with the evidence that supports it**,
 - the skip list with reasons,
 - an explicit shared-file risk line naming what no worker may touch:
   `README.md`, `CHANGELOG.md`, `.release-please-manifest.json`, and the
   generated `devcontainer-features/src/*/README.md`.
+
+A wave table is **optional**. When you print one, compute it from the graph
+rather than authoring it: wave 1 is the roots, and a child enters the first
+wave after the one in which its parent is pushed. It is a rendering of the
+graph's topological layers and may add no edge of its own — if computing a wave
+requires an ordering the graph does not contain, the graph is what is wrong.
 
 **Then stop and wait for go.** Dispatch nothing. A plan that fans out without
 pausing has failed regardless of how good the grouping is.
@@ -245,8 +263,27 @@ pausing has failed regardless of how good the grouping is.
 
   `/workspaces` is root-owned, so the worktree goes in the session scratchpad,
   not beside the repo.
+
+  The parent's PR number goes into the child's PR body as `Stacked on #N`, on
+  its own line, so the stack is legible from the PR alone.
 - A child dispatches when its parent **pushes its branch**, not when the
-  parent's PR merges.
+  parent's PR merges. The push is the *earliest* moment it may dispatch, not the
+  signal that it is ready. Before releasing a child:
+
+  ```bash
+  git -C "$REPO" diff --stat origin/main...origin/<parent-branch>
+  git -C "$REPO" diff origin/main...origin/<parent-branch> -- <each file the child's prompt names>
+  ```
+
+  Read the `--stat` for every child, and the full diff for every file that
+  child's prompt names. Then **re-derive the child's `file:line` pointers and
+  every interface it depends on** — renamed or deleted files, changed variable
+  and function signatures, moved sections and headings, new preconditions — and
+  **rewrite the child's prompt before dispatching it**. A prompt authored during
+  Phase 3, against the tree as it was before the parent ran, is stale by
+  construction the moment the parent touches the same interface; git will not
+  flag it, because the child's edit applies cleanly to the parent's new file and
+  is simply wrong.
 - Cap roughly 6 workers in flight.
 
 ## Phase 5 — Worker prompt contract
@@ -286,11 +323,21 @@ One template, filled per worker.
     linting and compiling against, and breaks their gates for reasons that
     appear nowhere in their own diffs. Confine dependency work to `uv lock`,
     which only rewrites the lockfile.
+
+    Reads resolve to the main checkout too, which is the half that bites
+    silently: the SDK's editable install is one absolute path into
+    `/workspaces/devcontainer-features/libraries/odoo_sdk/src`, so `import
+    odoo_sdk` from any worktree lands on **main's** source unless the run says
+    otherwise. Run the SDK's pytest from `<abs worktree path>/libraries/odoo_sdk`
+    — the ini `pythonpath` there pins that checkout's `src/` — or put
+    `PYTHONPATH=<abs worktree path>/libraries/odoo_sdk/src` on the *same command
+    line* as pytest, since exported environment does not survive between Bash
+    calls. The session-scoped guard in `libraries/odoo_sdk/tests/conftest.py`
+    fails the run loudly when neither holds; a test-only diff would otherwise
+    produce a false PASS against source the run never imported.
   - Do not merge, do not force-push, do not touch another worker's branch.
   - Do not edit shared doc lines unless explicitly assigned them.
   - **Parity traps**, when in scope:
-    - `libraries/odoo_sdk/src/odoo_sdk/skills/` ↔ `plugins/odoo-dev/skills/`
-      are generated copies; CI fails if only one side moves.
     - `persisted-paths.tsv` ↔ `devcontainer-feature.json` ↔ `setup.sh` ↔
       `setup.ps1` must move together.
     - `plugins/odoo-dev/scripts/validate.sh` carries hard-coded inventory counts
@@ -313,10 +360,15 @@ One template, filled per worker.
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
     means the title is what lands on `main` and what release-please parses.
-- `## Report back` — branch, PR URL, files changed, **and anything that
-  contradicts the issue's assumptions**. Final line exactly `PR: <url>` or
-  `PR: none — <reason>`. Silently dropping scope is failure; a documented,
-  verified blocker is acceptable.
+- `## Report back` — branch, PR URL, files changed, **anything that contradicts
+  the issue's assumptions**, and — required, not optional — **every interface
+  change a downstream worker needs**: files renamed or deleted, changed CLI
+  arguments and flags, new or renamed column names and variables, moved
+  headings and sections, new preconditions or early exits. Report these even
+  when nothing about your own issue was contradicted; a sibling or child briefed
+  on the old shape has no other way to learn it changed. Final line exactly
+  `PR: <url>` or `PR: none — <reason>`. Silently dropping scope is failure; a
+  documented, verified blocker is acceptable.
 
 ## Phase 6 — Steer live workers with `SendMessage`
 
