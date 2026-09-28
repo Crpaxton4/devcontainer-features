@@ -46,7 +46,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 ## 7. Verification loop (all modules, target devcontainer)
 
-- `install_all.sh` — drop dev DB, install EVERY custom module on fresh one. Must exit clean: no tracebacks, no "invalid view" warnings.
+- `install_all.sh --db <throwaway>` — install EVERY custom module on a fresh throwaway DB (never the project's own: `--db` is required and the script refuses a database that already holds modules). Must exit clean: no tracebacks, no "invalid view" warnings.
 - Fix what break (minimal diffs, commit per module), rerun. Repeat until green.
 - Then: run test suites with target odoo-bin (`odoo-bin test`), smoke-test main views (form/list/kanban) + report rendering — green install alone prove little; views can install yet render broken.
 - Upgrade path: `-u <module>` on DB where previous version was installed, when available.
