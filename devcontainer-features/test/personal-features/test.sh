@@ -212,6 +212,15 @@ check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-co
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# #884: the odoo-dev plugin resolves its state dir as
+# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}. $HOME is container-local
+# image storage, so without this mount every task artifact, repo-map.json and
+# release record is discarded on the next rebuild. containerEnv is the single
+# place the variable is set, so the plugin resolves the mount instead.
+check "odoo-dev state dir exists" bash -c "test -d /usr/local/share/odoo-dev"
+check "ODOO_DEV_STATE_DIR points at the bind mount (#884)" bash -c \
+  "[ \"\$ODOO_DEV_STATE_DIR\" = '/usr/local/share/odoo-dev' ]"
+
 # #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
 # mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
 # lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
@@ -1040,9 +1049,112 @@ check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run
 # #809: the worktree hook's command contains no `claude-event-hook`, so it is
 # only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
 # would survive the strip and be re-appended, accumulating one duplicate per
-# container create - re-run twice more and pin the count at exactly one.
+# container create - re-run twice more and pin the count at exactly one. The
+# SessionStart group count is THREE since #811: event shim, worktree context,
+# palace recall.
 check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '2' ]"
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '3' ]"
+
+# --- #811/#812/#813/#907/#832: the shared security policy rides the same merge --
+# The Feature used to ship the MECHANISMS that read this machine's config and
+# almost none of the CONFIG: three hooks and a settings fragment were
+# hand-maintained on one host and named from settings.json by absolute path, so a
+# fresh ~/.claude got every mechanism and no policy, and nothing reported the
+# difference. The hooks are Feature-owned files now and get the same
+# publish-then-reference treatment as the two shims (#803); the fragment gets an
+# additive-only arm in the same jq merge.
+HK_SEC="$HOOKS_TEST_ROOT/sec"
+mkdir -p "$HK_SEC"
+check "sync-claude-hooks runs twice against a fresh config dir (#811)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_SEC\" /usr/local/bin/sync-claude-hooks 2>/dev/null && CLAUDE_CONFIG_DIR=\"$HK_SEC\" /usr/local/bin/sync-claude-hooks 2>\"$HK_SEC/err\""
+check "the three security hooks are published into the shared config dir (#811)" bash -c \
+  "for h in odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do test -x \"$HK_SEC/hooks/\$h\" || exit 1; cmp -s \"/usr/local/share/personal-features/hooks/\$h\" \"$HK_SEC/hooks/\$h\" || exit 1; done"
+# Published exactly ONCE each after two syncs: each basename is in HOOK_MARKERS,
+# so a prior run's entry is stripped before the fresh one is appended. Without
+# that a container create would add one duplicate copy of every guard.
+check "each security hook is registered exactly once after two syncs (#811)" bash -c \
+  "[ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"odoo-api-guard.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"force-push-guard.sh\"))] | length' \"$HK_SEC/settings.json\")\" = '1' ]"
+check "the two guards register as PreToolUse/Bash with a 5s timeout (#811)" bash -c \
+  "[ \"\$(jq '[.hooks.PreToolUse[] | select(.matcher == \"Bash\") | select(.hooks[].timeout == 5)] | length' \"$HK_SEC/settings.json\")\" = '2' ]"
+check "mempalace-recall registers on SessionStart with a 20s timeout (#811)" bash -c \
+  "jq -e '.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\")) | .hooks[] | select(.timeout == 20)' \"$HK_SEC/settings.json\" >/dev/null"
+# Same #803 reason as the event shim, and sharper: a PreToolUse guard whose
+# command exit-127s reads to the harness as an ALLOW, so a container-absolute
+# path here is a prohibition that looks enforced on the host and is not.
+check "no security hook command bakes in a container-only absolute path (#803/#811)" bash -c \
+  "! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_SEC/settings.json\" | grep -q '^/usr/local/'"
+check "the #805 audit reports nothing about the three security hooks (#811)" bash -c \
+  "! grep -qE 'odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' \"$HK_SEC/err\""
+# The guard's own case table, shipped beside it, driven against the installed
+# copy: the narrowed decode rule (#813/#907), the rule named in every denial, and
+# the RPC/credential/production-host families still firing.
+check "odoo-api-guard passes its shipped case table (#813/#907)" bash -c \
+  "/usr/local/share/personal-features/hooks/tests/odoo-api-guard.test.sh /usr/local/share/personal-features/hooks/odoo-api-guard.sh"
+# The #832 limit is a documented decision, not a silent gap: the header has to say
+# so, or the next reader assumes a containment boundary that does not exist.
+check "odoo-api-guard documents the file-then-run limit (#832)" bash -c \
+  "grep -q '#832' /usr/local/share/personal-features/hooks/odoo-api-guard.sh && grep -q '#832' /usr/local/share/personal-features/hooks/force-push-guard.sh"
+
+# The fragment, into a settings.json that holds none of its keys: every one lands.
+check "the settings fragment is valid JSON (#811)" bash -c \
+  "jq . /usr/local/share/personal-features/settings-fragment.json >/dev/null"
+check "the shipped deny list lands whole (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC/settings.json\")\" = \"\$(jq '.permissions.deny | length' /usr/local/share/personal-features/settings-fragment.json)\" ] && jq -e '.permissions.deny | index(\"Bash(pkill*)\")' \"$HK_SEC/settings.json\" >/dev/null"
+check "the shipped env keys land (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq -r '.env.CAVEMAN_DEFAULT_MODE' \"$HK_SEC/settings.json\")\" = 'ultra' ]"
+# ODOO_DEV_STATE_DIR is delivered through containerEnv, not through this fragment;
+# shipping it here too would give one value two owners.
+check "the fragment ships no ODOO_DEV_STATE_DIR (#811)" bash -c \
+  "[ \"\$(jq -r '.env.ODOO_DEV_STATE_DIR // \"absent\"' /usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
+check "the fragment carries no secret-looking key (#811)" bash -c \
+  "! grep -qiE '\"[^\"]*(token|secret|password|api[_-]?key)[^\"]*\"[[:space:]]*:' /usr/local/share/personal-features/settings-fragment.json"
+check "the shipped autoMode.environment lands (#811)" bash -c \
+  "[ \"\$(jq '.autoMode.environment | length' \"$HK_SEC/settings.json\")\" -gt 5 ]"
+# #812: unset means the 0.01 default, which is 8,000 chars at 200k against a
+# 28,779-char listing - the listing truncates, and plugin skills are trimmed
+# before bundled ones, so this repo's own skills lose their descriptions first.
+check "skillListingBudgetFraction is set to 0.05 when absent (#812)" bash -c \
+  "[ \"\$(jq '.skillListingBudgetFraction' \"$HK_SEC/settings.json\")\" = '0.05' ]"
+
+# The same fragment against a settings.json that already holds every one of its
+# keys. The arm is additive-only: it may add policy and may never overwrite or
+# remove the user's. Run twice, because a merge that is right once and wrong on
+# re-run is the duplicate-accumulation bug in a different key.
+HK_SEC2="$HOOKS_TEST_ROOT/sec2"
+mkdir -p "$HK_SEC2"
+cat > "$HK_SEC2/settings.json" <<'JSON'
+{ "skillListingBudgetFraction": 0.1,
+  "env": {"CAVEMAN_DEFAULT_MODE": "lite", "MY_OWN_KEY": "keep"},
+  "autoMode": {"environment": ["my own environment document"]},
+  "permissions": {"deny": ["Bash(my-own-deny*)", "Bash(pkill*)"]} }
+JSON
+check "sync-claude-hooks merges the fragment into a settings.json that owns the same keys (#811)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_SEC2\" /usr/local/bin/sync-claude-hooks 2>/dev/null && CLAUDE_CONFIG_DIR=\"$HK_SEC2\" /usr/local/bin/sync-claude-hooks 2>/dev/null"
+# Union, not replace: a host that adds a deny keeps it across provisions, in its
+# original position, and the Feature's entries are appended after it.
+check "a user-only deny survives the merge and stays first (#811)" bash -c \
+  "[ \"\$(jq -r '.permissions.deny[0]' \"$HK_SEC2/settings.json\")\" = 'Bash(my-own-deny*)' ]"
+check "a shipped deny the user already had is not duplicated (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC2/settings.json\")\" = \"\$(jq '.permissions.deny | unique | length' \"$HK_SEC2/settings.json\")\" ] && [ \"\$(jq '[.permissions.deny[] | select(. == \"Bash(pkill*)\")] | length' \"$HK_SEC2/settings.json\")\" = '1' ]"
+check "the shipped denies are added alongside the user's (#811)" bash -c \
+  "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC2/settings.json\")\" = \"\$(jq '(.permissions.deny | length) + 1' /usr/local/share/personal-features/settings-fragment.json)\" ]"
+check "an env key the user already set is not clobbered (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CAVEMAN_DEFAULT_MODE' \"$HK_SEC2/settings.json\")\" = 'lite' ] && [ \"\$(jq -r '.env.MY_OWN_KEY' \"$HK_SEC2/settings.json\")\" = 'keep' ]"
+check "an env key the user did not set is added (#811)" bash -c \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_ENABLE_TODO_TOOLS' \"$HK_SEC2/settings.json\")\" = '1' ]"
+# autoMode.environment is one document, not a set of keys, so there is no sane
+# union: a present array is left completely alone.
+check "a user-authored autoMode.environment is left untouched (#811)" bash -c \
+  "[ \"\$(jq -c '.autoMode.environment' \"$HK_SEC2/settings.json\")\" = '[\"my own environment document\"]' ]"
+check "a user-set skillListingBudgetFraction is kept (#812)" bash -c \
+  "[ \"\$(jq '.skillListingBudgetFraction' \"$HK_SEC2/settings.json\")\" = '0.1' ]"
+
+# With no fragment to read, the hooks block still merges: the two halves fail
+# independently, and a missing policy file must not cost the machine its hooks.
+HK_SEC3="$HOOKS_TEST_ROOT/sec3"
+mkdir -p "$HK_SEC3"
+check "an absent settings fragment is reported and the hooks still merge (#811)" bash -c \
+  "PERSONAL_FEATURES_SETTINGS_FRAGMENT=\"$HOOKS_TEST_ROOT/no-such-fragment.json\" CLAUDE_CONFIG_DIR=\"$HK_SEC3\" /usr/local/bin/sync-claude-hooks 2>\"$HK_SEC3/err\" && grep -q 'no settings fragment' \"$HK_SEC3/err\" && jq -e '.hooks.SessionStart | length > 0' \"$HK_SEC3/settings.json\" >/dev/null && [ \"\$(jq -r '.skillListingBudgetFraction // \"absent\"' \"$HK_SEC3/settings.json\")\" = 'absent' ]"
 
 # (c) A pre-seeded user setting AND a user-authored hook survive the merge.
 HK_B="$HOOKS_TEST_ROOT/b"
@@ -1059,8 +1171,10 @@ check "a pre-seeded user setting survives the merge" bash -c \
   "[ \"\$(jq -r '.model' \"$HK_B/settings.json\")\" = 'opus' ] && [ \"\$(jq -r '.env.FOO' \"$HK_B/settings.json\")\" = 'bar' ]"
 check "a user-authored hook survives the merge" bash -c \
   "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
-check "the feature hook is added alongside the user's (two PreToolUse groups)" bash -c \
-  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '2' ]"
+# Four PreToolUse groups since #811: the user's, the match-all event group, and
+# one Bash-matched group per security guard.
+check "the feature hooks are added alongside the user's (four PreToolUse groups)" bash -c \
+  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
 
 # (c2) #803 migration: the stale container-absolute entries an earlier container
 # wrote into the user's real settings.json are stripped and REPLACED, not left to
@@ -1072,8 +1186,29 @@ cat > "$HK_D/settings.json" <<'JSON'
     "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
   } }
 JSON
+# Three PreToolUse groups afterwards: the replacement match-all event group plus
+# the two security guards (#811). What this pins is that NONE of them carries a
+# container-absolute command and the stale one is gone rather than beside them.
 check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '1' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '3' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+
+# (c2b) #811 migration, the same shape: the guards and the recall hook were named
+# from settings.json by their /usr/local/share/claude-home absolute paths while the
+# files were hand-maintained. Their basenames are HOOK_MARKERS, so those entries
+# are stripped and replaced by the published, per-machine-expanded ones instead of
+# accumulating beside them - and the host side of the mount stops exit-127ing them.
+HK_D2="$HOOKS_TEST_ROOT/d2"
+mkdir -p "$HK_D2"
+cat > "$HK_D2/settings.json" <<'JSON'
+{ "hooks": {
+    "SessionStart": [ {"hooks":[{"type":"command","command":"/usr/local/share/claude-home/hooks/mempalace-recall.sh","timeout":20}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[
+        {"type":"command","command":"/usr/local/share/claude-home/hooks/odoo-api-guard.sh","timeout":5},
+        {"type":"command","command":"/usr/local/share/claude-home/hooks/force-push-guard.sh","timeout":5}]} ]
+  } }
+JSON
+check "the hand-maintained absolute-path security entries are replaced (#811 migration)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$HK_D2\" /usr/local/bin/sync-claude-hooks >/dev/null 2>&1 && ! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_D2/settings.json\" | grep -q '^/usr/local/' && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"odoo-api-guard.sh\"))] | length' \"$HK_D2/settings.json\")\" = '1' ] && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"mempalace-recall.sh\"))] | length' \"$HK_D2/settings.json\")\" = '1' ]"
 
 # (c3) With no shim to publish and none already in place, writing the entries
 # would hand every session a command that resolves nowhere - the #803 failure
@@ -1114,26 +1249,34 @@ check "the real hook dependencies resolve when the SDK is installed (#496 covera
 # The PROVISION-time half: every command the settings file actually references.
 # It can only run here - settings.json lives in the bind-mounted config dir and
 # does not exist at image-build time.
+#
+# THE FIXTURES ARE USER-OWNED NAMES SINCE #811. They used to be called
+# `mempalace-recall.sh` and `odoo-api-guard.sh`, which are now Feature-owned
+# basenames listed in HOOK_MARKERS - so entries naming them are STRIPPED and
+# replaced by the published, working copies before the audit ever sees them, and
+# this block would silently stop testing the audit at all. What is under test
+# here is the audit's treatment of a command NOBODY in this feature owns, so the
+# fixtures must be names the merge does not touch.
 HK_F="$HOOKS_TEST_ROOT/f"
 mkdir -p "$HK_F"
 cat > "$HK_F/settings.json" <<JSON
 { "hooks": {
-    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/mempalace-recall.sh"}]} ],
-    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/odoo-api-guard.sh"}]},
+    "SessionStart": [ {"hooks":[{"type":"command","command":"$HK_F/hooks/users-own-recall.sh"}]} ],
+    "PreToolUse": [ {"matcher":"Bash","hooks":[{"type":"command","command":"$HK_F/users-own-guard.sh"}]},
                     {"matcher":"Edit","hooks":[{"type":"command","command":"jq --version"}]} ]
   } }
 JSON
 # Present but not executable is the same failure as absent: /bin/sh exit-127s it.
-printf '#!/bin/sh\n' > "$HK_F/odoo-api-guard.sh"
-chmod 0644 "$HK_F/odoo-api-guard.sh"
+printf '#!/bin/sh\n' > "$HK_F/users-own-guard.sh"
+chmod 0644 "$HK_F/users-own-guard.sh"
 check "sync-claude-hooks resolves every command in the settings file" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_F\" /usr/local/bin/sync-claude-hooks 2>\"$HK_F/err\""
 check "it names a referenced hook script that is missing (#744 coverage)" bash -c \
-  "grep -q 'mempalace-recall.sh' \"$HK_F/err\""
+  "grep -q 'users-own-recall.sh' \"$HK_F/err\""
 check "it never creates the missing hook script" bash -c \
-  "! test -e \"$HK_F/hooks/mempalace-recall.sh\""
+  "! test -e \"$HK_F/hooks/users-own-recall.sh\""
 check "it names a referenced hook script that is present but not executable" bash -c \
-  "grep -q 'odoo-api-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
+  "grep -q 'users-own-guard.sh' \"$HK_F/err\" && grep -q 'not executable' \"$HK_F/err\""
 check "it says nothing about a command that does resolve" bash -c \
   "! grep -q 'jq --version' \"$HK_F/err\""
 # A hook the user owns is theirs to fix: report it, but never fail container
@@ -1262,9 +1405,19 @@ check "the staleness report survives a create that writes no hook entries" bash 
 
 # #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
 # on every container create. The #804 mechanism deliberately adds NO hook entry,
-# so assert the settings file still carries only the two known feature programs.
+# so assert the settings file still carries only the KNOWN feature programs -
+# five of them since #811, which added the two security guards and the palace
+# recall hook alongside the event shim and the worktree-context hook.
+#
+# Three assertions, not one, so extending the roster cannot quietly weaken this
+# into a tautology: (1) every command in the file is one of the five - an entry
+# from anywhere else, the heartbeat included, fails here; (2) all five are
+# actually present - an allowlist that matches nothing would otherwise pass (1)
+# trivially; (3) no command string appears twice - the duplicate-accumulation
+# failure this check is a sibling of. The event shim's seven entries differ by
+# their event-name argument, so every one of the commands is distinct.
 check "the heartbeat mechanism adds no hook entry of its own" bash -c \
-  "! jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\" | grep -qvE 'claude-event-hook|worktree-context-hook'"
+  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
 
@@ -1481,115 +1634,279 @@ check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash
 check "real mempalace init completes headless and writes rooms" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
 
-# --- the shared mempalace MCP hub (#764) --------------------------------------
-# mempalace hands the MCP writer lease to one process per palace, so a container
-# where every session spawns its own server has exactly one session that can
-# write and N-1 that fail at write time with -32001. The fix is one long-lived
-# `mempalace serve` per container, started from postStartCommand - which
-# `devcontainer features test` does not run, so the script is driven by hand
-# here. MEMPALACE_HUB_CMD substitutes a stub for the real binary so these assert
-# the launcher's policy, not mempalace's server. Port 8799 throughout, never the
-# 8765 default, so nothing here can collide with a real hub.
-check "mempalace-hub is on PATH and executable" bash -c \
-  "test -x /usr/local/bin/mempalace-hub"
-check "mempalace-hub passes shell syntax check" bash -c \
-  "sh -n /usr/local/bin/mempalace-hub"
-
-# Pre-created 0666 for the same reason as mempal-dir.sh: install.sh cannot know
-# which account the dev container CLI runs postStartCommand as, and the hub's
-# only diagnostics live in this file.
-check "the hub log is pre-created and writable by any uid" bash -c \
-  "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
-
-# MEMPALACE_HUB_MARKER is overridden here and everywhere below: `status`
-# records what it saw (#780), and the default target is the real, host-persisted
-# provision marker, which no check may write to.
-check "mempalace-hub status reports no hub when nothing is listening" bash -c \
-  "MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
-check "mempalace-hub rejects an unknown action" bash -c \
-  "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
-
-# A stub that records its argv and the environment the launcher hands it, then
-# outlives the launcher - the detach path has to be exercised, not simulated.
+# --- the shared mempalace hub container (#898, #897, #921) --------------------
+# The palace is a HOST bind mount every devcontainer on the machine sees, so the
+# flock that arbitrates mempalace's single MCP writer lease is host-global. The
+# per-container hub this replaced bound and health-checked container-local
+# loopback, so the second container to start was refused the lock, spent its
+# restart budget in ~45s on a condition no retry can change, and gave up. There
+# is now ONE hub container for the host, reconciled by `mempalace-hub-up` over
+# the Docker socket that docker-outside-of-docker mounts.
 #
-# Every knob that names a file is pointed into the temp dir: the supervisor
-# outlives the check that started it, and must not write the container's real
-# pid file, log or provision marker while doing so. MEMPALACE_HUB_MAX_RESTARTS=0
-# keeps the leftover supervisor from re-running the stub for minutes afterwards;
-# the restart budget gets its own checks below.
-_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_MAX_RESTARTS=0;"
+# `devcontainer features test` has no host daemon to talk to and must never
+# create a real container, so everything below drives the reconcile against a
+# STUB `docker` first on PATH: it appends every argv line to $STUB_CALLS and
+# answers `info`/`inspect`/`network`/`image`/`pull`/`run`/`ps` from canned,
+# per-scenario values the check exports. That makes the assertions about the
+# launcher's policy - which state it records, and the exact argv it would hand a
+# real daemon - rather than about Docker.
+check "mempalace-hub-up is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-hub-up"
+check "mempalace-hub-up passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/mempalace-hub-up"
+# The per-container supervisor is gone, not deprecated: leaving it installed
+# would leave a second thing racing for the same host-global lock.
+check "the per-container mempalace-hub supervisor is gone" bash -c \
+  "! test -e /usr/local/bin/mempalace-hub"
 
-# A stub that exits immediately, for the restart budget. Same call record as the
-# long-lived one, so a restart is counted by grepping its argv log.
-_HUB_CRASH_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nexit 9\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_RESTART_DELAY=0 MEMPALACE_HUB_HEALTHY_SECS=3600;"
+# install.sh freezes the mempalace tool venv so the hub installs the resolution
+# THIS image was tested with, chromadb (the single-writer backend) included, and
+# records the image alongside it so the pin lives in one place.
+check "the hub's frozen dependency set is installed" bash -c \
+  "test -s /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+check "the frozen dependency set pins mempalace" bash -c \
+  "grep -qi '^mempalace==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+# A one-line file is the documented fallback (the freeze could not run), which
+# is a warning at build time, not a failure here. A real freeze must carry the
+# single-writer backend with it, or the hub resolves chromadb itself and stops
+# being the resolution this image was tested with.
+check "a real freeze pins chromadb with it" bash -c \
+  "[ \"\$(wc -l < /usr/local/share/personal-features/mempalace-hub-requirements.txt)\" -le 1 ] || grep -qi '^chromadb==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+check "the hub records its version and image" bash -c \
+  "grep -q '^MEMPALACE_HUB_VERSION=' /usr/local/share/personal-features/mempalace-hub.env && grep -q '^MEMPALACE_HUB_IMAGE=' /usr/local/share/personal-features/mempalace-hub.env"
 
-check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
+# The stub daemon. Built once, at test-file scope, because every check runs in
+# its own `bash -c` and cannot see a function defined here. A real AF_UNIX
+# socket file stands in for /var/run/docker.sock so the `-S` guard passes; the
+# stub is what answers, so nothing ever connects to it.
+_HUB_STUB_DIR="$(mktemp -d)"
+mkdir -p "$_HUB_STUB_DIR/bin"
+python3 -c 'import socket, sys
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(sys.argv[1])
+sock.listen(1)' "$_HUB_STUB_DIR/docker.sock"
 
-# The idle-exit watchdog exists for abandoned PER-SESSION servers; on the one
-# process the container shares it is a self-inflicted outage whose next repair
-# is the next container start.
-check "mempalace-hub disables the hub's idle-exit watchdog" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -qx 'idle=0' \"\$d/bin/stub.calls\""
+cat > "$_HUB_STUB_DIR/bin/docker" <<'HUB_DOCKER_STUB'
+#!/bin/sh
+# Stub `docker` for the mempalace-hub-up checks. Records argv, answers from
+# STUB_* variables. Never contacts a daemon and never creates anything.
+printf '%s\n' "$*" >> "$STUB_CALLS"
+case "$1" in
+    info) exit "${STUB_INFO_RC:-0}" ;;
+    network)
+        case "$2" in
+            inspect) [ "${STUB_NET_EXISTS:-1}" = 1 ] || exit 1 ;;
+        esac
+        exit 0
+        ;;
+    image) exit "${STUB_IMAGE_RC:-0}" ;;
+    pull) exit "${STUB_PULL_RC:-0}" ;;
+    run) exit "${STUB_RUN_RC:-0}" ;;
+    inspect) ;;
+    *) exit 0 ;;
+esac
+# `docker inspect`. With -f it is one of the four templates the reconcile uses;
+# without it, the self-identification probe.
+if [ "${2:-}" = "-f" ]; then
+    case "${3:-}" in
+        *State.Status*)
+            [ -n "${STUB_HUB_STATUS:-}" ] || exit 1
+            printf '%s\n' "$STUB_HUB_STATUS"
+            ;;
+        *requirements-sha*) printf '%s\n' "${STUB_HUB_SHA:-}" ;;
+        *Mounts*) printf '%s\n' "${STUB_HOST_PATH:-}" ;;
+        *NetworkSettings*) printf '%s\n' "${STUB_NETWORKS:-mempalace }" ;;
+    esac
+    exit 0
+fi
+exit "${STUB_SELF_RC:-0}"
+HUB_DOCKER_STUB
+chmod +x "$_HUB_STUB_DIR/bin/docker"
 
-# A background child still holding the lifecycle command's pipes would keep the
-# dev container CLI waiting on it forever, so the launcher must return on its
-# own timeout even though the hub it started is still alive.
-check "mempalace-hub does not block on the hub it started" bash -c \
-  "$_HUB_STUB_SETUP s=\$(date +%s); /usr/local/bin/mempalace-hub >/dev/null 2>&1; [ \$(( \$(date +%s) - s )) -lt 20 ]"
+# A credential-free /healthz that answers 200, so the `live` path can be reached
+# without a real hub. mempalace-hub-up dials $MEMPALACE_HUB_NAME:$PORT, so the
+# scenario names the hub 127.0.0.1 and this listens there.
+cat > "$_HUB_STUB_DIR/bin/fake-healthz" <<'HUB_HEALTHZ_STUB'
+#!/bin/sh
+exec python3 - "$1" <<'PY'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Every failure is a warning: no hub is the pre-#764 behaviour, which is
-# degraded (one writer among N sessions), not broken.
-check "mempalace-hub exits 0 when the hub never answers" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1"
-check "mempalace-hub warns when the hub never answers" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
-check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
-  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub 2>/dev/null"
-check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
-  "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
 
-# --- the hub supervisor and its liveness record (#780) ------------------------
-# postStartCommand fires once per container start, so before this a hub that
-# died mid-session was never restarted - and the fallback it left behind (every
-# session serving its own palace copy, one writer lease between them) is exactly
-# the #764 bug, reinstated silently and surfacing only at write time. `start`
-# now detaches `supervise`, which re-runs `mempalace serve` when it exits, and
-# every state transition is recorded in the provision marker #806 already keeps
-# in $CLAUDE_CONFIG_DIR - the same file and the same mechanism, one new key.
-check "the hub pid file is pre-created and writable by any uid" bash -c \
-  "test -f /usr/local/share/personal-features/mempalace-hub.pid && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.pid)\" = '666' ]"
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
 
-# start must hand off to the supervisor, not run the server as its own child:
-# the restart loop is the whole point, and it has to outlive the launcher.
-check "mempalace-hub start detaches the supervisor" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q '^supervisor=' \"\$d/hub.pid\" && grep -q '^server=' \"\$d/hub.pid\""
+    def log_message(self, *args):
+        pass
 
-# One serve run plus MEMPALACE_HUB_MAX_RESTARTS restarts, then it stops - a hub
-# that cannot bind at all must not spin forever.
-check "the supervisor restarts a hub that exits" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=2 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; [ \"\$(grep -c -- 'serve --host' \"\$d/bin/stub.calls\")\" = '3' ]"
-check "the supervisor gives up once the restart budget is spent" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise 2>&1 | grep -q 'giving up'"
 
-# The signal half of #780: giving up is recorded where it outlives the container
-# log, in the marker #806 writes - so "no hub" can be told apart from "a hub
-# that crashed out an hour ago" without waiting for a -32001.
-check "a spent restart budget is recorded in the provision marker" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"state\": \"gave_up\"' \"\$d/marker.json\""
-check "mempalace-hub status reports the state the supervisor last recorded" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; /usr/local/bin/mempalace-hub status 2>/dev/null | grep -q \"last recorded state 'gave_up'\""
-# Reuse, not a second breadcrumb: the default path is #806's marker, and the
-# hub's key is merged into whatever that file already holds.
+HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+HUB_HEALTHZ_STUB
+chmod +x "$_HUB_STUB_DIR/bin/fake-healthz"
+
+# Per-check scenario: a private temp dir for the calls log, the marker, the
+# palace mount and the share dir, so no check can touch the container's real
+# mount or the host-persisted provision marker.
+#
+# Two of these knobs exist so no check can depend on whether some name happens
+# to ANSWER on the machine running the suite, which is not hypothetical: the
+# Feature's own postStartCommand runs `mempalace-hub-up` for real before the
+# tests do, and on a CI runner with a working daemon that creates a real hub
+# called `mempalace-hub` and brings it live. A scenario probing that name then
+# records `live` where it meant to record `starting`.
+#
+#   MEMPALACE_HUB_NAME=mempalace-hub-under-test  a name nothing will answer on,
+#     so `status` and the poll see the absence they are written for. The
+#     DEFAULT name is asserted separately, by reading the script.
+#   MEMPALACE_HUB_WAIT=0  do not probe at all - `starting` is then the state
+#     regardless of the network, and costs no wall clock.
+_HUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/mount/palace\" \"\$d/mount/locks\" \"\$d/share\"; printf 'mempalace==3.9.0\n' > \"\$d/share/mempalace-hub-requirements.txt\"; export PATH=\"$_HUB_STUB_DIR/bin:\$PATH\" STUB_CALLS=\"\$d/calls\" STUB_HOST_PATH=/host/mempalace MEMPALACE_HUB_SOCKET=\"$_HUB_STUB_DIR/docker.sock\" MEMPALACE_HUB_MOUNT=\"\$d/mount\" MEMPALACE_HUB_SHARE_DIR=\"\$d/share\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_NAME=mempalace-hub-under-test MEMPALACE_HUB_WAIT=0;"
+
+# The scenarios below rename the hub so nothing they probe can answer, so the
+# real name is asserted here. It is load-bearing twice over: it is what
+# serverinfo.json publishes verbatim for every sibling container to dial, and
+# it is the container name a second devcontainer reconciles against.
+check "the hub is named mempalace-hub by default" bash -c \
+  "grep -qF 'MEMPALACE_HUB_NAME:-mempalace-hub}' /usr/local/bin/mempalace-hub-up"
+check "mempalace-hub-up rejects an unknown action" bash -c \
+  "/usr/local/bin/mempalace-hub-up bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
+
+# Every state below is recorded and exits 0. postStartCommand runs this, and a
+# container with no hub is degraded (each session serves its own palace copy,
+# one writer among them), not broken - never worth failing container start over.
+check "MEMPALACE_SKIP_HUB records 'disabled' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"disabled\"' \"\$d/marker.json\" && ! test -e \"\$d/calls\""
+
+# docker-outside-of-docker is a hard dependency precisely so this cannot happen;
+# when it does, the state names it instead of the container looking healthy.
+check "no docker binary records 'no_docker' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_HUB_DOCKER=definitely-not-a-real-binary /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_docker\"' \"\$d/marker.json\""
+
+check "an absent daemon socket records 'no_socket' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_HUB_SOCKET=\"\$d/definitely-not-a-socket\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_socket\"' \"\$d/marker.json\""
+check "a daemon that does not answer records 'no_socket'" bash -c \
+  "$_HUB_SETUP STUB_INFO_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_socket\"' \"\$d/marker.json\""
+
+# Without its own container id the reconcile cannot ask the daemon what host
+# path is behind the palace mount, and a hub given the in-container path would
+# get a fresh empty volume instead of the palace - a silently empty memory.
+check "an unidentifiable container records 'self_not_found'" bash -c \
+  "$_HUB_SETUP STUB_SELF_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"self_not_found\"' \"\$d/marker.json\""
+check "an unresolvable palace host path records 'self_not_found'" bash -c \
+  "$_HUB_SETUP STUB_HOST_PATH= /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"self_not_found\"' \"\$d/marker.json\""
+
+# The hub and this container have to meet on a name. Without the shared network
+# there is no name, so there is no hub.
+check "a network this container cannot join records 'network_failed'" bash -c \
+  "$_HUB_SETUP STUB_NETWORKS=bridge /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"network_failed\"' \"\$d/marker.json\""
+
+check "an unpullable hub image records 'pull_failed'" bash -c \
+  "$_HUB_SETUP STUB_IMAGE_RC=1 STUB_PULL_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"pull_failed\"' \"\$d/marker.json\""
+
+# The hub's $HOME layout is load-bearing: server_state_dir and mine_palace_lock
+# both root at $HOME/.mempalace, so the hub only shares the containers' token,
+# serverinfo record and lock if its HOME/.mempalace resolves onto the mount.
+check "the hub's HOME is prepared on the shared mount" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; [ \"\$(readlink \"\$d/mount/hub/home/.mempalace\")\" = \"\$d/mount\" ]"
+
+# The per-container hub left serverinfo records advertising loopback, which no
+# sibling container can dial and whose recorded pid can collide with an
+# unrelated local process. They are cleared, never trusted.
+check "a stale loopback serverinfo record is removed" bash -c \
+  "$_HUB_SETUP mkdir -p \"\$d/mount/server/abc\"; printf '{\"pid\": 1, \"host\": \"127.0.0.1\", \"port\": 8765}\n' > \"\$d/mount/server/abc/serverinfo.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; ! test -e \"\$d/mount/server/abc/serverinfo.json\""
+
+# The requirements file is bind-mounted into the hub BY THE HOST DAEMON, so it
+# has to be staged somewhere the host can see - the shared mount, not this
+# container's /usr/local/share/personal-features.
+check "the frozen dependency set is staged onto the shared mount" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qi '^mempalace==' \"\$d/mount/hub/mempalace-hub-requirements.txt\""
+
+# The argv a real daemon would be handed. Every flag here is load-bearing and is
+# asserted by name: --hostname/--network are the address the serverinfo record
+# publishes verbatim; no --init, because the server must BE pid 1 for
+# read_live_serverinfo's os.kill(pid, 0) to be true in every namespace;
+# --stop-signal SIGINT is the shutdown mempalace releases the palace lock on;
+# MEMPALACE_MCP_IDLE_HOURS=0 disables an idle-exit watchdog meant for abandoned
+# per-session servers; HF_HUB_DISABLE_SHARED_BLOBS=1 keeps huggingface_hub from
+# sharding the embedding model's blobs into per-prefix directories, which
+# onnxruntime then refuses to load across (#931).
+_HUB_RUNLINE="$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -F -- 'run -d' \"\$d/calls\" > \"\$d/runline\";"
+check "the hub run names and addresses the container" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--name mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--hostname mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--network mempalace' \"\$d/runline\""
+check "the hub run outlives every devcontainer" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--restart unless-stopped' \"\$d/runline\" && grep -qF -- '--stop-signal SIGINT' \"\$d/runline\""
+check "the hub run is labelled with the dependency-set sha" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--label personal-features.requirements-sha=' \"\$d/runline\""
+check "the hub run mounts the palace by its HOST path" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-v /host/mempalace:' \"\$d/runline\" && grep -qF -- '/hub/mempalace-hub-requirements.txt:/hub-requirements.txt:ro' \"\$d/runline\""
+check "the hub run points HOME and the palace at the shared mount" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e HOME=' \"\$d/runline\" && grep -qF -- '-e MEMPALACE_PALACE_PATH=' \"\$d/runline\" && grep -qF -- '--user ' \"\$d/runline\""
+check "the hub run disables the idle-exit watchdog" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e MEMPALACE_MCP_IDLE_HOURS=0' \"\$d/runline\""
+check "the hub run disables huggingface shared blobs (#931)" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e HF_HUB_DISABLE_SHARED_BLOBS=1' \"\$d/runline\""
+check "the hub run health-checks /healthz" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--health-interval 30s' \"\$d/runline\" && grep -qF -- '/healthz' \"\$d/runline\""
+check "the hub run installs the frozen set and execs the server as pid 1" bash -c \
+  "$_HUB_RUNLINE grep -qF -- 'pip install --user -q -r /hub-requirements.txt' \"\$d/runline\" && grep -qF -- 'exec python -m mempalace serve --host mempalace-hub-under-test --port 8765' \"\$d/runline\" && ! grep -qF -- '--init' \"\$d/runline\""
+
+# A hub that is up but has not answered yet is `starting` - an honest
+# intermediate state. #921 was a second, racing writer recording a vaguer state
+# over the accurate one; there is one writer of this key now.
+check "a hub that has not answered yet records 'starting'" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
+# The knob the scenarios above rely on, asserted rather than assumed. This is
+# the regression that turned CI red once already: the Feature's own
+# postStartCommand runs `mempalace-hub-up` for real before the suite does, so
+# on a runner with a working daemon a hub named `mempalace-hub` is genuinely
+# live by the time these run, and a scenario that probed it recorded `live`
+# where it meant `starting`. WAIT=0 must mean *do not probe at all*, so that
+# something answering cannot change the outcome.
+check "MEMPALACE_HUB_WAIT=0 records 'starting' even when something answers" bash -c \
+  "$_HUB_SETUP \"$_HUB_STUB_DIR/bin/fake-healthz\" 8799 & hp=\$!; sleep 1; MEMPALACE_HUB_NAME=127.0.0.1 MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$hp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
+
+# A hub already answering is left alone: no rm, no run, no second hub.
+check "an answering hub records 'live' and is not recreated" bash -c \
+  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; \"$_HUB_STUB_DIR/bin/fake-healthz\" 8799 & hp=\$!; sleep 1; STUB_HUB_STATUS=running STUB_HUB_SHA=\"\$sha\" MEMPALACE_HUB_NAME=127.0.0.1 MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$hp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"live\"' \"\$d/marker.json\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+
+# The label is the whole reconcile: a Feature release that moves any pin moves
+# the sha, and a hub still running last month's resolution is replaced rather
+# than quietly outliving the image that created it.
+check "a hub built from a different dependency set is removed and recreated" bash -c \
+  "$_HUB_SETUP STUB_HUB_STATUS=running STUB_HUB_SHA=deadbeef /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'rm -f mempalace-hub-under-test' \"\$d/calls\" && grep -qF -- 'run -d' \"\$d/calls\""
+check "a stopped hub with the right dependency set is started, not recreated" bash -c \
+  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; STUB_HUB_STATUS=exited STUB_HUB_SHA=\"\$sha\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'start mempalace-hub-under-test' \"\$d/calls\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+
+# #897: a held palace lock is a condition no retry can change, and the file
+# surviving on the mount proves nothing about the holder - which is why the
+# probe is a real non-blocking flock and why nothing here ever deletes one.
+check "a held palace lock records 'lock_held' and starts no hub" bash -c \
+  "$_HUB_SETUP python3 -c \"import fcntl, sys, time; f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(30)\" \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\" & lp=\$!; sleep 1; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$lp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"lock_held\"' \"\$d/marker.json\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+check "the lock file is never removed" bash -c \
+  "$_HUB_SETUP python3 -c \"import fcntl, sys, time; f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(30)\" \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\" & lp=\$!; sleep 1; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; kill \$lp 2>/dev/null; test -e \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\""
+
+# Reuse, not a second breadcrumb: the default target is #806's provision marker,
+# and the hub's key is merged into whatever that file already holds.
 check "the hub liveness record defaults to the #806 provision marker" bash -c \
-  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub"
+  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub-up"
 check "the hub record is merged into the marker, not written over it" bash -c \
-  "$_HUB_CRASH_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+  "$_HUB_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+check "a previous mempalace_hub key's foreign fields are carried forward" bash -c \
+  "$_HUB_SETUP printf '{\"mempalace_hub\": {\"kept_by_someone_else\": true}}\n' > \"\$d/marker.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qF '\"kept_by_someone_else\": true' \"\$d/marker.json\" && grep -qF '\"state\":' \"\$d/marker.json\""
 
-# Clearing the pid file is what stops the supervisor - no signal has to reach a
-# shell blocked on its child - and the server it was watching goes with it.
-check "mempalace-hub stop stops the hub it started" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; p=\"\$(sed -n 's/^server=//p' \"\$d/hub.pid\")\"; test -n \"\$p\" && /usr/local/bin/mempalace-hub stop >/dev/null 2>&1 && sleep 2 && ! kill -0 \"\$p\" 2>/dev/null"
+# `status` re-probes and prints what was last recorded, so "there is no hub" can
+# be told apart from "the lock is held, here is which file" without a -32001.
+check "mempalace-hub-up status reports the last recorded state" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; /usr/local/bin/mempalace-hub-up status 2>/dev/null | grep -q \"last recorded state 'starting'\""
+check "mempalace-hub-up down stops the hub and records 'stopped'" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up down >/dev/null 2>&1 && grep -qF -- 'stop mempalace-hub-under-test' \"\$d/calls\" && grep -qF '\"state\": \"stopped\"' \"\$d/marker.json\""
+check "mempalace-hub-up logs delegates to docker logs" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up logs --tail 5 >/dev/null 2>&1; grep -qF -- 'logs --tail 5 mempalace-hub-under-test' \"\$d/calls\""
 
 # The pinned mempalace must actually be able to serve a shared transport; if a
 # version bump ever drops `serve`, the whole design goes with it.
@@ -1597,19 +1914,9 @@ check "the pinned mempalace ships a 'serve' subcommand" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || mempalace serve --help 2>&1 | grep -q -- '--port'"
 # What the sessions launch. Since 3.9.0 this console script is the hub-aware
 # proxy (mempalace.mcp_proxy:main), not the server - which is why no session MCP
-# config has to be rewritten for any of this to work.
+# config and no plugin change is needed for any of this to work.
 check "the mempalace-mcp console script is on PATH" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || command -v mempalace-mcp >/dev/null 2>&1"
-
-# End-to-end against the REAL binary, on an isolated HOME so the container's own
-# palace and hub are untouched: start, confirm the endpoint answers, confirm a
-# second start is a no-op rather than a second hub, then stop it. `stop` has to
-# come first now - killing the server out from under a supervisor is a crash,
-# and the supervisor would restart it and leave a stray hub behind. The kill
-# through mempalace's own per-palace registry record stays as the backstop (no
-# dependency on pkill).
-check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
-  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; /usr/local/bin/mempalace-hub stop >/dev/null 2>&1; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
 
 # --- the odoo-ls language server (#746) ---------------------------------------
 # The server is what gives a Claude Code session Odoo-aware diagnostics,
@@ -1760,5 +2067,7 @@ check "pr-automation dir stays 0755 (holds no credentials)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/pr-automation)\" = '755' ]"
 check "shell-history dir is 0777 (any uid can create/append bash_history, #323)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '777' ]"
+check "odoo-dev state dir is chmod 0700 (client task artifacts, #884)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-dev)\" = '700' ]"
 
 reportResults

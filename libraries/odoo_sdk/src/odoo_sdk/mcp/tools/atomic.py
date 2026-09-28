@@ -379,8 +379,9 @@ def make_task_note_tool(registry: Registry):
         note: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
         dedupe_key: Optional[str] = None,
+        interim: bool = False,
     ) -> Dict[str, Any]:
-        """Post a note (max 300 chars) to the task chatter, optionally with files.
+        """Post a note (max 500 chars) to the task chatter, optionally with files.
 
         Each attachment spec is ``{"path": <local file>}`` or
         ``{"content": <base64>, "name": <filename>}`` plus optional
@@ -388,16 +389,27 @@ def make_task_note_tool(registry: Registry):
         call with an already-seen key skips the post and returns the existing
         message id.
 
+        ``interim=True`` records the note in the local session log ONLY: no
+        chatter post, no follower notification, no attachments, no dedupe key,
+        and no character limit. Use it for the plan and for checkpoints, and
+        post ONE consolidated non-interim note per run just before stopping —
+        every posted note notifies every follower on the task. Interim notes
+        still appear in the run summary derived at ``stop_task``.
+
         Task chatter is CLIENT-VISIBLE, and no tool removes a note or unlinks
         an attachment once posted. Attach only deliverables the client asked
         to receive. Do NOT attach internal engineering material — scripts,
         logs, test or benchmark output, tracebacks, machine paths, or working
-        analysis. Detail that will not fit the 300-char note belongs in the
+        analysis. Detail that will not fit the 500-char note belongs in the
         pull request, the commit history, or an internal channel; reference it
         from the note rather than attaching it.
         """
         return registry["task_note"].execute(
-            task_id, note, attachments=attachments, dedupe_key=dedupe_key
+            task_id,
+            note,
+            attachments=attachments,
+            dedupe_key=dedupe_key,
+            interim=interim,
         )
 
     return task_note
@@ -438,7 +450,7 @@ def make_task_question_tool(registry: Registry):
     def task_question(
         task_id: int, question: str, dedupe_key: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Post a question (max 300 chars) to the task chatter; transitions to AWAITING_ANSWERS.
+        """Post a question (max 500 chars) to the task chatter; transitions to AWAITING_ANSWERS.
 
         Records the message id as an answer watermark for task_status's
         ``new_messages_since_question``. ``dedupe_key`` makes the call
