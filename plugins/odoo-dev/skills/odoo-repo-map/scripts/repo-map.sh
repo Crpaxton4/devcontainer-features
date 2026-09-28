@@ -78,7 +78,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAP="${REPO_MAP_FILE:-${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/repo-map.json}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+# The state dir has exactly one definition, in scripts/state-dir.sh - which is
+# also what knows that a devcontainer supplies $ODOO_DEV_STATE_DIR from the
+# personal-features bind mount (#884), so repo-map.json survives a rebuild.
+# Restating the default here is how the two drift apart.
+MAP="${REPO_MAP_FILE:-$("$PLUGIN_ROOT/scripts/state-dir.sh")/repo-map.json}"
 # REPOS_DIR resolved lazily (only `add` with the repo-existence check needs it).
 
 die() { echo "repo-map.sh: $*" >&2; exit 2; }
