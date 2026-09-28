@@ -55,9 +55,12 @@ done
 # so a stray copy whose banner was edited away is still caught.
 
 # Group 1 — moved into this plugin (#695–#699, #701–#708) and still shipped by
-# it, so a loose copy SHADOWS a live twin. These five mirror
-# odoo_sdk.skills.PACKAGED_SKILL_NAMES, the sources the plugin copies are
-# generated from, and are the same five check-skill-parity.sh checks.
+# it, so a loose copy SHADOWS a live twin. Since #784 this plugin's own
+# skills/ tree is the single source for these five bodies (the SDK's packaged
+# copy, its sync-skills CLI and the check-skill-parity.sh gate are all gone),
+# so the listing under plugins/odoo-dev/skills/ is what this group is anchored
+# on — .github/scripts/test_stray_skill_parity.py checks every name here is
+# actually shipped there.
 PLUGIN_SHADOWED=(
   discovery-notes
   fibonacci-estimate
