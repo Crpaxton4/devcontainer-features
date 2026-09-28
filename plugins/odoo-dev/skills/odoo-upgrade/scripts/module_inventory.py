@@ -11,14 +11,19 @@ Usage:
 ADDONS_PATH defaults to /mnt/extra-addons (the devcontainer custom addons
 dir); pass several paths to inventory them into one CSV.
 
-Columns (11):
-    Module Name, Module Purpose, Source version, LoC, Dependencies,
-    3rd party app?, 3rd party app link, OCA repo, Complexity/risk,
-    Upgrade action, Functional area
+Columns (13):
+    Module Name, Display Name, Module Purpose, Source version, LoC,
+    Dependencies, Dependency origin, 3rd party app?, 3rd party app link,
+    OCA repo, Complexity/risk, Upgrade action, Functional area
 
-Dependencies are classified against the devcontainer: bare = core
-(odoo/addons), [E] = enterprise (/var/lib/odoo/addons/$ODOO_VERSION),
-[C] = local custom (one of the scanned paths), [?] = not found.
+Module Name is the technical name and nothing else — it is the key every
+other artifact joins on. The manifest name lives in Display Name.
+
+Dependencies is a plain "; "-separated list of names. Dependency origin
+carries one token per dependency, same order and separator, so the two
+cells zip: core (odoo/addons), E (enterprise,
+/var/lib/odoo/addons/$ODOO_VERSION), C (local custom, one of the scanned
+paths), ? (not found anywhere).
 
 "TODO-AI" cell values mark columns the AI must fill or refine by reading
 the module code (see references/inventory.md).
@@ -43,6 +48,17 @@ SKIP_PATH_PARTS = ("static/lib/",)
 
 TODO_AI = "TODO-AI"
 OCA_AUTHOR = "Odoo Community Association (OCA)"
+# The only two literals this script may write into "OCA repo". Anything
+# else in that cell is provenance prose, which belongs in the Evidence
+# sheet; build_workbook.py rejects it.
+OCA_NONE = "none"
+OCA_UNVERIFIED = "claimed — run oca_check.py"
+
+# One token per dependency in the "Dependency origin" cell.
+ORIGIN_CORE = "core"
+ORIGIN_ENTERPRISE = "E"
+ORIGIN_CUSTOM = "C"
+ORIGIN_UNKNOWN = "?"
 
 
 def parse_manifest(manifest_path):
@@ -72,7 +88,7 @@ def dep_universe(local_names):
 
     Core is located via find_spec (no odoo import executed); enterprise
     via the devcontainer per-series checkout. Missing sources yield empty
-    sets, so unknown deps degrade to [?] instead of crashing.
+    sets, so unknown deps degrade to "?" instead of crashing.
     """
     core = set()
     spec = importlib.util.find_spec("odoo")
@@ -84,18 +100,27 @@ def dep_universe(local_names):
     return core, enterprise, set(local_names)
 
 
-def annotate_deps(depends, core, enterprise, local):
-    out = []
+def classify_deps(depends, core, enterprise, local):
+    """("dep; dep", "origin; origin") — two parallel "; "-joined cells.
+
+    The names cell is usable as a dependency list without stripping
+    anything; the origin cell says where each name was found AT SCAN TIME
+    ON THE SCANNING MACHINE, which is a fact about this scan and not a
+    property of the dependency. Same order, same separator: zip them.
+    """
+    names, origins = [], []
     for dep in depends:
         if dep in core:
-            out.append(dep)
+            origin = ORIGIN_CORE
         elif dep in enterprise:
-            out.append(f"{dep}[E]")
+            origin = ORIGIN_ENTERPRISE
         elif dep in local:
-            out.append(f"{dep}[C]")
+            origin = ORIGIN_CUSTOM
         else:
-            out.append(f"{dep}[?]")
-    return "; ".join(out)
+            origin = ORIGIN_UNKNOWN
+        names.append(dep)
+        origins.append(origin)
+    return "; ".join(names), "; ".join(origins)
 
 
 def cloc_excluded(rel_str, patterns):
@@ -165,11 +190,16 @@ def third_party_link(manifest, technical_name, target_version, purchased):
 def oca_seed(manifest):
     """Offline seed only: the author string is a CLAIM, not proof — some
     externally-hosted modules carry it too. oca_check.py replaces this
-    cell with the verified OCA org repo (or empties it)."""
+    cell with the verified OCA org repo, or with the negative literal.
+
+    Nothing matched ⇒ exactly "none". The negative case has a literal so
+    that authors never write the scan that proved it into a client-facing
+    cell; that provenance belongs in the Evidence sheet.
+    """
     author = manifest.get("author", "")
     if not isinstance(author, str):
         author = ", ".join(map(str, author))
-    return "claimed — run oca_check.py" if OCA_AUTHOR in author else ""
+    return OCA_UNVERIFIED if OCA_AUTHOR in author else OCA_NONE
 
 
 def has_surface(module_dir, patterns):
@@ -204,10 +234,6 @@ def build_row(module_dir, manifest, target_version, deps_sets):
         manifest = {}
 
     display_name = (manifest.get("name") or "").strip()
-    if display_name and display_name.lower() != technical_name.lower():
-        name = f"{technical_name} ({display_name})"
-    else:
-        name = technical_name
 
     loc = count_loc(module_dir, manifest)
     flag = third_party_flag(manifest)
@@ -221,12 +247,16 @@ def build_row(module_dir, manifest, target_version, deps_sets):
     if broken:
         purpose = f"{TODO_AI} (manifest unparseable — fix it, read the code)"
 
+    dep_names, dep_origins = classify_deps(depends, *deps_sets)
+
     return {
-        "Module Name": name,
+        "Module Name": technical_name,
+        "Display Name": display_name,
         "Module Purpose": purpose,
         "Source version": str(manifest.get("version", "")),
         "LoC": loc,
-        "Dependencies": annotate_deps(depends, *deps_sets),
+        "Dependencies": dep_names,
+        "Dependency origin": dep_origins,
         "3rd party app?": flag,
         "3rd party app link": third_party_link(
             manifest, technical_name, target_version, flag == "Yes"),
@@ -238,9 +268,10 @@ def build_row(module_dir, manifest, target_version, deps_sets):
 
 
 FIELDNAMES = [
-    "Module Name", "Module Purpose", "Source version", "LoC",
-    "Dependencies", "3rd party app?", "3rd party app link", "OCA repo",
-    "Complexity/risk", "Upgrade action", "Functional area",
+    "Module Name", "Display Name", "Module Purpose", "Source version",
+    "LoC", "Dependencies", "Dependency origin", "3rd party app?",
+    "3rd party app link", "OCA repo", "Complexity/risk", "Upgrade action",
+    "Functional area",
 ]
 
 

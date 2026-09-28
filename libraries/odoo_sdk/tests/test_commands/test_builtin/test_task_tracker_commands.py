@@ -18,6 +18,7 @@ from odoo_sdk.commands.builtin.task_list import TaskListCommand
 from odoo_sdk.commands.builtin.task_note import TaskNoteCommand
 from odoo_sdk.commands.builtin.task_question import TaskQuestionCommand
 from odoo_sdk.commands.builtin.task_status import TaskStatusCommand
+from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state import TaskAlreadyRunningError, TaskNotRunningError, TaskState
 from tests.support import make_state_db
@@ -380,9 +381,10 @@ class TestTaskNoteCommand(unittest.TestCase):
         self.assertEqual(result["attachment_ids"], [91, 92])
         self.assertEqual(result["message_id"], 55)
 
-    def test_rejects_note_over_300_chars(self):
+    def test_rejects_note_over_the_chatter_cap(self):
         # #610: an over-limit note is rejected — nothing is uploaded, posted,
-        # or appended to the local session log.
+        # or appended to the local session log. #901 raised the cap to 500.
+        over = "x" * (MAX_CHATTER_BODY_CHARS + 1)
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
@@ -391,20 +393,20 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
         ):
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskNoteCommand, client, db).execute(1, "x" * 301)
+                _cmd_with_db(TaskNoteCommand, client, db).execute(1, over)
         message = str(ctx.exception)
-        self.assertIn("301", message)
-        self.assertIn("300", message)
+        self.assertIn(str(len(over)), message)
+        self.assertIn("500", message)
         self.assertIn("simple, direct, plain", message)
         mock_post.assert_not_called()
         run = db.get_active_run(1)
-        self.assertNotIn("x" * 301, run.notes or "")  # type: ignore[union-attr]
+        self.assertNotIn(over, run.notes or "")  # type: ignore[union-attr]
 
-    def test_accepts_note_of_exactly_300_chars(self):
+    def test_accepts_note_of_exactly_the_chatter_cap(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        note = "y" * 300
+        note = "y" * MAX_CHATTER_BODY_CHARS
         with (
             patch(_NOTE_GUARD),
             patch(
@@ -416,10 +418,133 @@ class TestTaskNoteCommand(unittest.TestCase):
         mock_post.assert_called_once_with(client, 1, note, attachment_ids=None)
         self.assertEqual(result["message_id"], 56)
 
-    def test_description_advertises_the_300_char_limit(self):
+    def test_cap_is_500_since_901(self):
+        # #901: 300 chars split one coherent finding across several posted
+        # messages, which was itself a driver of the note volume.
+        self.assertEqual(MAX_CHATTER_BODY_CHARS, 500)
+
+    def test_description_advertises_the_500_char_limit(self):
         # The limit must be visible to MCP callers up front: the command
         # description (which becomes the tool description) names it.
-        self.assertIn("300", TaskNoteCommand._description)
+        self.assertIn("500", TaskNoteCommand._description)
+
+    def test_description_explains_the_interim_flag(self):
+        # #901: the description is the only surface an MCP client sees, so the
+        # local-only mode and the one-note-per-run rule must be stated there.
+        description = TaskNoteCommand._description
+        self.assertIn("interim", description)
+        self.assertIn("ONE consolidated note per run", description)
+        self.assertIn("local session log ONLY", description)
+
+    # ── interim notes (#901) ────────────────────────────────────────────────
+
+    def test_interim_note_appends_locally_and_posts_nothing(self):
+        # #901: the whole point — the checkpoint survives in the session log
+        # without spending a client-visible chatter message on it.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
+        ):
+            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
+                1, "Checkpoint text", interim=True
+            )
+        mock_post.assert_not_called()
+        self.assertTrue(result["interim"])
+        self.assertEqual(result["task_id"], 1)
+        self.assertEqual(result["note_len"], len("Checkpoint text"))
+        self.assertNotIn("message_id", result)
+        run = db.get_active_run(1)
+        self.assertIn("Checkpoint text", run.notes)  # type: ignore[union-attr]
+
+    def test_interim_note_is_not_capped(self):
+        # #901: an interim note never reaches Odoo, so it takes the #626
+        # internal/local text policy — no length limit at all.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        long_note = "z" * (MAX_CHATTER_BODY_CHARS * 4)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
+        ):
+            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
+                1, long_note, interim=True
+            )
+        mock_post.assert_not_called()
+        self.assertEqual(result["note_len"], len(long_note))
+        run = db.get_active_run(1)
+        self.assertIn(long_note, run.notes)  # type: ignore[union-attr]
+
+    def test_interim_note_rejects_attachments(self):
+        # #901: there is no posted message to attach files to, so a caller
+        # asking for both is told rather than silently losing the files.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        with (
+            patch(_NOTE_GUARD),
+            patch(
+                "odoo_sdk.commands.builtin.task_note.create_attachments"
+            ) as mock_create,
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                _cmd_with_db(TaskNoteCommand, client, db).execute(
+                    1, "note", attachments=[{"path": "/tmp/a.csv"}], interim=True
+                )
+        self.assertIn(
+            "attachments are not supported with interim=True", str(ctx.exception)
+        )
+        mock_create.assert_not_called()
+        mock_post.assert_not_called()
+        run = db.get_active_run(1)
+        self.assertNotIn("note", run.notes or [])  # type: ignore[union-attr]
+
+    def test_interim_note_ignores_dedupe_key(self):
+        # #901: dedupe exists to avoid a duplicate chatter post; with no post
+        # there is nothing to deduplicate, so the key neither short-circuits
+        # the append nor is recorded.
+        client = _client()
+        db = _tmp_db()
+        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
+        db.record_chatter_dedupe(1, "k1", 99)
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
+        ):
+            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
+                1, "Checkpoint", dedupe_key="k1", interim=True
+            )
+        mock_post.assert_not_called()
+        self.assertNotIn("message_id", result)
+        self.assertNotIn("deduplicated", result)
+        run = db.get_active_run(1)
+        self.assertIn("Checkpoint", run.notes)  # type: ignore[union-attr]
+
+    def test_interim_note_requires_an_active_run(self):
+        # #901: the local append is the same guarded append the posting path
+        # performs, so a stopped session still fails loudly.
+        client = _client()
+        db = _tmp_db()
+        with (
+            patch(_NOTE_GUARD),
+            patch("odoo_sdk.commands.builtin.task_note.post_chatter_note") as mock_post,
+        ):
+            with self.assertRaises(TaskNotRunningError):
+                _cmd_with_db(TaskNoteCommand, client, db).execute(
+                    1, "Checkpoint", interim=True
+                )
+        mock_post.assert_not_called()
+
+    def test_interim_default_is_false(self):
+        # Backwards compatibility: an unflagged call still posts to chatter.
+        import inspect
+
+        sig = inspect.signature(TaskNoteCommand.execute)
+        self.assertIs(sig.parameters["interim"].default, False)
 
     def test_description_states_attachment_audience(self):
         # #767: the attachment spec was documented in full with no statement
@@ -731,9 +856,9 @@ class TestTaskQuestionCommand(unittest.TestCase):
             with self.assertRaises(TaskNotRunningError):
                 _cmd_with_db(TaskQuestionCommand, _client(), db).execute(999, "?")
 
-    def test_rejects_question_over_300_chars(self):
+    def test_rejects_question_over_the_chatter_cap(self):
         # #610: an over-limit question is rejected before anything is posted
-        # and before the session leaves RUNNING.
+        # and before the session leaves RUNNING. #901 raised the cap to 500.
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
@@ -744,19 +869,21 @@ class TestTaskQuestionCommand(unittest.TestCase):
             ) as mock_post,
         ):
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "q" * 301)
+                _cmd_with_db(TaskQuestionCommand, client, db).execute(
+                    1, "q" * (MAX_CHATTER_BODY_CHARS + 1)
+                )
         message = str(ctx.exception)
-        self.assertIn("300", message)
+        self.assertIn("500", message)
         self.assertIn("simple, direct, plain", message)
         mock_post.assert_not_called()
         run = db.get_active_run(1)
         self.assertEqual(run.state, TaskState.RUNNING)  # type: ignore[union-attr]
 
-    def test_accepts_question_of_exactly_300_chars(self):
+    def test_accepts_question_of_exactly_the_chatter_cap(self):
         client = _client()
         db = _tmp_db()
         db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        question = "q" * 300
+        question = "q" * MAX_CHATTER_BODY_CHARS
         with (
             patch(_QUESTION_GUARD),
             patch(
@@ -768,8 +895,8 @@ class TestTaskQuestionCommand(unittest.TestCase):
         mock_post.assert_called_once_with(client, 1, f"[?] {question}")
         self.assertEqual(result["state"], "AWAITING_ANSWERS")
 
-    def test_description_advertises_the_300_char_limit(self):
-        self.assertIn("300", TaskQuestionCommand._description)
+    def test_description_advertises_the_500_char_limit(self):
+        self.assertIn("500", TaskQuestionCommand._description)
 
     def test_records_message_id_as_answer_watermark(self):
         # #625: the message_post return id is stamped on the active run so
@@ -1264,13 +1391,11 @@ class TestStopTaskCommand(unittest.TestCase):
 
     def test_run_summary_has_no_length_cap(self):
         # Length policy (#626): derived summaries are internal/local text and
-        # are NOT subject to the 300-char chatter cap.
-        from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
-
+        # are NOT subject to the chatter cap.
         client = _client()
         db = _tmp_db()
         created = db.create_run(1, "Bug", 10, "Project A")
-        long_note = "checkpoint " * 60  # well over 300 chars on its own
+        long_note = "checkpoint " * 120  # well over the chatter cap on its own
         db.append_note(1, long_note)
         with patch(_STOP_GUARD):
             result = _cmd_with_db(StopTaskCommand, client, db).execute(1)
