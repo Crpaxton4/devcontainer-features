@@ -15,6 +15,7 @@ def _build_run_result(
     *,
     already_running: bool = False,
     branch_name: Optional[str] = None,
+    base_branch: Optional[str] = None,
     warning: Optional[str] = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
@@ -29,6 +30,8 @@ def _build_run_result(
     }
     if branch_name is not None:
         result["branch_name"] = branch_name
+    if base_branch is not None:
+        result["base_branch"] = base_branch
     if warning is not None:
         result["warning"] = warning
     return result
@@ -82,6 +85,7 @@ class StartTaskCommand(Command):
         project_id: int,
         project_name: str,
         branch_name: Optional[str] = None,
+        base_branch: Optional[str] = None,
         warning: Optional[str] = None,
     ) -> dict[str, Any]:
         """Ensure a RUNNING tracking session for an already-resolved task.
@@ -101,6 +105,9 @@ class StartTaskCommand(Command):
         :param project_id: Resolved Odoo project id.
         :param project_name: Resolved project display name.
         :param branch_name: Optional git branch created for the task, echoed back.
+        :param base_branch: Optional branch ``branch_name`` was forked from,
+            echoed back so the caller can verify the base instead of assuming
+            the remote default (#903).
         :param warning: Optional non-fatal warning to include in the result.
         :return: Session details including task name, project, started_at, state,
             and ``already_running`` (``timesheet_id`` is ``None`` — no anchor is
@@ -145,6 +152,7 @@ class StartTaskCommand(Command):
             project_name,
             already_running=already_running,
             branch_name=branch_name,
+            base_branch=base_branch,
             warning=warning,
         )
         # Prime the checkpoint-cadence signal (#387) on the very first response:

@@ -663,6 +663,11 @@ class TestStartTaskToolSchema(unittest.TestCase):
         for name in ("task_id", "task_name_query", "project_name_query"):
             self.assertIn(name, props)
 
+    def test_base_branch_is_an_optional_wire_parameter(self):
+        # #903: callers that know the project base must be able to say so.
+        self.assertIn("base_branch", self._schema()["properties"])
+        self.assertNotIn("base_branch", self._schema().get("required", []))
+
     def test_ctx_not_in_schema(self):
         self.assertNotIn("ctx", self._schema()["properties"])
 
@@ -742,6 +747,56 @@ class TestCreateTaskBranch(unittest.TestCase):
         checkout_idx = calls.index(["git", "checkout", "-b", "10-fix", "origin/main"])
         self.assertLess(fetch_idx, checkout_idx, "fetch must precede the fork")
 
+    def test_sets_upstream_to_the_remote_base(self):
+        # #903: `git pull --rebase` and PR tooling read the upstream, so it must
+        # point at the base we forked from — not at whatever git would infer.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(remote_branches=("uat",))
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10-fix", "uat")
+        calls = self._calls(sp)
+        self.assertIn(
+            ["git", "branch", "--set-upstream-to=origin/uat", "10-fix"], calls
+        )
+        checkout_idx = calls.index(["git", "checkout", "-b", "10-fix", "origin/uat"])
+        upstream_idx = calls.index(
+            ["git", "branch", "--set-upstream-to=origin/uat", "10-fix"]
+        )
+        self.assertLess(checkout_idx, upstream_idx, "branch must exist first")
+
+    def test_no_upstream_is_recorded_for_a_local_only_base(self):
+        # Offline / single-repo (#454 fallback): there is no origin/<base> to
+        # track, and a local branch is not a meaningful upstream.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(remote_branches=())
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10-fix", "main")
+        calls = self._calls(sp)
+        self.assertFalse(
+            any(
+                c[:2] == ["git", "branch"] and "--set-upstream-to" in c[2:]
+                for c in calls
+            )
+        )
+
+    def test_existing_branch_keeps_its_upstream(self):
+        # #149 idempotency extends to tracking: re-running must not re-point an
+        # existing task branch's upstream at the base.
+        from odoo_sdk.mcp.tools.start_task import _create_task_branch
+
+        sp = _make_sp(existing_branches=("10-fix",), remote_branches=("uat",))
+        with patch(_SP_PATCH, sp):
+            _create_task_branch("10-fix", "uat")
+        calls = self._calls(sp)
+        self.assertFalse(
+            any(
+                c[:2] == ["git", "branch"] and "--set-upstream-to" in c[2:]
+                for c in calls
+            )
+        )
+
     def test_falls_back_to_local_base_when_no_remote_ref(self):
         # No ``origin/<base>`` remote-tracking ref (single-repo / offline): the
         # fetch is still attempted but the fork degrades to the local base ref
@@ -765,6 +820,130 @@ class TestCreateTaskBranch(unittest.TestCase):
             _create_task_branch("10-fix", "main")
         calls = self._calls(sp)
         self.assertNotIn(["git", "fetch", "origin", "main"], calls)
+
+
+class TestTaskBranchBase(unittest.TestCase):
+    """#903: the task branch forks from the *configured* base, never origin/HEAD.
+
+    Precedence is explicit ``base_branch`` argument > ``ODOO_SDK_BASE_BRANCH``
+    > the remote default. On a repo whose base is a shared pre-production
+    branch, forking from the remote default silently puts the work — and the
+    PR — on the wrong base.
+    """
+
+    _ENV = "ODOO_SDK_BASE_BRANCH"
+
+    @staticmethod
+    def _calls(sp):
+        return [c.args[0] for c in sp.run.call_args_list]
+
+    def _tool(self):
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Accounting"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"run_id": 1, **kw},
+        )
+        return make_start_task_tool(reg)
+
+    def _start(self, sp, *, env_base=None, **kwargs):
+        """Run the headless (task_id) flow with ``ODOO_SDK_BASE_BRANCH`` controlled.
+
+        ``patch.dict`` restores the whole environment afterwards, so the value
+        is set in-process only — never exported into the test runner.
+        """
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.session.check_client_capability.return_value = False
+        with patch(_SP_PATCH, sp), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(self._ENV, None)
+            if env_base is not None:
+                os.environ[self._ENV] = env_base
+            return _run(self._tool()(ctx, task_id=10, **kwargs))
+
+    def test_explicit_base_branch_is_forked_from_and_tracked(self):
+        sp = _make_sp(remote_branches=("UAT",), origin_head="origin/main")
+        result = self._start(sp, base_branch="UAT")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/UAT"], calls)
+        self.assertIn(
+            ["git", "branch", "--set-upstream-to=origin/UAT", "10-fix"], calls
+        )
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/main"], calls)
+        self.assertEqual(result["base_branch"], "UAT")
+
+    def test_explicit_base_branch_never_consults_the_remote_default(self):
+        # The remote default is not merely overridden, it is not even probed:
+        # resolving it costs a subprocess and could only mislead.
+        sp = _make_sp(remote_branches=("UAT",), origin_head="origin/main")
+        self._start(sp, base_branch="UAT")
+        self.assertFalse(
+            any(c[1] == "symbolic-ref" for c in self._calls(sp)),
+            "origin/HEAD must not be consulted when a base was given",
+        )
+
+    def test_environment_base_branch_is_used_when_no_argument(self):
+        sp = _make_sp(remote_branches=("staging",), origin_head="origin/main")
+        result = self._start(sp, env_base="staging")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/staging"], calls)
+        self.assertIn(
+            ["git", "branch", "--set-upstream-to=origin/staging", "10-fix"], calls
+        )
+        self.assertEqual(result["base_branch"], "staging")
+
+    def test_argument_wins_over_the_environment(self):
+        sp = _make_sp(remote_branches=("UAT", "staging"), origin_head="origin/main")
+        result = self._start(sp, env_base="staging", base_branch="UAT")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/UAT"], calls)
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/staging"], calls)
+        self.assertEqual(result["base_branch"], "UAT")
+
+    def test_remote_default_is_used_when_neither_is_set(self):
+        # Unchanged behaviour (#621) when nothing is configured.
+        sp = _make_sp(remote_branches=("main",), origin_head="origin/main")
+        result = self._start(sp)
+        self.assertIn(
+            ["git", "checkout", "-b", "10-fix", "origin/main"], self._calls(sp)
+        )
+        self.assertEqual(result["base_branch"], "main")
+
+    def test_blank_environment_value_is_not_a_configured_base(self):
+        # An exported-but-empty variable must not fork from a nameless ref.
+        sp = _make_sp(remote_branches=("main",), origin_head="origin/main")
+        result = self._start(sp, env_base="   ")
+        self.assertIn(
+            ["git", "checkout", "-b", "10-fix", "origin/main"], self._calls(sp)
+        )
+        self.assertEqual(result["base_branch"], "main")
+
+    def test_explicit_base_replaces_the_interactive_branch_pick(self):
+        # Name-search path: a caller that already named the base has nothing to
+        # be asked, so the base-branch elicitation is skipped entirely.
+        reg = _FakeRegistry(
+            search_projects=lambda query, limit=10: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda query, project_id, limit=10: [
+                {"id": 10, "name": "Fix"}
+            ],
+            start_task=lambda **kw: {"run_id": 1, **kw},
+        )
+        ctx = _ctx()
+        sp = _make_sp(remote_branches=("UAT",), origin_head="origin/main")
+        with patch(_SP_PATCH, sp), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(self._ENV, None)
+            result = _run(
+                make_start_task_tool(reg)(ctx, "Fix", "Acct", base_branch="UAT")
+            )
+        ctx.elicit.assert_not_awaited()
+        self.assertIn(
+            ["git", "checkout", "-b", "10-fix", "origin/UAT"], self._calls(sp)
+        )
+        self.assertEqual(result["base_branch"], "UAT")
 
 
 def _sampling_ctx(
