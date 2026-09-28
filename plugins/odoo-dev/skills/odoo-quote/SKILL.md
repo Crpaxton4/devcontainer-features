@@ -95,10 +95,11 @@ apply:
 Break the work into estimable units. The granularity depends on the output
 format you will use (Step 7):
 
-- **Conforming to the house standard** — effort is distributed across its five
-  fixed aspects (Clarify requirements, Design, Implementation and testing,
-  Demo / Feedback, Document and review). Map each piece of work to the aspect it
-  belongs to; do not invent extra rows.
+- **Conforming to the house standard** — the aspect rows are defined by the
+  knowledge article that carries the standard, read in Step 1 via
+  `read_knowledge_article`; this skill does not name them and does not fix how
+  many there are. Map each piece of work to one of the rows the article defines;
+  do not invent extra rows.
 - **Falling back to the free-form template** — break into independent line items.
   A typical Odoo change spans several of: data model changes, view/UI work,
   business logic, security (access + record rules), reports/printouts,
@@ -120,18 +121,28 @@ format you will use (Step 7):
   uncertain and carrying the likely figure.
 - Keep PM/QA/UAT as their own lines in the fallback template (commonly 10–20% and
   15–25% of build effort respectively) rather than hiding them inside dev lines.
-  The house standard has no separate PM/QA/UAT rows — that effort folds into its
-  fixed aspects.
+  The house standard has no separate PM/QA/UAT rows — that effort folds into the
+  rows the knowledge article defines.
+- **Calibrate the leaves against the whole.** Leaves are sized so they *sum to
+  the quote of the whole* — a leaf is never sized in isolation. Ten leaves that
+  each look defensible alone routinely sum to several times what the whole job
+  costs. Before reporting, check the sum against what comparable whole tasks
+  actually cost and cite the logged hours; when the sum lands far above them,
+  re-cut the leaves rather than accept the sum.
 
 ## 5. Account for risk
 
-- **House standard** — no separate contingency row. Carry risk in the **High**
-  column and explain the drivers in the assumptions / comments column.
-- **Free-form fallback** — add an explicit contingency line sized to the
-  unknowns, not a reflex 10%:
-  - Low risk (well-understood, standard config): ~10%.
-  - Medium (custom logic, some unknowns): ~20%.
-  - High (integration, migration, vague requirements, unfamiliar module): 30%+.
+- **House standard** — contingency is defined by the knowledge article, not by
+  this skill: whether a contingency row exists at all, and what it defaults to,
+  comes from there. Follow the article. Where it defines no contingency row,
+  carry risk in the **High** column and explain the drivers in the assumptions /
+  comments column. Never layer a contingency percentage on top of a High column
+  that is already hedged unless the article says to.
+- **Free-form fallback** — add an explicit contingency line: state the driver and
+  size it to the unknowns, rather than reaching for a reflex percentage. A
+  well-understood standard configuration warrants far less than custom logic,
+  and custom logic far less than an integration, a migration, vague
+  requirements, or an unfamiliar module.
 
 Either way, state *why* the risk is what it is.
 
@@ -154,7 +165,7 @@ standard and conform to it:
 
 - Look for a **pre-seeded estimate template in sibling task descriptions** in the
   same project — the in-house standard is seeded verbatim into task descriptions
-  as a fixed 5-aspect table under an `### Estimate details` heading.
+  as an aspect table under an `### Estimate details` heading.
 - Look for a **knowledge article** documenting the estimating standard (may be
   unreachable — see Step 1; that does not mean it is absent, so check task
   descriptions too).
@@ -175,21 +186,19 @@ Written into the task's description under an Estimate details heading:
 
 | Aspect | Estimated Hours - Low (best case scenario) | Estimated Hours - High (worst case scenario) | Estimate assumptions / comments |
 |--------|-------------------------------------------:|---------------------------------------------:|---------------------------------|
-| Clarify requirements       | ... | ... | ... |
-| Design                     | ... | ... | ... |
-| Implementation and testing | ... | ... | ... |
-| Demo / Feedback            | ... | ... | ... |
-| Document and review        | ... | ... | ... |
-| TOTAL                      | ... | ... | ... |
+| <aspect row from the knowledge article> | ... | ... | ... |
+| TOTAL                                   | ... | ... | ... |
 
 Interpreting this estimate: Add this time to the existing Allocated Time OR Replace the existing Allocated Time.
 ```
 
-Keep the five aspect rows and the TOTAL exactly as named — no contingency row,
-no PM/QA/UAT rows, no three-point columns. Risk lives in the High column and the
-comments. Carry assumptions, exclusions, and open questions in the comments
-column or in the task chatter. For **internal** work, record the opportunity-cost
-/ prioritisation note (Step 8) in the comments column or beneath the table.
+Use exactly the rows the knowledge article defines, named as it names them, plus
+the TOTAL — no PM/QA/UAT rows, no three-point columns, and no contingency row
+unless the article defines one. Where it defines none, risk lives in the High
+column and the comments. Carry assumptions, exclusions, and open questions in
+the comments column or in the task chatter. For **internal** work, record the
+opportunity-cost / prioritisation note (Step 8) in the comments column or
+beneath the table.
 
 ### Template B — generic free-form estimate (fallback only, when no house standard exists)
 
