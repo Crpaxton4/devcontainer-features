@@ -203,15 +203,33 @@ are never assigned, so an empty assignee field carries no information.
 
 ## Phase 3 — Print the plan, then stop
 
+**The stack graph is the single source of every dependency.** Each edge is
+stated once, there, and nowhere else. The worker table's `Base` column and the
+wave/dispatch order are *derived* from it, never authored beside it:
+
+- a root is a node with no incoming edge; its base is `origin/main`,
+- a child's base is `origin/<parent-branch>`, read off its one incoming edge.
+
+**Consistency rule:** a base named in the worker table that does not appear as
+an edge in the stack graph is a plan defect — fix the graph and reprint the
+plan. Never reconcile the other way by editing the table, and never let two
+surfaces state the same dependency in their own words.
+
 Print:
 
-- the layered worker table,
-- the stack graph,
+- the stack graph, first, because everything below is derived from it,
+- the layered worker table, whose `Base` column is read off the graph,
 - each duplicate call **with the evidence that supports it**,
 - the skip list with reasons,
 - an explicit shared-file risk line naming what no worker may touch:
   `README.md`, `CHANGELOG.md`, `.release-please-manifest.json`, and the
   generated `devcontainer-features/src/*/README.md`.
+
+A wave table is **optional**. When you print one, compute it from the graph
+rather than authoring it: wave 1 is the roots, and a child enters the first
+wave after the one in which its parent is pushed. It is a rendering of the
+graph's topological layers and may add no edge of its own — if computing a wave
+requires an ordering the graph does not contain, the graph is what is wrong.
 
 **Then stop and wait for go.** Dispatch nothing. A plan that fans out without
 pausing has failed regardless of how good the grouping is.
