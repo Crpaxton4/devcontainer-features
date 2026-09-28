@@ -520,13 +520,14 @@ into the two groups that actually need different handling:
 | Plugin-shadowed | `discovery-notes`, `fibonacci-estimate`, `odoo-code-review`, `odoo-design-doc`, `odoo-quote` | Moved into `odoo-dev` (#695-#699, #701-#708); the plugin still ships them, so a loose copy loads *alongside* a live twin | Delete the loose copy; the plugin twin stays |
 | Retired, no twin | `client-status-report` | Retired outright (#700). No plugin copy, no packaged source, nothing replaces it — it shadows nothing but is still feature-seeded debris spending description budget every turn | Delete; there is nothing to fall back on |
 
-The plugin-shadowed five are not a fourth hand-maintained copy: they are
-`odoo_sdk.skills.PACKAGED_SKILL_NAMES`, the packaged sources the plugin's copies
-are generated from and the list `check-skill-parity.sh` already checks against.
+The plugin-shadowed five are not a third hand-maintained copy: since #784 the
+plugin's own `plugins/odoo-dev/skills/` tree is the single source for those
+bodies (the SDK's packaged twin, `odoo-sdk sync-skills` and the
+`check-skill-parity.sh` gate were all deleted with it), and that on-disk
+listing is what the group is anchored on.
 `.github/scripts/test_stray_skill_parity.py` gates all of it — the two lists
-against each other, both against the packaged names, and each claimed group
-against what the plugin actually ships on disk — so editing one file alone now
-fails CI instead of drifting.
+against each other, and each claimed group against what the plugin actually
+ships on disk — so editing one file alone now fails CI instead of drifting.
 
 **Not on either list, deliberately: `ingest`, `lint`, `llm-wiki-workspace`,
 `process`, `query`.** These turn up in `$CLAUDE_CONFIG_DIR/skills` beside the
