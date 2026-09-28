@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # preflight.sh — one-shot environment gate for the delivery suite.
 #
-# Usage: preflight.sh [--soft]
-#   --soft: report failures but exit 0.
+# Usage: preflight.sh [--soft] [--target-series V]
+#   --soft:          report failures but exit 0.
+#   --target-series: the Odoo series the work targets, compared against
+#                    ODOO_VERSION. Also read from $TARGET_SERIES. Unset means
+#                    there is nothing to compare, and the check passes.
 #
 # Runs ALL checks rather than stopping at the first, because the useful answer is
 # "these three things are wrong", not "the first thing is wrong" three times in a
@@ -25,7 +28,16 @@
 set -uo pipefail
 
 SOFT=0
-[ "${1:-}" = "--soft" ] && SOFT=1
+TARGET_SERIES="${TARGET_SERIES:-}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --soft) SOFT=1 ;;
+    --target-series) TARGET_SERIES="${2:-}"; shift ;;
+    --target-series=*) TARGET_SERIES="${1#*=}" ;;
+    *) ;;  # unknown arguments are ignored, as they always were
+  esac
+  shift
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/_common.sh"
@@ -65,6 +77,22 @@ if [ "$context" = host ]; then
 else
   check odoo odoo --version
   check postgres pg_isready
+
+  # An upgrade run in a container of the wrong series ports code this container
+  # cannot install, let alone test, and the result is an unverifiable commit
+  # (#876). Compared here rather than trusted from prose. No target named means
+  # nothing to compare: the check is absent rather than failed, because every
+  # non-upgrade caller passes none. The failure carries BOTH values, since
+  # "series mismatch" alone does not say which way to rebuild.
+  if [ -n "$TARGET_SERIES" ]; then
+    case "${ODOO_VERSION:-}" in
+      "$TARGET_SERIES"*)
+        echo "PASS series (ODOO_VERSION=${ODOO_VERSION:-unset})" >&2 ;;
+      *)
+        echo "FAIL series: ODOO_VERSION=${ODOO_VERSION:-unset}, target $TARGET_SERIES" >&2
+        failures+=("series: ODOO_VERSION=${ODOO_VERSION:-unset}, target $TARGET_SERIES") ;;
+    esac
+  fi
 fi
 
 # Needed in both contexts: every skill downstream talks to GitHub.

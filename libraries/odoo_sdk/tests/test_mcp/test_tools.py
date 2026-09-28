@@ -1297,10 +1297,35 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         self.assertEqual(schema["required"], ["task_id", "note"])
         self.assertEqual(schema["properties"]["dedupe_key"].get("default"), None)
 
-    def test_docstring_names_the_300_char_limit(self):
+    def test_docstring_names_the_500_char_limit(self):
         # MCP callers must see the #610 cap up front, in the tool itself as
-        # well as in the command-sourced description.
-        self.assertIn("300", self._make().__doc__)
+        # well as in the command-sourced description. #901 raised it to 500.
+        self.assertIn("500", self._make().__doc__)
+        self.assertNotIn("300", self._make().__doc__)
+
+    def test_interim_optional_and_defaults_to_false(self):
+        # #901: the local-only capture mode is opt-in; an unflagged call still
+        # posts to the chatter, so the required properties are unchanged.
+        schema = self._schema()
+        self.assertIn("interim", schema["properties"])
+        self.assertEqual(schema["required"], ["task_id", "note"])
+        self.assertIs(schema["properties"]["interim"].get("default"), False)
+
+    def test_docstring_explains_interim_and_the_one_note_rule(self):
+        # #901: this docstring is the only surface an MCP client sees when no
+        # prompt is loaded, so the cadence has to be stated here too.
+        doc = self._make().__doc__
+        self.assertIn("interim=True", doc)
+        self.assertIn("local session log ONLY", doc)
+        self.assertIn("ONE consolidated non-interim note per run", doc)
+
+    def test_interim_forwarded_to_command(self):
+        fn = self._make()
+        result = fn(5, "note", interim=True)
+        self.assertEqual(
+            result["kwargs"],
+            {"attachments": None, "dedupe_key": None, "interim": True},
+        )
 
     def test_docstring_states_the_attachment_audience(self):
         # #767: this docstring is the ONLY surface an MCP client sees when no
@@ -1316,19 +1341,26 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         specs = [{"path": "/tmp/report.csv"}]
         result = fn(5, "note", specs)
         self.assertEqual(result["args"], (5, "note"))
-        self.assertEqual(result["kwargs"], {"attachments": specs, "dedupe_key": None})
+        self.assertEqual(
+            result["kwargs"],
+            {"attachments": specs, "dedupe_key": None, "interim": False},
+        )
 
     def test_dedupe_key_forwarded_to_command(self):
         fn = self._make()
         result = fn(5, "note", None, "note-abc")
         self.assertEqual(
-            result["kwargs"], {"attachments": None, "dedupe_key": "note-abc"}
+            result["kwargs"],
+            {"attachments": None, "dedupe_key": "note-abc", "interim": False},
         )
 
     def test_plain_call_forwards_none_attachments(self):
         fn = self._make()
         result = fn(5, "note")
-        self.assertEqual(result["kwargs"], {"attachments": None, "dedupe_key": None})
+        self.assertEqual(
+            result["kwargs"],
+            {"attachments": None, "dedupe_key": None, "interim": False},
+        )
 
 
 class TestGetTaskChatterToolSchema(unittest.TestCase):

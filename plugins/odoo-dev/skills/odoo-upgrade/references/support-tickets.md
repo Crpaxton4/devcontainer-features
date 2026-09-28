@@ -80,7 +80,7 @@ Traceback alone get "please provide a reproduction". Before filing:
 
 ## Register
 
-Keep `tickets.csv` in project working directory next to inventory artifacts. `build_workbook.py --tickets` fold it in as workbook sheet.
+Keep `tickets.csv` in project working directory next to inventory artifacts. `build_workbook.py --tickets` fold it in as workbook sheet. Stage the file with its header row on day one, before any ticket exist: a headers-only register still get its sheet, its CSV sibling and a `tickets: 0 total, 0 still blocking` line, so a staged register is visible as staged and the first real ticket is one appended row. Never invent a placeholder row to make it appear — `validate_ticket` demand a real status and a real upgrade token, neither of which exist yet.
 
 ```csv
 id,date,subject,token,status,blocking_module,resolution,link

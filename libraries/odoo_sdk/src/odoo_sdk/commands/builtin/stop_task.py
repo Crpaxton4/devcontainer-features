@@ -15,7 +15,7 @@ class StopTaskCommand(Command):
     machine-derived summary computed from the run's recorded events and notes
     (#626) and stored on the run row (``task_runs.run_summary``), where the
     billing upload picks it up as the timesheet entry's description. The
-    summary is internal/local text with NO length cap; the 300-character
+    summary is internal/local text with NO length cap; the 500-character
     chatter limit applies only to posted chatter bodies.
 
     This command does **not** write hours to the Odoo timesheet, and

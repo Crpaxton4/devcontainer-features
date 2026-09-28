@@ -17,9 +17,17 @@ Usage:
                          [--cache DIR] [--repos repo1,repo2]
 
 ADDONS_PATH defaults to /mnt/extra-addons. With --csv, fills the
-"OCA repo" column of a module_inventory.py CSV in place. Exit code 0
+"OCA repo" column of a module_inventory.py CSV in place: the verified
+location `OCA/<repo> (series,…)`, or the literal `none` when a full,
+healthy scan found nothing. The scan that proves `none` is provenance and
+belongs in the workbook's Evidence sheet, never in the cell. Exit code 0
 on success even when mismatches are reported; exit 2 on a partial scan
 (network failures — CSV left untouched, absence unproven).
+
+The JSON index also carries `oca_alt`: for every module the org ships, the
+literal `already OCA: <repo>/<module>` that the workbook's
+"OCA <major> alternative" column takes — a module that IS the OCA module is
+not an alternative to itself, and the value is derived here, not authored.
 """
 
 import argparse
@@ -36,6 +44,9 @@ DEFAULT_ADDONS_PATH = "/mnt/extra-addons"
 ORG = "OCA"
 OCA_AUTHOR = "Odoo Community Association (OCA)"
 DEFAULT_SERIES = "16.0,17.0,18.0,19.0"
+# Documented literal for "no OCA repo ships this module" (references/
+# inventory.md). Written only after a full, healthy scan.
+OCA_NONE = "none"
 # OCB: full odoo/odoo fork (core modules at depth 2, huge clone).
 # OpenUpgrade: full fork through 13.0; >= 14.0 it ships only the
 # openupgrade_framework/openupgrade_scripts tooling addons — migration
@@ -144,9 +155,11 @@ def local_modules(addons_paths):
 
 
 def update_csv(csv_path, results, clear_absent):
-    """Fill the 'OCA repo' column. clear_absent=False on --repos subset
-    scans: a subset proves presence, never absence, so verified cells
-    from earlier full scans must survive."""
+    """Fill the 'OCA repo' column with `OCA/<repo> (series,…)`, or with
+    `none` once a full scan has proven the absence. clear_absent=False on
+    --repos subset scans: a subset proves presence, never absence, so
+    verified cells from earlier full scans must survive — and `none` is
+    only ever written when it has been proven."""
     # utf-8-sig on both ends so an Excel BOM survives the round-trip
     with csv_path.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
@@ -157,9 +170,10 @@ def update_csv(csv_path, results, clear_absent):
               f"CSV with the current module_inventory.py", file=sys.stderr)
         sys.exit(1)
     for row in rows:
-        technical = row["Module Name"].split(" (")[0].strip()
+        # Module Name carries the technical name and nothing else.
+        technical = row["Module Name"].strip()
         if technical in results and (results[technical] or clear_absent):
-            row["OCA repo"] = results[technical]
+            row["OCA repo"] = results[technical] or OCA_NONE
     with csv_path.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -256,9 +270,14 @@ def main():
                     f"ships it on {', '.join(series)} — fork, rename, or "
                     f"externally-maintained module")
 
+    # A module the org ships is not an alternative to itself: phase 2 copies
+    # this literal into "OCA <major> alternative" instead of inventing one.
+    oca_alt = {m: f"already OCA: {sorted(org_index[m])[0]}/{m}"
+               for m in sorted(results) if results[m]}
     args.output.write_text(json.dumps(
         {"series": series,
          "modules": {m: v for m, v in sorted(results.items()) if v},
+         "oca_alt": oca_alt,
          "mismatches": mismatches}, indent=2))
     found = sum(1 for v in results.values() if v)
     print(f"{found}/{len(local)} modules found in {ORG} org -> {args.output}")

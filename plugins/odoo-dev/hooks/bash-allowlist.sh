@@ -34,11 +34,11 @@ payload="$(cat)"
 if out="$(printf '%s' "$payload" | node -e '
 const TESTER = "odoo-dev-tester";
 
-// The five sanctioned scripts. Names, not paths: the tester invokes them through
+// The four sanctioned scripts. Names, not paths: the tester invokes them through
 // $CLAUDE_PLUGIN_ROOT or a skill-relative path, and the basename is the part that
 // is stable across both.
 const SCRIPTS = new Set([
-  "artifact.sh", "run-tests.sh", "browser-ensure.sh", "gate.sh", "module-classify.sh",
+  "artifact.sh", "run-tests.sh", "browser-ensure.sh", "module-classify.sh",
 ]);
 
 // Read-only git, written down explicitly. Anything not on this list is denied,
@@ -58,7 +58,7 @@ const BRANCH_FLAGS = new Set([
 
 const ALLOWED =
   "odoo-dev-tester may run exactly these, one command per Bash call: artifact.sh, " +
-  "run-tests.sh, browser-ensure.sh, gate.sh, module-classify.sh, and read-only git " +
+  "run-tests.sh, browser-ensure.sh, module-classify.sh, and read-only git " +
   "(status, diff, log, show, rev-parse, ls-files, branch, worktree list, remote -v, " +
   "cat-file). No chaining, no pipes, no command substitution, and redirection only " +
   "to /dev/null. Name a script by its path, because a bare $VAR cannot be resolved " +
