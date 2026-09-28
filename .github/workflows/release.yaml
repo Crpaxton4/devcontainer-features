@@ -1,4 +1,4 @@
-name: "Release dev container features & Generate Documentation"
+name: "Release dev container features"
 on:
   workflow_dispatch:
   workflow_call:
@@ -9,7 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
       packages: write
     steps:
       - uses: actions/checkout@v7
@@ -30,32 +29,6 @@ jobs:
         with:
           publish-features: "true"
           base-path-to-features: "./devcontainer-features/src"
-          generate-docs: "true"
-          
+          generate-docs: "false"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create PR for Documentation
-        id: push_image_info
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          # Configure git and Push updates
-          git config --global user.email github-actions[bot]@users.noreply.github.com
-          git config --global user.name github-actions[bot]
-          git config pull.rebase false
-          branch=automated-documentation-update-$GITHUB_RUN_ID
-          git checkout -b $branch
-          message='chore(main): automated documentation update'
-          # Add / update and commit
-          git add devcontainer-features/src/personal-features/README.md
-          git add devcontainer-features/src/second-brain/README.md
-          # Skip when there is nothing staged; otherwise a failed commit aborts under `set -e`.
-          if git diff --cached --quiet; then
-              echo "No documentation updates to commit."
-          else
-              git commit -m "$message"
-              git push origin "$branch"
-              gh pr create --title "$message" --body "$message"
-          fi
