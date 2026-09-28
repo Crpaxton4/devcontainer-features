@@ -11,9 +11,8 @@ background: false
 
 ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --create --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
-GATE: ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
 
-Those three are absolute literal paths, resolved once by the command before you
+Those two are absolute literal paths, resolved once by the command before you
 were dispatched. Type each of them out in full in every Bash call. Your Bash calls
 inherit no environment from me and keep no state from one call to the next, so a
 variable name in a command is not a path: it expands to nothing and the command
