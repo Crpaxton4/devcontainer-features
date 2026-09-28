@@ -21,7 +21,7 @@ still in [inventory.md](./inventory.md):
 | module is OCA, `self:` present | — | `replace` after diffing the local copy for local patches |
 
 Cell formats for the two inventory columns (`native?` ≤ 50 chars, `OCA alternative`
-≤ 80 chars, ≤ 3 candidates) are in [inventory.md](./inventory.md) columns 12–13.
+≤ 80 chars, ≤ 3 candidates) are in [inventory.md](./inventory.md) columns 14–15.
 
 Phase-2 fan-out for a whole-codebase inventory — one read-only agent per ~10-12
 modules, each writing `oca_alt_g<N>.json` with keys `module`, `oca_alt`,
