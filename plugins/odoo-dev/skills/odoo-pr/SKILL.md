@@ -5,11 +5,11 @@ user-invocable: false
 ---
 # Odoo PR
 
-Finished branch becomes PR that reviewer, client, and release manifest all read. Seven steps, in order. Steps 1 and 2 are gates: they refuse, not warn.
+Finished branch becomes PR that reviewer, client, and release manifest all read. Seven steps, in order. Nothing here blocks on an artifact: missing evidence is reported, never fabricated and never routed around.
 
 Scripts. This skill's own scripts (`PR_SCRIPTS`) live at `<base directory>/scripts`,
 where `<base directory>` is the absolute path on the `Base directory for this skill:`
-line injected above this body. `module-classify.sh`, `gate.sh` and `artifact.sh` are
+line injected above this body. `module-classify.sh` and `artifact.sh` are
 not there: they belong to the plugin rather than to this skill, and they live at
 `<plugin root>/scripts`. `<plugin root>` is two directory levels above the base
 directory — the base directory's parent is `skills/`, and its parent is the plugin
@@ -45,17 +45,19 @@ a reason to open a second.
 
 An Odoo task branch is finished and verified and the work has to become visible to the client; someone asks to open, update, or raise a pull request for a task; a PR title or body has to be written; CodeRabbit comments are waiting to be worked; or someone asks what the PR standard is.
 
-## 1. Preconditions — fail closed
+## 1. Preconditions
 
-**Test evidence.** Read `30-test.json`, the artifact `odoo-dev-tester` wrote, and require all three of:
+**Test evidence.** Read `30-test.json`, the artifact `odoo-dev-tester` wrote, and check all three of:
 
 - `tests_run > 0`. Zero never green — "no failures" not evidence when nothing ran.
 - `tours_run > 0` whenever `tours_declared > 0`. Odoo skips tours without browser and logs skip as pass, so tour suite with no browser is invisibly green. Re-run with `--with-tours`.
 - `passed: true`.
 
-If the artifact is missing, or any of the three fails, stop and hand the branch back to `odoo-dev-builder` — that is the agent allowed to change code, and evidence produced by whoever ships the change is not independent evidence. Do not open the pull request and explain the gap in its body. These numbers gate the PR; they do not appear in it.
+If a check **fails** — tests ran and something went red — stop and hand the branch back to `odoo-dev-builder`, the agent allowed to change code. Evidence produced by whoever ships the change is not independent evidence, so do not fix it yourself and do not open the pull request explaining the gap in its body.
 
-Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the branch yourself and apply the same three checks to its JSON.
+If the artifact is **absent**, or the module legitimately ships no tests, that is not the same thing and it does not stop you. Say so in your final message — which evidence is missing and why — and open the pull request anyway. Nothing enforces this; you are the judgement. What you must never do is write `30-test.json` yourself to make the shape look right: an agent's own account of its own work is not evidence, and a fabricated artifact is worse than an absent one because it cannot be told apart from a real one.
+
+Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the branch yourself and apply the same three checks to its JSON. These numbers inform the decision to open the PR; they do not appear in it.
 
 **Commits.** Conventional commits, scope = module name, per `odoo-devcontainer/references/commits.md`. Tidy history before PR exists: rebase fixups away, aim for one succinct commit or coherent sequence.
 
@@ -63,7 +65,7 @@ Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the bra
 
 **Size.** Keep the pull request small: best under 500 changed lines (additions plus deletions), and under 1000 is still acceptable. Past that, review quality collapses — the reviewer starts skimming, and the findings that matter are the ones missed. Split the work into stacked pull requests instead, each one independently reviewable and each leaving the codebase in a working state.
 
-## 2. Local CodeRabbit gate — before pushing
+## 2. Local CodeRabbit review — before pushing
 
 Review diff locally, fix findings, commit fixes. Cheaper than finding them in review thread.
 
@@ -125,13 +127,16 @@ Full logs stay at `log_file`.
 - Rerun-safe: looks for existing open PR on this head and **edits** it, not opens second. Second PR loses review history and CodeRabbit thread.
 - Exit **5** = body file missing or empty.
 
-The delivery gate runs before this command, not after it, and it must exit 0:
+Nothing runs in front of this command. There is no gate script and no `PreToolUse`
+hook holding the call: what decides whether the pull request opens is step 1 and
+your own reading of it.
 
-```bash
-<plugin root>/scripts/gate.sh <ARTIFACTS dir from your prompt> --for pr
-```
-
-`--for pr` is the stage this skill gates on. Exit 1 names the blocker that fired, and that is a stop — nothing gets pushed and no pull request gets opened until the blocker is gone.
+This step is more than one action — push, create, assign, note the task, schedule
+the activity — and they fail independently. Record `50-pr.json` as soon as
+`pr-open.sh` returns, before the writebacks in step 7, so that a re-run resumes from
+what is already done instead of opening a second pull request or posting a second
+note. `pr-open.sh` is itself rerun-safe; the writebacks are made rerun-safe by
+`--dedupe-key`.
 
 ## 6. Post-open review loop
 
@@ -164,32 +169,18 @@ Never write timesheet hours from here. Hours reach Odoo through the odoo-tui/CLI
 
 ## Artifacts this skill writes
 
-Three stages, all through `artifact.sh`, so the gate and the next agent read them off disk rather than out of a prompt:
+Two stages, both through `artifact.sh`, so the next agent and any human reading afterwards find them on disk rather than in a prompt:
 
 ```bash
 <plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 40-coderabbit <file>
-<plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 45-waiver <file>
 <plugin root>/scripts/artifact.sh put <ARTIFACTS dir from your prompt> 50-pr <file>
 ```
 
-`40-coderabbit.json` is the `coderabbit-local.sh` JSON, stored verbatim. It is tool output, so never edit it, never annotate it, and never hand-write one. The gate blocks while its `status` is anything other than `complete`, and it blocks on every finding the review reported.
+`40-coderabbit.json` is the `coderabbit-local.sh` JSON, stored verbatim. It is tool output, so never edit it, never annotate it, and never hand-write one. Nothing reads it and refuses on your behalf: an unfinished review or an open finding is yours to weigh, and a finding you decide not to fix is something you say plainly in your final message, with the reason, so a human can disagree with it.
 
-`45-waiver.json` is where your judgement goes, and it is a separate artifact for exactly that reason: nothing you decide is ever written into the same file as the tool output it excuses. **The default is to fix the finding and run the review again.** A fresh run that reports no findings is the clean way through the gate, and re-running is cheaper than a waiver that a human then has to read and accept.
+**The default is still to fix the finding and run the review again.** A fresh run that reports no findings is cheaper than a paragraph explaining why one was left, and it is the only answer that needs nobody's trust.
 
-A waiver is an auditable "won't fix". Write one only when a finding genuinely is not going to be fixed, and give a reason that a reader can weigh and disagree with:
-
-```json
-{"waived": [
-  {"file": "models/sale_order.py", "line": null,
-   "reason": "the write runs in a scheduled job with no user context, so a record rule cannot apply here"}
-]}
-```
-
-One entry is consumed per finding, so two findings in the same file need two entries, each with its own reason. Set `line` to `null` whenever the finding carries no line number, which is the usual case for this review output. `artifact.sh` exits **4** on an entry with no `file`, an empty `reason`, or a `line` that is neither a number nor `null`.
-
-Waiving a finding you have not actually read, or one you could have fixed in the time it took to write the waiver, is the one lie this contract cannot detect. The reason is the only thing a human has to judge it by, so make it a real one.
-
-`50-pr.json` requires `pr_url`, `pr_number`, `draft`, `base`, `head` and `title`, and should also carry `assigned`.
+`50-pr.json` requires `pr_url`, `pr_number`, `draft`, `base`, `head` and `title`, and should also carry `assigned`. Write it as soon as `pr-open.sh` returns: it is what makes a re-run of step 5 resume rather than repeat.
 
 ## References
 
