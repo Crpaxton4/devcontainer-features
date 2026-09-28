@@ -20,7 +20,7 @@
 #
 # NO CALLER IN THIS TREE TODAY, ON PURPOSE. Every GitHub API path the plugin
 # currently builds interpolates a SHA (release-manifest.sh, from `git rev-list`)
-# or a PR number (release-manifest.sh, coderabbit-poll.sh); branch names reach
+# or a PR number (release-manifest.sh); branch names reach
 # `gh` only as FLAG values — `gh pr list --head`, `gh pr create --base/--head`,
 # `gh pr edit --base` — which gh encodes itself rather than pasting into a path.
 # This file exists so the first call that does need a ref inside a path has a
