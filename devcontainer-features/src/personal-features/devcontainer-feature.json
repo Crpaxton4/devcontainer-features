@@ -6,11 +6,15 @@
     "options": {},
     "dependsOn": {
         "ghcr.io/devcontainers/features/node:1": {},
-        "ghcr.io/devcontainers/features/github-cli:1": {}
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+            "moby": false
+        }
     },
     "installsAfter": [
         "ghcr.io/devcontainers/features/node",
         "ghcr.io/devcontainers/features/github-cli",
+        "ghcr.io/devcontainers/features/docker-outside-of-docker",
         "ghcr.io/devcontainers/features/common-utils"
     ],
     "containerEnv": {
@@ -72,5 +76,5 @@
         }
     ],
     "postCreateCommand": "publish-claude-wrapper && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace && odoo-ls-config",
-    "postStartCommand": "mempalace-hub"
+    "postStartCommand": "mempalace-hub-up"
 }

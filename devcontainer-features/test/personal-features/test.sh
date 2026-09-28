@@ -1481,115 +1481,279 @@ check "mempalace-init-workspace keeps a .gitignore with unexpected content" bash
 check "real mempalace init completes headless and writes rooms" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\" \"\$d/repo/src\" \"\$d/repo/docs\"; echo x > \"\$d/repo/src/a.py\"; echo y > \"\$d/repo/docs/b.md\"; (cd \"\$d/repo\" && git init -q .); HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_INIT_TIMEOUT=120 /usr/local/bin/mempalace-init-workspace \"\$d/repo\" >/dev/null 2>&1 && test -f \"\$d/repo/mempalace.yaml\" && ! test -e \"\$d/repo/.gitignore\"; }"
 
-# --- the shared mempalace MCP hub (#764) --------------------------------------
-# mempalace hands the MCP writer lease to one process per palace, so a container
-# where every session spawns its own server has exactly one session that can
-# write and N-1 that fail at write time with -32001. The fix is one long-lived
-# `mempalace serve` per container, started from postStartCommand - which
-# `devcontainer features test` does not run, so the script is driven by hand
-# here. MEMPALACE_HUB_CMD substitutes a stub for the real binary so these assert
-# the launcher's policy, not mempalace's server. Port 8799 throughout, never the
-# 8765 default, so nothing here can collide with a real hub.
-check "mempalace-hub is on PATH and executable" bash -c \
-  "test -x /usr/local/bin/mempalace-hub"
-check "mempalace-hub passes shell syntax check" bash -c \
-  "sh -n /usr/local/bin/mempalace-hub"
-
-# Pre-created 0666 for the same reason as mempal-dir.sh: install.sh cannot know
-# which account the dev container CLI runs postStartCommand as, and the hub's
-# only diagnostics live in this file.
-check "the hub log is pre-created and writable by any uid" bash -c \
-  "test -f /usr/local/share/personal-features/mempalace-hub.log && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.log)\" = '666' ]"
-
-# MEMPALACE_HUB_MARKER is overridden here and everywhere below: `status`
-# records what it saw (#780), and the default target is the real, host-persisted
-# provision marker, which no check may write to.
-check "mempalace-hub status reports no hub when nothing is listening" bash -c \
-  "MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub status >/dev/null 2>&1; [ \$? -eq 1 ]"
-check "mempalace-hub rejects an unknown action" bash -c \
-  "/usr/local/bin/mempalace-hub bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
-
-# A stub that records its argv and the environment the launcher hands it, then
-# outlives the launcher - the detach path has to be exercised, not simulated.
+# --- the shared mempalace hub container (#898, #897, #921) --------------------
+# The palace is a HOST bind mount every devcontainer on the machine sees, so the
+# flock that arbitrates mempalace's single MCP writer lease is host-global. The
+# per-container hub this replaced bound and health-checked container-local
+# loopback, so the second container to start was refused the lock, spent its
+# restart budget in ~45s on a condition no retry can change, and gave up. There
+# is now ONE hub container for the host, reconciled by `mempalace-hub-up` over
+# the Docker socket that docker-outside-of-docker mounts.
 #
-# Every knob that names a file is pointed into the temp dir: the supervisor
-# outlives the check that started it, and must not write the container's real
-# pid file, log or provision marker while doing so. MEMPALACE_HUB_MAX_RESTARTS=0
-# keeps the leftover supervisor from re-running the stub for minutes afterwards;
-# the restart budget gets its own checks below.
-_HUB_STUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nprintf \"idle=%%s\\\\n\" \"\${MEMPALACE_MCP_IDLE_HOURS:-unset}\" >> \"\$0.calls\"\nsleep 30\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=2 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_MAX_RESTARTS=0;"
+# `devcontainer features test` has no host daemon to talk to and must never
+# create a real container, so everything below drives the reconcile against a
+# STUB `docker` first on PATH: it appends every argv line to $STUB_CALLS and
+# answers `info`/`inspect`/`network`/`image`/`pull`/`run`/`ps` from canned,
+# per-scenario values the check exports. That makes the assertions about the
+# launcher's policy - which state it records, and the exact argv it would hand a
+# real daemon - rather than about Docker.
+check "mempalace-hub-up is on PATH and executable" bash -c \
+  "test -x /usr/local/bin/mempalace-hub-up"
+check "mempalace-hub-up passes shell syntax check" bash -c \
+  "sh -n /usr/local/bin/mempalace-hub-up"
+# The per-container supervisor is gone, not deprecated: leaving it installed
+# would leave a second thing racing for the same host-global lock.
+check "the per-container mempalace-hub supervisor is gone" bash -c \
+  "! test -e /usr/local/bin/mempalace-hub"
 
-# A stub that exits immediately, for the restart budget. Same call record as the
-# long-lived one, so a restart is counted by grepping its argv log.
-_HUB_CRASH_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/bin\"; printf '#!/bin/sh\nprintf \"%%s\\\\n\" \"\$*\" >> \"\$0.calls\"\nexit 9\n' > \"\$d/bin/stub\"; chmod +x \"\$d/bin/stub\"; export MEMPALACE_HUB_CMD=\"\$d/bin/stub\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_RESTART_DELAY=0 MEMPALACE_HUB_HEALTHY_SECS=3600;"
+# install.sh freezes the mempalace tool venv so the hub installs the resolution
+# THIS image was tested with, chromadb (the single-writer backend) included, and
+# records the image alongside it so the pin lives in one place.
+check "the hub's frozen dependency set is installed" bash -c \
+  "test -s /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+check "the frozen dependency set pins mempalace" bash -c \
+  "grep -qi '^mempalace==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+# A one-line file is the documented fallback (the freeze could not run), which
+# is a warning at build time, not a failure here. A real freeze must carry the
+# single-writer backend with it, or the hub resolves chromadb itself and stops
+# being the resolution this image was tested with.
+check "a real freeze pins chromadb with it" bash -c \
+  "[ \"\$(wc -l < /usr/local/share/personal-features/mempalace-hub-requirements.txt)\" -le 1 ] || grep -qi '^chromadb==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
+check "the hub records its version and image" bash -c \
+  "grep -q '^MEMPALACE_HUB_VERSION=' /usr/local/share/personal-features/mempalace-hub.env && grep -q '^MEMPALACE_HUB_IMAGE=' /usr/local/share/personal-features/mempalace-hub.env"
 
-check "mempalace-hub binds the hub to loopback on the configured port" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q -- 'serve --host 127.0.0.1 --port 8799' \"\$d/bin/stub.calls\""
+# The stub daemon. Built once, at test-file scope, because every check runs in
+# its own `bash -c` and cannot see a function defined here. A real AF_UNIX
+# socket file stands in for /var/run/docker.sock so the `-S` guard passes; the
+# stub is what answers, so nothing ever connects to it.
+_HUB_STUB_DIR="$(mktemp -d)"
+mkdir -p "$_HUB_STUB_DIR/bin"
+python3 -c 'import socket, sys
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(sys.argv[1])
+sock.listen(1)' "$_HUB_STUB_DIR/docker.sock"
 
-# The idle-exit watchdog exists for abandoned PER-SESSION servers; on the one
-# process the container shares it is a self-inflicted outage whose next repair
-# is the next container start.
-check "mempalace-hub disables the hub's idle-exit watchdog" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -qx 'idle=0' \"\$d/bin/stub.calls\""
+cat > "$_HUB_STUB_DIR/bin/docker" <<'HUB_DOCKER_STUB'
+#!/bin/sh
+# Stub `docker` for the mempalace-hub-up checks. Records argv, answers from
+# STUB_* variables. Never contacts a daemon and never creates anything.
+printf '%s\n' "$*" >> "$STUB_CALLS"
+case "$1" in
+    info) exit "${STUB_INFO_RC:-0}" ;;
+    network)
+        case "$2" in
+            inspect) [ "${STUB_NET_EXISTS:-1}" = 1 ] || exit 1 ;;
+        esac
+        exit 0
+        ;;
+    image) exit "${STUB_IMAGE_RC:-0}" ;;
+    pull) exit "${STUB_PULL_RC:-0}" ;;
+    run) exit "${STUB_RUN_RC:-0}" ;;
+    inspect) ;;
+    *) exit 0 ;;
+esac
+# `docker inspect`. With -f it is one of the four templates the reconcile uses;
+# without it, the self-identification probe.
+if [ "${2:-}" = "-f" ]; then
+    case "${3:-}" in
+        *State.Status*)
+            [ -n "${STUB_HUB_STATUS:-}" ] || exit 1
+            printf '%s\n' "$STUB_HUB_STATUS"
+            ;;
+        *requirements-sha*) printf '%s\n' "${STUB_HUB_SHA:-}" ;;
+        *Mounts*) printf '%s\n' "${STUB_HOST_PATH:-}" ;;
+        *NetworkSettings*) printf '%s\n' "${STUB_NETWORKS:-mempalace }" ;;
+    esac
+    exit 0
+fi
+exit "${STUB_SELF_RC:-0}"
+HUB_DOCKER_STUB
+chmod +x "$_HUB_STUB_DIR/bin/docker"
 
-# A background child still holding the lifecycle command's pipes would keep the
-# dev container CLI waiting on it forever, so the launcher must return on its
-# own timeout even though the hub it started is still alive.
-check "mempalace-hub does not block on the hub it started" bash -c \
-  "$_HUB_STUB_SETUP s=\$(date +%s); /usr/local/bin/mempalace-hub >/dev/null 2>&1; [ \$(( \$(date +%s) - s )) -lt 20 ]"
+# A credential-free /healthz that answers 200, so the `live` path can be reached
+# without a real hub. mempalace-hub-up dials $MEMPALACE_HUB_NAME:$PORT, so the
+# scenario names the hub 127.0.0.1 and this listens there.
+cat > "$_HUB_STUB_DIR/bin/fake-healthz" <<'HUB_HEALTHZ_STUB'
+#!/bin/sh
+exec python3 - "$1" <<'PY'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Every failure is a warning: no hub is the pre-#764 behaviour, which is
-# degraded (one writer among N sessions), not broken.
-check "mempalace-hub exits 0 when the hub never answers" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1"
-check "mempalace-hub warns when the hub never answers" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub 2>&1 >/dev/null | grep -q 'did not answer'"
-check "mempalace-hub exits 0 when mempalace is not on PATH" bash -c \
-  "MEMPALACE_HUB_CMD=definitely-not-a-real-binary MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_MARKER=\"\$(mktemp -d)/marker.json\" /usr/local/bin/mempalace-hub 2>/dev/null"
-check "MEMPALACE_SKIP_HUB opts out entirely" bash -c \
-  "$_HUB_STUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub >/dev/null 2>&1; ! test -e \"\$d/bin/stub.calls\""
 
-# --- the hub supervisor and its liveness record (#780) ------------------------
-# postStartCommand fires once per container start, so before this a hub that
-# died mid-session was never restarted - and the fallback it left behind (every
-# session serving its own palace copy, one writer lease between them) is exactly
-# the #764 bug, reinstated silently and surfacing only at write time. `start`
-# now detaches `supervise`, which re-runs `mempalace serve` when it exits, and
-# every state transition is recorded in the provision marker #806 already keeps
-# in $CLAUDE_CONFIG_DIR - the same file and the same mechanism, one new key.
-check "the hub pid file is pre-created and writable by any uid" bash -c \
-  "test -f /usr/local/share/personal-features/mempalace-hub.pid && [ \"\$(stat -c '%a' /usr/local/share/personal-features/mempalace-hub.pid)\" = '666' ]"
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
 
-# start must hand off to the supervisor, not run the server as its own child:
-# the restart loop is the whole point, and it has to outlive the launcher.
-check "mempalace-hub start detaches the supervisor" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; grep -q '^supervisor=' \"\$d/hub.pid\" && grep -q '^server=' \"\$d/hub.pid\""
+    def log_message(self, *args):
+        pass
 
-# One serve run plus MEMPALACE_HUB_MAX_RESTARTS restarts, then it stops - a hub
-# that cannot bind at all must not spin forever.
-check "the supervisor restarts a hub that exits" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=2 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; [ \"\$(grep -c -- 'serve --host' \"\$d/bin/stub.calls\")\" = '3' ]"
-check "the supervisor gives up once the restart budget is spent" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise 2>&1 | grep -q 'giving up'"
 
-# The signal half of #780: giving up is recorded where it outlives the container
-# log, in the marker #806 writes - so "no hub" can be told apart from "a hub
-# that crashed out an hour ago" without waiting for a -32001.
-check "a spent restart budget is recorded in the provision marker" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=1 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"state\": \"gave_up\"' \"\$d/marker.json\""
-check "mempalace-hub status reports the state the supervisor last recorded" bash -c \
-  "$_HUB_CRASH_SETUP MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; /usr/local/bin/mempalace-hub status 2>/dev/null | grep -q \"last recorded state 'gave_up'\""
-# Reuse, not a second breadcrumb: the default path is #806's marker, and the
-# hub's key is merged into whatever that file already holds.
+HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+HUB_HEALTHZ_STUB
+chmod +x "$_HUB_STUB_DIR/bin/fake-healthz"
+
+# Per-check scenario: a private temp dir for the calls log, the marker, the
+# palace mount and the share dir, so no check can touch the container's real
+# mount or the host-persisted provision marker.
+#
+# Two of these knobs exist so no check can depend on whether some name happens
+# to ANSWER on the machine running the suite, which is not hypothetical: the
+# Feature's own postStartCommand runs `mempalace-hub-up` for real before the
+# tests do, and on a CI runner with a working daemon that creates a real hub
+# called `mempalace-hub` and brings it live. A scenario probing that name then
+# records `live` where it meant to record `starting`.
+#
+#   MEMPALACE_HUB_NAME=mempalace-hub-under-test  a name nothing will answer on,
+#     so `status` and the poll see the absence they are written for. The
+#     DEFAULT name is asserted separately, by reading the script.
+#   MEMPALACE_HUB_WAIT=0  do not probe at all - `starting` is then the state
+#     regardless of the network, and costs no wall clock.
+_HUB_SETUP="d=\"\$(mktemp -d)\"; mkdir -p \"\$d/mount/palace\" \"\$d/mount/locks\" \"\$d/share\"; printf 'mempalace==3.9.0\n' > \"\$d/share/mempalace-hub-requirements.txt\"; export PATH=\"$_HUB_STUB_DIR/bin:\$PATH\" STUB_CALLS=\"\$d/calls\" STUB_HOST_PATH=/host/mempalace MEMPALACE_HUB_SOCKET=\"$_HUB_STUB_DIR/docker.sock\" MEMPALACE_HUB_MOUNT=\"\$d/mount\" MEMPALACE_HUB_SHARE_DIR=\"\$d/share\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\" MEMPALACE_HUB_NAME=mempalace-hub-under-test MEMPALACE_HUB_WAIT=0;"
+
+# The scenarios below rename the hub so nothing they probe can answer, so the
+# real name is asserted here. It is load-bearing twice over: it is what
+# serverinfo.json publishes verbatim for every sibling container to dial, and
+# it is the container name a second devcontainer reconciles against.
+check "the hub is named mempalace-hub by default" bash -c \
+  "grep -qF 'MEMPALACE_HUB_NAME:-mempalace-hub}' /usr/local/bin/mempalace-hub-up"
+check "mempalace-hub-up rejects an unknown action" bash -c \
+  "/usr/local/bin/mempalace-hub-up bogus >/dev/null 2>&1; [ \$? -eq 2 ]"
+
+# Every state below is recorded and exits 0. postStartCommand runs this, and a
+# container with no hub is degraded (each session serves its own palace copy,
+# one writer among them), not broken - never worth failing container start over.
+check "MEMPALACE_SKIP_HUB records 'disabled' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_SKIP_HUB=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"disabled\"' \"\$d/marker.json\" && ! test -e \"\$d/calls\""
+
+# docker-outside-of-docker is a hard dependency precisely so this cannot happen;
+# when it does, the state names it instead of the container looking healthy.
+check "no docker binary records 'no_docker' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_HUB_DOCKER=definitely-not-a-real-binary /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_docker\"' \"\$d/marker.json\""
+
+check "an absent daemon socket records 'no_socket' and exits 0" bash -c \
+  "$_HUB_SETUP MEMPALACE_HUB_SOCKET=\"\$d/definitely-not-a-socket\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_socket\"' \"\$d/marker.json\""
+check "a daemon that does not answer records 'no_socket'" bash -c \
+  "$_HUB_SETUP STUB_INFO_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"no_socket\"' \"\$d/marker.json\""
+
+# Without its own container id the reconcile cannot ask the daemon what host
+# path is behind the palace mount, and a hub given the in-container path would
+# get a fresh empty volume instead of the palace - a silently empty memory.
+check "an unidentifiable container records 'self_not_found'" bash -c \
+  "$_HUB_SETUP STUB_SELF_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"self_not_found\"' \"\$d/marker.json\""
+check "an unresolvable palace host path records 'self_not_found'" bash -c \
+  "$_HUB_SETUP STUB_HOST_PATH= /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"self_not_found\"' \"\$d/marker.json\""
+
+# The hub and this container have to meet on a name. Without the shared network
+# there is no name, so there is no hub.
+check "a network this container cannot join records 'network_failed'" bash -c \
+  "$_HUB_SETUP STUB_NETWORKS=bridge /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"network_failed\"' \"\$d/marker.json\""
+
+check "an unpullable hub image records 'pull_failed'" bash -c \
+  "$_HUB_SETUP STUB_IMAGE_RC=1 STUB_PULL_RC=1 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"pull_failed\"' \"\$d/marker.json\""
+
+# The hub's $HOME layout is load-bearing: server_state_dir and mine_palace_lock
+# both root at $HOME/.mempalace, so the hub only shares the containers' token,
+# serverinfo record and lock if its HOME/.mempalace resolves onto the mount.
+check "the hub's HOME is prepared on the shared mount" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; [ \"\$(readlink \"\$d/mount/hub/home/.mempalace\")\" = \"\$d/mount\" ]"
+
+# The per-container hub left serverinfo records advertising loopback, which no
+# sibling container can dial and whose recorded pid can collide with an
+# unrelated local process. They are cleared, never trusted.
+check "a stale loopback serverinfo record is removed" bash -c \
+  "$_HUB_SETUP mkdir -p \"\$d/mount/server/abc\"; printf '{\"pid\": 1, \"host\": \"127.0.0.1\", \"port\": 8765}\n' > \"\$d/mount/server/abc/serverinfo.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; ! test -e \"\$d/mount/server/abc/serverinfo.json\""
+
+# The requirements file is bind-mounted into the hub BY THE HOST DAEMON, so it
+# has to be staged somewhere the host can see - the shared mount, not this
+# container's /usr/local/share/personal-features.
+check "the frozen dependency set is staged onto the shared mount" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qi '^mempalace==' \"\$d/mount/hub/mempalace-hub-requirements.txt\""
+
+# The argv a real daemon would be handed. Every flag here is load-bearing and is
+# asserted by name: --hostname/--network are the address the serverinfo record
+# publishes verbatim; no --init, because the server must BE pid 1 for
+# read_live_serverinfo's os.kill(pid, 0) to be true in every namespace;
+# --stop-signal SIGINT is the shutdown mempalace releases the palace lock on;
+# MEMPALACE_MCP_IDLE_HOURS=0 disables an idle-exit watchdog meant for abandoned
+# per-session servers; HF_HUB_DISABLE_SHARED_BLOBS=1 keeps huggingface_hub from
+# sharding the embedding model's blobs into per-prefix directories, which
+# onnxruntime then refuses to load across (#931).
+_HUB_RUNLINE="$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -F -- 'run -d' \"\$d/calls\" > \"\$d/runline\";"
+check "the hub run names and addresses the container" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--name mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--hostname mempalace-hub-under-test' \"\$d/runline\" && grep -qF -- '--network mempalace' \"\$d/runline\""
+check "the hub run outlives every devcontainer" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--restart unless-stopped' \"\$d/runline\" && grep -qF -- '--stop-signal SIGINT' \"\$d/runline\""
+check "the hub run is labelled with the dependency-set sha" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--label personal-features.requirements-sha=' \"\$d/runline\""
+check "the hub run mounts the palace by its HOST path" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-v /host/mempalace:' \"\$d/runline\" && grep -qF -- '/hub/mempalace-hub-requirements.txt:/hub-requirements.txt:ro' \"\$d/runline\""
+check "the hub run points HOME and the palace at the shared mount" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e HOME=' \"\$d/runline\" && grep -qF -- '-e MEMPALACE_PALACE_PATH=' \"\$d/runline\" && grep -qF -- '--user ' \"\$d/runline\""
+check "the hub run disables the idle-exit watchdog" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e MEMPALACE_MCP_IDLE_HOURS=0' \"\$d/runline\""
+check "the hub run disables huggingface shared blobs (#931)" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '-e HF_HUB_DISABLE_SHARED_BLOBS=1' \"\$d/runline\""
+check "the hub run health-checks /healthz" bash -c \
+  "$_HUB_RUNLINE grep -qF -- '--health-interval 30s' \"\$d/runline\" && grep -qF -- '/healthz' \"\$d/runline\""
+check "the hub run installs the frozen set and execs the server as pid 1" bash -c \
+  "$_HUB_RUNLINE grep -qF -- 'pip install --user -q -r /hub-requirements.txt' \"\$d/runline\" && grep -qF -- 'exec python -m mempalace serve --host mempalace-hub-under-test --port 8765' \"\$d/runline\" && ! grep -qF -- '--init' \"\$d/runline\""
+
+# A hub that is up but has not answered yet is `starting` - an honest
+# intermediate state. #921 was a second, racing writer recording a vaguer state
+# over the accurate one; there is one writer of this key now.
+check "a hub that has not answered yet records 'starting'" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
+# The knob the scenarios above rely on, asserted rather than assumed. This is
+# the regression that turned CI red once already: the Feature's own
+# postStartCommand runs `mempalace-hub-up` for real before the suite does, so
+# on a runner with a working daemon a hub named `mempalace-hub` is genuinely
+# live by the time these run, and a scenario that probed it recorded `live`
+# where it meant `starting`. WAIT=0 must mean *do not probe at all*, so that
+# something answering cannot change the outcome.
+check "MEMPALACE_HUB_WAIT=0 records 'starting' even when something answers" bash -c \
+  "$_HUB_SETUP \"$_HUB_STUB_DIR/bin/fake-healthz\" 8799 & hp=\$!; sleep 1; MEMPALACE_HUB_NAME=127.0.0.1 MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$hp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"starting\"' \"\$d/marker.json\""
+
+# A hub already answering is left alone: no rm, no run, no second hub.
+check "an answering hub records 'live' and is not recreated" bash -c \
+  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; \"$_HUB_STUB_DIR/bin/fake-healthz\" 8799 & hp=\$!; sleep 1; STUB_HUB_STATUS=running STUB_HUB_SHA=\"\$sha\" MEMPALACE_HUB_NAME=127.0.0.1 MEMPALACE_HUB_PORT=8799 /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$hp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"live\"' \"\$d/marker.json\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+
+# The label is the whole reconcile: a Feature release that moves any pin moves
+# the sha, and a hub still running last month's resolution is replaced rather
+# than quietly outliving the image that created it.
+check "a hub built from a different dependency set is removed and recreated" bash -c \
+  "$_HUB_SETUP STUB_HUB_STATUS=running STUB_HUB_SHA=deadbeef /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'rm -f mempalace-hub-under-test' \"\$d/calls\" && grep -qF -- 'run -d' \"\$d/calls\""
+check "a stopped hub with the right dependency set is started, not recreated" bash -c \
+  "$_HUB_SETUP sha=\"\$(sha256sum \"\$d/share/mempalace-hub-requirements.txt\" | cut -d' ' -f1)\"; STUB_HUB_STATUS=exited STUB_HUB_SHA=\"\$sha\" /usr/local/bin/mempalace-hub-up >/dev/null 2>&1 && grep -qF -- 'start mempalace-hub-under-test' \"\$d/calls\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+
+# #897: a held palace lock is a condition no retry can change, and the file
+# surviving on the mount proves nothing about the holder - which is why the
+# probe is a real non-blocking flock and why nothing here ever deletes one.
+check "a held palace lock records 'lock_held' and starts no hub" bash -c \
+  "$_HUB_SETUP python3 -c \"import fcntl, sys, time; f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(30)\" \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\" & lp=\$!; sleep 1; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; rc=\$?; kill \$lp 2>/dev/null; [ \$rc -eq 0 ] && grep -qF '\"state\": \"lock_held\"' \"\$d/marker.json\" && ! grep -qF -- 'run -d' \"\$d/calls\""
+check "the lock file is never removed" bash -c \
+  "$_HUB_SETUP python3 -c \"import fcntl, sys, time; f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(30)\" \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\" & lp=\$!; sleep 1; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; kill \$lp 2>/dev/null; test -e \"\$d/mount/locks/mine_palace_deadbeefdeadbeef.lock\""
+
+# Reuse, not a second breadcrumb: the default target is #806's provision marker,
+# and the hub's key is merged into whatever that file already holds.
 check "the hub liveness record defaults to the #806 provision marker" bash -c \
-  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub"
+  "grep -qF 'personal-features-provision.json' /usr/local/bin/mempalace-hub-up"
 check "the hub record is merged into the marker, not written over it" bash -c \
-  "$_HUB_CRASH_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; MEMPALACE_HUB_MAX_RESTARTS=0 timeout 60 /usr/local/bin/mempalace-hub supervise >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+  "$_HUB_SETUP printf '{\"schema\": 1, \"stale_image\": false}\n' > \"\$d/marker.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qF '\"stale_image\": false' \"\$d/marker.json\" && grep -qF '\"mempalace_hub\"' \"\$d/marker.json\""
+check "a previous mempalace_hub key's foreign fields are carried forward" bash -c \
+  "$_HUB_SETUP printf '{\"mempalace_hub\": {\"kept_by_someone_else\": true}}\n' > \"\$d/marker.json\"; /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; grep -qF '\"kept_by_someone_else\": true' \"\$d/marker.json\" && grep -qF '\"state\":' \"\$d/marker.json\""
 
-# Clearing the pid file is what stops the supervisor - no signal has to reach a
-# shell blocked on its child - and the server it was watching goes with it.
-check "mempalace-hub stop stops the hub it started" bash -c \
-  "$_HUB_STUB_SETUP /usr/local/bin/mempalace-hub >/dev/null 2>&1; p=\"\$(sed -n 's/^server=//p' \"\$d/hub.pid\")\"; test -n \"\$p\" && /usr/local/bin/mempalace-hub stop >/dev/null 2>&1 && sleep 2 && ! kill -0 \"\$p\" 2>/dev/null"
+# `status` re-probes and prints what was last recorded, so "there is no hub" can
+# be told apart from "the lock is held, here is which file" without a -32001.
+check "mempalace-hub-up status reports the last recorded state" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up >/dev/null 2>&1; /usr/local/bin/mempalace-hub-up status 2>/dev/null | grep -q \"last recorded state 'starting'\""
+check "mempalace-hub-up down stops the hub and records 'stopped'" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up down >/dev/null 2>&1 && grep -qF -- 'stop mempalace-hub-under-test' \"\$d/calls\" && grep -qF '\"state\": \"stopped\"' \"\$d/marker.json\""
+check "mempalace-hub-up logs delegates to docker logs" bash -c \
+  "$_HUB_SETUP /usr/local/bin/mempalace-hub-up logs --tail 5 >/dev/null 2>&1; grep -qF -- 'logs --tail 5 mempalace-hub-under-test' \"\$d/calls\""
 
 # The pinned mempalace must actually be able to serve a shared transport; if a
 # version bump ever drops `serve`, the whole design goes with it.
@@ -1597,19 +1761,9 @@ check "the pinned mempalace ships a 'serve' subcommand" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || mempalace serve --help 2>&1 | grep -q -- '--port'"
 # What the sessions launch. Since 3.9.0 this console script is the hub-aware
 # proxy (mempalace.mcp_proxy:main), not the server - which is why no session MCP
-# config has to be rewritten for any of this to work.
+# config and no plugin change is needed for any of this to work.
 check "the mempalace-mcp console script is on PATH" bash -c \
   "! command -v mempalace >/dev/null 2>&1 || command -v mempalace-mcp >/dev/null 2>&1"
-
-# End-to-end against the REAL binary, on an isolated HOME so the container's own
-# palace and hub are untouched: start, confirm the endpoint answers, confirm a
-# second start is a no-op rather than a second hub, then stop it. `stop` has to
-# come first now - killing the server out from under a supervisor is a crash,
-# and the supervisor would restart it and leave a stray hub behind. The kill
-# through mempalace's own per-palace registry record stays as the backstop (no
-# dependency on pkill).
-check "real mempalace-hub starts a hub, is idempotent, and is discoverable" bash -c \
-  "! command -v mempalace >/dev/null 2>&1 || { d=\"\$(mktemp -d)\"; mkdir -p \"\$d/home\"; export HOME=\"\$d/home\" MEMPALACE_PALACE_PATH=\"\$d/home/palace\" MEMPALACE_HUB_PORT=8799 MEMPALACE_HUB_WAIT=120 MEMPALACE_HUB_LOG=\"\$d/hub.log\" MEMPALACE_HUB_PIDFILE=\"\$d/hub.pid\" MEMPALACE_HUB_MARKER=\"\$d/marker.json\"; /usr/local/bin/mempalace-hub >/dev/null 2>&1 && /usr/local/bin/mempalace-hub status >/dev/null 2>&1 && /usr/local/bin/mempalace-hub 2>&1 | grep -q 'already serving'; rc=\$?; /usr/local/bin/mempalace-hub stop >/dev/null 2>&1; python3 -c \"import glob,json,os,sys;[os.kill(json.load(open(p))['pid'],15) for p in glob.glob(sys.argv[1])]\" \"\$d/home/.mempalace/server/*/serverinfo.json\" >/dev/null 2>&1; exit \$rc; }"
 
 # --- the odoo-ls language server (#746) ---------------------------------------
 # The server is what gives a Claude Code session Odoo-aware diagnostics,
