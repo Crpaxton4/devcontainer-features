@@ -5,6 +5,13 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+  # Daily, because the failures the odoo:N legs exist for arrive without a
+  # commit here: Debian tears an EOL release down from the live mirrors
+  # (bullseye, 2026-10-02, which killed docker-outside-of-docker on odoo:16),
+  # a third-party apt repo drops a suite (bullseye-pgdg the same week). A
+  # push/PR-only matrix only finds out on the next unrelated change.
+  schedule:
+    - cron: "17 9 * * *"
 
 # Single source of truth for the pinned @devcontainers/cli version. Referenced by
 # every install step and by the npm cache key below. Dependabot (npm) does not
@@ -151,11 +158,6 @@ jobs:
       - name: "Generating tests for '${{ matrix.features }}' against '${{ matrix.baseImage }}' (arm64)"
         run: devcontainer features test -p ./devcontainer-features --skip-scenarios -f ${{ matrix.features }} -i ${{ matrix.baseImage }} .
 
-  # Upstream odoo:N images only. The published QOC images consumers really
-  # build on (on_qoc_prebuilt_* in scenarios.json) are private and need a
-  # registry token, so they run from test-prebuilt-images.yaml instead - on a
-  # schedule too, because that is the only way to see a base image rot under a
-  # Feature that has not changed.
   test-scenarios:
     runs-on: ubuntu-latest
     strategy:
