@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.6.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.5.0...personal-features-v6.6.0) (2026-10-02)
+
+
+### Features
+
+* **debian-eol-archives:** repoint apt at the archives on an EOL Debian base ([#984](https://github.com/Crpaxton4/devcontainer-features/issues/984)) ([2160cff](https://github.com/Crpaxton4/devcontainer-features/commit/2160cff4020fdd428da398320ecd9f021daf5e17))
+
 ## [6.5.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.4.0...personal-features-v6.5.0) (2026-09-28)
 
 
