@@ -12,6 +12,14 @@
 # This scenario is the canonical proof of that interpreter independence: the
 # system Python here is the oldest of any supported base image, so if the
 # toolchain works here, the pin is doing its job everywhere.
+#
+# Since 2026-10-02 it is also the proof that personal-features builds on an EOL
+# Debian base at all: the scenario image hands the Features odoo:16's real,
+# torn-down mirrors, and the debian-eol-archives dependency has to repair them
+# before docker-outside-of-docker, github-cli and node apt-get (#688). Postgres
+# here is PGDG's postgresql-17 from apt-archive.postgresql.org, installed by
+# the scenario Dockerfile with a pq-init.sh that keeps the postgresql Feature's
+# contract (apt.postgresql.org dropped bullseye-pgdg); the checks are unchanged.
 
 set -e
 

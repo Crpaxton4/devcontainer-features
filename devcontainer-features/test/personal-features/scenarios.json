@@ -39,9 +39,14 @@
         },
         "remoteUser": "root"
     },
-    // Built, not pulled: Debian 11 is EOL, so odoo:16's apt sources have to be
-    // repointed at archive.debian.org *before* any feature installs, and feature
-    // installs happen during the image build (#688). The Dockerfile lives in the
+    // Built, not pulled, but NOT to repair apt: the image hands the Features
+    // odoo:16's real, dead, EOL mirrors, and personal-features' dependsOn on
+    // debian-eol-archives has to repair them (#688, 2026-10-02). The Dockerfile
+    // exists to supply postgres: apt.postgresql.org dropped bullseye-pgdg, and
+    // the postgresql Feature the other odoo scenarios use leaves a dead
+    // pgdg.list behind that breaks every later apt-get update, so on this base
+    // postgres is PGDG's postgresql-17 from apt-archive.postgresql.org, with a
+    // pq-init.sh that keeps the Feature's contract. The Dockerfile lives in the
     // sibling 'on_odoo16_base_image/' directory, which `devcontainer features
     // test` copies into the generated .devcontainer/ - hence the bare
     // "Dockerfile" path here. See that file for the full rationale.
@@ -49,7 +54,6 @@
         "build": { "dockerfile": "Dockerfile" },
         "features": {
             "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
-            "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
         "remoteUser": "root"
