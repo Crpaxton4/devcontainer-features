@@ -5,6 +5,13 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+  # Daily, because the failures the odoo:N legs exist for arrive without a
+  # commit here: Debian tears an EOL release down from the live mirrors
+  # (bullseye, 2026-10-02, which killed docker-outside-of-docker on odoo:16),
+  # a third-party apt repo drops a suite (bullseye-pgdg the same week). A
+  # push/PR-only matrix only finds out on the next unrelated change.
+  schedule:
+    - cron: "17 9 * * *"
 
 # Single source of truth for the pinned @devcontainers/cli version. Referenced by
 # every install step and by the npm cache key below. Dependabot (npm) does not
