@@ -50,8 +50,10 @@ case "${ID:-}/${VERSION_CODENAME:-}" in
             bash -c "$(declare -f as_root); as_root apt-get update -qq && as_root apt-get install -y -qq --no-install-recommends gnupg2 >/dev/null && command -v gpg"
         ;;
     *)
-        check "supported or non-Debian base: sources.list untouched" \
-            bash -c "! grep -rqs 'archive.debian.org\|snapshot.debian.org' /etc/apt/sources.list /etc/apt/sources.list.d"
+        # Active entries only (deb lines, deb822 URIs): Debian's own images
+        # carry commented-out snapshot.debian.org URLs beside each live source.
+        check "supported or non-Debian base: apt sources untouched" \
+            bash -c "! grep -rEqs '^(deb|URIs:).*(archive|snapshot)\.debian\.org' /etc/apt/sources.list /etc/apt/sources.list.d"
         check "supported or non-Debian base: no apt.conf fragment written" \
             bash -c "test ! -e /etc/apt/apt.conf.d/99debian-eol-archives"
         check "apt still works" \

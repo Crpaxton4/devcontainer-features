@@ -13,6 +13,7 @@ set -e
 # shellcheck source=/dev/null  # dev-container-features-test-lib is injected by the test harness at runtime; not resolvable statically. check()/reportResults() come from it.
 source dev-container-features-test-lib
 
+# shellcheck disable=SC2016  # single quotes on purpose: the child bash expands these, not this script
 check "image is odoo:16 on bullseye" \
     bash -c '. /etc/os-release && [ "$VERSION_CODENAME" = bullseye ] && case "$ODOO_VERSION" in 16.*) ;; *) exit 1;; esac'
 
