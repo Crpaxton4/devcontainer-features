@@ -1,6 +1,6 @@
 # Personal Dev Container Features
 
-This repo holds a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`, `second-brain`), a Python SDK for Odoo ERP access (`odoo_sdk`), and a Claude Code plugin for Odoo consulting and delivery (`odoo-dev`).
+This repo holds a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`, `second-brain`, `debian-eol-archives`), a Python SDK for Odoo ERP access (`odoo_sdk`), and a Claude Code plugin for Odoo consulting and delivery (`odoo-dev`).
 
 This is the only `README.md` in the repo. Per-Feature documentation lives in `devcontainer-features/src/<feature>/NOTES.md`, and the plugin's skills, agents and commands document themselves in their own files.
 
@@ -232,6 +232,7 @@ The two packages sit under `devcontainer-features/` and `libraries/`, the plugin
 ├── devcontainer-features
 │   ├── src/personal-features/     # devcontainer Feature — install.sh, hooks/, create-pr/, claude-event-hook/, sync-claude-*, NOTES.md
 │   ├── src/second-brain/          # devcontainer Feature — bind-mounts the host knowledge base, NOTES.md
+│   ├── src/debian-eol-archives/   # devcontainer Feature — repoints apt at the archives on an EOL Debian base, NOTES.md
 │   └── test/                      # feature test scenarios, one dir per Feature
 ├── libraries
 │   └── odoo_sdk/                  # owns src/, tests/, docs/, examples/, tools/ directly

@@ -61,13 +61,15 @@ jobs:
             devcontainer-features/src/personal-features/publish-claude-wrapper \
             devcontainer-features/src/second-brain/install.sh \
             devcontainer-features/src/second-brain/second-brain-verify \
+            devcontainer-features/src/debian-eol-archives/install.sh \
             setup.sh \
             .claude/commands/implement-issues/stack-merge.sh \
             .claude/commands/implement-issues/gh-as-owner.sh \
             scripts/check-generated-scripts.sh \
             scripts/tests/check-generated-scripts.test.sh \
             devcontainer-features/test/personal-features/*.sh \
-            devcontainer-features/test/second-brain/*.sh
+            devcontainer-features/test/second-brain/*.sh \
+            devcontainer-features/test/debian-eol-archives/*.sh
 
   # The job above lints install.sh as a FILE. It cannot lint the programs
   # install.sh WRITES: those live in quoted heredocs, which are inert literal

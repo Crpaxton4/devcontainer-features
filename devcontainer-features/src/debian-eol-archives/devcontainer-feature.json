@@ -1,0 +1,7 @@
+{
+    "name": "Debian EOL archives",
+    "id": "debian-eol-archives",
+    "version": "1.0.0",
+    "description": "Repoints apt at Debian's frozen archives when the base image's Debian release has reached end of life, so the Features that apt-get on install (docker-outside-of-docker, github-cli, node, personal-features) still build on it. After a release leaves LTS Debian tears it down from the live mirrors: apt-get update keeps succeeding because the Release files are still served, while every .deb 404s. No Feature that installs later can repair that, so this one is built to install first. A no-op on supported Debian releases and on non-Debian images. No options: where Debian keeps an EOL release is a fact, not a choice.",
+    "options": {}
+}
