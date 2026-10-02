@@ -24,6 +24,7 @@ set -e
 source dev-container-features-test-lib
 
 # The image under test is the one this scenario claims to cover.
+# shellcheck disable=SC2016  # single quotes on purpose: the child bash expands these, not this script
 check "image is the Odoo 16 build (ODOO_VERSION=16.x)" \
     bash -c 'case "$ODOO_VERSION" in 16.*) ;; *) echo "ODOO_VERSION=$ODOO_VERSION" >&2; exit 1;; esac'
 check "odoo entrypoint is on PATH" bash -c "command -v odoo"

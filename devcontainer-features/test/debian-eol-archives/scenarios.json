@@ -1,0 +1,16 @@
+{
+    // The failure this Feature exists for, reproduced exactly: plain upstream
+    // odoo:16 (Debian 11, EOL, apt on the torn-down live mirrors) plus
+    // docker-outside-of-docker, the Feature that died with "404 Not Found" on
+    // 2026-10-02. It only builds if debian-eol-archives ran first - which is
+    // what the scenario pins (see NOTES.md, "Why it installs first"). Nothing
+    // here patches the image.
+    "odoo16_with_docker_outside_of_docker": {
+        "image": "odoo:16",
+        "features": {
+            "debian-eol-archives": {},
+            "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false }
+        },
+        "remoteUser": "root"
+    }
+}

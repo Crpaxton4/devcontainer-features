@@ -14,6 +14,7 @@ set -e
 # shellcheck source=/dev/null  # dev-container-features-test-lib is injected by the test harness at runtime; not resolvable statically. check()/reportResults() come from it.
 source dev-container-features-test-lib
 
+# shellcheck disable=SC2016  # single quotes on purpose: the child bash expands these, not this script
 check "image is the Odoo 18 build (ODOO_VERSION=18.x)" \
     bash -c 'case "$ODOO_VERSION" in 18.*) ;; *) echo "ODOO_VERSION=$ODOO_VERSION" >&2; exit 1;; esac'
 check "odoo entrypoint is on PATH" bash -c "command -v odoo"
