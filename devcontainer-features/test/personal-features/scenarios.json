@@ -53,51 +53,5 @@
             "personal-features": {}
         },
         "remoteUser": "root"
-    },
-    // The four images every QOC project devcontainer actually runs on
-    // (QOC-Innovations/.devcontainer, images/odoo/Dockerfile.base, built FROM
-    // odoo:16..19), with the Features every project layers on top of them:
-    // personal-features via dev.containers.defaultFeatures and second-brain
-    // beside it. Pulled as published, never built or patched - the point is
-    // the artefact as consumers get it. Compare on_odoo16_base_image above:
-    // its Dockerfile repairs the EOL bullseye apt sources that THIS image
-    // needs just as much and did not have, which is how test.yaml stayed green
-    // while every Odoo 16 devcontainer rebuild failed in docker-outside-of-docker
-    // with "404 Not Found" (2026-10-02). The registry is private: `docker login
-    // ghcr.io` before running these locally. They are driven by
-    // .github/workflows/test-prebuilt-images.yaml (daily, plus push/PR), not by
-    // test.yaml's test-scenarios matrix. Tags follow the branch the image repo
-    // publishes from ("prebuilt-container-N" today, "N" once that merges to main).
-    "on_qoc_prebuilt_16": {
-        "image": "ghcr.io/qoc-innovations/qoc-devcontainer:prebuilt-container-16",
-        "features": {
-            "personal-features": {},
-            "second-brain": {}
-        },
-        "remoteUser": "root"
-    },
-    "on_qoc_prebuilt_17": {
-        "image": "ghcr.io/qoc-innovations/qoc-devcontainer:prebuilt-container-17",
-        "features": {
-            "personal-features": {},
-            "second-brain": {}
-        },
-        "remoteUser": "root"
-    },
-    "on_qoc_prebuilt_18": {
-        "image": "ghcr.io/qoc-innovations/qoc-devcontainer:prebuilt-container-18",
-        "features": {
-            "personal-features": {},
-            "second-brain": {}
-        },
-        "remoteUser": "root"
-    },
-    "on_qoc_prebuilt_19": {
-        "image": "ghcr.io/qoc-innovations/qoc-devcontainer:prebuilt-container-19",
-        "features": {
-            "personal-features": {},
-            "second-brain": {}
-        },
-        "remoteUser": "root"
     }
 }
