@@ -1,5 +1,37 @@
 # Changelog
 
+## [2.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v1.2.0...odoo-dev-plugin-v2.0.0) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-dev:** remove the PR and release gate; artifacts become optional evidence ([#935](https://github.com/Crpaxton4/devcontainer-features/issues/935))
+
+### Features
+
+* **odoo-dev:** name build_workbook.py in the upgrader brief and add progress.json checkpoints ([#940](https://github.com/Crpaxton4/devcontainer-features/issues/940)) ([133c66f](https://github.com/Crpaxton4/devcontainer-features/commit/133c66f447cff708abda6282550e02cc056d87e2)), closes [#913](https://github.com/Crpaxton4/devcontainer-features/issues/913) [#914](https://github.com/Crpaxton4/devcontainer-features/issues/914) [#882](https://github.com/Crpaxton4/devcontainer-features/issues/882) [#883](https://github.com/Crpaxton4/devcontainer-features/issues/883)
+* **odoo-dev:** one unattended upgrade surface with preflight, ssh Studio inventory and a chained test/review/PR ([#951](https://github.com/Crpaxton4/devcontainer-features/issues/951)) ([c47c4c4](https://github.com/Crpaxton4/devcontainer-features/commit/c47c4c4bed8b2bd951a8ea705786d02966d2bd5b))
+* **odoo-dev:** remove the PR and release gate; artifacts become optional evidence ([#935](https://github.com/Crpaxton4/devcontainer-features/issues/935)) ([f796748](https://github.com/Crpaxton4/devcontainer-features/commit/f796748bddb4f32dfb8d85e13c1b935a2fb6c541)), closes [#904](https://github.com/Crpaxton4/devcontainer-features/issues/904) [#892](https://github.com/Crpaxton4/devcontainer-features/issues/892) [#899](https://github.com/Crpaxton4/devcontainer-features/issues/899) [#895](https://github.com/Crpaxton4/devcontainer-features/issues/895)
+* **odoo-sdk:** get_models persists the project.task ir.model id; setup names the missing entry ([#958](https://github.com/Crpaxton4/devcontainer-features/issues/958)) ([ce24a0d](https://github.com/Crpaxton4/devcontainer-features/commit/ce24a0db96a21fa86f0aad15529580154b95ab62))
+* **odoo-sdk:** start_task takes base_branch, with ODOO_SDK_BASE_BRANCH as the env fallback ([#954](https://github.com/Crpaxton4/devcontainer-features/issues/954)) ([0f78d1d](https://github.com/Crpaxton4/devcontainer-features/commit/0f78d1d2efcfb30d4c2890a1240c4ffdcba21368))
+* **odoo-upgrade:** isolate install_all.sh with --db, template and per-tree modes ([#937](https://github.com/Crpaxton4/devcontainer-features/issues/937)) ([242099c](https://github.com/Crpaxton4/devcontainer-features/commit/242099c6d450c312d136731c96df844d17a981d3)), closes [#880](https://github.com/Crpaxton4/devcontainer-features/issues/880) [#879](https://github.com/Crpaxton4/devcontainer-features/issues/879) [#878](https://github.com/Crpaxton4/devcontainer-features/issues/878)
+* **personal-features:** persist the odoo-dev state dir as a bind mount ([#943](https://github.com/Crpaxton4/devcontainer-features/issues/943)) ([b83b3e6](https://github.com/Crpaxton4/devcontainer-features/commit/b83b3e64d60f60df8fab76773412fa174424853c))
+
+
+### Bug Fixes
+
+* **odoo-dev:** writeback.sh probes odoo-sdk cmd, wraps non-JSON output, ensures a tracking session ([#944](https://github.com/Crpaxton4/devcontainer-features/issues/944)) ([c4d34a0](https://github.com/Crpaxton4/devcontainer-features/commit/c4d34a0b68fa3278b3d52f2051ae7bd51b901452))
+* **odoo-pr:** drop the post-open CodeRabbit poll and its script ([#938](https://github.com/Crpaxton4/devcontainer-features/issues/938)) ([016c50f](https://github.com/Crpaxton4/devcontainer-features/commit/016c50f93b73699af03ebcecf6e2899031421119)), closes [#905](https://github.com/Crpaxton4/devcontainer-features/issues/905) [#893](https://github.com/Crpaxton4/devcontainer-features/issues/893) [#894](https://github.com/Crpaxton4/devcontainer-features/issues/894)
+* **odoo-pr:** read CodeRabbit finding text from codegenInstructions and keep suggestions ([#945](https://github.com/Crpaxton4/devcontainer-features/issues/945)) ([7c2ef32](https://github.com/Crpaxton4/devcontainer-features/commit/7c2ef32b095ebbb172e81df2b299d073b059ab7c)), closes [#888](https://github.com/Crpaxton4/devcontainer-features/issues/888)
+* **odoo-quote:** keep ladder mechanics only; aspect rows and contingency come from the knowledge article ([#936](https://github.com/Crpaxton4/devcontainer-features/issues/936)) ([08a436e](https://github.com/Crpaxton4/devcontainer-features/commit/08a436e7f136090f5a490311609fa822d140081c)), closes [#920](https://github.com/Crpaxton4/devcontainer-features/issues/920)
+* **odoo-repo-map:** bootstrap an absent map, fail loudly on a mangled one ([#947](https://github.com/Crpaxton4/devcontainer-features/issues/947)) ([edcc6f9](https://github.com/Crpaxton4/devcontainer-features/commit/edcc6f906d7345db10e6bb25118968f17dfb876d)), closes [#906](https://github.com/Crpaxton4/devcontainer-features/issues/906)
+* **odoo-sdk:** one consolidated chatter note per run, interim notes stay local, cap 500 ([#941](https://github.com/Crpaxton4/devcontainer-features/issues/941)) ([45f6cec](https://github.com/Crpaxton4/devcontainer-features/commit/45f6cec446609d1edc8fbf4e29548eb58765d3b2))
+* **odoo-test-run:** explicit addons path and data dir, registry_aborted status, per-suite counts ([#948](https://github.com/Crpaxton4/devcontainer-features/issues/948)) ([3900d52](https://github.com/Crpaxton4/devcontainer-features/commit/3900d52e811439ccc0bd67f823f7709073ab48e1))
+* **odoo-upgrade:** merge enrich JSON field-wise, count sentinels, split native verdict, cap evidence ([#942](https://github.com/Crpaxton4/devcontainer-features/issues/942)) ([b0a8302](https://github.com/Crpaxton4/devcontainer-features/commit/b0a8302de39ced03b6911a1c5ca354e3d50697ac))
+* **odoo-upgrade:** plain-text Studio labels, populated column, hand-edited arches, 17+ automations ([#934](https://github.com/Crpaxton4/devcontainer-features/issues/934)) ([574159b](https://github.com/Crpaxton4/devcontainer-features/commit/574159bf51ca9b0bdc33e57835d0f259e9355ef2))
+* **odoo-upgrade:** requirements validator survives missing keys, types sources, case-insensitive shall, real weak-wording rules, group-aware duplicates ([#950](https://github.com/Crpaxton4/devcontainer-features/issues/950)) ([1dada8b](https://github.com/Crpaxton4/devcontainer-features/commit/1dada8b346943b634f218bc294471d77b047bf7a))
+* **odoo-upgrade:** split inventory columns and pin OCA/functional-area literals ([#933](https://github.com/Crpaxton4/devcontainer-features/issues/933)) ([e6ccc86](https://github.com/Crpaxton4/devcontainer-features/commit/e6ccc864d61bc6f5fef7895a3445155ca7f45661)), closes [#922](https://github.com/Crpaxton4/devcontainer-features/issues/922) [#923](https://github.com/Crpaxton4/devcontainer-features/issues/923) [#924](https://github.com/Crpaxton4/devcontainer-features/issues/924) [#926](https://github.com/Crpaxton4/devcontainer-features/issues/926) [#915](https://github.com/Crpaxton4/devcontainer-features/issues/915)
+
 ## [1.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v1.1.0...odoo-dev-plugin-v1.2.0) (2026-09-23)
 
 
