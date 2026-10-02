@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.6.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.6.0...personal-features-v6.6.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **personal-features:** build on EOL Debian bases by depending on debian-eol-archives ([#986](https://github.com/Crpaxton4/devcontainer-features/issues/986)) ([c006674](https://github.com/Crpaxton4/devcontainer-features/commit/c0066740a3cd02527046cfff0660c3703858a22b))
+
 ## [6.6.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.5.0...personal-features-v6.6.0) (2026-10-02)
 
 
