@@ -433,6 +433,21 @@ check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system 
 check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"
 check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/git-hooks/pre-commit"
 
+# #981: the hook's type alternation has to cover every Conventional Commits
+# type, `revert` included - a real `git revert` whose subject was written in the
+# lowercase `revert(scope): ...` form was rejected and had to land as `fix`.
+# Git's own capital-R `Revert "..."` subject is exempted earlier by the hook's
+# case statement, so it never exercised the regex at all. Drive the INSTALLED
+# hook directly rather than re-asserting the pattern, and keep an accepted and
+# a rejected subject either side of it so a regex that matches everything fails
+# here too.
+check "commit-msg hook accepts the revert type (#981)" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'revert(sale_custom): revert the margin field\n' > \"\$d/msg\"; /usr/local/share/git-hooks/commit-msg \"\$d/msg\""
+check "commit-msg hook accepts the feat type" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'feat(sale_custom): add the margin field\n' > \"\$d/msg\"; /usr/local/share/git-hooks/commit-msg \"\$d/msg\""
+check "commit-msg hook rejects an unknown type" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'bogus(sale_custom): not a conventional type\n' > \"\$d/msg\"; ! /usr/local/share/git-hooks/commit-msg \"\$d/msg\" 2>/dev/null"
+
 # delta wired in as git's pager machine-wide (--system scope)
 check "git core.pager is set to delta" bash -c \
   "[ \"\$(git config --system --get core.pager)\" = 'delta' ]"
