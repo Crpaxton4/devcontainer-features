@@ -7,15 +7,78 @@ the dissolved ``utilities`` package (the old ``utilities.prompt_messages``
 path remains a deprecation shim).
 """
 
+from typing import Optional
+
 from odoo_sdk._utils import format_chatter
 from odoo_sdk.commands.command import MAX_CHATTER_BODY_CHARS
 
 
-def build_implement_task_messages(task: dict) -> list[str]:
+def _build_artifacts_paragraph(task_id: str, artifacts_dir: Optional[str]) -> str:
+    """Build the evidence paragraph that names the one artifacts directory.
+
+    The caller resolves the directory; this function only renders it, so the
+    module stays pure. When ``artifacts_dir`` is ``None`` the agent is told to
+    resolve it through the odoo-dev plugin's ``scripts/state-dir.sh`` rather
+    than being left to infer a location — inferring is what wrote artifacts to
+    a repo-local ``<worktree>/.odoo-dev/`` and left ``/odoo-dev:pr`` looking at
+    an empty state dir (#992).
+
+    :param task_id: Odoo task id, already stringified.
+    :type task_id: str
+    :param artifacts_dir: Absolute ``<state-dir>/tasks/<task-id>`` path, or
+        ``None`` when the server has no ``ODOO_DEV_STATE_DIR`` set.
+    :type artifacts_dir: Optional[str]
+    :return: The paragraph, ending in a blank line.
+    :rtype: str
+    """
+    if artifacts_dir:
+        where = (
+            f"ARTIFACTS: {artifacts_dir}\n\n"
+            f"That is the one artifacts directory for this task, resolved for "
+            f"you. Write every stage's evidence there and nowhere else.\n"
+        )
+    else:
+        where = (
+            f"Resolve the one artifacts directory for this task by running the "
+            f"odoo-dev plugin's `scripts/state-dir.sh task --create -- "
+            f"{task_id}` and using the absolute path it prints. Do NOT infer a "
+            f"location and do NOT write artifacts anywhere under the "
+            f"repository — `<worktree>/.odoo-dev/` is the wrong place, and "
+            f"evidence left there is invisible to the next stage.\n"
+        )
+    return (
+        f"Chatter is not where evidence lives. Test, build and review evidence "
+        f"belongs in the task's artifacts directory.\n\n"
+        f"{where}\n"
+        f"Every stage writes its own `NN-*.json` there through the odoo-dev "
+        f"plugin's `scripts/artifact.sh put <ARTIFACTS> <stage> <file>` — the "
+        f"TEST step's result is the `30-test` stage, landing as "
+        f"`30-test.json`. Use the `artifact.sh` that ships with the installed "
+        f"odoo-dev plugin (from inside the plugin that is "
+        f"`${{CLAUDE_PLUGIN_ROOT}}/scripts/artifact.sh`); locate the installed "
+        f"plugin rather than hardcoding a plugin-cache path. Record the "
+        f"evidence before you STOP: `/odoo-dev:pr {task_id}`, the stage after "
+        f"STOP, reads that same directory and reports whatever evidence is "
+        f"missing.\n\n"
+        f"`00-context.json` is not written here — it comes from "
+        f"`/odoo-dev:task` (the repo-map resolution step), so running "
+        f"`/odoo-dev:task {task_id}` first is how an `implement_task`-driven "
+        f"run gets one.\n\n"
+    )
+
+
+def build_implement_task_messages(
+    task: dict, artifacts_dir: Optional[str] = None
+) -> list[str]:
     """Build the two-message ``implement_task`` prompt from task context.
 
     :param task: Task context dict (fields plus a ``chatter`` list).
     :type task: dict
+    :param artifacts_dir: Absolute artifacts directory for the task, as
+        resolved by the caller from ``ODOO_DEV_STATE_DIR``; ``None`` leaves the
+        prompt telling the agent to resolve it through ``state-dir.sh``. This
+        module computes nothing from the environment.
+    :type artifacts_dir: Optional[str]
     :return: ``[context_message, workflow_message]``.
     :rtype: list[str]
     """
@@ -128,12 +191,7 @@ def build_implement_task_messages(task: dict) -> list[str]:
         f"| `task_question` | RUNNING → AWAITING\\_ANSWERS | When blocked on clarification |\n"
         f"| `resume_task` | AWAITING\\_ANSWERS / STOPPED → RUNNING (no-op when RUNNING) | After receiving answers, or to continue a stopped session |\n"
         f"| `stop_task` | active → STOPPED | Pausing or finishing — STOPPED is resumable, so resume or re-start to continue |\n\n"
-        f"Chatter is not where evidence lives. Test, build and review evidence "
-        f"belongs in the task's artifacts directory, written by "
-        f"`plugins/odoo-dev/scripts/artifact.sh` as the per-task `NN-*.json` "
-        f"files — the TEST step's result goes to `30-test.json`. Record it there "
-        f"before you STOP: `/odoo-dev:pr {task_id}`, the stage after STOP, reads "
-        f"those artifacts and refuses a task that never wrote them.\n\n"
+        f"{_build_artifacts_paragraph(task_id, artifacts_dir)}"
         f"## Guard Conditions\n\n"
         f"- `start_task` is idempotent: calling it on an existing session never errors (check `already_running` in the result).\n"
         f"- `TaskNotRunningError`: no active session — ensure `start_task` succeeded.\n"
