@@ -212,6 +212,16 @@ check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-co
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# #931: huggingface_hub 1.33 shards a downloaded model's blobs across
+# hub/blobs/<2 hex>/ directories, and onnxruntime 1.30 refuses to load an ONNX
+# model whose external data file resolves into a different one - which breaks
+# every embed, so recall and every drawer write fail. PR #939 put the switch on
+# the hub container's run line; containerEnv is what covers the per-container
+# processes that embed locally too: the SessionStart recall hook,
+# mempalace-init-workspace and the per-session MCP server.
+check "HF_HUB_DISABLE_SHARED_BLOBS is set for every container process (#931)" bash -c \
+  "[ \"\$HF_HUB_DISABLE_SHARED_BLOBS\" = '1' ]"
+
 # #884: the odoo-dev plugin resolves its state dir as
 # ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}. $HOME is container-local
 # image storage, so without this mount every task artifact, repo-map.json and
@@ -308,6 +318,14 @@ check "eza is installed" eza --version
 check "zoxide is installed" zoxide --version
 check "tldr is installed" tldr --version
 check "qsv is installed" qsv --version
+# The shell linter, #964 - the one CI lints install.sh with. Both halves matter:
+# that it exists at all (it used to be absent, so the "sanctioned local gate"
+# naming it could not be run), and that it is the PINNED version, since a local
+# run only means what CI's run means if the two are the same binary. Runs on the
+# arm64 leg too, which is what exercises the aarch64 asset name.
+check "shellcheck is installed (#964)" shellcheck --version
+check "shellcheck is the pinned 0.10.0 (#964)" bash -c \
+  "shellcheck --version | grep -qx 'version: 0.10.0'"
 
 # git QoL tools
 check "delta is installed" bash -c "test -x \"\$(command -v delta)\" && delta --version"
@@ -432,6 +450,21 @@ check "coderabbit CLI home state dir exists (#661)" bash -c "test -d /home/vscod
 check "global core.hooksPath is configured" bash -c "[ \"\$(git config --system --get core.hooksPath)\" = '/usr/local/share/git-hooks' ]"
 check "global commit-msg hook is executable" bash -c "test -x /usr/local/share/git-hooks/commit-msg"
 check "global pre-commit hook is executable" bash -c "test -x /usr/local/share/git-hooks/pre-commit"
+
+# #981: the hook's type alternation has to cover every Conventional Commits
+# type, `revert` included - a real `git revert` whose subject was written in the
+# lowercase `revert(scope): ...` form was rejected and had to land as `fix`.
+# Git's own capital-R `Revert "..."` subject is exempted earlier by the hook's
+# case statement, so it never exercised the regex at all. Drive the INSTALLED
+# hook directly rather than re-asserting the pattern, and keep an accepted and
+# a rejected subject either side of it so a regex that matches everything fails
+# here too.
+check "commit-msg hook accepts the revert type (#981)" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'revert(sale_custom): revert the margin field\n' > \"\$d/msg\"; /usr/local/share/git-hooks/commit-msg \"\$d/msg\""
+check "commit-msg hook accepts the feat type" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'feat(sale_custom): add the margin field\n' > \"\$d/msg\"; /usr/local/share/git-hooks/commit-msg \"\$d/msg\""
+check "commit-msg hook rejects an unknown type" bash -c \
+  "d=\"\$(mktemp -d)\"; printf 'bogus(sale_custom): not a conventional type\n' > \"\$d/msg\"; ! /usr/local/share/git-hooks/commit-msg \"\$d/msg\" 2>/dev/null"
 
 # delta wired in as git's pager machine-wide (--system scope)
 check "git core.pager is set to delta" bash -c \
@@ -583,6 +616,14 @@ check "sync-claude-mcp runs clean against a stub claude" bash -c \
 # plugin@marketplace form, so a same-named plugin elsewhere cannot satisfy it.
 check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features marketplace" bash -c \
   "grep -qF 'plugin install --scope user odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
+
+# The mempalace install is qualified the same way, and for a second reason: the
+# `claude plugin update mempalace@mempalace` that follows it is qualified, and
+# the two used to disagree - a bare install beside a qualified update, so on a
+# host where another marketplace also published a `mempalace` the install could
+# land one plugin and the update address another (#975).
+check "sync-claude-mcp installs mempalace pinned to the mempalace marketplace" bash -c \
+  "grep -qF 'plugin install --scope user mempalace@mempalace' \"$MCP_STUB_BIN/claude.calls\""
 
 # The point of #738: copies written into the bind-mounted ~/.claude by
 # pre-migration containers outlive the image that wrote them and shadow their
@@ -751,6 +792,87 @@ CLAUDE_CONFIG_DIR="$MCP_HUB_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
 
 check "sync-claude-mcp keeps the hub liveness record it finds in the marker" bash -c \
   "grep -qF '\"state\": \"gave_up\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\" && grep -qF '\"script_digest\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\""
+
+# --- sync-claude-mcp: the floating mempalace plugin vs the pin (#975) --------
+# MEMPALACE_VERSION pins the mempalace CLI in this container and the shared hub
+# container; the Claude Code plugin - which carries the MCP registration and the
+# Stop/SessionEnd/PreCompact hooks that drive both - is deliberately left to
+# float to whatever its marketplace serves. So two mempalace versions run side
+# by side in every container, and nothing used to assert they agree: a break on
+# either side would surface as an unexplained MCP failure in a fresh container
+# rather than as a build error. sync-claude-mcp now reads the installed plugin
+# version out of the registry Claude Code keeps in $CLAUDE_CONFIG_DIR, compares
+# major.minor against the pin, and records both in the provision marker.
+#
+# The pin is read from the env file install.sh wrote, never hardcoded here, so
+# bumping MEMPALACE_VERSION moves these fixtures with it instead of turning them
+# red. A pin that cannot be read is itself a defect, so the fallback is a value
+# nothing can match rather than a guess that would quietly pass.
+MCP_MP_PIN="$(sed -n 's/^MEMPALACE_CLI_VERSION=//p' /usr/local/share/personal-features/mempalace-hub.env | head -n 1)"
+MCP_MP_PIN="${MCP_MP_PIN:-unreadable-pin}"
+# Same major.minor as the pin, different patch: a patch release on one side is
+# the routine case and has to read as a match, or the warning cries wolf on
+# every create and stops being read.
+MCP_MP_PATCH="${MCP_MP_PIN%.*}.99"
+# A minor ahead of the pin - the live drift #975 found (3.9.0 pinned against a
+# plugin that had floated to 3.11.0), which is where the MCP tool surface and
+# the hook contract actually move.
+MCP_MP_DRIFT="${MCP_MP_PIN%%.*}.999.0"
+
+# The registry as Claude Code writes it: a version per installed revision under
+# a plugin@marketplace key.
+mcp_mp_registry() {  # <config-dir> <version>
+  mkdir -p "$1/plugins"
+  printf '{"version":2,"plugins":{"mempalace@mempalace":[{"version":"%s","installPath":"/x/%s"}]}}\n' \
+    "$2" "$2" > "$1/plugins/installed_plugins.json"
+}
+
+MCP_MP_OK_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-ok"
+MCP_MP_OK_LOG="$MCP_TEST_ROOT/mempalace-ok.log"
+mkdir -p "$MCP_MP_OK_CONFIG"
+mcp_mp_registry "$MCP_MP_OK_CONFIG" "$MCP_MP_PATCH"
+CLAUDE_CONFIG_DIR="$MCP_MP_OK_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_OK_LOG" || true
+
+check "a plugin agreeing with the pin on major.minor is recorded as a match" bash -c \
+  "jq -e --arg pin \"$MCP_MP_PIN\" --arg plugin \"$MCP_MP_PATCH\" '.mempalace_versions.match == true and .mempalace_versions.cli == \$pin and .mempalace_versions.hub == \$pin and .mempalace_versions.plugin == \$plugin and (.mempalace_versions.checked_at | type) == \"string\"' \"$MCP_MP_OK_CONFIG/personal-features-provision.json\" >/dev/null"
+check "a matching plugin version warns about nothing" bash -c \
+  "! grep -q 'does not match the pinned' \"$MCP_MP_OK_LOG\""
+
+MCP_MP_DRIFT_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-drift"
+MCP_MP_DRIFT_LOG="$MCP_TEST_ROOT/mempalace-drift.log"
+mkdir -p "$MCP_MP_DRIFT_CONFIG"
+mcp_mp_registry "$MCP_MP_DRIFT_CONFIG" "$MCP_MP_DRIFT"
+CLAUDE_CONFIG_DIR="$MCP_MP_DRIFT_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_DRIFT_LOG" || true
+
+# Both versions are named in the warning: a warning that says "mismatch" without
+# saying which two things disagree sends the reader back to the archaeology the
+# provision marker exists to replace.
+check "a plugin a minor ahead of the pin warns, naming both versions" bash -c \
+  "grep -qF 'mempalace plugin $MCP_MP_DRIFT does not match the pinned CLI/hub $MCP_MP_PIN' \"$MCP_MP_DRIFT_LOG\""
+check "the version mismatch is recorded in the marker" bash -c \
+  "jq -e --arg plugin \"$MCP_MP_DRIFT\" '.mempalace_versions.match == false and .mempalace_versions.plugin == \$plugin' \"$MCP_MP_DRIFT_CONFIG/personal-features-provision.json\" >/dev/null"
+# Drift is reported, never fatal: this whole script is best-effort and must not
+# fail container create over a version it merely disagrees with.
+check "sync-claude-mcp still exits 0 on a mempalace version mismatch" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_MP_DRIFT_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
+# No registry at all - a config dir Claude Code has never installed a plugin
+# into. "unknown" is recorded rather than a match nobody verified, and the
+# absence is not reported as drift: there is no second version to disagree with.
+MCP_MP_NONE_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-no-registry"
+MCP_MP_NONE_LOG="$MCP_TEST_ROOT/mempalace-no-registry.log"
+mkdir -p "$MCP_MP_NONE_CONFIG"
+CLAUDE_CONFIG_DIR="$MCP_MP_NONE_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_NONE_LOG" || true
+
+check "an unreadable plugin registry records an unknown version, not a match" bash -c \
+  "jq -e '.mempalace_versions.plugin == \"unknown\" and .mempalace_versions.match == false' \"$MCP_MP_NONE_CONFIG/personal-features-provision.json\" >/dev/null"
+check "an unreadable plugin registry is not reported as a version mismatch" bash -c \
+  "! grep -q 'does not match the pinned' \"$MCP_MP_NONE_LOG\""
+check "sync-claude-mcp still exits 0 when the plugin version cannot be read" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_MP_NONE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
 
 rm -rf "$MCP_TEST_ROOT"
 
@@ -1558,6 +1680,39 @@ check "mempalace-repair no longer carries its own recall-hook assertion (#805)" 
 check "mempalace-repair still exits 0 with both asserts failing" bash -c \
   "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run >/dev/null 2>&1; [ \$? -eq 0 ]"
 
+# --- mempalace-repair: the huggingface shared blob purge (#931) ---------------
+# huggingface_hub 1.33 shards every downloaded blob into hub/blobs/<2 hex>/ and
+# symlinks the snapshot file at it, so embeddinggemma's model_quantized.onnx and
+# its model_quantized.onnx_data land in different shards and onnxruntime 1.30
+# refuses to load the model across them. HF_HUB_DISABLE_SHARED_BLOBS=1 in
+# containerEnv stops the NEXT download sharding; a cache already in that layout
+# re-reads the same broken files forever, which is why the repair step deletes
+# the shared store and that one model once. Driven against a sandbox HOME, with
+# the switch passed explicitly so these cases assert the branch rather than
+# whatever the test container's environment happens to carry.
+_HF_SETUP="d=\"\$(mktemp -d)\"; unset HF_HOME; HUB=\"\$d/home/.cache/huggingface/hub\"; mkdir -p \"\$HUB/blobs/6a\" \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX/snapshots\" \"\$HUB/models--someone--unrelated-model\" \"\$d/mount/palace\"; : > \"\$HUB/blobs/.huggingface-shared-blobs\"; printf 'keep\n' > \"\$d/mount/palace/drawer.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
+
+check "mempalace-repair removes a sharded huggingface blob store (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && ! test -e \"\$HUB/blobs\" && ! test -e \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
+
+check "mempalace-repair says what it removed and why (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run 2>/dev/null | grep -q 'shared blob store'"
+
+# Narrow by construction: the palace is never a candidate, and another repo's
+# download has no external data file to resolve and so no reason to be refetched.
+check "mempalace-repair leaves the palace and other cached models alone (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && [ \"\$(cat \"\$d/mount/palace/drawer.json\")\" = 'keep' ] && test -d \"\$HUB/models--someone--unrelated-model\""
+
+# No marker means the cache is already flat: a working model must not be thrown
+# away on every postCreate, which would re-download it at every container start.
+check "mempalace-repair removes nothing from an already flat cache (#931)" bash -c \
+  "$_HF_SETUP rm -f \"\$HUB/blobs/.huggingface-shared-blobs\"; export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && test -d \"\$HUB/blobs\" && test -d \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
+
+# And an operator who turned the switch off has asked for the sharded layout;
+# deleting their cache anyway would be the repair step overruling them.
+check "mempalace-repair removes nothing when the switch is off (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=0; _run >/dev/null 2>&1 && test -d \"\$HUB/blobs\" && test -d \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
+
 # --- mempalace workspace init, run-once (#643 follow-up) ----------------------
 # `mempalace init` writes the rooms list the miner routes files by; without it
 # everything lands in a single `general` room. It is wired into
@@ -1735,6 +1890,13 @@ check "a real freeze pins chromadb with it" bash -c \
   "[ \"\$(wc -l < /usr/local/share/personal-features/mempalace-hub-requirements.txt)\" -le 1 ] || grep -qi '^chromadb==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
 check "the hub records its version and image" bash -c \
   "grep -q '^MEMPALACE_HUB_VERSION=' /usr/local/share/personal-features/mempalace-hub.env && grep -q '^MEMPALACE_HUB_IMAGE=' /usr/local/share/personal-features/mempalace-hub.env"
+# The same file carries the CLI pin under its own name (#975). sync-claude-mcp
+# reads it from here at container-create time, because its body is a quoted
+# heredoc that no build-time variable can reach - so if this key stops being
+# written, the plugin version check silently stops having anything to compare
+# against.
+check "the env file records the pinned mempalace CLI version" bash -c \
+  "grep -qE '^MEMPALACE_CLI_VERSION=[0-9]+\\.[0-9]+' /usr/local/share/personal-features/mempalace-hub.env"
 
 # The stub daemon. Built once, at test-file scope, because every check runs in
 # its own `bash -c` and cannot see a function defined here. A real AF_UNIX
@@ -2003,6 +2165,14 @@ check "typeshed stubs sit next to the binary, where the server looks for them" b
 # know which uid runs a session, so this is the guaranteed fallback.
 check "the server's fallback log directory is writable by any uid" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls/logs)\" = '777' ]"
+# And the directory ABOVE it, for the same unknowable-uid reason. odoo-ls-config
+# publishes odools.toml by writing a temp file into this directory and moving it
+# into place, and it runs from postCreateCommand as the remote user: against a
+# root-owned 0755 directory that is a guaranteed Permission denied, so the
+# generator warned, exited 0 by design, create reported success, and every LSP
+# call in the session died on an initialization timeout (#993).
+check "the odoo-ls share directory is writable by any uid (the config generator writes there)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls)\" = '777' ]"
 
 # The launcher is what the odoo-dev plugin's .lsp.json names as `command`;
 # Claude Code resolves it on PATH and refuses to run a bundled binary.
@@ -2082,7 +2252,29 @@ check "odoo-ls-config writes odoo_path and every addons path it can see" bash -c
 # An addons path that does not exist is a hard config error at server startup,
 # so a directory that is absent must simply not be named.
 check "odoo-ls-config omits an enterprise directory that is not there" bash -c \
-  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && ! grep -qF 'absent' \"\$d/out.toml\""
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null 2>&1 && ! grep -qF 'absent' \"\$d/out.toml\""
+
+# The enterprise series is PROBED for, not read off $ODOO_VERSION. Any
+# invocation that does not inherit the variable - sudo strips it, which is the
+# natural way to run this by hand - used to write a config with the enterprise
+# tree simply absent, and said nothing about it (#993). The directory either
+# exists or it does not; $ODOO_VERSION only picks between the ones found.
+_OLS_SERIES="$_OLS_TREE mkdir -p \"\$d/root/16.0\";"
+check "odoo-ls-config picks the single existing series dir when ODOO_VERSION is unset" bash -c \
+  "$_OLS_SERIES env -u ODOO_VERSION ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"\\\"\$d/root/16.0\\\"\" \"\$d/out.toml\""
+check "odoo-ls-config lets ODOO_VERSION choose among several series dirs" bash -c \
+  "$_OLS_SERIES mkdir -p \"\$d/root/17.0\"; ODOO_VERSION=17.0 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"\\\"\$d/root/17.0\\\"\" \"\$d/out.toml\" && ! grep -qF 'root/16.0' \"\$d/out.toml\""
+# Ambiguity is the one case that still omits the path - and it must never fall
+# back to the PARENT, which is a directory of series directories, not of
+# modules, and would be a hard config error at server startup.
+check "odoo-ls-config warns, omits and never names the parent when the series is ambiguous" bash -c \
+  "$_OLS_SERIES mkdir -p \"\$d/root/17.0\"; env -u ODOO_VERSION ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config 2>&1 >/dev/null | grep -q 'several series directories' && ! grep -qF \"\\\"\$d/root\\\"\" \"\$d/out.toml\" && ! grep -qF 'root/16.0' \"\$d/out.toml\""
+check "odoo-ls-config warns when ODOO_VERSION names a series that is not installed" bash -c \
+  "$_OLS_SERIES ODOO_VERSION=18.0 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config 2>&1 >/dev/null | grep -q 'does not exist'"
+# The write that actually failed in #993 was into the REAL output directory, so
+# a temp directory cannot prove it. Only the published path can.
+check "odoo-ls-config can publish to its real default output path" bash -c \
+  "$_OLS_TREE ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/none\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && test -f /usr/local/share/odoo-ls/odools.toml; rc=\$?; rm -f /usr/local/share/odoo-ls/odools.toml; exit \$rc"
 # The JS half of the server shells out to tsserver and reports a diagnostic on
 # every session when it is missing; typescript is not installed here.
 check "odoo-ls-config turns off the server's JS half (no tsserver in this image)" bash -c \
@@ -2130,5 +2322,169 @@ check "shell-history dir is 0777 (any uid can create/append bash_history, #323)"
   "[ \"\$(stat -c '%a' /usr/local/share/shell-history)\" = '777' ]"
 check "odoo-dev state dir is chmod 0700 (client task artifacts, #884)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/odoo-dev)\" = '700' ]"
+
+# --- #974: a present-but-unwritable bind mount is reported, not swallowed ----
+# Docker does not refuse a bind mount whose source is missing on the host - it
+# CREATES the source, as root:root 0755. So a row added to persisted-paths.tsv
+# without a re-run of ./setup.sh on the host leaves a mount that is present, a
+# container that starts cleanly, a provision marker that says stale_image:false,
+# and a target the container user cannot write. That was live for `coderabbit-cli`
+# (#661) and `odoo-dev` (#884) from the day each row landed.
+#
+# install.sh cannot check this, which is why nothing did: at build time no mount
+# exists, so every target it created is the image's own empty directory. The
+# check runs from postCreateCommand instead, over a manifest install.sh now
+# stages INTO the image - and that staging is the first thing asserted here,
+# because a checker with no manifest to read reports nothing at all.
+PF_STAGED_MANIFEST=/usr/local/share/personal-features/persisted-paths.tsv
+
+check "persisted-paths.tsv is staged into the image for runtime readers (#974)" bash -c \
+  "test -r $PF_STAGED_MANIFEST"
+check "the staged manifest is mode 0644 (readable by whichever uid runs postCreate)" bash -c \
+  "[ \"\$(stat -c '%a' $PF_STAGED_MANIFEST)\" = '644' ]"
+
+# The 7-column shape .github/scripts/check_persisted_paths.py fixes on the
+# source file has to hold for the staged copy too: a truncated or re-columned
+# copy makes the checker below read the wrong field and skip rows in silence.
+PF_TAB="$(printf '\t')"
+PF_STAGED_ROWS=0
+PF_STAGED_BADSHAPE=0
+while IFS= read -r _pf_line; do
+    case "$_pf_line" in '' | '#'*) continue ;; esac
+    _pf_fields="$(printf '%s' "$_pf_line" | awk -F'\t' '{print NF}')"
+    [ "$_pf_fields" = 7 ] || PF_STAGED_BADSHAPE=$((PF_STAGED_BADSHAPE + 1))
+    PF_STAGED_ROWS=$((PF_STAGED_ROWS + 1))
+done < "$PF_STAGED_MANIFEST"
+check "every staged manifest row carries the 7 columns the source contract fixes" bash -c \
+  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 10 ]"
+
+# The two rows #974 names, verbatim, so a staged copy that silently lost or
+# rewrote one is a failure rather than a smaller row count.
+PF_ROW_CODERABBIT="coderabbit-cli${PF_TAB}.coderabbit/${PF_TAB}/home/vscode/.coderabbit/${PF_TAB}"
+PF_ROW_ODOO_DEV="odoo-dev${PF_TAB}.config/odoo-dev/${PF_TAB}/usr/local/share/odoo-dev/${PF_TAB}"
+check "the staged manifest carries the coderabbit-cli row verbatim (#661)" bash -c \
+  "grep -qF '$PF_ROW_CODERABBIT' $PF_STAGED_MANIFEST"
+check "the staged manifest carries the odoo-dev row verbatim (#884)" bash -c \
+  "grep -qF '$PF_ROW_ODOO_DEV' $PF_STAGED_MANIFEST"
+
+# That the staged copy really is the file that built THIS container: every
+# container-provisioned row must name a target that exists at that row's mode.
+# Both consumers enforce the same `mode` column (install.sh on the container
+# side, setup.sh on the host side), so this holds whether or not the mounts are
+# live here. A staged manifest from some other build fails it.
+PF_ROW_MISMATCH=0
+PF_ROW_CHECKED=0
+while IFS="$PF_TAB" read -r _pf_name _pf_src _pf_target _pf_env _pf_val _pf_mode _pf_prov; do
+    case "$_pf_name" in '' | '#'*) continue ;; esac
+    case "$_pf_prov" in host) continue ;; esac
+    _pf_t="${_pf_target%/}"
+    PF_ROW_CHECKED=$((PF_ROW_CHECKED + 1))
+    if [ ! -e "$_pf_t" ]; then
+        PF_ROW_MISMATCH=$((PF_ROW_MISMATCH + 1))
+        echo "staged manifest row '$_pf_name' names $_pf_t, which does not exist" >&2
+        continue
+    fi
+    _pf_actual="$(stat -c '%a' "$_pf_t")"
+    if [ "$_pf_actual" != "${_pf_mode#0}" ]; then
+        PF_ROW_MISMATCH=$((PF_ROW_MISMATCH + 1))
+        echo "staged manifest row '$_pf_name' says mode $_pf_mode, $_pf_t is $_pf_actual" >&2
+    fi
+done < "$PF_STAGED_MANIFEST"
+check "every container-provisioned staged row names a target that exists at that row's mode" bash -c \
+  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 9 ]"
+
+check "check-mount-ownership is installed and executable (#974)" bash -c \
+  "test -x /usr/local/bin/check-mount-ownership"
+check "check-mount-ownership parses as both sh and bash" bash -c \
+  "sh -n /usr/local/bin/check-mount-ownership && bash -n /usr/local/bin/check-mount-ownership"
+
+# Behavioural, against the installed script, driven through PF_MANIFEST so the
+# fixture rows are the Feature's real manifest shape without touching a real
+# mount. The suite runs unprivileged on some matrix legs and as root on others
+# (`devcontainer features test` is invoked with no --remote-user in CI), and a
+# root-owned fixture cannot be created without root - so the unwritable fixture
+# is a directory this user owns at mode 0555, which `[ -w ]` refuses for its
+# owner. As ROOT, `[ -w ]` is true for every path whatever its mode, so the
+# expectation flips with `id -u` rather than the test skipping and proving
+# nothing: a silent skip here is exactly the shape of defect #974 is about.
+PF_MOUNT_ROOT="$(mktemp -d)"
+mkdir -p "$PF_MOUNT_ROOT/unwritable" "$PF_MOUNT_ROOT/writable" \
+  "$PF_MOUNT_ROOT/cfg-bad" "$PF_MOUNT_ROOT/cfg-ok"
+chmod 0700 "$PF_MOUNT_ROOT/writable"
+chmod 0555 "$PF_MOUNT_ROOT/unwritable"
+{
+    printf '# fixture manifest (#974)\n'
+    printf 'fixture-bad\t.config/pf-fixture-bad/\t%s/\t-\t-\t0700\tcontainer\n' "$PF_MOUNT_ROOT/unwritable"
+    # Deliberately the SAME directory as the row above: if the checker ever
+    # stopped skipping provision=host rows, `checked` would be 2 and the same
+    # path would be reported twice, which is what the assertions below catch.
+    printf 'fixture-host\t.config/pf-fixture-host/\t%s/\t-\t-\t0700\thost\n' "$PF_MOUNT_ROOT/unwritable"
+} > "$PF_MOUNT_ROOT/bad.tsv"
+printf 'fixture-ok\t.config/pf-fixture-ok/\t%s/\t-\t-\t0700\tcontainer\n' \
+  "$PF_MOUNT_ROOT/writable" > "$PF_MOUNT_ROOT/ok.tsv"
+
+# Seed a foreign key in the bad-case marker: this writer owns `mount_ownership`
+# and must carry every other key forward, the same contract #868 made general
+# for sync-claude-mcp.
+cat > "$PF_MOUNT_ROOT/cfg-bad/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "a_key_no_one_named_in_check_mount_ownership": "keep-me"
+}
+MARKER
+
+PF_MOUNT_BAD_LOG="$PF_MOUNT_ROOT/bad.log"
+if PF_MANIFEST="$PF_MOUNT_ROOT/bad.tsv" CLAUDE_CONFIG_DIR="$PF_MOUNT_ROOT/cfg-bad" \
+    /usr/local/bin/check-mount-ownership >"$PF_MOUNT_BAD_LOG" 2>&1; then
+    PF_MOUNT_BAD_EXIT=0
+else
+    PF_MOUNT_BAD_EXIT=$?
+fi
+PF_MOUNT_BAD_MARKER="$PF_MOUNT_ROOT/cfg-bad/personal-features-provision.json"
+
+if [ "$(id -u)" -eq 0 ]; then
+    check "as root a 0555 target is still writable, so the verdict is OK (#974)" bash -c \
+      "grep -qF 'check-mount-ownership: OK' '$PF_MOUNT_BAD_LOG' && jq -e '.mount_ownership.ok == true' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+    check "as root the checker says so, instead of implying it checked for everyone" bash -c \
+      "grep -qF 'proves nothing about a non-root remoteUser' '$PF_MOUNT_BAD_LOG'"
+else
+    check "an unwritable target gets a loud WARNING naming the target (#974)" bash -c \
+      "grep -qF 'WARNING: check-mount-ownership: $PF_MOUNT_ROOT/unwritable is owned by' '$PF_MOUNT_BAD_LOG'"
+    check "the warning names the HOST source from that row, which is where the fix goes" bash -c \
+      "grep -qF '~/.config/pf-fixture-bad/' '$PF_MOUNT_BAD_LOG'"
+    check "the warning spells out the sudo chown remedy and the setup.sh re-run" bash -c \
+      "grep -qF 'sudo chown -R $(id -u):$(id -g) ~/.config/pf-fixture-bad/' '$PF_MOUNT_BAD_LOG' && grep -qF './setup.sh' '$PF_MOUNT_BAD_LOG'"
+    check "the unwritable row lands in the provision marker with ok:false" bash -c \
+      "jq -e '.mount_ownership.ok == false and (.mount_ownership.unwritable | length) == 1 and .mount_ownership.unwritable[0].name == \"fixture-bad\" and .mount_ownership.unwritable[0].host_source == \".config/pf-fixture-bad/\" and .mount_ownership.unwritable[0].container_target == \"$PF_MOUNT_ROOT/unwritable\"' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+fi
+
+# Never fatal, on either leg: it sits in the postCreateCommand chain, and a
+# diagnostic that can break container create is worse than what it diagnoses.
+check "check-mount-ownership exits 0 whatever it finds" bash -c \
+  "[ '$PF_MOUNT_BAD_EXIT' = '0' ]"
+# provision=host rows are the container's business never to touch (#369), so the
+# checker must not have counted the fixture's host row.
+check "the checker skips provision=host rows" bash -c \
+  "jq -e '.mount_ownership.checked == 1' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+check "the checker preserves a marker key it does not own (#868)" bash -c \
+  "jq -e '.a_key_no_one_named_in_check_mount_ownership == \"keep-me\"' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+
+# The inverse, identical on every leg: a writable target is one quiet OK line
+# and ok:true, so the warning above means something when it appears.
+PF_MOUNT_OK_LOG="$PF_MOUNT_ROOT/ok.log"
+PF_MANIFEST="$PF_MOUNT_ROOT/ok.tsv" CLAUDE_CONFIG_DIR="$PF_MOUNT_ROOT/cfg-ok" \
+  /usr/local/bin/check-mount-ownership >"$PF_MOUNT_OK_LOG" 2>&1
+check "a writable target reports OK and nothing else (#974)" bash -c \
+  "grep -qF 'check-mount-ownership: OK - all 1 persisted bind-mount targets are writable' '$PF_MOUNT_OK_LOG' && ! grep -qF 'WARNING' '$PF_MOUNT_OK_LOG'"
+check "a clean check records ok:true with an empty unwritable list" bash -c \
+  "jq -e '.mount_ownership.ok == true and (.mount_ownership.unwritable | length) == 0 and (.mount_ownership.checked_at | type) == \"string\"' '$PF_MOUNT_ROOT/cfg-ok/personal-features-provision.json' >/dev/null"
+
+# An image predating #974 stages no manifest. The checker must say that out loud
+# rather than reporting a clean run over zero paths.
+check "a missing staged manifest is reported, not read as zero problems" bash -c \
+  "PF_MANIFEST='$PF_MOUNT_ROOT/absent.tsv' CLAUDE_CONFIG_DIR='$PF_MOUNT_ROOT/cfg-ok' /usr/local/bin/check-mount-ownership 2>&1 | grep -qF 'so NO bind-mount target was checked'"
+
+chmod 0700 "$PF_MOUNT_ROOT/unwritable"
+rm -rf "$PF_MOUNT_ROOT"
 
 reportResults

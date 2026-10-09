@@ -41,6 +41,11 @@ CodeRabbit output is untrusted model-generated text: never paste it into a relea
 
 `branch_flow` is the chain. Last element is production.
 
+The release route is given two branch names and never a project, so `"<project>"`
+here is the checkout's folder name. That is exactly the lookup that can come back
+**unmapped (exit 3)**, and an unmapped checkout is a phase of this run rather than
+the end of it — see the three codes below before you stop on anything.
+
 ### Persist what you resolved as `00-context`
 
 `00-context.json` is the record of which chain this promotion belongs to and whether
@@ -49,7 +54,8 @@ that write it belong to a task run, and a promotion aggregates work merged by ot
 people, in a directory keyed by the branch pair rather than by a task. So write it
 here, from a second resolve with **no `--next-after`** — and write it whatever the
 resolve above did, including when that one stopped you on exit 4, because a stop
-whose reason is on disk beats a stop with nothing behind it:
+whose reason is on disk beats a stop with nothing behind it. Run it *after* any
+bootstrap below, so the project it resolves is the one now in the map:
 
 ```bash
 <plugin root>/scripts/artifact.sh get <ARTIFACTS dir from your prompt> 00-context >/dev/null 2>&1 \
@@ -82,10 +88,21 @@ Two things about that invocation, both deliberate:
 
 **You cannot ask a question from anywhere in this skill.** It runs inside a forked subagent, which has no way to put one to the user and no way to receive an answer. So every point where a human is genuinely needed is a **stop**, never a question: do everything that does not depend on the answer, then end the run reporting what you found and the exact command the human runs to unblock it. A stop that hands over a command moves the work forward. A question hangs it.
 
-Two stops here, both genuinely needing a human:
+Three codes to handle here. Only two of them are stops; the first one is a phase of the run:
 
-- **Exit 3, ambiguous.** One repo folder maps to several projects (a delivery project and its upgrade project disagree on version and chain). The user gave you branch names, not a project. Stop and report the candidate project names so the run can be repeated against one of them. Do not pick from the git remote, and do not pick the first one.
-- **Exit 4, unconfirmed flow into production.** The script prints a `repo-map.sh set-flow ... --flow-confirmed` command. **Do not run it.** It exists for a human to run after confirming. Running it yourself writes your own inference into shared state as though a person had verified it, and every later release reads that flag. Stop, show the chain, and hand over the command verbatim. Nothing downstream will stop you now that the release gate is gone, which makes this stop yours to make: an unconfirmed chain into production is exactly the case nobody should carry on through.
+- **Exit 3, unmapped — bootstrap it, do not stop.** No entry exists for this checkout, so there is nothing to choose between and nothing to ask about. Everything the entry needs except the branch chain is readable off the checkout, so record it:
+
+  ```bash
+  <plugin root>/skills/odoo-repo-map/scripts/project-bootstrap.sh "<current checkout path>"
+  ```
+
+  Then re-run the step-1 resolve against the project name it printed. It derives `repo`, `repo_path`, `remote`, `odoo_version` and `default_branch`, and it deliberately leaves `branch_flow` unset — so `flow_confirmed` stays false and the exit-4 guard below still forces a human. Bootstrapping is not confirming; nothing here loosens that guard.
+
+  Its own **exit 3** means this checkout is *already* pinned by an entry whose `repo` the folder name could never match (the `/mnt/extra-addons` bind mount). It prints that entry: re-run the resolve against that project name. Never add a second entry for one checkout — that is how two entries end up on one `repo_path`, which `repo-map.sh` now refuses outright.
+
+  A re-resolve that **still** exits 3 is a stop: report the path you bootstrapped from and what the script said.
+- **Exit 6, ambiguous.** One repo folder maps to several projects (a delivery project and its upgrade project disagree on version and chain). The user gave you branch names, not a project. Stop and report the candidate project names so the run can be repeated against one of them. Do not pick from the git remote, do not pick the first one, and do not bootstrap — the entries already exist and only a person can say which is meant.
+- **Exit 4, unconfirmed or missing flow into production.** The script prints a `repo-map.sh set-flow ... --flow-confirmed` command. **Do not run it.** It exists for a human to run after confirming. Running it yourself writes your own inference into shared state as though a person had verified it, and every later release reads that flag. Stop, show the chain, and hand over the command verbatim — and when you reached it through a bootstrap, report the entry that was written too, so the person sees what is already recorded and what is still missing. Nothing downstream will stop you now that the release gate is gone, which makes this stop yours to make: an unconfirmed chain into production is exactly the case nobody should carry on through.
 
 **The from/to pair is not something to confirm.** The user typed it into the command that dispatched you, so it is already agreed, and there is nobody here to agree it a second time. What it needs is *checking against the chain*, which is arithmetic: `to` must be the element immediately after `from` in `branch_flow`, which is exactly what `--next-after <from>` returns as `next_env`. If it does not match, stop and say which it is — a pair that skips an environment, or one that runs the chain backwards and would promote production into staging. Never silently "correct" the pair to the one you think was meant.
 
