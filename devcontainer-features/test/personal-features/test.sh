@@ -212,6 +212,16 @@ check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-co
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
+# #931: huggingface_hub 1.33 shards a downloaded model's blobs across
+# hub/blobs/<2 hex>/ directories, and onnxruntime 1.30 refuses to load an ONNX
+# model whose external data file resolves into a different one - which breaks
+# every embed, so recall and every drawer write fail. PR #939 put the switch on
+# the hub container's run line; containerEnv is what covers the per-container
+# processes that embed locally too: the SessionStart recall hook,
+# mempalace-init-workspace and the per-session MCP server.
+check "HF_HUB_DISABLE_SHARED_BLOBS is set for every container process (#931)" bash -c \
+  "[ \"\$HF_HUB_DISABLE_SHARED_BLOBS\" = '1' ]"
+
 # #884: the odoo-dev plugin resolves its state dir as
 # ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}. $HOME is container-local
 # image storage, so without this mount every task artifact, repo-map.json and
@@ -1580,6 +1590,39 @@ check "mempalace-repair no longer carries its own recall-hook assertion (#805)" 
 # Every branch above is advisory: none of them may change the exit status.
 check "mempalace-repair still exits 0 with both asserts failing" bash -c \
   "$_ASSERT_SETUP printf '{\"palace_path\":\"PLACEHOLDER\",\"hooks\":{\"auto_save\":false}}' | sed \"s|PLACEHOLDER|\$d/mount/palace|\" > \"\$d/mount/config.json\"; _run >/dev/null 2>&1; [ \$? -eq 0 ]"
+
+# --- mempalace-repair: the huggingface shared blob purge (#931) ---------------
+# huggingface_hub 1.33 shards every downloaded blob into hub/blobs/<2 hex>/ and
+# symlinks the snapshot file at it, so embeddinggemma's model_quantized.onnx and
+# its model_quantized.onnx_data land in different shards and onnxruntime 1.30
+# refuses to load the model across them. HF_HUB_DISABLE_SHARED_BLOBS=1 in
+# containerEnv stops the NEXT download sharding; a cache already in that layout
+# re-reads the same broken files forever, which is why the repair step deletes
+# the shared store and that one model once. Driven against a sandbox HOME, with
+# the switch passed explicitly so these cases assert the branch rather than
+# whatever the test container's environment happens to carry.
+_HF_SETUP="d=\"\$(mktemp -d)\"; unset HF_HOME; HUB=\"\$d/home/.cache/huggingface/hub\"; mkdir -p \"\$HUB/blobs/6a\" \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX/snapshots\" \"\$HUB/models--someone--unrelated-model\" \"\$d/mount/palace\"; : > \"\$HUB/blobs/.huggingface-shared-blobs\"; printf 'keep\n' > \"\$d/mount/palace/drawer.json\"; _run() { MEMPALACE_MOUNT=\"\$d/mount\" /usr/local/bin/mempalace-repair \"\$d/home\"; };"
+
+check "mempalace-repair removes a sharded huggingface blob store (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && ! test -e \"\$HUB/blobs\" && ! test -e \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
+
+check "mempalace-repair says what it removed and why (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run 2>/dev/null | grep -q 'shared blob store'"
+
+# Narrow by construction: the palace is never a candidate, and another repo's
+# download has no external data file to resolve and so no reason to be refetched.
+check "mempalace-repair leaves the palace and other cached models alone (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && [ \"\$(cat \"\$d/mount/palace/drawer.json\")\" = 'keep' ] && test -d \"\$HUB/models--someone--unrelated-model\""
+
+# No marker means the cache is already flat: a working model must not be thrown
+# away on every postCreate, which would re-download it at every container start.
+check "mempalace-repair removes nothing from an already flat cache (#931)" bash -c \
+  "$_HF_SETUP rm -f \"\$HUB/blobs/.huggingface-shared-blobs\"; export HF_HUB_DISABLE_SHARED_BLOBS=1; _run >/dev/null 2>&1 && test -d \"\$HUB/blobs\" && test -d \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
+
+# And an operator who turned the switch off has asked for the sharded layout;
+# deleting their cache anyway would be the repair step overruling them.
+check "mempalace-repair removes nothing when the switch is off (#931)" bash -c \
+  "$_HF_SETUP export HF_HUB_DISABLE_SHARED_BLOBS=0; _run >/dev/null 2>&1 && test -d \"\$HUB/blobs\" && test -d \"\$HUB/models--onnx-community--embeddinggemma-300m-ONNX\""
 
 # --- mempalace workspace init, run-once (#643 follow-up) ----------------------
 # `mempalace init` writes the rooms list the miner routes files by; without it

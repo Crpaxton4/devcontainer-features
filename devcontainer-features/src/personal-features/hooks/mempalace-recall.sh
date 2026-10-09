@@ -28,6 +28,11 @@ BRANCH=$(git -C "$CWD" symbolic-ref --short HEAD 2>/dev/null || true)
 TASK=$(printf '%s' "$BRANCH" | grep -oE '^[0-9]+' || true)
 PY=/usr/local/share/uv/tools/mempalace/bin/python
 [ -x "$PY" ] || exit 0
+# onnxruntime cannot load the embedding model across huggingface_hub 1.33's
+# blob shards, and this hook embeds in-process (#931). containerEnv carries
+# the same switch; exporting it here covers a session whose environment
+# predates the rebuild, and keeps an operator override working.
+export HF_HUB_DISABLE_SHARED_BLOBS="${HF_HUB_DISABLE_SHARED_BLOBS:-1}"
 timeout 18 "$PY" - "$REPO" "$BRANCH" "$TASK" <<'PYEOF' 2>/dev/null || true
 import json, sys, os
 repo, branch, task = sys.argv[1:4]
