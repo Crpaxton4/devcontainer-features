@@ -362,10 +362,18 @@ One template, filled per worker.
   - Branch `<type>/<issue>-<slug>`.
   - Conventional commits; Husky's `commit-msg` hook runs commitlint.
   - Trailer `Claude-Session: <url>`.
-  - Push, then
-    `gh pr create -R <owner>/<repo> --base <root: main | child: parent-branch>`,
-    **ready, not draft**. (Draft-only is the odoo-dev plugin's policy for
-    *client* repos, not for this one.)
+  - Push, then `.claude/commands/implement-issues/gh-as-owner.sh pr-create
+    <abs worktree path> --base <root: main | child: parent-branch>
+    --title ... --body-file <per-worker file>`, **ready, not draft**.
+    (Draft-only is the odoo-dev plugin's policy for *client* repos, not for
+    this one.)
+  - **Temp files go under `<scratchpad>/<issue-number>/` — `mkdir -p` it
+    first.** Every worker subagent of one run resolves the same session
+    scratchpad, so a body written to a shared fixed name
+    (`<scratchpad>/pr-body.md`) can be overwritten by a sibling between the
+    write and the `pr-create` call (observed: worker C5, PR #947). Either use
+    the per-worker directory or pass the body inline with
+    `--body "$(cat <<'BODY' ... BODY)"`; never a shared fixed name.
   - Body carries one `Closes #NNN` per issue plus the session URL on its own
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
