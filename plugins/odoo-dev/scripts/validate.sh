@@ -301,6 +301,7 @@ run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-a
 run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
 run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
 run_suite "module-inventory.test.sh" "$SKILLS/odoo-upgrade/scripts/tests/module-inventory.test.sh"
+run_suite "bump-manifest.test.sh"  "$SKILLS/odoo-devcontainer/scripts/tests/bump-manifest.test.sh"
 # Registered on purpose, and note what it makes true: gate 21 reconciles this
 # block against disk, and its own suite is IN the block it reconciles. That is
 # deliberate — an unregistered reconciler would be the first thing its own check
