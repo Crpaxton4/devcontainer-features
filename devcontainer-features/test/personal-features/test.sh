@@ -1229,18 +1229,28 @@ check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" b
 # (e) #976: an UNREADABLE settings.json is left alone too, but it is a DIFFERENT
 # fault and must be reported as one - `jq -e . file` exits non-zero for EACCES
 # exactly as it does for malformed JSON, so the old order blamed the contents of a
-# valid file for a permissions problem. This suite runs as root, for whom chmod 000
-# is no barrier, so the script must run at an unprivileged uid; with no
-# privilege-dropping helper in the image the check skips visibly rather than
-# passing vacuously (no dependency is added to the image for it). Own temp tree
-# because the shared root is 0700 and nobody has to be able to traverse in, and
-# "untouched" is a stat fingerprint rather than a content hash so that it can
-# never read as equal-because-unreadable whatever uid captures it.
+# valid file for a permissions problem.
+#
+# WHO RUNS THIS MATTERS, so the check resolves it at runtime instead of assuming.
+# chmod 000 is no barrier to root, so as root the script has to be run at an
+# unprivileged uid (setpriv, else runuser; with neither in the image the check
+# prints a visible skip rather than passing vacuously, and no dependency is added
+# to the image for it). As a NON-root user chmod 000 already denies us, so no
+# privilege drop is wanted - and attempting one is not merely unnecessary but
+# fatal: `setpriv --reuid` EPERMs instantly for a non-root caller, which is how
+# the first version of this check failed in CI, where `devcontainer features test`
+# is invoked without --remote-user (test.yaml) unlike the header's example.
+#
+# Own temp tree because the shared root is 0700 and uid 65534 has to be able to
+# traverse in; "untouched" is a stat fingerprint rather than a content hash so it
+# can never read as equal-because-unreadable whatever uid captures it; and every
+# failure prints rc, the dropper it chose and the script's stderr, because the
+# harness shows neither and a silent red here says nothing at all.
 HK_F="$(mktemp -d)"; chmod 0755 "$HK_F"
 HK_FC="$HK_F/config"; mkdir -p "$HK_FC"; chmod 0777 "$HK_FC"
 printf '{ "model": "opus" }\n' > "$HK_FC/settings.json"; chmod 000 "$HK_FC/settings.json"
 check "sync-claude-hooks reports an unreadable settings.json as unreadable, not as invalid JSON (#976)" bash -c \
-  "if command -v setpriv >/dev/null 2>&1; then set -- setpriv --reuid=65534 --regid=65534 --clear-groups; elif command -v runuser >/dev/null 2>&1; then set -- runuser -u nobody --; else echo 'SKIPPED (#976): neither setpriv nor runuser in this image, cannot drop privileges to exercise EACCES' >&2; exit 0; fi; before=\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_FC\" \"\$@\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_F/err\"; rc=\$?; [ \$rc -eq 0 ] && grep -q 'is not readable' \"$HK_F/err\" && ! grep -q 'not valid JSON' \"$HK_F/err\" && [ \"\$before\" = \"\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\")\" ]"
+  "if [ \"\$(id -u)\" -ne 0 ]; then set -- env; elif command -v setpriv >/dev/null 2>&1; then set -- setpriv --reuid=65534 --regid=65534 --clear-groups; elif command -v runuser >/dev/null 2>&1; then set -- runuser -u nobody --; else echo 'SKIPPED (#976): running as root with neither setpriv nor runuser; cannot drop privileges to exercise EACCES' >&2; exit 0; fi; before=\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_FC\" \"\$@\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_F/err\"; rc=\$?; after=\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\"); if [ \"\$rc\" -eq 0 ] && grep -q 'is not readable' \"$HK_F/err\" && ! grep -q 'not valid JSON' \"$HK_F/err\" && [ \"\$before\" = \"\$after\" ]; then exit 0; fi; echo \"#976 check failed: uid=\$(id -u) dropper=[\$*] rc=\$rc before=[\$before] after=[\$after]; script stderr follows\" >&2; cat \"$HK_F/err\" >&2; exit 1"
 
 # --- #805: every hook command is resolved, not just the two that broke first ---
 # The feature used to assert exactly two of the ten commands settings.json
