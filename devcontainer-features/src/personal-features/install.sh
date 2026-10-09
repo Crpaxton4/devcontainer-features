@@ -2436,7 +2436,7 @@ case "$FIRST_LINE" in
         ;;
 esac
 
-if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([a-zA-Z0-9_.-]+\))?!?: .+'; then
+if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_.-]+\))?!?: .+'; then
     echo "ERROR: commit message does not follow Conventional Commits:" >&2
     echo "  $FIRST_LINE" >&2
     echo "Expected: <type>(<optional scope>): <description>, e.g. 'fix(api): handle empty response'" >&2
