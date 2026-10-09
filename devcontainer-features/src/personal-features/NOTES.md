@@ -69,9 +69,28 @@ docker: Error response from daemon: invalid mount config for type "bind":
 bind source path does not exist: /home/you/.claude
 ```
 
+### When a mount source is already root-owned (#974)
+
+That hard failure is only what happens on the **first** run of a container. Every run after it, Docker does something worse: rather than refusing a missing bind-mount source, **it creates the source itself, as `root:root 0755`**. So if a row is added to `persisted-paths.tsv` and `./setup.sh` is not re-run on this host, the next container starts cleanly, the mount is present, the provision marker reports a healthy provision — and the container user cannot write a byte through it. That was live from the day each row landed for `~/.coderabbit` (#661) and `~/.config/odoo-dev` (#884): the odoo-dev plugin could persist no task artifact and the CodeRabbit CLI login could not persist, with nothing reporting anything.
+
+Since #974 the container says so at create, naming the host path and both commands:
+
+```
+WARNING: check-mount-ownership: /usr/local/share/odoo-dev is owned by root:root (mode 755) and is not writable by vscode (uid 1000)
+WARNING: check-mount-ownership:   root:root is the tell: ./setup.sh never produces a root-owned source, so Docker created
+WARNING: check-mount-ownership:   the bind-mount source ~/.config/odoo-dev itself (as root:root 0755) because ./setup.sh
+WARNING: check-mount-ownership:   was not re-run on the host after the 'odoo-dev' row was added to persisted-paths.tsv.
+WARNING: check-mount-ownership:   On the host, run:  sudo chown -R 1000:1000 ~/.config/odoo-dev/
+WARNING: check-mount-ownership:   then re-run:       ./setup.sh
+```
+
+**`root:root` is the diagnosis, not just a detail:** `setup.sh` never produces a root-owned source — it runs unprivileged and only ever touches paths under `$HOME` — so a root-owned mount source can only have come from Docker materialising it. Run exactly the two commands above, in that order: the `chown` takes the directory back (`setup.sh` deliberately never chowns anything, since acquiring root to repair a directory you never asked for is not its call), and the `setup.sh` re-run then applies the manifest's `mode` column to it.
+
+`setup.sh` no longer dies obscurely on such a source either. It used to abort on the `chmod` with a bare `chmod: changing permissions of '/home/you/.coderabbit': Operation not permitted` and, under `set -eu`, nothing else — no path, no cause, no fix. It now stops **before** touching anything, with the same `sudo chown` instruction and exit status 1.
+
 ## What persists, and where
 
-The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces).
+The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces). The manifest is also staged **into the image** at `/usr/local/share/personal-features/persisted-paths.tsv`, where `check-mount-ownership` re-reads it from `postCreateCommand` with the mounts live, so a mount that is present but not writable by the container user is reported at every container create instead of looking healthy (#974 — see [When a mount source is already root-owned](#when-a-mount-source-is-already-root-owned-974) above).
 
 Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
@@ -679,7 +698,21 @@ $ cat ~/.claude/personal-features-provision.json
   "scripts": { "sync-claude-mcp": "a07e942c…", "claude-event-hook": "08f7e708…", … },
   "newest_script_epoch": 1790128289,
   "newest_seen_at": "2026-09-23T03:06:08Z",
-  "stale_image": false
+  "stale_image": false,
+  "mempalace_versions": {
+    "cli": "3.9.0", "hub": "3.9.0", "plugin": "3.11.0",
+    "match": false, "checked_at": "2026-09-23T03:06:08Z"
+  },
+  "mount_ownership": {
+    "issue": "974", "checked": 9, "ok": false,
+    "checked_at": "2026-09-23T03:06:08Z",
+    "unwritable": [
+      {
+        "name": "odoo-dev", "container_target": "/usr/local/share/odoo-dev",
+        "host_source": ".config/odoo-dev/", "owner": "root:root", "mode": "755"
+      }
+    ]
+  }
 }
 ```
 
@@ -738,6 +771,103 @@ Adding a key to this marker from anywhere else therefore needs **no edit in
 in `sync-claude-mcp`, so a key its owner forgot to add there was silently erased
 on the next container create and its reader then reported "never seen" where the
 truth was "erased" — the very failure mode this marker exists to make visible.
+
+### `mempalace_versions`: the pin against the float (#975)
+
+One owned key is not about the scripts. `MEMPALACE_VERSION` pins the mempalace
+CLI in this container *and*, through the frozen requirements, the shared hub
+container — while `sync-claude-mcp` runs `claude plugin update
+mempalace@mempalace` on every create, so the Claude Code plugin floats to
+whatever its marketplace serves. Two mempalace versions therefore run side by
+side in every container, and they talk to each other: the plugin carries the MCP
+registration and the Stop/SessionEnd/PreCompact hooks that drive the pinned CLI
+and dial the pinned hub. Observed live, with `MEMPALACE_VERSION=3.9.0`: the
+plugin had floated to **3.11.0**.
+
+**Pinning the plugin is not expressible.** `claude plugin install` takes
+`plugin@marketplace` and nothing else — there is no `@version` form and no
+revision flag — so "pin the plugin" means pinning the *marketplace's commit*,
+and that marketplace is third-party and is not provisioned from here (the
+install is best-effort precisely because its existence is a host precondition
+this Feature cannot satisfy). An opt-in build arg is out too: this Feature
+carries `"options": {}` by charter. So the float stays and the **disagreement
+becomes visible** instead of silent — which was the actual defect, since a
+breaking change on either side surfaces as an unexplained MCP failure in a fresh
+container rather than as a build error, and `git bisect` cannot find it because
+nothing in this repo changed.
+
+`sync-claude-mcp` reads the installed version out of
+`$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json` — the registry Claude Code
+keeps there, rather than the human table `claude plugin list` prints, whose
+columns are not a contract — and compares **`major.minor`** against the pin: a
+patch release on one side is the routine case and must stay quiet, while a minor
+bump is where the MCP tool surface and the hook contract move. A difference gets
+a multi-line `WARNING` naming both versions and both remedies (catch the pins
+up, or hold the plugin back); a match gets one `OK` line; and a missing or
+unparseable registry records `"plugin": "unknown"` with `"match": false` rather
+than a match nobody verified — the absence of a second version is not evidence
+of drift, so it is *not* reported as a mismatch. Nothing here is ever fatal.
+
+Both facts land in the marker as `mempalace_versions` (`cli`, `hub`, `plugin`,
+`match`, `checked_at`), because the container-create log that carries the warning
+is gone by the time anyone wonders. The key is **owned** — rewritten on every
+provision, never inherited — for the same reason the script fingerprints are:
+the facts are about *this* container and *this* create, and an inherited copy
+would report an agreement that was last true on a different image. The pinned
+value reaches the check as **data**, not as a shell variable:
+`sync-claude-mcp`'s body is a quoted heredoc, so `install.sh` writes
+`MEMPALACE_CLI_VERSION` into the same `mempalace-hub.env` it already writes the
+hub's version and image into, and the generated script reads it back out there.
+
+One inconsistency went with the fix. The install was the bare name `mempalace`
+while the update beside it was qualified `mempalace@mempalace`, so on a host
+where another marketplace also published a `mempalace` the install could land
+one plugin and the update address another. The install is now qualified too —
+with an unqualified **fallback**, because the marketplace *name* is the host's
+to choose: a host that registered it under some other name satisfies the bare
+install and not the qualified one, and refusing to install there at all would
+take the hooks away from a machine where they worked. That path says so out
+loud, since `claude plugin update mempalace@mempalace` cannot refresh it either.
+
+### `mount_ownership`: the mount that is present and unwritable (#974)
+
+The second foreign key in this marker, and the first one written from the same
+`postCreateCommand` chain rather than from `postStartCommand`. `mempalace_hub`
+(#898) proved the preserve-by-default property above; `mount_ownership` needed
+no edit in `sync-claude-mcp` either, which is the point of #868 holding.
+
+`check-mount-ownership` writes it. For every `provision=container` row of the
+manifest whose `container_target` exists, it asks one question — can the user
+running `postCreateCommand` write it? — and records `ok`, the number of targets
+`checked`, and one object per failure naming the row (`name`), the path inside
+the container (`container_target`), **the host path the fix goes on**
+(`host_source`), and the `owner` and `mode` that are the evidence.
+
+Three decisions worth keeping:
+
+- **The trigger is unwritability, not an ownership mismatch**, which narrows
+  what #974 proposed ("not owned by the container uid, *or* is not writable by
+  it"). Ownership routinely and correctly is *not* the container uid:
+  `shell-history` is mode `0777` precisely so that any container uid can append
+  through a host directory it does not own (#323), and warning there would train
+  the reader to ignore this check. Unwritability is what breaks, so
+  unwritability is what is reported — with the owner printed as the diagnosis,
+  because `root:root` distinguishes "Docker made this directory" from every
+  other ownership story.
+- **It runs at create, not at build.** `install.sh` cannot check this at all,
+  which is why nothing did: at image-build time no bind mount exists, so every
+  target `install.sh` just created is the image's own empty directory and says
+  nothing about the host path that will shadow it. That is also why the manifest
+  is now staged into the image — before #974 the TSV was read at build time and
+  never shipped, so no runtime reader could have existed.
+- **It never aborts container create.** Exit 0 whatever it finds, and it sits
+  after a `;` in the `postCreateCommand` chain rather than inside the `&&` run:
+  an unwritable mount is a plausible *cause* of an earlier step in that chain
+  failing, so the diagnostic has to run precisely when the chain broke.
+
+As root, `[ -w ]` is true for every path whatever its mode, so a run as a root
+`remoteUser` reports `OK` and says in the same breath that it proves nothing
+about a non-root one, rather than implying a clean bill of health.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
@@ -851,7 +981,7 @@ The record keeps the key name and the **merge** semantics the old supervisor's `
 
 **The reconcile is a label comparison, not a guess.** `install.sh` freezes the mempalace tool venv with `uv pip freeze` into `/usr/local/share/personal-features/mempalace-hub-requirements.txt` — the whole transitive closure, chromadb (the single-writer backend) included — and records the image in `mempalace-hub.env` beside it. `mempalace-hub-up` stages that file onto the shared mount (the **host** daemon has to be able to bind-mount it; it cannot see a path that exists only inside this container), labels the hub `personal-features.requirements-sha=<sha256 of it>`, and compares. Same sha and running: leave it alone. Same sha, exited: `docker start`. Different sha: remove and recreate, so a hub built from last month's resolution cannot quietly outlive the image that created it.
 
-**The run, and why each flag is there.** `--restart unless-stopped` carries the hub across a host reboot; `--stop-signal SIGINT` is the shutdown mempalace releases the palace lock on, so a stop is not what strands it; `--user` is the palace directory's own uid:gid, so nothing the hub writes onto the shared mount comes back root-owned; `MEMPALACE_MCP_IDLE_HOURS=0` disables an idle-exit watchdog that exists for abandoned *per-session* servers and is a self-inflicted outage on the one process the host shares; `HF_HUB_DISABLE_SHARED_BLOBS=1` is #931 — `huggingface_hub` 1.33.0 shards downloaded model blobs into `hub/blobs/<2 hex>/` directories, and onnxruntime 1.30.0 then refuses to load `model_quantized.onnx` because its external data file resolves into a different shard ("External data path escapes model directory"), which fails every `mempalace_search` in a fresh container. The hub is the process that embeds now, so the switch belongs on it.
+**The run, and why each flag is there.** `--restart unless-stopped` carries the hub across a host reboot; `--stop-signal SIGINT` is the shutdown mempalace releases the palace lock on, so a stop is not what strands it; `--user` is the palace directory's own uid:gid, so nothing the hub writes onto the shared mount comes back root-owned; `MEMPALACE_MCP_IDLE_HOURS=0` disables an idle-exit watchdog that exists for abandoned *per-session* servers and is a self-inflicted outage on the one process the host shares; `HF_HUB_DISABLE_SHARED_BLOBS=1` is #931 — `huggingface_hub` 1.33.0 shards downloaded model blobs into `hub/blobs/<2 hex>/` directories, and onnxruntime 1.30.0 then refuses to load `model_quantized.onnx` because its external data file resolves into a different shard ("External data path escapes model directory"), which fails every `mempalace_search` in a fresh container. The switch on the run line covers the hub's own process and nothing else: every per-container process that still embeds locally - the SessionStart recall hook, `mempalace-init-workspace`, the per-session MCP proxy - gets it from `containerEnv` instead, which is why "the hub embeds now" was never a reason to leave the containers without it. Neither place helps a cache an earlier build already sharded, so `mempalace-repair` removes the shared blob store and the cached model once at `postCreate` and lets the next embed re-download it flat.
 
 First start installs the frozen set into a `--user` site under the hub's `$HOME` on the shared mount, which is minutes rather than seconds — and megabytes on the palace mount, deliberately, so a restart is fast and the next container start finds it already there. A hub that has not answered within `MEMPALACE_HUB_WAIT` (60s) is therefore `starting`, an honest intermediate state, not a failure. That budget is bounded by the **wall clock**, not by counting sleeps: a probe whose DNS lookup blocks is not bounded by `urlopen`'s timeout, so counting alone could stretch 60s into minutes. `MEMPALACE_HUB_WAIT=0` means *do not probe at all* and record `starting` immediately — which is what the feature test uses, since no check there may depend on whether some name happens to answer on the machine running it.
 
@@ -881,7 +1011,7 @@ First start installs the frozen set into a `--user` site under the hub's `$HOME`
 
 **Two scripts, because `.lsp.json` cannot express either job.**
 
-- `odoo-ls-config` (from `postCreateCommand`) writes `/usr/local/share/odoo-ls/odools.toml` from paths that only exist once the container does: `odoo_path`, the community/enterprise/`/mnt/extra-addons` `addons_paths`, and the checkout's `.venv` interpreter as `python_path`. Same reason `resolve-mempal-dir` exists — a Feature build cannot see any of this (#485). Not an Odoo container? It writes nothing and *removes* a stale file from a previous create, because every path setting is resolved against the filesystem and a stale entry is a hard config error, which is worse than no config. It is joined to the rest of the chain with `;`, not `&&`, so it runs regardless of how the mempalace steps before it exit — when `mempalace-init-workspace` failed under the old all-`&&` chain, `odools.toml` was never written and every LSP call in the session died on a 60-second initialization timeout instead (#896).
+- `odoo-ls-config` (from `postCreateCommand`) writes `/usr/local/share/odoo-ls/odools.toml` from paths that only exist once the container does: `odoo_path`, the community/enterprise/`/mnt/extra-addons` `addons_paths`, and the checkout's `.venv` interpreter as `python_path`. The enterprise path is **probed** for, not read off `$ODOO_VERSION`: `/var/lib/odoo/addons/` is scanned for series directories and the variable only picks between the ones found, because any invocation that does not inherit it (`sudo` strips it) used to write a config with the enterprise tree silently absent (#993) — see the plugin's `references/language-server.md` for the one case that still omits it, and the warning it prints. Same reason `resolve-mempal-dir` exists — a Feature build cannot see any of this (#485). Not an Odoo container? It writes nothing and *removes* a stale file from a previous create, because every path setting is resolved against the filesystem and a stale entry is a hard config error, which is worse than no config. It is joined to the rest of the chain with `;`, not `&&`, so it runs regardless of how the mempalace steps before it exit — when `mempalace-init-workspace` failed under the old all-`&&` chain, `odools.toml` was never written and every LSP call in the session died on a 60-second initialization timeout instead (#896).
 - `odoo-ls-server` picks exactly one config source per session: a project's own `odools.toml` at or above `$CLAUDE_PROJECT_DIR` if there is one, otherwise the generated file via `--config-path`, and with neither it starts nothing at all — the plugin registers `.py` for every project, not only Odoo ones, and without an `odoo_path` the server would index a whole tree to resolve no model, no field and no xmlid. **Never both** — the server merges its sources agree-or-error for scalars, so passing both turns a legitimate per-project override of `odoo_path` or `python_path` into a config error instead of an override. The cost is that a project config has to be self-contained; the generated file is the copy-paste starting point. Task worktrees under `.worktrees/` need no entry anywhere: the server infers addon paths from the LSP workspace folder when the profile for that folder sets none, and Claude Code sends the project directory as that folder, so a session started in a worktree indexes it. Enumerating them would instead bake in paths that come and go with every task.
 
 **Facts checked against the 1.6.0 source and the running binary, not the docs.**
@@ -891,6 +1021,8 @@ First start installs the frozen set into a `--user` site under the hub's `$HOME`
 - **`--logs-directory` must already exist.** The server checks the path and falls back to `<binary dir>/logs` rather than creating it, and that fallback's construction is an `.expect()` — a panic before the server ever speaks LSP. The launcher creates the directory it names, and `install.sh` pre-creates `/usr/local/share/odoo-ls/logs` mode `0777` (server logs, no secret) so the fallback can never be the thing that kills a session. `--log-level` is `warn`, not the server's own `trace`, which is megabytes an hour per session.
 - **`${workspaceFolder}` is not a thing in a plugin LSP config.** #746 flagged this as unverified; it is false. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PROJECT_DIR}` into `command`/`args`/`env`/`workspaceFolder`, and injects those three into the server's environment as well — which is how the launcher knows the project directory with no `env` block at all.
 - **JS/OWL support is off** (`disable_javascript = true`). That half of the server shells out to `tsserver`; TypeScript is not installed here, and without the flag it reports the same diagnostic on every session. Python, XML and CSV — what the plugin registers — are unaffected.
+
+**Two things install.sh cannot know at build time, and handles the same way.** The uid that ends up running a Claude Code session, and whether the release binary can even load. `/usr/local/share/odoo-ls` itself is left mode `0777`, not just its `logs/` subdirectory: `odoo-ls-config` publishes `odools.toml` with a write-temp-and-move into that directory while running as the remote user from `postCreateCommand`, and against a root-owned `0755` directory that is a guaranteed `Permission denied` in exactly the containers this targets — the generator warned on stderr, exited 0 by design, and container create reported success while every LSP call in the session died on the #896 timeout for a different reason (#993). No sticky bit, because the move has to be able to replace a file a previous root create left behind; nothing secret is in there. The warnings now name the uid, the mode and the owner, because `Permission denied` with none of those beside it is a dead end. And the installed binary is run once (`--version`, which exits immediately and reads no config): the 1.6.0 release assets need glibc 2.34, bullseye — every `odoo:16` image — ships 2.31, and the loader rejects the binary before `main()` and before the server has logging of its own, so the symptom was an initialization timeout or `crashed with exit code 1` with an *empty* log directory. A failed smoke test removes the binary, which hands `odoo-ls-server` its existing "missing or not executable" path: one warning per session instead of a crash-loop through `maxRestarts`. Same class of problem as #674; the real fix is a bookworm-or-newer base for Odoo 16 containers.
 
 **Kill switches, coarsest last**, because upstream flags the project "in development": `"diagnostics": false` in `.lsp.json` keeps navigation and stops diagnostics being pushed into context; `settings.Odoo.selectedProfile = "Disabled"` is the server's own in-protocol off switch (it logs `OdooLS is disabled. Exiting...` and indexes nothing); `ODOO_LS_DISABLE=1` stops the process starting; disabling the plugin removes the registration. `restartOnCrash` with `maxRestarts: 3` covers a server that dies on its own — both keys need Claude Code >= 2.1.205, and the pinned version here is well past that.
 
@@ -908,6 +1040,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 - [`delta`](https://github.com/dandavison/delta) for syntax-highlighted git diffs, and [`lazygit`](https://github.com/jesseduffield/lazygit) as a terminal git UI. `delta` is wired in machine-wide via `git config --system core.pager delta` and `interactive.diffFilter "delta --color-only"`, so `git diff`/`git log -p`/`git show` render through it and `git add -p` hunks are highlighted, in every repo with no per-repo setup.
 - [`qsv`](https://github.com/dathere/qsv) — a fast CSV data-wrangling toolkit for slicing, filtering, joining, and profiling the CSV exports that Odoo work throws off. Ships as a bundle of binaries; only the `qsv` binary is put on `PATH` (the static musl build on x86_64, the gnu build on arm64).
 - [`gitleaks`](https://github.com/gitleaks/gitleaks) for secret scanning. Usable manually, and invoked automatically by the global `pre-commit` hook below.
+- [`shellcheck`](https://github.com/koalaman/shellcheck) for linting shell scripts, pinned to 0.10.0 — the same version, from the same release tarball, that this repo's own CI lint jobs download (`.github/workflows/validate.yaml`, `plugin-odoo-dev.yaml`). Pinned rather than taken from apt precisely so that the two agree: `shellcheck -s bash -S error` run in a container means exactly what CI's run means, instead of a different release disagreeing in either direction. Its download is one of the few here whose SHA256 is verified, since a linter nobody checked is a gate that cannot be trusted (#964).
 - [`coderabbit`](https://docs.coderabbit.ai/cli) (CodeRabbit CLI) for AI code review, and to back the Claude Code CodeRabbit plugin — see the [CodeRabbit CLI](#coderabbit-cli) section above for auth and config-persistence details.
 - Standards enforced **machine-wide** rather than per-repo, since most of this owner's projects aren't mature enough to have their own hook config checked in. Sets `git config --system core.hooksPath` to a Feature-installed directory (`/usr/local/share/git-hooks`) containing:
   - `commit-msg` — rejects commits whose subject line doesn't follow [Conventional Commits](https://www.conventionalcommits.org/).
@@ -922,6 +1055,8 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 
   Concurrent sessions share **one** MCP server, started from `postStartCommand` — see [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub).
+
+  The **Claude Code plugin floats** while the CLI and the hub are pinned — `claude plugin update mempalace@mempalace` runs on every container create — so `sync-claude-mcp` compares the installed plugin's `major.minor` against the pin, warns loudly when they differ, and records both in the provision marker's `mempalace_versions` key (see [`mempalace_versions`: the pin against the float](#mempalace_versions-the-pin-against-the-float-975)).
 
   **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things, then asserts a fourth:
 
