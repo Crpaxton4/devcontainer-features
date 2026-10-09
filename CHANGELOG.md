@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.0.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v7.0.0...personal-features-v7.0.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **personal-features:** pin Claude Code 2.1.295 so odoo-ls 1.6.0 survives client/registerCapability ([#1030](https://github.com/Crpaxton4/devcontainer-features/issues/1030)) ([3c2a342](https://github.com/Crpaxton4/devcontainer-features/commit/3c2a342d067817d7a0c5e6ca1195483940be1332)), closes [#1029](https://github.com/Crpaxton4/devcontainer-features/issues/1029)
+
 ## [7.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.6.1...personal-features-v7.0.0) (2026-10-09)
 
 
