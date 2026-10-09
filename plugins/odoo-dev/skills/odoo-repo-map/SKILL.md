@@ -84,6 +84,7 @@ Every script print one JSON object as last stdout line.
 | `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first, then sweep `$PWD` + candidates for a dir carrying `.odoo-repos-dir` marker or >= 2 git subdirs. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
 | `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | **Only** sanctioned way to read or edit map |
 | `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | Full resolution, plus next environment in chain |
+| `project-bootstrap.sh "<checkout path>" [--project NAME]` | Record the **mechanically derivable** half of an entry for an unmapped checkout: `repo`, `repo_path`, `remote`, `odoo_version`, `default_branch`. Writes through `add`. Leaves `branch_flow` unset on purpose |
 
 ### Resolving
 
@@ -102,7 +103,23 @@ The two `release_*` fields are `null` when the project recorded none.
 
 `repo_path` is checkout path when one present on this machine, `null` when none — metadata still correct, still useful for planning. Only filesystem-touching skills need path. Entry's own `repo_path` win over `$REPOS_DIR/$repo`, so project pinned that way resolve even where no repos tree exist. Hand value straight to `odoo-dev:odoo-task-env` scripts' `--repo-path DIR` — same bypass, now recorded once instead of typed every call.
 
-Exit codes: `2` usage · `3` unmapped **or** repo folder mapping to several projects · `4` branch chain cannot answer question asked.
+Exit codes: `2` usage · `3` **unmapped** · `4` branch chain cannot answer question asked · `6` **ambiguous** — repo folder mapping to several projects.
+
+`3` and `6` were one code and have opposite remedies, which is why they split (#995). `3` means no entry exists: nothing to choose between, and `project-bootstrap.sh` below records what does not need a human. `6` means the entries already exist and a person must name one. `3` matches `repo-map.sh get`, whose exit 3 is also "project unmapped"; `5` is skipped because `release-manifest.sh` already spends it on "nothing to release".
+
+Ambiguity is keyed on `repo`, never on `repo_path`. Two entries pinning the same checkout are a *defect*, not an ambiguity — `add` and `set --repo-path` refuse to write one.
+
+### Bootstrapping an unmapped checkout
+
+```bash
+<base directory>/scripts/project-bootstrap.sh /mnt/extra-addons --project "ACME Support"
+```
+
+Exists because `3` used to be a dead stop: the subagent routes that hit it cannot ask a question, so the entry got written by hand — which these rules forbid, and which in practice produced a second entry whose `repo_path` already belonged to another project. Everything that stop waited on except the chain is readable off the checkout, so it is recorded: `repo` = basename, `repo_path` = absolutised path, `remote` from `git remote get-url origin`, `odoo_version` = majority `NN.0` across the checkout's `__manifest__.py` files (else a branch literally named `NN.0`, else omitted), `default_branch` from `origin/HEAD` (else the checked-out branch), project name defaulting to `repo`.
+
+**It never derives `branch_flow`.** The chain's last element points a release at a customer, so it stays unset, `flow_confirmed` stays false, and `project-resolve.sh`'s exit 4 still forces a human to vouch. Bootstrapping is not confirming.
+
+Exit `0` entry written · `2` usage, or the path is not a git checkout · `3` this checkout is **already** pinned by an entry, which is printed — resolve by that project name rather than adding a second one · any other code is `repo-map.sh`'s own, passed through.
 
 ### Editing
 
@@ -144,10 +161,11 @@ Writes atomic (temp file → validate → `.bak` → rename), so rejected edit n
 
 ## Rules
 
-- **Unknown project = stop, not guess.** `project-resolve.sh` exit 3, list what it know. Ask user which repo and branch, then `add` entry. Never infer repo from similar name.
+- **Unknown project = stop, not guess.** `project-resolve.sh` exit **3** (ambiguous is **6**), list what it know. Ask user which repo and branch, then `add` entry. Never infer repo from similar name. Where you cannot ask — a forked subagent — run `project-bootstrap.sh` for the checkout first, so the derivable fields are recorded, then stop on whatever remains.
+- **One checkout, one entry.** Two entries may share `repo`; they may never share `repo_path`. `add` and `set --repo-path` reject a collision with exit 2, naming the entry that already holds the path. The check sits at those two write sites and **not** in the validator on purpose: `remove` is how a bad entry gets repaired, and a validator that rejected a colliding map would make that repair impossible by any sanctioned command. For the same reason `remove` is the one command that does not pre-validate the live map — it still needs the file to parse, and the result is still validated before it lands.
 - **Entries added only with explicit user confirmation** — repo, base branch, series, chain.
 - **One repo, several projects is normal** (delivery project and its upgrade project share checkout). Those entries can legitimately disagree on `odoo_version` and `branch_flow` — that why resolving by folder name ambiguous by design. Name the project.
-- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain and never `:task`, no repeats, no unknown keys, `repo_path` absolute, `:task` only element 0, every other `branch_flow` element a legal git branch name.
+- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain and never `:task`, no repeats, no unknown keys, `repo_path` absolute, `:task` only element 0, every other `branch_flow` element a legal git branch name. Writers enforce one more the validator deliberately does not: no two entries on one `repo_path`.
 - **Never invent branch name for chain's first element.** Task branch cut fresh per task is `:task`, not `dev`. Only thing that go on chain is branch that exist on remote, plus that one placeholder.
 - `default_branch` is what task PR target. Frequently **not** GitHub default branch. Real case: client repo whose GitHub default is `Odoov18` while every task PR belongs on `staging`.
 

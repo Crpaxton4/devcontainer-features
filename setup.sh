@@ -30,6 +30,9 @@
 # and chmod just re-asserts the manifest's mode column (0700 for the
 # credential-holding dirs - they hold e.g. ~/.claude/.credentials.json and
 # gh's hosts.yml, and the container sees the host mode through the mount).
+#
+# It does NOT chown anything, and it refuses to continue over a source it does
+# not own: see assert_owned below (#974).
 
 set -eu
 
@@ -44,6 +47,64 @@ MANIFEST="$SCRIPT_DIR/devcontainer-features/src/personal-features/persisted-path
     exit 1
 }
 
+# path_owner PATH - the numeric uid that owns PATH, or empty when that cannot be
+# determined (PATH absent, or no stat that answers). GNU coreutils spells this
+# `stat -c %u` and BSD/macOS stat spells it `stat -f %u`; neither accepts the
+# other's flag and this script runs on Linux, WSL and macOS, so try both. An
+# undeterminable owner skips the check below rather than guessing at one.
+path_owner() {
+    stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null || true
+}
+
+# assert_owned PATH NAME - stop, with the remedy, when PATH already exists and
+# belongs to somebody else (#974).
+#
+# Without this the script simply dies on the `chmod` below with
+# `chmod: changing permissions of '/home/you/.coderabbit': Operation not
+# permitted` and, under `set -eu`, nothing else - no path, no cause, no fix.
+# That is not a hypothetical: Docker does not refuse a bind mount whose source
+# is missing, it CREATES the source, as `root:root 0755`. So a row added to the
+# manifest without a re-run of this script here leaves a root-owned directory on
+# the host, the container mounts it and looks healthy while being unable to
+# write a byte through it, and the first thing that reports anything at all is
+# this chmod - on the next re-run, with that one opaque line.
+#
+# Nothing is chowned automatically: this script deliberately runs unprivileged
+# (it only ever touches paths under $HOME) and acquiring root to repair a
+# directory the user never asked for is not its call to make.
+assert_owned() {
+    _ao_owner="$(path_owner "$1")"
+    # Absent, or an owner this platform will not report: nothing to assert.
+    # `if`, not `&& return`, so this reads the same under `set -e` however it is
+    # called - an AND-OR list whose test fails is the one shape where errexit's
+    # behaviour depends on the caller's context.
+    if [ -z "$_ao_owner" ] || [ "$_ao_owner" = "$(id -u)" ]; then
+        return 0
+    fi
+    # root may chmod anything, so there is no failure ahead to pre-empt.
+    if [ "$(id -u)" = 0 ]; then
+        return 0
+    fi
+    echo "ERROR: $1 exists but is owned by uid $_ao_owner, not you (uid $(id -u))." >&2
+    echo "       This is the '$2' row of persisted-paths.tsv, and the chmod below would die" >&2
+    echo "       on it with a bare 'Operation not permitted'." >&2
+    if [ "$_ao_owner" = 0 ]; then
+        echo "       uid 0 is the tell: this script never produces a root-owned source, so Docker" >&2
+        echo "       created this directory itself, as root:root, when a container bind-mounted it" >&2
+        echo "       before this script had ever created it - which means the mount is present" >&2
+        echo "       inside the container and nothing there can write through it (#974)." >&2
+    else
+        echo "       It belongs to another user, so a container mounting it runs as neither its" >&2
+        echo "       owner nor root and cannot write through the mount (#974)." >&2
+    fi
+    echo "       Take it back, then re-run this script:" >&2
+    echo "" >&2
+    echo "         sudo chown -R $(id -u):$(id -g) $1" >&2
+    echo "         ./setup.sh" >&2
+    echo "" >&2
+    return 1
+}
+
 # Host-provisioned state directory (provision=host in the manifest), captured
 # during the loop so the tracker-database schema init below is manifest-derived
 # rather than a hardcoded path. Empty when no host row is present.
@@ -52,6 +113,10 @@ TRACKER_DIR=""
 TAB="$(printf '\t')"
 while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
     case "$_name" in ''|'#'*) continue ;; esac  # skip blank/comment lines
+    # Before mkdir/chmod, not after: a source somebody else owns is exactly what
+    # the chmod below cannot repair, and the point is to say so rather than to
+    # die on it (#974).
+    assert_owned "$HOME/$_host_source" "$_name" || exit 1
     case "$_host_source" in
         */) mkdir -p "$HOME/$_host_source" ;;
         *)  mkdir -p "$(dirname "$HOME/$_host_source")"; touch "$HOME/$_host_source" ;;

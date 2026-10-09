@@ -18,7 +18,7 @@ still in [inventory.md](./inventory.md):
 | `no` | `(partial)` | `replace` + custom delta, or `keep` — size the gap first |
 | `no` | `none`, in-house code | `keep` |
 | `no` | `none`, vendor app | `replace` if the vendor ships a target release, else escalate |
-| module is OCA, `self:` present | — | `replace` after diffing the local copy for local patches |
+| `no` | `already OCA: <repo>/<module>` | `replace` after diffing the local copy for local patches |
 
 Cell formats for the three inventory columns (`native?` = one of `yes`,
 `yes/partial`, `partial`, `no`; `native notes` ≤ 300 chars; `OCA alternative`
