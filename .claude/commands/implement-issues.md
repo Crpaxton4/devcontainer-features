@@ -310,19 +310,36 @@ One template, filled per worker.
     `.release-please-manifest.json`. release-please owns all three, and the open
     `chore: release main` PR currently holds them.
   - **No local CI.** No devcontainer builds, no Docker, no full suite —
-    verification is GitHub PR CI. Sanctioned locally: `bash -n`,
-    `shellcheck -s bash -S error` (pinned 0.10.0),
+    verification is GitHub PR CI. Sanctioned locally: `bash -n`, `shellcheck`
+    (pinned 0.10.0, in the form CI applies to the files touched — below),
     `bash scripts/check-generated-scripts.sh` — the gate for `install.sh`
     heredocs, because `bash -n` cannot see inside a quoted one and an
     apostrophe in an embedded `python3 -c` program ships a broken generated
     script (#872) — `black --check`, `py_compile`, and `uv lock` when
-    dependencies change (CI runs `uv lock --check`). For changes under
-    `libraries/odoo_sdk`, add `make static`, run from `libraries/odoo_sdk`:
-    it runs `black --check`, the internal root-import check, `lint-imports`,
-    radon, and complexipy with `max-complexity-allowed = 15` from
-    `libraries/odoo_sdk/pyproject.toml`, and one function over 15 is a hard
-    fail on the `Static Analysis` job — it passed every other gate twice
-    (#954, #958) and was caught only in CI. From a worktree it must be run as
+    dependencies change (CI runs `uv lock --check`). The shellcheck form is
+    per file set, and a worker lints what it touched with the form CI will
+    apply to it: `.github/workflows/validate.yaml`'s `Lint shell entry
+    points` runs plain `shellcheck`, no `-s` and no `-S`, so at the default
+    `style` severity, over the Features' shell entry points, the root
+    `setup.sh`, this repo's own `scripts/` and
+    `.claude/commands/implement-issues/` shell, and the test suites —
+    `devcontainer-features/test/personal-features/*.sh` among them;
+    `-s bash -S error` is used only by
+    `.github/workflows/plugin-odoo-dev.yaml` over `plugins/odoo-dev` and by
+    `scripts/check-generated-scripts.sh` over the scripts it extracts. A
+    clean `-S error` run therefore says nothing about an SC2xxx style finding
+    on a file `validate` lints. Two traps: a comment line may not START with
+    the word `shellcheck` — the linter reads it as one of its own directives
+    and fails with SC1072/SC1073 (#1001); and the Feature has only installed
+    the binary since #1001, so a container built before that has none and the
+    pinned 0.10.0 tarball `install_shellcheck` fetches in `install.sh` is the
+    fallback. For changes under `libraries/odoo_sdk`, add `make static`, run
+    from `libraries/odoo_sdk`: it runs `black --check`, the internal
+    root-import check, `lint-imports`, radon, and complexipy with
+    `max-complexity-allowed = 15` from `libraries/odoo_sdk/pyproject.toml`,
+    and one function over 15 is a hard fail on the `Static Analysis` job — it
+    passed every other gate twice (#954, #958) and was caught only in CI.
+    From a worktree it must be run as
     `make -C <abs worktree path>/libraries/odoo_sdk static` so it resolves
     that checkout's `src/`, for the reason the next bullet gives about pytest.
   - **Worktrees do not isolate the Python environment.** Every worker resolves
