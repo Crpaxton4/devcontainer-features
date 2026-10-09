@@ -77,10 +77,6 @@ const SCHEMA = {
     required: ["findings","criteria_results"],
     types: { findings: "array", criteria_results: "array" },
   },
-  "40-coderabbit": {
-    required: ["status","findings"],
-    types: { findings: "array" },
-  },
   "50-pr": {
     required: ["pr_url","pr_number","draft","base","head","title"],
     types: { draft: "boolean" },
