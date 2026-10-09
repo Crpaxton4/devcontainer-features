@@ -617,6 +617,14 @@ check "sync-claude-mcp runs clean against a stub claude" bash -c \
 check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features marketplace" bash -c \
   "grep -qF 'plugin install --scope user odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
 
+# The mempalace install is qualified the same way, and for a second reason: the
+# `claude plugin update mempalace@mempalace` that follows it is qualified, and
+# the two used to disagree - a bare install beside a qualified update, so on a
+# host where another marketplace also published a `mempalace` the install could
+# land one plugin and the update address another (#975).
+check "sync-claude-mcp installs mempalace pinned to the mempalace marketplace" bash -c \
+  "grep -qF 'plugin install --scope user mempalace@mempalace' \"$MCP_STUB_BIN/claude.calls\""
+
 # The point of #738: copies written into the bind-mounted ~/.claude by
 # pre-migration containers outlive the image that wrote them and shadow their
 # odoo-dev twins. With the plugin in place they are deleted.
@@ -784,6 +792,87 @@ CLAUDE_CONFIG_DIR="$MCP_HUB_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
 
 check "sync-claude-mcp keeps the hub liveness record it finds in the marker" bash -c \
   "grep -qF '\"state\": \"gave_up\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\" && grep -qF '\"script_digest\"' \"$MCP_HUB_CONFIG/personal-features-provision.json\""
+
+# --- sync-claude-mcp: the floating mempalace plugin vs the pin (#975) --------
+# MEMPALACE_VERSION pins the mempalace CLI in this container and the shared hub
+# container; the Claude Code plugin - which carries the MCP registration and the
+# Stop/SessionEnd/PreCompact hooks that drive both - is deliberately left to
+# float to whatever its marketplace serves. So two mempalace versions run side
+# by side in every container, and nothing used to assert they agree: a break on
+# either side would surface as an unexplained MCP failure in a fresh container
+# rather than as a build error. sync-claude-mcp now reads the installed plugin
+# version out of the registry Claude Code keeps in $CLAUDE_CONFIG_DIR, compares
+# major.minor against the pin, and records both in the provision marker.
+#
+# The pin is read from the env file install.sh wrote, never hardcoded here, so
+# bumping MEMPALACE_VERSION moves these fixtures with it instead of turning them
+# red. A pin that cannot be read is itself a defect, so the fallback is a value
+# nothing can match rather than a guess that would quietly pass.
+MCP_MP_PIN="$(sed -n 's/^MEMPALACE_CLI_VERSION=//p' /usr/local/share/personal-features/mempalace-hub.env | head -n 1)"
+MCP_MP_PIN="${MCP_MP_PIN:-unreadable-pin}"
+# Same major.minor as the pin, different patch: a patch release on one side is
+# the routine case and has to read as a match, or the warning cries wolf on
+# every create and stops being read.
+MCP_MP_PATCH="${MCP_MP_PIN%.*}.99"
+# A minor ahead of the pin - the live drift #975 found (3.9.0 pinned against a
+# plugin that had floated to 3.11.0), which is where the MCP tool surface and
+# the hook contract actually move.
+MCP_MP_DRIFT="${MCP_MP_PIN%%.*}.999.0"
+
+# The registry as Claude Code writes it: a version per installed revision under
+# a plugin@marketplace key.
+mcp_mp_registry() {  # <config-dir> <version>
+  mkdir -p "$1/plugins"
+  printf '{"version":2,"plugins":{"mempalace@mempalace":[{"version":"%s","installPath":"/x/%s"}]}}\n' \
+    "$2" "$2" > "$1/plugins/installed_plugins.json"
+}
+
+MCP_MP_OK_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-ok"
+MCP_MP_OK_LOG="$MCP_TEST_ROOT/mempalace-ok.log"
+mkdir -p "$MCP_MP_OK_CONFIG"
+mcp_mp_registry "$MCP_MP_OK_CONFIG" "$MCP_MP_PATCH"
+CLAUDE_CONFIG_DIR="$MCP_MP_OK_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_OK_LOG" || true
+
+check "a plugin agreeing with the pin on major.minor is recorded as a match" bash -c \
+  "jq -e --arg pin \"$MCP_MP_PIN\" --arg plugin \"$MCP_MP_PATCH\" '.mempalace_versions.match == true and .mempalace_versions.cli == \$pin and .mempalace_versions.hub == \$pin and .mempalace_versions.plugin == \$plugin and (.mempalace_versions.checked_at | type) == \"string\"' \"$MCP_MP_OK_CONFIG/personal-features-provision.json\" >/dev/null"
+check "a matching plugin version warns about nothing" bash -c \
+  "! grep -q 'does not match the pinned' \"$MCP_MP_OK_LOG\""
+
+MCP_MP_DRIFT_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-drift"
+MCP_MP_DRIFT_LOG="$MCP_TEST_ROOT/mempalace-drift.log"
+mkdir -p "$MCP_MP_DRIFT_CONFIG"
+mcp_mp_registry "$MCP_MP_DRIFT_CONFIG" "$MCP_MP_DRIFT"
+CLAUDE_CONFIG_DIR="$MCP_MP_DRIFT_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_DRIFT_LOG" || true
+
+# Both versions are named in the warning: a warning that says "mismatch" without
+# saying which two things disagree sends the reader back to the archaeology the
+# provision marker exists to replace.
+check "a plugin a minor ahead of the pin warns, naming both versions" bash -c \
+  "grep -qF 'mempalace plugin $MCP_MP_DRIFT does not match the pinned CLI/hub $MCP_MP_PIN' \"$MCP_MP_DRIFT_LOG\""
+check "the version mismatch is recorded in the marker" bash -c \
+  "jq -e --arg plugin \"$MCP_MP_DRIFT\" '.mempalace_versions.match == false and .mempalace_versions.plugin == \$plugin' \"$MCP_MP_DRIFT_CONFIG/personal-features-provision.json\" >/dev/null"
+# Drift is reported, never fatal: this whole script is best-effort and must not
+# fail container create over a version it merely disagrees with.
+check "sync-claude-mcp still exits 0 on a mempalace version mismatch" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_MP_DRIFT_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
+
+# No registry at all - a config dir Claude Code has never installed a plugin
+# into. "unknown" is recorded rather than a match nobody verified, and the
+# absence is not reported as drift: there is no second version to disagree with.
+MCP_MP_NONE_CONFIG="$MCP_TEST_ROOT/claude-home-mempalace-no-registry"
+MCP_MP_NONE_LOG="$MCP_TEST_ROOT/mempalace-no-registry.log"
+mkdir -p "$MCP_MP_NONE_CONFIG"
+CLAUDE_CONFIG_DIR="$MCP_MP_NONE_CONFIG" PATH="$MCP_STUB_BIN:$PATH" \
+  /usr/local/bin/sync-claude-mcp >/dev/null 2>"$MCP_MP_NONE_LOG" || true
+
+check "an unreadable plugin registry records an unknown version, not a match" bash -c \
+  "jq -e '.mempalace_versions.plugin == \"unknown\" and .mempalace_versions.match == false' \"$MCP_MP_NONE_CONFIG/personal-features-provision.json\" >/dev/null"
+check "an unreadable plugin registry is not reported as a version mismatch" bash -c \
+  "! grep -q 'does not match the pinned' \"$MCP_MP_NONE_LOG\""
+check "sync-claude-mcp still exits 0 when the plugin version cannot be read" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_MP_NONE_CONFIG\" PATH=\"$MCP_STUB_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>&1"
 
 rm -rf "$MCP_TEST_ROOT"
 
@@ -1801,6 +1890,13 @@ check "a real freeze pins chromadb with it" bash -c \
   "[ \"\$(wc -l < /usr/local/share/personal-features/mempalace-hub-requirements.txt)\" -le 1 ] || grep -qi '^chromadb==' /usr/local/share/personal-features/mempalace-hub-requirements.txt"
 check "the hub records its version and image" bash -c \
   "grep -q '^MEMPALACE_HUB_VERSION=' /usr/local/share/personal-features/mempalace-hub.env && grep -q '^MEMPALACE_HUB_IMAGE=' /usr/local/share/personal-features/mempalace-hub.env"
+# The same file carries the CLI pin under its own name (#975). sync-claude-mcp
+# reads it from here at container-create time, because its body is a quoted
+# heredoc that no build-time variable can reach - so if this key stops being
+# written, the plugin version check silently stops having anything to compare
+# against.
+check "the env file records the pinned mempalace CLI version" bash -c \
+  "grep -qE '^MEMPALACE_CLI_VERSION=[0-9]+\\.[0-9]+' /usr/local/share/personal-features/mempalace-hub.env"
 
 # The stub daemon. Built once, at test-file scope, because every check runs in
 # its own `bash -c` and cannot see a function defined here. A real AF_UNIX

@@ -679,7 +679,11 @@ $ cat ~/.claude/personal-features-provision.json
   "scripts": { "sync-claude-mcp": "a07e942c…", "claude-event-hook": "08f7e708…", … },
   "newest_script_epoch": 1790128289,
   "newest_seen_at": "2026-09-23T03:06:08Z",
-  "stale_image": false
+  "stale_image": false,
+  "mempalace_versions": {
+    "cli": "3.9.0", "hub": "3.9.0", "plugin": "3.11.0",
+    "match": false, "checked_at": "2026-09-23T03:06:08Z"
+  }
 }
 ```
 
@@ -738,6 +742,63 @@ Adding a key to this marker from anywhere else therefore needs **no edit in
 in `sync-claude-mcp`, so a key its owner forgot to add there was silently erased
 on the next container create and its reader then reported "never seen" where the
 truth was "erased" — the very failure mode this marker exists to make visible.
+
+### `mempalace_versions`: the pin against the float (#975)
+
+One owned key is not about the scripts. `MEMPALACE_VERSION` pins the mempalace
+CLI in this container *and*, through the frozen requirements, the shared hub
+container — while `sync-claude-mcp` runs `claude plugin update
+mempalace@mempalace` on every create, so the Claude Code plugin floats to
+whatever its marketplace serves. Two mempalace versions therefore run side by
+side in every container, and they talk to each other: the plugin carries the MCP
+registration and the Stop/SessionEnd/PreCompact hooks that drive the pinned CLI
+and dial the pinned hub. Observed live, with `MEMPALACE_VERSION=3.9.0`: the
+plugin had floated to **3.11.0**.
+
+**Pinning the plugin is not expressible.** `claude plugin install` takes
+`plugin@marketplace` and nothing else — there is no `@version` form and no
+revision flag — so "pin the plugin" means pinning the *marketplace's commit*,
+and that marketplace is third-party and is not provisioned from here (the
+install is best-effort precisely because its existence is a host precondition
+this Feature cannot satisfy). An opt-in build arg is out too: this Feature
+carries `"options": {}` by charter. So the float stays and the **disagreement
+becomes visible** instead of silent — which was the actual defect, since a
+breaking change on either side surfaces as an unexplained MCP failure in a fresh
+container rather than as a build error, and `git bisect` cannot find it because
+nothing in this repo changed.
+
+`sync-claude-mcp` reads the installed version out of
+`$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json` — the registry Claude Code
+keeps there, rather than the human table `claude plugin list` prints, whose
+columns are not a contract — and compares **`major.minor`** against the pin: a
+patch release on one side is the routine case and must stay quiet, while a minor
+bump is where the MCP tool surface and the hook contract move. A difference gets
+a multi-line `WARNING` naming both versions and both remedies (catch the pins
+up, or hold the plugin back); a match gets one `OK` line; and a missing or
+unparseable registry records `"plugin": "unknown"` with `"match": false` rather
+than a match nobody verified — the absence of a second version is not evidence
+of drift, so it is *not* reported as a mismatch. Nothing here is ever fatal.
+
+Both facts land in the marker as `mempalace_versions` (`cli`, `hub`, `plugin`,
+`match`, `checked_at`), because the container-create log that carries the warning
+is gone by the time anyone wonders. The key is **owned** — rewritten on every
+provision, never inherited — for the same reason the script fingerprints are:
+the facts are about *this* container and *this* create, and an inherited copy
+would report an agreement that was last true on a different image. The pinned
+value reaches the check as **data**, not as a shell variable:
+`sync-claude-mcp`'s body is a quoted heredoc, so `install.sh` writes
+`MEMPALACE_CLI_VERSION` into the same `mempalace-hub.env` it already writes the
+hub's version and image into, and the generated script reads it back out there.
+
+One inconsistency went with the fix. The install was the bare name `mempalace`
+while the update beside it was qualified `mempalace@mempalace`, so on a host
+where another marketplace also published a `mempalace` the install could land
+one plugin and the update address another. The install is now qualified too —
+with an unqualified **fallback**, because the marketplace *name* is the host's
+to choose: a host that registered it under some other name satisfies the bare
+install and not the qualified one, and refusing to install there at all would
+take the hooks away from a machine where they worked. That path says so out
+loud, since `claude plugin update mempalace@mempalace` cannot refresh it either.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
@@ -925,6 +986,8 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 
   Concurrent sessions share **one** MCP server, started from `postStartCommand` — see [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub).
+
+  The **Claude Code plugin floats** while the CLI and the hub are pinned — `claude plugin update mempalace@mempalace` runs on every container create — so `sync-claude-mcp` compares the installed plugin's `major.minor` against the pin, warns loudly when they differ, and records both in the provision marker's `mempalace_versions` key (see [`mempalace_versions`: the pin against the float](#mempalace_versions-the-pin-against-the-float-975)).
 
   **`mempalace-repair` reconciles the palace root (#596, #643).** mempalace holds several disagreeing ideas of where the palace lives, so the Feature installs one idempotent script that settles all of them. It runs twice — from `install.sh` at image-build time, and again from `postCreateCommand` — because the two passes see different filesystems: the bind mount is not attached during the build, so the host's palace only becomes visible at container-create time. It does three things, then asserts a fourth:
 
