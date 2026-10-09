@@ -595,7 +595,9 @@ set -eu
 #   4. assert the two things mempalace-as-only-memory needs that are its own -
 #      hooks.auto_save and identity.txt (#744) - warn-only. The third, the
 #      SessionStart recall hook, moved to sync-claude-hooks, which resolves every
-#      command settings.json references rather than this one alone (#805).
+#      command settings.json references rather than this one alone (#805);
+#   5. purge a huggingface_hub 1.33 sharded blob store once, so the embedding
+#      model the palace writes through can load at all (#931).
 #
 # HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root and
 # MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; both exist so
@@ -787,6 +789,38 @@ if [ ! -e "$MEMPALACE_IDENTITY" ]; then
     else
         echo "WARNING: mempalace-repair: $MEMPALACE_IDENTITY is missing and could not be seeded; 'mempalace wake-up' will start with no identity (#744)" >&2
     fi
+fi
+
+# --- 5. one-time purge of a sharded huggingface blob store (#931) -------------
+# huggingface_hub 1.33.0 added a cache-wide shared blob store: instead of a flat
+# models--<repo>/blobs/ directory it writes hub/blobs/<2 hex>/<xet hash> and
+# symlinks each snapshot file at it. onnxruntime 1.30.0 resolves an ONNX model's
+# external data file relative to the REAL directory of the model file and
+# refuses any path that resolves outside it, so embeddinggemma's
+# model_quantized.onnx (one shard) can never reach its model_quantized.onnx_data
+# (another), and every embed - search, drawer write, diary entry - fails with
+# "External data path escapes model directory".
+#
+# HF_HUB_DISABLE_SHARED_BLOBS=1 lives in the Feature's containerEnv, so every
+# per-container process that embeds gets it. But it only governs FUTURE
+# downloads: a cache already in the sharded layout stays broken, because the
+# files are all present and nothing re-downloads them. So when 1.33's marker
+# file is there AND the switch is on, remove the shared store and the one model
+# that reads an external data file, and let the next embed fetch it flat.
+#
+# Narrow on purpose: the shared store and that single models-- tree, nothing
+# else under the cache, and never anything under the palace. No marker means the
+# cache is already flat and nothing is removed.
+HF_HUB_DIR="${HF_HOME:-$HOME_DIR/.cache/huggingface}/hub"
+# The four values huggingface_hub itself reads as true (ENV_VARS_TRUE_VALUES),
+# so an operator who wrote `true` is not told one thing and given another.
+case "${HF_HUB_DISABLE_SHARED_BLOBS:-}" in
+    1 | [oO][nN] | [yY][eE][sS] | [tT][rR][uU][eE]) HF_SHARED_BLOBS_OFF=1 ;;
+    *) HF_SHARED_BLOBS_OFF= ;;
+esac
+if [ -n "$HF_SHARED_BLOBS_OFF" ] && [ -e "$HF_HUB_DIR/blobs/.huggingface-shared-blobs" ]; then
+    echo "mempalace-repair: removing the huggingface_hub shared blob store $HF_HUB_DIR/blobs and the cached embeddinggemma-300m-ONNX model, which onnxruntime cannot load across blob shards; the next embed re-downloads it flat (#931)"
+    rm -rf "${HF_HUB_DIR:?}/blobs" "${HF_HUB_DIR:?}/models--onnx-community--embeddinggemma-300m-ONNX"
 fi
 MEMPALACE_REPAIR
 chmod 0755 /usr/local/bin/mempalace-repair
