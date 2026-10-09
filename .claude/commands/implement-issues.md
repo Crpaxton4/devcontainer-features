@@ -316,7 +316,15 @@ One template, filled per worker.
     heredocs, because `bash -n` cannot see inside a quoted one and an
     apostrophe in an embedded `python3 -c` program ships a broken generated
     script (#872) — `black --check`, `py_compile`, and `uv lock` when
-    dependencies change (CI runs `uv lock --check`).
+    dependencies change (CI runs `uv lock --check`). For changes under
+    `libraries/odoo_sdk`, add `make static`, run from `libraries/odoo_sdk`:
+    it runs `black --check`, the internal root-import check, `lint-imports`,
+    radon, and complexipy with `max-complexity-allowed = 15` from
+    `libraries/odoo_sdk/pyproject.toml`, and one function over 15 is a hard
+    fail on the `Static Analysis` job — it passed every other gate twice
+    (#954, #958) and was caught only in CI. From a worktree it must be run as
+    `make -C <abs worktree path>/libraries/odoo_sdk static` so it resolves
+    that checkout's `src/`, for the reason the next bullet gives about pytest.
   - **Worktrees do not isolate the Python environment.** Every worker resolves
     the same `.venv` from the main checkout, so one worker running `uv sync`
     or installing a dependency changes the interpreter its siblings are
