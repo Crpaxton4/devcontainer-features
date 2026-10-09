@@ -520,11 +520,22 @@ else
 fi
 chmod 0644 "$MEMPALACE_HUB_REQUIREMENTS"
 
-# The version and the image the hub runs, as data rather than as a string
+# The versions and the image the hub runs, as data rather than as strings
 # repeated in a second script. mempalace-hub-up sources this file, so bumping
 # MEMPALACE_VERSION above moves the hub too.
-printf 'MEMPALACE_HUB_VERSION=%s\nMEMPALACE_HUB_IMAGE=%s\n' \
-    "$MEMPALACE_VERSION" "$MEMPALACE_HUB_IMAGE" > "$MEMPALACE_HUB_ENV_FILE"
+#
+# MEMPALACE_CLI_VERSION is that same pin under the name of the thing it actually
+# describes: the mempalace CLI/MCP server installed in THIS container. It is
+# written here because sync-claude-mcp needs the pinned value at
+# container-create time, to compare against the Claude Code plugin it lets float
+# (#975) - and sync-claude-mcp's body is a QUOTED heredoc, so no build-time
+# variable can reach it and the constant has to arrive as data. Same value as
+# the hub's today, by construction; recorded under both names so that a change
+# which ever pins the hub separately has a key to say so in, instead of
+# redefining this one underneath its only reader.
+printf 'MEMPALACE_HUB_VERSION=%s\nMEMPALACE_HUB_IMAGE=%s\nMEMPALACE_CLI_VERSION=%s\n' \
+    "$MEMPALACE_VERSION" "$MEMPALACE_HUB_IMAGE" "$MEMPALACE_VERSION" \
+    > "$MEMPALACE_HUB_ENV_FILE"
 chmod 0644 "$MEMPALACE_HUB_ENV_FILE"
 
 # Belt-and-braces on the interpreter perms, after the last uv call that could
@@ -897,13 +908,31 @@ fi
 # bare CI runner it fails with "not found in any configured marketplace". That
 # is a host-config precondition this Feature cannot satisfy for the user, so it
 # stays best-effort and says so rather than failing container create.
+#
+# The install is written in the plugin@marketplace form, matching the
+# `claude plugin update mempalace@mempalace` below. It used to be the bare name
+# while the update was qualified, which is an inconsistency with teeth: on a
+# host where some OTHER marketplace also publishes a `mempalace`, the bare form
+# could install that one and the update would then address a plugin this script
+# never installed (#975). The unqualified attempt survives only as a FALLBACK,
+# because the marketplace NAME is the host's to choose - see below.
 mempalace_plugin_present=0
 if command -v mempalace >/dev/null 2>&1; then
     if claude plugin list 2>/dev/null | grep -q mempalace; then
         echo "sync-claude-mcp: plugin 'mempalace' is already installed"
         mempalace_plugin_present=1
+    elif claude plugin install --scope user mempalace@mempalace; then
+        echo "sync-claude-mcp: installed plugin 'mempalace@mempalace'"
+        mempalace_plugin_present=1
     elif claude plugin install --scope user mempalace; then
-        echo "sync-claude-mcp: installed plugin 'mempalace'"
+        # The qualified form is tried first because it is the one the update
+        # below addresses. This fallback exists because the marketplace name is
+        # the host's: a host that registered the mempalace marketplace under
+        # some other name satisfies the bare install and not the qualified one,
+        # and refusing to install there at all would take the hooks away from a
+        # machine where they used to work. Say which case this is, loudly
+        # enough to act on, since the update below cannot match it either.
+        echo "WARNING: sync-claude-mcp: installed plugin 'mempalace' from an unqualified install: no marketplace named 'mempalace' is configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), so 'mempalace@mempalace' did not resolve. The hooks work, but 'claude plugin update mempalace@mempalace' below cannot refresh this plugin - re-add the marketplace under the name 'mempalace' to get updates (#975)." >&2
         mempalace_plugin_present=1
     else
         echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
@@ -927,6 +956,128 @@ if [ "$mempalace_plugin_present" -eq 1 ]; then
     else
         echo "WARNING: sync-claude-mcp: could not update the 'mempalace' plugin; this container keeps whatever revision was already cached in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), which may be stale. Check network/marketplace access, or run 'claude plugin update mempalace@mempalace' by hand." >&2
     fi
+fi
+
+# --- mempalace version drift: the pinned CLI/hub vs the floating plugin (#975)
+# The update above deliberately floats the plugin to whatever the marketplace
+# serves, while MEMPALACE_VERSION pins the CLI in this container and the shared
+# hub container to one release. So TWO mempalace versions run side by side in
+# every container, and they talk to each other: the plugin ships the MCP server
+# registration and the Stop/SessionEnd/PreCompact hooks, which drive the pinned
+# CLI and dial the pinned hub. Nothing used to assert they agree. A breaking
+# change on either side would surface as an unexplained MCP failure in a fresh
+# container rather than as a build error, and `git bisect` could not find it
+# because nothing in this repo changed.
+#
+# Pinning the plugin instead is not expressible: `claude plugin install` takes
+# plugin@marketplace and nothing else - there is no @version form and no
+# revision flag - so "pin the plugin" would mean pinning the marketplace's
+# commit, and that marketplace is third-party and is not provisioned from here
+# (see the install block above). What IS available is the assertion. The float
+# therefore stays, and the disagreement becomes visible instead of silent: loud
+# on the container-create log, and recorded in the provision marker below for
+# whoever reads it weeks later, when that log is gone.
+#
+# major.minor, not the full version: a patch release on one side is the routine
+# case and has to stay quiet, while a minor bump is where the MCP tool surface
+# and the hook contract move. Never fatal - like every other step here, this
+# reports and exits 0.
+mempalace_pinned_cli="unknown"
+mempalace_pinned_hub="unknown"
+mempalace_version_env="${MEMPALACE_HUB_ENV_FILE:-/usr/local/share/personal-features/mempalace-hub.env}"
+if [ -r "$mempalace_version_env" ]; then
+    # Read out, never sourced: this wants two named values out of a file
+    # install.sh wrote, not every name in that file evaluated by this shell.
+    mempalace_pinned_cli="$(sed -n 's/^MEMPALACE_CLI_VERSION=//p' "$mempalace_version_env" | head -n 1)"
+    mempalace_pinned_hub="$(sed -n 's/^MEMPALACE_HUB_VERSION=//p' "$mempalace_version_env" | head -n 1)"
+    [ -n "$mempalace_pinned_cli" ] || mempalace_pinned_cli="unknown"
+    [ -n "$mempalace_pinned_hub" ] || mempalace_pinned_hub="$mempalace_pinned_cli"
+fi
+
+# The installed-plugin registry Claude Code keeps in the bind-mounted config
+# dir. `claude plugin list` prints a human table whose columns are not a
+# contract; this file carries the version as data. A missing file, an
+# unparseable one or no mempalace entry all mean "unknown" - never a failure.
+mempalace_plugin_registry="$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
+mempalace_plugin_version="unknown"
+if command -v python3 >/dev/null 2>&1; then
+    mempalace_plugin_version="$(PF_PLUGIN_REGISTRY="$mempalace_plugin_registry" python3 -c '
+import json, os
+
+registry = os.environ["PF_PLUGIN_REGISTRY"]
+try:
+    with open(registry) as handle:
+        loaded = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+
+# {"version": 2, "plugins": {"mempalace@mempalace": [{"version": "3.11.0", ...}]}}
+# Matched on the plugin half of the key, so a marketplace registered under
+# another name is still found. Any unexpected shape means "unknown".
+plugins = loaded.get("plugins") if isinstance(loaded, dict) else None
+if not isinstance(plugins, dict):
+    raise SystemExit(0)
+
+found = []
+for key, value in plugins.items():
+    if str(key).split("@")[0] != "mempalace":
+        continue
+    for entry in value if isinstance(value, list) else [value]:
+        version = entry.get("version") if isinstance(entry, dict) else entry
+        if isinstance(version, str) and version:
+            found.append(version)
+
+
+def sort_key(value):
+    parts = []
+    for chunk in value.split(".")[:3]:
+        digits = ""
+        for char in chunk:
+            if not char.isdigit():
+                break
+            digits = digits + char
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+# The cache can hold several revisions at once - the observed registry carried
+# 3.9.0 and 3.11.0 together. Report the HIGHEST, which is the one the update
+# above just converged on and the conservative choice for a drift check:
+# picking the lowest would let a stale pin look like a match and hide exactly
+# the mismatch this exists to surface.
+if found:
+    print(sorted(found, key=sort_key)[-1])
+' 2>/dev/null)" || mempalace_plugin_version=""
+    [ -n "$mempalace_plugin_version" ] || mempalace_plugin_version="unknown"
+fi
+
+mempalace_versions_match=false
+if [ "$mempalace_plugin_version" != "unknown" ] && [ "$mempalace_pinned_cli" != "unknown" ] \
+    && [ "$(echo "$mempalace_plugin_version" | cut -d. -f1,2)" \
+        = "$(echo "$mempalace_pinned_cli" | cut -d. -f1,2)" ]; then
+    mempalace_versions_match=true
+fi
+
+if [ "$mempalace_versions_match" = true ]; then
+    echo "sync-claude-mcp: OK: mempalace plugin $mempalace_plugin_version agrees with the pinned CLI/hub $mempalace_pinned_cli on major.minor"
+elif [ "$mempalace_plugin_version" = "unknown" ]; then
+    # Not a mismatch warning: there is no second version to disagree with. The
+    # plugin being absent is already warned about above, and an unreadable
+    # registry is not evidence of drift - so this says only that the check
+    # could not run, and the marker records plugin "unknown" rather than a
+    # match nobody verified.
+    echo "sync-claude-mcp: no installed mempalace plugin version could be read from $mempalace_plugin_registry, so the pinned CLI/hub $mempalace_pinned_cli was not checked against it (#975)"
+else
+    printf 'WARNING: sync-claude-mcp: mempalace plugin %s does not match the pinned CLI/hub %s\n' \
+        "$mempalace_plugin_version" "$mempalace_pinned_cli" >&2
+    printf 'WARNING: sync-claude-mcp:   plugin (MCP registration + Stop/SessionEnd/PreCompact hooks): %s, floating, from %s\n' \
+        "$mempalace_plugin_version" "$mempalace_plugin_registry" >&2
+    printf 'WARNING: sync-claude-mcp:   CLI in this container: %s. Shared hub container: %s. Both pinned by MEMPALACE_VERSION in this Feature.\n' \
+        "$mempalace_pinned_cli" "$mempalace_pinned_hub" >&2
+    printf 'WARNING: sync-claude-mcp:   major.minor differ, so the MCP tool surface and the hook contract are not guaranteed to agree, and a break would look like an unexplained MCP failure rather than a build error. Either catch the pins up (bump MEMPALACE_VERSION in the personal-features install.sh and rebuild without cache) or hold the plugin at %s. Recorded as mempalace_versions in the provision marker below (#975).\n' \
+        "$mempalace_pinned_cli" >&2
 fi
 
 # --- odoo-dev plugin: marketplace + install (#723) ---------------------------
@@ -1057,7 +1208,12 @@ pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
 pf_add_script /usr/local/share/personal-features/settings-fragment.json
 if command -v python3 >/dev/null 2>&1; then
-    PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
+    PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" \
+        PF_MEMPALACE_CLI="$mempalace_pinned_cli" \
+        PF_MEMPALACE_HUB="$mempalace_pinned_hub" \
+        PF_MEMPALACE_PLUGIN="$mempalace_plugin_version" \
+        PF_MEMPALACE_MATCH="$mempalace_versions_match" \
+        python3 -c '
 import hashlib, json, os, sys, time
 
 marker = os.environ["PF_MARKER"]
@@ -1134,11 +1290,20 @@ if not stale:
 # therefore needs no edit here. Nothing is dropped: no key has ever needed
 # resetting, and a reset belongs next to the writer that owns the key.
 #
-# The owned fields all describe the scripts in THIS container, so none of them
-# may be inherited stale from the previous marker - that would be a lie about
-# the current image and would defeat the staleness check (#806). The three
+# Almost all of the owned fields describe the scripts in THIS container, so none
+# of them may be inherited stale from the previous marker - that would be a lie
+# about the current image and would defeat the staleness check (#806). The three
 # newest_* high-water-mark fields are owned too: they are computed from the
 # previous marker above, deliberately, so a stale run cannot lower them.
+#
+# mempalace_versions (#975) is the one owned key that is not about the scripts:
+# it records the mempalace versions this create observed - the CLI/hub pin the
+# image was built with, and the floating Claude Code plugin found in the
+# registry - plus whether they agree on major.minor. Owned, and therefore
+# rewritten rather than inherited, for the same reason as the rest: the facts
+# are about THIS container and THIS create, and an inherited copy would report
+# an agreement that was last true on a different image. The warning above is the
+# live signal; this key is what is still readable once that log is gone.
 record = dict(previous)
 record.update(
     {
@@ -1152,6 +1317,13 @@ record.update(
         "newest_script_digest": seen_digest,
         "newest_seen_at": seen_at,
         "stale_image": stale,
+        "mempalace_versions": {
+            "cli": os.environ.get("PF_MEMPALACE_CLI") or "unknown",
+            "hub": os.environ.get("PF_MEMPALACE_HUB") or "unknown",
+            "plugin": os.environ.get("PF_MEMPALACE_PLUGIN") or "unknown",
+            "match": os.environ.get("PF_MEMPALACE_MATCH") == "true",
+            "checked_at": iso(now),
+        },
     }
 )
 
