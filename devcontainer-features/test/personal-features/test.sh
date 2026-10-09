@@ -1226,6 +1226,22 @@ printf '{ this is : not json ' > "$HK_C/settings.json"
 check "sync-claude-hooks leaves a corrupt settings.json untouched and exits 0" bash -c \
   "before=\$(cat \"$HK_C/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_C\" /usr/local/bin/sync-claude-hooks; rc=\$?; [ \$rc -eq 0 ] && [ \"\$before\" = \"\$(cat \"$HK_C/settings.json\")\" ]"
 
+# (e) #976: an UNREADABLE settings.json is left alone too, but it is a DIFFERENT
+# fault and must be reported as one - `jq -e . file` exits non-zero for EACCES
+# exactly as it does for malformed JSON, so the old order blamed the contents of a
+# valid file for a permissions problem. This suite runs as root, for whom chmod 000
+# is no barrier, so the script must run at an unprivileged uid; with no
+# privilege-dropping helper in the image the check skips visibly rather than
+# passing vacuously (no dependency is added to the image for it). Own temp tree
+# because the shared root is 0700 and nobody has to be able to traverse in, and
+# "untouched" is a stat fingerprint rather than a content hash so that it can
+# never read as equal-because-unreadable whatever uid captures it.
+HK_F="$(mktemp -d)"; chmod 0755 "$HK_F"
+HK_FC="$HK_F/config"; mkdir -p "$HK_FC"; chmod 0777 "$HK_FC"
+printf '{ "model": "opus" }\n' > "$HK_FC/settings.json"; chmod 000 "$HK_FC/settings.json"
+check "sync-claude-hooks reports an unreadable settings.json as unreadable, not as invalid JSON (#976)" bash -c \
+  "if command -v setpriv >/dev/null 2>&1; then set -- setpriv --reuid=65534 --regid=65534 --clear-groups; elif command -v runuser >/dev/null 2>&1; then set -- runuser -u nobody --; else echo 'SKIPPED (#976): neither setpriv nor runuser in this image, cannot drop privileges to exercise EACCES' >&2; exit 0; fi; before=\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\"); CLAUDE_CONFIG_DIR=\"$HK_FC\" \"\$@\" /usr/local/bin/sync-claude-hooks >/dev/null 2>\"$HK_F/err\"; rc=\$?; [ \$rc -eq 0 ] && grep -q 'is not readable' \"$HK_F/err\" && ! grep -q 'not valid JSON' \"$HK_F/err\" && [ \"\$before\" = \"\$(stat -c '%s %Y %a %U:%G' \"$HK_FC/settings.json\")\" ]"
+
 # --- #805: every hook command is resolved, not just the two that broke first ---
 # The feature used to assert exactly two of the ten commands settings.json
 # references - the odoo-sdk console scripts in install.sh (#496) and
