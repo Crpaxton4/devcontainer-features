@@ -51,7 +51,9 @@ Return contract, typed out in full in each Bash call:
     <ARTIFACT above> put <ARTIFACTS above> 35-review <file>
 
 `30-test.json` carries the verbatim run output: `passed`, `tests_run`,
-`tours_declared`, `tours_run`, `failures`, `log_file`. `35-review.json` carries
+`tours_declared`, `tours_run`, `failures`, `log_file`, `produced_by`.
+`produced_by` comes from `run-tests.sh` and from nowhere else, which is what lets
+a reader tell a real run from a hand-assembled one. `35-review.json` carries
 `findings` and `criteria_results`, one entry per claim and per acceptance
 criterion, each with the evidence that settles it. Final message: the artifact
 path, then at most five lines of plain English.

@@ -219,10 +219,15 @@ seed
 out="$(resolve Alpha)"; check "resolve-by-project" 0 $?
 out="$(resolve alpha)"; check "resolve-by-repo" 0 $?
 check_contains "resolve-repo-finds-project" '"project":"Alpha"' "$out"
-out="$(resolve shared 2>&1)"; check "resolve-ambiguous-repo" 3 $?
+# Unmapped and ambiguous were one exit code until #995 and have opposite
+# remedies, so they are separate codes: 3 stays unmapped (agreeing with
+# `repo-map.sh get`), ambiguous moved to 6. 5 is release-manifest.sh's.
+out="$(resolve shared 2>&1)"; check "resolve-ambiguous-repo" 6 $?
 check_contains "resolve-ambiguous-lists" "Gamma" "$out"
+check_contains "resolve-ambiguous-says-ambiguous" "ambiguous" "$out"
 out="$(resolve Nope 2>&1)"; check "resolve-unmapped" 3 $?
 check_contains "resolve-unmapped-says-ask" "never guess" "$out"
+check_contains "resolve-unmapped-points-at-bootstrap" "project-bootstrap.sh" "$out"
 
 out="$(resolve Alpha --next-after :task)"; check "next-after-mid-chain" 0 $?
 check_contains "next-env" '"next_env":"UAT"' "$out"
@@ -506,6 +511,75 @@ check_absent "set-repo-path-removed" '"repo_path"' "$out"
 out="$(resolve_in "$TMP/tree" Rho)"; check "resolve-after-repo-path-unset" 0 $?
 check_contains "unset-repo-path-falls-back" "\"repo_path\":\"$TMP/tree/iota\"" "$out"
 
+# --- one checkout, one entry ------------------------------------------------------
+# Two entries may share `repo` (Gamma and Delta do, deliberately) and resolving by
+# that folder is reported ambiguous. Two entries sharing repo_path is a different
+# thing: the path IS the checkout, so nothing downstream can tell them apart, and
+# field reports showed it being created by hand. Rejected at the two write sites,
+# naming the flag and the entry already holding the path (#995).
+seed
+map add "Upsilon" upsilon --repo-path "$TMP/mount/extra-addons" >/dev/null
+check "collide-first-add-ok" 0 $?
+out="$(map add "Phi" phi --repo-path "$TMP/mount/extra-addons" 2>&1)"
+check "add-rejects-colliding-repo-path" 2 $?
+check_contains "add-collision-names-flag" "--repo-path" "$out"
+check_contains "add-collision-names-holder" "Upsilon" "$out"
+
+# `set --repo-path` is the other way one could be written.
+map add "Chi" chi --no-repo-check >/dev/null
+out="$(map set "Chi" --repo-path "$TMP/mount/extra-addons" 2>&1)"
+check "set-rejects-colliding-repo-path" 2 $?
+check_contains "set-collision-names-holder" "Upsilon" "$out"
+
+# Re-setting a path to the value the SAME entry already holds is not a collision:
+# an idempotent write must stay legal, or a re-run of a bootstrap becomes an error.
+out="$(map set "Upsilon" --repo-path "$TMP/mount/extra-addons" 2>&1)"
+check "set-same-entry-same-path-ok" 0 $?
+
+# The rule lives at the write sites, NOT in the validator: `remove` is how a map
+# that already collides gets repaired, and a validator rejecting it would make
+# that repair impossible by any sanctioned command.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8"));
+  d.projects.Gamma.repo_path="/mnt/extra-addons"; d.projects.Delta.repo_path="/mnt/extra-addons";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "validate-tolerates-existing-collision" 0 $?
+out="$(map remove Delta 2>&1)"; check "remove-repairs-collision" 0 $?
+
+# --- remove works on a semantically invalid map ------------------------------------
+# The #992 papercut: `remove` pre-validated the live map, so an entry carrying an
+# unknown key could not be deleted by the one sanctioned command that deletes —
+# leaving the forbidden hand-edit as the only way out. The RESULT is still
+# validated by commit_tmp, which is what keeps the guarantee that mattered.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.bogus_key="whatever";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+out="$(map validate 2>&1)"; check "invalid-map-fails-validate" 4 $?
+out="$(map remove Alpha 2>&1)"; check "remove-on-invalid-map" 0 $?
+out="$(map validate 2>&1)"; check "remove-left-valid-map" 0 $?
+
+# Removing something else leaves the map still invalid, so commit_tmp rejects the
+# write: the attempt is allowed, landing a bad map is not.
+seed && node -e '
+  const fs=require("fs"); const f=process.argv[1];
+  const d=JSON.parse(fs.readFileSync(f,"utf8")); d.projects.Alpha.bogus_key="whatever";
+  fs.writeFileSync(f, JSON.stringify(d));' "$TMP/map.json"
+before="$(cat "$TMP/map.json")"
+map remove Beta >/dev/null 2>&1; check "remove-still-rejects-invalid-result" 4 $?
+[ "$(cat "$TMP/map.json")" = "$before" ]; check "remove-rejected-no-write" 0 $?
+
+# A map that does not PARSE is still exit 4 naming the file (#947): a delete
+# against bytes nobody can read would be a guess at what the map used to say.
+printf '{"projects": {' > "$TMP/map.json"
+out="$(map remove Alpha 2>&1)"; check "remove-on-mangled-map" 4 $?
+check_contains "remove-mangled-names-file" "invalid JSON" "$out"
+
+# Unmapped is still 3, not swallowed by the dropped pre-check.
+seed
+out="$(map remove Nope 2>&1)"; check "remove-unmapped-still-3" 3 $?
+
 # The origin sniff is gated on the checkout being present, so before repo_path it
 # could never fire in the devcontainer and `remote` was always null. Needs a real
 # git repo; skipped rather than failed where git is absent.
@@ -521,6 +595,90 @@ if command -v git >/dev/null 2>&1; then
   seed
   map add "Pi" pi --repo-path "$TMP/gitmount" --remote other/override >/dev/null
   out="$(resolve_in "$NO_TREE" Pi)"; check_contains "map-remote-beats-sniff" '"remote":"other/override"' "$out"
+fi
+
+# --- project-bootstrap.sh ---------------------------------------------------------
+# An unmapped project used to end the release route with nothing done, and the
+# entry then got written by hand (#995). Everything but the branch chain is
+# readable off the checkout, so it is recorded without a human — and the chain is
+# left unset precisely so the exit-4 guard still demands one.
+#
+# Needs a real git repo with a manifest in it; skipped rather than failed where
+# git is absent. Nothing here touches the network.
+bootstrap() { REPO_MAP_FILE="$TMP/map.json" bash "$SCRIPTS/project-bootstrap.sh" "$@"; }
+
+if command -v git >/dev/null 2>&1; then
+  CO="$TMP/checkout/client-addons"
+  mkdir -p "$CO/sale_ext" "$CO/stock_ext"
+  printf "{\n 'name': 'Sale Ext',\n 'version': '18.0.1.0.0',\n}\n" > "$CO/sale_ext/__manifest__.py"
+  printf "{\n 'name': 'Stock Ext',\n 'version': '18.0.2.1.0',\n}\n" > "$CO/stock_ext/__manifest__.py"
+  git init -q -b staging "$CO" >/dev/null 2>&1
+  git -C "$CO" remote add origin https://github.com/acme/client-addons.git
+  # No commit on purpose: `git init` leaves an unborn branch, the branch name is
+  # still readable with symbolic-ref, and committing here would run whatever
+  # hooks the ambient machine has configured.
+
+  seed
+  out="$(bootstrap "$CO" 2>/dev/null)"; check "bootstrap-writes-entry" 0 $?
+  check_contains "bootstrap-project-defaults-to-repo" '"project":"client-addons"' "$out"
+  check_contains "bootstrap-repo-is-basename" '"repo":"client-addons"' "$out"
+  check_contains "bootstrap-repo-path-absolute" "\"repo_path\":\"$CO\"" "$out"
+  check_contains "bootstrap-remote-from-origin" '"remote":"acme/client-addons"' "$out"
+  check_contains "bootstrap-version-from-manifests" '"odoo_version":"18.0"' "$out"
+  check_contains "bootstrap-default-branch-from-head" '"default_branch":"staging"' "$out"
+  # The whole point: the chain is NOT derived, so flow_confirmed stays false and
+  # project-resolve.sh still stops a promotion at the exit-4 guard.
+  check_absent "bootstrap-leaves-flow-unset" '"branch_flow"' "$out"
+  check_absent "bootstrap-leaves-flow-unconfirmed" '"flow_confirmed"' "$out"
+  out="$(resolve_in "$NO_TREE" client-addons)"; check "bootstrap-entry-resolves" 0 $?
+  check_contains "bootstrap-entry-flow-false" '"flow_confirmed":false' "$out"
+  out="$(resolve_in "$NO_TREE" client-addons --next-after staging 2>&1)"
+  check "bootstrap-entry-still-stops-at-flow-guard" 4 $?
+  check_contains "bootstrap-entry-hands-over-set-flow" "set-flow" "$out"
+
+  # Re-running against a checkout an entry already pins is exit 3 with that
+  # entry printed, never a second colliding entry — the field failure in #995.
+  out="$(bootstrap "$CO" 2>/dev/null)"; check "bootstrap-already-mapped" 3 $?
+  check_contains "bootstrap-already-mapped-names-project" '"project":"client-addons"' "$out"
+  out="$(map list)"; check_contains "bootstrap-did-not-duplicate" '"client-addons"' "$out"
+
+  # --project overrides the default, because the exact Odoo project.project name
+  # is the map's key and a folder name is rarely it.
+  seed
+  out="$(bootstrap "$CO" --project "ACME Support" 2>/dev/null)"; check "bootstrap-project-flag" 0 $?
+  check_contains "bootstrap-project-flag-key" '"project":"ACME Support"' "$out"
+
+  # No manifest anywhere and a branch not named for a series: the field is omitted
+  # rather than guessed.
+  BARE="$TMP/checkout/bare-repo"
+  mkdir -p "$BARE"
+  git init -q -b feature/x "$BARE" >/dev/null 2>&1
+  seed
+  out="$(bootstrap "$BARE" 2>/dev/null)"; check "bootstrap-no-manifest" 0 $?
+  check_absent "bootstrap-omits-unknown-version" '"odoo_version"' "$out"
+  check_absent "bootstrap-omits-remote-without-origin" '"remote"' "$out"
+
+  # Branch named for the series is the one other mechanical source.
+  VER="$TMP/checkout/ver-repo"
+  mkdir -p "$VER"
+  git init -q -b 17.0 "$VER" >/dev/null 2>&1
+  seed
+  out="$(bootstrap "$VER" 2>/dev/null)"; check "bootstrap-version-from-branch" 0 $?
+  check_contains "bootstrap-version-from-branch-value" '"odoo_version":"17.0"' "$out"
+
+  # A path that is not a git checkout is a usage error: repo, remote and branch
+  # all come from git, so there is nothing to derive.
+  seed
+  out="$(bootstrap "$TMP/mount-no-checkout" 2>&1)"; check "bootstrap-not-a-git-checkout" 2 $?
+  check_contains "bootstrap-not-git-msg" "not a git checkout" "$out"
+  out="$(bootstrap "$TMP/nowhere" 2>&1)"; check "bootstrap-missing-path" 2 $?
+  out="$(bootstrap 2>&1)"; check "bootstrap-no-args" 2 $?
+
+  # A duplicate project NAME is repo-map.sh's own exit 2, passed through.
+  seed
+  map add "client-addons" other --no-repo-check >/dev/null
+  out="$(bootstrap "$CO" 2>&1)"; check "bootstrap-duplicate-project-name" 2 $?
+  check_contains "bootstrap-duplicate-msg" "duplicate project" "$out"
 fi
 
 # --- the scratch file a write lands through --------------------------------------

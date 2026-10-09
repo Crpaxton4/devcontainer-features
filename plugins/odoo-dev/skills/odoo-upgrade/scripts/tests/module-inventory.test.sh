@@ -11,7 +11,9 @@
 #
 # The join key (Module Name) and the closed literals (`none`, the origin
 # tokens) are contracts: build_workbook.py and oca_check.py both key off them,
-# so a silent change here is a silent miss there.
+# so a silent change here is a silent miss there. The last block in this file
+# asserts that contract directly, by grepping the three scripts and the two
+# references against each other (#963).
 #
 # Stdlib python3 only — no Odoo, no network, no database. A fake `odoo`
 # package is put on PYTHONPATH so "core" dependency classification is decided
@@ -538,6 +540,81 @@ wb_run "$dir"
 contains "a pair inside one group is not reviewed" "$wb_out" \
   "to review (not blocking): 0"
 expect "an intra-group pair is clean" "$wb_status" "0"
+
+# --- #963: the OCA literal contract — one owner, asserted by grep ------------
+# Three literals cross skill trees: `none`, `claimed — run oca_check.py`, and
+# `already OCA: <repo>/<module>`. No shared module can hold them — there is no
+# package under plugins/odoo-dev, the scripts are invoked by absolute path, and
+# oca_check.py lives in another skill — so the contract is a documented owner
+# (the commented OCA_NONE in oca_check.py) plus this test. `self:` was invented
+# in one reference and defined nowhere; these asserts are what stops the next
+# one.
+SKILLS_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+OCA_CHECK="$SKILLS_DIR/odoo-prior-art/scripts/oca_check.py"
+INVENTORY_MD="$SKILLS_DIR/odoo-upgrade/references/inventory.md"
+METHOD_MD="$SKILLS_DIR/odoo-prior-art/references/method.md"
+REVIEW_MD="$SKILLS_DIR/odoo-upgrade/references/oca-base-review.md"
+
+for f in "$SUT" "$WORKBOOK" "$OCA_CHECK" "$INVENTORY_MD" "$METHOD_MD" \
+         "$REVIEW_MD"; do
+  expect "contract file exists: ${f##*/}" "$([ -f "$f" ] && echo yes)" "yes"
+done
+
+# The literal as the file actually spells it, not a count of matches: a count
+# passes when the value was changed but still defined.
+oca_literal() {  # <file> <constant>
+  sed -n "s/^$2 = \"\(.*\)\"\$/\1/p" "$1" | head -1
+}
+
+expect "the owner declares itself" \
+  "$(grep -c 'OCA literal contract' "$OCA_CHECK")" "1"
+expect "both mirrors point at the owner script by name" \
+  "$(grep -l 'oca_check.py' "$SUT" "$WORKBOOK" | wc -l | tr -d ' ')" "2"
+
+owner_none="$(oca_literal "$OCA_CHECK" OCA_NONE)"
+expect "oca_check.py owns OCA_NONE" "$owner_none" "none"
+expect "module_inventory.py mirrors OCA_NONE" \
+  "$(oca_literal "$SUT" OCA_NONE)" "$owner_none"
+expect "build_workbook.py mirrors OCA_NONE" \
+  "$(oca_literal "$WORKBOOK" OCA_NONE)" "$owner_none"
+
+# OCA_UNVERIFIED is asymmetric on purpose: oca_check.py replaces the seed, it
+# never writes it, so it must NOT carry a third copy to drift.
+unverified="$(oca_literal "$SUT" OCA_UNVERIFIED)"
+expect "module_inventory.py seeds the unverified literal" \
+  "$unverified" "claimed — run oca_check.py"
+expect "build_workbook.py mirrors OCA_UNVERIFIED" \
+  "$(oca_literal "$WORKBOOK" OCA_UNVERIFIED)" "$unverified"
+expect "oca_check.py keeps no copy of a literal it never writes" \
+  "$(oca_literal "$OCA_CHECK" OCA_UNVERIFIED)" ""
+
+# `already OCA: ` has one producer (an f-string), one validator (a regex) and
+# one spec line. All three carry the prefix verbatim or the cell is rejected.
+produced="$(sed -n 's/.*f"\(already OCA: \).*/\1/p' "$OCA_CHECK" | head -1)"
+validated="$(sed -n 's/.*r"^\(already OCA: \).*/\1/p' "$WORKBOOK" | head -1)"
+documented="$(sed -n 's/.*`\(already OCA: \)<repo>\/<module>`.*/\1/p' \
+  "$INVENTORY_MD" | head -1)"
+expect "oca_check.py is the sole producer of the prefix" \
+  "$produced" "already OCA: "
+expect "build_workbook.py validates the prefix it is sent" \
+  "$validated" "$produced"
+expect "inventory.md documents the prefix both sides use" \
+  "$documented" "$produced"
+
+# The #963 defect: a verdict literal named in a reference and defined nowhere.
+expect "no 'self:' verdict literal in the prior-art method" \
+  "$(grep -c 'self:' "$METHOD_MD")" "0"
+expect "no 'self:' verdict literal in the OCA base review" \
+  "$(grep -c 'self:' "$REVIEW_MD")" "0"
+
+# ...and the row that carried it now puts the value in the column that takes
+# it: `already OCA:` is an `OCA <major> alternative` value, not a `native?` one.
+contains "the OCA base review row names the literal in the OCA column" \
+  "$(cat "$REVIEW_MD")" '| `no` | `already OCA: <repo>/<module>` |'
+contains "the prior-art decision table names it in the oca column" \
+  "$(cat "$METHOD_MD")" '| `no` | `already OCA: <repo>/<module>` |'
+contains "the prior-art verdict list names the literal" \
+  "$(cat "$METHOD_MD")" '`already OCA: <repo>/<module>`'
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
