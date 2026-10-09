@@ -4,7 +4,13 @@
 #
 # Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S]
 #                     [--with-tours] [--repo-path DIR] [--addons-path P]
-#                     [--data-dir DIR]
+#                     [--data-dir DIR] [--target-series NN.0]
+#
+#   --target-series: the Odoo series the MODULE targets, as in 18.0. Compared
+#                    against the series this container's core actually runs. No
+#                    flag means no comparison — every caller that is not
+#                    series-aware passes none — so the check is absent rather
+#                    than passed.
 #
 # Mechanics:
 #   - addons path STATED, never inherited: worktree FIRST so worktree modules
@@ -27,17 +33,21 @@
 # checkout is bind-mounted and odoo is on PATH — it failed on `docker: command
 # not found`, which reads as a broken script rather than a wrong assumption.
 #
-# Last stdout line: {"passed","status","error","db","module","odoo_version","mode",
+# Last stdout line: {"passed","status","error","db","module","odoo_version",
+#   "module_target_series","mode","produced_by",
 #   "tests_run","suites":[{"module","collected","executed","failed"}],
 #   "collected_is_executed","addons_path","data_dir","tours_declared","tours_run",
 #   "tours_passed","failures":[{"test","error"}],"log_file","log_excerpt",
 #   "db_dropped"}
 #
 # status is the vocabulary a gate branches on: "passed" | "failed" |
-# "registry_aborted". The third exists because "the registry never loaded" and
-# "this module ships no tests" both rendered as tests_run: 0 with an empty
-# failure list, and only one of those is safe to wave through. "error" carries
-# the decisive log line for registry_aborted and is null otherwise.
+# "registry_aborted" | "series_mismatch". The third exists because "the registry
+# never loaded" and "this module ships no tests" both rendered as tests_run: 0
+# with an empty failure list, and only one of those is safe to wave through. The
+# fourth is the same shape with a different cause: a module of another series is
+# never installed at all (#978). "error" carries the decisive log line for
+# registry_aborted, the two disagreeing series for series_mismatch, and is null
+# otherwise.
 #
 # failures[].error is the EXTRACTED exception message ("AssertionError: 2 != 1"),
 # parsed out of the failure's traceback — not the adjacent log line, and not the
@@ -55,6 +65,10 @@
 #     without a browser and logs the skip at INFO, so this is the difference
 #     between "the tours pass" and "the tours never ran".
 #   - --with-tours exits 6 rather than running when no browser is available.
+#   - a run whose container does not run the module's own series REFUSES to
+#     start: Odoo sets installable=False on a manifest from another series, logs
+#     it at WARNING, and then prints "0 failed, 0 error(s) of 0 tests" and exits
+#     0 — a green zero whose cause appears nowhere in the result (#978).
 #
 # Concurrency: several invocations may hit ONE odoo container at the same time
 # (the stack is a shared singleton, not a lock), so every run is isolated
@@ -67,13 +81,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR]" >&2; exit 2; }
+[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0]" >&2; exit 2; }
 repo="$1"; task_id="$2"; module="$3"; shift 3
 
 tags=""; suffix=""; with_tours=false; repo_path=""; addons_override=""; data_dir_override=""
+target_series=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --test-tags) tags="${2:?}"; shift 2 ;;
+    --target-series) target_series="${2:?}"; shift 2 ;;
     --db-suffix) suffix="${2:?}"; shift 2 ;;
     --repo-path) repo_path="${2:?}"; shift 2 ;;
     --addons-path) addons_override="${2:?}"; shift 2 ;;
@@ -136,6 +152,54 @@ case "$major" in
   16|17|18|19) : ;;  # same test-flag surface; adjust here if a version diverges
   *) echo "WARN unrecognized Odoo version '$version_raw' — using standard flags" >&2 ;;
 esac
+
+# ---- series mismatch, which is NOT "no tests" either -------------------------
+# An 18.0 module on a 19.0 core is not a failing test and not a crash. Odoo reads
+# the manifest, logs "The module <m> has an incompatible version, setting
+# installable=False" at WARNING, installs nothing, and then prints "0 failed,
+# 0 error(s) of 0 tests" and exits 0. Nothing in that result says the module was
+# never installed, so it reads as a module that ships no tests (#978).
+#
+# Compared on the MAJOR alone: a core answers "19.0-20260810" and a target is
+# written "19.0", and the build dates never agree. A core whose series could not
+# be read at all is a mismatch too — a series that cannot be proved equal is not
+# equal, which is the same fail-closed rule the rest of this script follows.
+target_major=""
+if [ -n "$target_series" ]; then
+  target_major="$(printf '%s' "$target_series" | { grep -oE '[0-9]+' || true; } | head -1)"
+  [ -n "$target_major" ] || {
+    echo "--target-series must name an Odoo series, as in 18.0: got '$target_series'" >&2
+    exit 2
+  }
+fi
+if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
+  if [ "$major" = 0 ]; then
+    mismatch_error="could not read this container's Odoo series (odoo --version said '$version_raw') and the module targets $target_series — refusing to run: a series that cannot be proved equal is not equal"
+  else
+    mismatch_error="this container runs Odoo ${major}.0 but the module targets $target_series — refusing to run: Odoo sets installable=False on a manifest from another series, installs nothing, and still reports 0 failed, 0 error(s) of 0 tests with exit 0"
+  fi
+  # The SAME key set as the completed-run emitter at the bottom of this script, so
+  # a reader never has to branch on which path wrote the artifact; the offline
+  # suite asserts the two key sets are identical. Nothing ran, so every count is 0
+  # and the paths a run would have stated are null rather than invented.
+  node -e '
+    const [db, module_, version, target, mode, err] = process.argv.slice(1);
+    console.log(JSON.stringify({
+      passed: false, status: "series_mismatch", error: err,
+      db, module: module_,
+      odoo_version: version, module_target_series: target, mode,
+      produced_by: "run-tests.sh",
+      tests_run: 0,
+      suites: [], collected_is_executed: true,
+      addons_path: null, data_dir: null,
+      tours_declared: 0, tours_run: 0, tours_passed: 0,
+      failures: [{ test: module_ + ": Odoo series mismatch", error: err }],
+      log_file: null, log_excerpt: "",
+      db_dropped: false,
+    }));
+  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error"
+  exit 0  # a series mismatch is a RESULT, like a test failure
+fi
 
 # ---- addons path: stated, never inherited ------------------------------------
 # This used to be "${worktree},$(addons_path read out of odoo.conf)", which made
@@ -387,7 +451,7 @@ node -e '
   const fs = require("fs");
   const [logFile, passed, dbname, module_, version, dropped, testsRun,
          toursDeclared, toursRun, toursPassed, tourGap, mode, status,
-         registryError, addonsPath, dataDir] = process.argv.slice(1);
+         registryError, addonsPath, dataDir, targetSeries] = process.argv.slice(1);
   const text = fs.readFileSync(logFile, "utf8");
   const lines = text.split("\n");
 
@@ -470,7 +534,10 @@ node -e '
     passed: passed === "true", status,
     error: status === "registry_aborted" ? (registryError || "").trim().slice(0, 300) || null : null,
     db: dbname, module: module_,
-    odoo_version: version, mode,
+    // odoo_version is the core this run used; module_target_series is what the
+    // caller said the module is FOR, null when nobody said. The pair is the only
+    // way a reader can tell a real zero from a series mismatch (#978).
+    odoo_version: version, module_target_series: targetSeries || null, mode,
     // Provenance, not a number: downstream readers cannot otherwise tell this
     // artifact from one an agent hand-assembled around its own claim (#982).
     produced_by: "run-tests.sh",
@@ -485,6 +552,6 @@ node -e '
   }));
 ' "$log" "$passed" "$dbname" "$module" "$version_raw" "$db_dropped" "$tests_run" \
   "$tours_declared" "$tours_run" "$tours_passed" "$tour_gap" "$mode" "$status" \
-  "$registry_error" "$addons" "$data_dir"
+  "$registry_error" "$addons" "$data_dir" "$target_series"
 
 [ "$passed" = true ] || exit 0  # a test failure is a RESULT, not a script error

@@ -49,7 +49,7 @@ An Odoo task branch is finished and verified and the work has to become visible 
 
 **Test evidence.** Read `30-test.json`, the artifact `odoo-dev-tester` wrote, and check all four of:
 
-- `tests_run > 0`. Zero never green — "no failures" not evidence when nothing ran.
+- `tests_run > 0`. Zero never green — "no failures" not evidence when nothing ran. A `status` of `series_mismatch` is that zero with its cause named: the container ran one Odoo series and `module_target_series` names another, so the module was never installed and no test ran. Never green, and the two series are what you report rather than the zero.
 - `tours_run > 0` whenever `tours_declared > 0`. Odoo skips tours without browser and logs skip as pass, so tour suite with no browser is invisibly green. Re-run with `--with-tours`.
 - `passed: true`.
 - `produced_by` is present and equals `run-tests.sh`. Only `run-tests.sh` stamps that value, and it stamps it from the same code path that counts the tests. A `30-test.json` missing the key, or carrying any other value, was hand-assembled around somebody's account of their own run — report it as **not independent evidence**, say which agent or session wrote it, and treat the other three checks as unmet whatever numbers the file states. Hand-assembled evidence is never green. This is a report, not a refusal: there are no hard gates here, so you may still open the pull request — but the missing provenance goes in your final message, and the numbers from that file never go in the PR body as if they were a run.

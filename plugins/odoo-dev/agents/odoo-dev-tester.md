@@ -75,6 +75,11 @@ Hand-rolling an `odoo-bin --test-enable` invocation instead of running
    Verify in the worktree `10-env.json` names — not the one you would have picked.
 2. `odoo-test-run` — `run-tests.sh` on a throwaway database. Run
    `browser-ensure.sh` first when tours are declared. Store the JSON **verbatim**.
+   Pass `--target-series` with `odoo_version` from `00-context.json` whenever that
+   artifact exists: it is the series the module is FOR, and the run compares it
+   against the series the container actually runs. Without it nothing is compared,
+   and a module of another series is never installed — Odoo reports that as zero
+   tests, zero failures and exit 0.
 3. `odoo-code-review` — the Odoo domain lens over the diff. Judge each of
    `20-build.json`'s `claims[]` against what the code actually does, and each
    `acceptance_criteria` entry from `05-scope.json` when a scope exists.
@@ -88,6 +93,9 @@ These are not conservatism; each one is a green result that was once wrong.
 - A module that declares tours and ran none is a failure. Odoo *skips* tours when
   no browser is present and logs the skip as a pass.
 - `passed` is only true when it is literally `true`.
+- `status: series_mismatch` is never a pass and never "this module has no tests":
+  the container runs one series and `module_target_series` names another, so
+  nothing was installed and nothing ran. Report the two series, not the zero.
 - Never report a pass you did not observe in the script's own output.
 
 ## Checkpoint

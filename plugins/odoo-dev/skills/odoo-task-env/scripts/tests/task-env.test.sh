@@ -103,6 +103,32 @@ rc=$?
 expect_exit "no docker and no odoo exits 5" 5 $rc
 case "$out" in *"HOST"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL exit-5 message should name the host context: $out" >&2 ;; esac
 
+# In-container: the core series is REPORTED, and a stated target that disagrees
+# with it is flagged rather than left for a green 0-test run to not mention (#978).
+# A PATH holding only what that branch needs, with a stubbed 19.0 odoo on it.
+mkdir -p "$work/inbin"
+for b in bash dirname grep head tail; do ln -sf "$(command -v $b)" "$work/inbin/$b"; done
+printf '#!/usr/bin/env bash\necho "Odoo Server 19.0-20260810"\n' > "$work/inbin/odoo"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$work/inbin/pg_isready"
+chmod +x "$work/inbin/odoo" "$work/inbin/pg_isready"
+
+out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>/dev/null | tail -1)"
+expect "in-container still says so" "$(field "$out" status)" "in-container"
+expect "in-container reports the core series" "$(field "$out" odoo_version)" "19.0"
+expect "no target means no verdict" "$(field "$out" series_mismatch)" "null"
+
+rc=0
+out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --target-series 18.0 2>/dev/null | tail -1)" || rc=$?
+expect_exit "a mismatch is a warning, not a failure" 0 $rc
+expect "a 19.0 container flags an 18.0 target" "$(field "$out" series_mismatch)" "true"
+for series in 18.0 19.0; do
+  case "$(field "$out" warning)" in *"$series"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "FAIL the warning should name $series: $(field "$out" warning)" >&2 ;; esac
+done
+
+out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --target-series 19.0 2>/dev/null | tail -1)"
+expect "the matching series is not flagged" "$(field "$out" series_mismatch)" "null"
+
 # ---------- preflight -----------------------------------------------------------
 # Context detection is the whole point: the lifted original only knew the host
 # case and reported four confident failures inside a perfectly good container.
