@@ -8,8 +8,11 @@
 # callers start from an Odoo task (project name) and half from a checkout the
 # user is standing in (folder). When a folder maps to SEVERAL projects — one
 # repo commonly carries both the delivery project and its upgrade project —
-# that is reported as ambiguous rather than resolved to the first hit, because
-# the two entries can disagree on odoo_version and on the branch chain.
+# that is reported as ambiguous (exit 6) rather than resolved to the first hit,
+# because the two entries can disagree on odoo_version and on the branch chain.
+# Ambiguity is keyed on the `repo` field, which is what the lookup matched; a
+# shared repo_path is not ambiguity here and is rejected by repo-map.sh at write
+# time instead.
 #
 # --next-after <branch> answers "where does work on <branch> get promoted to",
 # reading branch_flow. It refuses to answer from an unconfirmed flow only when
@@ -42,7 +45,17 @@
 # has no tree to resolve. The origin sniff below reads that same path, so a
 # project pinned this way gets its remote filled in rather than left null.
 #
-# Exit codes: 0 ok | 2 usage | 3 unmapped or ambiguous | 4 flow missing/unusable
+# Exit codes: 0 ok | 2 usage | 3 unmapped | 4 flow missing/unusable | 6 ambiguous
+#
+# 3 and 6 were one code until #995, and the two have opposite remedies: an
+# unmapped project needs an entry written (project-bootstrap.sh derives what is
+# mechanical and `repo-map.sh add` records it), while an ambiguous one needs a
+# human to pick between entries that already exist. A caller given one code for
+# both could only ever report the wrong one, which is what made the release
+# route describe a missing project as an ambiguity listing zero candidates.
+# 3 keeps the unmapped meaning so it still agrees with `repo-map.sh get`, whose
+# exit 3 is "project unmapped". 5 is skipped on purpose: release-manifest.sh in
+# the same skill family already spends it on "nothing to release".
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,12 +91,20 @@ entry_json="$(node --input-type=module -e '
     process.exit(0);
   }
   if (byRepo.length > 1) {
-    console.error("repo \"" + key + "\" maps to several projects — name the project instead:\n  " +
+    // Exit 6, not 3: the entries exist and a human has to choose between them.
+    // Ambiguity keys on `repo`, never on repo_path — two projects legitimately
+    // share one checkout, and they are told apart by the folder name they were
+    // looked up by. A colliding repo_path is a separate defect, rejected by
+    // repo-map.sh at `add`/`set --repo-path` time rather than here.
+    console.error("ambiguous: repo \"" + key + "\" maps to several projects — name the project instead:\n  " +
       byRepo.map(([n]) => n).join("\n  "));
-    process.exit(3);
+    process.exit(6);
   }
+  // Exit 3, unmapped. Mechanically derivable fields can be recorded without a
+  // human: skills/odoo-repo-map/scripts/project-bootstrap.sh "<checkout>".
   console.error("unmapped project or repo: " + key + "\nknown projects:\n  " + Object.keys(projects).join("\n  ") +
-    "\nStop and ask the user; never guess a repo for an unknown project.");
+    "\nStop and ask the user; never guess a repo for an unknown project." +
+    "\nTo record what is mechanically derivable about a checkout first: project-bootstrap.sh \"<checkout path>\"");
   process.exit(3);
 ' -- "$MAP" "$key")"
 

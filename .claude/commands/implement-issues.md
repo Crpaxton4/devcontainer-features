@@ -310,19 +310,52 @@ One template, filled per worker.
     `.release-please-manifest.json`. release-please owns all three, and the open
     `chore: release main` PR currently holds them.
   - **No local CI.** No devcontainer builds, no Docker, no full suite —
-    verification is GitHub PR CI. Sanctioned locally: `bash -n`,
-    `shellcheck -s bash -S error` (pinned 0.10.0),
+    verification is GitHub PR CI. Sanctioned locally: `bash -n`, `shellcheck`
+    (pinned 0.10.0, in the form CI applies to the files touched — below),
     `bash scripts/check-generated-scripts.sh` — the gate for `install.sh`
     heredocs, because `bash -n` cannot see inside a quoted one and an
     apostrophe in an embedded `python3 -c` program ships a broken generated
     script (#872) — `black --check`, `py_compile`, and `uv lock` when
-    dependencies change (CI runs `uv lock --check`).
+    dependencies change (CI runs `uv lock --check`). The shellcheck form is
+    per file set, and a worker lints what it touched with the form CI will
+    apply to it: `.github/workflows/validate.yaml`'s `Lint shell entry
+    points` runs plain `shellcheck`, no `-s` and no `-S`, so at the default
+    `style` severity, over the Features' shell entry points, the root
+    `setup.sh`, this repo's own `scripts/` and
+    `.claude/commands/implement-issues/` shell, and the test suites —
+    `devcontainer-features/test/personal-features/*.sh` among them;
+    `-s bash -S error` is used only by
+    `.github/workflows/plugin-odoo-dev.yaml` over `plugins/odoo-dev` and by
+    `scripts/check-generated-scripts.sh` over the scripts it extracts. A
+    clean `-S error` run therefore says nothing about an SC2xxx style finding
+    on a file `validate` lints. Two traps: a comment line may not START with
+    the word `shellcheck` — the linter reads it as one of its own directives
+    and fails with SC1072/SC1073 (#1001); and the Feature has only installed
+    the binary since #1001, so a container built before that has none and the
+    pinned 0.10.0 tarball `install_shellcheck` fetches in `install.sh` is the
+    fallback. For changes under `libraries/odoo_sdk`, add `make static`, run
+    from `libraries/odoo_sdk`: it runs `black --check`, the internal
+    root-import check, `lint-imports`, radon, and complexipy with
+    `max-complexity-allowed = 15` from `libraries/odoo_sdk/pyproject.toml`,
+    and one function over 15 is a hard fail on the `Static Analysis` job — it
+    passed every other gate twice (#954, #958) and was caught only in CI.
+    From a worktree it must be run as
+    `make -C <abs worktree path>/libraries/odoo_sdk static` so it resolves
+    that checkout's `src/`, for the reason the next bullet gives about pytest.
   - **Worktrees do not isolate the Python environment.** Every worker resolves
     the same `.venv` from the main checkout, so one worker running `uv sync`
     or installing a dependency changes the interpreter its siblings are
     linting and compiling against, and breaks their gates for reasons that
     appear nowhere in their own diffs. Confine dependency work to `uv lock`,
-    which only rewrites the lockfile.
+    which only rewrites the lockfile. `uv sync` is not the only writer: a plain
+    `uv run` re-syncs the project environment implicitly on every call, and so
+    does `make static`, whose `PYTHON_CMD` is `uv run python`
+    (`libraries/odoo_sdk/Makefile:9`). Each such call rewrites the editable
+    `odoo_sdk` install to point at the calling worktree's `src/` — on #1003 and
+    #1005 both workers logged `Uninstalled 1 package / Installed 1 package` on
+    the way into their gates. The run itself stays correct, for the
+    `pythonpath` and conftest reasons the next paragraph gives; what moves under
+    them is what a sibling worker and the main checkout see afterwards.
 
     Reads resolve to the main checkout too, which is the half that bites
     silently: the SDK's editable install is one absolute path into
@@ -354,10 +387,18 @@ One template, filled per worker.
   - Branch `<type>/<issue>-<slug>`.
   - Conventional commits; Husky's `commit-msg` hook runs commitlint.
   - Trailer `Claude-Session: <url>`.
-  - Push, then
-    `gh pr create -R <owner>/<repo> --base <root: main | child: parent-branch>`,
-    **ready, not draft**. (Draft-only is the odoo-dev plugin's policy for
-    *client* repos, not for this one.)
+  - Push, then `.claude/commands/implement-issues/gh-as-owner.sh pr-create
+    <abs worktree path> --base <root: main | child: parent-branch>
+    --title ... --body-file <per-worker file>`, **ready, not draft**.
+    (Draft-only is the odoo-dev plugin's policy for *client* repos, not for
+    this one.)
+  - **Temp files go under `<scratchpad>/<issue-number>/` — `mkdir -p` it
+    first.** Every worker subagent of one run resolves the same session
+    scratchpad, so a body written to a shared fixed name
+    (`<scratchpad>/pr-body.md`) can be overwritten by a sibling between the
+    write and the `pr-create` call (observed: worker C5, PR #947). Either use
+    the per-worker directory or pass the body inline with
+    `--body "$(cat <<'BODY' ... BODY)"`; never a shared fixed name.
   - Body carries one `Closes #NNN` per issue plus the session URL on its own
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
@@ -480,7 +521,22 @@ Remove every worktree **this run created**, then `git -C "$REPO" worktree prune`
 Post-merge reaping has never once happened here, which is why a preflight
 worktree list of 40 entries was the normal state.
 
-Two mechanics that are not obvious:
+Then re-point the shared venv at the main checkout and confirm it:
+
+```bash
+uv run --directory /workspaces/devcontainer-features/libraries/odoo_sdk \
+  python -c 'import odoo_sdk; print(odoo_sdk.__file__)'
+```
+
+The printed path must be under
+`/workspaces/devcontainer-features/libraries/odoo_sdk/src`. If any worker ran
+`uv run` or `make static` from its worktree, the shared `.venv`'s editable
+`odoo_sdk` install points into a directory the reap just deleted (Phase 5), and
+every later `import odoo_sdk` that does not pin `pythonpath` fails. That
+command is itself the re-sync that fixes it, so a correct path printed once is
+the whole check.
+
+Three mechanics that are not obvious:
 
 - **Name one path per invocation.** A glob or a `for` loop over
   `.claude/worktrees/agent-*` is refused by the permission classifier, with and
@@ -488,6 +544,16 @@ Two mechanics that are not obvious:
   pass. Write them out.
 - A worktree with uncommitted files needs `--force`, and `--force` on a worktree
   you did not create is destructive. Only your own are safe to force.
+- **Harness branches outlive the worktree.** Every root worker dispatched with
+  `isolation: "worktree"` also leaves a local branch `worktree-agent-<id>` that
+  the worker never commits to: its first command checks out its real branch.
+  Removing the worktree does not remove the branch, and 140 had accumulated
+  before this run's cleanup. After `git worktree remove`, prove the branch is
+  empty with `git -C "$REPO" log --oneline origin/main..worktree-agent-<id>`
+  (it must print nothing) and delete it with
+  `git -C "$REPO" branch -D worktree-agent-<id>`, one per invocation like the
+  worktree removal. The 129 from earlier runs remain and are the user's call,
+  as the paragraph below already says about the worktrees themselves.
 
 **Worktrees you did not create are not yours to prune**, and deciding is not a
 one-liner — a stale-looking worktree can hold the only copy of unshipped work.

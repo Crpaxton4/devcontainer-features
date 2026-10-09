@@ -69,7 +69,7 @@ asked, which is the failure this map exists to prevent.
 | `odoo-dev-scoper` | Unpriced and unscoped: discovery, prior-art verdict, estimate, design doc | `05-scope.json` |
 | `odoo-dev-builder` | One Odoo task to deliver: one worktree, code, tests, conventional commits | `10-env.json`, `20-build.json` |
 | `odoo-dev-tester` | Asking whether it passes: tests, tours, Odoo review lens. Cannot edit code | `30-test.json`, `35-review.json` |
-| `odoo-dev-pr` | Ready to leave the machine: CodeRabbit loop, draft PR, release, chatter notes | `40-coderabbit.json`, `50-pr.json`, `60-release.json` |
+| `odoo-dev-pr` | Ready to leave the machine: local CodeRabbit review, draft PR, release, chatter notes | `50-pr.json`, `60-release.json` |
 | `odoo-dev-upgrader` | Crossing a major series: porting lifecycle, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
 
 `odoo-dev-tester` is the single definition of "passes" for **both** delivery and

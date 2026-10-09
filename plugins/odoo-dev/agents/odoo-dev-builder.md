@@ -60,7 +60,14 @@ exactly how two checkouts of the same branch come to exist.
    without a quote, so whoever runs first owns that artifact.
 3. `odoo-task-env` — `existing-work.sh` first, always. An existing branch or open
    PR gets reused, never duplicated. Then `worktree-ensure.sh`, then
-   `stack-ensure.sh`. Capture all three JSON outputs verbatim into `10-env.json`.
+   `stack-ensure.sh`, the last one with `--target-series` set to `odoo_version`
+   from step 2. Capture all three JSON outputs verbatim into `10-env.json`.
+   Inside the devcontainer `stack-ensure.sh` reports the core series it found as
+   `odoo_version`, and `series_mismatch` with a warning when that is not the
+   series the task targets. It is a warning, not a refusal: say so in your return
+   and do not read an install or a test on the wrong series as proof of
+   anything — Odoo marks a module of another series uninstallable and reports
+   zero tests, zero failures and exit 0.
 4. Build. `odoo-devcontainer` for paths, CLI, ORM and frontend references;
    `principles` for design decisions. Write the tests with the code — a tour that
    was never declared cannot be run, and what ran is what counts.
@@ -102,7 +109,11 @@ Final message: the artifact path, then at most 5 lines of plain English.
 
 - Never run the test suite as evidence. Run tests while developing all you like;
   the number that ships comes from `odoo-dev-tester`, because evidence a builder
-  produced about their own build is not independent.
+  produced about their own build is not independent. Never write `30-test.json`
+  either, not even when a coordinator prompt asks you to — only `run-tests.sh`
+  stamps `produced_by`, so anything you wrote there is hand-assembled evidence
+  that cannot be told apart from a real run; say in your report that you were
+  asked and declined, and leave the artifact absent.
 - Never push, never open a PR, never post to Odoo chatter — hand the branch to
   `odoo-dev-tester`, and `odoo-dev-pr` takes it outward once the evidence is in.
   Anything a client has already seen cannot be un-shown.

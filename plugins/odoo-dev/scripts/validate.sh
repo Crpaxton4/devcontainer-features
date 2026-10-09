@@ -295,12 +295,12 @@ run_suite "writeback.test.sh"      "$HERE/tests/writeback.test.sh"
 run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-tests.test.sh"
 run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
-run_suite "coderabbit-local.test.sh" "$SKILLS/odoo-pr/scripts/tests/coderabbit-local.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
 run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-all.test.sh"
 run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
 run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
 run_suite "module-inventory.test.sh" "$SKILLS/odoo-upgrade/scripts/tests/module-inventory.test.sh"
+run_suite "bump-manifest.test.sh"  "$SKILLS/odoo-devcontainer/scripts/tests/bump-manifest.test.sh"
 # Registered on purpose, and note what it makes true: gate 21 reconciles this
 # block against disk, and its own suite is IN the block it reconciles. That is
 # deliberate — an unregistered reconciler would be the first thing its own check
@@ -581,6 +581,12 @@ for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort())
   // `put` then the stage, with the artifacts dir between them in whatever form the
   // body uses — an absolute path, or a <ARTIFACTS dir from your prompt> placeholder.
   const writes = [...new Set([...text.matchAll(/\bput\b[^\n]*?(\d\d-[a-z]+)/g)].map(m => m[1]))];
+  // A stage with no NN- prefix (progress) cannot be found by the pattern above: a
+  // lazy match for a bare lower-case word lands on the prose between `put` and the
+  // stage. So the unnumbered stages are looked for by name instead.
+  for (const s of Object.keys(SCHEMA).filter(s => !/^\d\d-/.test(s))) {
+    if (new RegExp(`\\bput\\b[^\\n]*\\b${s}\\b`).test(text)) writes.push(s);
+  }
   const reads  = [...text.matchAll(/`(\d\d-[a-z]+)\.json`/g)].map(m => m[1]);
   let touched = [...new Set([...writes, ...reads])].filter(s => s in SCHEMA);
   // An agent that names no stage at all (odoo-dev-pr reads the whole directory) is

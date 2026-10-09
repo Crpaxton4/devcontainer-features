@@ -571,10 +571,20 @@ OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" \
   }
 ')"
 
-# Resolve the JSON we merge into. An absent file starts from {}. An existing but
-# UNPARSEABLE file is left strictly alone — clobbering the user's real settings
-# would be far worse than skipping the hook wiring.
+# Resolve the JSON we merge into. An absent file starts from {}. An existing file
+# we cannot READ, and an existing file we cannot PARSE, are both left strictly
+# alone — clobbering the user's real settings would be far worse than skipping
+# the hook wiring — but they are two different faults and get two different
+# messages (#976). `jq -e . file` exits non-zero for EACCES exactly as it does
+# for malformed JSON, and the 2>&1 that keeps jq's parse errors off the terminal
+# swallows the open error with them, so testing parseability first reports a
+# perfectly valid file (observed as root:root 0600, written by a root-uid
+# session) as corrupt and sends the fix hunting for JSON damage that isn't there.
 if [ -f "$SETTINGS" ]; then
+    if [ ! -r "$SETTINGS" ]; then
+        note "$SETTINGS exists but is not readable by $(id -un) ($(stat -c '%U:%G %a' "$SETTINGS")); hooks not merged. Fix ownership/permissions and re-run."
+        exit 0
+    fi
     if ! jq -e . "$SETTINGS" >/dev/null 2>&1; then
         note "$SETTINGS is not valid JSON; leaving it untouched (hooks not merged)."
         exit 0

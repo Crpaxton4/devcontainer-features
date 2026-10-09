@@ -8,6 +8,7 @@
 #
 # Usage:
 #   artifact.sh put  <artifacts_dir> <stage> <file>   # <file> may be - for stdin
+#   artifact.sh put  <artifacts_dir> <stage> --json '<payload>'   # payload inline
 #   artifact.sh get  <artifacts_dir> <stage> [--first|--latest|--rev N]
 #   artifact.sh list <artifacts_dir>
 #   artifact.sh stages
@@ -24,9 +25,19 @@
 # earlier revision stays on disk and `list` shows them all, so "green on the third
 # try" can never read as "green".
 #
+# The `progress` stage is the run checkpoint — one row per unit of work, each row
+# carrying a `status` from the four-word vocabulary the per-element `enum` rule
+# enforces. It is append-only like every other stage, so a flush is a new revision
+# (`progress.json`, then `progress.2.json`) and the HIGHEST revision is the current
+# checkpoint; readers take `get --latest`. Agents whose Edit/Write tools are removed
+# and whose shell denies every redirect have no way to put a file on disk first, so
+# `put` also takes the payload inline as a single `--json` argument — one command,
+# no redirection, nothing for an allowlist to refuse.
+#
 # Validation is required-field presence plus cheap type checks, plus optional
-# per-element checks for array fields, all run before the file is named — a
-# malformed artifact never becomes a stage. Writes are atomic
+# per-element checks for array fields — type, nonEmpty, and a closed `enum` of
+# permitted values — all run before the file is named: a malformed artifact never
+# becomes a stage. Writes are atomic
 # (tmp in the same dir, then rename), so a killed agent leaves no half file.
 #
 # Exit codes: 0 ok | 2 usage | 3 unknown stage | 4 invalid payload | 5 nothing to get
@@ -57,17 +68,14 @@ const SCHEMA = {
     types: { modules: "array", claims: "array", verify_steps: "array" },
   },
   "30-test": {
-    required: ["passed","tests_run","tours_declared","tours_run","failures","log_file"],
+    required: ["passed","tests_run","tours_declared","tours_run","failures","log_file","produced_by"],
     types: { passed: "boolean", tests_run: "number", tours_declared: "number",
-             tours_run: "number", failures: "array" },
+             tours_run: "number", failures: "array", produced_by: "string",
+             module_target_series: "string" },
   },
   "35-review": {
     required: ["findings","criteria_results"],
     types: { findings: "array", criteria_results: "array" },
-  },
-  "40-coderabbit": {
-    required: ["status","findings"],
-    types: { findings: "array" },
   },
   "50-pr": {
     required: ["pr_url","pr_number","draft","base","head","title"],
@@ -76,6 +84,16 @@ const SCHEMA = {
   "60-release": {
     required: ["from","to","prs","unresolved","tasks"],
     types: { prs: "array", unresolved: "array", tasks: "array" },
+  },
+  "progress": {
+    required: ["units"],
+    types: { units: "array", run: "string", updated: "string" },
+    elements: { units: {
+      unit:   { type: "string", nonEmpty: true },
+      kind:   { type: "string", nonEmpty: true },
+      status: { type: "string", enum: ["done","in-progress","not-started","failed"] },
+      note:   { type: ["string","null"] },
+    } },
   },
 };
 '
@@ -128,10 +146,15 @@ if [ "$cmd" = get ]; then
   exit 0
 fi
 
-SRC="${1:-}"; [ -n "$SRC" ] || die "missing <file> (use - for stdin)"
+SRC="${1:-}"; [ -n "$SRC" ] || die "missing <file> (use - for stdin, --json for inline)"
 mkdir -p "$DIR"
 
-if [ "$SRC" = "-" ]; then
+if [ "$SRC" = "--json" ]; then
+  # One argument, no redirection, no pipe: this is the only `put` form an agent with
+  # no Edit/Write tool and a redirect-denying allowlist can actually reach.
+  payload="${2:-}"
+  [ -n "$payload" ] || die "--json needs the JSON payload as the next single argument"
+elif [ "$SRC" = "-" ]; then
   payload="$(cat)"
 else
   [ -f "$SRC" ] || die "payload file not found: $SRC"
@@ -162,6 +185,12 @@ node --input-type=module -e "$SCHEMA"'
   for (const [k, want] of Object.entries(spec.types ?? {})) {
     if (!(k in obj)) continue;
     const got = Array.isArray(obj[k]) ? "array" : obj[k] === null ? "null" : typeof obj[k];
+    // An OPTIONAL field — typed here but absent from required — may be explicitly
+    // null. That is how run-tests.sh reports "no target series was given", and
+    // rejecting it would push a writer into omitting the key, which
+    // cannot be told apart from forgetting it. A REQUIRED field still may not be
+    // null: presence alone is not a value.
+    if (got === "null" && !(spec.required ?? []).includes(k)) continue;
     if (got !== want) problems.push(`field ${k}: expected ${want}, got ${got}`);
   }
   // Optional per-element checks for array fields, so a stage whose value is a list
@@ -180,6 +209,10 @@ node --input-type=module -e "$SCHEMA"'
         if (!want.includes(got)) { problems.push(`${at}.${k}: expected ${want.join(" or ")}, got ${got}`); continue; }
         if (rule.nonEmpty && got === "string" && el[k].trim() === "")
           problems.push(`${at}.${k}: must not be empty`);
+        // A closed vocabulary. The problem names every permitted word, because the
+        // writer of a rejected row needs the list and not just the refusal.
+        if (Array.isArray(rule.enum) && !rule.enum.includes(el[k]))
+          problems.push(`${at}.${k}: must be one of ${rule.enum.join(", ")}, got ${JSON.stringify(el[k])}`);
       }
     });
   }

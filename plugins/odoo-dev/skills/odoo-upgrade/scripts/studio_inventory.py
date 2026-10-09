@@ -528,20 +528,43 @@ def collect_automations(cr):
 def collect_server_actions(cr):
     """Server actions and crons that no module owns, or that Studio owns."""
     out = []
+    # Exclusions, each one a population of ir_act_server rows another record
+    # owns and another collector already reports. Built as a list of fragments
+    # so that an absent schema contributes nothing at all: a stand-in subquery
+    # like `s.id NOT IN (SELECT NULL::integer)` is NULL for every row, which
+    # would filter out the whole table instead of nothing.
+    excludes = []
     # From 17.0 ir.cron _inherits ir.actions.server, so every cron owns a server
     # action row. Reporting those here as well would list each scheduled action
     # twice, under two different classifications — and the cron row is the one
     # that knows whether it is still active.
-    cron_backed = "SELECT ir_actions_server_id FROM ir_cron" \
-        if table_exists(cr, "ir_cron") and column_exists(cr, "ir_cron", "ir_actions_server_id") \
-        else "SELECT NULL::integer"
+    has_cron = table_exists(cr, "ir_cron") and \
+        column_exists(cr, "ir_cron", "ir_actions_server_id")
+    if has_cron:
+        excludes.append("AND s.id NOT IN (SELECT ir_actions_server_id FROM ir_cron"
+                        " WHERE ir_actions_server_id IS NOT NULL)")
+    # Same story for base.automation, and the schema test is the same one
+    # collect_automations makes: from 17.0 ir_act_server points back at the
+    # automation through base_automation_id, up to 16.0 base.automation
+    # _inherits ir.actions.server and points forward through action_server_id.
+    # Either way the automation's action is not a finding of its own — the
+    # automation row is. The old code only excluded crons, so the action was
+    # reported a second time whenever it had no xmlid of its own, or carried a
+    # studio_customization one (#960).
+    if column_exists(cr, "ir_act_server", "base_automation_id"):
+        excludes.append("AND s.base_automation_id IS NULL")
+    elif table_exists(cr, "base_automation") and \
+            column_exists(cr, "base_automation", "action_server_id"):
+        excludes.append("AND s.id NOT IN (SELECT action_server_id FROM base_automation"
+                        " WHERE action_server_id IS NOT NULL)")
     name = label_expr(cr, "ir_act_server", "name", "s.name")
+    exclusions = "\n          ".join(excludes)
     for r in rows_of(cr, f"""
         SELECT s.id, {name} AS name, s.model_name, s.state, d.module
         FROM ir_act_server s
         LEFT JOIN ir_model_data d ON d.model = 'ir.actions.server' AND d.res_id = s.id
         WHERE (d.id IS NULL OR d.module = %s)
-          AND s.id NOT IN ({cron_backed})
+          {exclusions}
         ORDER BY s.name
     """, (STUDIO_MODULE,)):
         out.append({
@@ -556,6 +579,10 @@ def collect_server_actions(cr):
             "classification": "convert-to-code" if r["state"] == "code" else "review",
             "detail": f"state={r['state'] or '?'}",
         })
+    if not has_cron:
+        # The same schema test has to gate the query below, or the branch above
+        # is unreachable: without it an unreadable ir_cron raised here instead.
+        return out
     for r in rows_of(cr, f"""
         SELECT c.id, c.active, {name} AS name, d.module
         FROM ir_cron c

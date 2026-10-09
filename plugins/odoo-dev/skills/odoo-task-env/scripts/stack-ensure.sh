@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # stack-ensure.sh — ensure the singleton project stack is running.
 #
-# Usage: stack-ensure.sh <repo>
+# Usage: stack-ensure.sh <repo> [--target-series NN.0]
+#
+#   --target-series: the Odoo series the work targets, as in 18.0. Inside the
+#                    devcontainer it is compared against the series this core
+#                    actually runs; no flag means no comparison.
 #
 # Rules (design doc §4):
 #   - singleton per project: reuse a running <repo>-odoo-1; restart a stopped
@@ -51,7 +55,16 @@
 # containers, so a repo-map-cased entry silently protected nothing. $REPOS_DIR/$repo
 # keeps the ORIGINAL case — the directory really is "QOC".
 #
-# Last stdout line: {"stack": ..., "status": "reused"|"restarted"|"created", "stopped_lru": [...]}
+# Series: inside the devcontainer the probed core series is REPORTED as
+# odoo_version, because the caller downstream (build, then test) has no other
+# machine-readable answer to "which Odoo is this". With --target-series, a
+# disagreement also adds "series_mismatch": true and a "warning" naming both
+# series. It stays a warning and still exits 0: this script ensures a stack, and
+# whether the wrong stack is fatal is the caller's call — run-tests.sh refuses
+# outright on the same comparison (#978).
+#
+# Last stdout line: {"stack": ..., "status": "reused"|"restarted"|"created"|"in-container",
+#   "odoo_version": <in-container only>, "stopped_lru": [...]}
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,8 +73,17 @@ MIN_FREE_GB="${MIN_FREE_GB:-6}"
 READY_TIMEOUT_S="${STACK_READY_TIMEOUT_S:-60}"
 LOCK_FILE="${TMPDIR:-/tmp}/odoo-task-env-stack.lock"
 
-[ $# -eq 1 ] || { echo "usage: stack-ensure.sh <repo>" >&2; exit 2; }
-repo="$1"
+target_series=""
+positional=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target-series) target_series="${2:?}"; shift 2 ;;
+    --target-series=*) target_series="${1#*=}"; shift ;;
+    *) positional+=("$1"); shift ;;
+  esac
+done
+[ "${#positional[@]}" -eq 1 ] || { echo "usage: stack-ensure.sh <repo> [--target-series NN.0]" >&2; exit 2; }
+repo="${positional[0]}"
 
 # A worktree path would mint a SECOND compose project for the same repo, which
 # defeats the singleton this whole script exists to guarantee.
@@ -73,7 +95,20 @@ if ! command -v docker >/dev/null 2>&1; then
   # Inside the devcontainer there is no stack to ensure — this IS the stack.
   # Prove it answers, then say so; anything else here is a wrong-context error.
   if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
-    echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"stopped_lru\": []}"
+    # The series this core runs, stated rather than left for a caller to guess:
+    # an 18.0 module on a 19.0 core installs as installable=False and its test
+    # run reports a green zero whose cause appears nowhere (#978). Majors are
+    # compared because a core answers "19.0-20260810" and a target is "19.0".
+    core_major="$(odoo --version 2>/dev/null | tail -1 | { grep -oE '[0-9]+' || true; } | head -1)"
+    core_series="unknown"
+    [ -z "$core_major" ] || core_series="${core_major}.0"
+    target_major=""
+    [ -z "$target_series" ] || target_major="$(printf '%s' "$target_series" | { grep -oE '[0-9]+' || true; } | head -1)"
+    if [ -n "$target_major" ] && [ "$target_major" != "$core_major" ]; then
+      echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_series\", \"series_mismatch\": true, \"warning\": \"this container runs Odoo $core_series but the work targets $target_series — nothing installed or tested here proves anything about $target_series\", \"stopped_lru\": []}"
+    else
+      echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_series\", \"stopped_lru\": []}"
+    fi
     exit 0
   fi
   echo "docker is not available and this is not a working Odoo container: stack-ensure.sh runs on the HOST (where the repos tree and docker live), or inside a devcontainer that already has odoo + postgres" >&2
