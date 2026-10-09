@@ -1,5 +1,5 @@
 {
-    ".": "7.0.0",
+    ".": "7.0.1",
     "devcontainer-features/src/second-brain": "1.1.1",
     "devcontainer-features/src/debian-eol-archives": "1.1.0",
     "plugins/odoo-dev": "3.0.0"
