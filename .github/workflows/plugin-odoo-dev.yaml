@@ -66,8 +66,10 @@ jobs:
       # Kept in step with CLAUDE_CODE_VERSION in the personal-features install
       # script (devcontainer-features/src/personal-features/install.sh), so the
       # CLI that gates these plugins here is the CLI that actually loads them in
-      # a container. Bump both together (#741).
-      CLAUDE_CODE_VERSION: "2.1.268"
+      # a container. Bump both together (#741). Neither may drop below 2.1.288,
+      # which is the floor odoo-ls 1.6.0 needs to survive its startup handshake
+      # (#1029).
+      CLAUDE_CODE_VERSION: "2.1.295"
 
     steps:
       - uses: actions/checkout@v7
