@@ -45,3 +45,17 @@ def _odoo_sdk_imported_from_this_checkout() -> None:
         "line as pytest.",
         returncode=1,
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_odoo_dev_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the developer's real odoo-dev state dir from every test (#979).
+
+    ``start_task`` now reads ``$ODOO_DEV_STATE_DIR/repo-map.json`` to resolve a
+    base branch, and that variable is exported for real in this devcontainer
+    (``/usr/local/share/odoo-dev``). Left in place, a test asserting the
+    ``origin/HEAD`` fallback would pass or fail according to whichever projects
+    the machine running it happens to have mapped. Tests that mean to exercise
+    the map set the variable themselves, inside their own patch scope.
+    """
+    monkeypatch.delenv("ODOO_DEV_STATE_DIR", raising=False)
