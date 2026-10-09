@@ -26,6 +26,7 @@
         "ODOO_SDK_CONFIG": "/usr/local/share/odoo-sdk-config",
         "MEMPALACE_PALACE_PATH": "/usr/local/share/mempalace/palace",
         "MEMPALACE_EMBEDDING_MODEL": "embeddinggemma",
+        "HF_HUB_DISABLE_SHARED_BLOBS": "1",
         "PR_AUTOMATION_CONFIG_DIR": "/usr/local/share/pr-automation",
         "CODERABBIT_CONFIG_DIR": "/usr/local/share/coderabbit-config",
         "ODOO_TASK_TRACKER_DIR": "/usr/local/share/odoo-task-tracker",
@@ -83,6 +84,6 @@
             "type": "bind"
         }
     ],
-    "postCreateCommand": "publish-claude-wrapper && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace; odoo-ls-config",
+    "postCreateCommand": "publish-claude-wrapper && sync-claude-hooks && sync-claude-mcp && resolve-mempal-dir && mempalace-repair && mempalace-init-workspace; check-mount-ownership; odoo-ls-config",
     "postStartCommand": "mempalace-hub-up"
 }

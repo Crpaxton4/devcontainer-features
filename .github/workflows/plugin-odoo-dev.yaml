@@ -1,9 +1,18 @@
 name: "CI - odoo-dev plugin"
 
 # Every gate for the odoo-dev Claude Code plugin at plugins/odoo-dev/, imported
-# from Crpaxton4/odoo-dev-claude-plugin. The suite is offline — no docker, no
-# Odoo, no repos tree — so no job needs secrets or anything beyond the read-only
-# default token; the only network calls install tooling.
+# from Crpaxton4/odoo-dev-claude-plugin. No job needs secrets or anything beyond
+# the read-only default token, and no job runs Odoo or needs a repos tree.
+#
+# One documented exception to "offline": the script-tests job declares a
+# postgres:16 service container, which is a Docker container pulled from the
+# public registry. It exists for exactly one suite —
+# skills/odoo-upgrade/scripts/tests/studio-inventory.test.sh — which builds a
+# miniature Odoo-shaped database and asserts on what studio_inventory.py's SQL
+# reads back out of it. Every bug that script has had (#877, #928, #929, #930)
+# was in the SQL, so there is no substitute for a real server: with no database
+# the suite SKIPs and its assertions never run (#959). Apart from that image,
+# the only network calls install tooling.
 #
 # The SDK sources are in the paths filter because of the plugin's one remaining
 # contract with the SDK: every tool name the plugin references must be on the
@@ -92,9 +101,12 @@ jobs:
   #
   # validate.sh gate 11 keeps its own explicit list, which is deliberately a
   # SUBSET of what this job runs: a few suites reach their real subject only
-  # where CI provisions what it needs (studio-inventory exits early without
-  # psql; the parity and tool-contract suites SKIP their installed-SDK cases
-  # without the pip-installed odoo_sdk that jobs 4 and 5 set up). They do not
+  # where CI provisions what it needs (studio-inventory needs a reachable
+  # Postgres server and psycopg2, which only this job provides — a developer
+  # machine has the client binaries but no server, so there it prints
+  # "SKIP: no reachable postgres"; the parity and tool-contract suites SKIP
+  # their installed-SDK cases without the pip-installed odoo_sdk that jobs 4
+  # and 5 set up). They do not
   # fail off a runner — they quietly check less, so running them from
   # validate.sh would print PASS for a suite whose point went unexercised.
   # The number of such suites moves, so do not name them here — that is how
@@ -111,8 +123,60 @@ jobs:
     name: "plugin script test suites"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # studio-inventory.test.sh takes its whole connection from libpq's
+    # environment — createdb, psql, pg_isready and psycopg2 all read these —
+    # and its `--db` argument only overrides PGDATABASE. That is why the suite
+    # itself needed no change to start running here (#959).
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    services:
+      # See the header: the one Docker container in this workflow. postgres:16
+      # is the oldest server the fixture's 17.0-shaped schema targets (jsonb
+      # translated columns), and the health check keeps the suite from racing
+      # the server's first-boot initdb.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
+
+      # studio_inventory.py --db connects through psycopg2 (connect_local), and
+      # exits 2 with an install hint if the import fails — psycopg2 is in none
+      # of the requirements this repo installs, so it is installed here.
+      # setup-python rather than the system interpreter: the runner's
+      # /usr/bin/python3 is PEP 668 externally-managed, and the suite shells out
+      # to plain `python3`, which this action puts on PATH ahead of it.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # Asserted, not assumed. The client binaries the suite shells out to ship
+      # on the ubuntu-latest image, so this step installs nothing — it fails the
+      # job loudly if that ever stops being true, instead of letting the suite
+      # fall back to its SKIP branch and report success having checked nothing.
+      - name: "psycopg2, and a postgres the suite can actually reach"
+        run: |
+          python -m pip install --quiet psycopg2-binary
+          python -c 'import psycopg2; print("psycopg2", psycopg2.__version__)'
+          for bin in psql createdb dropdb pg_isready; do
+            command -v "$bin" >/dev/null || {
+              echo "::error::$bin is missing from the runner image — studio-inventory.test.sh would SKIP; add postgresql-client here"
+              exit 1
+            }
+          done
+          psql --version
+          pg_isready
 
       - name: "Run every *.test.sh under plugins/odoo-dev"
         run: |

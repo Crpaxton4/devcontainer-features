@@ -109,9 +109,16 @@ valuable output of the exercise unbuilt.
 
 You stop at 40 turns whether or not the port is finished, and nobody can read your
 transcript to find out how far you got — reading it overflows the context that would
-resume you. So the state of the run lives in a file rather than in your head:
-`<ARTIFACTS dir from your prompt>/progress.json`, one row per unit of work. A unit is
-one module for the port track and one agent group for the inventory fan-out.
+resume you. So the state of the run lives in an artifact rather than in your head —
+the `progress` stage, written through the one sanctioned writer:
+
+```
+<ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> progress --json '<one line of JSON>'
+```
+
+One row per unit of work. A unit is one module for the port track and one agent
+group for the inventory fan-out. You still have `Write`, so a payload file and
+`put ... progress <file>` works just as well; `--json` only saves writing the file.
 
 ```json
 {
@@ -133,13 +140,20 @@ one module for the port track and one agent group for the inventory fan-out.
 - `status` is exactly one of `done`, `in-progress`, `not-started`, `failed`. There is
   no fifth word and no `partial`. `note` is free text and is where the reason for a
   `failed` row goes; a `failed` row without a reason is a row nobody can act on.
-- **Read the file first on every dispatch**, before any other artifact. If it exists
-  it is authoritative: resume from the rows and never restart a unit already marked
-  `done`, however cheap redoing it looks.
-- **Flush after every unit.** Rewrite the whole file the moment a unit changes state,
-  not at the end of the run — a checkpoint written once at the end is exactly the
-  state you have already lost. Flush again before you stop at the turn limit, and
+- **Read the checkpoint first on every dispatch**, before any other artifact:
+  `<ARTIFACT path from your prompt> get <ARTIFACTS dir from your prompt> progress --latest`.
+  Rows it returns are authoritative: resume from them and never restart a unit
+  already marked `done`, however cheap redoing it looks. Exit 5 means no checkpoint
+  exists yet.
+- **Flush after every unit.** Put the whole table again the moment a unit changes
+  state, not at the end of the run — a checkpoint written once at the end is exactly
+  the state you have already lost. Flush again before you stop at the turn limit, and
   make your final message name the unit you were on.
+- **Every flush is a new revision.** `artifact.sh` never overwrites, so the rows land
+  at `progress.json`, then `progress.2.json`, and the HIGHEST revision is the current
+  checkpoint — which is what `get --latest` returns and what every reader takes. The
+  earlier revisions stay on disk, so a unit that went `failed` before it went `done`
+  stays visible instead of being edited out of the record.
 - **Derive the counters, never type them.** Every "N done / M remaining" in the
   completion report is counted from the rows at the moment it is written. A summary
   maintained beside the rows goes stale against them and then misleads the person who
@@ -199,7 +213,7 @@ prose:
 An empty list is written as the word `none`, because a missing list reads as
 "nothing was skipped".
 
-Every "N done / M remaining" in that report is counted from the `progress.json`
+Every "N done / M remaining" in that report is counted from the latest `progress`
 rows at the moment you write it, never typed from memory — a count maintained
 beside the rows goes stale against them and then misleads the person who trusts it.
 
