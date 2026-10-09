@@ -1,6 +1,7 @@
 """Tests for MCP prompt registration and the implement_task prompt."""
 
 import asyncio
+import os
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -175,6 +176,25 @@ class TestImplementTaskPromptFactory(unittest.TestCase):
         messages = fn(task_id=42)
         self.assertIn("Please fix ASAP", messages[0])
         self.assertNotIn("(no messages)", messages[0])
+
+    def test_state_dir_env_resolves_the_artifacts_dir(self):
+        # #992: the prompt (not the pure builder) reads the MCP server's
+        # ODOO_DEV_STATE_DIR, so the rendered text names the same directory
+        # /odoo-dev:pr reads through scripts/state-dir.sh.
+        reg = _registry_with_get_task(_make_task())
+        with patch.dict(
+            os.environ, {"ODOO_DEV_STATE_DIR": "/usr/local/share/odoo-dev"}
+        ):
+            messages = make_implement_task_prompt(reg)(task_id=42)
+        self.assertIn("ARTIFACTS: /usr/local/share/odoo-dev/tasks/42", messages[1])
+
+    def test_unset_state_dir_env_leaves_resolution_to_the_plugin(self):
+        # #992: nothing outside scripts/state-dir.sh may hardcode the default.
+        reg = _registry_with_get_task(_make_task())
+        with patch.dict(os.environ, {}, clear=True):
+            messages = make_implement_task_prompt(reg)(task_id=42)
+        self.assertNotIn("ARTIFACTS: ", messages[1])
+        self.assertIn("scripts/state-dir.sh task --create --", messages[1])
 
 
 class _FakeOdooClient:
@@ -440,18 +460,57 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("client-visible", row)
         self.assertIn(str(MAX_CHATTER_BODY_CHARS), row)
 
+    @staticmethod
+    def _evidence_section(**kwargs) -> str:
+        content = _build_messages(_make_task(), **kwargs)[1]
+        return content[
+            content.index("## Tool Reference") : content.index("## Guard Conditions")
+        ]
+
     def test_tool_reference_names_the_artifacts_dir_and_next_stage(self):
         # #784 part (b): the workflow ended at STOP with no pointer to where
         # evidence is recorded or which stage runs next, so work started here
         # could never reach /odoo-dev:pr.
-        content = _build_messages(_make_task())[1]
-        table = content[
-            content.index("## Tool Reference") : content.index("## Guard Conditions")
-        ]
+        table = self._evidence_section()
         self.assertIn("artifacts directory", table)
-        self.assertIn("plugins/odoo-dev/scripts/artifact.sh", table)
+        self.assertIn("scripts/artifact.sh put", table)
         self.assertIn("30-test.json", table)
         self.assertIn("/odoo-dev:pr", table)
+
+    def test_evidence_section_never_claims_pr_refuses(self):
+        # #992: /odoo-dev:pr lost its gate.sh in #935 — it reports missing
+        # evidence now, so the old "refuses" clause was simply false.
+        table = self._evidence_section()
+        self.assertNotIn("refuses", table)
+        self.assertIn("reports whatever evidence is missing", table)
+
+    def test_resolved_artifacts_dir_is_named_verbatim(self):
+        # #992: the location was left implicit, so an implement_task-driven run
+        # inferred a repo-local <worktree>/.odoo-dev/ that /odoo-dev:pr never
+        # looks at. When the caller resolves it, the prompt states it outright.
+        table = self._evidence_section(
+            artifacts_dir="/usr/local/share/odoo-dev/tasks/42"
+        )
+        self.assertIn("ARTIFACTS: ", table)
+        self.assertIn("/usr/local/share/odoo-dev/tasks/42", table)
+        self.assertNotIn("state-dir.sh", table)
+
+    def test_unresolved_artifacts_dir_defers_to_state_dir_script(self):
+        # #992: with ODOO_DEV_STATE_DIR unset the builder must not guess the
+        # default (state-dir.sh owns it), so it hands the agent the resolver
+        # and names the repo-local path as wrong.
+        table = self._evidence_section()
+        self.assertIn("scripts/state-dir.sh task --create --", table)
+        self.assertIn(".odoo-dev", table)
+        self.assertIn("wrong place", table)
+        self.assertNotIn("ARTIFACTS: ", table)
+
+    def test_evidence_section_points_00_context_at_the_task_command(self):
+        # #992: 00-context was never written by this route, because repo-map
+        # resolution belongs to /odoo-dev:task.
+        table = self._evidence_section()
+        self.assertIn("00-context.json", table)
+        self.assertIn("/odoo-dev:task", table)
 
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])
