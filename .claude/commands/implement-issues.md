@@ -316,7 +316,15 @@ One template, filled per worker.
     heredocs, because `bash -n` cannot see inside a quoted one and an
     apostrophe in an embedded `python3 -c` program ships a broken generated
     script (#872) — `black --check`, `py_compile`, and `uv lock` when
-    dependencies change (CI runs `uv lock --check`).
+    dependencies change (CI runs `uv lock --check`). For changes under
+    `libraries/odoo_sdk`, add `make static`, run from `libraries/odoo_sdk`:
+    it runs `black --check`, the internal root-import check, `lint-imports`,
+    radon, and complexipy with `max-complexity-allowed = 15` from
+    `libraries/odoo_sdk/pyproject.toml`, and one function over 15 is a hard
+    fail on the `Static Analysis` job — it passed every other gate twice
+    (#954, #958) and was caught only in CI. From a worktree it must be run as
+    `make -C <abs worktree path>/libraries/odoo_sdk static` so it resolves
+    that checkout's `src/`, for the reason the next bullet gives about pytest.
   - **Worktrees do not isolate the Python environment.** Every worker resolves
     the same `.venv` from the main checkout, so one worker running `uv sync`
     or installing a dependency changes the interpreter its siblings are
@@ -354,10 +362,18 @@ One template, filled per worker.
   - Branch `<type>/<issue>-<slug>`.
   - Conventional commits; Husky's `commit-msg` hook runs commitlint.
   - Trailer `Claude-Session: <url>`.
-  - Push, then
-    `gh pr create -R <owner>/<repo> --base <root: main | child: parent-branch>`,
-    **ready, not draft**. (Draft-only is the odoo-dev plugin's policy for
-    *client* repos, not for this one.)
+  - Push, then `.claude/commands/implement-issues/gh-as-owner.sh pr-create
+    <abs worktree path> --base <root: main | child: parent-branch>
+    --title ... --body-file <per-worker file>`, **ready, not draft**.
+    (Draft-only is the odoo-dev plugin's policy for *client* repos, not for
+    this one.)
+  - **Temp files go under `<scratchpad>/<issue-number>/` — `mkdir -p` it
+    first.** Every worker subagent of one run resolves the same session
+    scratchpad, so a body written to a shared fixed name
+    (`<scratchpad>/pr-body.md`) can be overwritten by a sibling between the
+    write and the `pr-create` call (observed: worker C5, PR #947). Either use
+    the per-worker directory or pass the body inline with
+    `--body "$(cat <<'BODY' ... BODY)"`; never a shared fixed name.
   - Body carries one `Closes #NNN` per issue plus the session URL on its own
     line.
   - **The PR title must itself be a valid conventional commit.** Squash-only
