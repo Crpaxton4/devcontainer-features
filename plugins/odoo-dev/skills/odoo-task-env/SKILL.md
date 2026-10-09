@@ -107,14 +107,16 @@ Idempotent, serialized per repo under flock so concurrent callers cannot race `g
 ### 3. Stack
 
 ```bash
-<base directory>/scripts/stack-ensure.sh <repo>
+<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0]
 ```
 
 → `{"stack","status":"reused"|"restarted"|"created"|"in-container","stopped_lru":[]}`
 
 One stack per project, host-globally locked, LRU eviction below `MIN_FREE_GB` (default 6). Protect stacks you using with `ODOO_ACTIVE_REPOS=repoA,repoB`. Readiness proved (postgres reachable *from inside* odoo container, `odoo --version` answers) before return, so `reused` never mean "still coming up".
 
-`in-container` mean you already inside stack; nothing done, nothing needed. Exit 5 mean docker absent **and** this not working Odoo container — you in wrong place, not looking at broken script.
+`in-container` mean you already inside stack; nothing done, nothing needed. That branch also report the series this core run, as `odoo_version` — nobody downstream have another machine-readable answer to "which Odoo this". Give `--target-series <NN.0>` (the project `odoo_version` off repo map) and a disagreement add `"series_mismatch": true` plus `warning` naming both series. Still exit 0: this script ensure stack, and `run-tests.sh` is what refuse outright on same comparison — Odoo mark module of another series uninstallable and still print 0 tests, 0 failures, exit 0.
+
+Exit 5 mean docker absent **and** this not working Odoo container — you in wrong place, not looking at broken script.
 
 Never point this at worktree path: would mint second compose project for same repo and break the singleton it exist to guarantee.
 

@@ -7,26 +7,36 @@
 # proves the SQL parses but not that the classification is right. This does the
 # opposite: a known population, checked row by row.
 #
-# The fixture is 17.0-shaped where the schema differs across the supported
+# The main fixture is 17.0-shaped where the schema differs across the supported
 # series: translated labels are jsonb, base_automation has no action_server_id
 # and ir_act_server points back at it, and ir_ui_view carries arch_fs /
-# arch_updated. Those are exactly the shapes the script used to get wrong.
+# arch_updated. Those are exactly the shapes the script used to get wrong. The
+# last section builds a second, minimal database in the <= 16.0 shape, for the
+# version-dependent branches one database cannot cover on its own.
 #
-# Needs a postgres it can CREATE DATABASE on (libpq env). The database is
+# Needs a postgres it can CREATE DATABASE on (libpq env). Both databases are
 # dropped on every exit path.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$(cd "$SCRIPT_DIR/.." && pwd)/studio_inventory.py"
 DB="${STUDIO_TEST_DB:-studio_inventory_test_$$}"
+# The schema differs across the supported series, and one database can only
+# carry one shape. DB is 17.0-shaped; DB16 is the <= 16.0 shape, used by the
+# last section only.
+DB16="${DB}_16"
 
 command -v psql >/dev/null 2>&1 || { echo "SKIP: psql not available"; exit 0; }
 pg_isready >/dev/null 2>&1 || { echo "SKIP: no reachable postgres"; exit 0; }
 
-cleanup() { dropdb --if-exists "$DB" >/dev/null 2>&1 || true; }
+cleanup() {
+  dropdb --if-exists "$DB" >/dev/null 2>&1 || true
+  dropdb --if-exists "$DB16" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
-dropdb --if-exists "$DB" >/dev/null 2>&1 || true
+cleanup
 createdb "$DB" || { echo "SKIP: cannot create a database here"; exit 0; }
+createdb "$DB16" || { echo "SKIP: cannot create a second database here"; exit 0; }
 
 psql -q -d "$DB" >/dev/null <<'SQL'
 CREATE TABLE ir_module_module (
@@ -147,21 +157,32 @@ INSERT INTO ir_act_server (id, name, model_name, state) VALUES (4, '{"en_US": "D
 INSERT INTO ir_cron (id, active, ir_actions_server_id) VALUES (2, false, 4);
 
 -- a base automation, 17.0 shape: the server action points back at it, and
--- carries the model name. Given an xmlid so it is not also reported as an
--- unowned server action.
+-- carries the model name. Its action carries no xmlid at all, which is what
+-- made collect_server_actions report it a second time as an unowned action
+-- (#960) — the automation row is the finding, not its action.
 INSERT INTO ir_act_server (id, name, model_name, state, base_automation_id)
   VALUES (5, '{"en_US": "Notify on confirm"}', 'sale.order', 'code', 1);
 INSERT INTO base_automation (id, active, trigger) VALUES (1, true, 'on_create');
-INSERT INTO ir_model_data (module, name, model, res_id) VALUES ('sale', 'a5', 'ir.actions.server', 5);
+-- a second automation, Studio-built: its action DOES have an xmlid, but a
+-- studio_customization one, which the collector's WHERE matches exactly as
+-- readily as a missing one. So "has an xmlid" was never the right exclusion.
+INSERT INTO ir_act_server (id, name, model_name, state, base_automation_id)
+  VALUES (6, '{"en_US": "Studio automation"}', 'crm.lead', 'code', 2);
+INSERT INTO base_automation (id, active, trigger) VALUES (2, true, 'on_write');
+INSERT INTO ir_model_data (module, name, model, res_id)
+  VALUES ('studio_customization', 'a6', 'ir.actions.server', 6);
 
 INSERT INTO ir_act_report_xml (id, name, model, report_name)
   VALUES (1, '{"en_US": "Custom Picking"}', 'stock.picking', 'x_custom_picking');
 SQL
 
-out="$(python3 "$SUT" --db "$DB" --csv "$SCRIPT_DIR/.studio.csv" 2>&1 | tail -1)"
+CSV="$SCRIPT_DIR/.studio.csv"
+out="$(python3 "$SUT" --db "$DB" --csv "$CSV" 2>&1 | tail -1)"
 
 pass=0; fail=0
 expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL $1: wanted '$3', got '$2'" >&2; fi; }
+# count and cell read $out and $CSV as they stand, so the <= 16.0 section at the
+# bottom repoints both at its own run rather than duplicating them.
 count() { python3 -c "
 import json,sys
 print(json.loads(sys.argv[1])['counts'].get(sys.argv[2], 0))" "$out" "$1"; }
@@ -171,7 +192,7 @@ import csv,sys
 for r in csv.DictReader(open(sys.argv[1])):
     if r['technical_name'] == sys.argv[2] or r['label'] == sys.argv[2]:
         print(r[sys.argv[3]]); break
-else: print('MISSING')" "$SCRIPT_DIR/.studio.csv" "$1" "$2"; }
+else: print('MISSING')" "$CSV" "$1" "$2"; }
 cls() { cell "$1" classification; }
 
 expect "manual fields only"        "$(count field)" "5"
@@ -183,7 +204,7 @@ expect "studio + inactive views"   "$(count view)" "2"
 expect "hand-edited module views"  "$(count view-inline-edit)" "4"
 expect "unowned actions + crons"   "$(count server_action)" "1"
 expect "crons counted separately"  "$(count cron)" "2"
-expect "base automations"          "$(count automation)" "1"
+expect "base automations"          "$(count automation)" "2"
 expect "unowned reports"           "$(count report)" "1"
 
 expect "studio field -> code"      "$(cls x_studio_carrier_account)" "convert-to-code"
@@ -213,7 +234,7 @@ expect "no jsonb leaked into any cell" "$(python3 -c "
 import csv,sys
 bad = [(r['kind'], v) for r in csv.DictReader(open(sys.argv[1]))
        for v in r.values() if v and v.lstrip().startswith('{')]
-print(bad or 'clean')" "$SCRIPT_DIR/.studio.csv")" "clean"
+print(bad or 'clean')" "$CSV")" "clean"
 
 # --- #929: does the field hold anything ---------------------------------------
 expect "stored field with data"    "$(cell x_studio_carrier_account populated)" "populated"
@@ -237,7 +258,7 @@ import csv,sys
 for r in csv.DictReader(open(sys.argv[1])):
     if r['label'] == 'edited list':
         print('yes' if 'arch edited in database' in r['detail'] else r['detail'])
-        break" "$SCRIPT_DIR/.studio.csv")" "yes"
+        break" "$CSV")" "yes"
 
 # --- #877: the 17.0+ automation join ------------------------------------------
 expect "automation label is plain text" "$(cell 'base.automation:1' label)" "Notify on confirm"
@@ -246,11 +267,83 @@ expect "automation label is plain text" "$(cell 'base.automation:1' label)" "Not
 expect "automation model name"     "$(cell 'base.automation:1' model)" "sale.order"
 expect "active automation is data" "$(cls 'base.automation:1')" "keep-as-data"
 
+# --- #960: an automation's server action is reported once, as the automation --
+# Both automations own an ir_act_server row the unowned-action query would
+# otherwise pick up: #5 has no xmlid, #6 has a studio_customization one. Both
+# satisfy `d.id IS NULL OR d.module = 'studio_customization'`, so the exclusion
+# has to be on the automation link, not on the xmlid.
+expect "action of an xmlid-less automation not re-counted" \
+  "$(cls 'ir.actions.server:5')" "MISSING"
+expect "action of a Studio automation not re-counted" \
+  "$(cls 'ir.actions.server:6')" "MISSING"
+expect "second automation still reported" "$(cls 'base.automation:2')" "keep-as-data"
+expect "studio automation model name" "$(cell 'base.automation:2' model)" "crm.lead"
+# ...and the genuinely unowned action is still a finding: the exclusion must not
+# swallow the whole table.
+expect "loose action survives the exclusions" "$(cls 'ir.actions.server:1')" "convert-to-code"
+
 expect "version read from base module" "$(python3 -c "
 import json,sys; print(json.loads(sys.argv[1])['odoo_version'])" "$out")" "17.0.1.3"
 expect "rows are not dumped on stdout" "$(python3 -c "
 import json,sys; print('rows' in json.loads(sys.argv[1]))" "$out")" "False"
 
-rm -f "$SCRIPT_DIR/.studio.csv"
+rm -f "$CSV"
+
+# --- #960, the <= 16.0 shape --------------------------------------------------
+# Up to 16.0 base.automation _inherits ir.actions.server and points FORWARD at
+# its own row through action_server_id; ir_act_server has no base_automation_id
+# column at all. That action is still a separate ir_act_server row with no xmlid
+# of its own, so it was double-counted on the old series too — the issue's claim
+# that <= 16.0 is unaffected is wrong, only the exclusion SQL differs.
+#
+# This database also carries no ir_cron table, which is the absent-schema case
+# the old `s.id NOT IN (SELECT NULL::integer)` stand-in got wrong: NULL for
+# every row, filtering out every server action instead of none.
+psql -q -d "$DB16" >/dev/null <<'SQL'
+CREATE TABLE ir_module_module (id serial PRIMARY KEY, name text, latest_version text);
+INSERT INTO ir_module_module (name, latest_version) VALUES ('base', '16.0.1.3');
+-- <= 16.0 also predates jsonb labels on some of these, so they stay varchar.
+CREATE TABLE ir_model (id serial PRIMARY KEY, model text, name text, state text);
+CREATE TABLE ir_model_fields (
+  id serial PRIMARY KEY, name text, model text, field_description text,
+  ttype text, relation text, compute text, store boolean, state text);
+CREATE TABLE ir_model_data (
+  id serial PRIMARY KEY, module text, name text, model text, res_id integer,
+  noupdate boolean DEFAULT false);
+CREATE TABLE ir_ui_view (
+  id serial PRIMARY KEY, name text, model text, type text,
+  active boolean DEFAULT true, inherit_id integer);
+CREATE TABLE ir_act_report_xml (
+  id serial PRIMARY KEY, name text, model text, report_name text);
+CREATE TABLE ir_act_server (
+  id serial PRIMARY KEY, name text, model_name text, state text, model_id integer);
+CREATE TABLE base_automation (
+  id serial PRIMARY KEY, active boolean DEFAULT true, trigger text,
+  action_server_id integer);
+
+-- the automation and the ir_act_server row it inherits from: one finding
+INSERT INTO ir_act_server (id, name, model_name, state)
+  VALUES (1, 'Notify on confirm', 'sale.order', 'code');
+INSERT INTO base_automation (id, active, trigger, action_server_id)
+  VALUES (1, true, 'on_create', 1);
+-- a genuinely unowned server action, which must still be reported
+INSERT INTO ir_act_server (id, name, model_name, state)
+  VALUES (2, 'Loose action', 'sale.order', 'code');
+SQL
+
+CSV="$SCRIPT_DIR/.studio16.csv"
+out="$(python3 "$SUT" --db "$DB16" --csv "$CSV" 2>&1 | tail -1)"
+
+expect "16.0: version read"        "$(python3 -c "
+import json,sys; print(json.loads(sys.argv[1])['odoo_version'])" "$out")" "16.0.1.3"
+expect "16.0: automation reported" "$(cls 'base.automation:1')" "keep-as-data"
+expect "16.0: its own action is not a second finding" \
+  "$(cls 'ir.actions.server:1')" "MISSING"
+expect "16.0: loose action still reported" "$(cls 'ir.actions.server:2')" "convert-to-code"
+expect "16.0: one unowned action"  "$(count server_action)" "1"
+# No ir_cron table: no crons to report, and no silent loss of the actions above.
+expect "16.0: no crons reported"   "$(count cron)" "0"
+
+rm -f "$CSV"
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
