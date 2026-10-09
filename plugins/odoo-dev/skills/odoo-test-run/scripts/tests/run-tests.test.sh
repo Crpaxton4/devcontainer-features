@@ -131,6 +131,10 @@ expect "green has no failures" "$(nfail "$out")"          "0"
 expect "green status"        "$(field "$out" status)"     "passed"
 expect "green tallies its one suite" "$(suites "$out")"   "mymodule:2/2/0"
 expect "green drops its db"  "$(field "$out" db_dropped)" "true"
+# Provenance (#982): the one field no hand-assembled 30-test.json can honestly
+# carry. odoo-pr treats a missing or differing produced_by as not-independent
+# evidence, so a run that stopped stamping it would read as hand-written.
+expect "run stamps its own provenance" "$(field "$out" produced_by)" "run-tests.sh"
 expect "db name carries project+task" "$(field "$out" db)" "myrepo_test_4242"
 
 out="$(run "$twophase" 0)"
@@ -179,6 +183,7 @@ expect "red extracts one failure" "$(nfail "$out")" "1"
 expect "error is the exception line, not the traceback" "$(firsterr "$out")" "AssertionError: 2 != 1"
 expect "red's status is failed, not registry_aborted" "$(field "$out" status)" "failed"
 expect "a failing test is not an aborted registry" "$(field "$out" error)" "null"
+expect "a red run is stamped too" "$(field "$out" produced_by)" "run-tests.sh"
 
 # ---------- registry aborted is not "this module has no tests" (#887) ----------
 # The registry dies before collection starts: no test is collected, so tests_run

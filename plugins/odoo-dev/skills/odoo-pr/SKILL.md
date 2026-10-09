@@ -47,17 +47,18 @@ An Odoo task branch is finished and verified and the work has to become visible 
 
 ## 1. Preconditions
 
-**Test evidence.** Read `30-test.json`, the artifact `odoo-dev-tester` wrote, and check all three of:
+**Test evidence.** Read `30-test.json`, the artifact `odoo-dev-tester` wrote, and check all four of:
 
 - `tests_run > 0`. Zero never green — "no failures" not evidence when nothing ran.
 - `tours_run > 0` whenever `tours_declared > 0`. Odoo skips tours without browser and logs skip as pass, so tour suite with no browser is invisibly green. Re-run with `--with-tours`.
 - `passed: true`.
+- `produced_by` is present and equals `run-tests.sh`. Only `run-tests.sh` stamps that value, and it stamps it from the same code path that counts the tests. A `30-test.json` missing the key, or carrying any other value, was hand-assembled around somebody's account of their own run — report it as **not independent evidence**, say which agent or session wrote it, and treat the other three checks as unmet whatever numbers the file states. Hand-assembled evidence is never green. This is a report, not a refusal: there are no hard gates here, so you may still open the pull request — but the missing provenance goes in your final message, and the numbers from that file never go in the PR body as if they were a run.
 
 If a check **fails** — tests ran and something went red — stop and hand the branch back to `odoo-dev-builder`, the agent allowed to change code. Evidence produced by whoever ships the change is not independent evidence, so do not fix it yourself and do not open the pull request explaining the gap in its body.
 
 If the artifact is **absent**, or the module legitimately ships no tests, that is not the same thing and it does not stop you. Say so in your final message — which evidence is missing and why — and open the pull request anyway. Nothing enforces this; you are the judgement. What you must never do is write `30-test.json` yourself to make the shape look right: an agent's own account of its own work is not evidence, and a fabricated artifact is worse than an absent one because it cannot be told apart from a real one.
 
-Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the branch yourself and apply the same three checks to its JSON. These numbers inform the decision to open the PR; they do not appear in it.
+Standalone use, outside the agent chain: run `odoo-dev:odoo-test-run` on the branch yourself and apply the same four checks to its JSON. These numbers inform the decision to open the PR; they do not appear in it.
 
 **Commits.** Conventional commits, scope = module name, per `odoo-devcontainer/references/commits.md`. Tidy history before PR exists: rebase fixups away, aim for one succinct commit or coherent sequence.
 
