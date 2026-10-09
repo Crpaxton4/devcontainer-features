@@ -73,7 +73,12 @@ Verdict format:
 - `oca: <repo>/<module> (full)` — deliver what request deliver for end user (configuration may differ).
 - `oca: <repo>/<module> (partial)` — cover part. **Say what remain** — that remainder is thing being quoted.
 - Strong fit exist only on previous series: `<repo>/<module> (18.0 only, port pending)`. Port cheaper than rewrite.
-- Customization *is* OCA module: `self: OCA/<repo> <target>` when target port exist; else name successor; else `none on <target>`.
+- Customization *is* OCA module: `already OCA: <repo>/<module>` — the one literal
+  `oca_check.py` write for this case, and the only value the workbook's
+  `OCA <major> alternative` column accept for it (spec: `odoo-upgrade/references/inventory.md`
+  column 16). `none` would be false and the bare upstream name read as an alternative
+  to itself. Target port exist ⇒ name the series in the evidence; no target port ⇒ name
+  the successor repo/module in the evidence; neither ⇒ `none on <target>`.
 
 Watch `installable` and `development_status` in catalog. Alpha or Beta OCA module still candidate, but client must be told — and OCA own policy: Stable module may depend only on Stable and Mature modules. Put status in notes.
 
@@ -101,7 +106,7 @@ Then one recommendation per capability: **adopt** (native or OCA cover it), **ad
 | `no` | `(full)` | **adopt OCA** — install and configure |
 | `no` | `(partial)` | **adopt + delta** — size gap before quote it |
 | `no` | `none` | **build** — this the quotable work |
-| is an OCA module, `self:` present | — | **adopt upstream** after diff local copy for local patches |
+| `no` | `already OCA: <repo>/<module>` | **adopt upstream** after diff local copy for local patches |
 
 Native and OCA both cover behaviour: prefer native. One less dependency to carry through next upgrade.
 

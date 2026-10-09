@@ -44,8 +44,31 @@ DEFAULT_ADDONS_PATH = "/mnt/extra-addons"
 ORG = "OCA"
 OCA_AUTHOR = "Odoo Community Association (OCA)"
 DEFAULT_SERIES = "16.0,17.0,18.0,19.0"
-# Documented literal for "no OCA repo ships this module" (references/
-# inventory.md). Written only after a full, healthy scan.
+# --- OCA literal contract --- THIS FILE IS THE OWNER -------------------------
+# Three literals travel between this skill and odoo-upgrade. There is no shared
+# module to import them from: there is no package under plugins/odoo-dev, the
+# scripts are invoked by absolute path, and this one lives in a different skill
+# tree. So the contract is a documented single owner plus a parity test, and
+# this definition is the owner.
+#
+#   "none"                      no OCA repo ships this module — the ONLY
+#                               negative value. Written only after a full,
+#                               healthy scan (a partial scan leaves the cell).
+#   "claimed — run oca_check.py"  manifest author names the OCA but nothing
+#                               verified it yet. Seeded by module_inventory.py;
+#                               this script replaces it. Not defined here
+#                               because this script never writes it.
+#   "already OCA: <repo>/<module>"  the module IS the OCA module carried
+#                               locally. Produced ONLY here (see the `oca_alt`
+#                               f-string below) — nothing else may author it.
+#
+# Spec:    ../../odoo-upgrade/references/inventory.md:93 (column 16) and :182.
+# Mirrors: ../../odoo-upgrade/scripts/module_inventory.py (OCA_NONE,
+#          OCA_UNVERIFIED) and ../../odoo-upgrade/scripts/build_workbook.py
+#          (OCA_NONE, OCA_UNVERIFIED, OCA_ALREADY_RE).
+# Parity:  ../../odoo-upgrade/scripts/tests/module-inventory.test.sh greps all
+#          three files plus inventory.md and fails on any drift. Change a
+#          literal here and that suite tells you every other place to change.
 OCA_NONE = "none"
 # OCB: full odoo/odoo fork (core modules at depth 2, huge clone).
 # OpenUpgrade: full fork through 13.0; >= 14.0 it ships only the
