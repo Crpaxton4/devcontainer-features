@@ -31,8 +31,8 @@ saying so.
   the licence call needs a human with an account regardless.
 - **Record it once, then keep going.** Emit exactly ONE human-action item in the
   completion report, naming the exact URL, exactly what to download, and the exact
-  path to place it at. Mark that tree incomplete in `progress.json` — the unit's
-  row becomes `failed` with a `note` naming the login wall, which is what
+  path to place it at. Mark that tree incomplete in the next `progress` revision —
+  the unit's row becomes `failed` with a `note` naming the login wall, which is what
   "incomplete" means in that four-word vocabulary — and continue with the other
   trees. One blocked download blocks one module, never the pass; a blocked module
   that nothing records is the failure these rules exist to prevent.
@@ -68,7 +68,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 ## 6. Wrap up module
 
-- Record the module's findings as an `enrich_<module>.json` record in the inventory work dir (raise Complexity, flag follow-ups) — never edit the seed CSV in place; the CSV is a seed and `build_workbook.py` reads the records, not an enriched CSV. Keys: [inventory.md](./inventory.md). Flip the module's `progress.json` row to `done`. Commit; next module in topological order.
+- Record the module's findings as an `enrich_<module>.json` record in the inventory work dir (raise Complexity, flag follow-ups) — never edit the seed CSV in place; the CSV is a seed and `build_workbook.py` reads the records, not an enriched CSV. Keys: [inventory.md](./inventory.md). Flip the module's `progress` row to `done` and put the table again. Commit; next module in topological order.
 - Client use Studio? Flag modules with changed views as elevated risk — Studio views layer on custom views, break on DB upgrade; warn human running it.
 
 ## 7. Verification loop (all modules, target devcontainer)
