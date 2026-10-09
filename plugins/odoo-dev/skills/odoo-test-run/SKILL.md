@@ -54,12 +54,13 @@ calls. Spell the base directory out in full there.
 ```bash
 <base directory>/scripts/run-tests.sh <repo> <task_id> <module> \
   [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] \
-  [--addons-path P] [--data-dir DIR]
+  [--addons-path P] [--data-dir DIR] [--target-series NN.0]
 ```
 
 → ```json
 {"passed":true,"status":"passed","error":null,"db":"...","module":"...",
- "odoo_version":"18.0","mode":"container","tests_run":12,
+ "odoo_version":"18.0","module_target_series":"18.0","mode":"container",
+ "produced_by":"run-tests.sh","tests_run":12,
  "suites":[{"module":"my_module","collected":12,"executed":12,"failed":0}],
  "collected_is_executed":true,
  "addons_path":"/mnt/extra-addons/.worktrees/task-30412,/usr/lib/python3/dist-packages/odoo/addons",
@@ -70,6 +71,12 @@ calls. Spell the base directory out in full there.
 ```
 
 The database is `<project>_test_<id><suffix>`, created fresh and dropped by a trap on every exit path. Exit code is `0` whenever the run completed — **a test failure is a result, not a script error**, so read `status`, never `$?`.
+
+### The module's series, compared instead of assumed
+
+`--target-series` is the series the **module** is for — `odoo_version` from the repo map, which is what `00-context.json` records. The run compares it against the series this container's core actually runs and, on a disagreement, **refuses to run Odoo at all**: `status: "series_mismatch"`, `passed: false`, `tests_run: 0`, and an `error` naming both series. `odoo_version` is the core; `module_target_series` is what was asked for, or `null` when no flag was passed.
+
+Odoo does not fail on a manifest from another series. It sets `installable=False`, logs that at WARNING, installs nothing, and still prints `0 failed, 0 error(s) of 0 tests` and exits 0 — so without this flag the result is a green zero that reads as "this module ships no tests" and names no cause anywhere. Pass no flag and nothing is compared: the check is absent rather than passed, which is why a caller that knows the target should always pass it.
 
 ### The addons path and the data dir are stated, never inherited
 
@@ -106,8 +113,9 @@ pulling 100 MB over the network or failing the render.
 
 | Field | Rule |
 |---|---|
-| `status` | `passed` \| `failed` \| `registry_aborted`. The one field to branch on |
-| `error` | Set only for `registry_aborted`: the decisive log line, quoted. `null` otherwise |
+| `status` | `passed` \| `failed` \| `registry_aborted` \| `series_mismatch`. The one field to branch on |
+| `error` | Set for `registry_aborted` (the decisive log line, quoted) and for `series_mismatch` (both series). `null` otherwise |
+| `odoo_version`, `module_target_series` | The core this run used, and the series the module was declared for (`null` when `--target-series` was not passed) |
 | `tests_run` | **Must be > 0.** Zero never green, whatever `passed` say elsewhere |
 | `suites[]` | Per module: `collected`, `executed`, `failed`. A module with zero of both ran nothing |
 | `collected_is_executed` | Always `true`: Odoo logs no per-module collected count distinct from the executed one, so the parse reports the same number for both rather than inventing one |
@@ -115,6 +123,8 @@ pulling 100 MB over the network or failing the render.
 | `failures[].error` | **Extracted exception line** (`AssertionError: 2 != 1`). What you hand back to whoever fixes it |
 | `addons_path`, `data_dir` | What the run actually stated. Check these first when a suite reports nothing |
 | `log_excerpt`, `log_file` | **Internal only.** Never paste into PR body or Odoo chatter |
+
+`status: series_mismatch` means the comparison above failed and **nothing ran**: no database was created and Odoo was never invoked. It is never green, and the cause is in `error` and in the one entry of `failures[]`. Fix the container or the target — a 19.0 container cannot prove anything about an 18.0 module — and re-run; nothing about the module has been proved either way.
 
 `status: registry_aborted` means the registry died before a single test was collected — a broken module somewhere on the addons path, a database that would not come up. It is **not** "this module has no tests", which is the reading `tests_run: 0` with an empty failure list used to invite. Fix the cause named in `error` and re-run; nothing about the module under test has been proved either way.
 
@@ -126,8 +136,9 @@ None of this is published. A PR body carries the task link, the module lists, an
 # unit tests only, fast loop while fixing
 <base directory>/scripts/run-tests.sh qocinnovations 30412 my_module --test-tags /my_module
 
-# the run the PR decision rests on
-<base directory>/scripts/run-tests.sh qocinnovations 30412 my_module --with-tours
+# the run the PR decision rests on — --target-series from 00-context.json
+<base directory>/scripts/run-tests.sh qocinnovations 30412 my_module \
+  --with-tours --target-series 18.0
 ```
 
 Run the second one before `odoo-dev:odoo-pr`. Its JSON is what `30-test.json` records and what step 1 of that skill reads. It is what the decision to open the PR rests on; it does not go in the PR body.

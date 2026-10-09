@@ -60,7 +60,14 @@ exactly how two checkouts of the same branch come to exist.
    without a quote, so whoever runs first owns that artifact.
 3. `odoo-task-env` — `existing-work.sh` first, always. An existing branch or open
    PR gets reused, never duplicated. Then `worktree-ensure.sh`, then
-   `stack-ensure.sh`. Capture all three JSON outputs verbatim into `10-env.json`.
+   `stack-ensure.sh`, the last one with `--target-series` set to `odoo_version`
+   from step 2. Capture all three JSON outputs verbatim into `10-env.json`.
+   Inside the devcontainer `stack-ensure.sh` reports the core series it found as
+   `odoo_version`, and `series_mismatch` with a warning when that is not the
+   series the task targets. It is a warning, not a refusal: say so in your return
+   and do not read an install or a test on the wrong series as proof of
+   anything — Odoo marks a module of another series uninstallable and reports
+   zero tests, zero failures and exit 0.
 4. Build. `odoo-devcontainer` for paths, CLI, ORM and frontend references;
    `principles` for design decisions. Write the tests with the code — a tour that
    was never declared cannot be run, and what ran is what counts.

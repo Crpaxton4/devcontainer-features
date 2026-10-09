@@ -23,6 +23,10 @@ expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); ech
 field() { node -e 'console.log(String(JSON.parse(process.argv[1])[process.argv[2]] ?? "null"))' "$1" "$2"; }
 nfail() { node -e 'console.log(JSON.parse(process.argv[1]).failures.length)' "$1"; }
 firsterr() { node -e 'const f=JSON.parse(process.argv[1]).failures[0];console.log(f?f.error:"")' "$1"; }
+# The whole key set, sorted: the series-mismatch refusal emits its JSON from its
+# own code path, so the suite — not a reader downstream — is what keeps the two
+# shapes identical.
+keys() { node -e 'console.log(Object.keys(JSON.parse(process.argv[1])).sort().join(","))' "$1"; }
 # suites is the per-module tally; "mod_a:2/2/0" reads collected/executed/failed.
 suites() { node -e 'console.log(JSON.parse(process.argv[1]).suites.map(s=>`${s.module}:${s.collected}/${s.executed}/${s.failed}`).join(" "))' "$1"; }
 # The stub records one argv entry per line, so a fixed-string line match is an
@@ -254,6 +258,39 @@ expect "zero tests is not a pass" "$(field "$out" passed)" "false"
 # are reported differently on purpose — only one of them names a cause.
 expect "a silent zero is failed, not registry_aborted" "$(field "$out" status)" "failed"
 expect "silent zero has no suites to tally" "$(suites "$out")" ""
+
+# ---------- series mismatch is not "this module has no tests" either (#978) ----
+# The stub core answers 18.0. A module declared as 17.0 is never INSTALLED on it:
+# Odoo sets installable=False from the manifest, runs nothing, and still prints
+# "0 failed, 0 error(s) of 0 tests" with exit 0 — a green zero with no cause in
+# it anywhere.
+greenout="$(run "$green" 0)"
+rm -f "$work/args"
+mm="$(run "$green" 0 --target-series 17.0)"
+expect "mismatch gets its own status"      "$(field "$mm" status)" "series_mismatch"
+expect "mismatch is never a pass"          "$(field "$mm" passed)" "false"
+expect "mismatch ran no tests"             "$(field "$mm" tests_run)" "0"
+expect "mismatch records the module target" "$(field "$mm" module_target_series)" "17.0"
+expect "mismatch is stamped like any run"  "$(field "$mm" produced_by)" "run-tests.sh"
+expect "mismatch names a cause rather than an empty list" "$(nfail "$mm")" "1"
+# Refusing is the point: the canned log is never even opened, and no Odoo runs.
+[ -f "$work/args" ]
+expect "a mismatch never invokes Odoo" "$?" "1"
+for series in 17.0 18.0; do
+  case "$(field "$mm" error)" in *"$series"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "FAIL the error should name $series: $(field "$mm" error)" >&2 ;; esac
+done
+# One shape for both paths, so no reader has to branch on which one wrote the file.
+expect "the refusal carries the same keys as a completed run" "$(keys "$mm")" "$(keys "$greenout")"
+
+# The matching case changes nothing but the recorded target.
+out="$(run "$green" 0 --target-series 18.0)"
+expect "a matching series runs normally"    "$(field "$out" status)" "passed"
+expect "the matching target is recorded"    "$(field "$out" module_target_series)" "18.0"
+expect "no flag means no target to compare" "$(field "$greenout" module_target_series)" "null"
+
+run "$green" 0 --target-series nonsense >/dev/null 2>&1
+expect "a target that names no series is a usage error" "$?" "2"
 
 # ---------- tours ----------------------------------------------------------------
 mkdir -p "$work/addons/.worktrees/task-4242/mymodule"

@@ -59,7 +59,8 @@ const SCHEMA = {
   "30-test": {
     required: ["passed","tests_run","tours_declared","tours_run","failures","log_file","produced_by"],
     types: { passed: "boolean", tests_run: "number", tours_declared: "number",
-             tours_run: "number", failures: "array", produced_by: "string" },
+             tours_run: "number", failures: "array", produced_by: "string",
+             module_target_series: "string" },
   },
   "35-review": {
     required: ["findings","criteria_results"],
@@ -162,6 +163,12 @@ node --input-type=module -e "$SCHEMA"'
   for (const [k, want] of Object.entries(spec.types ?? {})) {
     if (!(k in obj)) continue;
     const got = Array.isArray(obj[k]) ? "array" : obj[k] === null ? "null" : typeof obj[k];
+    // An OPTIONAL field — typed here but absent from required — may be explicitly
+    // null. That is how run-tests.sh reports "no target series was given", and
+    // rejecting it would push a writer into omitting the key, which
+    // cannot be told apart from forgetting it. A REQUIRED field still may not be
+    // null: presence alone is not a value.
+    if (got === "null" && !(spec.required ?? []).includes(k)) continue;
     if (got !== want) problems.push(`field ${k}: expected ${want}, got ${got}`);
   }
   // Optional per-element checks for array fields, so a stage whose value is a list
