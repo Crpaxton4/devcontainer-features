@@ -80,6 +80,18 @@
 # subagent that cannot ask one. release_reviewer may be the literal `none`, which
 # records a deliberate absence rather than an unanswered question.
 #
+# Two entries may share `repo` — that is the delivery-project/upgrade-project
+# case project-resolve.sh reports as ambiguous. They may NOT share repo_path:
+# that names one checkout, and nothing downstream could then tell the entries
+# apart. `add` and `set --repo-path` reject a collision with exit 2, naming the
+# entry already holding the path. The check lives at those two write sites and
+# NOT in validation on purpose, so that `remove` — which is how a bad entry gets
+# repaired — keeps working on a map that already collides.
+#
+# `remove` is correspondingly the one command that does not pre-validate the live
+# map; it still requires the file to PARSE and commit_tmp still validates the
+# result (#992, #995).
+#
 # Exit codes: 0 ok | 2 user error | 3 project unmapped | 4 validation failure
 set -euo pipefail
 
@@ -335,6 +347,24 @@ case "$cmd" in
       const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       if (data.projects[project]) { console.error("duplicate project: " + project); process.exit(2); }
+      // Two entries holding the SAME repo_path is a defect nothing downstream can
+      // repair: the path is where the checkout is, and a release resolving from
+      // that checkout has no field left to tell the entries apart. Rejected here,
+      // beside the duplicate-project check and for the same reason, rather than in
+      // the validator — `remove` has to keep working on a map that already
+      // collides, or the only repair left would be the hand-edit this script
+      // exists to make unnecessary (#995). Sharing `repo` is still legal: that is
+      // the delivery-project/upgrade-project case, and project-resolve.sh reports
+      // it as ambiguous so a human names one.
+      if (repoPath) {
+        const clash = Object.entries(data.projects).find(([, e]) => e.repo_path === repoPath);
+        if (clash) {
+          console.error("--repo-path " + repoPath + " is already the repo_path of project: " + clash[0] +
+            "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +
+            " repo-map.sh set \"" + clash[0] + "\" --repo-path \"\"");
+          process.exit(2);
+        }
+      }
       const entry = { repo };
       if (repoPath) entry.repo_path = repoPath;
       if (branch) entry.default_branch = branch;
@@ -389,6 +419,18 @@ case "$cmd" in
       if (!entry) { console.error("unmapped project: " + project); process.exit(3); }
       for (let i = 0; i < updates.length; i += 2) {
         const [key, value] = [updates[i], updates[i + 1]];
+        // Same one-checkout-one-entry rule `add` enforces, checked here too
+        // because `set --repo-path` is the other way a collision can be written.
+        // "" is the unset, which can never collide.
+        if (key === "repo_path" && value !== "") {
+          const clash = Object.entries(data.projects).find(([n, e]) => n !== project && e.repo_path === value);
+          if (clash) {
+            console.error("--repo-path " + value + " is already the repo_path of project: " + clash[0] +
+              "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +
+              " repo-map.sh set \"" + clash[0] + "\" --repo-path \"\"");
+            process.exit(2);
+          }
+        }
         // "" is the only way a merge can say "remove this key". An empty string
         // left in place would validate but read as an answer nobody gave.
         if (value === "") delete entry[key]; else entry[key] = value;
@@ -450,13 +492,28 @@ case "$cmd" in
 
   remove)
     [ $# -eq 1 ] || die "usage: repo-map.sh remove \"<project name>\""
-    validate_file "$MAP"
+    # DELIBERATELY no validate_file "$MAP" pre-check — the one command here that
+    # skips it (#992, #995). Deleting an entry is how a semantically invalid map
+    # gets repaired, so demanding a valid map first made an already-broken map
+    # unrepairable by any sanctioned command and left the hand-edit this script
+    # exists to prevent as the only way out. commit_tmp still validates the
+    # RESULT, so a delete that does not fix the map is still rejected and still
+    # leaves the live map alone; what changed is only that the attempt is allowed.
+    # The file must still PARSE: a mangled map is exit 4 naming the file and the
+    # parser's complaint, same as everywhere else (#947), because a delete against
+    # bytes nobody can read would be a guess at what the map used to say.
     tmp="$(mktemp "$MAP.tmp.XXXXXX")"
     trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
       const [file, project, tmp] = process.argv.slice(1);
-      const data = JSON.parse(readFileSync(file, "utf8"));
+      let data;
+      try { data = JSON.parse(readFileSync(file, "utf8")); }
+      catch (e) { console.error(file + ": invalid JSON: " + e.message); process.exit(4); }
+      if (typeof data !== "object" || data === null || Array.isArray(data) ||
+          typeof data.projects !== "object" || data.projects === null || Array.isArray(data.projects)) {
+        console.error(file + ": no projects object to remove from"); process.exit(4);
+      }
       if (!data.projects[project]) { console.error("unmapped project: " + project); process.exit(3); }
       delete data.projects[project];
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");

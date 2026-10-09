@@ -28,11 +28,18 @@ Linux test:
 
 Like the other helpers here this is CI-only and stdlib-only: no ``odoo_sdk``, no
 third-party YAML/JSON5 parser.
+
+``TestSetupShOwnership`` is the one group here that *runs* ``setup.sh`` rather
+than reading it: the #974 branch is a message and an exit status, and neither is
+provable by grepping for a string that happens to be in the file.
 """
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -221,6 +228,166 @@ class TestHostSetupParity(unittest.TestCase):
                     f"{script.name} references shell-history files {offenders}; "
                     f"history persistence is directory-based (see #198)",
                 )
+
+
+# The stub `stat` the ownership tests put ahead of the real one on PATH. It
+# answers the one question setup.sh's path_owner asks - "who owns this?" - with
+# a uid nobody here can be, which is the only way to produce a foreign-owned
+# directory without root. Anything else it refuses to answer, exactly as a stat
+# that does not understand the flag would, so path_owner falls through to its
+# "cannot tell" branch for paths that do not exist yet.
+STAT_STUB = """#!/bin/sh
+if [ "$1" = "-c" ] && [ "$2" = "%u" ] && [ -e "$3" ]; then
+    echo 4242
+    exit 0
+fi
+exit 1
+"""
+
+
+class TestSetupShOwnership(unittest.TestCase):
+    """#974: a mount source setup.sh does not own stops it with the remedy.
+
+    Docker does not refuse a bind mount whose source is missing on the host - it
+    creates the source, as ``root:root 0755``. A row added to the manifest
+    without a re-run of ``setup.sh`` therefore leaves a root-owned directory the
+    container cannot write, and the only thing that ever reported it was
+    ``setup.sh`` itself dying on ``chmod: Operation not permitted`` under
+    ``set -eu``: no path, no cause, no fix.
+    """
+
+    def _run_setup(self, home, extra_path=None):
+        env = dict(os.environ, HOME=str(home))
+        if extra_path:
+            env["PATH"] = f"{extra_path}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["sh", str(SETUP_SH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_setup_sh_stops_on_a_source_it_does_not_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            # The first manifest row's source, pre-created so the guard has
+            # something to look at. Everything else is still absent, which is
+            # the ordinary case and must stay silent.
+            first = checker.load_manifest()[0]
+            (home / first["host_source"]).mkdir(parents=True)
+            stub_dir = Path(tmp) / "stub-bin"
+            stub_dir.mkdir()
+            stub = stub_dir / "stat"
+            stub.write_text(STAT_STUB)
+            stub.chmod(0o755)
+
+            result = self._run_setup(home, extra_path=stub_dir)
+            message = result.stderr
+
+            if os.getuid() == 0:
+                # The other honest expectation rather than a skip: root may
+                # chmod any path, so there is no failure ahead to pre-empt and
+                # the guard must stand down instead of inventing one.
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"as root the ownership guard must stand down\nstdout:\n"
+                    f"{result.stdout}\nstderr:\n{message}",
+                )
+                self.assertNotIn("sudo chown", result.stdout + message)
+                return
+
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"setup.sh must refuse a source it does not own; got "
+                f"{result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{message}",
+            )
+            self.assertIn("uid 4242", message)
+            self.assertIn(first["name"], message)
+            self.assertIn(str(home / first["host_source"]), message)
+            # The remedy, in full: the chown nobody can guess, and the re-run
+            # that applies the manifest's mode afterwards.
+            self.assertIn(
+                f"sudo chown -R {os.getuid()}:{os.getgid()} "
+                f"{home / first['host_source']}",
+                message,
+            )
+            self.assertIn("./setup.sh", message)
+            self.assertIn("#974", message)
+            # It stops AT the first offender, before touching anything, rather
+            # than provisioning some rows and then dying on the chmod.
+            self.assertEqual(result.stdout, "")
+
+    def test_setup_sh_is_silent_over_sources_it_owns(self):
+        # The inverse, and the guard against a check that fires on everything:
+        # a clean host home must still provision end to end and say nothing
+        # about ownership.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+
+            result = self._run_setup(home)
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"setup.sh failed over a home it owns\nstdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}",
+            )
+            self.assertNotIn("sudo chown", result.stdout + result.stderr)
+            for row in checker.load_manifest():
+                with self.subTest(row=row["name"]):
+                    self.assertTrue((home / row["host_source"]).exists())
+
+    def test_setup_sh_still_never_chowns(self):
+        # #974 prints a chown instruction; it must not start running one. This
+        # script is deliberately unprivileged (it only ever touches paths under
+        # $HOME), and acquiring root to repair a directory the user never asked
+        # for is not its call. Allow the string inside the message, reject it as
+        # a command.
+        offenders = [
+            line
+            for line in SETUP_SH.read_text().splitlines()
+            if re.match(r"\s*(sudo\s+)?chown\b", line)
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            f"setup.sh executes chown {offenders}; it must only ever print the "
+            f"instruction (#974)",
+        )
+
+
+class TestMountOwnershipCheckIsWired(unittest.TestCase):
+    """#974: the runtime half has to be staged and invoked, or it reports nothing."""
+
+    def test_install_sh_stages_the_manifest_into_the_image(self):
+        body = INSTALL_SH.read_text()
+        self.assertRegex(
+            body,
+            r"install -m 0644 \S+ "
+            r"/usr/local/share/personal-features/persisted-paths\.tsv",
+            "install.sh must stage persisted-paths.tsv into the image; without "
+            "it check-mount-ownership has no rows to check at postCreate time "
+            "(#974)",
+        )
+
+    def test_postcreate_runs_the_check_after_a_semicolon(self):
+        # Not `&&`-chained, deliberately: an unwritable mount is a plausible
+        # CAUSE of an earlier step in this chain failing (mempalace-repair
+        # writing to the palace mount, for one), so the diagnostic has to run
+        # precisely when the chain broke. It exits 0 by contract, so it cannot
+        # mask a failure behind it either.
+        post_create = json.loads(FEATURE_JSON.read_text())["postCreateCommand"]
+        self.assertIn("check-mount-ownership", post_create)
+        self.assertRegex(
+            post_create,
+            r";\s*check-mount-ownership\s*;",
+            f"check-mount-ownership must sit between `;` boundaries so a failed "
+            f"earlier step cannot skip it: {post_create!r}",
+        )
 
 
 if __name__ == "__main__":

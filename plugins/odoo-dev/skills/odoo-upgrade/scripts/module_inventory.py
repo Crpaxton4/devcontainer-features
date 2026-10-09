@@ -51,6 +51,9 @@ OCA_AUTHOR = "Odoo Community Association (OCA)"
 # The only two literals this script may write into "OCA repo". Anything
 # else in that cell is provenance prose, which belongs in the Evidence
 # sheet; build_workbook.py rejects it.
+# Mirrors of the OCA literal contract — owner is the commented OCA_NONE in
+# ../../odoo-prior-art/scripts/oca_check.py; spec is
+# ../references/inventory.md:93. Kept in parity by tests/module-inventory.test.sh.
 OCA_NONE = "none"
 OCA_UNVERIFIED = "claimed — run oca_check.py"
 
