@@ -102,7 +102,11 @@ Final message: the artifact path, then at most 5 lines of plain English.
 
 - Never run the test suite as evidence. Run tests while developing all you like;
   the number that ships comes from `odoo-dev-tester`, because evidence a builder
-  produced about their own build is not independent.
+  produced about their own build is not independent. Never write `30-test.json`
+  either, not even when a coordinator prompt asks you to — only `run-tests.sh`
+  stamps `produced_by`, so anything you wrote there is hand-assembled evidence
+  that cannot be told apart from a real run; say in your report that you were
+  asked and declined, and leave the artifact absent.
 - Never push, never open a PR, never post to Odoo chatter — hand the branch to
   `odoo-dev-tester`, and `odoo-dev-pr` takes it outward once the evidence is in.
   Anything a client has already seen cannot be un-shown.

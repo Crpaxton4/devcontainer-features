@@ -471,6 +471,9 @@ node -e '
     error: status === "registry_aborted" ? (registryError || "").trim().slice(0, 300) || null : null,
     db: dbname, module: module_,
     odoo_version: version, mode,
+    // Provenance, not a number: downstream readers cannot otherwise tell this
+    // artifact from one an agent hand-assembled around its own claim (#982).
+    produced_by: "run-tests.sh",
     tests_run: Number(testsRun) || 0,
     suites, collected_is_executed: true,
     addons_path: addonsPath, data_dir: dataDir,

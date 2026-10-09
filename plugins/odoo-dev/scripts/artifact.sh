@@ -57,9 +57,9 @@ const SCHEMA = {
     types: { modules: "array", claims: "array", verify_steps: "array" },
   },
   "30-test": {
-    required: ["passed","tests_run","tours_declared","tours_run","failures","log_file"],
+    required: ["passed","tests_run","tours_declared","tours_run","failures","log_file","produced_by"],
     types: { passed: "boolean", tests_run: "number", tours_declared: "number",
-             tours_run: "number", failures: "array" },
+             tours_run: "number", failures: "array", produced_by: "string" },
   },
   "35-review": {
     required: ["findings","criteria_results"],

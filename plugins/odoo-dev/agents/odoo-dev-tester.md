@@ -164,7 +164,11 @@ reuse it either, since it forbids `;` and `&&` — one command per call, and tha
 command carries its own absolute paths.
 
 `30-test.json` required fields: `passed`, `tests_run`, `tours_declared`,
-`tours_run`, `failures`, `log_file` — the verbatim `run-tests.sh` JSON.
+`tours_run`, `failures`, `log_file`, `produced_by` — the verbatim `run-tests.sh`
+JSON. `produced_by` is stamped by that script and by nothing else, so the only way
+to satisfy it is to put the run's own output through unedited. If you find yourself
+hand-writing the field, stop: that is the hand-assembled artifact the field exists
+to expose, and `odoo-dev-pr` reports it as not independent evidence.
 
 `35-review.json` required fields: `findings` (each with file, line, severity and
 what is wrong) and `criteria_results` (one entry per claim and per acceptance
