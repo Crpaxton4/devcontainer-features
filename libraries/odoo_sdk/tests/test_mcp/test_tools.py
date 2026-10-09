@@ -2,8 +2,11 @@
 two-phase sampling flow (input-required result + ctx.input_responses, #664)."""
 
 import asyncio
+import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,6 +42,7 @@ def _make_sp(
     existing_branches=(),
     remote_branches=(),
     origin_head="",
+    toplevel="",
 ) -> MagicMock:
     """Fake ``subprocess`` for the git helpers in ``start_task``.
 
@@ -56,6 +60,10 @@ def _make_sp(
         refs/remotes/origin/HEAD`` (e.g. ``"origin/main"``); empty means the
         remote default branch is unknown, so ``_default_base_branch`` falls back
         to the current branch.
+    :param toplevel: Value returned by ``git rev-parse --show-toplevel``
+        (``_repo_root``). Empty — the default — makes that probe *fail*, so the
+        odoo-dev repo-map lookup (#979) is skipped entirely and no test picks up
+        the developer's ambient ``repo-map.json``. Pass a path to exercise it.
     """
     sp = MagicMock()
     state = {"stash_entries": 0}
@@ -67,6 +75,9 @@ def _make_sp(
         if args[1] == "symbolic-ref":
             r.stdout = f"{origin_head}\n" if origin_head else ""
             r.returncode = 0 if origin_head else 1
+        elif args[1] == "rev-parse" and "--show-toplevel" in args:
+            r.stdout = f"{toplevel}\n" if toplevel else ""
+            r.returncode = 0 if toplevel else 128
         elif args[1] == "rev-parse" and "--verify" in args:
             spec = args[-1]
             ref = spec.rsplit("/", 1)[-1]
@@ -826,9 +837,10 @@ class TestTaskBranchBase(unittest.TestCase):
     """#903: the task branch forks from the *configured* base, never origin/HEAD.
 
     Precedence is explicit ``base_branch`` argument > ``ODOO_SDK_BASE_BRANCH``
-    > the remote default. On a repo whose base is a shared pre-production
-    branch, forking from the remote default silently puts the work — and the
-    PR — on the wrong base.
+    > the odoo-dev repo map (#979, covered in :class:`TestRepoMapBase`) > the
+    remote default. On a repo whose base is a shared pre-production branch,
+    forking from the remote default silently puts the work — and the PR — on
+    the wrong base.
     """
 
     _ENV = "ODOO_SDK_BASE_BRANCH"
@@ -944,6 +956,326 @@ class TestTaskBranchBase(unittest.TestCase):
             ["git", "checkout", "-b", "10-fix", "origin/UAT"], self._calls(sp)
         )
         self.assertEqual(result["base_branch"], "UAT")
+
+
+class TestRepoMapDefaultBranch(unittest.TestCase):
+    """#979: the pure repo-map lookup — matching rule and failure tolerance.
+
+    ``_repo_map_default_branch`` is the only part of the SDK that knows the
+    odoo-dev repo map exists. It is a *read* of a file another tool owns, so
+    every way that read can disappoint it has to end in ``None`` rather than an
+    exception: ``start_task`` must still work on a machine with no map, a map
+    from the future, or a map truncated mid-write.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _lookup(self, repo_root, *, map_text=None, state_dir=...):
+        """Resolve ``repo_root`` against a map written from ``map_text``.
+
+        ``map_text=None`` writes no file at all; ``state_dir`` defaults to this
+        test's temp dir and may be set to ``None`` to leave
+        ``ODOO_DEV_STATE_DIR`` unset — the "no odoo-dev here" case.
+        """
+        from odoo_sdk.mcp.tools.start_task import _repo_map_default_branch
+
+        if map_text is not None:
+            (self.state_dir / "repo-map.json").write_text(map_text)
+        if state_dir is ...:
+            state_dir = self.state_dir
+        env = {} if state_dir is None else {"ODOO_DEV_STATE_DIR": str(state_dir)}
+        with patch.dict(os.environ, env, clear=False):
+            if state_dir is None:
+                os.environ.pop("ODOO_DEV_STATE_DIR", None)
+            return _repo_map_default_branch(repo_root)
+
+    @staticmethod
+    def _map(**projects) -> str:
+        return json.dumps({"_doc": "test", "projects": projects})
+
+    def test_repo_path_match_returns_the_recorded_default_branch(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            Breezy={"repo": "breezyhill1", "repo_path": root, "default_branch": "E2E"}
+        )
+        self.assertEqual(self._lookup(root, map_text=text), "E2E")
+
+    def test_repo_path_is_compared_through_realpath(self):
+        # A bind mount or symlink must still identify the same checkout.
+        real = self.state_dir / "checkout"
+        real.mkdir()
+        link = self.state_dir / "via-symlink"
+        link.symlink_to(real)
+        text = self._map(
+            Breezy={"repo": "checkout", "repo_path": str(link), "default_branch": "UAT"}
+        )
+        self.assertEqual(self._lookup(os.path.realpath(real), map_text=text), "UAT")
+
+    def test_repo_name_match_is_the_fallback_when_no_path_is_recorded(self):
+        root = os.path.join(self._tmp.name, "qocinnovations")
+        text = self._map(QOC={"repo": "qocinnovations", "default_branch": "UAT"})
+        self.assertEqual(self._lookup(root, map_text=text), "UAT")
+
+    def test_repo_path_match_beats_a_name_match_on_another_entry(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            Named={"repo": os.path.basename(root), "default_branch": "wrong"},
+            Pathed={"repo": "other", "repo_path": root, "default_branch": "right"},
+        )
+        self.assertEqual(self._lookup(root, map_text=text), "right")
+
+    def test_ambiguous_repo_name_match_resolves_to_nothing(self):
+        # Two projects on one repo — an engagement and its version upgrade —
+        # disagree about default_branch, so the name alone cannot decide.
+        root = os.path.join(self._tmp.name, "Fulton")
+        text = self._map(
+            Consulting={"repo": "Fulton", "default_branch": "UAT"},
+            Upgrade={"repo": "Fulton", "default_branch": "28224#19-upgrade"},
+        )
+        self.assertIsNone(self._lookup(root, map_text=text))
+
+    def test_unmapped_repo_resolves_to_nothing(self):
+        text = self._map(QOC={"repo": "qocinnovations", "default_branch": "UAT"})
+        self.assertIsNone(
+            self._lookup(os.path.join(self._tmp.name, "elsewhere"), map_text=text)
+        )
+
+    def test_entry_without_a_default_branch_resolves_to_nothing(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(QOC={"repo": "qoc", "repo_path": root})
+        self.assertIsNone(self._lookup(root, map_text=text))
+
+    def test_unset_state_dir_resolves_to_nothing_without_guessing_a_default(self):
+        # state-dir.sh owns the $HOME/.local/share/odoo-dev default and forbids
+        # a second spelling of it, so an unset variable means "no map" — even
+        # with a perfectly good map sitting in this test's own state dir.
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(QOC={"repo": "qoc", "repo_path": root, "default_branch": "x"})
+        self.assertIsNone(self._lookup(root, map_text=text, state_dir=None))
+
+    def test_missing_map_file_resolves_to_nothing(self):
+        self.assertIsNone(
+            self._lookup(os.path.realpath(self._tmp.name), state_dir=self.state_dir)
+        )
+
+    def test_malformed_map_resolves_to_nothing_instead_of_raising(self):
+        root = os.path.realpath(self._tmp.name)
+        self.assertIsNone(self._lookup(root, map_text='{"projects": {"a":'))
+
+    def test_map_with_a_non_object_projects_key_resolves_to_nothing(self):
+        root = os.path.realpath(self._tmp.name)
+        self.assertIsNone(self._lookup(root, map_text='{"projects": []}'))
+
+    def test_no_repo_root_resolves_to_nothing(self):
+        # Outside a git repo there is nothing to look up, and the map is not
+        # even opened.
+        self.assertIsNone(self._lookup(None, map_text=self._map()))
+
+
+class TestRepoMapBase(unittest.TestCase):
+    """#979: the repo map's ``default_branch`` outranks ``origin/HEAD``.
+
+    The reported failure: a repo whose GitHub default is ``master`` while task
+    work flows into ``E2E``. ``start_task`` forked from ``master``, whose
+    ``.gitignore`` differs, and the auto-stash pop then collided — the user's
+    work ended up parked in ``stash@{0}`` with an error that never said which
+    base had been chosen. The repo map already recorded the right answer.
+    """
+
+    _ENV = "ODOO_SDK_BASE_BRANCH"
+    _STATE_ENV = "ODOO_DEV_STATE_DIR"
+
+    @staticmethod
+    def _calls(sp):
+        return [c.args[0] for c in sp.run.call_args_list]
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.state_dir = Path(self._tmp.name) / "state"
+        self.state_dir.mkdir()
+        self.repo_root = os.path.realpath(self._tmp.name)
+
+    def _write_map(self, text=None, *, default_branch="E2E"):
+        if text is None:
+            text = json.dumps(
+                {
+                    "_doc": "test",
+                    "projects": {
+                        "Breezy Hill Phase 2": {
+                            "repo": os.path.basename(self.repo_root),
+                            "repo_path": self.repo_root,
+                            "default_branch": default_branch,
+                            "branch_flow": [":task", default_branch, "production"],
+                        }
+                    },
+                }
+            )
+        (self.state_dir / "repo-map.json").write_text(text)
+
+    def _tool(self):
+        client = MagicMock()
+        client.execute.return_value = [
+            {"id": 10, "name": "Fix", "project_id": [5, "Accounting"]}
+        ]
+        reg = _FakeRegistry(
+            client=client,
+            search_projects=lambda *a, **k: [],
+            search_tasks=lambda *a, **k: [],
+            start_task=lambda **kw: {"run_id": 1, **kw},
+        )
+        return make_start_task_tool(reg)
+
+    def _start(self, sp, *, env_base=None, state_dir=True, **kwargs):
+        """Run the headless flow with both env knobs controlled in-process."""
+        ctx = MagicMock()
+        ctx.elicit = AsyncMock()
+        ctx.session.check_client_capability.return_value = False
+        with patch(_SP_PATCH, sp), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(self._ENV, None)
+            os.environ.pop(self._STATE_ENV, None)
+            if env_base is not None:
+                os.environ[self._ENV] = env_base
+            if state_dir:
+                os.environ[self._STATE_ENV] = str(self.state_dir)
+            return _run(self._tool()(ctx, task_id=10, **kwargs))
+
+    def _sp(self, *, remote=("E2E", "master", "staging"), origin_head="origin/master"):
+        return _make_sp(
+            remote_branches=remote,
+            origin_head=origin_head,
+            toplevel=self.repo_root,
+        )
+
+    def test_repo_map_default_branch_wins_over_origin_head(self):
+        self._write_map()
+        sp = self._sp()
+        result = self._start(sp)
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/E2E"], calls)
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/master"], calls)
+        self.assertIn(
+            ["git", "branch", "--set-upstream-to=origin/E2E", "10-fix"], calls
+        )
+        self.assertEqual(result["base_branch"], "E2E")
+
+    def test_environment_wins_over_the_repo_map(self):
+        self._write_map()
+        sp = self._sp()
+        result = self._start(sp, env_base="staging")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/staging"], calls)
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/E2E"], calls)
+        self.assertEqual(result["base_branch"], "staging")
+
+    def test_argument_wins_over_the_environment_and_the_repo_map(self):
+        self._write_map()
+        sp = self._sp(remote=("E2E", "master", "staging", "UAT"))
+        result = self._start(sp, env_base="staging", base_branch="UAT")
+        calls = self._calls(sp)
+        self.assertIn(["git", "checkout", "-b", "10-fix", "origin/UAT"], calls)
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/E2E"], calls)
+        self.assertNotIn(["git", "checkout", "-b", "10-fix", "origin/staging"], calls)
+        self.assertEqual(result["base_branch"], "UAT")
+
+    def test_unset_state_dir_falls_back_to_origin_head(self):
+        self._write_map()  # present, but nothing points the SDK at it
+        sp = self._sp()
+        result = self._start(sp, state_dir=False)
+        self.assertIn(
+            ["git", "checkout", "-b", "10-fix", "origin/master"], self._calls(sp)
+        )
+        self.assertEqual(result["base_branch"], "master")
+
+    def test_malformed_repo_map_falls_back_to_origin_head(self):
+        self._write_map(text='{"projects": {"Breezy Hill Phase 2": {"repo"')
+        sp = self._sp()
+        result = self._start(sp)
+        self.assertIn(
+            ["git", "checkout", "-b", "10-fix", "origin/master"], self._calls(sp)
+        )
+        self.assertEqual(result["base_branch"], "master")
+
+    def test_repo_map_replaces_the_interactive_branch_pick(self):
+        # Name-search path: a recorded base is an answer, so there is nothing
+        # left to ask the caller.
+        reg = _FakeRegistry(
+            search_projects=lambda query, limit=10: [{"id": 5, "name": "Acct"}],
+            search_tasks=lambda query, project_id, limit=10: [
+                {"id": 10, "name": "Fix"}
+            ],
+            start_task=lambda **kw: {"run_id": 1, **kw},
+        )
+        self._write_map()
+        ctx = _ctx()
+        sp = self._sp()
+        with patch(_SP_PATCH, sp), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(self._ENV, None)
+            os.environ[self._STATE_ENV] = str(self.state_dir)
+            result = _run(make_start_task_tool(reg)(ctx, "Fix", "Acct"))
+        ctx.elicit.assert_not_awaited()
+        self.assertEqual(result["base_branch"], "E2E")
+
+
+class TestBranchSetupErrorNamesTheBase(unittest.TestCase):
+    """#979: a failed branch setup says which base it forked from, and why.
+
+    The reported error named the branch it could not create and where the work
+    had gone, but not the base — so the one piece of information that would
+    have explained the collision (``master``, chosen from ``origin/HEAD``, on a
+    repo whose task work is based on ``E2E``) was missing.
+    """
+
+    def test_message_names_the_base_and_the_knob_that_chose_it(self):
+        from odoo_sdk.mcp.tools.start_task import _unwind_failed_pop
+
+        sp = _make_sp(current_branch="UAT")
+        with patch(_SP_PATCH, sp):
+            message = _unwind_failed_pop("10-fix", True, "UAT", "master", "origin/HEAD")
+        self.assertIn("base 'master' chosen from origin/HEAD", message)
+        self.assertIn("10-fix", message)
+
+    def test_each_source_is_reported_verbatim(self):
+        from odoo_sdk.mcp.tools.start_task import _unwind_failed_pop
+
+        for source in (
+            "argument",
+            "ODOO_SDK_BASE_BRANCH",
+            "repo map",
+            "origin/HEAD",
+            "current branch",
+        ):
+            with self.subTest(source=source):
+                with patch(_SP_PATCH, _make_sp(current_branch="UAT")):
+                    message = _unwind_failed_pop("10-fix", True, "UAT", "E2E", source)
+                self.assertIn(f"base 'E2E' chosen from {source}", message)
+
+    def test_create_task_branch_defaults_the_source_to_the_argument(self):
+        # A direct two-argument call really is naming the base as an argument.
+        from odoo_sdk.mcp.tools.start_task import (
+            _BranchSetupError,
+            _create_task_branch,
+        )
+
+        # Dirty tree -> an auto-stash is pushed, and every pop reports failure,
+        # which is the branch-setup failure path.
+        sp = _make_sp(dirty=True, remote_branches=("main",), origin_head="origin/main")
+        inner = sp.run.side_effect
+
+        def _fail_pops(args, **kwargs):
+            result = inner(args, **kwargs)
+            if args[1:3] == ["stash", "pop"]:
+                result.returncode = 1
+            return result
+
+        sp.run.side_effect = _fail_pops
+        with patch(_SP_PATCH, sp):
+            with self.assertRaises(_BranchSetupError) as caught:
+                _create_task_branch("10-fix", "main")
+        self.assertIn("base 'main' chosen from argument", str(caught.exception))
 
 
 def _sampling_ctx(
