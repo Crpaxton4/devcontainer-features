@@ -7,11 +7,21 @@
 #   install.sh               creates each container_target (mkdir -p / chown / chmod mode)
 #                            EXCEPT host-provisioned rows (provision=host): those the
 #                            container must NOT create - see the provision column below
+#   install.sh (staging)     also copies THIS FILE verbatim into the image, at
+#                            /usr/local/share/personal-features/persisted-paths.tsv,
+#                            because the build-time loop above runs before any bind
+#                            mount exists and so cannot inspect the mounted paths
+#   check-mount-ownership    the staged copy's reader: at postCreateCommand time, with
+#                            the mounts live, it warns about every container_target the
+#                            container user cannot write and names that row's
+#                            host_source in the `sudo chown` remedy (#974)
 #   setup.sh                 creates each host_source under the host home directory
 #                            (mkdir -p / chmod mode - the container sees the HOST
 #                            mode through an active bind mount, so the mode column
 #                            must be enforced on both sides), and initializes the
-#                            host-provisioned tracker database schema
+#                            host-provisioned tracker database schema. It never
+#                            chowns: a source it does not own stops it with the
+#                            `sudo chown` remedy rather than a chmod failure (#974)
 #   setup.ps1                mirrors setup.sh row-for-row (hand-kept in sync; no pwsh CI
 #                            for the container build, so parity is checked statically by
 #                            .github/scripts/test_host_setup_parity.py)

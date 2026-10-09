@@ -133,6 +133,18 @@ while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_val
     chmod "$_mode" "$_container_target"
 done < "$_MANIFEST"
 
+# Stage the manifest INTO the image (#974). Until now the TSV was read here, at
+# build time, and never shipped - so nothing at runtime could iterate the rows,
+# and the one check that matters most cannot run at build time at all: no bind
+# mount exists yet while this script runs, so every target above is the image's
+# own empty directory and says nothing about the host path that will shadow it.
+# check-mount-ownership (generated further down, run from postCreateCommand with
+# the mounts live) reads this copy. /usr/local/share/personal-features is the
+# Feature's existing "ship policy as data" location, and it is outside every
+# bind mount, so a build-time write here is not shadowed at runtime.
+install -d -m 0755 /usr/local/share/personal-features
+install -m 0644 "$_MANIFEST" /usr/local/share/personal-features/persisted-paths.tsv
+
 # create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
 # YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
 # containers — the script tolerates missing config at every level).
@@ -839,6 +851,184 @@ chmod 0755 /usr/local/bin/mempalace-repair
 echo "Reconciling the mempalace palace root for $_REMOTE_USER_HOME"
 MEMPALACE_LINK_OWNER="$_REMOTE_USER" /usr/local/bin/mempalace-repair "$_REMOTE_USER_HOME"
 
+# --- check-mount-ownership: a present-but-unwritable bind mount (#974) -------
+# Adding a row to persisted-paths.tsv provisions the CONTAINER side here, but
+# the HOST side only exists once someone re-runs ./setup.sh on the host. Nothing
+# makes them do that, and Docker does not refuse a missing bind-mount source: it
+# creates it, as `root:root 0755`. The container then starts cleanly, the mount
+# is present, the provision marker says `stale_image: false`, and the container
+# user cannot write a byte through it. That ran undetected from the day each row
+# landed for `coderabbit-cli` (#661) and `odoo-dev` (#884) - the odoo-dev plugin
+# could persist no task artifact and the CodeRabbit CLI login could not persist,
+# with no error anywhere.
+#
+# This CANNOT be checked in install.sh, which is why the issue's first option is
+# not the one taken: at image-build time no bind mount exists at all, so every
+# target the loop at the top of this file just created is the image's own empty
+# directory, owned by whoever install.sh ran as. Checking there would assert a
+# fact about a path the runtime mount then replaces. The check has to run with
+# the mounts LIVE, i.e. from postCreateCommand - hence a generated script, and
+# hence the manifest being staged into the image above, which it was not before.
+#
+# The trigger is UNWRITABILITY, not an ownership mismatch, and that is a
+# deliberate narrowing of the issue's wording ("not owned by the container uid,
+# or is not writable by it"). Ownership alone is routinely and correctly not the
+# container uid: `shell-history` is mode 0777 precisely so that any container
+# uid can append through a host dir it does not own (#323), and warning there
+# would train the reader to ignore this. Unwritability is the thing that breaks,
+# so unwritability is what is reported - with the owner and mode printed as the
+# evidence, because `root:root` is the tell that distinguishes "Docker made this
+# directory" from any other ownership story (setup.sh never produces a
+# root-owned source).
+#
+# Exit 0 by contract, always: this is a diagnostic, and a diagnostic that can
+# break container create is worse than the condition it reports. The result also
+# lands in the shared provision marker as `mount_ownership`, because the
+# container-create log carrying the warning is gone by the time anyone wonders.
+cat > /usr/local/bin/check-mount-ownership << 'CHECK_MOUNT_OWNERSHIP'
+#!/bin/sh
+# check-mount-ownership - report every persisted bind-mount target this user
+# cannot write, and say how to fix it on the host (#974).
+#
+# Runs from the Feature's postCreateCommand, where the bind mounts are LIVE and
+# `stat` therefore sees the HOST directory the mount exposes rather than the
+# image directory install.sh created. Reads the manifest install.sh stages at
+# /usr/local/share/personal-features/persisted-paths.tsv - the same
+# persisted-paths.tsv that is the single source of truth for every other
+# consumer - so a row added there is checked here with no edit.
+#
+# `provision=host` rows are skipped: the host provisions those and the container
+# must never touch them (#369); a missing one already fails loudly on its own.
+#
+# Overrides, for the feature test and for debugging:
+#   PF_MANIFEST         manifest to read (default: the staged copy above)
+#   CLAUDE_CONFIG_DIR   where the provision marker lives
+#
+# Never fatal: exits 0 whatever it finds.
+set -u
+
+MANIFEST="${PF_MANIFEST:-/usr/local/share/personal-features/persisted-paths.tsv}"
+MARKER="${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features-provision.json"
+
+MY_UID="$(id -u)"
+MY_GID="$(id -g)"
+ME="$(id -un 2>/dev/null || echo "uid $MY_UID")"
+
+warn() { printf 'WARNING: check-mount-ownership: %s\n' "$1" >&2; }
+say() { printf 'check-mount-ownership: %s\n' "$1"; }
+
+if [ ! -r "$MANIFEST" ]; then
+    warn "no persisted-paths manifest at $MANIFEST, so NO bind-mount target was checked. An image built before #974 stages none; rebuild without cache to get one."
+    exit 0
+fi
+
+# One unwritable target per line, tab-separated, for the marker writer below.
+UNWRITABLE=""
+CHECKED=0
+TAB="$(printf '\t')"
+while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
+    case "$_name" in '' | '#'*) continue ;; esac
+    case "$_provision" in host) continue ;; esac
+    target="${_container_target%/}"
+    [ -n "$target" ] || continue
+    [ -e "$target" ] || continue
+    CHECKED=$((CHECKED + 1))
+    [ -w "$target" ] && continue
+
+    owner="$(stat -c '%U:%G' "$target" 2>/dev/null)" || owner=""
+    [ -n "$owner" ] || owner="unknown:unknown"
+    owner_uid="$(stat -c '%u' "$target" 2>/dev/null)" || owner_uid=""
+    mode="$(stat -c '%a' "$target" 2>/dev/null)" || mode=""
+    [ -n "$mode" ] || mode="unknown"
+
+    warn "$target is owned by $owner (mode $mode) and is not writable by $ME (uid $MY_UID)"
+    # Three distinguishable stories, and saying which one it is matters more
+    # than the remedy, which is the same for all three.
+    if [ "$owner" = "root:root" ]; then
+        warn "  root:root is the tell: ./setup.sh never produces a root-owned source, so Docker created the bind-mount source ~/$_host_source itself (as root:root 0755) because ./setup.sh was not re-run on the host after the '$_name' row was added to persisted-paths.tsv."
+    elif [ -n "$owner_uid" ] && [ "$owner_uid" = "$MY_UID" ]; then
+        warn "  The owner is this user, so it is the MODE that denies the write: the container sees the HOST directory's mode through the mount, and ~/$_host_source carries $mode where persisted-paths.tsv says $_mode."
+    else
+        warn "  The bind-mount source ~/$_host_source on the host belongs to neither root nor this container user, so the mount delivers a directory nothing here can write."
+    fi
+    warn "  On the host, run:  sudo chown -R $MY_UID:$MY_GID ~/$_host_source"
+    warn "  then re-run:       ./setup.sh"
+    warn "  Until then the mount is present and this container looks healthy, but nothing written under $target is saved - which is the whole failure mode (#974)."
+    UNWRITABLE="$UNWRITABLE$_name$TAB$target$TAB$_host_source$TAB$owner$TAB$mode
+"
+done < "$MANIFEST"
+
+if [ -z "$UNWRITABLE" ]; then
+    say "OK - all $CHECKED persisted bind-mount targets are writable by $ME (uid $MY_UID)"
+    if [ "$MY_UID" -eq 0 ]; then
+        say "note - running as root, which may write any path whatever its owner, so this run proves nothing about a non-root remoteUser"
+    fi
+fi
+
+# Record the verdict in the marker the rest of the Feature shares. Merged, not
+# rewritten: this writer owns `mount_ownership` and nothing else (#868).
+if command -v python3 >/dev/null 2>&1; then
+    PF_MARKER="$MARKER" PF_UNWRITABLE="$UNWRITABLE" PF_CHECKED="$CHECKED" \
+        python3 - <<'MOUNT_OWNERSHIP_RECORD' 2>/dev/null || warn "the result could not be recorded in $MARKER"
+import json, os, time
+
+marker = os.environ["PF_MARKER"]
+record = {}
+try:
+    with open(marker) as handle:
+        loaded = json.load(handle)
+    if isinstance(loaded, dict):
+        record = loaded
+except Exception:
+    record = {}
+
+unwritable = []
+for line in os.environ.get("PF_UNWRITABLE", "").splitlines():
+    fields = line.split("\t")
+    if len(fields) != 5:
+        continue
+    name, target, host_source, owner, mode = fields
+    unwritable.append(
+        {
+            "name": name,
+            "container_target": target,
+            "host_source": host_source,
+            "owner": owner,
+            "mode": mode,
+        }
+    )
+
+record["mount_ownership"] = {
+    "issue": "974",
+    "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "checked": int(os.environ.get("PF_CHECKED") or 0),
+    "unwritable": unwritable,
+    "ok": not unwritable,
+}
+
+directory = os.path.dirname(marker)
+if directory:
+    os.makedirs(directory, exist_ok=True)
+tmp = marker + ".mounts.tmp"
+with open(tmp, "w") as handle:
+    json.dump(record, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+try:
+    # Same reasoning as the other writers here: install.sh cannot know which uid
+    # runs postCreateCommand, and the marker holds no secret.
+    os.chmod(tmp, 0o666)
+except OSError:
+    pass
+os.replace(tmp, marker)
+MOUNT_OWNERSHIP_RECORD
+else
+    warn "python3 is not on PATH, so the result was not recorded in $MARKER"
+fi
+
+exit 0
+CHECK_MOUNT_OWNERSHIP
+chmod 0755 /usr/local/bin/check-mount-ownership
+
 # --- Claude Code integrations: MCP server + plugins (#486, #484, #723) -------
 # sync-claude-mcp registers the odoo-mcp MCP server and the mempalace and
 # odoo-dev plugins at user scope. Installed to /usr/local/bin and run at
@@ -1193,6 +1383,7 @@ pf_add_script /usr/local/bin/sync-claude-mcp
 pf_add_script /usr/local/bin/sync-claude-hooks
 pf_add_script /usr/local/bin/claude-event-hook
 pf_add_script /usr/local/bin/mempalace-repair
+pf_add_script /usr/local/bin/check-mount-ownership
 pf_add_script /usr/local/bin/resolve-mempal-dir
 pf_add_script /usr/local/bin/create-pr
 pf_add_script /usr/local/bin/gh-as-owner
@@ -1207,6 +1398,14 @@ pf_add_script /usr/local/share/personal-features/hooks/odoo-api-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
 pf_add_script /usr/local/share/personal-features/settings-fragment.json
+# The staged persisted-paths manifest (#974), in this set for the same stated
+# reason as the settings fragment one line up: this list fingerprints file
+# CONTENTS, and policy data whose drift is invisible belongs in it as much as a
+# script does. check-mount-ownership checks exactly the rows its copy of the
+# manifest carries, so an image staged before a row was added reports `OK` over
+# a path it never looked at - healthy-looking output from a stale checker, which
+# is the #806 defect wearing the #974 hat.
+pf_add_script /usr/local/share/personal-features/persisted-paths.tsv
 if command -v python3 >/dev/null 2>&1; then
     PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" \
         PF_MEMPALACE_CLI="$mempalace_pinned_cli" \
@@ -1331,6 +1530,8 @@ record.update(
 # `mempalace_hub` into this same marker from postStartCommand, and
 # `record = dict(previous)` above carries it through every provision without
 # naming it here - which is exactly the property #868 made general.
+# `mount_ownership` (#974, written by check-mount-ownership later in the same
+# postCreateCommand chain) is the second, and needed no edit here either.
 
 if stale:
     sys.stderr.write(
