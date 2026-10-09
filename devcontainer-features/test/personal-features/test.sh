@@ -2323,4 +2323,168 @@ check "shell-history dir is 0777 (any uid can create/append bash_history, #323)"
 check "odoo-dev state dir is chmod 0700 (client task artifacts, #884)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/odoo-dev)\" = '700' ]"
 
+# --- #974: a present-but-unwritable bind mount is reported, not swallowed ----
+# Docker does not refuse a bind mount whose source is missing on the host - it
+# CREATES the source, as root:root 0755. So a row added to persisted-paths.tsv
+# without a re-run of ./setup.sh on the host leaves a mount that is present, a
+# container that starts cleanly, a provision marker that says stale_image:false,
+# and a target the container user cannot write. That was live for `coderabbit-cli`
+# (#661) and `odoo-dev` (#884) from the day each row landed.
+#
+# install.sh cannot check this, which is why nothing did: at build time no mount
+# exists, so every target it created is the image's own empty directory. The
+# check runs from postCreateCommand instead, over a manifest install.sh now
+# stages INTO the image - and that staging is the first thing asserted here,
+# because a checker with no manifest to read reports nothing at all.
+PF_STAGED_MANIFEST=/usr/local/share/personal-features/persisted-paths.tsv
+
+check "persisted-paths.tsv is staged into the image for runtime readers (#974)" bash -c \
+  "test -r $PF_STAGED_MANIFEST"
+check "the staged manifest is mode 0644 (readable by whichever uid runs postCreate)" bash -c \
+  "[ \"\$(stat -c '%a' $PF_STAGED_MANIFEST)\" = '644' ]"
+
+# The 7-column shape .github/scripts/check_persisted_paths.py fixes on the
+# source file has to hold for the staged copy too: a truncated or re-columned
+# copy makes the checker below read the wrong field and skip rows in silence.
+PF_TAB="$(printf '\t')"
+PF_STAGED_ROWS=0
+PF_STAGED_BADSHAPE=0
+while IFS= read -r _pf_line; do
+    case "$_pf_line" in '' | '#'*) continue ;; esac
+    _pf_fields="$(printf '%s' "$_pf_line" | awk -F'\t' '{print NF}')"
+    [ "$_pf_fields" = 7 ] || PF_STAGED_BADSHAPE=$((PF_STAGED_BADSHAPE + 1))
+    PF_STAGED_ROWS=$((PF_STAGED_ROWS + 1))
+done < "$PF_STAGED_MANIFEST"
+check "every staged manifest row carries the 7 columns the source contract fixes" bash -c \
+  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 10 ]"
+
+# The two rows #974 names, verbatim, so a staged copy that silently lost or
+# rewrote one is a failure rather than a smaller row count.
+PF_ROW_CODERABBIT="coderabbit-cli${PF_TAB}.coderabbit/${PF_TAB}/home/vscode/.coderabbit/${PF_TAB}"
+PF_ROW_ODOO_DEV="odoo-dev${PF_TAB}.config/odoo-dev/${PF_TAB}/usr/local/share/odoo-dev/${PF_TAB}"
+check "the staged manifest carries the coderabbit-cli row verbatim (#661)" bash -c \
+  "grep -qF '$PF_ROW_CODERABBIT' $PF_STAGED_MANIFEST"
+check "the staged manifest carries the odoo-dev row verbatim (#884)" bash -c \
+  "grep -qF '$PF_ROW_ODOO_DEV' $PF_STAGED_MANIFEST"
+
+# That the staged copy really is the file that built THIS container: every
+# container-provisioned row must name a target that exists at that row's mode.
+# Both consumers enforce the same `mode` column (install.sh on the container
+# side, setup.sh on the host side), so this holds whether or not the mounts are
+# live here. A staged manifest from some other build fails it.
+PF_ROW_MISMATCH=0
+PF_ROW_CHECKED=0
+while IFS="$PF_TAB" read -r _pf_name _pf_src _pf_target _pf_env _pf_val _pf_mode _pf_prov; do
+    case "$_pf_name" in '' | '#'*) continue ;; esac
+    case "$_pf_prov" in host) continue ;; esac
+    _pf_t="${_pf_target%/}"
+    PF_ROW_CHECKED=$((PF_ROW_CHECKED + 1))
+    if [ ! -e "$_pf_t" ]; then
+        PF_ROW_MISMATCH=$((PF_ROW_MISMATCH + 1))
+        echo "staged manifest row '$_pf_name' names $_pf_t, which does not exist" >&2
+        continue
+    fi
+    _pf_actual="$(stat -c '%a' "$_pf_t")"
+    if [ "$_pf_actual" != "${_pf_mode#0}" ]; then
+        PF_ROW_MISMATCH=$((PF_ROW_MISMATCH + 1))
+        echo "staged manifest row '$_pf_name' says mode $_pf_mode, $_pf_t is $_pf_actual" >&2
+    fi
+done < "$PF_STAGED_MANIFEST"
+check "every container-provisioned staged row names a target that exists at that row's mode" bash -c \
+  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 9 ]"
+
+check "check-mount-ownership is installed and executable (#974)" bash -c \
+  "test -x /usr/local/bin/check-mount-ownership"
+check "check-mount-ownership parses as both sh and bash" bash -c \
+  "sh -n /usr/local/bin/check-mount-ownership && bash -n /usr/local/bin/check-mount-ownership"
+
+# Behavioural, against the installed script, driven through PF_MANIFEST so the
+# fixture rows are the Feature's real manifest shape without touching a real
+# mount. The suite runs unprivileged on some matrix legs and as root on others
+# (`devcontainer features test` is invoked with no --remote-user in CI), and a
+# root-owned fixture cannot be created without root - so the unwritable fixture
+# is a directory this user owns at mode 0555, which `[ -w ]` refuses for its
+# owner. As ROOT, `[ -w ]` is true for every path whatever its mode, so the
+# expectation flips with `id -u` rather than the test skipping and proving
+# nothing: a silent skip here is exactly the shape of defect #974 is about.
+PF_MOUNT_ROOT="$(mktemp -d)"
+mkdir -p "$PF_MOUNT_ROOT/unwritable" "$PF_MOUNT_ROOT/writable" \
+  "$PF_MOUNT_ROOT/cfg-bad" "$PF_MOUNT_ROOT/cfg-ok"
+chmod 0700 "$PF_MOUNT_ROOT/writable"
+chmod 0555 "$PF_MOUNT_ROOT/unwritable"
+{
+    printf '# fixture manifest (#974)\n'
+    printf 'fixture-bad\t.config/pf-fixture-bad/\t%s/\t-\t-\t0700\tcontainer\n' "$PF_MOUNT_ROOT/unwritable"
+    # Deliberately the SAME directory as the row above: if the checker ever
+    # stopped skipping provision=host rows, `checked` would be 2 and the same
+    # path would be reported twice, which is what the assertions below catch.
+    printf 'fixture-host\t.config/pf-fixture-host/\t%s/\t-\t-\t0700\thost\n' "$PF_MOUNT_ROOT/unwritable"
+} > "$PF_MOUNT_ROOT/bad.tsv"
+printf 'fixture-ok\t.config/pf-fixture-ok/\t%s/\t-\t-\t0700\tcontainer\n' \
+  "$PF_MOUNT_ROOT/writable" > "$PF_MOUNT_ROOT/ok.tsv"
+
+# Seed a foreign key in the bad-case marker: this writer owns `mount_ownership`
+# and must carry every other key forward, the same contract #868 made general
+# for sync-claude-mcp.
+cat > "$PF_MOUNT_ROOT/cfg-bad/personal-features-provision.json" <<'MARKER'
+{
+  "schema": 1,
+  "a_key_no_one_named_in_check_mount_ownership": "keep-me"
+}
+MARKER
+
+PF_MOUNT_BAD_LOG="$PF_MOUNT_ROOT/bad.log"
+if PF_MANIFEST="$PF_MOUNT_ROOT/bad.tsv" CLAUDE_CONFIG_DIR="$PF_MOUNT_ROOT/cfg-bad" \
+    /usr/local/bin/check-mount-ownership >"$PF_MOUNT_BAD_LOG" 2>&1; then
+    PF_MOUNT_BAD_EXIT=0
+else
+    PF_MOUNT_BAD_EXIT=$?
+fi
+PF_MOUNT_BAD_MARKER="$PF_MOUNT_ROOT/cfg-bad/personal-features-provision.json"
+
+if [ "$(id -u)" -eq 0 ]; then
+    check "as root a 0555 target is still writable, so the verdict is OK (#974)" bash -c \
+      "grep -qF 'check-mount-ownership: OK' '$PF_MOUNT_BAD_LOG' && jq -e '.mount_ownership.ok == true' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+    check "as root the checker says so, instead of implying it checked for everyone" bash -c \
+      "grep -qF 'proves nothing about a non-root remoteUser' '$PF_MOUNT_BAD_LOG'"
+else
+    check "an unwritable target gets a loud WARNING naming the target (#974)" bash -c \
+      "grep -qF 'WARNING: check-mount-ownership: $PF_MOUNT_ROOT/unwritable is owned by' '$PF_MOUNT_BAD_LOG'"
+    check "the warning names the HOST source from that row, which is where the fix goes" bash -c \
+      "grep -qF '~/.config/pf-fixture-bad/' '$PF_MOUNT_BAD_LOG'"
+    check "the warning spells out the sudo chown remedy and the setup.sh re-run" bash -c \
+      "grep -qF 'sudo chown -R $(id -u):$(id -g) ~/.config/pf-fixture-bad/' '$PF_MOUNT_BAD_LOG' && grep -qF './setup.sh' '$PF_MOUNT_BAD_LOG'"
+    check "the unwritable row lands in the provision marker with ok:false" bash -c \
+      "jq -e '.mount_ownership.ok == false and (.mount_ownership.unwritable | length) == 1 and .mount_ownership.unwritable[0].name == \"fixture-bad\" and .mount_ownership.unwritable[0].host_source == \".config/pf-fixture-bad/\" and .mount_ownership.unwritable[0].container_target == \"$PF_MOUNT_ROOT/unwritable\"' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+fi
+
+# Never fatal, on either leg: it sits in the postCreateCommand chain, and a
+# diagnostic that can break container create is worse than what it diagnoses.
+check "check-mount-ownership exits 0 whatever it finds" bash -c \
+  "[ '$PF_MOUNT_BAD_EXIT' = '0' ]"
+# provision=host rows are the container's business never to touch (#369), so the
+# checker must not have counted the fixture's host row.
+check "the checker skips provision=host rows" bash -c \
+  "jq -e '.mount_ownership.checked == 1' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+check "the checker preserves a marker key it does not own (#868)" bash -c \
+  "jq -e '.a_key_no_one_named_in_check_mount_ownership == \"keep-me\"' '$PF_MOUNT_BAD_MARKER' >/dev/null"
+
+# The inverse, identical on every leg: a writable target is one quiet OK line
+# and ok:true, so the warning above means something when it appears.
+PF_MOUNT_OK_LOG="$PF_MOUNT_ROOT/ok.log"
+PF_MANIFEST="$PF_MOUNT_ROOT/ok.tsv" CLAUDE_CONFIG_DIR="$PF_MOUNT_ROOT/cfg-ok" \
+  /usr/local/bin/check-mount-ownership >"$PF_MOUNT_OK_LOG" 2>&1
+check "a writable target reports OK and nothing else (#974)" bash -c \
+  "grep -qF 'check-mount-ownership: OK - all 1 persisted bind-mount targets are writable' '$PF_MOUNT_OK_LOG' && ! grep -qF 'WARNING' '$PF_MOUNT_OK_LOG'"
+check "a clean check records ok:true with an empty unwritable list" bash -c \
+  "jq -e '.mount_ownership.ok == true and (.mount_ownership.unwritable | length) == 0 and (.mount_ownership.checked_at | type) == \"string\"' '$PF_MOUNT_ROOT/cfg-ok/personal-features-provision.json' >/dev/null"
+
+# An image predating #974 stages no manifest. The checker must say that out loud
+# rather than reporting a clean run over zero paths.
+check "a missing staged manifest is reported, not read as zero problems" bash -c \
+  "PF_MANIFEST='$PF_MOUNT_ROOT/absent.tsv' CLAUDE_CONFIG_DIR='$PF_MOUNT_ROOT/cfg-ok' /usr/local/bin/check-mount-ownership 2>&1 | grep -qF 'so NO bind-mount target was checked'"
+
+chmod 0700 "$PF_MOUNT_ROOT/unwritable"
+rm -rf "$PF_MOUNT_ROOT"
+
 reportResults

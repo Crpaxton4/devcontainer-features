@@ -69,9 +69,28 @@ docker: Error response from daemon: invalid mount config for type "bind":
 bind source path does not exist: /home/you/.claude
 ```
 
+### When a mount source is already root-owned (#974)
+
+That hard failure is only what happens on the **first** run of a container. Every run after it, Docker does something worse: rather than refusing a missing bind-mount source, **it creates the source itself, as `root:root 0755`**. So if a row is added to `persisted-paths.tsv` and `./setup.sh` is not re-run on this host, the next container starts cleanly, the mount is present, the provision marker reports a healthy provision — and the container user cannot write a byte through it. That was live from the day each row landed for `~/.coderabbit` (#661) and `~/.config/odoo-dev` (#884): the odoo-dev plugin could persist no task artifact and the CodeRabbit CLI login could not persist, with nothing reporting anything.
+
+Since #974 the container says so at create, naming the host path and both commands:
+
+```
+WARNING: check-mount-ownership: /usr/local/share/odoo-dev is owned by root:root (mode 755) and is not writable by vscode (uid 1000)
+WARNING: check-mount-ownership:   root:root is the tell: ./setup.sh never produces a root-owned source, so Docker created
+WARNING: check-mount-ownership:   the bind-mount source ~/.config/odoo-dev itself (as root:root 0755) because ./setup.sh
+WARNING: check-mount-ownership:   was not re-run on the host after the 'odoo-dev' row was added to persisted-paths.tsv.
+WARNING: check-mount-ownership:   On the host, run:  sudo chown -R 1000:1000 ~/.config/odoo-dev/
+WARNING: check-mount-ownership:   then re-run:       ./setup.sh
+```
+
+**`root:root` is the diagnosis, not just a detail:** `setup.sh` never produces a root-owned source — it runs unprivileged and only ever touches paths under `$HOME` — so a root-owned mount source can only have come from Docker materialising it. Run exactly the two commands above, in that order: the `chown` takes the directory back (`setup.sh` deliberately never chowns anything, since acquiring root to repair a directory you never asked for is not its call), and the `setup.sh` re-run then applies the manifest's `mode` column to it.
+
+`setup.sh` no longer dies obscurely on such a source either. It used to abort on the `chmod` with a bare `chmod: changing permissions of '/home/you/.coderabbit': Operation not permitted` and, under `set -eu`, nothing else — no path, no cause, no fix. It now stops **before** touching anything, with the same `sudo chown` instruction and exit status 1.
+
 ## What persists, and where
 
-The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces).
+The persisted paths below are defined once in `persisted-paths.tsv` (next to `install.sh`), the single source of truth: `install.sh` creates the container targets from it, `setup.sh` creates the host sources from it, and `.github/scripts/check_persisted_paths.py` fails CI if `devcontainer-feature.json` drifts from it. Adding a persisted path is a one-row edit to that manifest (plus the matching JSON mount/env, which the check enforces). The manifest is also staged **into the image** at `/usr/local/share/personal-features/persisted-paths.tsv`, where `check-mount-ownership` re-reads it from `postCreateCommand` with the mounts live, so a mount that is present but not writable by the container user is reported at every container create instead of looking healthy (#974 — see [When a mount source is already root-owned](#when-a-mount-source-is-already-root-owned-974) above).
 
 Config and history are bind-mounted from your host home directory into fixed container paths, so they survive container rebuilds, follow you across projects on the same machine, and are safe from `docker volume prune`:
 
@@ -683,6 +702,16 @@ $ cat ~/.claude/personal-features-provision.json
   "mempalace_versions": {
     "cli": "3.9.0", "hub": "3.9.0", "plugin": "3.11.0",
     "match": false, "checked_at": "2026-09-23T03:06:08Z"
+  },
+  "mount_ownership": {
+    "issue": "974", "checked": 9, "ok": false,
+    "checked_at": "2026-09-23T03:06:08Z",
+    "unwritable": [
+      {
+        "name": "odoo-dev", "container_target": "/usr/local/share/odoo-dev",
+        "host_source": ".config/odoo-dev/", "owner": "root:root", "mode": "755"
+      }
+    ]
   }
 }
 ```
@@ -799,6 +828,46 @@ to choose: a host that registered it under some other name satisfies the bare
 install and not the qualified one, and refusing to install there at all would
 take the hooks away from a machine where they worked. That path says so out
 loud, since `claude plugin update mempalace@mempalace` cannot refresh it either.
+
+### `mount_ownership`: the mount that is present and unwritable (#974)
+
+The second foreign key in this marker, and the first one written from the same
+`postCreateCommand` chain rather than from `postStartCommand`. `mempalace_hub`
+(#898) proved the preserve-by-default property above; `mount_ownership` needed
+no edit in `sync-claude-mcp` either, which is the point of #868 holding.
+
+`check-mount-ownership` writes it. For every `provision=container` row of the
+manifest whose `container_target` exists, it asks one question — can the user
+running `postCreateCommand` write it? — and records `ok`, the number of targets
+`checked`, and one object per failure naming the row (`name`), the path inside
+the container (`container_target`), **the host path the fix goes on**
+(`host_source`), and the `owner` and `mode` that are the evidence.
+
+Three decisions worth keeping:
+
+- **The trigger is unwritability, not an ownership mismatch**, which narrows
+  what #974 proposed ("not owned by the container uid, *or* is not writable by
+  it"). Ownership routinely and correctly is *not* the container uid:
+  `shell-history` is mode `0777` precisely so that any container uid can append
+  through a host directory it does not own (#323), and warning there would train
+  the reader to ignore this check. Unwritability is what breaks, so
+  unwritability is what is reported — with the owner printed as the diagnosis,
+  because `root:root` distinguishes "Docker made this directory" from every
+  other ownership story.
+- **It runs at create, not at build.** `install.sh` cannot check this at all,
+  which is why nothing did: at image-build time no bind mount exists, so every
+  target `install.sh` just created is the image's own empty directory and says
+  nothing about the host path that will shadow it. That is also why the manifest
+  is now staged into the image — before #974 the TSV was read at build time and
+  never shipped, so no runtime reader could have existed.
+- **It never aborts container create.** Exit 0 whatever it finds, and it sits
+  after a `;` in the `postCreateCommand` chain rather than inside the `&&` run:
+  an unwritable mount is a plausible *cause* of an earlier step in that chain
+  failing, so the diagnostic has to run precisely when the chain broke.
+
+As root, `[ -w ]` is true for every path whatever its mode, so a run as a root
+`remoteUser` reports `OK` and says in the same breath that it proves nothing
+about a non-root one, rather than implying a clean bill of health.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
