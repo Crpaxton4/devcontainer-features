@@ -536,7 +536,7 @@ every later `import odoo_sdk` that does not pin `pythonpath` fails. That
 command is itself the re-sync that fixes it, so a correct path printed once is
 the whole check.
 
-Two mechanics that are not obvious:
+Three mechanics that are not obvious:
 
 - **Name one path per invocation.** A glob or a `for` loop over
   `.claude/worktrees/agent-*` is refused by the permission classifier, with and
@@ -544,6 +544,16 @@ Two mechanics that are not obvious:
   pass. Write them out.
 - A worktree with uncommitted files needs `--force`, and `--force` on a worktree
   you did not create is destructive. Only your own are safe to force.
+- **Harness branches outlive the worktree.** Every root worker dispatched with
+  `isolation: "worktree"` also leaves a local branch `worktree-agent-<id>` that
+  the worker never commits to: its first command checks out its real branch.
+  Removing the worktree does not remove the branch, and 140 had accumulated
+  before this run's cleanup. After `git worktree remove`, prove the branch is
+  empty with `git -C "$REPO" log --oneline origin/main..worktree-agent-<id>`
+  (it must print nothing) and delete it with
+  `git -C "$REPO" branch -D worktree-agent-<id>`, one per invocation like the
+  worktree removal. The 129 from earlier runs remain and are the user's call,
+  as the paragraph below already says about the worktrees themselves.
 
 **Worktrees you did not create are not yours to prune**, and deciding is not a
 one-liner — a stale-looking worktree can hold the only copy of unshipped work.
