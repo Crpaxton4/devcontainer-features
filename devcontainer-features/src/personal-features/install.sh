@@ -29,9 +29,11 @@ echo "Activating feature 'personal-features'"
 # Verification is opt-in per call, not mandatory, because the existing callers
 # fetch installer scripts and release tarballs whose publishers re-cut assets
 # under the same tag; pinning a digest for those would trade a working install
-# for a broken one on every upstream re-tag. Where the digest IS pinned (odoo-ls
-# below) that trade is the point: the binary runs as a long-lived server inside
-# every session.
+# for a broken one on every upstream re-tag. Where the digest IS pinned - the
+# odoo-ls assets and shellcheck, both below - that trade is the point: one runs
+# as a long-lived server inside every session, the other is the linter whose
+# verdict a gate is trusted on, and a re-cut body of either is a reason to stop
+# rather than to carry on.
 fetch() {
     local url="$1" dest="$2" expected="${3-}"
     curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url" || return 1
@@ -130,6 +132,18 @@ while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_val
     chown "$_REMOTE_USER" "$_container_target"
     chmod "$_mode" "$_container_target"
 done < "$_MANIFEST"
+
+# Stage the manifest INTO the image (#974). Until now the TSV was read here, at
+# build time, and never shipped - so nothing at runtime could iterate the rows,
+# and the one check that matters most cannot run at build time at all: no bind
+# mount exists yet while this script runs, so every target above is the image's
+# own empty directory and says nothing about the host path that will shadow it.
+# check-mount-ownership (generated further down, run from postCreateCommand with
+# the mounts live) reads this copy. /usr/local/share/personal-features is the
+# Feature's existing "ship policy as data" location, and it is outside every
+# bind mount, so a build-time write here is not shadowed at runtime.
+install -d -m 0755 /usr/local/share/personal-features
+install -m 0644 "$_MANIFEST" /usr/local/share/personal-features/persisted-paths.tsv
 
 # create-pr: config-driven `gh pr create` wrapper. Reads global/per-project
 # YAML from PR_AUTOMATION_CONFIG (bind-mounted at runtime, empty in test
@@ -518,11 +532,22 @@ else
 fi
 chmod 0644 "$MEMPALACE_HUB_REQUIREMENTS"
 
-# The version and the image the hub runs, as data rather than as a string
+# The versions and the image the hub runs, as data rather than as strings
 # repeated in a second script. mempalace-hub-up sources this file, so bumping
 # MEMPALACE_VERSION above moves the hub too.
-printf 'MEMPALACE_HUB_VERSION=%s\nMEMPALACE_HUB_IMAGE=%s\n' \
-    "$MEMPALACE_VERSION" "$MEMPALACE_HUB_IMAGE" > "$MEMPALACE_HUB_ENV_FILE"
+#
+# MEMPALACE_CLI_VERSION is that same pin under the name of the thing it actually
+# describes: the mempalace CLI/MCP server installed in THIS container. It is
+# written here because sync-claude-mcp needs the pinned value at
+# container-create time, to compare against the Claude Code plugin it lets float
+# (#975) - and sync-claude-mcp's body is a QUOTED heredoc, so no build-time
+# variable can reach it and the constant has to arrive as data. Same value as
+# the hub's today, by construction; recorded under both names so that a change
+# which ever pins the hub separately has a key to say so in, instead of
+# redefining this one underneath its only reader.
+printf 'MEMPALACE_HUB_VERSION=%s\nMEMPALACE_HUB_IMAGE=%s\nMEMPALACE_CLI_VERSION=%s\n' \
+    "$MEMPALACE_VERSION" "$MEMPALACE_HUB_IMAGE" "$MEMPALACE_VERSION" \
+    > "$MEMPALACE_HUB_ENV_FILE"
 chmod 0644 "$MEMPALACE_HUB_ENV_FILE"
 
 # Belt-and-braces on the interpreter perms, after the last uv call that could
@@ -593,7 +618,9 @@ set -eu
 #   4. assert the two things mempalace-as-only-memory needs that are its own -
 #      hooks.auto_save and identity.txt (#744) - warn-only. The third, the
 #      SessionStart recall hook, moved to sync-claude-hooks, which resolves every
-#      command settings.json references rather than this one alone (#805).
+#      command settings.json references rather than this one alone (#805);
+#   5. purge a huggingface_hub 1.33 sharded blob store once, so the embedding
+#      model the palace writes through can load at all (#931).
 #
 # HOME_DIR defaults to $HOME. MEMPALACE_MOUNT overrides the mount root and
 # MEMPALACE_LINK_OWNER, when set, is chowned the resulting link; both exist so
@@ -786,11 +813,221 @@ if [ ! -e "$MEMPALACE_IDENTITY" ]; then
         echo "WARNING: mempalace-repair: $MEMPALACE_IDENTITY is missing and could not be seeded; 'mempalace wake-up' will start with no identity (#744)" >&2
     fi
 fi
+
+# --- 5. one-time purge of a sharded huggingface blob store (#931) -------------
+# huggingface_hub 1.33.0 added a cache-wide shared blob store: instead of a flat
+# models--<repo>/blobs/ directory it writes hub/blobs/<2 hex>/<xet hash> and
+# symlinks each snapshot file at it. onnxruntime 1.30.0 resolves an ONNX model's
+# external data file relative to the REAL directory of the model file and
+# refuses any path that resolves outside it, so embeddinggemma's
+# model_quantized.onnx (one shard) can never reach its model_quantized.onnx_data
+# (another), and every embed - search, drawer write, diary entry - fails with
+# "External data path escapes model directory".
+#
+# HF_HUB_DISABLE_SHARED_BLOBS=1 lives in the Feature's containerEnv, so every
+# per-container process that embeds gets it. But it only governs FUTURE
+# downloads: a cache already in the sharded layout stays broken, because the
+# files are all present and nothing re-downloads them. So when 1.33's marker
+# file is there AND the switch is on, remove the shared store and the one model
+# that reads an external data file, and let the next embed fetch it flat.
+#
+# Narrow on purpose: the shared store and that single models-- tree, nothing
+# else under the cache, and never anything under the palace. No marker means the
+# cache is already flat and nothing is removed.
+HF_HUB_DIR="${HF_HOME:-$HOME_DIR/.cache/huggingface}/hub"
+# The four values huggingface_hub itself reads as true (ENV_VARS_TRUE_VALUES),
+# so an operator who wrote `true` is not told one thing and given another.
+case "${HF_HUB_DISABLE_SHARED_BLOBS:-}" in
+    1 | [oO][nN] | [yY][eE][sS] | [tT][rR][uU][eE]) HF_SHARED_BLOBS_OFF=1 ;;
+    *) HF_SHARED_BLOBS_OFF= ;;
+esac
+if [ -n "$HF_SHARED_BLOBS_OFF" ] && [ -e "$HF_HUB_DIR/blobs/.huggingface-shared-blobs" ]; then
+    echo "mempalace-repair: removing the huggingface_hub shared blob store $HF_HUB_DIR/blobs and the cached embeddinggemma-300m-ONNX model, which onnxruntime cannot load across blob shards; the next embed re-downloads it flat (#931)"
+    rm -rf "${HF_HUB_DIR:?}/blobs" "${HF_HUB_DIR:?}/models--onnx-community--embeddinggemma-300m-ONNX"
+fi
 MEMPALACE_REPAIR
 chmod 0755 /usr/local/bin/mempalace-repair
 
 echo "Reconciling the mempalace palace root for $_REMOTE_USER_HOME"
 MEMPALACE_LINK_OWNER="$_REMOTE_USER" /usr/local/bin/mempalace-repair "$_REMOTE_USER_HOME"
+
+# --- check-mount-ownership: a present-but-unwritable bind mount (#974) -------
+# Adding a row to persisted-paths.tsv provisions the CONTAINER side here, but
+# the HOST side only exists once someone re-runs ./setup.sh on the host. Nothing
+# makes them do that, and Docker does not refuse a missing bind-mount source: it
+# creates it, as `root:root 0755`. The container then starts cleanly, the mount
+# is present, the provision marker says `stale_image: false`, and the container
+# user cannot write a byte through it. That ran undetected from the day each row
+# landed for `coderabbit-cli` (#661) and `odoo-dev` (#884) - the odoo-dev plugin
+# could persist no task artifact and the CodeRabbit CLI login could not persist,
+# with no error anywhere.
+#
+# This CANNOT be checked in install.sh, which is why the issue's first option is
+# not the one taken: at image-build time no bind mount exists at all, so every
+# target the loop at the top of this file just created is the image's own empty
+# directory, owned by whoever install.sh ran as. Checking there would assert a
+# fact about a path the runtime mount then replaces. The check has to run with
+# the mounts LIVE, i.e. from postCreateCommand - hence a generated script, and
+# hence the manifest being staged into the image above, which it was not before.
+#
+# The trigger is UNWRITABILITY, not an ownership mismatch, and that is a
+# deliberate narrowing of the issue's wording ("not owned by the container uid,
+# or is not writable by it"). Ownership alone is routinely and correctly not the
+# container uid: `shell-history` is mode 0777 precisely so that any container
+# uid can append through a host dir it does not own (#323), and warning there
+# would train the reader to ignore this. Unwritability is the thing that breaks,
+# so unwritability is what is reported - with the owner and mode printed as the
+# evidence, because `root:root` is the tell that distinguishes "Docker made this
+# directory" from any other ownership story (setup.sh never produces a
+# root-owned source).
+#
+# Exit 0 by contract, always: this is a diagnostic, and a diagnostic that can
+# break container create is worse than the condition it reports. The result also
+# lands in the shared provision marker as `mount_ownership`, because the
+# container-create log carrying the warning is gone by the time anyone wonders.
+cat > /usr/local/bin/check-mount-ownership << 'CHECK_MOUNT_OWNERSHIP'
+#!/bin/sh
+# check-mount-ownership - report every persisted bind-mount target this user
+# cannot write, and say how to fix it on the host (#974).
+#
+# Runs from the Feature's postCreateCommand, where the bind mounts are LIVE and
+# `stat` therefore sees the HOST directory the mount exposes rather than the
+# image directory install.sh created. Reads the manifest install.sh stages at
+# /usr/local/share/personal-features/persisted-paths.tsv - the same
+# persisted-paths.tsv that is the single source of truth for every other
+# consumer - so a row added there is checked here with no edit.
+#
+# `provision=host` rows are skipped: the host provisions those and the container
+# must never touch them (#369); a missing one already fails loudly on its own.
+#
+# Overrides, for the feature test and for debugging:
+#   PF_MANIFEST         manifest to read (default: the staged copy above)
+#   CLAUDE_CONFIG_DIR   where the provision marker lives
+#
+# Never fatal: exits 0 whatever it finds.
+set -u
+
+MANIFEST="${PF_MANIFEST:-/usr/local/share/personal-features/persisted-paths.tsv}"
+MARKER="${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features-provision.json"
+
+MY_UID="$(id -u)"
+MY_GID="$(id -g)"
+ME="$(id -un 2>/dev/null || echo "uid $MY_UID")"
+
+warn() { printf 'WARNING: check-mount-ownership: %s\n' "$1" >&2; }
+say() { printf 'check-mount-ownership: %s\n' "$1"; }
+
+if [ ! -r "$MANIFEST" ]; then
+    warn "no persisted-paths manifest at $MANIFEST, so NO bind-mount target was checked. An image built before #974 stages none; rebuild without cache to get one."
+    exit 0
+fi
+
+# One unwritable target per line, tab-separated, for the marker writer below.
+UNWRITABLE=""
+CHECKED=0
+TAB="$(printf '\t')"
+while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
+    case "$_name" in '' | '#'*) continue ;; esac
+    case "$_provision" in host) continue ;; esac
+    target="${_container_target%/}"
+    [ -n "$target" ] || continue
+    [ -e "$target" ] || continue
+    CHECKED=$((CHECKED + 1))
+    [ -w "$target" ] && continue
+
+    owner="$(stat -c '%U:%G' "$target" 2>/dev/null)" || owner=""
+    [ -n "$owner" ] || owner="unknown:unknown"
+    owner_uid="$(stat -c '%u' "$target" 2>/dev/null)" || owner_uid=""
+    mode="$(stat -c '%a' "$target" 2>/dev/null)" || mode=""
+    [ -n "$mode" ] || mode="unknown"
+
+    warn "$target is owned by $owner (mode $mode) and is not writable by $ME (uid $MY_UID)"
+    # Three distinguishable stories, and saying which one it is matters more
+    # than the remedy, which is the same for all three.
+    if [ "$owner" = "root:root" ]; then
+        warn "  root:root is the tell: ./setup.sh never produces a root-owned source, so Docker created the bind-mount source ~/$_host_source itself (as root:root 0755) because ./setup.sh was not re-run on the host after the '$_name' row was added to persisted-paths.tsv."
+    elif [ -n "$owner_uid" ] && [ "$owner_uid" = "$MY_UID" ]; then
+        warn "  The owner is this user, so it is the MODE that denies the write: the container sees the HOST directory's mode through the mount, and ~/$_host_source carries $mode where persisted-paths.tsv says $_mode."
+    else
+        warn "  The bind-mount source ~/$_host_source on the host belongs to neither root nor this container user, so the mount delivers a directory nothing here can write."
+    fi
+    warn "  On the host, run:  sudo chown -R $MY_UID:$MY_GID ~/$_host_source"
+    warn "  then re-run:       ./setup.sh"
+    warn "  Until then the mount is present and this container looks healthy, but nothing written under $target is saved - which is the whole failure mode (#974)."
+    UNWRITABLE="$UNWRITABLE$_name$TAB$target$TAB$_host_source$TAB$owner$TAB$mode
+"
+done < "$MANIFEST"
+
+if [ -z "$UNWRITABLE" ]; then
+    say "OK - all $CHECKED persisted bind-mount targets are writable by $ME (uid $MY_UID)"
+    if [ "$MY_UID" -eq 0 ]; then
+        say "note - running as root, which may write any path whatever its owner, so this run proves nothing about a non-root remoteUser"
+    fi
+fi
+
+# Record the verdict in the marker the rest of the Feature shares. Merged, not
+# rewritten: this writer owns `mount_ownership` and nothing else (#868).
+if command -v python3 >/dev/null 2>&1; then
+    PF_MARKER="$MARKER" PF_UNWRITABLE="$UNWRITABLE" PF_CHECKED="$CHECKED" \
+        python3 - <<'MOUNT_OWNERSHIP_RECORD' 2>/dev/null || warn "the result could not be recorded in $MARKER"
+import json, os, time
+
+marker = os.environ["PF_MARKER"]
+record = {}
+try:
+    with open(marker) as handle:
+        loaded = json.load(handle)
+    if isinstance(loaded, dict):
+        record = loaded
+except Exception:
+    record = {}
+
+unwritable = []
+for line in os.environ.get("PF_UNWRITABLE", "").splitlines():
+    fields = line.split("\t")
+    if len(fields) != 5:
+        continue
+    name, target, host_source, owner, mode = fields
+    unwritable.append(
+        {
+            "name": name,
+            "container_target": target,
+            "host_source": host_source,
+            "owner": owner,
+            "mode": mode,
+        }
+    )
+
+record["mount_ownership"] = {
+    "issue": "974",
+    "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "checked": int(os.environ.get("PF_CHECKED") or 0),
+    "unwritable": unwritable,
+    "ok": not unwritable,
+}
+
+directory = os.path.dirname(marker)
+if directory:
+    os.makedirs(directory, exist_ok=True)
+tmp = marker + ".mounts.tmp"
+with open(tmp, "w") as handle:
+    json.dump(record, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+try:
+    # Same reasoning as the other writers here: install.sh cannot know which uid
+    # runs postCreateCommand, and the marker holds no secret.
+    os.chmod(tmp, 0o666)
+except OSError:
+    pass
+os.replace(tmp, marker)
+MOUNT_OWNERSHIP_RECORD
+else
+    warn "python3 is not on PATH, so the result was not recorded in $MARKER"
+fi
+
+exit 0
+CHECK_MOUNT_OWNERSHIP
+chmod 0755 /usr/local/bin/check-mount-ownership
 
 # --- Claude Code integrations: MCP server + plugins (#486, #484, #723) -------
 # sync-claude-mcp registers the odoo-mcp MCP server and the mempalace and
@@ -861,13 +1098,31 @@ fi
 # bare CI runner it fails with "not found in any configured marketplace". That
 # is a host-config precondition this Feature cannot satisfy for the user, so it
 # stays best-effort and says so rather than failing container create.
+#
+# The install is written in the plugin@marketplace form, matching the
+# `claude plugin update mempalace@mempalace` below. It used to be the bare name
+# while the update was qualified, which is an inconsistency with teeth: on a
+# host where some OTHER marketplace also publishes a `mempalace`, the bare form
+# could install that one and the update would then address a plugin this script
+# never installed (#975). The unqualified attempt survives only as a FALLBACK,
+# because the marketplace NAME is the host's to choose - see below.
 mempalace_plugin_present=0
 if command -v mempalace >/dev/null 2>&1; then
     if claude plugin list 2>/dev/null | grep -q mempalace; then
         echo "sync-claude-mcp: plugin 'mempalace' is already installed"
         mempalace_plugin_present=1
+    elif claude plugin install --scope user mempalace@mempalace; then
+        echo "sync-claude-mcp: installed plugin 'mempalace@mempalace'"
+        mempalace_plugin_present=1
     elif claude plugin install --scope user mempalace; then
-        echo "sync-claude-mcp: installed plugin 'mempalace'"
+        # The qualified form is tried first because it is the one the update
+        # below addresses. This fallback exists because the marketplace name is
+        # the host's: a host that registered the mempalace marketplace under
+        # some other name satisfies the bare install and not the qualified one,
+        # and refusing to install there at all would take the hooks away from a
+        # machine where they used to work. Say which case this is, loudly
+        # enough to act on, since the update below cannot match it either.
+        echo "WARNING: sync-claude-mcp: installed plugin 'mempalace' from an unqualified install: no marketplace named 'mempalace' is configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), so 'mempalace@mempalace' did not resolve. The hooks work, but 'claude plugin update mempalace@mempalace' below cannot refresh this plugin - re-add the marketplace under the name 'mempalace' to get updates (#975)." >&2
         mempalace_plugin_present=1
     else
         echo "WARNING: sync-claude-mcp: could not install the 'mempalace' plugin; its marketplace is not configured in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Add it with 'claude plugin marketplace add <repo>' on the host, or the mempalace hooks will not run." >&2
@@ -891,6 +1146,128 @@ if [ "$mempalace_plugin_present" -eq 1 ]; then
     else
         echo "WARNING: sync-claude-mcp: could not update the 'mempalace' plugin; this container keeps whatever revision was already cached in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), which may be stale. Check network/marketplace access, or run 'claude plugin update mempalace@mempalace' by hand." >&2
     fi
+fi
+
+# --- mempalace version drift: the pinned CLI/hub vs the floating plugin (#975)
+# The update above deliberately floats the plugin to whatever the marketplace
+# serves, while MEMPALACE_VERSION pins the CLI in this container and the shared
+# hub container to one release. So TWO mempalace versions run side by side in
+# every container, and they talk to each other: the plugin ships the MCP server
+# registration and the Stop/SessionEnd/PreCompact hooks, which drive the pinned
+# CLI and dial the pinned hub. Nothing used to assert they agree. A breaking
+# change on either side would surface as an unexplained MCP failure in a fresh
+# container rather than as a build error, and `git bisect` could not find it
+# because nothing in this repo changed.
+#
+# Pinning the plugin instead is not expressible: `claude plugin install` takes
+# plugin@marketplace and nothing else - there is no @version form and no
+# revision flag - so "pin the plugin" would mean pinning the marketplace's
+# commit, and that marketplace is third-party and is not provisioned from here
+# (see the install block above). What IS available is the assertion. The float
+# therefore stays, and the disagreement becomes visible instead of silent: loud
+# on the container-create log, and recorded in the provision marker below for
+# whoever reads it weeks later, when that log is gone.
+#
+# major.minor, not the full version: a patch release on one side is the routine
+# case and has to stay quiet, while a minor bump is where the MCP tool surface
+# and the hook contract move. Never fatal - like every other step here, this
+# reports and exits 0.
+mempalace_pinned_cli="unknown"
+mempalace_pinned_hub="unknown"
+mempalace_version_env="${MEMPALACE_HUB_ENV_FILE:-/usr/local/share/personal-features/mempalace-hub.env}"
+if [ -r "$mempalace_version_env" ]; then
+    # Read out, never sourced: this wants two named values out of a file
+    # install.sh wrote, not every name in that file evaluated by this shell.
+    mempalace_pinned_cli="$(sed -n 's/^MEMPALACE_CLI_VERSION=//p' "$mempalace_version_env" | head -n 1)"
+    mempalace_pinned_hub="$(sed -n 's/^MEMPALACE_HUB_VERSION=//p' "$mempalace_version_env" | head -n 1)"
+    [ -n "$mempalace_pinned_cli" ] || mempalace_pinned_cli="unknown"
+    [ -n "$mempalace_pinned_hub" ] || mempalace_pinned_hub="$mempalace_pinned_cli"
+fi
+
+# The installed-plugin registry Claude Code keeps in the bind-mounted config
+# dir. `claude plugin list` prints a human table whose columns are not a
+# contract; this file carries the version as data. A missing file, an
+# unparseable one or no mempalace entry all mean "unknown" - never a failure.
+mempalace_plugin_registry="$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
+mempalace_plugin_version="unknown"
+if command -v python3 >/dev/null 2>&1; then
+    mempalace_plugin_version="$(PF_PLUGIN_REGISTRY="$mempalace_plugin_registry" python3 -c '
+import json, os
+
+registry = os.environ["PF_PLUGIN_REGISTRY"]
+try:
+    with open(registry) as handle:
+        loaded = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+
+# {"version": 2, "plugins": {"mempalace@mempalace": [{"version": "3.11.0", ...}]}}
+# Matched on the plugin half of the key, so a marketplace registered under
+# another name is still found. Any unexpected shape means "unknown".
+plugins = loaded.get("plugins") if isinstance(loaded, dict) else None
+if not isinstance(plugins, dict):
+    raise SystemExit(0)
+
+found = []
+for key, value in plugins.items():
+    if str(key).split("@")[0] != "mempalace":
+        continue
+    for entry in value if isinstance(value, list) else [value]:
+        version = entry.get("version") if isinstance(entry, dict) else entry
+        if isinstance(version, str) and version:
+            found.append(version)
+
+
+def sort_key(value):
+    parts = []
+    for chunk in value.split(".")[:3]:
+        digits = ""
+        for char in chunk:
+            if not char.isdigit():
+                break
+            digits = digits + char
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+# The cache can hold several revisions at once - the observed registry carried
+# 3.9.0 and 3.11.0 together. Report the HIGHEST, which is the one the update
+# above just converged on and the conservative choice for a drift check:
+# picking the lowest would let a stale pin look like a match and hide exactly
+# the mismatch this exists to surface.
+if found:
+    print(sorted(found, key=sort_key)[-1])
+' 2>/dev/null)" || mempalace_plugin_version=""
+    [ -n "$mempalace_plugin_version" ] || mempalace_plugin_version="unknown"
+fi
+
+mempalace_versions_match=false
+if [ "$mempalace_plugin_version" != "unknown" ] && [ "$mempalace_pinned_cli" != "unknown" ] \
+    && [ "$(echo "$mempalace_plugin_version" | cut -d. -f1,2)" \
+        = "$(echo "$mempalace_pinned_cli" | cut -d. -f1,2)" ]; then
+    mempalace_versions_match=true
+fi
+
+if [ "$mempalace_versions_match" = true ]; then
+    echo "sync-claude-mcp: OK: mempalace plugin $mempalace_plugin_version agrees with the pinned CLI/hub $mempalace_pinned_cli on major.minor"
+elif [ "$mempalace_plugin_version" = "unknown" ]; then
+    # Not a mismatch warning: there is no second version to disagree with. The
+    # plugin being absent is already warned about above, and an unreadable
+    # registry is not evidence of drift - so this says only that the check
+    # could not run, and the marker records plugin "unknown" rather than a
+    # match nobody verified.
+    echo "sync-claude-mcp: no installed mempalace plugin version could be read from $mempalace_plugin_registry, so the pinned CLI/hub $mempalace_pinned_cli was not checked against it (#975)"
+else
+    printf 'WARNING: sync-claude-mcp: mempalace plugin %s does not match the pinned CLI/hub %s\n' \
+        "$mempalace_plugin_version" "$mempalace_pinned_cli" >&2
+    printf 'WARNING: sync-claude-mcp:   plugin (MCP registration + Stop/SessionEnd/PreCompact hooks): %s, floating, from %s\n' \
+        "$mempalace_plugin_version" "$mempalace_plugin_registry" >&2
+    printf 'WARNING: sync-claude-mcp:   CLI in this container: %s. Shared hub container: %s. Both pinned by MEMPALACE_VERSION in this Feature.\n' \
+        "$mempalace_pinned_cli" "$mempalace_pinned_hub" >&2
+    printf 'WARNING: sync-claude-mcp:   major.minor differ, so the MCP tool surface and the hook contract are not guaranteed to agree, and a break would look like an unexplained MCP failure rather than a build error. Either catch the pins up (bump MEMPALACE_VERSION in the personal-features install.sh and rebuild without cache) or hold the plugin at %s. Recorded as mempalace_versions in the provision marker below (#975).\n' \
+        "$mempalace_pinned_cli" >&2
 fi
 
 # --- odoo-dev plugin: marketplace + install (#723) ---------------------------
@@ -1006,6 +1383,7 @@ pf_add_script /usr/local/bin/sync-claude-mcp
 pf_add_script /usr/local/bin/sync-claude-hooks
 pf_add_script /usr/local/bin/claude-event-hook
 pf_add_script /usr/local/bin/mempalace-repair
+pf_add_script /usr/local/bin/check-mount-ownership
 pf_add_script /usr/local/bin/resolve-mempal-dir
 pf_add_script /usr/local/bin/create-pr
 pf_add_script /usr/local/bin/gh-as-owner
@@ -1020,8 +1398,21 @@ pf_add_script /usr/local/share/personal-features/hooks/odoo-api-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
 pf_add_script /usr/local/share/personal-features/settings-fragment.json
+# The staged persisted-paths manifest (#974), in this set for the same stated
+# reason as the settings fragment one line up: this list fingerprints file
+# CONTENTS, and policy data whose drift is invisible belongs in it as much as a
+# script does. check-mount-ownership checks exactly the rows its copy of the
+# manifest carries, so an image staged before a row was added reports `OK` over
+# a path it never looked at - healthy-looking output from a stale checker, which
+# is the #806 defect wearing the #974 hat.
+pf_add_script /usr/local/share/personal-features/persisted-paths.tsv
 if command -v python3 >/dev/null 2>&1; then
-    PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" python3 -c '
+    PF_MARKER="$pf_marker" PF_SCRIPTS="$pf_scripts" \
+        PF_MEMPALACE_CLI="$mempalace_pinned_cli" \
+        PF_MEMPALACE_HUB="$mempalace_pinned_hub" \
+        PF_MEMPALACE_PLUGIN="$mempalace_plugin_version" \
+        PF_MEMPALACE_MATCH="$mempalace_versions_match" \
+        python3 -c '
 import hashlib, json, os, sys, time
 
 marker = os.environ["PF_MARKER"]
@@ -1098,11 +1489,20 @@ if not stale:
 # therefore needs no edit here. Nothing is dropped: no key has ever needed
 # resetting, and a reset belongs next to the writer that owns the key.
 #
-# The owned fields all describe the scripts in THIS container, so none of them
-# may be inherited stale from the previous marker - that would be a lie about
-# the current image and would defeat the staleness check (#806). The three
+# Almost all of the owned fields describe the scripts in THIS container, so none
+# of them may be inherited stale from the previous marker - that would be a lie
+# about the current image and would defeat the staleness check (#806). The three
 # newest_* high-water-mark fields are owned too: they are computed from the
 # previous marker above, deliberately, so a stale run cannot lower them.
+#
+# mempalace_versions (#975) is the one owned key that is not about the scripts:
+# it records the mempalace versions this create observed - the CLI/hub pin the
+# image was built with, and the floating Claude Code plugin found in the
+# registry - plus whether they agree on major.minor. Owned, and therefore
+# rewritten rather than inherited, for the same reason as the rest: the facts
+# are about THIS container and THIS create, and an inherited copy would report
+# an agreement that was last true on a different image. The warning above is the
+# live signal; this key is what is still readable once that log is gone.
 record = dict(previous)
 record.update(
     {
@@ -1116,6 +1516,13 @@ record.update(
         "newest_script_digest": seen_digest,
         "newest_seen_at": seen_at,
         "stale_image": stale,
+        "mempalace_versions": {
+            "cli": os.environ.get("PF_MEMPALACE_CLI") or "unknown",
+            "hub": os.environ.get("PF_MEMPALACE_HUB") or "unknown",
+            "plugin": os.environ.get("PF_MEMPALACE_PLUGIN") or "unknown",
+            "match": os.environ.get("PF_MEMPALACE_MATCH") == "true",
+            "checked_at": iso(now),
+        },
     }
 )
 
@@ -1123,6 +1530,8 @@ record.update(
 # `mempalace_hub` into this same marker from postStartCommand, and
 # `record = dict(previous)` above carries it through every provision without
 # naming it here - which is exactly the property #868 made general.
+# `mount_ownership` (#974, written by check-mount-ownership later in the same
+# postCreateCommand chain) is the second, and needed no edit here either.
 
 if stale:
     sys.stderr.write(
@@ -2186,6 +2595,28 @@ STARSHIP_VERSION=1.26.0  # github.com/starship/starship
 # unlike the tools above its download URL uses the bare version verbatim.
 DELTA_VERSION=0.19.2     # github.com/dandavison/delta
 LAZYGIT_VERSION=0.63.0   # github.com/jesseduffield/lazygit
+# The shell linter, #964: the exact binary the CI lint jobs run, installed into
+# the image so `shellcheck -s bash -S error` locally means what CI's run means.
+# (A comment line here may not START with the word shellcheck: the linter reads
+# `# shellcheck <word>` as one of its own directives and errors out on a prose
+# one. Hence the indirect openings on this block and the two below.)
+# Tagged WITH a leading "v", and the asset is a .tar.xz (not .tar.gz) nesting
+# the binary under shellcheck-v<ver>/ - neither of which install_gh_release
+# handles - so it gets its own installer (install_shellcheck below). The
+# per-arch asset name uses the same x86_64/aarch64 spelling as ARCH_GNU above.
+# Digest-pinned, like odoo-ls and unlike every convenience CLI here: a linter
+# whose body nobody verified is a gate that cannot be trusted, and 0.10.0 is a
+# long-settled 2024 release upstream has no reason to re-cut. Bump the version
+# and both digests together (sha256sum each downloaded .tar.xz).
+#
+# The same version is pinned independently in .github/workflows/validate.yaml
+# and .github/workflows/plugin-odoo-dev.yaml; nothing yet holds the three copies
+# together, so bumping one means bumping all three by hand.
+SHELLCHECK_VERSION=0.10.0  # github.com/koalaman/shellcheck
+case "$ARCH_GNU" in
+    x86_64)  SHELLCHECK_SHA256=6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87 ;;
+    aarch64) SHELLCHECK_SHA256=324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb ;;
+esac
 # qsv tags its releases WITHOUT a leading "v" (e.g. 21.1.0). Unlike every tool
 # above it ships a .zip (not a raw binary or .tar.gz) bundling ~13 binaries, so
 # it needs its own installer (install_qsv) rather than install_gh_release. The
@@ -2265,6 +2696,34 @@ install_qsv() {
     rm -f "$zip"
 }
 
+# The shell linter, #964 - the one CI lints this very file with. Installed here
+# so the same gate is runnable before pushing instead of being CI-only.
+# Neither install_gh_release path fits - that function's extract is `tar -xz`
+# (gzip only) while shellcheck publishes .tar.xz, and the binary sits under a
+# top-level shellcheck-v<ver>/ directory - so this fetches the tarball and
+# unpacks just that one member with --strip-components=1 straight onto
+# /usr/local/bin. The download is digest-verified (fetch's third argument); see
+# the pin block above for why this one is. Best-effort like every tool above: a
+# container without shellcheck is the pre-#964 state - degraded, since the
+# local gate goes back to being CI-only, not broken - and the feature test
+# asserts the binary is present, so CI goes red rather than shipping an image
+# that silently lost it.
+install_shellcheck() {
+    local version="$1" sha="$2"
+    local url="https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.${ARCH_GNU}.tar.xz"
+    local staging
+    staging="$(mktemp -d)"
+    if fetch "$url" "$staging/shellcheck.tar.xz" "$sha" \
+        && tar -xJf "$staging/shellcheck.tar.xz" -C "$staging" \
+            --strip-components=1 "shellcheck-v${version}/shellcheck" \
+        && [ -f "$staging/shellcheck" ]; then
+        install -m 0755 "$staging/shellcheck" /usr/local/bin/shellcheck
+    else
+        echo "WARNING: failed to install shellcheck, skipping" >&2
+    fi
+    rm -rf "$staging"
+}
+
 # odoo-ls (#746): the Odoo language server Claude Code launches over stdio.
 # Neither install_gh_release path fits, for two reasons.
 #
@@ -2291,6 +2750,7 @@ install_qsv() {
 install_odoo_ls() {
     local version="$1" tarball_sha="$2" typeshed_sha="$3"
     local dest=/usr/local/share/odoo-ls
+    local runner=""
     local base="https://github.com/odoo/odoo-ls/releases/download/${version}"
     local staging
     staging="$(mktemp -d)"
@@ -2316,6 +2776,35 @@ install_odoo_ls() {
         rm -rf "$dest/typeshed"
         mv "$staging/typeshed" "$dest/typeshed"
         install -m 0755 "$staging/odoo_ls_server" "$dest/odoo_ls_server"
+
+        # Does the binary RUN here? The two checksums above prove only that the
+        # right bytes arrived. The 1.6.0 release assets are linked against glibc
+        # 2.34, and Debian 11 (bullseye) - which every odoo:16 image is - ships
+        # 2.31, so there the dynamic loader rejects the binary before main() and
+        # before the server has any logging of its own: the symptom reaching a
+        # session is an LSP initialization timeout, or `crashed with exit code
+        # 1`, with an EMPTY log directory to debug it from (#993). `--version`
+        # exits immediately, reads no config and touches no workspace, so it
+        # costs nothing and is a true loader check.
+        #
+        # A failure removes the binary rather than keeping an unrunnable one.
+        # That hands odoo-ls-server its existing "missing or not executable"
+        # path - one warning per session, exit 0 - instead of a crash-loop
+        # through maxRestarts, and keeps this function best-effort like the rest
+        # of install.sh. The feature test asserts the binary IS present on the
+        # bases that can run it, so a regression there still goes red.
+        # `timeout` is coreutils and is always there, but install.sh runs under
+        # `set -e`: an `&&` list whose left side fails would take the whole
+        # backgrounded job down, so this is an `if`.
+        if command -v timeout >/dev/null 2>&1; then
+            runner="timeout 30"
+        fi
+        if ! $runner "$dest/odoo_ls_server" --version >/dev/null 2>"$staging/version.err"; then
+            echo "WARNING: odoo-ls $version installed but will not run on this base image (needs glibc 2.34; bullseye ships 2.31) - removing it, so this container degrades to no language server rather than to a crash-looping one. The loader said:" >&2
+            sed 's/^/    /' "$staging/version.err" >&2 || true
+            rm -f "$dest/odoo_ls_server"
+        fi
+
         # The server's own log directory, and the ONE that cannot fail: with no
         # --logs-directory (or one that does not exist - the server checks
         # `path.exists()` and falls back rather than creating it) the rolling
@@ -2325,6 +2814,17 @@ install_odoo_ls() {
         # Claude Code session, and these are server logs, not a secret.
         mkdir -p "$dest/logs"
         chmod 0777 "$dest/logs"
+        # And the directory ITSELF, for the same stated reason: odoo-ls-config
+        # runs from postCreateCommand as the remote user, whose uid install.sh
+        # cannot know, and it publishes odools.toml by writing a temp file here
+        # and moving it into place. Against a root-owned 0755 directory that is
+        # a guaranteed `Permission denied` in exactly the containers this
+        # targets - the generator warned, exited 0 by design, and create
+        # reported success while every LSP call timed out (#993). No sticky bit:
+        # the move has to be able to replace a file a previous (root) create
+        # left behind. Nothing secret lives here - a pinned public binary, its
+        # stubs, generated config, server logs.
+        chmod 0777 "$dest"
     else
         echo "WARNING: failed to unpack odoo-ls, skipping" >&2
     fi
@@ -2395,6 +2895,10 @@ bg install_gh_release lazygit \
 # ARCH_QSV selects the per-arch target (static musl on amd64, gnu on arm64).
 bg install_qsv \
     "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip"
+# The shell linter, #964 - a .tar.xz with the binary nested under a versioned
+# dir, so it uses its own installer (see install_shellcheck above) and, like
+# odoo-ls, is digest-verified rather than taken on trust.
+bg install_shellcheck "$SHELLCHECK_VERSION" "$SHELLCHECK_SHA256"
 # odoo-ls (#746) - see install_odoo_ls above for why it gets its own installer
 # and why its two assets are the only digest-pinned downloads here.
 bg install_odoo_ls "$ODOO_LS_VERSION" "$ODOO_LS_SHA256" "$ODOO_LS_SHA256_TYPESHED"
@@ -2436,7 +2940,7 @@ case "$FIRST_LINE" in
         ;;
 esac
 
-if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([a-zA-Z0-9_.-]+\))?!?: .+'; then
+if ! echo "$FIRST_LINE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_.-]+\))?!?: .+'; then
     echo "ERROR: commit message does not follow Conventional Commits:" >&2
     echo "  $FIRST_LINE" >&2
     echo "Expected: <type>(<optional scope>): <description>, e.g. 'fix(api): handle empty response'" >&2
@@ -2528,7 +3032,7 @@ install_starship() {
 bg install_starship
 
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
-# lazygit, qsv, odoo-ls, coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# lazygit, qsv, shellcheck, odoo-ls, coderabbit, starship). Each job already warns and exits 0 on its own failure;
 # wait on each PID and guard it so an unexpected non-zero exit degrades to a
 # warning instead of aborting the build under set -e. (A bare `wait` returns 0
 # regardless, which would instead silently mask such a failure.)
@@ -2677,18 +3181,49 @@ set -u
 #   ODOO_LS_SKIP_CONFIG=1  write nothing
 #   ODOO_LS_CONFIG         output file
 #   ODOO_LS_ODOO_PATH      Odoo community source
-#   ODOO_LS_ENTERPRISE     enterprise addons directory
+#   ODOO_LS_ENTERPRISE     enterprise addons directory (one series)
+#   ODOO_LS_ENTERPRISE_ROOT  directory the per-series addons dirs live under
 #   ODOO_LS_WORKSPACE      the mounted customization checkout
 #   ODOO_LS_PYTHON         interpreter whose site-packages the server reads
 
 OUT="${ODOO_LS_CONFIG:-/usr/local/share/odoo-ls/odools.toml}"
 ODOO_PATH="${ODOO_LS_ODOO_PATH:-/usr/lib/python3/dist-packages/odoo}"
-# Enterprise addons are per-series (/var/lib/odoo/addons/<series>), so with no
-# $ODOO_VERSION there is no directory to name - and naming the parent would hand
-# the server a directory of series directories, not of modules.
+# Enterprise addons are per-series: /var/lib/odoo/addons/<series>, e.g. 16.0.
+# The PARENT is never the answer - naming it would hand the server a directory
+# of series directories, not of modules - so the series itself has to be
+# resolved, and $ODOO_VERSION on its own is not enough to resolve it. Any
+# invocation that does not inherit the variable (sudo strips it, which is the
+# natural way to run this by hand) used to write a config with the enterprise
+# tree simply absent, and said nothing (#993). The directory either exists or it
+# does not, so probe for it; $ODOO_VERSION only picks between the ones found.
+ENTERPRISE_ROOT="${ODOO_LS_ENTERPRISE_ROOT:-/var/lib/odoo/addons}"
 ENTERPRISE="${ODOO_LS_ENTERPRISE:-}"
-if [ -z "$ENTERPRISE" ] && [ -n "${ODOO_VERSION:-}" ]; then
-    ENTERPRISE="/var/lib/odoo/addons/$ODOO_VERSION"
+if [ -n "$ENTERPRISE" ]; then
+    # An explicit override wins outright, but say so when it is not there: the
+    # path is dropped from addons_paths below, and a silent drop is the whole
+    # complaint in #993.
+    [ -d "$ENTERPRISE" ] || echo "WARNING: odoo-ls-config: ODOO_LS_ENTERPRISE=$ENTERPRISE is not a directory; omitting the enterprise addons path" >&2
+elif [ -d "$ENTERPRISE_ROOT" ]; then
+    series_found=""
+    series_count=0
+    for candidate in "$ENTERPRISE_ROOT"/[0-9]*.[0-9]; do
+        [ -d "$candidate" ] || continue
+        series_count=$((series_count + 1))
+        series_found="${series_found:+$series_found }$candidate"
+    done
+    if [ -n "${ODOO_VERSION:-}" ]; then
+        if [ -d "$ENTERPRISE_ROOT/$ODOO_VERSION" ]; then
+            ENTERPRISE="$ENTERPRISE_ROOT/$ODOO_VERSION"
+        elif [ "$series_count" -gt 0 ]; then
+            echo "WARNING: odoo-ls-config: ODOO_VERSION is $ODOO_VERSION but $ENTERPRISE_ROOT/$ODOO_VERSION does not exist (present: $series_found); omitting the enterprise addons path" >&2
+        fi
+    elif [ "$series_count" -eq 1 ]; then
+        # Exactly one series on disk and no variable to disagree with it. Naming
+        # it is strictly better than the old silent omission.
+        ENTERPRISE="$series_found"
+    elif [ "$series_count" -gt 1 ]; then
+        echo "WARNING: odoo-ls-config: ODOO_VERSION is unset and $ENTERPRISE_ROOT holds several series directories ($series_found); omitting the enterprise addons path - set ODOO_VERSION or ODOO_LS_ENTERPRISE to pick one" >&2
+    fi
 fi
 WORKSPACE="${ODOO_LS_WORKSPACE:-/mnt/extra-addons}"
 VENV_PYTHON="$WORKSPACE/.venv/bin/python"
@@ -2725,9 +3260,22 @@ if [ -z "$PYTHON" ]; then
     fi
 fi
 
-mkdir -p "$(dirname "$OUT")" || {
-    echo "WARNING: odoo-ls-config: cannot create $(dirname "$OUT"); no Odoo language server config was written" >&2
+OUT_DIR="$(dirname "$OUT")"
+mkdir -p "$OUT_DIR" || {
+    echo "WARNING: odoo-ls-config: cannot create $OUT_DIR (running as uid $(id -u)); no Odoo language server config was written" >&2
     exit 0
+}
+
+# Why the warnings below name the mode and the uid: this script runs from
+# postCreateCommand as the remote user, and the one failure it actually hit in
+# the field was a root-owned 0755 output directory (#993). install.sh now leaves
+# that directory 0777, but a bind mount, a rebuilt image or an ODOO_LS_CONFIG
+# pointed somewhere else can put it back - and "Permission denied" with no owner
+# and no mode beside it is a dead end. Still exit 0: a container that cannot be
+# configured for Odoo gets no language server, which is not an outage.
+why_unwritable() {
+    printf 'uid %s, %s is %s' "$(id -u)" "$OUT_DIR" \
+        "$(ls -ld "$OUT_DIR" 2>/dev/null | awk '{ printf "mode %s owned by %s:%s", $1, $3, $4 }')"
 }
 
 TMP="$OUT.tmp.$$"
@@ -2753,12 +3301,12 @@ TMP="$OUT.tmp.$$"
     echo "disable_javascript = true"
 } > "$TMP" || {
     rm -f "$TMP"
-    echo "WARNING: odoo-ls-config: could not write $TMP; no Odoo language server config was written" >&2
+    echo "WARNING: odoo-ls-config: could not write $TMP ($(why_unwritable)); no Odoo language server config was written" >&2
     exit 0
 }
 mv "$TMP" "$OUT" || {
     rm -f "$TMP"
-    echo "WARNING: odoo-ls-config: could not move $TMP to $OUT" >&2
+    echo "WARNING: odoo-ls-config: could not move $TMP to $OUT ($(why_unwritable)); no Odoo language server config was written" >&2
     exit 0
 }
 # Readable by whichever account ends up running a Claude Code session, for the

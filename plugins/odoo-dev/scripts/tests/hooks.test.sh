@@ -83,6 +83,18 @@ allowed "$ALLOWLIST" "tester: artifact.sh put" \
   "$TESTER" "artifact.sh put /tmp/artifacts 30-test /tmp/run.json"
 allowed "$ALLOWLIST" "tester: artifact.sh by plugin-root path" \
   "$TESTER" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh" put /tmp/a 30-test -'
+
+# The checkpoint (#961). The tester has no Edit/Write and no redirection, so the
+# only reachable shapes are a path it did not write and the inline payload — and
+# the inline one is the one that has to pass, because there is no path.
+allowed "$ALLOWLIST" "tester: artifact.sh put progress from a file" \
+  "$TESTER" "artifact.sh put /tmp/artifacts progress /tmp/p.json"
+allowed "$ALLOWLIST" "tester: artifact.sh put progress --json inline" \
+  "$TESTER" 'artifact.sh put /tmp/artifacts progress --json {"units":[{"unit":"acme_sale","kind":"module-under-test","status":"in-progress","note":"unit tests green, tours not started"}]}'
+# What the agent file warns about: an ampersand in a note is a deny, and the reason
+# is the ampersand rather than anything about the stage.
+denied "$ALLOWLIST" "tester: an ampersand inside the inline payload" "contains &" \
+  "$TESTER" 'artifact.sh put /tmp/artifacts progress --json {"units":[{"unit":"a","kind":"suite","status":"failed","note":"2 failures & 1 error"}]}'
 allowed "$ALLOWLIST" "tester: browser-ensure.sh" "$TESTER" "browser-ensure.sh"
 allowed "$ALLOWLIST" "tester: module-classify.sh" "$TESTER" "module-classify.sh /tmp/wt"
 

@@ -20,6 +20,11 @@
 # here is PGDG's postgresql-17 from apt-archive.postgresql.org, installed by
 # the scenario Dockerfile with a pq-init.sh that keeps the postgresql Feature's
 # contract (apt.postgresql.org dropped bullseye-pgdg); the checks are unchanged.
+#
+# And since #993 it is the proof that the Odoo language server degrades LOUDLY
+# on an EOL base rather than silently: bullseye ships glibc 2.31, the pinned
+# odoo-ls release binary needs 2.34, and every other leg runs on bookworm or
+# trixie - so this is the only place that failure can be caught at all.
 
 set -e
 
@@ -81,6 +86,55 @@ check "odoo-tui entrypoint is executable" bash -c "test -x \"\$(command -v odoo-
 # system 3.9 exactly as before.
 check "system OpenSSL is intact (isolated install didn't touch cryptography)" \
     python3 -c "from OpenSSL import SSL, crypto"
+
+# --- the Odoo language server on an EOL base (#993) ---------------------------
+# This is the ONLY bullseye leg, and bullseye is where odoo-ls fails: the pinned
+# release binaries are linked against glibc 2.34 and this base ships 2.31, so
+# the dynamic loader rejects the binary before main() and before the server has
+# any logging of its own. Nothing detected that - the other legs run on bookworm
+# and trixie, where the binary runs, so CI was green while this image shipped a
+# server that could not start and a log directory that stayed empty.
+#
+# install.sh now runs the installed binary once at build time and REMOVES it when
+# it will not execute. So two outcomes are correct here and both pass: no binary
+# at all (today, on bullseye), or a binary that really runs (a future
+# ODOO_LS_VERSION with a lower glibc floor, which is the better outcome and must
+# not be blocked by this check). The one state that must never pass is an
+# INSTALLED binary that cannot execute - that is what crash-looped a session
+# through maxRestarts and left nothing to debug it with.
+# shellcheck disable=SC2016  # single quotes are deliberate: $bin is the inner script's own variable and must not be expanded by this file.
+check "odoo-ls either runs here or was not installed at all - never a binary that cannot execute" \
+    bash -c '
+bin=/usr/local/share/odoo-ls/odoo_ls_server
+if [ -x "$bin" ]; then
+    "$bin" --version || {
+        echo "FAIL: $bin is installed but will not execute on bullseye; the build-time smoke test in install_odoo_ls should have removed it (#993)"
+        exit 1
+    }
+    echo "odoo-ls runs on this base image - the glibc 2.34 floor no longer applies here"
+else
+    echo "odoo-ls was not installed, as expected on bullseye: the pinned release binary needs glibc 2.34 and this base ships 2.31"
+fi'
+
+# Degrading has to be LOUD but not fatal. The launcher is what Claude Code
+# execs, and a non-zero exit from it reads as a crash and burns the restart
+# budget for a container that simply has no language server - so it must still
+# be on PATH, still say why on stderr, and still exit 0.
+check "odoo-ls-server is still on PATH even with no server binary" \
+    bash -c "test -x /usr/local/bin/odoo-ls-server"
+check "odoo-ls-server warns about the missing server and exits 0" \
+    bash -c "ODOO_LS_BIN=/definitely/not/here /usr/local/bin/odoo-ls-server 2>&1 >/dev/null | grep -q 'no Odoo language intelligence'"
+
+# The second half of #993, independent of the glibc problem: odoo-ls-config runs
+# from postCreateCommand as the remote user (uid 1002 here, not root) and
+# publishes odools.toml by writing a temp file into this directory and moving it
+# into place. Root-owned 0755 made that a guaranteed Permission denied, and the
+# generator warns and exits 0 by design - so create reported success while every
+# LSP call in the session died on a 60-second initialization timeout.
+check "the odoo-ls share directory is writable by any uid (the config generator writes there)" \
+    bash -c "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls)\" = '777' ]"
+check "odoo-ls-config is on PATH and parses" \
+    bash -c "test -x /usr/local/bin/odoo-ls-config && sh -n /usr/local/bin/odoo-ls-config"
 
 check "postgresql starts and is ready" /usr/local/share/pq-init.sh
 
