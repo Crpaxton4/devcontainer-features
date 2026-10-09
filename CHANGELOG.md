@@ -1,5 +1,32 @@
 # Changelog
 
+## [7.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.6.1...personal-features-v7.0.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-dev:** the `40-coderabbit` artifact stage is removed from artifact.sh's SCHEMA, and `skills/odoo-pr/scripts/coderabbit-local.sh` (with its test suite) is deleted. `odoo-pr` now writes one stage on the task route, `50-pr`. Anything putting or getting `40-coderabbit` fails with "unknown stage".
+
+### Features
+
+* **odoo-dev:** the pr review gate dispatches coderabbit:code-reviewer; no 40-coderabbit artifact ([#1028](https://github.com/Crpaxton4/devcontainer-features/issues/1028)) ([15d883a](https://github.com/Crpaxton4/devcontainer-features/commit/15d883a20f20bdc04538773c2761c4233636e000)), closes [#977](https://github.com/Crpaxton4/devcontainer-features/issues/977)
+* **odoo-sdk:** resolve start_task's base branch from the odoo-dev repo map ([68e3b07](https://github.com/Crpaxton4/devcontainer-features/commit/68e3b07a9463049dba5881af1ce7d42b74c5826c)), closes [#979](https://github.com/Crpaxton4/devcontainer-features/issues/979)
+* **odoo-sdk:** start_task resolves the base branch from the odoo-dev repo map before origin/HEAD ([#1005](https://github.com/Crpaxton4/devcontainer-features/issues/1005)) ([68e3b07](https://github.com/Crpaxton4/devcontainer-features/commit/68e3b07a9463049dba5881af1ce7d42b74c5826c))
+* **personal-features:** assert the mempalace plugin version against the pinned CLI and record both in the provision marker ([#1014](https://github.com/Crpaxton4/devcontainer-features/issues/1014)) ([bf596ab](https://github.com/Crpaxton4/devcontainer-features/commit/bf596ab1d97b805be82db4d1017f81d34864e7cb))
+* **personal-features:** assert the mempalace plugin version against the pinned CLI/hub ([bf596ab](https://github.com/Crpaxton4/devcontainer-features/commit/bf596ab1d97b805be82db4d1017f81d34864e7cb)), closes [#975](https://github.com/Crpaxton4/devcontainer-features/issues/975)
+* **personal-features:** install the pinned shellcheck the CI lint uses ([#1001](https://github.com/Crpaxton4/devcontainer-features/issues/1001)) ([7e64d0b](https://github.com/Crpaxton4/devcontainer-features/commit/7e64d0b0f38409ba2d22cb2741a123e2a7206dbc)), closes [#964](https://github.com/Crpaxton4/devcontainer-features/issues/964)
+* **personal-features:** warn at create when a bind-mount target is root-owned or unwritable ([#1015](https://github.com/Crpaxton4/devcontainer-features/issues/1015)) ([e5ae7c9](https://github.com/Crpaxton4/devcontainer-features/commit/e5ae7c9059747e38753ec2741acff5d2aac1e7df)), closes [#974](https://github.com/Crpaxton4/devcontainer-features/issues/974)
+
+
+### Bug Fixes
+
+* **odoo-sdk:** implement_task names the state-dir artifacts directory ([8588c02](https://github.com/Crpaxton4/devcontainer-features/commit/8588c02c638274c526acc1d069613a8a909b4d2a)), closes [#992](https://github.com/Crpaxton4/devcontainer-features/issues/992)
+* **odoo-sdk:** implement_task names the state-dir artifacts directory instead of a repo-relative path ([#1003](https://github.com/Crpaxton4/devcontainer-features/issues/1003)) ([8588c02](https://github.com/Crpaxton4/devcontainer-features/commit/8588c02c638274c526acc1d069613a8a909b4d2a))
+* **personal-features:** accept the Conventional Commits revert type in the commit-msg hook ([#996](https://github.com/Crpaxton4/devcontainer-features/issues/996)) ([61c5c5e](https://github.com/Crpaxton4/devcontainer-features/commit/61c5c5ee12cd00dd125a0b334ea0aa3fc348cd7a)), closes [#981](https://github.com/Crpaxton4/devcontainer-features/issues/981)
+* **personal-features:** disable huggingface_hub shared blobs for every per-container mempalace process ([#1013](https://github.com/Crpaxton4/devcontainer-features/issues/1013)) ([2da8d13](https://github.com/Crpaxton4/devcontainer-features/commit/2da8d130932d5d82f66dfcbb264ce04ad3d709bc))
+* **personal-features:** odoo-ls degrades loudly on bullseye and its config generator can write as the remote user ([#1011](https://github.com/Crpaxton4/devcontainer-features/issues/1011)) ([df03b10](https://github.com/Crpaxton4/devcontainer-features/commit/df03b1026c0c17e3f3a5da182bf2c828c75069c2))
+* **personal-features:** sync-claude-hooks reports an unreadable settings.json as such, not as invalid JSON ([#1009](https://github.com/Crpaxton4/devcontainer-features/issues/1009)) ([e5158d9](https://github.com/Crpaxton4/devcontainer-features/commit/e5158d95cd9216cfadaa42219de4307d119b2960))
+
 ## [6.6.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v6.6.0...personal-features-v6.6.1) (2026-10-02)
 
 
