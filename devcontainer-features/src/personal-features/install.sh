@@ -2343,6 +2343,7 @@ install_shellcheck() {
 install_odoo_ls() {
     local version="$1" tarball_sha="$2" typeshed_sha="$3"
     local dest=/usr/local/share/odoo-ls
+    local runner=""
     local base="https://github.com/odoo/odoo-ls/releases/download/${version}"
     local staging
     staging="$(mktemp -d)"
@@ -2368,6 +2369,35 @@ install_odoo_ls() {
         rm -rf "$dest/typeshed"
         mv "$staging/typeshed" "$dest/typeshed"
         install -m 0755 "$staging/odoo_ls_server" "$dest/odoo_ls_server"
+
+        # Does the binary RUN here? The two checksums above prove only that the
+        # right bytes arrived. The 1.6.0 release assets are linked against glibc
+        # 2.34, and Debian 11 (bullseye) - which every odoo:16 image is - ships
+        # 2.31, so there the dynamic loader rejects the binary before main() and
+        # before the server has any logging of its own: the symptom reaching a
+        # session is an LSP initialization timeout, or `crashed with exit code
+        # 1`, with an EMPTY log directory to debug it from (#993). `--version`
+        # exits immediately, reads no config and touches no workspace, so it
+        # costs nothing and is a true loader check.
+        #
+        # A failure removes the binary rather than keeping an unrunnable one.
+        # That hands odoo-ls-server its existing "missing or not executable"
+        # path - one warning per session, exit 0 - instead of a crash-loop
+        # through maxRestarts, and keeps this function best-effort like the rest
+        # of install.sh. The feature test asserts the binary IS present on the
+        # bases that can run it, so a regression there still goes red.
+        # `timeout` is coreutils and is always there, but install.sh runs under
+        # `set -e`: an `&&` list whose left side fails would take the whole
+        # backgrounded job down, so this is an `if`.
+        if command -v timeout >/dev/null 2>&1; then
+            runner="timeout 30"
+        fi
+        if ! $runner "$dest/odoo_ls_server" --version >/dev/null 2>"$staging/version.err"; then
+            echo "WARNING: odoo-ls $version installed but will not run on this base image (needs glibc 2.34; bullseye ships 2.31) - removing it, so this container degrades to no language server rather than to a crash-looping one. The loader said:" >&2
+            sed 's/^/    /' "$staging/version.err" >&2 || true
+            rm -f "$dest/odoo_ls_server"
+        fi
+
         # The server's own log directory, and the ONE that cannot fail: with no
         # --logs-directory (or one that does not exist - the server checks
         # `path.exists()` and falls back rather than creating it) the rolling
@@ -2377,6 +2407,17 @@ install_odoo_ls() {
         # Claude Code session, and these are server logs, not a secret.
         mkdir -p "$dest/logs"
         chmod 0777 "$dest/logs"
+        # And the directory ITSELF, for the same stated reason: odoo-ls-config
+        # runs from postCreateCommand as the remote user, whose uid install.sh
+        # cannot know, and it publishes odools.toml by writing a temp file here
+        # and moving it into place. Against a root-owned 0755 directory that is
+        # a guaranteed `Permission denied` in exactly the containers this
+        # targets - the generator warned, exited 0 by design, and create
+        # reported success while every LSP call timed out (#993). No sticky bit:
+        # the move has to be able to replace a file a previous (root) create
+        # left behind. Nothing secret lives here - a pinned public binary, its
+        # stubs, generated config, server logs.
+        chmod 0777 "$dest"
     else
         echo "WARNING: failed to unpack odoo-ls, skipping" >&2
     fi
@@ -2733,18 +2774,49 @@ set -u
 #   ODOO_LS_SKIP_CONFIG=1  write nothing
 #   ODOO_LS_CONFIG         output file
 #   ODOO_LS_ODOO_PATH      Odoo community source
-#   ODOO_LS_ENTERPRISE     enterprise addons directory
+#   ODOO_LS_ENTERPRISE     enterprise addons directory (one series)
+#   ODOO_LS_ENTERPRISE_ROOT  directory the per-series addons dirs live under
 #   ODOO_LS_WORKSPACE      the mounted customization checkout
 #   ODOO_LS_PYTHON         interpreter whose site-packages the server reads
 
 OUT="${ODOO_LS_CONFIG:-/usr/local/share/odoo-ls/odools.toml}"
 ODOO_PATH="${ODOO_LS_ODOO_PATH:-/usr/lib/python3/dist-packages/odoo}"
-# Enterprise addons are per-series (/var/lib/odoo/addons/<series>), so with no
-# $ODOO_VERSION there is no directory to name - and naming the parent would hand
-# the server a directory of series directories, not of modules.
+# Enterprise addons are per-series: /var/lib/odoo/addons/<series>, e.g. 16.0.
+# The PARENT is never the answer - naming it would hand the server a directory
+# of series directories, not of modules - so the series itself has to be
+# resolved, and $ODOO_VERSION on its own is not enough to resolve it. Any
+# invocation that does not inherit the variable (sudo strips it, which is the
+# natural way to run this by hand) used to write a config with the enterprise
+# tree simply absent, and said nothing (#993). The directory either exists or it
+# does not, so probe for it; $ODOO_VERSION only picks between the ones found.
+ENTERPRISE_ROOT="${ODOO_LS_ENTERPRISE_ROOT:-/var/lib/odoo/addons}"
 ENTERPRISE="${ODOO_LS_ENTERPRISE:-}"
-if [ -z "$ENTERPRISE" ] && [ -n "${ODOO_VERSION:-}" ]; then
-    ENTERPRISE="/var/lib/odoo/addons/$ODOO_VERSION"
+if [ -n "$ENTERPRISE" ]; then
+    # An explicit override wins outright, but say so when it is not there: the
+    # path is dropped from addons_paths below, and a silent drop is the whole
+    # complaint in #993.
+    [ -d "$ENTERPRISE" ] || echo "WARNING: odoo-ls-config: ODOO_LS_ENTERPRISE=$ENTERPRISE is not a directory; omitting the enterprise addons path" >&2
+elif [ -d "$ENTERPRISE_ROOT" ]; then
+    series_found=""
+    series_count=0
+    for candidate in "$ENTERPRISE_ROOT"/[0-9]*.[0-9]; do
+        [ -d "$candidate" ] || continue
+        series_count=$((series_count + 1))
+        series_found="${series_found:+$series_found }$candidate"
+    done
+    if [ -n "${ODOO_VERSION:-}" ]; then
+        if [ -d "$ENTERPRISE_ROOT/$ODOO_VERSION" ]; then
+            ENTERPRISE="$ENTERPRISE_ROOT/$ODOO_VERSION"
+        elif [ "$series_count" -gt 0 ]; then
+            echo "WARNING: odoo-ls-config: ODOO_VERSION is $ODOO_VERSION but $ENTERPRISE_ROOT/$ODOO_VERSION does not exist (present: $series_found); omitting the enterprise addons path" >&2
+        fi
+    elif [ "$series_count" -eq 1 ]; then
+        # Exactly one series on disk and no variable to disagree with it. Naming
+        # it is strictly better than the old silent omission.
+        ENTERPRISE="$series_found"
+    elif [ "$series_count" -gt 1 ]; then
+        echo "WARNING: odoo-ls-config: ODOO_VERSION is unset and $ENTERPRISE_ROOT holds several series directories ($series_found); omitting the enterprise addons path - set ODOO_VERSION or ODOO_LS_ENTERPRISE to pick one" >&2
+    fi
 fi
 WORKSPACE="${ODOO_LS_WORKSPACE:-/mnt/extra-addons}"
 VENV_PYTHON="$WORKSPACE/.venv/bin/python"
@@ -2781,9 +2853,22 @@ if [ -z "$PYTHON" ]; then
     fi
 fi
 
-mkdir -p "$(dirname "$OUT")" || {
-    echo "WARNING: odoo-ls-config: cannot create $(dirname "$OUT"); no Odoo language server config was written" >&2
+OUT_DIR="$(dirname "$OUT")"
+mkdir -p "$OUT_DIR" || {
+    echo "WARNING: odoo-ls-config: cannot create $OUT_DIR (running as uid $(id -u)); no Odoo language server config was written" >&2
     exit 0
+}
+
+# Why the warnings below name the mode and the uid: this script runs from
+# postCreateCommand as the remote user, and the one failure it actually hit in
+# the field was a root-owned 0755 output directory (#993). install.sh now leaves
+# that directory 0777, but a bind mount, a rebuilt image or an ODOO_LS_CONFIG
+# pointed somewhere else can put it back - and "Permission denied" with no owner
+# and no mode beside it is a dead end. Still exit 0: a container that cannot be
+# configured for Odoo gets no language server, which is not an outage.
+why_unwritable() {
+    printf 'uid %s, %s is %s' "$(id -u)" "$OUT_DIR" \
+        "$(ls -ld "$OUT_DIR" 2>/dev/null | awk '{ printf "mode %s owned by %s:%s", $1, $3, $4 }')"
 }
 
 TMP="$OUT.tmp.$$"
@@ -2809,12 +2894,12 @@ TMP="$OUT.tmp.$$"
     echo "disable_javascript = true"
 } > "$TMP" || {
     rm -f "$TMP"
-    echo "WARNING: odoo-ls-config: could not write $TMP; no Odoo language server config was written" >&2
+    echo "WARNING: odoo-ls-config: could not write $TMP ($(why_unwritable)); no Odoo language server config was written" >&2
     exit 0
 }
 mv "$TMP" "$OUT" || {
     rm -f "$TMP"
-    echo "WARNING: odoo-ls-config: could not move $TMP to $OUT" >&2
+    echo "WARNING: odoo-ls-config: could not move $TMP to $OUT ($(why_unwritable)); no Odoo language server config was written" >&2
     exit 0
 }
 # Readable by whichever account ends up running a Claude Code session, for the

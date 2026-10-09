@@ -56,6 +56,41 @@ as that folder — so a session started inside a worktree indexes the worktree.
 Listing them in the generated config would instead bake in paths that come and
 go with every task, and a removed one is a hard config error.
 
+The enterprise addons path is found by **probing** `/var/lib/odoo/addons/` for
+series directories (`16.0`, `17.0`, …), not by trusting `$ODOO_VERSION`: the
+variable picks between the ones that are there, and with it unset and exactly
+one series present that one is used. Several present and no `$ODOO_VERSION`
+(`sudo` strips it) is the one case that still omits the path, and it warns on
+stderr naming what it found — set `ODOO_VERSION` or `ODOO_LS_ENTERPRISE` to
+pick. The parent directory is never named: it is a directory of series
+directories, not of modules.
+
+## `startupTimeout` does not bound indexing
+
+`startupTimeout: 60000` in `.lsp.json` bounds the LSP `initialize` handshake and
+nothing else. The server answers `initialize` almost immediately and then builds
+the workspace **asynchronously** — `Odoo: Indexing modules`, `Building
+Database`, `core/build_scheduler.rs`. On a tree this size (300+ modules under
+`/mnt/extra-addons`) that build is minutes, and raising `startupTimeout` does
+not wait for it.
+
+So an early `workspaceSymbol` or `goToDefinition` can come back **empty or
+partial, and nothing in the reply distinguishes "that symbol does not exist"
+from "not indexed yet"** — a wrong answer rather than a slow one. Before the
+first query a session actually depends on, either warm up (one throwaway
+`workspaceSymbol`, then re-ask) or wait for the indexing lines in the log
+directory:
+
+```bash
+# $ODOO_LS_LOGS_DIR, default $TMPDIR/odoo-ls-logs; the 0777 directory next to
+# the binary is the fallback when that one is not writable.
+tail -F "$(ls -t /tmp/odoo-ls-logs/* /usr/local/share/odoo-ls/logs/* 2>/dev/null | head -1)" \
+    | grep -m1 -E 'Building Database|Indexing modules'
+```
+
+Note that `ODOO_LS_LOG_LEVEL` defaults to `warn`, which drops those lines —
+rerun the launcher at `info` to see them.
+
 ## Turning it off
 
 Three switches, coarsest last:
@@ -81,7 +116,9 @@ stopped and the session carries on without it.
 | `ODOO_LS_LOGS_DIR`  | `$TMPDIR/odoo-ls-logs`                     |
 
 `odoo-ls-config` takes `ODOO_LS_SKIP_CONFIG`, `ODOO_LS_ODOO_PATH`,
-`ODOO_LS_ENTERPRISE`, `ODOO_LS_WORKSPACE` and `ODOO_LS_PYTHON`.
+`ODOO_LS_ENTERPRISE`, `ODOO_LS_ENTERPRISE_ROOT` (default `/var/lib/odoo/addons`,
+the directory the series dirs are probed in), `ODOO_LS_WORKSPACE` and
+`ODOO_LS_PYTHON`.
 
 ## Facts worth not re-deriving
 
@@ -99,6 +136,17 @@ stopped and the session carries on without it.
   true`: that half of the server shells out to `tsserver`, which is not
   installed here, and without this it reports the same diagnostic every session.
   Python, XML and CSV are unaffected — they are what the plugin registers.
+- **The release binaries need glibc 2.34.** Debian 11 (bullseye), which every
+  `odoo:16` image is, ships 2.31, so the dynamic loader rejects the binary
+  before `main()` and before the server has any logging of its own (#993). The
+  Feature smoke-tests `--version` at build time and *removes* a binary that will
+  not run, so such a container reports `no Odoo language intelligence` once per
+  session instead of crash-looping through `maxRestarts`. A bookworm-or-newer
+  base is the fix; there is no language server on bullseye.
+- **There is no on-disk index cache.** 1.6.0 builds the database from scratch
+  per server process, and `--parse` cannot pre-seed an image (it writes
+  diagnostics to `output.json` and exits). Amortizing the build would mean a
+  long-lived daemon; see #993 for the `--use-tcp` caveats.
 
 ## Reading the diagnostics
 
