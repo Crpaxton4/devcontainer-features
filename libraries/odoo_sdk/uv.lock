@@ -3185,7 +3185,7 @@ wheels = [
 
 [[package]]
 name = "odoo-sdk"
-version = "6.6.1"
+version = "7.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },

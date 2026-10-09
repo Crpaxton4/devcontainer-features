@@ -1,5 +1,37 @@
 # Changelog
 
+## [3.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v2.0.0...odoo-dev-plugin-v3.0.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-dev:** the `40-coderabbit` artifact stage is removed from artifact.sh's SCHEMA, and `skills/odoo-pr/scripts/coderabbit-local.sh` (with its test suite) is deleted. `odoo-pr` now writes one stage on the task route, `50-pr`. Anything putting or getting `40-coderabbit` fails with "unknown stage".
+
+### Features
+
+* **odoo-dev:** a progress stage in artifact.sh so the tester can checkpoint ([d5f6559](https://github.com/Crpaxton4/devcontainer-features/commit/d5f6559c7b5f0b1b45aeecae69e57bcc7c0f1fda)), closes [#961](https://github.com/Crpaxton4/devcontainer-features/issues/961)
+* **odoo-dev:** a progress stage in artifact.sh so the tester can checkpoint under the allowlist ([#1012](https://github.com/Crpaxton4/devcontainer-features/issues/1012)) ([d5f6559](https://github.com/Crpaxton4/devcontainer-features/commit/d5f6559c7b5f0b1b45aeecae69e57bcc7c0f1fda))
+* **odoo-dev:** bootstrap an unmapped project in phase on the release route ([f88448c](https://github.com/Crpaxton4/devcontainer-features/commit/f88448c277dc2686a7be631fb241b6e3555f0aae)), closes [#995](https://github.com/Crpaxton4/devcontainer-features/issues/995)
+* **odoo-dev:** bootstrap an unmapped project in phase on the release route; split resolve exit 3 ([#1004](https://github.com/Crpaxton4/devcontainer-features/issues/1004)) ([f88448c](https://github.com/Crpaxton4/devcontainer-features/commit/f88448c277dc2686a7be631fb241b6e3555f0aae))
+* **odoo-devcontainer:** accept every Odoo version form, normalize to series.A.B.C ([4aa171c](https://github.com/Crpaxton4/devcontainer-features/commit/4aa171c101a27a1ac7f9b62daf27163facdbfdd5))
+* **odoo-devcontainer:** bump_manifest_version.py accepts every Odoo version form and normalizes to series.A.B.C ([#1008](https://github.com/Crpaxton4/devcontainer-features/issues/1008)) ([4aa171c](https://github.com/Crpaxton4/devcontainer-features/commit/4aa171c101a27a1ac7f9b62daf27163facdbfdd5))
+* **odoo-dev:** fail a test run loudly when the container's Odoo series differs from the module's ([#1007](https://github.com/Crpaxton4/devcontainer-features/issues/1007)) ([7b99dc8](https://github.com/Crpaxton4/devcontainer-features/commit/7b99dc84835333e1c5fba4fc51283f955a79435e))
+* **odoo-dev:** refuse a test run when the container's Odoo series is not the module's ([7b99dc8](https://github.com/Crpaxton4/devcontainer-features/commit/7b99dc84835333e1c5fba4fc51283f955a79435e))
+* **odoo-dev:** stamp produced_by into 30-test.json and report hand-assembled test evidence ([#998](https://github.com/Crpaxton4/devcontainer-features/issues/998)) ([51c1abc](https://github.com/Crpaxton4/devcontainer-features/commit/51c1abc43ea5f3c877da117b13127f3e5a71dd8f)), closes [#982](https://github.com/Crpaxton4/devcontainer-features/issues/982)
+* **odoo-dev:** the pr review gate dispatches coderabbit:code-reviewer; no 40-coderabbit artifact ([#1028](https://github.com/Crpaxton4/devcontainer-features/issues/1028)) ([15d883a](https://github.com/Crpaxton4/devcontainer-features/commit/15d883a20f20bdc04538773c2761c4233636e000)), closes [#977](https://github.com/Crpaxton4/devcontainer-features/issues/977)
+* **odoo-sdk:** resolve start_task's base branch from the odoo-dev repo map ([68e3b07](https://github.com/Crpaxton4/devcontainer-features/commit/68e3b07a9463049dba5881af1ce7d42b74c5826c)), closes [#979](https://github.com/Crpaxton4/devcontainer-features/issues/979)
+* **odoo-sdk:** start_task resolves the base branch from the odoo-dev repo map before origin/HEAD ([#1005](https://github.com/Crpaxton4/devcontainer-features/issues/1005)) ([68e3b07](https://github.com/Crpaxton4/devcontainer-features/commit/68e3b07a9463049dba5881af1ce7d42b74c5826c))
+
+
+### Bug Fixes
+
+* **odoo-dev:** the pr agent description and router stop advertising a CodeRabbit review loop ([#1002](https://github.com/Crpaxton4/devcontainer-features/issues/1002)) ([90d2845](https://github.com/Crpaxton4/devcontainer-features/commit/90d28451ccd3b7bb91b4ee020a9c071e98319971)), closes [#962](https://github.com/Crpaxton4/devcontainer-features/issues/962)
+* **odoo-upgrade:** count an automation's server action once in studio_inventory.py ([#1010](https://github.com/Crpaxton4/devcontainer-features/issues/1010)) ([8facb68](https://github.com/Crpaxton4/devcontainer-features/commit/8facb684b330029b2cf699ed1acc948df784b523)), closes [#960](https://github.com/Crpaxton4/devcontainer-features/issues/960)
+* **odoo-upgrade:** OCA review references use the already OCA literal, one owner ([a5d443e](https://github.com/Crpaxton4/devcontainer-features/commit/a5d443e3afaadbc91f5b3bddaa28b2ff7e63db42)), closes [#963](https://github.com/Crpaxton4/devcontainer-features/issues/963)
+* **odoo-upgrade:** the OCA review references use the already OCA literal; one owner, a parity test ([#1006](https://github.com/Crpaxton4/devcontainer-features/issues/1006)) ([a5d443e](https://github.com/Crpaxton4/devcontainer-features/commit/a5d443e3afaadbc91f5b3bddaa28b2ff7e63db42))
+* **personal-features:** accept the Conventional Commits revert type in the commit-msg hook ([#996](https://github.com/Crpaxton4/devcontainer-features/issues/996)) ([61c5c5e](https://github.com/Crpaxton4/devcontainer-features/commit/61c5c5ee12cd00dd125a0b334ea0aa3fc348cd7a)), closes [#981](https://github.com/Crpaxton4/devcontainer-features/issues/981)
+* **personal-features:** odoo-ls degrades loudly on bullseye and its config generator can write as the remote user ([#1011](https://github.com/Crpaxton4/devcontainer-features/issues/1011)) ([df03b10](https://github.com/Crpaxton4/devcontainer-features/commit/df03b1026c0c17e3f3a5da182bf2c828c75069c2))
+
 ## [2.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v1.2.0...odoo-dev-plugin-v2.0.0) (2026-09-28)
 
 
