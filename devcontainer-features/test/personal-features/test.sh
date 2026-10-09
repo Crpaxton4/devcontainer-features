@@ -2026,6 +2026,14 @@ check "typeshed stubs sit next to the binary, where the server looks for them" b
 # know which uid runs a session, so this is the guaranteed fallback.
 check "the server's fallback log directory is writable by any uid" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls/logs)\" = '777' ]"
+# And the directory ABOVE it, for the same unknowable-uid reason. odoo-ls-config
+# publishes odools.toml by writing a temp file into this directory and moving it
+# into place, and it runs from postCreateCommand as the remote user: against a
+# root-owned 0755 directory that is a guaranteed Permission denied, so the
+# generator warned, exited 0 by design, create reported success, and every LSP
+# call in the session died on an initialization timeout (#993).
+check "the odoo-ls share directory is writable by any uid (the config generator writes there)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/odoo-ls)\" = '777' ]"
 
 # The launcher is what the odoo-dev plugin's .lsp.json names as `command`;
 # Claude Code resolves it on PATH and refuses to run a bundled binary.
@@ -2105,7 +2113,29 @@ check "odoo-ls-config writes odoo_path and every addons path it can see" bash -c
 # An addons path that does not exist is a hard config error at server startup,
 # so a directory that is absent must simply not be named.
 check "odoo-ls-config omits an enterprise directory that is not there" bash -c \
-  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && ! grep -qF 'absent' \"\$d/out.toml\""
+  "$_OLS_TREE ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE=\"\$d/absent\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null 2>&1 && ! grep -qF 'absent' \"\$d/out.toml\""
+
+# The enterprise series is PROBED for, not read off $ODOO_VERSION. Any
+# invocation that does not inherit the variable - sudo strips it, which is the
+# natural way to run this by hand - used to write a config with the enterprise
+# tree simply absent, and said nothing about it (#993). The directory either
+# exists or it does not; $ODOO_VERSION only picks between the ones found.
+_OLS_SERIES="$_OLS_TREE mkdir -p \"\$d/root/16.0\";"
+check "odoo-ls-config picks the single existing series dir when ODOO_VERSION is unset" bash -c \
+  "$_OLS_SERIES env -u ODOO_VERSION ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"\\\"\$d/root/16.0\\\"\" \"\$d/out.toml\""
+check "odoo-ls-config lets ODOO_VERSION choose among several series dirs" bash -c \
+  "$_OLS_SERIES mkdir -p \"\$d/root/17.0\"; ODOO_VERSION=17.0 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && grep -qF \"\\\"\$d/root/17.0\\\"\" \"\$d/out.toml\" && ! grep -qF 'root/16.0' \"\$d/out.toml\""
+# Ambiguity is the one case that still omits the path - and it must never fall
+# back to the PARENT, which is a directory of series directories, not of
+# modules, and would be a hard config error at server startup.
+check "odoo-ls-config warns, omits and never names the parent when the series is ambiguous" bash -c \
+  "$_OLS_SERIES mkdir -p \"\$d/root/17.0\"; env -u ODOO_VERSION ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config 2>&1 >/dev/null | grep -q 'several series directories' && ! grep -qF \"\\\"\$d/root\\\"\" \"\$d/out.toml\" && ! grep -qF 'root/16.0' \"\$d/out.toml\""
+check "odoo-ls-config warns when ODOO_VERSION names a series that is not installed" bash -c \
+  "$_OLS_SERIES ODOO_VERSION=18.0 ODOO_LS_CONFIG=\"\$d/out.toml\" ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/root\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config 2>&1 >/dev/null | grep -q 'does not exist'"
+# The write that actually failed in #993 was into the REAL output directory, so
+# a temp directory cannot prove it. Only the published path can.
+check "odoo-ls-config can publish to its real default output path" bash -c \
+  "$_OLS_TREE ODOO_LS_ODOO_PATH=\"\$d/odoo\" ODOO_LS_ENTERPRISE_ROOT=\"\$d/none\" ODOO_LS_WORKSPACE=\"\$d/ws\" /usr/local/bin/odoo-ls-config >/dev/null && test -f /usr/local/share/odoo-ls/odools.toml; rc=\$?; rm -f /usr/local/share/odoo-ls/odools.toml; exit \$rc"
 # The JS half of the server shells out to tsserver and reports a diagnostic on
 # every session when it is missing; typescript is not installed here.
 check "odoo-ls-config turns off the server's JS half (no tsserver in this image)" bash -c \
