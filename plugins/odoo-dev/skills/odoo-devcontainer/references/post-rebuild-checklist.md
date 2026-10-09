@@ -245,6 +245,13 @@ All three must answer. No `odools.toml` means `odoo-ls-config` did not run or
 found no Odoo source — rerun it by hand (`odoo-ls-config`) and read what it
 says. Missing stubs mean the server will start, answer, and resolve nothing.
 
+A **missing `odoo_ls_server`** with the stubs still in place is not a broken
+build: the Feature smoke-tests the binary at install time and deletes one that
+cannot execute, which on Debian 11 (bullseye — every `odoo:16` image) it cannot,
+because the release binaries need glibc 2.34 and bullseye ships 2.31 (#993).
+That container has no language server, and `odoo-ls-server` says so once per
+session. The fix is a bookworm-or-newer base, not a reinstall.
+
 Then confirm the config the server will actually use, and that it parses:
 
 ```bash

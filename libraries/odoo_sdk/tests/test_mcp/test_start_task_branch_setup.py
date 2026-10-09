@@ -287,8 +287,12 @@ class TestStashPopCollisionIsUnwound(unittest.TestCase):
 
     def test_collision_reports_an_actionable_error(self):
         with self.assertRaises(_BranchSetupError) as caught:
-            _create_task_branch("10-fix", "main")
-        self.assertIn("10-fix", str(caught.exception))
+            _create_task_branch("10-fix", "main", "repo map")
+        message = str(caught.exception)
+        self.assertIn("10-fix", message)
+        # #979: the base — and the knob that chose it — is the missing piece
+        # that explains the collision, so the message has to carry both.
+        self.assertIn("base 'main' chosen from repo map", message)
 
     def test_user_work_is_back_on_disk_on_the_original_branch(self):
         with self.assertRaises(_BranchSetupError):
@@ -326,6 +330,11 @@ class TestStashPopCollisionIsUnwound(unittest.TestCase):
         result = _run(tool(_ctx(), task_id=10))
         self.assertIn("error", result)
         self.assertIn("10-fix", result["error"])
+        # #979: no base was given and this fixture has no repo-map entry, so the
+        # base was guessed — and the error names both the base and the guess
+        # that produced it (this clone records no origin/HEAD, so the guess
+        # lands on the checked-out branch).
+        self.assertIn("base 'main' chosen from current branch", result["error"])
         self.assertEqual(_git(self.local, "rev-parse", "--abbrev-ref", "HEAD"), "main")
 
 

@@ -74,11 +74,16 @@ AREA_ORDER = ["Sales", "CRM", "Purchasing", "Inventory", "Manufacturing",
 # provenance prose — it belongs in the Evidence sheet, not a client-facing cell.
 # The two literals are written by module_inventory.oca_seed (same names there)
 # and by odoo-prior-art/scripts/oca_check.py; this is the reader of both.
+# Mirrors of the OCA literal contract — owner is the commented OCA_NONE in
+# ../../odoo-prior-art/scripts/oca_check.py (sole producer of "already OCA: ");
+# spec is ../references/inventory.md:93. Kept in parity by
+# tests/module-inventory.test.sh.
 OCA_NONE = "none"
 OCA_UNVERIFIED = "claimed — run oca_check.py"
 OCA_REPO_RE = re.compile(r"^OCA/[A-Za-z0-9._-]+(?: \([^()]*\))?$")
 # "OCA <major> alternative": none, an already-OCA statement for a module that
-# IS the upstream module, or up to three candidates.
+# IS the upstream module, or up to three candidates. The "already OCA: " prefix
+# is the contract literal; oca_check.py writes it, this only validates it.
 OCA_ALREADY_RE = re.compile(
     r"^already OCA: [A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 OCA_ALT_RE = re.compile(

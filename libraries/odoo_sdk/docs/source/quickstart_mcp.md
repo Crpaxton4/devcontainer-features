@@ -77,7 +77,43 @@ the base git branch), then atomically dispatches on the session state:
 - Posts no chatter note; the run and its events are the tracking record.
 
 Returns `run_id`, `task_id`, `state`, `already_running`, `started_at`,
-`timesheet_id` (`null` — no anchor).
+`timesheet_id` (`null` — no anchor), and `base_branch` — the branch the task
+branch was actually forked from.
+
+### Which branch the task branch forks from
+
+`start_task` creates `<task-id>-<slug>` from the first of these that answers,
+and reports the winner as `base_branch`:
+
+| # | Source | Notes |
+|---|--------|-------|
+| 1 | `base_branch=` argument | An explicit override; also skips the interactive branch pick |
+| 2 | `ODOO_SDK_BASE_BRANCH` | Per-project env knob; blank/whitespace reads as unset |
+| 3 | odoo-dev repo map | `default_branch` in `$ODOO_DEV_STATE_DIR/repo-map.json` (#979) |
+| 4 | `origin/HEAD` | The *GitHub* default branch |
+| 5 | current branch | Only when there is no `origin/HEAD` |
+
+```text
+start_task(task_id=1234, base_branch="E2E")
+```
+
+The repo map outranks `origin/HEAD` because the repos this tool serves
+routinely keep a GitHub default (`master`) that task work is never based on —
+work flows into a shared pre-production branch such as `E2E` or `UAT` instead.
+Forking from the remote default there puts both the work and its PR on the
+wrong base, and the differing trees make the auto-stash collide (#979).
+
+The map is read-only here and matched to the checkout by `repo_path`
+(`realpath`-compared), else by `repo` against the git root's folder name when
+exactly one entry claims it — two projects on one repo, say an engagement and
+its version upgrade, disagree about `default_branch`, so a bare name match is
+not enough to decide. A missing, unreadable or malformed map is simply "no
+answer": the lookup never fails `start_task`. `ODOO_DEV_STATE_DIR` has no
+default in the SDK — where it is unset, there is no map to consult.
+
+When branch setup does fail (a dirty tree whose files are tracked on the base),
+the error names the base *and* the row above that chose it, e.g.
+`base 'master' chosen from origin/HEAD`.
 
 ## 3. Work, leaving `task_note` checkpoints
 

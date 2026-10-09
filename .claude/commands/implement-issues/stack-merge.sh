@@ -614,9 +614,19 @@ restack_child() {
         # already exists for base branch X and head branch Y", naming the PR
         # being edited as though it collided with a different one. That reads
         # like a duplicate-PR problem and is not one.
+        #
+        # The pre-check above races GitHub's own retarget: observed once on
+        # all-20261009, the view said the base was still the parent, the edit
+        # then landed after GitHub had moved it and was rejected as the no-op.
+        # So a rejected edit is re-queried as a FACT, the same way merge_node
+        # treats a refused merge: if the base is now BASE, the step is done.
         current_base=$(gh pr view "$child" -R "$SLUG" --json baseRefName --jq .baseRefName)
         if [[ $current_base != "$BASE" ]]; then
-            gh pr edit "$child" -R "$SLUG" --base "$BASE"
+            if ! gh pr edit "$child" -R "$SLUG" --base "$BASE"; then
+                current_base=$(gh pr view "$child" -R "$SLUG" --json baseRefName --jq .baseRefName)
+                [[ $current_base == "$BASE" ]] ||
+                    die "#$child retarget to $BASE failed and the base is still $current_base" 1
+            fi
         fi
         add_done "$child:retarget"
     fi

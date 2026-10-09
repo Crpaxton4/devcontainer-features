@@ -26,12 +26,22 @@ no-op result (``already_running: true``) with no branch mutation and no
 prompts. There is no confirmation gate, and the ``task_id``-only path performs
 zero name searches and zero elicitations (#614), so automation can call this
 headless in any state.
+
+Base-branch precedence (#903/#979): the explicit ``base_branch`` argument, then
+``ODOO_SDK_BASE_BRANCH``, then the odoo-dev repo map's ``default_branch`` for
+this checkout (``$ODOO_DEV_STATE_DIR/repo-map.json``), then ``origin/HEAD``,
+then the current branch. The map ranks above ``origin/HEAD`` because the repos
+this tool serves routinely keep a GitHub default (``master``) that task work is
+never based on, so the remote default is a confidently wrong answer; it ranks
+below the two explicit knobs because those are a human overriding the record.
+See :func:`_resolve_base_branch`.
 """
 
+import json
 import os
 import re
 import subprocess
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, NamedTuple, Optional, Union
 
 from fastmcp import Context
 from mcp.types import (
@@ -74,6 +84,45 @@ class _SelectIndex(BaseModel):
 #: ``adapters.external_sync``.
 _TASK_BRANCH_RE = re.compile(r"\d+-")
 
+#: Environment variable naming the branch task branches must fork from (#903).
+#: Set it once per project (the pre-production branch on repos whose base is not
+#: the GitHub default) and every headless ``start_task`` forks from it.
+_BASE_BRANCH_ENV = "ODOO_SDK_BASE_BRANCH"
+
+#: Directory holding the odoo-dev plugin's state, ``repo-map.json`` among it
+#: (#979). Read with NO default on purpose: ``plugins/odoo-dev/scripts/
+#: state-dir.sh`` is the single definition of the ``$HOME/.local/share/odoo-dev``
+#: fallback and forbids every other caller from spelling it a second time — in a
+#: devcontainer the variable is exported for you, and where it is unset there is
+#: no map this process may assume exists.
+_STATE_DIR_ENV = "ODOO_DEV_STATE_DIR"
+
+#: The odoo-dev repo map, relative to :data:`_STATE_DIR_ENV`.
+_REPO_MAP_FILE = "repo-map.json"
+
+#: The vocabulary :class:`_ResolvedBase` reports a base's provenance in, in
+#: precedence order. These strings are caller-facing: they are quoted verbatim
+#: in the branch-setup failure message so an unexpected base (the #979 symptom)
+#: names the knob that chose it.
+_SOURCE_ARGUMENT = "argument"
+_SOURCE_ENV = _BASE_BRANCH_ENV
+_SOURCE_REPO_MAP = "repo map"
+_SOURCE_SELECTION = "branch selection"
+_SOURCE_ORIGIN_HEAD = "origin/HEAD"
+_SOURCE_CURRENT_BRANCH = "current branch"
+
+
+class _ResolvedBase(NamedTuple):
+    """A base branch together with the knob that chose it (#903/#979).
+
+    Threaded from :func:`_resolve_base_branch` down to the failure message so a
+    collision can say *which* base it forked from and why that base was picked;
+    the success path still surfaces the bare ``branch`` in the result payload.
+    """
+
+    branch: str
+    source: str
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     """Run a read-only ``git`` command, capturing its text output."""
@@ -84,6 +133,20 @@ def _current_branch() -> Optional[str]:
     result = _git("rev-parse", "--abbrev-ref", "HEAD")
     name = result.stdout.strip()
     return name if result.returncode == 0 and name != "HEAD" else None
+
+
+def _repo_root() -> Optional[str]:
+    """Real path of the working tree's git root, or ``None`` outside a repo.
+
+    Resolved through ``realpath`` so it compares equal to a repo-map
+    ``repo_path`` that reaches the same checkout through a symlink or a bind
+    mount (``/mnt/extra-addons`` in practice).
+    """
+    result = _git("rev-parse", "--show-toplevel")
+    path = result.stdout.strip()
+    if result.returncode != 0 or not path:
+        return None
+    return os.path.realpath(path)
 
 
 def _list_local_branches() -> list[str]:
@@ -183,7 +246,11 @@ def _resolve_base_ref(base_branch: str) -> str:
 
 
 def _unwind_failed_pop(
-    branch_name: str, created: bool, original_branch: Optional[str]
+    branch_name: str,
+    created: bool,
+    original_branch: Optional[str],
+    base_branch: str,
+    base_source: str,
 ) -> str:
     """Put the repo back where it started after ``git stash pop`` failed (#542).
 
@@ -206,6 +273,14 @@ def _unwind_failed_pop(
     :type created: bool
     :param original_branch: Branch to return to; skipped when ``None``.
     :type original_branch: Optional[str]
+    :param base_branch: Base that was forked from — named in the message because
+        an unexpected base is the usual cause of the collision (#979): a repo
+        whose GitHub default is ``master`` while task work flows into ``E2E``
+        collides on every file the two branches disagree about.
+    :type base_branch: str
+    :param base_source: Where that base came from, e.g. ``origin/HEAD`` — see
+        :func:`_resolve_base_branch` for the vocabulary.
+    :type base_source: str
     :return: Caller-facing message naming where the user's work now lives.
     :rtype: str
     """
@@ -226,7 +301,8 @@ def _unwind_failed_pop(
     )
     return (
         f"Could not set up branch {branch_name!r}: local changes collide with "
-        f"files already tracked on the base branch. Now {left} and {where}. "
+        f"files already tracked on base {base_branch!r} chosen from "
+        f"{base_source}. Now {left} and {where}. "
         f"Commit or move the conflicting files, then retry."
     )
 
@@ -255,7 +331,9 @@ def _set_upstream(branch_name: str, base_ref: str) -> None:
     _git("branch", f"--set-upstream-to={base_ref}", branch_name)
 
 
-def _create_task_branch(branch_name: str, base_branch: str) -> bool:
+def _create_task_branch(
+    branch_name: str, base_branch: str, base_source: str = _SOURCE_ARGUMENT
+) -> bool:
     """Create or switch to ``branch_name``, preserving any local changes.
 
     Idempotent (#149): when ``branch_name`` already exists it is checked out
@@ -278,6 +356,10 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
     :type branch_name: str
     :param base_branch: Base branch to fork from when creating a new branch.
     :type base_branch: str
+    :param base_source: Where ``base_branch`` came from, for the failure message
+        (#979). Defaults to :data:`_SOURCE_ARGUMENT`, which is what a direct
+        call naming the base literally is.
+    :type base_source: str
     :return: ``True`` when a new branch was created, ``False`` when an existing
         one was merely checked out — lets callers roll back only fresh branches.
     :rtype: bool
@@ -313,7 +395,9 @@ def _create_task_branch(branch_name: str, base_branch: str) -> bool:
         raise
     if stashed and _git("stash", "pop").returncode != 0:
         raise _BranchSetupError(
-            _unwind_failed_pop(branch_name, created, original_branch)
+            _unwind_failed_pop(
+                branch_name, created, original_branch, base_branch, base_source
+            )
         )
     return created
 
@@ -421,35 +505,107 @@ def _resolve_branch_description(ctx: Any, task_name: str) -> str:
     return _slugify(text.strip()) or fallback
 
 
-#: Environment variable naming the branch task branches must fork from (#903).
-#: Set it once per project (the pre-production branch on repos whose base is not
-#: the GitHub default) and every headless ``start_task`` forks from it.
-_BASE_BRANCH_ENV = "ODOO_SDK_BASE_BRANCH"
-
-
 def _env_base_branch() -> Optional[str]:
     """Return the base branch configured in the environment, or ``None`` (#903).
 
-    An unset *or* empty/whitespace-only ``ODOO_SDK_BASE_BRANCH`` reads as "not
-    configured" so an exported-but-blank variable falls through to
+    An unset *or* empty/whitespace-only ``ODOO_SDK_BASE_BRANCH``
+    (:data:`_BASE_BRANCH_ENV`) reads as "not configured" so an exported-but-blank
+    variable falls through to the repo map and then
     :func:`_default_base_branch` instead of forking from a nameless ref.
     """
     return os.environ.get(_BASE_BRANCH_ENV, "").strip() or None
 
 
-def _default_base_branch() -> Optional[str]:
+def _repo_map_projects() -> dict:
+    """Return the odoo-dev repo map's ``projects`` object, or ``{}`` (#979).
+
+    Pure read of ``$ODOO_DEV_STATE_DIR/repo-map.json`` with stdlib ``json``: the
+    SDK is a *consumer* of that file and never writes it (``repo-map.sh`` owns
+    every mutation, atomically and validated). Every way the read can go wrong —
+    the variable unset, no file there, unreadable, invalid JSON, a ``projects``
+    key that is not an object — degrades to "no map", because a base branch is a
+    convenience here and a damaged map must never fail ``start_task``.
+    """
+    state_dir = os.environ.get(_STATE_DIR_ENV, "").strip()
+    if not state_dir:
+        return {}
+    try:
+        with open(os.path.join(state_dir, _REPO_MAP_FILE), encoding="utf-8") as handle:
+            projects = json.load(handle).get("projects")
+    except Exception:
+        return {}
+    return projects if isinstance(projects, dict) else {}
+
+
+def _repo_map_entry_path(entry: Any) -> Optional[str]:
+    """Real path of ``entry``'s ``repo_path``, or ``None`` when it has none."""
+    path = entry.get("repo_path") if isinstance(entry, dict) else None
+    return os.path.realpath(path) if isinstance(path, str) and path.strip() else None
+
+
+def _repo_map_entry_for(repo_root: str) -> Optional[dict]:
+    """Return the repo map's entry for ``repo_root``, or ``None`` (#979).
+
+    The matching rule, in order:
+
+    * an entry whose ``repo_path`` resolves (``realpath``) to ``repo_root`` — the
+      unambiguous identification, and the only one that works for the several
+      projects that live under a shared checkout path family such as
+      ``/mnt/extra-addons``;
+    * otherwise an entry whose ``repo`` (a bare folder name) equals
+      ``basename(repo_root)``, **and only when exactly one entry does**. Two
+      projects on one repo — an ongoing engagement and its version upgrade —
+      legitimately disagree about ``default_branch``, and guessing between them
+      would reintroduce the very bug this lookup exists to fix.
+    """
+    entries = [e for e in _repo_map_projects().values() if isinstance(e, dict)]
+    by_path = [e for e in entries if _repo_map_entry_path(e) == repo_root]
+    if by_path:
+        return by_path[0]
+    basename = os.path.basename(repo_root)
+    by_name = [e for e in entries if e.get("repo") == basename]
+    return by_name[0] if len(by_name) == 1 else None
+
+
+def _repo_map_default_branch(repo_root: Optional[str]) -> Optional[str]:
+    """Return the repo map's ``default_branch`` for this checkout, or ``None``.
+
+    The odoo-dev repo map (``$ODOO_DEV_STATE_DIR/repo-map.json``, #979) records
+    per-project where task work is based — commonly a shared pre-production
+    branch such as ``E2E`` or ``UAT`` on a repo whose *GitHub* default is still
+    ``master``. Reading it here is what stops ``start_task`` forking from the
+    wrong branch when nobody passed a base. The checkout is identified by
+    :func:`_repo_map_entry_for`, which documents the matching rule.
+
+    :param repo_root: Real path of the git root, or ``None`` outside a repo.
+    :type repo_root: Optional[str]
+    :return: The recorded base branch, or ``None`` when the map is absent,
+        unreadable, silent about this repo, or ambiguous about it.
+    :rtype: Optional[str]
+    """
+    if not repo_root:
+        return None
+    entry = _repo_map_entry_for(repo_root)
+    branch = entry.get("default_branch") if entry is not None else None
+    return branch.strip() or None if isinstance(branch, str) else None
+
+
+def _default_base_branch() -> Optional[_ResolvedBase]:
     """Resolve a base branch without prompting (headless automation path, #621).
 
-    Prefers the remote's default branch (``origin/HEAD``), falling back to the
-    branch currently checked out. Returns ``None`` only when neither can be
-    determined (e.g. not a git repo, detached HEAD with no origin).
+    The last resort, reached only once the argument, the environment and the
+    repo map have all stayed silent: it *guesses*. Prefers the remote's default
+    branch (``origin/HEAD``), falling back to the branch currently checked out.
+    Returns ``None`` only when neither can be determined (e.g. not a git repo,
+    detached HEAD with no origin).
     """
     result = _git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     name = result.stdout.strip()
     if result.returncode == 0 and name:
         # ``origin/main`` -> ``main``; _resolve_base_ref re-derives the remote ref.
-        return name.split("/", 1)[-1]
-    return _current_branch()
+        return _ResolvedBase(name.split("/", 1)[-1], _SOURCE_ORIGIN_HEAD)
+    current = _current_branch()
+    return _ResolvedBase(current, _SOURCE_CURRENT_BRANCH) if current else None
 
 
 def _on_task_branch(task_id: int) -> bool:
@@ -514,19 +670,44 @@ async def _elicit_base_branch(ctx: Any) -> tuple[Optional[str], Optional[str]]:
     return branches[idx], None
 
 
+def _configured_base_branch(base_branch: Optional[str]) -> Optional[_ResolvedBase]:
+    """Return the base somebody *configured*, or ``None`` if nobody did (#979).
+
+    The deterministic half of :func:`_resolve_base_branch`'s precedence, split
+    out so that function stays a flat read of the chain: the explicit argument,
+    then ``ODOO_SDK_BASE_BRANCH``, then the odoo-dev repo map's recorded
+    ``default_branch`` for this checkout. None of the three guesses, so all
+    three rank above both the interactive pick and ``origin/HEAD``.
+    """
+    if base_branch:
+        return _ResolvedBase(base_branch, _SOURCE_ARGUMENT)
+    env_base = _env_base_branch()
+    if env_base is not None:
+        return _ResolvedBase(env_base, _SOURCE_ENV)
+    mapped = _repo_map_default_branch(_repo_root())
+    return _ResolvedBase(mapped, _SOURCE_REPO_MAP) if mapped is not None else None
+
+
 async def _resolve_base_branch(
     ctx: Any, *, interactive: bool, base_branch: Optional[str]
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[_ResolvedBase], Optional[str]]:
     """Resolve the branch the task branch must fork from; return (base, error).
 
-    Precedence (#903), strictly: the explicit ``base_branch`` argument, then
-    ``ODOO_SDK_BASE_BRANCH`` (:func:`_env_base_branch`), and only when neither
-    is configured the fallbacks that *guess* — the interactive branch pick on
-    the name-search path, or :func:`_default_base_branch` (remote HEAD, then
-    the current branch) on the headless ``task_id`` path (#614/#621). A
-    configured base therefore also replaces the elicitation: a caller that
-    already named the base has nothing to be asked, and the remote default is
-    never even probed.
+    Precedence (#903/#979), strictly: the explicit ``base_branch`` argument,
+    then ``ODOO_SDK_BASE_BRANCH`` (:func:`_env_base_branch`), then the odoo-dev
+    repo map's ``default_branch`` for this checkout
+    (:func:`_repo_map_default_branch`) — the three *configured* answers, see
+    :func:`_configured_base_branch` — and only when all three stay silent the
+    fallbacks that *guess*: the interactive branch pick on the name-search
+    path, or :func:`_default_base_branch` (``origin/HEAD``, then the current
+    branch) on the headless ``task_id`` path (#614/#621).
+
+    A configured base therefore also replaces the elicitation: a caller that
+    already named the base — or a project whose base the repo map already
+    records — has nothing to be asked, and the remote default is never even
+    probed. ``origin/HEAD`` ranking *below* the map is the fix for #979: on a
+    repo whose GitHub default is ``master`` while task work flows into ``E2E``,
+    the remote default is exactly the wrong answer.
 
     :param ctx: FastMCP context, used only for the interactive fallback.
     :type ctx: Any
@@ -534,21 +715,25 @@ async def _resolve_base_branch(
     :type interactive: bool
     :param base_branch: Base named by the caller, or ``None``.
     :type base_branch: Optional[str]
-    :return: The resolved base, or an error string when none could be found.
-    :rtype: tuple[Optional[str], Optional[str]]
+    :return: The resolved base and the knob that chose it, or an error string
+        when none could be found.
+    :rtype: tuple[Optional[_ResolvedBase], Optional[str]]
     """
-    base = base_branch or _env_base_branch()
-    if base is not None:
-        return base, None
+    configured = _configured_base_branch(base_branch)
+    if configured is not None:
+        return configured, None
     if interactive:
-        return await _elicit_base_branch(ctx)
-    base = _default_base_branch()
-    if base is None:
+        picked, pick_err = await _elicit_base_branch(ctx)
+        if picked is None:
+            return None, pick_err
+        return _ResolvedBase(picked, _SOURCE_SELECTION), None
+    guessed = _default_base_branch()
+    if guessed is None:
         return (
             None,
             "No base branch found. Ensure the working directory is a git repo.",
         )
-    return base, None
+    return guessed, None
 
 
 async def _setup_task_branch(
@@ -561,8 +746,11 @@ async def _setup_task_branch(
 ) -> tuple[Optional[str], bool, Optional[str], Optional[str]]:
     """Ensure the working tree sits on this task's branch; report the base used.
 
-    The base is resolved by :func:`_resolve_base_branch` (#903): explicit
-    argument, then ``ODOO_SDK_BASE_BRANCH``, then a guess.
+    The base is resolved by :func:`_resolve_base_branch` (#903/#979): explicit
+    argument, then ``ODOO_SDK_BASE_BRANCH``, then the odoo-dev repo map, then a
+    guess. Only the base's *name* reaches the result payload; its provenance
+    travels on to :func:`_create_task_branch`, which names it in the failure
+    message so a collision says which knob chose the base (#979).
 
     :return: ``(branch_name, created, base_branch, error)`` — ``branch_name`` is
         ``None`` when the tree was already on the task branch or setup failed,
@@ -583,12 +771,12 @@ async def _setup_task_branch(
     branch_name = f"{task_id}-{description}"
 
     try:
-        created = _create_task_branch(branch_name, base)
+        created = _create_task_branch(branch_name, base.branch, base.source)
     except _BranchSetupError as exc:
         # Already unwound (#542): report it as an ordinary flow error so the
         # caller sees an actionable message instead of a git stack trace.
         return None, False, None, str(exc)
-    return branch_name, created, base, None
+    return branch_name, created, base.branch, None
 
 
 async def _disambiguate(
@@ -774,11 +962,14 @@ def make_start_task_tool(registry: Registry):
         timesheet and posts no chatter note (hours are derived by the
         sessionization upload path).
 
-        base_branch names the branch to fork the task branch from; it overrides
-        ODOO_SDK_BASE_BRANCH, and when both are unset the remote default branch
-        is used. Pass it on any project whose base is not the GitHub default
-        (#903) — the created branch is forked from origin/<base_branch> and its
-        upstream is set there, and the resolved base comes back in the result.
+        base_branch names the branch to fork the task branch from. Precedence:
+        this argument, then ODOO_SDK_BASE_BRANCH, then the odoo-dev repo map's
+        default_branch for this checkout ($ODOO_DEV_STATE_DIR/repo-map.json,
+        #979), then the remote default branch (origin/HEAD), then the current
+        branch. Pass it on any project whose base is not the GitHub default and
+        is not in the repo map (#903) — the created branch is forked from
+        origin/<base_branch> and its upstream is set there, and the resolved
+        base comes back in the result.
         """
         selector_error = _missing_selector_error(task_id, task_name_query)
         if selector_error is not None:

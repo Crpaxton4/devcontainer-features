@@ -100,21 +100,23 @@ Probe **both** branch forms: `<id>#<slug>` (humans push) and `<id>-<slug>` (auto
 
 Idempotent, serialized per repo under flock so concurrent callers cannot race `git worktree add`. On reuse branch **read from worktree**, never recomputed from arguments — renamed Odoo task yield new slug, and reporting branch never created hand you something you cannot push.
 
-**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. Call it with `base_branch=<default_branch from repo-map.sh>` — unset, SDK fall back to `ODOO_SDK_BASE_BRANCH` then remote default, and remote default is **not** the base on most projects here. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
+**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. Call it with `base_branch=<default_branch from repo-map.sh>` — unset, SDK fall back to `ODOO_SDK_BASE_BRANCH`, then read `default_branch` out of the repo map itself (#979), then remote default, and remote default is **not** the base on most projects here. Pass it anyway: the SDK's own map read only match a repo by `repo_path` or by unique folder name, so pass base_branch and the answer never depend on that match. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
 
 `<resume_branch>` adopted exactly as it stands — never reset, rebased, re-cut. Commits on it are work you continuing.
 
 ### 3. Stack
 
 ```bash
-<base directory>/scripts/stack-ensure.sh <repo>
+<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0]
 ```
 
 → `{"stack","status":"reused"|"restarted"|"created"|"in-container","stopped_lru":[]}`
 
 One stack per project, host-globally locked, LRU eviction below `MIN_FREE_GB` (default 6). Protect stacks you using with `ODOO_ACTIVE_REPOS=repoA,repoB`. Readiness proved (postgres reachable *from inside* odoo container, `odoo --version` answers) before return, so `reused` never mean "still coming up".
 
-`in-container` mean you already inside stack; nothing done, nothing needed. Exit 5 mean docker absent **and** this not working Odoo container — you in wrong place, not looking at broken script.
+`in-container` mean you already inside stack; nothing done, nothing needed. That branch also report the series this core run, as `odoo_version` — nobody downstream have another machine-readable answer to "which Odoo this". Give `--target-series <NN.0>` (the project `odoo_version` off repo map) and a disagreement add `"series_mismatch": true` plus `warning` naming both series. Still exit 0: this script ensure stack, and `run-tests.sh` is what refuse outright on same comparison — Odoo mark module of another series uninstallable and still print 0 tests, 0 failures, exit 0.
+
+Exit 5 mean docker absent **and** this not working Odoo container — you in wrong place, not looking at broken script.
 
 Never point this at worktree path: would mint second compose project for same repo and break the singleton it exist to guarantee.
 
