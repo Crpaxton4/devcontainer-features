@@ -308,6 +308,14 @@ check "eza is installed" eza --version
 check "zoxide is installed" zoxide --version
 check "tldr is installed" tldr --version
 check "qsv is installed" qsv --version
+# The shell linter, #964 - the one CI lints install.sh with. Both halves matter:
+# that it exists at all (it used to be absent, so the "sanctioned local gate"
+# naming it could not be run), and that it is the PINNED version, since a local
+# run only means what CI's run means if the two are the same binary. Runs on the
+# arm64 leg too, which is what exercises the aarch64 asset name.
+check "shellcheck is installed (#964)" shellcheck --version
+check "shellcheck is the pinned 0.10.0 (#964)" bash -c \
+  "shellcheck --version | grep -qx 'version: 0.10.0'"
 
 # git QoL tools
 check "delta is installed" bash -c "test -x \"\$(command -v delta)\" && delta --version"

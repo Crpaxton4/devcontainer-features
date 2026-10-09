@@ -29,9 +29,11 @@ echo "Activating feature 'personal-features'"
 # Verification is opt-in per call, not mandatory, because the existing callers
 # fetch installer scripts and release tarballs whose publishers re-cut assets
 # under the same tag; pinning a digest for those would trade a working install
-# for a broken one on every upstream re-tag. Where the digest IS pinned (odoo-ls
-# below) that trade is the point: the binary runs as a long-lived server inside
-# every session.
+# for a broken one on every upstream re-tag. Where the digest IS pinned - the
+# odoo-ls assets and shellcheck, both below - that trade is the point: one runs
+# as a long-lived server inside every session, the other is the linter whose
+# verdict a gate is trusted on, and a re-cut body of either is a reason to stop
+# rather than to carry on.
 fetch() {
     local url="$1" dest="$2" expected="${3-}"
     curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url" || return 1
@@ -2186,6 +2188,28 @@ STARSHIP_VERSION=1.26.0  # github.com/starship/starship
 # unlike the tools above its download URL uses the bare version verbatim.
 DELTA_VERSION=0.19.2     # github.com/dandavison/delta
 LAZYGIT_VERSION=0.63.0   # github.com/jesseduffield/lazygit
+# The shell linter, #964: the exact binary the CI lint jobs run, installed into
+# the image so `shellcheck -s bash -S error` locally means what CI's run means.
+# (A comment line here may not START with the word shellcheck: the linter reads
+# `# shellcheck <word>` as one of its own directives and errors out on a prose
+# one. Hence the indirect openings on this block and the two below.)
+# Tagged WITH a leading "v", and the asset is a .tar.xz (not .tar.gz) nesting
+# the binary under shellcheck-v<ver>/ - neither of which install_gh_release
+# handles - so it gets its own installer (install_shellcheck below). The
+# per-arch asset name uses the same x86_64/aarch64 spelling as ARCH_GNU above.
+# Digest-pinned, like odoo-ls and unlike every convenience CLI here: a linter
+# whose body nobody verified is a gate that cannot be trusted, and 0.10.0 is a
+# long-settled 2024 release upstream has no reason to re-cut. Bump the version
+# and both digests together (sha256sum each downloaded .tar.xz).
+#
+# The same version is pinned independently in .github/workflows/validate.yaml
+# and .github/workflows/plugin-odoo-dev.yaml; nothing yet holds the three copies
+# together, so bumping one means bumping all three by hand.
+SHELLCHECK_VERSION=0.10.0  # github.com/koalaman/shellcheck
+case "$ARCH_GNU" in
+    x86_64)  SHELLCHECK_SHA256=6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87 ;;
+    aarch64) SHELLCHECK_SHA256=324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb ;;
+esac
 # qsv tags its releases WITHOUT a leading "v" (e.g. 21.1.0). Unlike every tool
 # above it ships a .zip (not a raw binary or .tar.gz) bundling ~13 binaries, so
 # it needs its own installer (install_qsv) rather than install_gh_release. The
@@ -2263,6 +2287,34 @@ install_qsv() {
         echo "WARNING: failed to install qsv, skipping" >&2
     fi
     rm -f "$zip"
+}
+
+# The shell linter, #964 - the one CI lints this very file with. Installed here
+# so the same gate is runnable before pushing instead of being CI-only.
+# Neither install_gh_release path fits - that function's extract is `tar -xz`
+# (gzip only) while shellcheck publishes .tar.xz, and the binary sits under a
+# top-level shellcheck-v<ver>/ directory - so this fetches the tarball and
+# unpacks just that one member with --strip-components=1 straight onto
+# /usr/local/bin. The download is digest-verified (fetch's third argument); see
+# the pin block above for why this one is. Best-effort like every tool above: a
+# container without shellcheck is the pre-#964 state - degraded, since the
+# local gate goes back to being CI-only, not broken - and the feature test
+# asserts the binary is present, so CI goes red rather than shipping an image
+# that silently lost it.
+install_shellcheck() {
+    local version="$1" sha="$2"
+    local url="https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.${ARCH_GNU}.tar.xz"
+    local staging
+    staging="$(mktemp -d)"
+    if fetch "$url" "$staging/shellcheck.tar.xz" "$sha" \
+        && tar -xJf "$staging/shellcheck.tar.xz" -C "$staging" \
+            --strip-components=1 "shellcheck-v${version}/shellcheck" \
+        && [ -f "$staging/shellcheck" ]; then
+        install -m 0755 "$staging/shellcheck" /usr/local/bin/shellcheck
+    else
+        echo "WARNING: failed to install shellcheck, skipping" >&2
+    fi
+    rm -rf "$staging"
 }
 
 # odoo-ls (#746): the Odoo language server Claude Code launches over stdio.
@@ -2395,6 +2447,10 @@ bg install_gh_release lazygit \
 # ARCH_QSV selects the per-arch target (static musl on amd64, gnu on arm64).
 bg install_qsv \
     "https://github.com/dathere/qsv/releases/download/${QSV_VERSION}/qsv-${QSV_VERSION}-${ARCH_QSV}.zip"
+# The shell linter, #964 - a .tar.xz with the binary nested under a versioned
+# dir, so it uses its own installer (see install_shellcheck above) and, like
+# odoo-ls, is digest-verified rather than taken on trust.
+bg install_shellcheck "$SHELLCHECK_VERSION" "$SHELLCHECK_SHA256"
 # odoo-ls (#746) - see install_odoo_ls above for why it gets its own installer
 # and why its two assets are the only digest-pinned downloads here.
 bg install_odoo_ls "$ODOO_LS_VERSION" "$ODOO_LS_SHA256" "$ODOO_LS_SHA256_TYPESHED"
@@ -2528,7 +2584,7 @@ install_starship() {
 bg install_starship
 
 # Wait for all background downloads (yq, eza, tldr, zoxide, gitleaks, delta,
-# lazygit, qsv, odoo-ls, coderabbit, starship). Each job already warns and exits 0 on its own failure;
+# lazygit, qsv, shellcheck, odoo-ls, coderabbit, starship). Each job already warns and exits 0 on its own failure;
 # wait on each PID and guard it so an unexpected non-zero exit degrades to a
 # warning instead of aborting the build under set -e. (A bare `wait` returns 0
 # regardless, which would instead silently mask such a failure.)
