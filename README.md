@@ -174,7 +174,7 @@ Agents are plain subagents, in [`plugins/odoo-dev/agents/`](plugins/odoo-dev/age
 | [`odoo-dev-scoper`](plugins/odoo-dev/agents/odoo-dev-scoper.md) | Discovery, prior-art verdict, estimate, design doc. Never touches a repo | `05-scope.json` |
 | [`odoo-dev-builder`](plugins/odoo-dev/agents/odoo-dev-builder.md) | One task, one worktree: code, tests, conventional commits | `10-env.json`, `20-build.json` |
 | [`odoo-dev-tester`](plugins/odoo-dev/agents/odoo-dev-tester.md) | Independent evidence: tests, tours, the Odoo review lens. **Cannot edit code** | `30-test.json`, `35-review.json` |
-| [`odoo-dev-pr`](plugins/odoo-dev/agents/odoo-dev-pr.md) | Push, local CodeRabbit review, draft PR, promotion, chatter notes | `40-coderabbit.json`, `50-pr.json`, `60-release.json` |
+| [`odoo-dev-pr`](plugins/odoo-dev/agents/odoo-dev-pr.md) | Push, local CodeRabbit review, draft PR, promotion, chatter notes | `50-pr.json`, `60-release.json` |
 | [`odoo-dev-upgrader`](plugins/odoo-dev/agents/odoo-dev-upgrader.md) | Cross-version porting, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
 
 One slash command per agent, in [`plugins/odoo-dev/commands/`](plugins/odoo-dev/commands): `/odoo-dev:quote`, `/odoo-dev:task`, `/odoo-dev:upgrade`, `/odoo-dev:test`, and `/odoo-dev:pr` (which also carries the release route, `/odoo-dev:pr release <from> <to>`). Each resolves the paths its agent needs and dispatches it. **No command chains to another** — you type the next one once you have read what the last one returned.
@@ -196,7 +196,7 @@ Every spawn prompt carries two absolute paths, typed out in full in every call: 
 
 Append-only JSON in a per-task directory, written only through `artifact.sh` — artifacts survive compaction, a session boundary, a killed subagent, and a human taking over mid-chain, and a JSON blob in a prompt survives none of those.
 
-`00-context` · `05-scope` · `10-env` · `20-build` · `30-test` · `35-review` · `40-coderabbit` · `50-pr` · `60-release`
+`00-context` · `05-scope` · `10-env` · `20-build` · `30-test` · `35-review` · `50-pr` · `60-release`
 
 `artifact.sh` validates required fields and cheap types before the file is named, writes atomically, and **never overwrites**: a second put of a stage lands at `<stage>.2.json`, and `get` reads the latest revision while `list` shows them all — so a chain can recover from a red test, but "green on the third try" can never read as "green".
 

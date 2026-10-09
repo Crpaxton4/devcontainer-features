@@ -6,9 +6,9 @@
 # Usage: setup.sh [--check] [--yes]
 #
 # Why it exists: a fresh machine or a rebuilt container used to fail late and
-# cryptically. coderabbit-local.sh exits 3 with "coderabbit CLI is not
-# installed", tours silently skip because no browser is present, and repo-map.sh
-# reads a state dir nobody ever created. Every one of those is knowable up front.
+# cryptically. The review agent finds no `coderabbit` on PATH and comes back with
+# a review that never ran, tours silently skip because no browser is present, and
+# repo-map.sh reads a state dir nobody ever created. Every one of those is knowable up front.
 #
 # It NEVER performs an interactive login itself. Device-flow and browser auth
 # cannot be driven from a script without hanging, so this script detects what is
@@ -134,8 +134,10 @@ else
 fi
 
 # --- coderabbit ------------------------------------------------------------------
-# A review that cannot authenticate is coderabbit-local.sh exit 3, not a clean
-# review, and the gate blocks on review_incomplete. Both halves are checked.
+# The review gate in odoo-pr dispatches the coderabbit:code-reviewer plugin agent,
+# which runs this same CLI — so the CLI and its login are still what stands between
+# a review and no review. A review that cannot authenticate is not a clean review.
+# Both halves are checked.
 CR_INSTALL="install the CodeRabbit CLI — https://docs.coderabbit.ai/cli (curl -fsSL https://cli.coderabbit.ai/install.sh | sh)"
 if ! have coderabbit; then
   fail coderabbit "not on PATH" "$CR_INSTALL" "coderabbit auth login"
@@ -144,7 +146,7 @@ else
   if bounded "$BOUND_S" coderabbit auth status >/dev/null 2>&1; then
     pass coderabbit-auth "authenticated"
   else
-    fail coderabbit-auth "not authenticated — a review that cannot authenticate is exit 3, not a clean review" \
+    fail coderabbit-auth "not authenticated — a review that cannot authenticate is not a clean review" \
       "coderabbit auth login"
   fi
 fi

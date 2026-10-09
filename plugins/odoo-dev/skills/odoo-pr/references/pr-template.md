@@ -29,6 +29,9 @@ odoo-bin -i {install_list} -u {update_list} --stop-after-init
 
 ### Changes
 **{module}** — {what changed and why, one short paragraph}
+
+### Review waivers
+- {finding the local review raised and you did not fix, in your own words} — {why}
 ````
 
 ## Filling it
@@ -126,6 +129,14 @@ line.
 paragraph saying what changed and why, in the reviewer's terms. Describe the
 behaviour that is different now. The diff already lists the files.
 
+**Review waivers is where the local review's loose ends go**, because that review
+writes no artifact. Step 2 of this skill dispatches the `coderabbit:code-reviewer`
+plugin agent; a finding you fixed is described under *Changes* like any other
+change, and a finding you decided not to fix gets one line here, in your own words,
+with the reason. A clean review renders `- n/a`, and so does a PR whose every
+finding was fixed. Never quote the review text itself — see the published-surface
+rule below.
+
 **Commits are deliberately absent.** The PR timeline lists them already, and a
 hand-maintained copy goes stale within one push.
 
@@ -142,10 +153,11 @@ needs to read.
 The PR body is client-visible, and so is Odoo chatter.
 
 The body carries the task link, the module lists, the deploy command, the
-manifest-version checklist, and the per-module description.
+manifest-version checklist, the per-module description, and the review waivers.
 Nothing else: no test output, no logs, no tracebacks, no machine paths, no
-CodeRabbit text. Findings you acted on are described in your own words under
-*Changes*.
+CodeRabbit text quoted verbatim. Findings you acted on are described in your own
+words under *Changes*, and findings you waived in your own words under *Review
+waivers*.
 
 Full logs stay at `log_file`, for you and for whoever debugs this next.
 
