@@ -347,7 +347,15 @@ One template, filled per worker.
     or installing a dependency changes the interpreter its siblings are
     linting and compiling against, and breaks their gates for reasons that
     appear nowhere in their own diffs. Confine dependency work to `uv lock`,
-    which only rewrites the lockfile.
+    which only rewrites the lockfile. `uv sync` is not the only writer: a plain
+    `uv run` re-syncs the project environment implicitly on every call, and so
+    does `make static`, whose `PYTHON_CMD` is `uv run python`
+    (`libraries/odoo_sdk/Makefile:9`). Each such call rewrites the editable
+    `odoo_sdk` install to point at the calling worktree's `src/` — on #1003 and
+    #1005 both workers logged `Uninstalled 1 package / Installed 1 package` on
+    the way into their gates. The run itself stays correct, for the
+    `pythonpath` and conftest reasons the next paragraph gives; what moves under
+    them is what a sibling worker and the main checkout see afterwards.
 
     Reads resolve to the main checkout too, which is the half that bites
     silently: the SDK's editable install is one absolute path into
@@ -512,6 +520,21 @@ Things the script cannot judge, so you must:
 Remove every worktree **this run created**, then `git -C "$REPO" worktree prune`.
 Post-merge reaping has never once happened here, which is why a preflight
 worktree list of 40 entries was the normal state.
+
+Then re-point the shared venv at the main checkout and confirm it:
+
+```bash
+uv run --directory /workspaces/devcontainer-features/libraries/odoo_sdk \
+  python -c 'import odoo_sdk; print(odoo_sdk.__file__)'
+```
+
+The printed path must be under
+`/workspaces/devcontainer-features/libraries/odoo_sdk/src`. If any worker ran
+`uv run` or `make static` from its worktree, the shared `.venv`'s editable
+`odoo_sdk` install points into a directory the reap just deleted (Phase 5), and
+every later `import odoo_sdk` that does not pin `pythonpath` fails. That
+command is itself the re-sync that fixes it, so a correct path printed once is
+the whole check.
 
 Two mechanics that are not obvious:
 
