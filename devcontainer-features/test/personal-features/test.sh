@@ -56,8 +56,8 @@ check "claude reports a version" claude --version
 # pin actually took - an unpinned install, or an autoupdater that slipped past
 # the env var, both show up here as a mismatch. Bump this string whenever
 # CLAUDE_CODE_VERSION moves.
-check "claude is pinned to 2.1.268" bash -c \
-  "claude --version | grep -qF '2.1.268'"
+check "claude is pinned to 2.1.295" bash -c \
+  "claude --version | grep -qF '2.1.295'"
 
 # The wrapper injects --ide ONLY for a bare interactive session (no args + TTY)
 # and passes everything else straight through, so a new Claude Code subcommand

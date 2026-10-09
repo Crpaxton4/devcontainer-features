@@ -270,7 +270,15 @@ fi
 # Dependabot do not track shell-script pins - bump this by hand, same rule as
 # the pinned GitHub-release tools further down. Keep it in step with
 # CLAUDE_CODE_VERSION in .github/workflows/plugin-odoo-dev.yaml.
-CLAUDE_CODE_VERSION=2.1.268  # npmjs.com/package/@anthropic-ai/claude-code
+#
+# There is a floor here as well as a pin. odoo-ls 1.6.0 sends a
+# `client/registerCapability` request during startup and panics on any error
+# reply to it, and Claude Code up to 2.1.287 answered that request with
+# `-32601 Unhandled method`, which killed the language server on every session
+# (#1029). Claude Code 2.1.288 and later answer it with `null` instead and the
+# server then runs unchanged, so this pin must never drop below 2.1.288 while
+# ODOO_LS_VERSION is 1.6.0.
+CLAUDE_CODE_VERSION=2.1.295  # npmjs.com/package/@anthropic-ai/claude-code
 
 export PATH
 npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
