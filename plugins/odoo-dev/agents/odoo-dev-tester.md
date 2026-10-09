@@ -113,45 +113,58 @@ unit here is one test suite or one module under test:
     { "unit": "acme_sale_pricing", "kind": "module-under-test", "status": "done",
       "note": "run-tests.sh: 41 tests, 2 tours declared, 2 run, passed true" },
     { "unit": "acme_stock_labels: TestLabelRender", "kind": "suite",
-      "status": "in-progress", "note": "unit tests green; tours not started" },
+      "status": "in-progress", "note": "unit tests green, tours not started" },
     { "unit": "acme_vendor_portal", "kind": "module-under-test",
       "status": "not-started", "note": "" },
     { "unit": "acme_crm_sync: TestSyncCron", "kind": "suite", "status": "failed",
-      "note": "2 failures, see log_file in 30-test.json" }
+      "note": "2 failures, log_file is in 30-test.json" }
   ]
 }
 ```
 
 - `status` is exactly one of `done`, `in-progress`, `not-started`, `failed`. There is
   no fifth word. `note` is free text and carries the reason a `failed` row failed.
-- **Read the rows first on every dispatch** — from `30-test.json` if a previous run
-  left one, and from the resume prompt otherwise. They are authoritative: resume from
-  them and never re-run a suite already marked `done`.
+- **Read the rows first on every dispatch** —
+  `<ARTIFACT path from your prompt> get <ARTIFACTS dir from your prompt> progress --latest`,
+  before any other artifact. Rows it returns are authoritative: resume from them and
+  never re-run a suite already marked `done`. Exit 5 means no checkpoint exists yet,
+  and then the resume prompt is all there is.
 - **Derive the counters, never type them.** Every "N done / M remaining" is counted
   from the rows at the moment it is written, so it cannot go stale against them.
 
 ### Where you may write it
 
-Nowhere, today, as a standalone `progress.json` — and that is a gap in the harness,
-not a licence to work around it. `Edit`, `Write` and `NotebookEdit` are removed from
-you; the `PreToolUse` allowlist permits only `artifact.sh`, `run-tests.sh`,
-`browser-ensure.sh`, `module-classify.sh` and read-only `git`, and it
-denies every redirection whose target is not `/dev/null`, so no `>`, no heredoc and
-no `tee` reaches a real path. `artifact.sh` is the one writer you can reach and it
-refuses any stage outside its schema, so `progress` is not a stage it will accept.
-Until one exists:
+`progress` is a stage of `artifact.sh`, and `artifact.sh` is the one writer your
+allowlist already permits:
 
+```
+<ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> progress --json '<one line of JSON>'
+```
+
+- **The payload rides in the command, as one argument.** `Edit`, `Write` and
+  `NotebookEdit` are removed from you, and the `PreToolUse` allowlist denies every
+  redirection whose target is not `/dev/null` — no `>`, no heredoc, no `tee`. So you
+  cannot write a file and then name it, and `--json` exists for exactly that reason:
+  one command, one argument, nothing to redirect.
+- **Keep the JSON on one line and out of the allowlist's way.** The hook refuses a
+  command containing `;`, `|`, `&`, a backtick, `$(` or a newline anywhere in it,
+  inside quotes included. Write the notes in words: "2 failures and 1 error", never
+  "2 failures & 1 error".
+- **Flush after every unit.** Put a new checkpoint the moment a row changes state,
+  not at the end of the run, and put one more before the turn limit stops you — a
+  checkpoint written once at the end is exactly the state you have already lost.
+- **Every flush is a new revision, and that is the point.** `artifact.sh` never
+  overwrites: the rows land at `progress.json`, then `progress.2.json`, then
+  `progress.3.json`, and the HIGHEST revision is the current checkpoint. `get
+  --latest` returns it; every earlier one stays on disk, so "green on the third try"
+  can never read as "green".
 - Restate the whole table **verbatim in every return message**, including the one you
   send when the turn limit stops you, and name the unit you were on. That string is
-  all the resuming context gets.
-- Carry the same rows into `30-test.json` as a `progress` array alongside its
-  required fields. `artifact.sh` checks required fields and their types, not extra
-  ones, so the rows ride along and outlive the session. Write that artifact only once
-  you have the required fields for it — `artifact.sh` never overwrites, and a
-  half-filled `30-test` becomes the latest revision the gate reads.
-- If a denied command is the only way to record progress, report the denial as a
-  finding. A test agent that routes around its own allowlist is the failure the
-  allowlist exists to prevent.
+  what the resuming context reads before it reads anything else.
+- A rejected row is a row to fix, never one to route around. A `status` outside the
+  four words exits 4 and the message lists all four. If a denied command looks like
+  the only way to record progress, report the denial as a finding: a test agent that
+  routes around its own allowlist is the failure the allowlist exists to prevent.
 
 ## Return contract
 
