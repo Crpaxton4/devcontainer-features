@@ -82,8 +82,8 @@ gate "inventory"
 n_skills="$(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l)"
 n_agents="$(find "$AGENTS" -maxdepth 1 -name '*.md' | wc -l)"
 n_cmds="$(find "$COMMANDS" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
-[ "$n_skills" -eq 16 ] && ok "16 skills"   || bad "expected 16 skills, found $n_skills"
-[ "$n_agents" -eq 5 ]  && ok "5 agents"    || bad "expected 5 agents, found $n_agents"
+[ "$n_skills" -eq 14 ] && ok "14 skills"   || bad "expected 14 skills, found $n_skills"
+[ "$n_agents" -eq 4 ]  && ok "4 agents"    || bad "expected 4 agents, found $n_agents"
 [ "$n_cmds"   -eq 5 ]  && ok "5 commands"  || bad "expected 5 commands, found $n_cmds"
 
 # A plugin command and a plugin skill share one namespace: both register as
@@ -172,24 +172,40 @@ while IFS= read -r f; do
 done < <(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 [ "$over" -eq 0 ] && ok "every body <= 500 lines"
 
-# --- 6. router completeness -----------------------------------------------------
-gate "router completeness"
-ROUTER="$SKILLS/odoo-dev-map/SKILL.md"
-if [ ! -f "$ROUTER" ]; then
-  bad "router skill missing at $ROUTER"
-else
-  missing=0
-  for d in $(find "$SKILLS" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
-    grep -q "odoo-dev:$d\`" "$ROUTER" || { bad "router does not reference odoo-dev:$d"; missing=1; }
-  done
-  [ "$missing" -eq 0 ] && ok "every skill appears in the router Skill Map"
-
-  amiss=0
-  for a in $(find "$AGENTS" -maxdepth 1 -name '*.md' -printf '%f\n' | sed 's/\.md$//' | sort); do
-    grep -q "$a" "$ROUTER" || { bad "router does not reference agent $a"; amiss=1; }
-  done
-  [ "$amiss" -eq 0 ] && ok "every agent appears in the router Agent Map"
-fi
+# --- 6. commands <-> agents completeness ----------------------------------------
+# The five commands are the only entry points. Each agent is dispatched by exactly
+# one forked command; every command with an `agent:` key names an agent file and
+# forks; every command is user-invoked only; exactly one command (plan) is inline.
+gate "commands <-> agents completeness"
+node -e '
+const fs = require("fs"), path = require("path");
+const [agentsDir, cmdsDir] = process.argv.slice(1);
+const fm = (f) => (fs.readFileSync(f, "utf8").match(/^---\n([\s\S]*?)\n---\n/) || ["", ""])[1];
+const agents = fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).map(f => f.slice(0, -3)).sort();
+const cmds = fs.readdirSync(cmdsDir).filter(f => f.endsWith(".md")).sort();
+let bad = 0, forked = 0, inline = [];
+const dispatched = new Map();
+for (const c of cmds) {
+  const m = fm(path.join(cmdsDir, c));
+  if (!/^disable-model-invocation:\s*true\s*$/m.test(m)) { console.log(`  FAIL ${c}: needs disable-model-invocation: true`); bad++; }
+  const a = (m.match(/^agent:\s*(.+)$/m) || [])[1]?.trim();
+  if (!a) { inline.push(c); continue; }
+  forked++;
+  const name = a.replace(/^odoo-dev:/, "");
+  if (!agents.includes(name)) { console.log(`  FAIL ${c}: agent: ${a} names no file in agents/`); bad++; }
+  if (!/^context:\s*fork\s*$/m.test(m)) { console.log(`  FAIL ${c}: has agent: but not context: fork`); bad++; }
+  dispatched.set(name, [...(dispatched.get(name) || []), c]);
+}
+for (const a of agents) {
+  const by = dispatched.get(a) || [];
+  if (by.length !== 1) { console.log(`  FAIL ${a}: dispatched by ${by.length} command(s) [${by.join(", ")}], want exactly one`); bad++; }
+}
+if (inline.length !== 1 || inline[0] !== "plan.md") {
+  console.log(`  FAIL exactly one command (plan.md) may run inline without agent:, found [${inline.join(", ")}]`); bad++;
+}
+if (bad === 0) console.log(`  PASS ${forked} forked commands dispatch ${agents.length} agents, one each; plan is inline`);
+process.exit(bad === 0 ? 0 : 1);
+' "$AGENTS" "$COMMANDS" || fails=$((fails + 1))
 
 # --- 7. agent definitions -------------------------------------------------------
 gate "agent definitions"
@@ -415,9 +431,9 @@ done < <(find "$ROOT" -name '*.sh' -type f | sort)
 # this wrong since the gate was removed in #904.
 gate "no bare artifact.sh invocation"
 bare="$(grep -nE '^[[:space:]]*artifact\.sh([[:space:]]|$)' \
-        "$AGENTS"/*.md "$SKILLS/odoo-dev-map/SKILL.md" 2>/dev/null || true)"
+        "$AGENTS"/*.md "$COMMANDS"/*.md 2>/dev/null || true)"
 if [ -z "$bare" ]; then
-  ok "agents + router invoke artifact.sh only through a resolved path"
+  ok "agents + commands invoke artifact.sh only through a resolved path"
 else
   bad "bare script invocation — nothing puts scripts/ on PATH, so this is command not found"
   echo "$bare" | sed "s|^$ROOT/||" | sed 's/^/       /'
@@ -529,27 +545,28 @@ const [root, agentsDir] = process.argv.slice(1);
 
 // The SCHEMA is a JS object literal held in a shell variable in scripts/artifact.sh.
 // Chosen approach: lift the literal out whole and evaluate it, rather than re-parse
-// the required:/types:/elements: arrays out of the file text. Re-parsing would drift
+// the required:/types:/fields: arrays out of the file text. Re-parsing would drift
 // from what artifact.sh actually enforces; evaluating reads the exact same object.
 const src = fs.readFileSync(path.join(root, "scripts", "artifact.sh"), "utf8");
 const lit = src.match(/\nSCHEMA=\x27\n([\s\S]*?)\n\x27\n/);
 if (!lit) { console.log("  FAIL cannot lift the SCHEMA literal out of scripts/artifact.sh"); process.exit(1); }
 const SCHEMA = new Function(lit[1] + "\nreturn SCHEMA;")();
 
-const fieldsOf = stage => {
-  const s = SCHEMA[stage]; if (!s) return [];
-  const out = new Set(s.required ?? []);
-  for (const k of Object.keys(s.types ?? {})) out.add(k);
-  for (const [f, spec] of Object.entries(s.elements ?? {})) {
-    out.add(f);
-    for (const k of Object.keys(spec)) out.add(k);
-  }
-  return [...out];
+// The token allow-list per section: required keys, typed keys and the documented
+// optional `fields`. One file, four sections — plan, build, test, review.
+const fieldsOf = section => {
+  const s = SCHEMA[section]; if (!s) return [];
+  return [...new Set([...(s.required ?? []), ...Object.keys(s.types ?? {}), ...(s.fields ?? [])])];
 };
-const arraysOf = stage => Object.entries(SCHEMA[stage]?.types ?? {})
-  .filter(([, t]) => t === "array").map(([k]) => k);
+// `name[]` tokens: a key typed as array, or a documented field whose name reads as
+// a list (the test and review sections type nothing, so their lists are fields).
+const arraysOf = section => {
+  const s = SCHEMA[section]; if (!s) return [];
+  const typed = Object.entries(s.types ?? {}).filter(([, t]) => t === "array").map(([k]) => k);
+  return [...new Set([...typed, ...(s.fields ?? [])])];
+};
 
-// Vocabulary a script emits but no stage requires — log_excerpt is a run-tests.sh
+// Vocabulary a script emits but no section requires — log_excerpt is a run-tests.sh
 // output field, for instance. A body may name these.
 // The phantom this gate exists to catch (reasons[]) was in no schema AND emitted by
 // no script, so widening to script keys does not let it through.
@@ -563,57 +580,44 @@ for (const f of walk(root).filter(f => f.endsWith(".sh"))) {
   for (const m of t.matchAll(/([a-z][a-z0-9]*(?:_[a-z0-9]+)+):/g)) scriptKeys.add(m[1]);
 }
 
-// Neither a schema field nor script output, and still legitimate:
-//   design_doc_path — a real but OPTIONAL 05-scope field. SCHEMA enumerates required
-//                     fields only, so optional ones have to be named here until it
-//                     grows an optional: list.
-//   upgrade_code    — the odoo-bin subcommand. A tool name that happens to be snake_case.
-const ALLOW = new Set(["design_doc_path", "upgrade_code"]);
-
 let bad = 0, checked = 0, agents = 0;
 for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort()) {
   agents++;
   let text = fs.readFileSync(path.join(agentsDir, f), "utf8");
   const fm = text.match(/^---\n[\s\S]*?\n---\n/);
   if (fm) text = text.slice(fm[0].length);
-  // Stages the agent writes come from its own Return contract; stages it reads are
-  // named as `NN-stage.json` in the body.
-  // `put` then the stage, with the artifacts dir between them in whatever form the
-  // body uses — an absolute path, or a <ARTIFACTS dir from your prompt> placeholder.
-  const writes = [...new Set([...text.matchAll(/\bput\b[^\n]*?(\d\d-[a-z]+)/g)].map(m => m[1]))];
-  // A stage with no NN- prefix (progress) cannot be found by the pattern above: a
-  // lazy match for a bare lower-case word lands on the prose between `put` and the
-  // stage. So the unnumbered stages are looked for by name instead.
-  for (const s of Object.keys(SCHEMA).filter(s => !/^\d\d-/.test(s))) {
-    if (new RegExp(`\\bput\\b[^\\n]*\\b${s}\\b`).test(text)) writes.push(s);
-  }
-  const reads  = [...text.matchAll(/`(\d\d-[a-z]+)\.json`/g)].map(m => m[1]);
-  let touched = [...new Set([...writes, ...reads])].filter(s => s in SCHEMA);
-  // An agent that names no stage at all (odoo-dev-pr reads the whole directory) is
-  // checked against the union of every stage rather than against nothing.
+  // Sections the agent touches are named after `set` or `get`, with the artifacts
+  // dir between in whatever form the body uses (`<ARTIFACTS>`, an absolute path).
+  const names = Object.keys(SCHEMA).join("|");
+  const touchedSet = new Set();
+  for (const m of text.matchAll(new RegExp("\\b(?:set|get)\\b[^\\n`]*?\\b(" + names + ")\\b", "g"))) touchedSet.add(m[1]);
+  const writes = [...new Set([...text.matchAll(new RegExp("\\bset\\b[^\\n`]*?\\b(" + names + ")\\b", "g"))].map(m => m[1]))];
+  let touched = [...touchedSet];
+  // An agent that names no section at all is checked against the union of every
+  // section rather than against nothing.
   if (!touched.length) touched = Object.keys(SCHEMA);
   const vocab  = new Set(touched.flatMap(fieldsOf));
   const arrays = new Set(touched.flatMap(arraysOf));
-  const wrote  = writes.length ? writes.join(", ") : "no stage";
+  const wrote  = writes.length ? writes.join(", ") : "no section";
 
   for (const m of text.matchAll(/`([^`\n]+)`/g)) {
     const tok = m[1];
     // A field token is a backticked token ending in [] or a bare snake_case name.
-    // Filenames (a dot), stage names (NN-name), shell variables ($ or ALL_CAPS) and
-    // anything with a slash or a space are excluded by these two shapes.
+    // Filenames (a dot), shell variables ($ or ALL_CAPS) and anything with a slash
+    // or a space are excluded by these two shapes.
     if (/\[\]$/.test(tok)) {
       const base = tok.slice(0, -2);
       if (!/^[a-z][a-z0-9_]*$/.test(base)) continue;
       checked++;
-      if (!arrays.has(base)) {
-        console.log(`  FAIL ${f}: \`${tok}\` is an array field of no stage this agent touches`);
+      if (!arrays.has(base) && !scriptKeys.has(base)) {
+        console.log(`  FAIL ${f}: \`${tok}\` is an array field of no section this agent touches`);
         console.log(`       touches ${touched.join(", ")} / writes ${wrote} — add it to the SCHEMA or drop it from the body`);
         bad++;
       }
     } else if (/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(tok)) {
       checked++;
-      if (!vocab.has(tok) && !scriptKeys.has(tok) && !ALLOW.has(tok)) {
-        console.log(`  FAIL ${f}: \`${tok}\` is in no artifact.sh SCHEMA stage this agent touches, and no script emits it`);
+      if (!vocab.has(tok) && !scriptKeys.has(tok)) {
+        console.log(`  FAIL ${f}: \`${tok}\` is in no artifact.sh SCHEMA section this agent touches, and no script emits it`);
         console.log(`       touches ${touched.join(", ")} / writes ${wrote} — add it to the SCHEMA or drop it from the body`);
         bad++;
       }
@@ -678,21 +682,14 @@ inj_render() {
 
 # Anything under a scratch state dir that a well-formed invocation could not have
 # made. A task directory may only ever be named by a numeric id, and no value above
-# is one, so ANY entry under tasks/ is junk; a release directory must be one plain
-# `<from>-to-<to>` component directly under releases/.
+# is one, so ANY entry under tasks/ is junk. The release route keeps no directory.
 inj_junk() {
   [ -d "$1" ] || return 0
-  local p rel leaf
+  local p rel
   while IFS= read -r p; do
     rel="${p#$1/}"
     case "$rel" in
-      tasks|releases) continue ;;
-      releases/*)
-        leaf="${rel#releases/}"
-        case "$leaf" in
-          */*) echo "$rel" ;;
-          *) echo "$leaf" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*-to-[A-Za-z0-9][A-Za-z0-9._-]*$' || echo "$rel" ;;
-        esac ;;
+      tasks) continue ;;
       *) echo "$rel" ;;
     esac
   done < <(find "$1" -mindepth 1 2>/dev/null)
@@ -742,16 +739,12 @@ while IFS=$'\t' read -r cf cl craw; do
   $cf:$cl exits $rc on a real task id
        said:     $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-150)"
   printf '%s\n' "$out" >> "$inj_root/live-$cf.out"
-  cmd="$(inj_render "$craw" release UAT main)"
-  env HOME="$inj_root/livehome" ODOO_DEV_STATE_DIR="$inj_root/live" \
-      bash -c "$cmd" </dev/null >> "$inj_root/live-$cf.out" 2>&1
 done < "$inj_list"
 
 inj_mute=""
 for c in $(find "$COMMANDS" -maxdepth 1 -name '*.md' -printf '%f\n' 2>/dev/null | sort); do
   grep -q "$inj_root/live" "$inj_root/live-$c.out" 2>/dev/null || inj_mute="$inj_mute $c"
 done
-[ -d "$inj_root/live/releases/UAT-to-main" ] || inj_mute="$inj_mute (no releases/UAT-to-main)"
 
 if [ "$inj_n" -eq 0 ]; then
   bad "no !\`…\` injection found in $COMMANDS — the extractor or the commands changed shape"

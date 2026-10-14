@@ -1,8 +1,8 @@
 ---
-description: Deliver one Odoo task in a forked odoo-dev-builder — existing-work check, worktree and branch, running stack, module code, tests, conventional commits.
+description: Deliver one Odoo task in its own worktree — existing-work check, branch, stack, code and tests, a green self-test, conventional commits.
 argument-hint: <task-id>
 arguments: [task]
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
 disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-builder
@@ -12,50 +12,19 @@ background: false
 ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --create --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
 
-Those two are absolute literal paths, resolved once by the command before you
-were dispatched. Type each of them out in full in every Bash call. Your Bash calls
-inherit no environment from me and keep no state from one call to the next, so a
-variable name in a command is not a path: it expands to nothing and the command
-runs without it.
+Every path in a Bash call is absolute and written out in full: the two paths
+above, and each preloaded skill's `<base directory>/scripts/...`, where
+`<base directory>` is the path on that skill's `Base directory for this skill:`
+line. A Bash call inherits no environment and keeps no state from the call
+before it. A variable name such as `$ARTIFACTS` is not a path: it expands to
+nothing.
 
-If the `ARTIFACTS:` line above does not start with a `/`, it is a marker rather
-than a path, and the command was typed without an Odoo task id. Stop there. Do not
-guess an id, do not invent a directory, and do not work from the request text
-alone: reply with one line telling the person that the command takes the numeric
-Odoo task id, as in `/odoo-dev:task 30412`, and do nothing else.
+If the ARTIFACTS line does not start with `/` it is a marker, not a path: reply
+with exactly `usage: /odoo-dev:task <task-id>` and stop.
 
-Context — you have none of my conversation. The request below is verbatim, and its
-first token is the Odoo task id that names the artifacts directory above:
+Request, verbatim; its first token is the Odoo task id:
 
 $ARGUMENTS
 
-Read `00-context.json` and `05-scope.json` in the artifacts directory before
-anything else. If `05-scope.json` is absent, the task was never scoped: say so and
-work from the task itself rather than inventing acceptance criteria.
-
-Your job is that one task, end to end, in its own worktree: find the work that
-already exists before creating any, cut or reuse the task branch, bring up a
-runnable stack, write the module code and the tests that go with it, and commit
-conventionally. An open PR found for this task is a stop, not a reason to start a
-second branch.
-
-Return contract, typed out in full in each Bash call:
-
-    <ARTIFACT above> put <ARTIFACTS above> 10-env <file>
-    <ARTIFACT above> put <ARTIFACTS above> 20-build <file>
-
-`10-env.json` carries `existing_work`, `worktree_ensure` and `stack_ensure`
-verbatim. `20-build.json` carries `worktree`, `branch`, `modules`, `claims`,
-`verify_steps` and `diff_summary`, and its `worktree` and `branch` must match
-`10-env.json` exactly. Final message: the artifact path, then at most five lines of
-plain English.
-
-Boundaries: you never run the test suite as evidence, never push, never open a PR,
-never post to Odoo chatter, never write outside your worktree, and never write a
-timesheet hour. Evidence a builder produced about its own build is not independent,
-which is why the number that ships comes from somewhere else.
-
-This command dispatches `odoo-dev-builder` and nothing else. It chains to no other
-command and no other command chains to it: the person who typed it drives the
-sequence, one environment per task, and decides what happens after the build
-artifacts land.
+Deliver this task in its worktree. When the test and review artifacts exist, their
+failures come first. Return only when your own test run is green or you have stopped.

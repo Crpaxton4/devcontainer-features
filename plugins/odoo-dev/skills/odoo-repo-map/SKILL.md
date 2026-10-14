@@ -5,173 +5,111 @@ user-invocable: false
 ---
 # Odoo Repo Map
 
-One place answer "this Odoo project — which repo, which branch, which version, what come after this branch?" Rest of delivery suite (`odoo-dev:odoo-task-env`, `odoo-dev:odoo-pr`, `odoo-dev:odoo-release`, `odoo-dev:odoo-prior-art`) resolve through this skill, not infer from checkout.
-
-This skill exist to stop inference. GitHub default branch not branch task PR target. Folder name not project name. Environment chain live nowhere in git.
-
-Live values, injected every time this skill is rendered — at invocation and at every
-agent spawn that preloads it. Trust them; do not re-derive them.
-
-- **Projects in the map**: !`bash ${CLAUDE_SKILL_DIR}/scripts/repo-map.sh list 2>/dev/null | sed -n 's/^  "\(.*\)": {$/"\1"/p' | paste -sd ' ' - | grep . || echo "map unreadable — read it with repo-map.sh before you answer, and never guess"`
-
-A project that is not named on that line is unmapped. Ask the user for its repo,
-base branch, series and chain, or add it — never infer any of them from a folder
-name or from a checkout.
-
-## When to use
-
-Before cutting a worktree, opening a pull request, or planning a release, and any time the repo, base branch, Odoo series, GitHub remote, or environment chain for a project is not already known; a new client project has to be added to the map; a repo was renamed or a branch flow is wrong; or someone asks which projects and repos are known.
+One answer to "this Odoo project: which repo, which branch, which series, what comes after
+this branch?". Nothing is inferred from a checkout: the GitHub default branch is not the
+base, the folder name is not the project name, and the chain lives nowhere in git.
 
 ## The data
 
-`$ODOO_DEV_STATE_DIR/repo-map.json` (default `~/.local/share/odoo-dev/repo-map.json`) —
-mutable state, deliberately outside the plugin tree so a plugin update never touches it.
-`REPO_MAP_FILE` overrides the whole path. The in-tree `repo-map.json.seed` is an empty
-skeleton `bootstrap-state.sh` copies in when the state file is absent, never a live map.
-`repo-map.sh` run that bootstrap itself when the file missing and carry on with the empty
-map it create; map that **exist but not parse or not validate** instead hard exit 4 naming
-the file and the parser complaint, never silently reseeded — reseed would discard every
-project base branch (#906).
-One entry per **exact Odoo `project.project` name**:
+`$ODOO_DEV_STATE_DIR/repo-map.json` (default `~/.local/share/odoo-dev/repo-map.json`).
+`REPO_MAP_FILE` overrides the path. A map that exists but does not parse or validate
+exits 4 naming the file and the complaint. It is never reseeded.
+
+One entry per exact Odoo `project.project` name:
 
 | Key | Meaning |
 |-----|---------|
-| `repo` | Bare folder name under repos tree — never path |
-| `repo_path` | Optional **absolute** path to checkout. Overrides `$REPOS_DIR/$repo` |
-| `default_branch` | Branch task work based on, and task PRs target. Must appear in `branch_flow`. Never `:task` |
-| `odoo_version` | Series this project run, e.g. `18.0` |
-| `branch_flow` | Ordered environment chain, **last element is production**, e.g. `[":task","UAT","main"]` |
-| `flow_confirmed` | `true` only when human vouched for chain (see below) |
-| `remote` | `owner/repo` on GitHub, when differ from what local clone show |
+| `repo` | Bare folder name under the repos tree. Never a path |
+| `repo_path` | Optional absolute path to the checkout. Overrides `$REPOS_DIR/$repo` |
+| `default_branch` | The branch task work is based on and task PRs target. Must appear in `branch_flow`. Never `:task` |
+| `odoo_version` | The series this project runs, e.g. `18.0` |
+| `branch_flow` | Ordered environment chain, e.g. `[":task","UAT","main"]` |
+| `flow_confirmed` | `true` only when a human vouched for the chain |
+| `remote` | `owner/repo` on GitHub, when it differs from the local clone |
 | `notes` | Free text for humans. Never parsed |
-| `release_assignee` | GitHub login an aggregation release PR is assigned to |
+| `release_assignee` | GitHub login a release PR is assigned to |
 | `release_reviewer` | GitHub login the release PR requests review from, or `none` |
 
-**`repo_path` exists because the flat repos tree is convention, not law.** `repos-dir.sh` need directory whose immediate subdirectory names equal `repo`. Bind mount cannot supply one: Odoo devcontainer mount client repo at `/mnt/extra-addons`, name fixed by addons path, never match `repo`, and no `REPOS_DIR` value bridge that — `REPOS_DIR=/mnt` still leave folder named `extra-addons`. Record absolute path on entry instead. Project carrying `repo_path` never consult `repos-dir.sh` at all: `add` check that path exist, `project-resolve.sh` report it as `repo_path` and sniff `origin` from it, so `remote` fill in instead of stay null. Relative path rejected — resolve against whatever directory caller stand in, exactly guesswork this map exist to stop. `repo` stay required and stay bare folder name: it the lookup key, independent of where checkout mounted.
+Five facts:
 
-**`.odoo-repos-dir` marker exist because host with one clone cannot be inferred.** Sweep count >= 2 git subdirs because `$PWD` is first candidate: accept one and parent of any single checkout start masquerading as the tree, false positive far harder to notice than the false negative. Machine holding exactly one repo therefore declare tree once — `touch <tree>/.odoo-repos-dir` — and marker outrank the count, same authority as `REPOS_DIR`, which script never count either. Marker also resolve tree still empty, state fresh host clone into. Setting `REPOS_DIR` stay equally valid, just per-shell rather than per-machine.
-
-**`release_assignee` / `release_reviewer` exist so the release route never has to ask.** Who owns a release PR is a property of the project, not of the run, and `odoo-dev:odoo-release` runs inside a subagent that cannot put a question to the user. Recorded once, read every release. Absent = unanswered: ask the user and record the answer, never infer one from commit authorship.
-
-**`:task` is reserved first element of `branch_flow`, standing for per-task branch.** Chain's first element is where task work start from, and on most project that not shared branch at all — task branch cut fresh per unit of work, exist on no remote. Writing ordinary name there (old `dev` convention) claim branch every consumer walking chain believe in and none can resolve; `gh api repos/<owner>/<repo>/branches/dev` return 404 on every mapped remote. Record `:task` instead. Colon forbidden anywhere in git ref name, so token can never collide with branch anyone could create, and chain readable without guessing at index 0.
-
-Token **optional**: project whose task work based directly on shared environment record that branch first and no placeholder — `["staging","main"]` with `default_branch: staging` correct and warn nothing. Rules validator enforce: placeholder only ever element 0, appear once, never `default_branch` (task PR need real branch to target), and every element after it must be legal git branch name that exist on remote. `validate` also **warn** (not fail) when chain start with name that neither `:task` nor `default_branch` — that the phantom, and warning carry `set-flow` command that repair it.
-
-**`flow_confirmed` is honesty flag.** Seeded flows parsed out of old free-text notes written for people. Parsed chain = hypothesis. `project-resolve.sh` answer mid-chain hop from unconfirmed flow — wrong there cost re-run — but refuse to name **production** hop until someone confirm. Hit that refusal: ask user confirm chain, record it:
-
-```bash
-<base directory>/scripts/repo-map.sh set-flow "QOC Delivery Improvements" ":task,UAT,main" --flow-confirmed
-```
+- `repo_path` is absolute. A relative path is rejected.
+- A `.odoo-repos-dir` marker file declares a repos tree that holds one clone. It outranks
+  the two-git-subdirectories sweep. `REPOS_DIR` is the per-shell equivalent.
+- `:task` is only ever element 0 of `branch_flow`. It stands for the per-task branch and
+  can never be `default_branch`.
+- `flow_confirmed` becomes `true` only through `set-flow ... --flow-confirmed`, run by a
+  person.
+- The last element of `branch_flow` is production.
 
 ## Scripts
 
-This skill's scripts (`MAP_SCRIPTS`) live at `<base directory>/scripts`, where
-`<base directory>` is the absolute path on the `Base directory for this skill:`
-line injected above this body. The name is a label for that directory, not a shell
-variable to set and reuse: every Bash call has to spell the absolute path out in
-full, because a Bash call inherits no environment and keeps no state from the call
-before it.
+Every script prints one JSON object as its last stdout line. Write every path in full.
 
-`${CLAUDE_SKILL_DIR}` in the injected bullet above is not a shell variable either.
-The renderer substitutes it into this body before any shell sees it, and a Bash tool
-call is not rendered, so the same spelling expands to nothing in one of your own
-calls. Spell the base directory out in full there.
+| Script and arguments | Prints | Exit |
+|---|---|---|
+| `repos-dir.sh [--raw]` | `{"repos_dir"}` from `$REPOS_DIR`, then the marker, then the sweep | 0 · 1 no tree (entries with `repo_path` skip it) |
+| `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | the only sanctioned way to read or edit the map | 0 · 2 usage · 3 unmapped · 4 map invalid |
+| `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | `{"project","repo","repo_path","default_branch","odoo_version","branch_flow","flow_confirmed","remote","next_env","at_production","release_assignee","release_reviewer"}` | 0 · 2 usage · 3 unmapped · 4 chain cannot answer · 6 ambiguous |
+| `project-bootstrap.sh "<checkout path>" [--project NAME]` | the entry it wrote: `repo`, `repo_path`, `remote`, `odoo_version`, `default_branch`; never `branch_flow` | 0 · 2 not a git checkout · 3 already pinned (entry printed) |
 
-Every script print one JSON object as last stdout line.
-
-| Script | Use |
-|--------|-----|
-| `repos-dir.sh [--raw]` | Resolve repos tree → `{"repos_dir"}`. Honours `$REPOS_DIR` first, then sweep `$PWD` + candidates for a dir carrying `.odoo-repos-dir` marker or >= 2 git subdirs. Exit 1 = no tree here, not fatal — entries with `repo_path` skip it |
-| `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | **Only** sanctioned way to read or edit map |
-| `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | Full resolution, plus next environment in chain |
-| `project-bootstrap.sh "<checkout path>" [--project NAME]` | Record the **mechanically derivable** half of an entry for an unmapped checkout: `repo`, `repo_path`, `remote`, `odoo_version`, `default_branch`. Writes through `add`. Leaves `branch_flow` unset on purpose |
-
-### Resolving
+### Resolve
 
 ```bash
 <base directory>/scripts/project-resolve.sh "B&K Logistics Support"
-<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after :task  # first hop -> next_env: "UAT"
-<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after UAT    # -> next_env: "main"
-<base directory>/scripts/project-resolve.sh B-K-Logistics                               # repo folder also works
+<base directory>/scripts/project-resolve.sh "B&K Logistics Support" --next-after :task   # -> next_env: "UAT"
 ```
 
-`--next-after` take **element of chain**, never arbitrary branch. First hop — out of per-task branch, into whatever that task PR target — spelled `--next-after :task`, same arithmetic as every other hop. Real branch name not on chain still exit 4: treating unrecognised name as "must be task branch" would answer typo'd environment name with `default_branch`.
+`--next-after` takes an element of the chain, never an arbitrary branch. The first hop
+is `--next-after :task`. `repo_path` is `null` when no checkout is on this machine. The
+two `release_*` fields are `null` when the project recorded none.
 
-Output: `{"project","repo","repo_path","default_branch","odoo_version","branch_flow","flow_confirmed","remote","next_env","at_production","release_assignee","release_reviewer"}`.
+- `exit 3` — unmapped → run `project-bootstrap.sh "<checkout>"`, then resolve again by
+  the project name it printed; still 3 → stop, report the path and the output.
+- `exit 4` — the chain cannot answer (unconfirmed or missing production hop) → stop;
+  hand over the printed `set-flow` command verbatim; never run it yourself.
+- `exit 6` — ambiguous: one repo folder maps to several projects → stop; list the
+  candidate project names; never pick one.
+- `exit 2` — usage → fix the call.
 
-The two `release_*` fields are `null` when the project recorded none.
-
-`repo_path` is checkout path when one present on this machine, `null` when none — metadata still correct, still useful for planning. Only filesystem-touching skills need path. Entry's own `repo_path` win over `$REPOS_DIR/$repo`, so project pinned that way resolve even where no repos tree exist. Hand value straight to `odoo-dev:odoo-task-env` scripts' `--repo-path DIR` — same bypass, now recorded once instead of typed every call.
-
-Exit codes: `2` usage · `3` **unmapped** · `4` branch chain cannot answer question asked · `6` **ambiguous** — repo folder mapping to several projects.
-
-`3` and `6` were one code and have opposite remedies, which is why they split (#995). `3` means no entry exists: nothing to choose between, and `project-bootstrap.sh` below records what does not need a human. `6` means the entries already exist and a person must name one. `3` matches `repo-map.sh get`, whose exit 3 is also "project unmapped"; `5` is skipped because `release-manifest.sh` already spends it on "nothing to release".
-
-Ambiguity is keyed on `repo`, never on `repo_path`. Two entries pinning the same checkout are a *defect*, not an ambiguity — `add` and `set --repo-path` refuse to write one.
-
-### Bootstrapping an unmapped checkout
+### Bootstrap an unmapped checkout
 
 ```bash
 <base directory>/scripts/project-bootstrap.sh /mnt/extra-addons --project "ACME Support"
 ```
 
-Exists because `3` used to be a dead stop: the subagent routes that hit it cannot ask a question, so the entry got written by hand — which these rules forbid, and which in practice produced a second entry whose `repo_path` already belonged to another project. Everything that stop waited on except the chain is readable off the checkout, so it is recorded: `repo` = basename, `repo_path` = absolutised path, `remote` from `git remote get-url origin`, `odoo_version` = majority `NN.0` across the checkout's `__manifest__.py` files (else a branch literally named `NN.0`, else omitted), `default_branch` from `origin/HEAD` (else the checked-out branch), project name defaulting to `repo`.
+It records the mechanically derivable half of an entry and leaves `branch_flow` unset, so
+`flow_confirmed` stays false. Bootstrapping is not confirming.
 
-**It never derives `branch_flow`.** The chain's last element points a release at a customer, so it stays unset, `flow_confirmed` stays false, and `project-resolve.sh`'s exit 4 still forces a human to vouch. Bootstrapping is not confirming.
+- `exit 3` — this checkout is already pinned by the printed entry → resolve by that
+  project name; never add a second entry.
 
-Exit `0` entry written · `2` usage, or the path is not a git checkout · `3` this checkout is **already** pinned by an entry, which is printed — resolve by that project name rather than adding a second one · any other code is `repo-map.sh`'s own, passed through.
-
-### Editing
+### Edit
 
 ```bash
 <base directory>/scripts/repo-map.sh add "New Client - Phase 1" newclient \
   --default-branch UAT --odoo-version 18.0 \
   --branch-flow ":task,UAT,main" --flow-confirmed \
-  --remote acme-eng/newclient --notes "..." \
-  --release-assignee alice --release-reviewer bob
-```
-
-`add` only create, and refuse duplicate. Already-mapped project need setter. `set` merge into existing entry — field you not name keep its value:
-
-```bash
+  --remote acme-eng/newclient --release-assignee alice --release-reviewer bob
 <base directory>/scripts/repo-map.sh set "New Client - Phase 1" \
-  --remote acme-eng/newclient --notes "release goes out Thursdays" \
-  --default-branch UAT --odoo-version 18.0 --repo-path /mnt/extra-addons
-```
-
-**Never `remove` then re-`add` to change a field.** That the old way and it lossy — every field you leave off the re-`add` silently dropped, `notes` first — and non-atomic: `remove` commit its own write before `add` run, so failed `add` leave project simply gone, `.bak` holding only post-`remove` state. `set` write once, through same validate → `.bak` → rename path.
-
-Empty value delete the key: `set "<project>" --repo-path ""` put entry back on flat tree. Only way a merge can say "unset this". `--repo-path` on `set` check same as on `add` — absolute, and directory must exist unless `--no-repo-check`.
-
-Two fields `set` deliberately not take, because each carry own extra question — it point you at owner instead:
-
-```bash
+  --remote acme-eng/newclient --notes "release goes out Thursdays" --repo-path /mnt/extra-addons
 <base directory>/scripts/repo-map.sh set-flow "New Client - Phase 1" ":task,UAT,main" --flow-confirmed
 <base directory>/scripts/repo-map.sh set-release-owners "New Client - Phase 1" alice bob
-```
-
-Checkout not under repos tree (bind mount, devcontainer) — pin it:
-
-```bash
 <base directory>/scripts/repo-map.sh add "Client - Support" clientrepo \
   --repo-path /mnt/extra-addons --default-branch staging --odoo-version 18.0
 ```
 
-Writes atomic (temp file → validate → `.bak` → rename), so rejected edit never become live map. `add` check repo folder exist unless you pass `--no-repo-check` — checks `--repo-path` when given, else `$REPOS_DIR/$repo`.
+- `add` only creates and refuses a duplicate. `set` merges into an existing entry.
+- Never `remove` then re-`add` to change a field. Every field left off the re-add is lost.
+- An empty value deletes a key: `set "<project>" --repo-path ""`.
+- `--repo-path` must be absolute and must exist, unless `--no-repo-check`.
+- Writes are atomic: temp file → validate → `.bak` → rename.
 
 ## Rules
 
-- **Unknown project = stop, not guess.** `project-resolve.sh` exit **3** (ambiguous is **6**), list what it know. Ask user which repo and branch, then `add` entry. Never infer repo from similar name. Where you cannot ask — a forked subagent — run `project-bootstrap.sh` for the checkout first, so the derivable fields are recorded, then stop on whatever remains.
-- **One checkout, one entry.** Two entries may share `repo`; they may never share `repo_path`. `add` and `set --repo-path` reject a collision with exit 2, naming the entry that already holds the path. The check sits at those two write sites and **not** in the validator on purpose: `remove` is how a bad entry gets repaired, and a validator that rejected a colliding map would make that repair impossible by any sanctioned command. For the same reason `remove` is the one command that does not pre-validate the live map — it still needs the file to parse, and the result is still validated before it lands.
-- **Entries added only with explicit user confirmation** — repo, base branch, series, chain.
-- **One repo, several projects is normal** (delivery project and its upgrade project share checkout). Those entries can legitimately disagree on `odoo_version` and `branch_flow` — that why resolving by folder name ambiguous by design. Name the project.
-- **Never hand-edit the map file.** Validator enforce things easy to get wrong by hand: `default_branch` on chain and never `:task`, no repeats, no unknown keys, `repo_path` absolute, `:task` only element 0, every other `branch_flow` element a legal git branch name. Writers enforce one more the validator deliberately does not: no two entries on one `repo_path`.
-- **Never invent branch name for chain's first element.** Task branch cut fresh per task is `:task`, not `dev`. Only thing that go on chain is branch that exist on remote, plus that one placeholder.
-- `default_branch` is what task PR target. Frequently **not** GitHub default branch. Real case: client repo whose GitHub default is `Odoov18` while every task PR belongs on `staging`.
-
-## Verify
-
-```bash
-bash <base directory>/scripts/tests/repo-map.test.sh    # offline; no network, no repos tree, no Odoo
-bash <base directory>/scripts/tests/repos-dir.test.sh  # offline; resolver only — explicit REPOS_DIR, sweep, marker
-```
+- An unknown project is a stop, never a guess. Bootstrap first, then stop on what remains.
+- One checkout, one entry. Two entries may share `repo`, never `repo_path`.
+- An entry is added only with explicit user confirmation of repo, base, series and chain.
+- One repo with several projects is normal. Those entries can disagree on
+  `odoo_version` and `branch_flow`. Name the project.
+- Never hand-edit the map file. The validator enforces what is easy to get wrong.
+- `default_branch` is what a task PR targets. It is often not the GitHub default branch.

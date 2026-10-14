@@ -1,46 +1,41 @@
 #!/usr/bin/env bash
-# artifact.sh — the only sanctioned way to write a handoff artifact.
+# artifact.sh — the only sanctioned way to read and write a task's artifact file.
 #
-# Agents in the odoo-dev chain hand work to each other through append-only JSON
-# files in a per-task directory, not through prompt returns. Artifacts survive
-# compaction, a session boundary, a killed subagent, and a human taking over
-# mid-chain; a JSON blob in a prompt survives none of those.
+# One file per task, four sections. Every stage of the odoo-dev chain reads and
+# writes <artifacts_dir>/task.json, and each command touches only its own section:
+#
+#   plan    written by /odoo-dev:plan after approval  ({"markdown": "..."})
+#   build   written by the builder and the upgrader   (worktree, branch, modules,
+#                                                      odoo_version, default_branch)
+#   test    written by run-tests.sh --put, one entry per module under test.<module>
+#   review  written by the tester                     (findings, criteria_results)
+#
+# The test section is written by the test script itself, never re-typed by an agent:
+# that is what lets a reader tell a real run from a hand-assembled one.
 #
 # Usage:
-#   artifact.sh put  <artifacts_dir> <stage> <file>   # <file> may be - for stdin
-#   artifact.sh put  <artifacts_dir> <stage> --json '<payload>'   # payload inline
-#   artifact.sh get  <artifacts_dir> <stage> [--first|--latest|--rev N]
+#   artifact.sh set  <artifacts_dir> <section> <file|->          # whole section
+#   artifact.sh set  <artifacts_dir> <section> --json '<payload>' # payload inline
+#   artifact.sh set  <artifacts_dir> <section> --key <k> <file|-> # one key only
+#   artifact.sh set  <artifacts_dir> plan --text <file>           # {"markdown": <file>}
+#   artifact.sh get  <artifacts_dir> [<section> [--key <k>]] [--raw]
 #   artifact.sh list <artifacts_dir>
-#   artifact.sh stages
+#   artifact.sh sections
 #
 # <artifacts_dir> may be given as a bare Odoo task id — anything matching ^[0-9]+$ —
 # which resolves against the state dir to <state>/tasks/<id>. Anything else is a path
-# and is used exactly as given. The rule comes from state-dir.sh rather than being
-# restated here.
+# and is used exactly as given. The rule comes from state-dir.sh.
 #
-# NEVER OVERWRITES. A second put of the same stage lands at <stage>.2.json, then
-# .3.json. This is the point, not a limitation. A chain must be able to recover
-# from a red test — the builder fixes and re-runs — so `get` reads the LATEST
-# revision. What append-only buys is that the recovery is never QUIET: every
-# earlier revision stays on disk and `list` shows them all, so "green on the third
-# try" can never read as "green".
+# `set` validates the payload against SCHEMA (JSON object, required keys present and
+# not null, cheap type checks), then replaces the section in place. The file holds
+# the latest state only. Writes are atomic (tmp in the same dir, then rename), so a
+# killed agent leaves no half file.
 #
-# The `progress` stage is the run checkpoint — one row per unit of work, each row
-# carrying a `status` from the four-word vocabulary the per-element `enum` rule
-# enforces. It is append-only like every other stage, so a flush is a new revision
-# (`progress.json`, then `progress.2.json`) and the HIGHEST revision is the current
-# checkpoint; readers take `get --latest`. Agents whose Edit/Write tools are removed
-# and whose shell denies every redirect have no way to put a file on disk first, so
-# `put` also takes the payload inline as a single `--json` argument — one command,
-# no redirection, nothing for an allowlist to refuse.
+# `get --raw` prints a string value unquoted. On an object with exactly one key whose
+# value is a string (the plan section), it prints that string.
 #
-# Validation is required-field presence plus cheap type checks, plus optional
-# per-element checks for array fields — type, nonEmpty, and a closed `enum` of
-# permitted values — all run before the file is named: a malformed artifact never
-# becomes a stage. Writes are atomic
-# (tmp in the same dir, then rename), so a killed agent leaves no half file.
-#
-# Exit codes: 0 ok | 2 usage | 3 unknown stage | 4 invalid payload | 5 nothing to get
+# Exit codes: 0 ok | 2 usage | 3 unknown section | 4 invalid payload or file
+#             5 nothing to get
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,186 +44,209 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "artifact.sh: $*" >&2; exit "${2:-2}"; }
 
+# required: keys that must be present and non-null.
+# types:    cheap type checks on keys that are present.
+# fields:   documentation only — the optional keys a reader may name. `set` ignores it;
+#           validate.sh gate 17 reads it as part of the token allow-list.
+# keyed:    the section is a map of entries written one at a time with --key, and
+#           `required` applies per entry.
 SCHEMA='
 const SCHEMA = {
-  "00-context": {
-    required: ["project","repo","default_branch","odoo_version","branch_flow","flow_confirmed"],
-    types: { branch_flow: "array", flow_confirmed: "boolean" },
-  },
-  "05-scope": {
-    required: ["prior_art","estimate","acceptance_criteria"],
-    types: { acceptance_criteria: "array" },
-  },
-  "10-env": {
-    required: ["existing_work","worktree_ensure","stack_ensure"],
-    types: { existing_work: "object", worktree_ensure: "object" },
-  },
-  "20-build": {
-    required: ["worktree","branch","modules","claims","verify_steps","diff_summary"],
-    types: { modules: "array", claims: "array", verify_steps: "array" },
-  },
-  "30-test": {
-    required: ["passed","tests_run","tours_declared","tours_run","failures","log_file","produced_by"],
-    types: { passed: "boolean", tests_run: "number", tours_declared: "number",
-             tours_run: "number", failures: "array", produced_by: "string",
-             module_target_series: "string" },
-  },
-  "35-review": {
-    required: ["findings","criteria_results"],
-    types: { findings: "array", criteria_results: "array" },
-  },
-  "50-pr": {
-    required: ["pr_url","pr_number","draft","base","head","title"],
-    types: { draft: "boolean" },
-  },
-  "60-release": {
-    required: ["from","to","prs","unresolved","tasks"],
-    types: { prs: "array", unresolved: "array", tasks: "array" },
-  },
-  "progress": {
-    required: ["units"],
-    types: { units: "array", run: "string", updated: "string" },
-    elements: { units: {
-      unit:   { type: "string", nonEmpty: true },
-      kind:   { type: "string", nonEmpty: true },
-      status: { type: "string", enum: ["done","in-progress","not-started","failed"] },
-      note:   { type: ["string","null"] },
-    } },
-  },
+  plan:   { required: ["markdown"], types: { markdown: "string" }, fields: [] },
+  build:  { required: ["worktree","branch","modules","odoo_version","default_branch"],
+            types: { modules: "array" }, fields: ["claims","diff_summary"] },
+  test:   { required: [], types: {}, keyed: true,
+            fields: ["passed","status","error","tests_run","tours_declared","tours_run",
+                     "failures","log_file","produced_by","odoo_version",
+                     "module_target_series"] },
+  review: { required: [], types: {}, fields: ["findings","criteria_results"] },
 };
 '
 
+FILE_NAME="task.json"
+
 case "${1:-}" in
-  stages)
+  sections)
     node --input-type=module -e "$SCHEMA
       console.log(Object.keys(SCHEMA).join('\n'));"
     exit 0 ;;
-  put|get|list) cmd="$1"; shift ;;
-  *) die "usage: artifact.sh put|get|list|stages <artifacts_dir> [stage] [file]" ;;
+  set|get|list) cmd="$1"; shift ;;
+  *) die "usage: artifact.sh set|get|list|sections <artifacts_dir> [section] [options]" ;;
 esac
 
 DIR="${1:-}"; [ -n "$DIR" ] || die "missing <artifacts_dir>"; shift
 DIR="$(odoo_dev_artifacts_dir "$DIR")"
+FILE="$DIR/$FILE_NAME"
 
+# ---- list -------------------------------------------------------------------------
 if [ "$cmd" = list ]; then
-  [ -d "$DIR" ] || die "artifacts dir not found: $DIR" 5
+  [ $# -eq 0 ] || die "list takes only <artifacts_dir>"
   node --input-type=module -e '
-    import { readdirSync, readFileSync } from "fs";
-    const dir = process.argv[1];
-    const files = readdirSync(dir).filter(f => f.endsWith(".json")).sort();
-    console.log(JSON.stringify({ dir, artifacts: files.map(f => {
-      let ok = true; try { JSON.parse(readFileSync(`${dir}/${f}`, "utf8")); } catch { ok = false; }
-      return { file: f, stage: f.replace(/(\.\d+)?\.json$/, ""), parseable: ok };
-    }) }));
-  ' -- "$DIR"
+    import { existsSync, readFileSync } from "fs";
+    const file = process.argv[1];
+    let sections = [];
+    if (existsSync(file)) {
+      let obj = {};
+      try { obj = JSON.parse(readFileSync(file, "utf8")); } catch { obj = {}; }
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        sections = Object.entries(obj).map(([name, v]) => ({
+          name, keys: v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : [],
+        }));
+      }
+    }
+    console.log(JSON.stringify({ file, sections }));
+  ' -- "$FILE"
   exit 0
 fi
 
-STAGE="${1:-}"; [ -n "$STAGE" ] || die "missing <stage>"; shift
-
+# ---- get --------------------------------------------------------------------------
 if [ "$cmd" = get ]; then
-  which="${1:---latest}"
-  case "$which" in
-    --first)  f="$DIR/$STAGE.json" ;;
-    --rev)    n="${2:?--rev needs N}"
-              f="$DIR/$STAGE.json"; [ "$n" -gt 1 ] && f="$DIR/$STAGE.$n.json" ;;
-    --latest) f=""
-              n=1
-              while :; do
-                cand="$DIR/$STAGE.json"; [ "$n" -gt 1 ] && cand="$DIR/$STAGE.$n.json"
-                [ -f "$cand" ] || break
-                f="$cand"; n=$((n + 1))
-              done ;;
-    *) die "get: unknown option $which" ;;
-  esac
-  [ -n "$f" ] && [ -f "$f" ] || die "no artifact for stage $STAGE in $DIR" 5
-  cat "$f"
+  section=""; key=""; raw=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --key) key="${2:?--key needs a name}"; shift 2 ;;
+      --raw) raw=1; shift ;;
+      -*) die "get: unknown option $1" ;;
+      *) [ -z "$section" ] || die "get: one section at most"; section="$1"; shift ;;
+    esac
+  done
+  [ -n "$section" ] || [ -z "$key" ] || die "get: --key needs a section"
+  [ -f "$FILE" ] || die "no artifact file at $FILE" 5
+  node --input-type=module -e '
+    import { readFileSync } from "fs";
+    const [file, section, key, raw] = process.argv.slice(1);
+    let obj;
+    try { obj = JSON.parse(readFileSync(file, "utf8")); }
+    catch (e) { console.error(`artifact.sh: ${file} is not JSON: ${e.message}`); process.exit(4); }
+    let v = obj;
+    if (section) {
+      if (!(section in obj)) { console.error(`artifact.sh: no ${section} section in ${file}`); process.exit(5); }
+      v = obj[section];
+      if (key) {
+        if (!v || typeof v !== "object" || !(key in v)) {
+          console.error(`artifact.sh: no key ${key} in section ${section} of ${file}`); process.exit(5);
+        }
+        v = v[key];
+      }
+    }
+    if (raw === "1") {
+      if (typeof v === "string") { process.stdout.write(v.endsWith("\n") ? v : v + "\n"); process.exit(0); }
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const ks = Object.keys(v);
+        if (ks.length === 1 && typeof v[ks[0]] === "string") {
+          const s = v[ks[0]]; process.stdout.write(s.endsWith("\n") ? s : s + "\n"); process.exit(0);
+        }
+      }
+    }
+    console.log(JSON.stringify(v, null, 2));
+  ' -- "$FILE" "$section" "$key" "$raw"
   exit 0
 fi
 
-SRC="${1:-}"; [ -n "$SRC" ] || die "missing <file> (use - for stdin, --json for inline)"
+# ---- set --------------------------------------------------------------------------
+SECTION="${1:-}"; [ -n "$SECTION" ] || die "missing <section>"; shift
+
+key=""; src=""; payload=""; have_payload=0; text=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --key)  key="${2:?--key needs a name}"; shift 2 ;;
+    --json) payload="${2:-}"; have_payload=1
+            [ -n "$payload" ] || die "--json needs the JSON payload as the next single argument"
+            shift 2 ;;
+    --text) src="${2:?--text needs a file}"; text=1; shift 2 ;;
+    -)      src="-"; shift ;;
+    -*)     die "set: unknown option $1" ;;
+    *)      [ -z "$src" ] || die "set: one payload at most"; src="$1"; shift ;;
+  esac
+done
+
+if [ "$have_payload" -eq 0 ]; then
+  [ -n "$src" ] || die "missing <file> (use - for stdin, --json for inline, --text for a markdown file)"
+  if [ "$src" = "-" ]; then
+    payload="$(cat)"
+  else
+    [ -f "$src" ] || die "payload file not found: $src" 4
+    payload="$(cat "$src")"
+  fi
+fi
+
 mkdir -p "$DIR"
 
-if [ "$SRC" = "--json" ]; then
-  # One argument, no redirection, no pipe: this is the only `put` form an agent with
-  # no Edit/Write tool and a redirect-denying allowlist can actually reach.
-  payload="${2:-}"
-  [ -n "$payload" ] || die "--json needs the JSON payload as the next single argument"
-elif [ "$SRC" = "-" ]; then
-  payload="$(cat)"
-else
-  [ -f "$SRC" ] || die "payload file not found: $SRC"
-  payload="$(cat "$SRC")"
-fi
-
-# Validate, pick the target name, and write atomically in one node pass so the
-# name can never be chosen from a state that changed before the rename.
+# Validate, merge and write atomically in one node pass.
 node --input-type=module -e "$SCHEMA"'
-  import { existsSync, writeFileSync, renameSync } from "fs";
-  const [dir, stage, payload] = process.argv.slice(1);
+  import { existsSync, readFileSync, writeFileSync, renameSync } from "fs";
+  const [file, section, key, payload, text] = process.argv.slice(1);
 
-  const spec = SCHEMA[stage];
+  const spec = SCHEMA[section];
   if (!spec) {
-    console.error(`artifact.sh: unknown stage ${stage}. Known: ${Object.keys(SCHEMA).join(", ")}`);
+    console.error(`artifact.sh: unknown section ${section}. Known: ${Object.keys(SCHEMA).join(", ")}`);
     process.exit(3);
   }
 
-  let obj;
-  try { obj = JSON.parse(payload); }
-  catch (e) { console.error(`artifact.sh: payload is not JSON: ${e.message}`); process.exit(4); }
-  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
-    console.error("artifact.sh: payload must be a JSON object"); process.exit(4);
+  const kind = v => (Array.isArray(v) ? "array" : v === null ? "null" : typeof v);
+  let value;
+  if (text === "1") {
+    if (key) { console.error("artifact.sh: --text and --key do not combine"); process.exit(2); }
+    if (section !== "plan") { console.error("artifact.sh: --text is for the plan section only"); process.exit(2); }
+    value = { markdown: payload };
+  } else {
+    try { value = JSON.parse(payload); }
+    catch (e) { console.error(`artifact.sh: payload is not JSON: ${e.message}`); process.exit(4); }
+    if (kind(value) !== "object") {
+      console.error("artifact.sh: payload must be a JSON object"); process.exit(4);
+    }
   }
 
-  const problems = [];
-  for (const k of spec.required) if (!(k in obj)) problems.push(`missing required field: ${k}`);
-  for (const [k, want] of Object.entries(spec.types ?? {})) {
-    if (!(k in obj)) continue;
-    const got = Array.isArray(obj[k]) ? "array" : obj[k] === null ? "null" : typeof obj[k];
-    // An OPTIONAL field — typed here but absent from required — may be explicitly
-    // null. That is how run-tests.sh reports "no target series was given", and
-    // rejecting it would push a writer into omitting the key, which
-    // cannot be told apart from forgetting it. A REQUIRED field still may not be
-    // null: presence alone is not a value.
-    if (got === "null" && !(spec.required ?? []).includes(k)) continue;
-    if (got !== want) problems.push(`field ${k}: expected ${want}, got ${got}`);
-  }
-  // Optional per-element checks for array fields, so a stage whose value is a list
-  // of records can require shape inside the list. Every bad element is reported
-  // with its index rather than stopping at the first.
-  const kind = v => (Array.isArray(v) ? "array" : v === null ? "null" : typeof v);
-  for (const [field, elemSpec] of Object.entries(spec.elements ?? {})) {
-    if (!Array.isArray(obj[field])) continue;
-    obj[field].forEach((el, i) => {
-      const at = `${field}[${i}]`;
-      if (kind(el) !== "object") { problems.push(`${at}: expected object, got ${kind(el)}`); return; }
-      for (const [k, rule] of Object.entries(elemSpec)) {
-        if (!(k in el)) { problems.push(`${at}: missing required field: ${k}`); continue; }
-        const want = Array.isArray(rule.type) ? rule.type : [rule.type];
-        const got = kind(el[k]);
-        if (!want.includes(got)) { problems.push(`${at}.${k}: expected ${want.join(" or ")}, got ${got}`); continue; }
-        if (rule.nonEmpty && got === "string" && el[k].trim() === "")
-          problems.push(`${at}.${k}: must not be empty`);
-        // A closed vocabulary. The problem names every permitted word, because the
-        // writer of a rejected row needs the list and not just the refusal.
-        if (Array.isArray(rule.enum) && !rule.enum.includes(el[k]))
-          problems.push(`${at}.${k}: must be one of ${rule.enum.join(", ")}, got ${JSON.stringify(el[k])}`);
-      }
-    });
+  // The entries `required` and `types` apply to: the whole section, or each entry of
+  // a keyed section, or the one entry being written with --key.
+  const check = (obj, at) => {
+    const problems = [];
+    for (const k of spec.required) {
+      if (!(k in obj) || obj[k] === null) problems.push(`${at}missing required field: ${k}`);
+    }
+    for (const [k, want] of Object.entries(spec.types ?? {})) {
+      if (!(k in obj)) continue;
+      const got = kind(obj[k]);
+      // An OPTIONAL typed field may be explicitly null; a REQUIRED one may not.
+      if (got === "null" && !spec.required.includes(k)) continue;
+      if (got !== want) problems.push(`${at}field ${k}: expected ${want}, got ${got}`);
+    }
+    return problems;
+  };
+  let problems = [];
+  if (key) {
+    problems = check(value, `${key}: `);
+  } else if (spec.keyed) {
+    for (const [k, v] of Object.entries(value)) {
+      if (kind(v) !== "object") { problems.push(`${k}: expected object, got ${kind(v)}`); continue; }
+      problems.push(...check(v, `${k}: `));
+    }
+  } else {
+    problems = check(value, "");
   }
   if (problems.length) {
-    console.error(`artifact.sh: invalid ${stage} payload\n  ` + problems.join("\n  "));
+    console.error(`artifact.sh: invalid ${section} payload\n  ` + problems.join("\n  "));
     process.exit(4);
   }
 
-  // Append-only: never clobber. The first write owns the bare name.
-  let target = `${dir}/${stage}.json`, n = 1;
-  while (existsSync(target)) { n += 1; target = `${dir}/${stage}.${n}.json`; }
+  let doc = {};
+  if (existsSync(file)) {
+    try { doc = JSON.parse(readFileSync(file, "utf8")); }
+    catch (e) { console.error(`artifact.sh: ${file} is not JSON: ${e.message}`); process.exit(4); }
+    if (kind(doc) !== "object") { console.error(`artifact.sh: ${file} is not a JSON object`); process.exit(4); }
+  }
+  if (key) {
+    const cur = doc[section];
+    doc[section] = kind(cur) === "object" ? cur : {};
+    doc[section][key] = value;
+  } else {
+    doc[section] = value;
+  }
 
-  const tmp = `${dir}/.${stage}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n");
-  renameSync(tmp, target);
+  const dir = file.slice(0, file.lastIndexOf("/"));
+  const tmp = `${dir}/.task.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n");
+  renameSync(tmp, file);
 
-  console.log(JSON.stringify({ stage, file: target, revision: n,
-    superseded: n > 1 ? `${dir}/${stage}.json` : null }));
-' -- "$DIR" "$STAGE" "$payload"
+  console.log(JSON.stringify({ section, key: key || null, file }));
+' -- "$FILE" "$SECTION" "$key" "$payload" "$text"

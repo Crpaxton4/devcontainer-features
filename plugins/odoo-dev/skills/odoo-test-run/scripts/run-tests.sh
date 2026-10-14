@@ -4,13 +4,18 @@
 #
 # Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S]
 #                     [--with-tours] [--repo-path DIR] [--addons-path P]
-#                     [--data-dir DIR] [--target-series NN.0]
+#                     [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]
 #
 #   --target-series: the Odoo series the MODULE targets, as in 18.0. Compared
 #                    against the series this container's core actually runs. No
 #                    flag means no comparison — every caller that is not
 #                    series-aware passes none — so the check is absent rather
 #                    than passed.
+#   --put:           after the result JSON is built, write it into
+#                    <ARTIFACTS_DIR>/task.json under test.<module> through the
+#                    plugin's artifact.sh. stdout still prints the JSON. A failed
+#                    write prints the reason on stderr and exits 7. This is how
+#                    the test section is written by the script and never re-typed.
 #
 # Mechanics:
 #   - addons path STATED, never inherited: worktree FIRST so worktree modules
@@ -26,12 +31,14 @@
 #   - Odoo major detected and recorded; 16-19 share the
 #     --test-enable/--test-tags/--stop-after-init surface
 #
-# Two execution modes, detected rather than configured:
-#   host        docker is present and <project>-odoo-1 is running -> docker exec
-#   container   no docker, but odoo and postgres answer here -> run directly
-# The lifted original only knew the first. Inside the devcontainer — where the
+# Two execution modes, detected rather than configured, container FIRST:
+#   container   odoo and postgres answer here -> run directly
+#   host        otherwise, docker is present and <project>-odoo-1 is running
+#               -> docker exec
+# The lifted original only knew host mode. Inside the devcontainer — where the
 # checkout is bind-mounted and odoo is on PATH — it failed on `docker: command
-# not found`, which reads as a broken script rather than a wrong assumption.
+# not found`; once docker-from-docker put `docker` on PATH in there too, the
+# docker-first order picked host mode from inside the stack (#1039).
 #
 # Last stdout line: {"passed","status","error","db","module","odoo_version",
 #   "module_target_series","mode","produced_by",
@@ -76,16 +83,17 @@
 # bounded per-process connection budget.
 #
 # Exit codes: 0 ran (check "passed") | 2 usage/environment | 6 tours requested
-# but no usable browser
+# but no usable browser | 7 --put could not write the result
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0]" >&2; exit 2; }
+[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]" >&2; exit 2; }
 repo="$1"; task_id="$2"; module="$3"; shift 3
 
 tags=""; suffix=""; with_tours=false; repo_path=""; addons_override=""; data_dir_override=""
-target_series=""
+target_series=""; put_dir=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --test-tags) tags="${2:?}"; shift 2 ;;
@@ -94,10 +102,23 @@ while [ $# -gt 0 ]; do
     --repo-path) repo_path="${2:?}"; shift 2 ;;
     --addons-path) addons_override="${2:?}"; shift 2 ;;
     --data-dir) data_dir_override="${2:?}"; shift 2 ;;
+    --put) put_dir="${2:?}"; shift 2 ;;
     --with-tours) with_tours=true; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# emit <json> — print the result, and with --put write it into task.json under
+# test.<module>. Both result paths (series mismatch and completed run) go through
+# here, so a reader never has to ask which one wrote the entry.
+emit() {
+  printf '%s\n' "$1"
+  [ -n "$put_dir" ] || return 0
+  if ! printf '%s' "$1" | "$PLUGIN_ROOT/scripts/artifact.sh" set "$put_dir" test --key "$module" - >/dev/null; then
+    echo "run-tests.sh: --put $put_dir: could not write the test entry for $module into task.json (see above)" >&2
+    exit 7
+  fi
+}
 
 CREATEDB_ATTEMPTS="${CREATEDB_ATTEMPTS:-5}"
 CREATEDB_RETRY_S="${CREATEDB_RETRY_S:-3}"
@@ -119,12 +140,19 @@ odoo_c="${proj}-odoo-1"
 dbname="${proj}_test_${task_id}${suffix}"
 
 # ---- mode detection ----------------------------------------------------------
+# Container mode is tried FIRST. Inside the devcontainer `docker` is on PATH too
+# (docker-from-docker, the host's daemon), and the project stack can be running
+# on that host, so the old docker-first order picked host mode from inside the
+# container and ran `docker exec` against a stack this process is not in; Odoo
+# died 0.4 s into init with no traceback and every run read `tests_run: 0`
+# (#1039). A shell where `odoo` and `pg_isready` both answer IS the stack, and
+# needs no PATH shim to say so.
 mode=""
-if command -v docker >/dev/null 2>&1 \
+if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
+  mode="container"
+elif command -v docker >/dev/null 2>&1 \
    && docker ps --filter "name=^${odoo_c}$" --format '{{.Names}}' | grep -q .; then
   mode="host"
-elif command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
-  mode="container"
 else
   echo "no way to run Odoo: docker is absent or ${odoo_c} is not running (run odoo-task-env's stack-ensure.sh first), and this is not a working Odoo container" >&2
   exit 2
@@ -182,7 +210,7 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
   # a reader never has to branch on which path wrote the artifact; the offline
   # suite asserts the two key sets are identical. Nothing ran, so every count is 0
   # and the paths a run would have stated are null rather than invented.
-  node -e '
+  mismatch_json="$(node -e '
     const [db, module_, version, target, mode, err] = process.argv.slice(1);
     console.log(JSON.stringify({
       passed: false, status: "series_mismatch", error: err,
@@ -197,7 +225,8 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
       log_file: null, log_excerpt: "",
       db_dropped: false,
     }));
-  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error"
+  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error")"
+  emit "$mismatch_json"
   exit 0  # a series mismatch is a RESULT, like a test failure
 fi
 
@@ -447,7 +476,7 @@ fi
 cleanup
 trap - EXIT
 
-node -e '
+result_json="$(node -e '
   const fs = require("fs");
   const [logFile, passed, dbname, module_, version, dropped, testsRun,
          toursDeclared, toursRun, toursPassed, tourGap, mode, status,
@@ -552,6 +581,7 @@ node -e '
   }));
 ' "$log" "$passed" "$dbname" "$module" "$version_raw" "$db_dropped" "$tests_run" \
   "$tours_declared" "$tours_run" "$tours_passed" "$tour_gap" "$mode" "$status" \
-  "$registry_error" "$addons" "$data_dir" "$target_series"
+  "$registry_error" "$addons" "$data_dir" "$target_series")"
+emit "$result_json"
 
 [ "$passed" = true ] || exit 0  # a test failure is a RESULT, not a script error

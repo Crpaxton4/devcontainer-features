@@ -473,9 +473,22 @@ class TestBuildMessages(unittest.TestCase):
         # could never reach /odoo-dev:pr.
         table = self._evidence_section()
         self.assertIn("artifacts directory", table)
-        self.assertIn("scripts/artifact.sh put", table)
-        self.assertIn("30-test.json", table)
+        self.assertIn("task.json", table)
+        self.assertIn("scripts/artifact.sh set", table)
         self.assertIn("/odoo-dev:pr", table)
+
+    def test_evidence_section_hands_the_test_section_to_the_test_script(self):
+        # One task.json with four sections replaced the NN-*.json stage files;
+        # the test section is written by run-tests.sh --put and never re-typed
+        # by the agent, which is what lets /odoo-dev:pr tell a real run from a
+        # hand-assembled one.
+        table = self._evidence_section()
+        self.assertIn("run-tests.sh", table)
+        self.assertIn("--put <ARTIFACTS>", table)
+        self.assertIn("never re-type", table)
+        self.assertIn("`test` section", table)
+        for stale in ("artifact.sh put", "30-test", "00-context", "NN-*"):
+            self.assertNotIn(stale, table)
 
     def test_evidence_section_never_claims_pr_refuses(self):
         # #992: /odoo-dev:pr lost its gate.sh in #935 — it reports missing
@@ -505,12 +518,16 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("wrong place", table)
         self.assertNotIn("ARTIFACTS: ", table)
 
-    def test_evidence_section_points_00_context_at_the_task_command(self):
-        # #992: 00-context was never written by this route, because repo-map
-        # resolution belongs to /odoo-dev:task.
+    def test_evidence_section_points_the_build_section_at_the_task_command(self):
+        # #992 (re-cut for one task.json): /odoo-dev:task writes the build
+        # section itself, because repo-map resolution, the worktree and the
+        # branch belong to it; an implement_task-driven run records the same
+        # five keys through artifact.sh set so /odoo-dev:pr reads one shape.
         table = self._evidence_section()
-        self.assertIn("00-context.json", table)
+        self.assertIn("`build` section", table)
         self.assertIn("/odoo-dev:task", table)
+        for key in ("worktree", "branch", "modules", "odoo_version", "default_branch"):
+            self.assertIn(f"`{key}`", table)
 
     def test_empty_chatter_shows_placeholder(self):
         task = _make_task(chatter=[])

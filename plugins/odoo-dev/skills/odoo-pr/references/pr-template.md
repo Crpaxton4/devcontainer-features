@@ -144,7 +144,7 @@ hand-maintained copy goes stale within one push.
 `odoo-dev:odoo-test-run` reports tests actually executed, tours actually run, and
 `passed: true`, and step 1 of this skill is where those three are read. Nothing
 blocks on them any more — a red run is a stop you make, not one a script makes for
-you. Those numbers live in `30-test.json` and stay internal. A branch that failed
+you. Those numbers live in the `test` section of `task.json` and stay internal. A branch that failed
 its tests still does not ship; the evidence is simply not something the client
 needs to read.
 

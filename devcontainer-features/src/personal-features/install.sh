@@ -231,14 +231,11 @@ install -m 0644 "$(dirname "$0")/settings-fragment.json" /usr/local/share/person
 install -d -m 0755 /usr/local/share/personal-features/hooks/tests
 install -m 0755 "$(dirname "$0")/hooks/tests/odoo-api-guard.test.sh" /usr/local/share/personal-features/hooks/tests/odoo-api-guard.test.sh
 # publish-claude-wrapper (#807): the runtime half of the `claude` wrapper, which
-# is generated further down. The wrapper is what DELIVERS
-# system-prompt-append.md, and it used to exist only inside the image while the
-# rules it delivers live in the bind mount - so the rules updated on every edit
-# and their reader updated only on rebuild, silently. This script publishes the
-# wrapper into $CLAUDE_CONFIG_DIR at container-create time (same #803 reason the
-# hook sync runs from postCreateCommand: a build-time write there is shadowed by
-# the mount) and reports an on-PATH wrapper that carries no
-# --append-system-prompt-file at all.
+# is generated further down. The wrapper used to exist only inside the image, so
+# two containers on one machine could run two different wrappers. This script
+# publishes the wrapper into $CLAUDE_CONFIG_DIR at container-create time (same
+# #803 reason the hook sync runs from postCreateCommand: a build-time write there
+# is shadowed by the mount), and the wrapper on PATH defers to that copy.
 install -m 0755 "$(dirname "$0")/publish-claude-wrapper" /usr/local/bin/publish-claude-wrapper
 
 # Installed via npm (rather than the standalone native installer) so it rides
@@ -304,27 +301,16 @@ rm "$WRAPPER_PATH"
 # Accepted trade-off: `claude -c`, `claude -r`, and `claude "prompt"` no longer
 # auto-get `--ide` (strict, predictable rule chosen over guessing intent).
 #
-# The same wrapper also injects `--append-system-prompt-file` (#740) so that
-# session-wide style and policy rules load as SYSTEM prompt rather than drifting
-# user-turn context. The file it points at is local-only and hand-maintained in
-# the bind-mounted claude-home: this feature never ships it and never creates it,
-# so the flag is injected only when the file is actually there - an absent file
-# leaves the invocation byte-identical to the pre-#740 wrapper.
+# Session-wide style and policy rules are NOT injected here. They live in
+# $CLAUDE_CONFIG_DIR/CLAUDE.md, the global memory file in the bind-mounted
+# claude-home, which Claude Code loads itself for every session and every
+# subagent. The `--append-system-prompt-file` path (#740) is retired: a flag
+# reaches only a session the wrapper started and never a forked subagent.
 #
-# Injection is gated on the invocation being a SESSION - no args at all, or a
-# first argument that is a flag. Subcommands (`claude mcp`, `claude plugin`,
-# anything whose first argument is not a flag) REJECT the option outright, so
-# they must be left alone. `\${1#-}` != `\$1` is the POSIX test for "starts with
-# a dash"; a `case` statement would read more naturally but would resurrect the
-# subcommand-allowlist shape this wrapper deliberately does not have.
-#
-# THE WRAPPER IS ALSO ITS OWN SHARED COPY (#807). The prompt file lives in the
-# bind mount and is therefore always current; the wrapper that reads it lived
-# only in the image and was therefore current only until the next edit. On this
-# machine that gap ran for the better part of two weeks across an unknown number
-# of sessions, and nothing reported it: the flag was simply never passed, so
-# every standing rule in the file was absent from all of them. So the wrapper now
-# consults $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper - the copy
+# THE WRAPPER IS ALSO ITS OWN SHARED COPY (#807). The wrapper lived only in the
+# image and was therefore current only until the next rebuild, so two containers
+# on one machine could run two different wrappers. So the wrapper now consults
+# $CLAUDE_CONFIG_DIR/personal-features/claude-wrapper - the copy
 # publish-claude-wrapper publishes at container-create time from the same source
 # - and execs it when one is there. Same shape as #803's published hook shim,
 # and the same reason: that directory is the one place both ends of the mount
@@ -353,20 +339,12 @@ REAL="$REAL_CLAUDE_BIN"
 if [ -n "\${CLAUDE_REAL_BIN:-}" ] && [ -x "\${CLAUDE_REAL_BIN:-}" ]; then
     REAL="\$CLAUDE_REAL_BIN"
 fi
-PROMPT_FILE="\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/system-prompt-append.md"
 SHARED_WRAPPER="\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/personal-features/claude-wrapper"
 
 if [ "\$0" != "\$SHARED_WRAPPER" ] && [ -x "\$SHARED_WRAPPER" ]; then
     CLAUDE_REAL_BIN="\$REAL"
     export CLAUDE_REAL_BIN
     exec "\$SHARED_WRAPPER" "\$@"
-fi
-
-if [ -f "\$PROMPT_FILE" ] && { [ \$# -eq 0 ] || [ "\${1#-}" != "\$1" ]; }; then
-    if [ \$# -eq 0 ] && [ -t 0 ]; then
-        set -- --ide
-    fi
-    exec "\$REAL" --append-system-prompt-file "\$PROMPT_FILE" "\$@"
 fi
 
 if [ \$# -eq 0 ] && [ -t 0 ]; then
@@ -1608,16 +1586,18 @@ fi
 # stale_shadowed: moved into the odoo-dev plugin, which still ships them.
 #   Anchored on plugins/odoo-dev/skills/, the single source for those bodies
 #   since #784.
-# stale_retired:  retired outright (#700) with no plugin twin and no
-#   replacement. Still feature-seeded debris, so still deleted here - it simply
-#   has nothing to fall back on, which is why it is named separately.
+# stale_retired:  retired outright with no plugin twin under the same name
+#   (client-status-report in #700; fibonacci-estimate and odoo-quote folded into
+#   the plugin's `estimate` skill). Still feature-seeded debris, so still
+#   deleted here - it simply has nothing to fall back on, which is why it is
+#   named separately.
 #
 # Deliberately absent from both: ingest, lint, llm-wiki-workspace, process and
 # query. They show up beside these in $CLAUDE_CONFIG_DIR/skills but this feature
 # never seeded them and no plugin ships them - they are the user's own personal
 # skills, and `rm -rf` on a name this feature does not own is data loss.
-stale_shadowed="discovery-notes fibonacci-estimate odoo-code-review odoo-design-doc odoo-quote"
-stale_retired="client-status-report"
+stale_shadowed="discovery-notes odoo-code-review odoo-design-doc"
+stale_retired="client-status-report fibonacci-estimate odoo-quote"
 if [ "$odoo_dev_installed" -eq 1 ]; then
     for stale_skill in $stale_shadowed $stale_retired; do
         stale_dir="$CLAUDE_CONFIG_DIR/skills/$stale_skill"
