@@ -62,8 +62,7 @@ const ALLOWED =
   "(status, diff, log, show, rev-parse, ls-files, branch, worktree list, remote -v, " +
   "cat-file). No chaining, no pipes, no command substitution, and redirection only " +
   "to /dev/null. Name a script by its path, because a bare $VAR cannot be resolved " +
-  "by this hook. If a file has to change, that is a failure to report, not to fix: " +
-  "hand it back to odoo-dev-builder or odoo-dev-upgrader.";
+  "by this hook. If a file has to change, report it as a failure; do not fix it.";
 
 const allow = () => process.exit(0);
 const deny = (reason) => {

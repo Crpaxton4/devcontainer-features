@@ -5,50 +5,47 @@ user-invocable: false
 ---
 # Odoo Prior Art
 
-Answer one question per capability: **does this already exist?** In standard Odoo on target version, or OCA module on customer's series.
+One question per capability: does this already exist, in standard Odoo on the target
+series or in an OCA module on that series?
 
-Cheapest lever on quote. Custom module paid once when built, again at every upgrade. Settings checkbox or maintained OCA module paid once, never appear in next upgrade.
+Verdicts come from greps and fetched READMEs, never from memory. Every verdict cites a
+path, a catalog row, or a README that was read. `no` and `none` are respectable answers.
 
-## When to use
+## Procedure
 
-Before any Odoo quote, estimate, design, or build begins; someone proposes a new custom module, model, or field; someone asks whether Odoo already does this, whether an OCA module exists for it, or whether it needs building at all; or an upgrade is being planned and a custom module may have been made redundant by the target series.
-
-## The rule that makes it worth anything
-
-**Verdicts come from greps and fetched READMEs, never from memory.** Model knowledge of post-training version unreliable. OCA repos change weekly. Every verdict cite path, catalog row, or README actually fetched. `no` and `none` respectable answers — unsupported `yes` send client into rebuild that not work, unsupported `no` bill them for thing they already own.
-
-## Flow
-
-1. **Resolve the series.** `odoo-dev:odoo-repo-map` give customer's `odoo_version`. For upgrade, target series matter, not one they run today.
-2. **Get the trees to grep.**
+1. Take the series from the context you were given. For an upgrade, the target series
+   is the one that matters.
+2. Get the trees to grep:
    ```bash
    <base directory>/scripts/addons_paths.sh --series 19.0
    ```
    → `{"series","odoo_version","addons_paths":[],"community_path","enterprise_path","custom_paths":[],"missing":[]}`
 
-   A non-empty `missing` is a **stop**, not a hint to grep harder: a `no` verdict from a tree that is not checked out is worthless. Say what is missing and ask for the checkout.
-3. **Split the request into 2–5 concrete capabilities** in the user's own words. Prior art is answered per capability, not per module — "partly native" tells nobody what to build.
-4. **Native review**, then **OCA review**, per `references/method.md`. Read it before doing either; it carries the grep discipline, the synonym rule, the neighbour-module list, and the exact verdict formats.
-5. **Report** the verdict block and a recommendation per capability: **adopt**, **adopt + delta**, or **build**.
+   A non-empty `missing` is a stop. Stop; report the missing tree and the path expected.
+   A `no` from a tree that is not checked out is worthless.
+3. Split the request into 2 to 5 concrete capabilities, in the user's own words. Prior
+   art is answered per capability, never per module.
+4. Native review, then OCA review, per `references/method.md`. Read it before either:
+   it carries the grep discipline, the synonym rule, the neighbour-module list and the
+   verdict formats.
+5. Report the verdict block and one recommendation per capability: adopt, adopt + delta,
+   or build.
 
 ## Scripts
 
-This skill's scripts (`PRIOR_ART_SCRIPTS`) live at `<base directory>/scripts`, where
-`<base directory>` is the absolute path on the `Base directory for this skill:`
-line injected above this body. The name is a label for that directory, not a shell
-variable to set and reuse: every Bash call has to spell the absolute path out in
-full, because a Bash call inherits no environment and keeps no state from the call
-before it.
+Every script prints one JSON object as its last stdout line. Write every path in full.
 
-| Script | Use |
-|---|---|
-| `addons_paths.sh [--series V]` | Which trees to grep, and which are missing |
-| `oca_check.py [PATH ...] --series 16.0,17.0,18.0,19.0 [--csv inventory.csv]` | Is a given local module actually an OCA module? Verified against the org, not the author string |
-| `oca_catalog.py --series 19.0 -o catalog.csv` | Every OCA module on a series as one greppable CSV (~1,300 rows) |
+| Script and arguments | Prints | Exit |
+|---|---|---|
+| `addons_paths.sh [--series V]` | the trees to grep and the missing ones | 0 |
+| `oca_check.py [PATH ...] --series 16.0,17.0,18.0,19.0 [--csv inventory.csv]` | whether each local module is an OCA module, verified against the org | 0 · 2 PARTIAL SCAN |
+| `oca_catalog.py --series 19.0 -o catalog.csv` | every OCA module on a series as one CSV (about 1,300 rows) | 0 |
 
-Run `oca_check.py` **before** `oca_catalog.py`: the catalog reuses the branch listings the checker caches. Both need an authenticated `gh`.
+Run `oca_check.py` before `oca_catalog.py`: the catalog reuses the branch listings the
+checker caches. Both need an authenticated `gh`.
 
-`oca_check.py` exits **2** on `PARTIAL SCAN` — network trouble, or more than 10% of repos failing. A partial scan can prove presence but never absence, so it must never be reported as `none`.
+`exit 2` — PARTIAL SCAN: network trouble, or more than 10% of repos failed → a partial
+scan proves presence, never absence; never report `none` from it. Run it again, or stop.
 
 ## Output shape
 
@@ -63,20 +60,18 @@ Capability: <one line, in the user's words>
   -> adopt | adopt + delta | build
 ```
 
-Client-facing output is normal prose. These verdicts are proposals for a human review — say so when handing them over.
+Client-facing output is normal prose. These verdicts are proposals for a human review.
 
-## Where it feeds
-
-| Consumer | What it takes |
-|---|---|
-| `odoo-dev:odoo-quote` | `adopt` capabilities become **exclusions/assumptions**, not line items; `adopt + delta` is quoted as the gap only |
-| `odoo-dev:odoo-design-doc` | Build-vs-adopt per capability; adopted OCA modules become dependencies |
-| `odoo-dev:odoo-upgrade` | The same two questions decide `keep` / `replace` / `merge-into-standard` per module — see its `references/inventory.md` |
-
-## Reference
+## References
 
 | File | Read when |
 |---|---|
-| [method.md](./references/method.md) | Before any native or OCA review — the grep discipline and verdict formats |
+| [method.md](./references/method.md) | Before any native or OCA review |
 
 Grep roots and patterns: `odoo-devcontainer/references/searching.md`.
+
+## Stop conditions
+
+- `missing` trees from `addons_paths.sh` → stop, name the tree and the path.
+- `oca_check.py` exit 2 with no re-run possible → stop, report PARTIAL SCAN.
+- A verdict with no cited evidence is not a verdict. Grep again or say unverified.

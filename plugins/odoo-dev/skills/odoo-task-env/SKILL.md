@@ -5,59 +5,30 @@ user-invocable: false
 ---
 # Odoo Task Environment
 
-Everything between "here is a task id" and "there is somewhere to write code". Three questions, in this order, each with script that answer deterministically:
+Three questions, in this order, each answered by one script:
 
-1. Work for this task already exist? (branches, PRs — both naming conventions)
-2. Worktree and branch exist? (create or reuse — never second one)
-3. Odoo stack running? (reuse, restart, or create — never second one)
+1. Does work for this task already exist? (branches and PRs, both naming conventions)
+2. Do the worktree and the branch exist? (create or reuse, never a second one)
+3. Is an Odoo stack running? (reuse, restart or create, never a second one)
 
-Order matter. Cut branch before question 1 = task finished last month get implemented second time, on branch beside one that already have open PR.
-
-Live values, injected every time this skill is rendered — at invocation and at every
-agent spawn that preloads it. Trust them; do not re-derive them.
-
-- **Worktrees in this checkout**: !`git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\(.*\)\]$/\1/p' | paste -sd ' ' - | grep . || echo "none visible from here"`
-- **Open pull requests visible from here**: !`timeout 1 gh pr list --state open --limit 10 --json number,headRefName --jq '.[] | "#\(.number) \(.headRefName)"' 2>/dev/null | paste -sd ' ' - | grep . || echo "none listed — gh may be slow, logged out, or this is not the project checkout"`
-
-Neither line answers question 1; `existing-work.sh` does, because it reads both
-naming conventions and finds merged pull requests whose branch has since been
-deleted. The two lines are an early warning instead. A task id that already appears
-on either of them is work in flight, so stop and find it rather than cutting a
-second branch beside it.
-
-## When to use
-
-At the start of implementing any Odoo task, and whenever a task is picked back up; before writing code, cutting a branch, or running anything; someone asks where to work on a task, whether it was already started, or whether a branch or an open PR already exists for it; or a task branch or a dev stack has to be set up or reset.
-
-## Preconditions
-
-Resolve project first with **`odoo-dev:odoo-repo-map`** — need `repo`, `default_branch`, `odoo_version`. Do not read them off checkout. `default_branch` is the base every later step take — `worktree-ensure.sh <base_branch>` and `start_task`'s `base_branch` both — so nothing downstream guess it.
-
-Load **`odoo-dev:odoo-devcontainer`** for paths, CLI, environment layout.
+Inputs: `repo`, `default_branch` and `odoo_version` from the resolved project; the
+`task_id`; a `slug` from the task name. `default_branch` is the base for every step.
 
 ## Where this runs
 
-Two contexts, scripts detect which one they in:
-
 | Context | Repos tree | Worktrees | Stacks |
 |---|---|---|---|
-| **Host** | `$REPOS_DIR/<repo>` | yes | `stack-ensure.sh` manages docker |
-| **Devcontainer** | not visible — checkout bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-path /mnt/extra-addons` | nothing to do; already inside one |
+| Host | `$REPOS_DIR/<repo>` | yes | `stack-ensure.sh` manages docker |
+| Devcontainer | not visible; the checkout is bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-path /mnt/extra-addons` | already inside one |
 
-Every script take `--repo-path DIR` to bypass repos-tree resolution entirely. Inside devcontainer not optional — no repos tree to resolve.
+Every script takes `--repo-path DIR` to bypass repos-tree resolution. Inside the
+devcontainer it is required.
 
 ## Scripts
 
-This skill's scripts (`ENV_SCRIPTS`) live at `<base directory>/scripts`, where
-`<base directory>` is the absolute path on the `Base directory for this skill:`
-line injected above this body. The name is a label for that directory, not a shell
-variable to set and reuse: every Bash call has to spell the absolute path out in
-full, because a Bash call inherits no environment and keeps no state from the call
-before it.
+Every script prints one JSON object as its last stdout line. Write every path in full.
 
-Each print one JSON object as last stdout line.
-
-### 0. Preflight (once per machine or after rebuild)
+### 0. Preflight (once per machine or after a rebuild)
 
 ```bash
 <base directory>/scripts/preflight.sh [--soft]
@@ -65,9 +36,9 @@ Each print one JSON object as last stdout line.
 
 → `{"ok","context","failures":[],"warnings":[],"ram_available_gb","repos_dir"}`
 
-Run every check, not stop at first — useful answer is "these three things wrong", not first one three times. Detect own context: on host check docker, populated repos tree, devcontainer CLI, `gh`; inside container check `odoo`, postgres, `gh`. Exit 1 on any failure, or 0 with `--soft`.
-
-`odoo-mcp` reachability deliberately not checked here — MCP not callable from bash. Check from session.
+Runs every check and reports all failures. On the host: docker, a populated repos tree,
+the devcontainer CLI, `gh`. Inside a container: `odoo`, postgres, `gh`. Exit 1 on any
+failure, 0 with `--soft`.
 
 ### 1. Existing work
 
@@ -77,18 +48,17 @@ Run every check, not stop at first — useful answer is "these three things wron
 
 → `{"state","branch","candidates":[...],"prs":[...],"gh_error","tracking":[...],"tracking_error"}`
 
-`state` computed, never judged:
-
 | state | Meaning | Do |
 |---|---|---|
-| `complete` | Candidate branch merged into base, or PR MERGED | Stop. Report it. Work landed — confirm with user before redoing anything |
-| `resume` | Exactly one unmerged candidate | Continue on `branch` — pass as `<resume_branch>` below |
-| `ambiguous` | Two or more unmerged candidates | Stop, let user pick. Do not choose for them |
-| `none` | Nothing found | Start fresh |
+| `complete` | a candidate branch merged into base, or a PR MERGED | Stop. Report it. Do not redo. |
+| `resume` | exactly one unmerged candidate | Continue on `branch`; pass it as `<resume_branch>` |
+| `ambiguous` | two or more unmerged candidates | Stop. List the candidates. Do not choose. |
+| `none` | nothing found | Start fresh |
 
-Probe **both** branch forms: `<id>#<slug>` (humans push) and `<id>-<slug>` (automation create). Match only one = five commits and open PR become invisible. `gh` failure non-fatal, degrade to `"prs": []` plus `gh_error` string — say so in report, not treat "no PRs" as proof.
-
-`tracking` = this task's active local tracking sessions, from best-effort `odoo-sdk cmd task_status` (argless — the script filters to the task). Same degrade shape as `gh`: CLI missing or failing → `"tracking": []` plus `tracking_error` string. `[]` with non-null `tracking_error` means **unknown**, not "no session" — say so in report.
+- Both branch forms are probed: `<id>#<slug>` and `<id>-<slug>`.
+- `"prs": []` with a non-null `gh_error` means unknown, not "no PRs". Say so.
+- `"tracking": []` with a non-null `tracking_error` means unknown, not "no session".
+  `tracking` comes from a best-effort `odoo-sdk cmd task_status`.
 
 ### 2. Worktree and branch
 
@@ -98,11 +68,11 @@ Probe **both** branch forms: `<id>#<slug>` (humans push) and `<id>-<slug>` (auto
 
 → `{"worktree","branch","status":"created"|"reused","tracking":"started"|"already_running"|"skipped"|"error"}`
 
-Idempotent, serialized per repo under flock so concurrent callers cannot race `git worktree add`. On reuse branch **read from worktree**, never recomputed from arguments — renamed Odoo task yield new slug, and reporting branch never created hand you something you cannot push.
-
-**Session-FSM alignment.** `worktree-ensure.sh` is the **single git writer** for the task branch. After the worktree flow succeeds it calls the registry `odoo-sdk cmd start_task` best-effort (that command is git-free — branch setup lives only in the MCP tool layer), so the local tracking session opens with the worktree; `tracking` in its output say what happened, and `skipped`/`error` warn without failing the flow — do not retry the worktree over it, just say so in report. The interactive odoo-mcp `start_task` tool also create `<id>-<slug>` branch. Call it with `base_branch=<default_branch from repo-map.sh>` — unset, SDK fall back to `ODOO_SDK_BASE_BRANCH`, then read `default_branch` out of the repo map itself (#979), then remote default, and remote default is **not** the base on most projects here. Pass it anyway: the SDK's own map read only match a repo by `repo_path` or by unique folder name, so pass base_branch and the answer never depend on that match. If tracking session started that way, pass that branch as `<resume_branch>` so this adopt it. Two branches for one task = two half-finished heads, no PR.
-
-`<resume_branch>` adopted exactly as it stands — never reset, rebased, re-cut. Commits on it are work you continuing.
+- Idempotent and flocked per repo. On reuse the branch is read from the worktree.
+- It is the single git writer for the task branch. It calls `odoo-sdk cmd start_task`
+  best-effort; `tracking` says what happened, and `skipped` or `error` is a warning,
+  not a failure.
+- `<resume_branch>` is adopted as it stands: never reset, rebased or re-cut.
 
 ### 3. Stack
 
@@ -112,40 +82,35 @@ Idempotent, serialized per repo under flock so concurrent callers cannot race `g
 
 → `{"stack","status":"reused"|"restarted"|"created"|"in-container","stopped_lru":[]}`
 
-One stack per project, host-globally locked, LRU eviction below `MIN_FREE_GB` (default 6). Protect stacks you using with `ODOO_ACTIVE_REPOS=repoA,repoB`. Readiness proved (postgres reachable *from inside* odoo container, `odoo --version` answers) before return, so `reused` never mean "still coming up".
+- One stack per project, host-globally locked, LRU eviction below `MIN_FREE_GB`.
+  Readiness is proved before it returns.
+- `in-container` means you are already inside the stack. It reports the series this core
+  runs as `odoo_version`. With `--target-series`, a disagreement adds
+  `"series_mismatch": true` and a `warning`; the exit is still 0.
+- `exit 5` — docker absent and not an Odoo container → stop; you are in the wrong place.
+- `exit 2` — usage → stop; fix the call.
+- Never point it at a worktree path. That mints a second compose project for the repo.
 
-`in-container` mean you already inside stack; nothing done, nothing needed. That branch also report the series this core run, as `odoo_version` — nobody downstream have another machine-readable answer to "which Odoo this". Give `--target-series <NN.0>` (the project `odoo_version` off repo map) and a disagreement add `"series_mismatch": true` plus `warning` naming both series. Still exit 0: this script ensure stack, and `run-tests.sh` is what refuse outright on same comparison — Odoo mark module of another series uninstallable and still print 0 tests, 0 failures, exit 0.
+## Re-run
 
-Exit 5 mean docker absent **and** this not working Odoo container — you in wrong place, not looking at broken script.
-
-Never point this at worktree path: would mint second compose project for same repo and break the singleton it exist to guarantee.
-
-## The rerun contract
-
-Run this skill twice for one task must converge, not accumulate:
-
-- Reuse worktree and branch; do not create second one.
-- **Surface open PRs before creating anything.** Open PR for this task is most important thing on screen.
-- Report `status` honestly (`created` vs `reused`) — downstream steps read it.
+- Reuse the worktree and the branch. Never create a second one.
+- Report an open PR before you create anything.
+- Report `status` as printed (`created` or `reused`).
 
 ## Environment knobs
 
 | Variable | Default | Why you would change it |
 |---|---|---|
-| `REPOS_DIR` | resolved by `odoo-repo-map/scripts/repos-dir.sh` | Non-standard repos tree. Sweep want >= 2 git subdirs; tree holding one clone declare itself with `touch <tree>/.odoo-repos-dir` instead of exporting this every shell |
+| `REPOS_DIR` | resolved by `repos-dir.sh` | Non-standard repos tree. A tree with one clone declares itself with `touch <tree>/.odoo-repos-dir` |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |
-| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort `odoo-sdk` tracking probes (existing-work `tracking`, worktree `start_task`) |
-| `MIN_FREE_GB` | `6` | Different RAM budget |
-| `ODOO_SHARED_COMPOSE` | `$REPOS_DIR/.devcontainer/shared/compose.yml` | Shared postgres/proxy stack lives elsewhere |
-| `ODOO_REPO_MAP_SCRIPTS` | sibling `../odoo-repo-map/scripts` | Map skill moved |
+| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort tracking probes |
+| `MIN_FREE_GB` | `6` | A different RAM budget |
+| `ODOO_SHARED_COMPOSE` | `$REPOS_DIR/.devcontainer/shared/compose.yml` | The shared postgres and proxy stack lives elsewhere |
+| `ODOO_REPO_MAP_SCRIPTS` | the sibling map skill's `scripts/` | The map skill moved |
 
-## Next
+## Stop conditions
 
-Implement, then **`odoo-dev:odoo-test-run`** for evidence, then **`odoo-dev:odoo-pr`**. Commit messages follow `odoo-devcontainer/references/commits.md`; design follow `odoo-dev:principles`.
-
-## Verify
-
-```bash
-bash <base directory>/scripts/tests/task-env.test.sh   # offline; builds throwaway git repos in a temp dir
-```
+- `existing-work.sh` → `complete` or `ambiguous`: stop and report.
+- An open PR for this task: stop and report it. Never cut a second branch.
+- `stack-ensure.sh` exit 5 or exit 2: stop.

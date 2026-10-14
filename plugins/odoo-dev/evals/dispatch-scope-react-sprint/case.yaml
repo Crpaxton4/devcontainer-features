@@ -11,13 +11,31 @@ execution:
 runs: 2
 graders:
   - type: tool_used
-    name: no-odoo-dev-scoper
+    name: no-odoo-dev-builder
     tool: Task
-    input_match: "odoo-dev-scoper"
+    input_match: "odoo-dev-builder"
     max: 0
   - type: tool_used
-    name: no-odoo-dev-skill
-    tool: Skill
-    input_match: "odoo-dev"
+    name: no-odoo-dev-tester
+    tool: Task
+    input_match: "odoo-dev-tester"
     max: 0
-expected_outcome: No odoo-dev subagent is spawned and no odoo-dev skill fires; the request is out of domain.
+  - type: tool_used
+    name: no-odoo-dev-pr
+    tool: Task
+    input_match: "odoo-dev-pr"
+    max: 0
+  - type: tool_used
+    name: no-odoo-dev-upgrader
+    tool: Task
+    input_match: "odoo-dev-upgrader"
+    max: 0
+  - type: tool_used
+    name: no-odoo-prior-art
+    tool: Skill
+    input_match: "odoo-prior-art"
+    max: 0
+expected_outcome: >-
+  No odoo-dev subagent is spawned and the Odoo prior-art skill does not fire; the
+  product is not Odoo. The generic estimate skill may fire on a React sprint, and
+  that is correct: it is not Odoo-specific.

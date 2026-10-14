@@ -74,16 +74,19 @@ else
 fi
 
 # The #778 name specifically, and with the advice that fits it: there is no
-# odoo-dev:client-status-report to fall back on.
-if printf '%s' "$out" | grep -q "client-status-report/SKILL.md is a retired skill"; then
-  ok "dirty: client-status-report is reported as retired, not as shadowing"
-else
-  bad "dirty: client-status-report not reported as retired: $out"
-fi
-if printf '%s' "$out" | grep -q "odoo-quote/SKILL.md shadows odoo-dev:odoo-quote"; then
+# odoo-dev:client-status-report to fall back on. odoo-quote and
+# fibonacci-estimate joined it when the plugin folded them into `estimate`.
+for name in client-status-report odoo-quote fibonacci-estimate; do
+  if printf '%s' "$out" | grep -q "$name/SKILL.md is a retired skill"; then
+    ok "dirty: $name is reported as retired, not as shadowing"
+  else
+    bad "dirty: $name not reported as retired: $out"
+  fi
+done
+if printf '%s' "$out" | grep -q "odoo-design-doc/SKILL.md shadows odoo-dev:odoo-design-doc"; then
   ok "dirty: a plugin-shadowed name names its twin"
 else
-  bad "dirty: odoo-quote did not name its twin: $out"
+  bad "dirty: odoo-design-doc did not name its twin: $out"
 fi
 
 if printf '%s' "$out" | grep -Eq '\bmy-own-skill\b|/lint/'; then
@@ -97,9 +100,9 @@ fi
 # the reader to ignore it.
 
 one="$work/one"
-seed "$one" odoo-quote
+seed "$one" odoo-design-doc
 advice="$(bash "$SUT" --skills-dir "$one" 2>&1 >/dev/null)"
-if printf '%s' "$advice" | grep -qF 'rm -rf "$CLAUDE_CONFIG_DIR"/skills/odoo-quote'; then
+if printf '%s' "$advice" | grep -qF 'rm -rf "$CLAUDE_CONFIG_DIR"/skills/odoo-design-doc'; then
   ok "one stray: suggests a plain path, not a one-element brace expansion"
 else
   bad "one stray: bad rm suggestion: $advice"
@@ -129,8 +132,8 @@ fi
 
 json="$(bash "$SUT" --skills-dir "$dirty" --json 2>/dev/null)"
 if printf '%s' "$json" | grep -qF '"ok":false' \
-   && printf '%s' "$json" | grep -qF '"retired":["client-status-report"]' \
-   && printf '%s' "$json" | grep -qF '"odoo-quote"'; then
+   && printf '%s' "$json" | grep -qF '"retired":["client-status-report","fibonacci-estimate","odoo-quote"]' \
+   && printf '%s' "$json" | grep -qF '"odoo-design-doc"'; then
   ok "json: dirty dir separates the retired name from the shadowed ones"
 else
   bad "json: dirty dir: $json"

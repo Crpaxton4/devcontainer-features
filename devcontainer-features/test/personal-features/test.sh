@@ -71,19 +71,11 @@ check "wrapper passes everything else (subcommands, flags, prompts) through unto
 check "wrapper has no hardcoded subcommand allowlist" bash -c \
   "! grep -qF 'case \"\$1\" in' \"\$(command -v claude)\""
 
-# --- #740: the wrapper also appends the hand-maintained system prompt ---------
-# Session-wide style/policy rules have to arrive as SYSTEM prompt, so the wrapper
-# injects --append-system-prompt-file pointing at a file in the bind-mounted
-# claude-home. That file is local-only: the feature never ships it and never
-# creates it, so the injection is gated on the file actually existing and on the
-# invocation being a SESSION (no args, or a first arg that is a flag) -
-# subcommands (`claude mcp`, `claude plugin`) reject the option outright.
-check "wrapper injects --append-system-prompt-file" bash -c \
-  "grep -qF -- '--append-system-prompt-file' \"\$(command -v claude)\""
-check "wrapper points the appended prompt at CLAUDE_CONFIG_DIR/system-prompt-append.md" bash -c \
-  "grep -qF -- '\${CLAUDE_CONFIG_DIR:-/usr/local/share/claude-home}/system-prompt-append.md' \"\$(command -v claude)\""
-check "wrapper gates the injection on the prompt file existing" bash -c \
-  "grep -qF -- '[ -f \"\$PROMPT_FILE\" ]' \"\$(command -v claude)\""
+# Session-wide rules live in the global CLAUDE.md in the bind-mounted claude-home,
+# which Claude Code loads itself. The --append-system-prompt-file path (#740) is
+# retired: the wrapper names neither the flag nor the old prompt file.
+check "wrapper passes no system prompt flag and names no prompt file" bash -c \
+  "! grep -qF -- '--append-system-prompt-file' \"\$(command -v claude)\" && ! grep -qF -- 'system-prompt-append.md' \"\$(command -v claude)\""
 
 # Functional half: exercise the SHIPPED wrapper logic verbatim, with only its
 # REAL= line repointed at a stub that records its argv - running the real Claude
@@ -104,23 +96,20 @@ chmod +x "$SPA_ROOT/claude"
 SPA_RUN="CLAUDE_CONFIG_DIR=\"$SPA_CONFIG\" \"$SPA_ROOT/claude\""
 SPA_ARGV="$SPA_ROOT/real-claude.argv"
 
-# No prompt file yet: every invocation must look exactly like it did pre-#740.
-check "wrapper adds no flag when the prompt file is absent" bash -c \
-  "$SPA_RUN -c </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- '-c' \"$SPA_ARGV\""
-
-printf 'local-only system prompt append\n' > "$SPA_CONFIG/system-prompt-append.md"
-
-# ...and with it in place, sessions - and only sessions - pick it up.
-check "wrapper flags a bare session once the prompt file exists" bash -c \
-  "$SPA_RUN </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md' \"$SPA_ARGV\""
-check "wrapper flags a flag-first session and keeps its original args" bash -c \
-  "$SPA_RUN -c </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md -c' \"$SPA_ARGV\""
-check "wrapper leaves 'claude plugin' un-flagged" bash -c \
-  "$SPA_RUN plugin --help </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- 'plugin --help' \"$SPA_ARGV\""
-check "wrapper leaves 'claude mcp' un-flagged" bash -c \
-  "$SPA_RUN mcp list </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\" && grep -qF -- 'mcp list' \"$SPA_ARGV\""
-check "wrapper leaves a bare prompt argument un-flagged" bash -c \
-  "$SPA_RUN 'summarise this' </dev/null && ! grep -qF -- '--append-system-prompt-file' \"$SPA_ARGV\""
+# Every non-interactive invocation passes through byte-for-byte: no injected flag,
+# the original argv intact. A prompt file in the config dir changes nothing.
+printf 'a retired rule file\n' > "$SPA_CONFIG/system-prompt-append.md"
+check "wrapper passes a flag-first session through unchanged" bash -c \
+  "$SPA_RUN -c </dev/null && [ \"\$(cat \"$SPA_ARGV\")\" = '-c' ]"
+check "wrapper passes a bare non-TTY session through with no argument at all" bash -c \
+  "$SPA_RUN </dev/null && [ -z \"\$(cat \"$SPA_ARGV\")\" ]"
+check "wrapper passes 'claude plugin --help' through unchanged" bash -c \
+  "$SPA_RUN plugin --help </dev/null && [ \"\$(cat \"$SPA_ARGV\")\" = 'plugin --help' ]"
+check "wrapper passes 'claude mcp list' through unchanged" bash -c \
+  "$SPA_RUN mcp list </dev/null && [ \"\$(cat \"$SPA_ARGV\")\" = 'mcp list' ]"
+check "wrapper passes a bare prompt argument through unchanged" bash -c \
+  "$SPA_RUN 'summarise this' </dev/null && [ \"\$(cat \"$SPA_ARGV\")\" = 'summarise this' ]"
+rm -f "$SPA_CONFIG/system-prompt-append.md"
 
 # --- #807: the wrapper is published into the bind mount, beside the rules -----
 # The prompt file lives in the mount and is always current; the wrapper reading
@@ -171,7 +160,7 @@ check "wrapper passes its own real binary to the published copy" bash -c \
 cp "$SPA_ROOT/claude" "$SPA_CONFIG/personal-features/claude-wrapper"
 chmod +x "$SPA_CONFIG/personal-features/claude-wrapper"
 check "the published copy does not re-exec itself (no delegation loop)" bash -c \
-  "$SPA_RUN -c </dev/null && grep -qF -- '--append-system-prompt-file $SPA_CONFIG/system-prompt-append.md -c' \"$SPA_ARGV\""
+  "$SPA_RUN -c </dev/null && [ \"\$(cat \"$SPA_ARGV\")\" = '-c' ]"
 rm -rf "$SPA_CONFIG/personal-features"
 
 # --- publish-claude-wrapper: the runtime publisher + the flag audit (#807) ----
@@ -201,27 +190,10 @@ check "publish-claude-wrapper skips cleanly with CLAUDE_CONFIG_DIR unset" bash -
 check "publish-claude-wrapper exits 0 when its source is missing" bash -c \
   "PERSONAL_FEATURES_CLAUDE_WRAPPER_SRC=\"$PCW_ROOT/absent-wrapper\" CLAUDE_CONFIG_DIR=\"$PCW_ROOT/config-b\" /usr/local/bin/publish-claude-wrapper"
 
-# The audit: one grep against the file `claude` resolves to. Drive it with a fake
-# `claude` first on PATH that carries no flag - the exact shape of the pre-#740
-# image this issue was raised from - and assert it is reported, loudly, and that
-# the run still exits 0.
-PCW_FAKE="$PCW_ROOT/fakebin"
-mkdir -p "$PCW_FAKE"
-cat > "$PCW_FAKE/claude" <<'FAKECLAUDE'
-#!/bin/sh
-exit 0
-FAKECLAUDE
-chmod +x "$PCW_FAKE/claude"
-PCW_C="$PCW_ROOT/config-c"
-mkdir -p "$PCW_C"
-printf 'a standing rule\n' > "$PCW_C/system-prompt-append.md"
-check "publish-claude-wrapper reports a wrapper that delivers no prompt file" bash -c \
-  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
-check "publish-claude-wrapper still exits 0 when it reports one" bash -c \
-  "PATH=\"$PCW_FAKE:\$PATH\" CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper >/dev/null 2>&1"
-# ...and says nothing about the real wrapper, which does pass the flag.
-check "publish-claude-wrapper is quiet about a wrapper that does deliver it" bash -c \
-  "! CLAUDE_CONFIG_DIR=\"$PCW_C\" /usr/local/bin/publish-claude-wrapper 2>&1 >/dev/null | grep -q 'append-system-prompt-file'"
+# The prompt-file audit is gone with the flag it audited: the publisher neither
+# names the flag nor looks for the old prompt file.
+check "publish-claude-wrapper carries no append-system-prompt-file audit" bash -c \
+  "! grep -qF -- 'append-system-prompt-file' /usr/local/bin/publish-claude-wrapper && ! grep -qF -- 'system-prompt-append.md' /usr/local/bin/publish-claude-wrapper"
 
 # The staleness half is NOT a second breadcrumb: the wrapper is fingerprinted by
 # the #806 provision marker, so an image older than one this config dir has
