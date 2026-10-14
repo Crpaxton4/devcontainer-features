@@ -62,16 +62,66 @@ def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
     return {"error": {"type": type(exc).__name__, "message": str(exc)}}
 
 
-def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
-    """Return the explicit attribution *hint* a call's bound arguments carry.
+#: Tool names whose bound ``task_id`` is an attribution *hint* (#1040).
+#:
+#: Every entry MUTATES the task it names — it writes to the Odoo record (chatter
+#: note/question, a new task, an activity) or to the tracker run FSM (start /
+#: stop / resume / close / abort). Naming a task to such a tool is itself work on
+#: that task, so the event it emits attributes to it.
+#:
+#: Every other built-in is deliberately absent, which is the whole point. A tool
+#: that only READS a task — ``get_task``, ``get_task_chatter``,
+#: ``get_task_attachments``, ``get_todo``, ``query_sessions``, every ``search_*``
+#: / ``task_*`` report — used to tag its queried id, so one investigation read
+#: became a derived session and the ``min_session_hours`` floor turned it into a
+#: 0.25 h timesheet (#1040: 55 of 90 sessions in one window were read-only).
+#: The queried id is still recorded, as :data:`READ_TASK_IDS_PAYLOAD_KEY`
+#: evidence, so the read remains auditable without being billable.
+#:
+#: ``assign_event`` and ``normalize_timesheets`` are likewise absent on purpose:
+#: they write, but what they write IS the billing record, so attributing them to
+#: their target task would bill the act of correcting that task's time — the
+#: self-perpetuating loop #1040 reports from retagging.
+#:
+#: Reads still attribute to an OPEN run through
+#: :meth:`~odoo_sdk.commands.log_event.LogEventCommand.resolve_task_ids` rule 2
+#: (#507): inspecting task B while a run on task A is open is time spent on A.
+#: What this set removes is only the *hint* — the claim that the queried id is
+#: the task being worked.
+#:
+#: Pinned by ``tests/test_mcp/test_server_events.py``, which enumerates every
+#: built-in command and asserts each one is classified exactly once, so a new
+#: command cannot silently default into either behaviour.
+ATTRIBUTING_TOOLS: frozenset[str] = frozenset(
+    {
+        # Tracker run FSM writes.
+        "start_task",
+        "stop_task",
+        "resume_task",
+        "close_task",
+        "abort_task",
+        "abort_run",
+        "stop_run",
+        "stop_all",
+        # Odoo record writes.
+        "task_note",
+        "task_question",
+        "create_task",
+        "schedule_activity",
+        "mark_activity_done",
+    }
+)
 
-    A tool that takes an int-coercible ``task_id`` names the task its event
-    belongs to; every other tool yields no hint. This is deliberately only a
-    hint, not the task scope: a tool signature that omits ``task_id`` says
-    nothing about whether work is happening on a task, and treating it as an
-    empty scope is what left inspection-only tool calls permanently unbillable
-    (#507). :meth:`~odoo_sdk.commands.log_event.LogEventCommand.resolve_task_ids`
-    owns what an unhinted event actually attributes to.
+#: Payload key carrying the task id a NON-attributing (read) tool queried
+#: (#1040). Evidence only: it is deliberately NOT in the row's ``task_ids``, so
+#: session derivation, upload, and every report never see it, while the TUI
+#: review surface can still show that the event was a read (see
+#: :mod:`odoo_sdk.tui.evidence`, which pins this spelling).
+READ_TASK_IDS_PAYLOAD_KEY = "read_task_ids"
+
+
+def _bound_task_id(arguments: dict[str, Any]) -> list[str]:
+    """Return the int-coercible ``task_id`` a call's bound arguments name.
 
     :param arguments: Bound tool arguments (``ctx`` already excluded).
     :type arguments: dict[str, Any]
@@ -80,6 +130,51 @@ def _event_task_ids(arguments: dict[str, Any]) -> list[str]:
     """
 
     return normalize_task_ids([arguments.get("task_id")])
+
+
+def _event_task_ids(name: str, arguments: dict[str, Any]) -> list[str]:
+    """Return the explicit attribution *hint* a call carries, or ``[]``.
+
+    A tool in :data:`ATTRIBUTING_TOOLS` that takes an int-coercible ``task_id``
+    names the task its event belongs to; every other tool yields no hint, even
+    when it took a ``task_id`` — reading a task is not a claim that the task was
+    worked (#1040), and the queried id is recorded as
+    :data:`READ_TASK_IDS_PAYLOAD_KEY` evidence by :func:`_queried_task_ids`
+    instead.
+
+    This is deliberately only a hint, not the task scope: an unhinted event is
+    still attributed from context, so an inspection-only call made inside an open
+    run remains billable to that run rather than permanently unbillable (#507).
+    :meth:`~odoo_sdk.commands.log_event.LogEventCommand.resolve_task_ids` owns
+    what an unhinted event actually attributes to.
+
+    :param name: Public tool name, matched against :data:`ATTRIBUTING_TOOLS`.
+    :type name: str
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: ``[str(task_id)]`` for an attributing tool, else ``[]``.
+    :rtype: list[str]
+    """
+
+    return _bound_task_id(arguments) if name in ATTRIBUTING_TOOLS else []
+
+
+def _queried_task_ids(name: str, arguments: dict[str, Any]) -> list[str]:
+    """Return the task id a non-attributing (read) tool merely QUERIED (#1040).
+
+    The exact complement of :func:`_event_task_ids`: an attributing tool records
+    nothing here (its id is real attribution, already in ``task_ids``), and a
+    read tool records the id it looked at as payload evidence.
+
+    :param name: Public tool name, matched against :data:`ATTRIBUTING_TOOLS`.
+    :type name: str
+    :param arguments: Bound tool arguments (``ctx`` already excluded).
+    :type arguments: dict[str, Any]
+    :return: ``[str(task_id)]`` for a read tool, else ``[]``.
+    :rtype: list[str]
+    """
+
+    return [] if name in ATTRIBUTING_TOOLS else _bound_task_id(arguments)
 
 
 #: Identifier-shaped result fields lifted into the agent-event payload (#626).
@@ -168,14 +263,17 @@ def _emit_tool_event(
     persistence.
 
     Neither the task scope nor the repo/branch provenance is decided here. The
-    bound ``task_id`` (when the tool has one) is handed over as an attribution
-    *hint* and the command applies the shared policy — falling back to the active
-    runs for a tool that takes no ``task_id``, so inspecting a task is attributed
-    to it exactly like mutating one (#507). ``repo`` and ``branch`` are likewise
-    left unstated so the command resolves them from the working tree; this path
-    used to hardcode ``repo=""``, which left every agent event unattributable to
-    the code that produced it and sessionized it under the repo-less sentinel
-    (#509).
+    bound ``task_id`` of a MUTATING tool (:data:`ATTRIBUTING_TOOLS`) is handed
+    over as an attribution *hint* and the command applies the shared policy —
+    falling back to the active runs for an unhinted event, so a tool call made
+    inside an open run is attributed to that run rather than left permanently
+    unbillable (#507). A READ tool's queried id is NOT a hint (#1040): it rides
+    in the payload under :data:`READ_TASK_IDS_PAYLOAD_KEY` as evidence, so
+    investigating a task no longer mints a billable session on it. ``repo`` and
+    ``branch`` are likewise left unstated so the command resolves them from the
+    working tree; this path used to hardcode ``repo=""``, which left every agent
+    event unattributable to the code that produced it and sessionized it under
+    the repo-less sentinel (#509).
 
     :param state: The local state store the event is appended to.
     :type state: Any
@@ -196,16 +294,18 @@ def _emit_tool_event(
     :rtype: None
     """
 
+    queried = _queried_task_ids(name, arguments)
     payload: dict[str, Any] = {
         "tool": name,
         "args": sorted(arguments),
         "outcome": _outcome_line(result),
         **({"via": via} if via is not None else {}),
+        **({READ_TASK_IDS_PAYLOAD_KEY: queried} if queried else {}),
         **_result_payload_fields(result),
     }
     LogEventCommand(state=state).execute(
         source="agent",
         subject=name,
         payload=payload,
-        task_ids=_event_task_ids(arguments),
+        task_ids=_event_task_ids(name, arguments),
     )

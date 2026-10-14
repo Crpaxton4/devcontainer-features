@@ -33,8 +33,16 @@ def _overlap_badge(overlaps: tuple[Overlap, ...]) -> str:
 
 
 def _card_badges(card: ReviewCard) -> str:
-    """Return the trailing badge text (logged + overlap) for a card line."""
+    """Return the trailing badge text (read-only + logged + overlap) for a card line.
+
+    The read-only badge leads, because it is the one badge that says the session
+    may be worth nothing at all: every member event was an investigation read or
+    ambient run-attachment traffic (#1040), so there is no evidence in it that
+    work happened on the task.
+    """
     badges = []
+    if card.read_only:
+        badges.append("read-only")
     if card.logged_flag:
         badges.append(f"logged {card.logged_hours:.1f}h ({card.logged_flag})")
     overlap = _overlap_badge(card.overlaps)
@@ -53,9 +61,10 @@ def card_line(card: ReviewCard, selected: bool) -> str:
 def evidence_lines(card: ReviewCard) -> list[str]:
     """Return the expanded evidence pane for the selected card.
 
-    Lists the logged-hours detail (item 7), every cross-task overlap (item 8), and
-    the citation trail extracted from the member events (item 9), so the reviewer
-    sees exactly what the confidence class was computed from.
+    Lists the logged-hours detail (item 7), every cross-task overlap (item 8), the
+    read-only warning (#1040), and the citation trail extracted from the member
+    events (item 9), so the reviewer sees exactly what the confidence class was
+    computed from.
     """
     lines = [
         f" evidence — task {card.task_id}"
@@ -68,6 +77,11 @@ def evidence_lines(card: ReviewCard) -> list[str]:
         )
     for overlap in card.overlaps:
         lines.append(f"   overlaps task {overlap.task_id} by {overlap.minutes}m")
+    if card.read_only:
+        lines.append(
+            "   ! read-only: every event is an agent read or run attachment"
+            " — no evidence of work on this task"
+        )
     if card.unvalidated:
         lines.append("   ! task id unvalidated (flagged weak)")
     if card.citations:

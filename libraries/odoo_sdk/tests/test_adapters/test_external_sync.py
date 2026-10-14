@@ -1031,6 +1031,142 @@ class TestSyncOdooChatter(unittest.TestCase):
             result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(result, {"skipped": "odoo unavailable"})
 
+    def test_search_reads_the_tracking_fields(self) -> None:
+        # #1040: the puller cannot tell a stage flip from a note without them.
+        state = _tmp_state()
+        client = _FakeClient(messages=self._messages())
+        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
+            ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        search = next(c for c in client.calls if c[0] == "mail.message")
+        for field in ("message_type", "subtype_id", "tracking_value_ids"):
+            self.assertIn(field, search[3]["fields"], field)
+
+    def test_stage_flip_notification_is_not_stored(self) -> None:
+        # The #1040 symptom: an administrative stage flip derived a 0.55 h
+        # billable session on the task it was flipping.
+        state = _tmp_state()
+        client = _FakeClient(
+            messages=[
+                {
+                    "id": 902,
+                    "res_id": 123,
+                    "date": "2026-07-03 10:00:00",
+                    "subject": False,
+                    "body": False,
+                    "message_type": "notification",
+                    "subtype_id": [3, "Task Stage Changed"],
+                    "tracking_value_ids": [7],
+                }
+            ]
+        )
+        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        self.assertEqual(result, {"inserted": 0})
+        self.assertEqual(state.get_events(), [])
+
+    def test_authored_note_on_a_stage_flip_is_still_stored(self) -> None:
+        # The predicate must never silently drop real work: a person who typed
+        # something said something, even on a tracked write.
+        state = _tmp_state()
+        client = _FakeClient(
+            messages=[
+                {
+                    "id": 903,
+                    "res_id": 123,
+                    "date": "2026-07-03 11:00:00",
+                    "subject": False,
+                    "body": "<p>Refactored the kiosk controller</p>",
+                    "message_type": "notification",
+                    "subtype_id": [3, "Task Stage Changed"],
+                    "tracking_value_ids": [7],
+                }
+            ]
+        )
+        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        self.assertEqual(result, {"inserted": 1})
+        self.assertEqual(
+            state.get_events()[0].subject, "Refactored the kiosk controller"
+        )
+
+
+class TestTrackingOnlyChatter(unittest.TestCase):
+    """The stage-only / tracking-only chatter predicate (#1040)."""
+
+    def _message(self, **kw) -> dict:
+        base = {
+            "id": 1,
+            "res_id": 123,
+            "date": "2026-07-03 08:00:00",
+            "subject": False,
+            "body": False,
+        }
+        base.update(kw)
+        return base
+
+    def test_bodyless_notification_with_tracking_values_is_tracking_only(self) -> None:
+        self.assertTrue(
+            ex._is_tracking_only_message(
+                self._message(message_type="notification", tracking_value_ids=[7])
+            )
+        )
+
+    def test_bodyless_notification_with_a_stage_subtype_is_tracking_only(self) -> None:
+        # Odoo returns a many2one as [id, display_name], so the subtype's own
+        # name is already in hand — no extra RPC to classify it.
+        self.assertTrue(
+            ex._is_tracking_only_message(
+                self._message(
+                    message_type="notification", subtype_id=[3, "Task Stage Changed"]
+                )
+            )
+        )
+
+    def test_bodyless_notification_without_tracking_is_kept(self) -> None:
+        # A bare notification with nothing tracked is not evidence either way.
+        self.assertFalse(
+            ex._is_tracking_only_message(self._message(message_type="notification"))
+        )
+
+    def test_a_posted_comment_is_never_tracking_only(self) -> None:
+        self.assertFalse(
+            ex._is_tracking_only_message(
+                self._message(
+                    message_type="comment",
+                    body="<p>Done</p>",
+                    tracking_value_ids=[7],
+                )
+            )
+        )
+
+    def test_a_body_that_is_only_a_stage_move_is_tracking_only(self) -> None:
+        for body in (
+            "<p>Stage: In Progress &#8594; Done</p>",
+            "<p>Stage -&gt; Done</p>",
+            "<p>Kanban State: Blocked &#8594; Ready</p>",
+            "<p>stage from In Progress to Done</p>",
+        ):
+            self.assertTrue(
+                ex._is_tracking_only_message(self._message(body=body)), body
+            )
+
+    def test_a_note_that_merely_mentions_a_stage_is_kept(self) -> None:
+        for body in (
+            "<p>Moved the kiosk stage logic into a mixin -&gt; see PR</p>",
+            "<p>Moving out of done to correct time sheets</p>",
+        ):
+            self.assertFalse(
+                ex._is_tracking_only_message(self._message(body=body)), body
+            )
+
+    def test_absent_tracking_fields_are_no_signal(self) -> None:
+        # Pre-#1040 rows (and the legacy fixture shape) read as authored notes.
+        self.assertFalse(ex._is_tracking_only_message(self._message(subject="note")))
+
+    def test_subtype_shapes_that_are_not_a_pair_are_no_signal(self) -> None:
+        for subtype in (False, 3, [], [3]):
+            self.assertFalse(ex._is_stage_subtype(subtype), subtype)
+
 
 class TestParsingAndGuards(unittest.TestCase):
     """Direct coverage of the small parsing/guard helpers, both branches."""
@@ -1046,6 +1182,44 @@ class TestParsingAndGuards(unittest.TestCase):
 
     def test_build_commit_event_skips_malformed_line(self) -> None:
         self.assertIsNone(ex._build_commit_event("just-a-sha", "o/r"))
+
+    def test_ref_decorations_never_attribute_a_commit(self) -> None:
+        # #1040: a merge commit on ``main`` was billed to a task purely because
+        # the checked-out task branch still decorated it. The subject is the only
+        # text read now, and a trailing legacy %D field is ignored, not parsed.
+        line = _SEP.join(
+            [
+                "sha9",
+                "2026-07-01T10:00:00Z",
+                "Merge pull request #12 from acme/UAT",
+                "HEAD -> 24648-kiosk-fix, origin/main, origin/HEAD",
+            ]
+        )
+        event = ex._build_commit_event(line, "o/r")
+        self.assertIsNotNone(event)
+        self.assertEqual(event.task_ids, [])
+        # The decoration string is no longer recorded as a branch either: it
+        # never was one, and the narrative rendered it as if it were.
+        self.assertEqual(event.branch, "")
+
+    def test_subject_task_id_still_attributes(self) -> None:
+        line = _SEP.join(["sha8", "2026-07-01T10:00:00Z", "fix kiosk (task 24648)"])
+        event = ex._build_commit_event(line, "o/r")
+        self.assertEqual(event.task_ids, ["24648"])
+
+    def test_git_log_no_longer_asks_for_ref_decorations(self) -> None:
+        # The field is not merely ignored downstream; it is not requested.
+        captured: list[list[str]] = []
+
+        def _capture(cmd):
+            captured.append(cmd)
+            return None
+
+        with patch.object(ex, "_run_capture", _capture):
+            ex._git_log(Path("/repo"), ["dev@example.com"], _NOW, _NOW)
+        pretty = next(a for a in captured[0] if a.startswith("--pretty="))
+        self.assertNotIn("%D", pretty)
+        self.assertIn("%s", pretty)
 
     def test_ts_in_window_bounds(self) -> None:
         since = datetime(2026, 7, 1, tzinfo=timezone.utc)

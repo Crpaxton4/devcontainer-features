@@ -341,7 +341,7 @@ def _git_log(
     ids dedupe the branch overlap ``--all`` introduces. The full-ISO
     ``--since``/``--until`` pair applies the resolved window exactly.
     """
-    pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s", "%D"))
+    pretty = _GIT_FIELD_SEP.join(("%H", "%aI", "%s"))
     cmd = [
         "git",
         "-C",
@@ -371,22 +371,28 @@ def _repo_label_for(root: Path) -> str:
 def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
     """Build one ``commit`` event from a git-log line, or None when malformed.
 
-    The trailing ``%D`` (ref decorations) field is optional — git omits the final
-    separator for an undecorated commit, so a valid line has three fields (sha,
-    date, subject) or four. Task ids are validated later by :func:`_store_pending`.
+    A valid line has three fields: sha, authored date, subject. The commit's
+    SUBJECT is the only text task ids are read from (#1040). ``%D`` ref
+    decorations used to be read alongside it and recorded as ``branch``, but a
+    decoration is whatever refs happen to point at that commit *now* — so a
+    ``Merge pull request #NNN from <org>/UAT`` commit on ``main`` was attributed
+    to a task purely because its decoration still read
+    ``HEAD -> <task-id>-branch, origin/main``, and every repo-wide merge
+    inherited whatever task branch was checked out. Extra fields on a line are
+    ignored rather than rejected, so a log captured with the old four-field
+    pretty format still parses. Task ids are validated later by
+    :func:`_store_pending`.
     """
     parts = line.split(_GIT_FIELD_SEP)
     if len(parts) < 3:
         return None
     sha, authored, subject = parts[0], parts[1], parts[2]
-    decorations = parts[3] if len(parts) > 3 else ""
     return EventRecord(
         id=None,
         source="commit",
         timestamp=_parse_iso_utc(authored),
-        task_ids=_extract_task_ids(subject, decorations, allow_leading_id=True),
+        task_ids=_extract_task_ids(subject, "", allow_leading_id=True),
         repo=label,
-        branch=decorations,
         subject=subject,
         external_id=f"git:{sha}",
     )
@@ -1017,6 +1023,11 @@ def _search_chatter(
     no text at all and the billing narrative had nothing of the user's own words
     to lead with. The body supplies that first line (see
     :func:`_chatter_headline`).
+
+    ``message_type``, ``subtype_id``, and ``tracking_value_ids`` are read for
+    :func:`_is_tracking_only_message` (#1040): Odoo writes a ``mail.message`` for
+    every tracked-field change, so a bare stage flip arrived here looking exactly
+    like an authored note and billed as one.
     """
     return client.execute(
         "mail.message",
@@ -1027,7 +1038,16 @@ def _search_chatter(
             ("date", ">=", _odoo_dt_str(since)),
             ("date", "<=", _odoo_dt_str(until)),
         ],
-        fields=["id", "res_id", "date", "subject", "body"],
+        fields=[
+            "id",
+            "res_id",
+            "date",
+            "subject",
+            "body",
+            "message_type",
+            "subtype_id",
+            "tracking_value_ids",
+        ],
     )
 
 
@@ -1063,18 +1083,85 @@ def _chatter_headline(body: Any) -> str:
     return lines[0][:_CHATTER_SUBJECT_CHARS] if lines else ""
 
 
+#: ``mail.message.message_type`` values Odoo writes for a system-generated
+#: record change rather than something a person typed. ``comment`` (a posted
+#: note) and ``email`` are deliberately absent.
+_NOTIFICATION_MESSAGE_TYPES = frozenset({"notification"})
+
+# A tracking-value rendering: ``Stage: In Progress -> Done`` (Odoo uses a real
+# arrow in the chatter HTML; ``->`` covers plain-text variants). Anchored at the
+# line start on the tracked field's own label, so an authored note that merely
+# MENTIONS a stage never matches.
+_STAGE_MOVE_LINE = re.compile(
+    r"(?i)^(?:stage|state|kanban state)\s*[:\-]?\s*"
+    r"(?:.*(?:→|⇨|->).*|from\s+.+\s+to\s+.+)$"
+)
+
+
+def _is_stage_move_text(headline: str) -> bool:
+    """Return True when a chatter first line is only a stage/state move (#1040)."""
+    return bool(headline) and bool(_STAGE_MOVE_LINE.match(headline))
+
+
+def _is_stage_subtype(subtype: Any) -> bool:
+    """Return True when a ``subtype_id`` many2one names a stage-change subtype.
+
+    ``search_read`` returns a many2one as ``[id, display_name]``, so the subtype's
+    own name (``Task Stage Changed``) is already in hand — no extra RPC. Anything
+    else (a bare id, ``False``, absent) is no signal.
+    """
+    if not isinstance(subtype, (list, tuple)) or len(subtype) < 2:
+        return False
+    return "stage" in str(subtype[1]).lower()
+
+
+def _is_tracking_only_message(message: dict) -> bool:
+    """Return True when a chatter message records a field change, not work (#1040).
+
+    Odoo writes a ``mail.message`` for every tracked-field write, so an
+    administrative stage flip — including the ones made to *correct* timesheets —
+    arrived in the puller indistinguishable from an authored note and derived a
+    billable session on the task (0.55 h each across six tasks in #1040).
+
+    Two signals, both already on the row:
+
+    * the body is nothing but a tracking-value line (``Stage: Done → In
+      Progress``), whatever the message type says; or
+    * the message is Odoo's own ``notification`` type, carries tracking values or
+      a stage subtype, and has NO author-written body.
+
+    The author-written-body requirement is what keeps this narrow: a person who
+    typed something said something, and this must never silently drop real work.
+    A free-text note that happens to be administrative (``"Moving out of done to
+    correct time sheets"``) is therefore still stored — no small predicate can
+    tell it from a progress note, and the TUI review surface is where a human
+    declines to bill it.
+    """
+    headline = _chatter_headline(message.get("body"))
+    if _is_stage_move_text(headline):
+        return True
+    if message.get("message_type") not in _NOTIFICATION_MESSAGE_TYPES:
+        return False
+    tracked = message.get("tracking_value_ids") or _is_stage_subtype(
+        message.get("subtype_id")
+    )
+    return bool(tracked) and not headline
+
+
 def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
     """Store one chatter message as a ``chatter`` event; return 1 if inserted.
 
     A message with no timestamp (Odoo returns ``False`` for an empty datetime) is
-    skipped rather than crashing the puller. The task id is the message's
-    ``res_id`` (the task it is ON), so it exists by construction. The subject is
-    the message's own when it has one, else the body's first line (#710) — the
-    usual case, since a logged note carries no subject — so the event arrives
-    carrying the user's own words instead of an empty string.
+    skipped rather than crashing the puller, and so is a tracking-only message
+    (:func:`_is_tracking_only_message`, #1040) — a stage flip is a record change,
+    not time worked. The task id is the message's ``res_id`` (the task it is ON),
+    so it exists by construction. The subject is the message's own when it has
+    one, else the body's first line (#710) — the usual case, since a logged note
+    carries no subject — so the event arrives carrying the user's own words
+    instead of an empty string.
     """
     date = message.get("date")
-    if not date:
+    if not date or _is_tracking_only_message(message):
         return 0
     res_id = message["res_id"]
     event = EventRecord(

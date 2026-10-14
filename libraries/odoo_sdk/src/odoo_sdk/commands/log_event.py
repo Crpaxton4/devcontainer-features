@@ -133,6 +133,30 @@ _MIN_TASK_ID_DIGITS = 4
 # agree on a session branch.
 _BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})-")
 
+# Conventional-commit types. A branch whose FIRST path segment is one of these
+# follows the GitHub-issue convention ``<type>/<issue-number>-<slug>``, so its
+# leading digit run is an issue number in the hosting forge, not an Odoo task id
+# (#1040: ``docs/1019-shellcheck-form-per-file-set`` minted phantom task lanes
+# 1016/1019/1020/1029 in a repo with no Odoo project at all). ``start_task``
+# never writes such a branch — it writes ``<task-id>-<slug>`` at the root (#622),
+# or a caller-stated name — so excluding the type prefixes costs no real
+# attribution. Note ``feat`` is listed but ``feature`` is not: only the
+# conventional-commit spelling carries the convention.
+_CONVENTIONAL_BRANCH_TYPES = frozenset(
+    {
+        "build",
+        "chore",
+        "ci",
+        "docs",
+        "feat",
+        "fix",
+        "perf",
+        "refactor",
+        "style",
+        "test",
+    }
+)
+
 
 def task_ids_from_branch(branch: Optional[str]) -> list[str]:
     """Recover the task ids named by a ``<task-id>-<slug>`` session branch.
@@ -147,7 +171,9 @@ def task_ids_from_branch(branch: Optional[str]) -> list[str]:
     Returns the distinct ids in first-seen order, canonicalized through ``int`` so
     a zero-padded ``0028788-…`` records as ``"28788"``. A branch that does not
     match the convention — a ``main``/``feat/x`` branch, a detached HEAD's ``""``,
-    ``None`` — yields ``[]``.
+    ``None`` — yields ``[]``. So does a branch whose first path segment is a
+    conventional-commit type (:data:`_CONVENTIONAL_BRANCH_TYPES`): that names a
+    GitHub issue, not an Odoo task (#1040).
 
     :param branch: The session branch, or ``None``/`""` when there is none.
     :type branch: Optional[str]
@@ -157,12 +183,75 @@ def task_ids_from_branch(branch: Optional[str]) -> list[str]:
 
     if not branch:
         return []
+    if branch.split("/", 1)[0].strip().lower() in _CONVENTIONAL_BRANCH_TYPES:
+        return []
     ids: list[str] = []
     for raw in _BRANCH_TASK_ID_PATTERN.findall(branch):
         canonical = str(int(raw))
         if canonical not in ids:
             ids.append(canonical)
     return ids
+
+
+#: Source-string prefix of the Claude Code hook shim's events
+#: (``claude:<HookName>``). The shim fires on EVERY tool use in the container,
+#: states no task, and passes ``--attach-active-run``, so its events are the one
+#: family that is ambient rather than targeted — see :func:`billable_task_ids`.
+#: Byte-identical to ``adapters.state_persistence._CLAUDE_SOURCE_PREFIX`` and the
+#: ``LIKE 'claude:%'`` billing predicate; that three-way parity is pinned by
+#: ``tests/test_cli/test_hook_cli_contract.py``.
+_HOOK_SOURCE_PREFIX = "claude:"
+
+
+def billable_task_ids(
+    source: str, task_ids: list[str], attached_task_ids: list[str]
+) -> list[str]:
+    """Drop the hook fan-out from a hook event's billable scope (#1040, #779).
+
+    A ``claude:*`` hook event names no task of its own: the shim fires on every
+    tool use in the container and asks for ``--attach-active-run``, so rule 2 of
+    :meth:`LogEventCommand.resolve_attribution` handed it EVERY open run. With
+    six runs left RUNNING that is six parallel wall-clock sessions off one
+    keystroke — the ~38 h of phantom time #1040 measured, and the regression #779
+    describes from the other side (the attachment also refreshed the staleness
+    clock that was supposed to age those runs out).
+
+    The ids removed here are exactly the attachment-only subset: runs that were
+    merely open, with nothing else tying this event to them.
+    :meth:`LogEventCommand.resolve_attribution` already excludes from that subset
+    any run the caller-stated session branch corroborates, so a session sitting
+    on its task's ``<task-id>-<slug>`` branch keeps billing normally — only the
+    OTHER runs a busy container happens to have open are dropped.
+
+    The ids are NOT discarded: :func:`mark_attached_attribution` still records
+    them in the payload, which is what the reaper's attachment-independent clock
+    reads to decide a forgotten run has gone quiet.
+
+    Hinted events are untouched (rule 1 contributes no attachment-only ids), and
+    so is every non-hook source — a ``source="agent"`` tool call made inside an
+    open run is a human driving that run, and attributing it there is the #507
+    behaviour this must not undo.
+
+    .. note::
+
+       This is the narrow exclusion, not the full fix. Attributing a hook event
+       to the run its ``session_id`` actually started needs a session → run
+       mapping the events table does not have; until then a hook-only session on
+       a non-task branch attributes to nothing rather than to the wrong task.
+
+    :param source: The event's source string, e.g. ``claude:PreToolUse``.
+    :type source: str
+    :param task_ids: The resolved attribution, in resolution order.
+    :type task_ids: list[str]
+    :param attached_task_ids: The attachment-only subset of ``task_ids``.
+    :type attached_task_ids: list[str]
+    :return: The ids the event bills, order preserved.
+    :rtype: list[str]
+    """
+
+    if not attached_task_ids or not source.startswith(_HOOK_SOURCE_PREFIX):
+        return task_ids
+    return [task_id for task_id in task_ids if task_id not in attached_task_ids]
 
 
 def mark_attached_attribution(
@@ -464,6 +553,9 @@ class LogEventCommand(Command):
             active runs; see :meth:`resolve_task_ids`.
         :type attach_active_run: bool
         :return: ``{"source", "subject", "task_ids"}`` describing the written row.
+            For a ``claude:*`` hook event the ids are the post-exclusion set
+            (:func:`billable_task_ids`), so the caller sees what was actually
+            billed rather than what rule 2 proposed.
         :rtype: dict[str, Any]
         """
 
@@ -479,7 +571,7 @@ class LogEventCommand(Command):
             id=None,
             source=source,
             timestamp=timestamp or datetime.now(timezone.utc),
-            task_ids=resolved_ids,
+            task_ids=billable_task_ids(source, resolved_ids, attached_ids),
             repo=current_repo_label() if repo is None else repo,
             branch=resolved_branch,
             pr_num=pr_num,

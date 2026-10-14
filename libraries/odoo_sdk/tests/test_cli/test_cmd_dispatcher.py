@@ -24,7 +24,10 @@ from unittest.mock import Mock, patch
 import odoo_sdk.cli.__main__ as cli
 from odoo_sdk.commands import Command, Registry
 from odoo_sdk.commands.builtin import register_builtins
-from odoo_sdk.commands.dispatch_telemetry import _BOUNDARY_ERRORS
+from odoo_sdk.commands.dispatch_telemetry import (
+    READ_TASK_IDS_PAYLOAD_KEY,
+    _BOUNDARY_ERRORS,
+)
 from odoo_sdk.errors import OdooError
 from odoo_sdk.state import LocalStateClient
 from odoo_sdk.state.models import (
@@ -64,6 +67,21 @@ class _EchoCommand(Command):
 
     def execute(self, x: int = 0) -> dict:
         return {"x": x}
+
+
+class _ReadTaskCommand(Command):
+    """Local fake standing in for a READ tool that takes a ``task_id``.
+
+    Registered under the real ``get_task`` name so the dispatcher's telemetry
+    classifies it the way the live command would (#1040), without this local
+    test needing an Odoo client.
+    """
+
+    _name = "get_task"
+    _description = "Read one task."
+
+    def execute(self, task_id: int = 0) -> dict:
+        return {"id": task_id}
 
 
 def _raising_command(exc: BaseException) -> type[Command]:
@@ -158,6 +176,27 @@ class TestCmdDispatchSuccess(unittest.TestCase):
         self.assertEqual(
             event.payload,
             {"tool": "echo", "args": ["x"], "outcome": "ok", "via": "cli"},
+        )
+
+    def test_read_dispatch_records_the_queried_id_without_attributing(self):
+        # #1040 on the CLI dispatch surface: ``odoo-sdk cmd get_task`` is just as
+        # capable of minting a phantom 0.25 h session as the MCP tool was, so the
+        # queried id lands in the payload and NOT in ``task_ids``.
+        db = _tmp_db()
+        with _patched(_registry(db, extra={"get_task": _ReadTaskCommand})):
+            code, _ = _run_cli("cmd", "get_task", "--args", '{"task_id": 42}')
+        self.assertEqual(code, 0)
+        event = db.get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "get_task",
+                "args": ["task_id"],
+                "outcome": "ok",
+                "via": "cli",
+                READ_TASK_IDS_PAYLOAD_KEY: ["42"],
+            },
         )
 
     def test_emit_failure_never_breaks_a_successful_dispatch(self):

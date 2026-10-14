@@ -434,8 +434,9 @@ def _member_events(
 
     The ``query_sessions`` render embeds only a thin event summary; the review
     surface needs the full :class:`EventRecord` — its ``external_id`` for the
-    citation trail and its ``payload`` for the unvalidated-id flag — so the member
-    events are re-read read-only from the store by their ids.
+    citation trail, its ``source``/``task_ids``/``payload`` for the
+    unvalidated-id flag and the read-only flag (#1040) — so the member events are
+    re-read read-only from the store by their ids.
     """
     return {
         session["session_id"]: store.get_events_by_ids(

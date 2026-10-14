@@ -19,6 +19,8 @@ from unittest.mock import Mock, patch
 from odoo_sdk.commands import LogEventCommand
 from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.commands.log_event import (
+    _CONVENTIONAL_BRANCH_TYPES,
+    billable_task_ids,
     current_branch_label,
     normalize_task_ids,
     task_ids_from_branch,
@@ -156,6 +158,28 @@ class TestTaskIdsFromBranch(unittest.TestCase):
         for branch in ("main", "master", "feat/kiosk", "fix/wc1-hook"):
             self.assertEqual(task_ids_from_branch(branch), [], branch)
 
+    def test_conventional_commit_prefix_names_an_issue_not_a_task(self) -> None:
+        # #1040: branches like ``docs/1019-shellcheck-form-per-file-set``, in a
+        # repo with no Odoo project at all, minted phantom task lanes out of
+        # GitHub issue numbers. A conventional-commit type as the first path
+        # segment IS the GitHub-issue convention, so the digit run after it is
+        # an issue number, not a task id.
+        for prefix in sorted(_CONVENTIONAL_BRANCH_TYPES):
+            branch = f"{prefix}/1019-shellcheck-form-per-file-set"
+            self.assertEqual(task_ids_from_branch(branch), [], branch)
+
+    def test_conventional_prefix_match_is_case_insensitive(self) -> None:
+        self.assertEqual(task_ids_from_branch("DOCS/1019-slug"), [])
+
+    def test_feature_prefix_is_not_a_conventional_type(self) -> None:
+        # Only the conventional-commit spelling carries the convention: a
+        # ``feature/`` branch is still the documented #574 task-branch form.
+        self.assertEqual(task_ids_from_branch("feature/28788-slug"), ["28788"])
+
+    def test_root_task_branch_survives_the_prefix_rule(self) -> None:
+        # The form start_task actually writes has no path prefix at all (#622).
+        self.assertEqual(task_ids_from_branch("28788-hook-attribution"), ["28788"])
+
     def test_short_number_is_not_a_task_id(self) -> None:
         # Fewer than the shared 4-digit floor: a stray number, not a task id, so
         # a hook event and the commit it accompanies never split lanes (#378).
@@ -182,6 +206,41 @@ class TestTaskIdsFromBranch(unittest.TestCase):
         # MCP tool builds it must parse back to the same task id.
         task_id, slug = 28788, "hyphenated-branch-slug"
         self.assertEqual(task_ids_from_branch(f"{task_id}-{slug}"), [str(task_id)])
+
+
+class TestBillableTaskIds(unittest.TestCase):
+    """The hook fan-out exclusion, unit-tested on its own (#1040, #779)."""
+
+    def test_hook_event_drops_the_attachment_only_ids(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:PreToolUse", ["101", "202"], ["101", "202"]), []
+        )
+
+    def test_hook_event_keeps_the_corroborated_id(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:Stop", ["28788", "101"], ["101"]), ["28788"]
+        )
+
+    def test_agent_source_is_untouched(self) -> None:
+        # Hook-scoped on purpose: an agent tool call inside an open run is a
+        # human driving that run (#507).
+        self.assertEqual(
+            billable_task_ids("agent", ["101", "202"], ["101", "202"]), ["101", "202"]
+        )
+
+    def test_other_sources_are_untouched(self) -> None:
+        for source in ("commit", "chatter", "merge", "claude", ""):
+            self.assertEqual(
+                billable_task_ids(source, ["101"], ["101"]), ["101"], source
+            )
+
+    def test_no_attachment_is_a_no_op(self) -> None:
+        self.assertEqual(billable_task_ids("claude:Stop", ["28788"], []), ["28788"])
+
+    def test_order_is_preserved(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:Stop", ["3", "1", "2"], ["1"]), ["3", "2"]
+        )
 
 
 class TestCurrentBranchLabel(unittest.TestCase):
@@ -362,12 +421,24 @@ class TestAttachmentProvenance(unittest.TestCase):
         self.db.create_run(202, "Task B", 1, "Proj")
         self.command.execute(source="claude:PostToolUse", payload={"tool": "Bash"})
         event = self.db.get_events()[0]
-        self.assertEqual(sorted(event.task_ids), ["101", "202"])
+        # The hook event records both runs as attachment-only provenance and
+        # bills neither of them: #1040 drops the fan-out from ``task_ids``.
+        self.assertEqual(event.task_ids, [])
         self.assertEqual(
             sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
         )
         # The caller's own payload keys survive untouched.
         self.assertEqual(event.payload["tool"], "Bash")
+
+    def test_agent_event_still_bills_the_attached_run(self) -> None:
+        # The exclusion is hook-scoped: a ``source="agent"`` tool call made
+        # inside an open run is a human driving that run, and keeping it billable
+        # is the #507 behaviour #1040 must not undo.
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(source="agent", subject="get_task")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, ["101"])
+        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["101"])
 
     def test_marker_is_added_to_a_payloadless_event(self) -> None:
         self.db.create_run(101, "Task A", 1, "Proj")

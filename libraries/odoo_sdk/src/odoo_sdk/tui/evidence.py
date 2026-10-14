@@ -51,6 +51,21 @@ _CITATIONS = (
 # signal (an un-flagged event is not evidence of validity either way).
 _UNVALIDATED_KEY = "unvalidated_task_ids"
 
+# The key :func:`odoo_sdk.commands.dispatch_telemetry._queried_task_ids` stamps
+# with the task id a READ tool merely looked at (#1040). Its presence means the
+# event is an investigation read, not work on the task.
+_READ_KEY = "read_task_ids"
+
+# The key :func:`odoo_sdk.commands.log_event.mark_attached_attribution` stamps
+# with the ids an event names only because their run was open (#779). An event
+# whose attachment-only list covers this card's task is ambient container
+# traffic, not evidence of work on it.
+_ATTACHED_KEY = "attached_run_task_ids"
+
+# The ``source`` the MCP/CLI dispatch telemetry writes. Only an ``agent`` event
+# can be a tool read; a ``commit``/``chatter``/``claude:*`` event never is.
+_AGENT_SOURCE = "agent"
+
 
 @dataclass(frozen=True)
 class Overlap:
@@ -76,6 +91,10 @@ class ReviewCard:
     :param overlaps: Cross-task wall-clock overlaps against other sessions.
     :param citations: One citation string per member event, in order.
     :param unvalidated: True when a member event flags an unvalidated task id.
+    :param read_only: True when EVERY member event is an agent read of the task
+        or ambient run-attachment traffic (#1040) — nothing in the session is
+        evidence that work happened on it. Defaults to False so a card built
+        positionally from the pre-#1040 field order still constructs.
     """
 
     session_id: int
@@ -89,6 +108,7 @@ class ReviewCard:
     overlaps: tuple[Overlap, ...]
     citations: tuple[str, ...]
     unvalidated: bool
+    read_only: bool = False
 
 
 def _parse_ts(value: str) -> datetime:
@@ -169,6 +189,38 @@ def event_unvalidated(payload: Any) -> bool:
     return bool(payload.get(_UNVALIDATED_KEY))
 
 
+def event_is_read_only(event: EventRecord, task_id: str) -> bool:
+    """Return True when one member event is no evidence of work on ``task_id``.
+
+    Two shapes qualify, both introduced by the over-billing fixes they belong to:
+
+    * an **agent read** — a ``source="agent"`` dispatch event that recorded the
+      task it queried under :data:`_READ_KEY`, or that attributed to nothing at
+      all. Investigation reads used to tag their queried id and so minted a
+      billable session per read (#1040).
+    * **attachment-only traffic** — an event naming this task only because a run
+      on it was open (:data:`_ATTACHED_KEY`, #779), which is the fan-out that
+      multiplied one keystroke into a parallel session per forgotten run.
+
+    Anything else — a commit, a chatter note, a mutating tool call — is real
+    evidence and makes the session not read-only.
+
+    :param event: One member event of the session.
+    :type event: EventRecord
+    :param task_id: The card's task id, as a string.
+    :type task_id: str
+    :return: True when the event is a read or attachment-only for this task.
+    :rtype: bool
+    """
+
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    if str(task_id) in (payload.get(_ATTACHED_KEY) or ()):
+        return True
+    if event.source != _AGENT_SOURCE:
+        return False
+    return not event.task_ids or bool(payload.get(_READ_KEY))
+
+
 def _valid_task_id(task_id: Any) -> bool:
     """Return True when ``task_id`` is a positive integer (a billable Odoo task)."""
     text = str(task_id)
@@ -218,6 +270,10 @@ def build_review_cards(
     the driver), so this is deterministic and terminal-free. Missing member events
     or an absent logged map (offline) degrade to an empty evidence trail and no
     logged badge — the card still classifies and renders.
+
+    Each card also carries ``read_only`` (#1040), true when every member event is
+    an agent read or attachment-only traffic — a session that exists but contains
+    no evidence any work happened on the task.
     """
     cards: list[ReviewCard] = []
     for session in sessions:
@@ -230,11 +286,12 @@ def build_review_cards(
         )
         hours = float(session["duration_secs"]) / 3600
         day = str(session["started_at"])[:10]
-        logged = logged_by_task_day.get((str(session["task_id"]), day), 0.0)
+        task_id = str(session["task_id"])
+        logged = logged_by_task_day.get((task_id, day), 0.0)
         cards.append(
             ReviewCard(
                 session_id=sid,
-                task_id=str(session["task_id"]),
+                task_id=task_id,
                 started_at=session["started_at"],
                 ended_at=session["ended_at"],
                 hours=hours,
@@ -246,6 +303,11 @@ def build_review_cards(
                     event_citation(event.source, event.external_id) for event in events
                 ),
                 unvalidated=unvalidated,
+                # Vacuous truth is NOT read-only: a card with no member events at
+                # all is already badged "(no linked events)", and claiming it was
+                # read-only would assert something about evidence there is none of.
+                read_only=bool(events)
+                and all(event_is_read_only(event, task_id) for event in events),
             )
         )
     return cards

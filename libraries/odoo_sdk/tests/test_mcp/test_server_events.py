@@ -16,8 +16,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_sdk.commands import Registry
+from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
 from odoo_sdk.mcp import server as server_mod
-from odoo_sdk.mcp.server import OdooMCPServer
+from odoo_sdk.mcp.server import READ_TASK_IDS_PAYLOAD_KEY, OdooMCPServer
 from odoo_sdk.state import LocalStateClient
 from tests.support import make_state_db
 
@@ -44,16 +45,16 @@ def _build_tools(registry, explicit_tools):
 
 
 class TestDispatchEmitsEvent(unittest.TestCase):
-    def test_sync_tool_with_task_id_emits_one_event(self):
+    def test_mutating_tool_with_task_id_emits_one_event(self):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
 
-        def do_thing(task_id: int, task_name: str) -> dict:
+        def start_task(task_id: int, task_name: str) -> dict:
             """Fake tool."""
             return {"task_id": task_id}
 
-        tools = _build_tools(registry, {"do_thing": do_thing})
-        result = tools["do_thing"].fn(task_id=42, task_name="Fix VAT")
+        tools = _build_tools(registry, {"start_task": start_task})
+        result = tools["start_task"].fn(task_id=42, task_name="Fix VAT")
 
         self.assertEqual(result, {"task_id": 42})
         events = db.get_events()
@@ -61,21 +62,84 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         event = events[0]
         self.assertEqual(event.source, "agent")
         # Only the tool name is persisted as subject; no argument values.
-        self.assertEqual(event.subject, "do_thing")
+        self.assertEqual(event.subject, "start_task")
         self.assertEqual(event.task_ids, ["42"])
         # The payload is reconstructable (#626): the tool name, the argument
         # NAMES (shape, not content -- the task_name value "Fix VAT" is
         # withheld), a one-line outcome, and the allowlisted identifier fields
-        # lifted from the result.
+        # lifted from the result. An ATTRIBUTING tool records no read_task_ids:
+        # its id is real attribution and already in ``task_ids``.
         self.assertEqual(
             event.payload,
             {
-                "tool": "do_thing",
+                "tool": "start_task",
                 "args": ["task_id", "task_name"],
                 "outcome": "ok",
                 "task_id": 42,
             },
         )
+
+    def test_read_tool_records_the_queried_id_without_attributing(self):
+        # #1040: a read tool used to tag its queried id, so one investigation
+        # ``get_task`` minted a derived session on that task and the 0.25 h
+        # min-session floor billed it. The id is now payload evidence only.
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def get_task(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"get_task": get_task})
+        tools["get_task"].fn(task_id=42)
+
+        event = db.get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "get_task",
+                "args": ["task_id"],
+                "outcome": "ok",
+                READ_TASK_IDS_PAYLOAD_KEY: ["42"],
+            },
+        )
+
+    def test_read_tool_with_an_uncoercible_id_records_nothing(self):
+        # The key is omitted rather than written empty, so a read of a
+        # non-task argument leaves the historical payload shape untouched.
+        db = _tmp_db()
+        registry = Registry(Mock(), state_client=db)
+
+        def get_task(task_id: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"get_task": get_task})
+        tools["get_task"].fn(task_id="not-an-id")
+
+        self.assertEqual(
+            db.get_events()[0].payload,
+            {"tool": "get_task", "args": ["task_id"], "outcome": "ok"},
+        )
+
+    def test_read_tool_inside_an_open_run_still_bills_that_run(self):
+        # #1040 removes the HINT, not the #507 context fallback: inspecting task
+        # 42 while a run on task 101 is open is time spent on 101.
+        db = _tmp_db()
+        db.create_run(101, "Task A", 1, "Proj")
+        registry = Registry(Mock(), state_client=db)
+
+        def get_task(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"get_task": get_task})
+        tools["get_task"].fn(task_id=42)
+
+        event = db.get_events()[0]
+        self.assertEqual(event.task_ids, ["101"])
+        self.assertEqual(event.payload[READ_TASK_IDS_PAYLOAD_KEY], ["42"])
 
     def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
         db = _tmp_db()
@@ -124,12 +188,12 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         db.create_run(101, "Task A", 1, "Proj")
         registry = Registry(Mock(), state_client=db)
 
-        def do_thing(task_id: int) -> dict:
+        def stop_task(task_id: int) -> dict:
             """Fake tool."""
             return {"ok": True}
 
-        tools = _build_tools(registry, {"do_thing": do_thing})
-        tools["do_thing"].fn(task_id=999)
+        tools = _build_tools(registry, {"stop_task": stop_task})
+        tools["stop_task"].fn(task_id=999)
 
         self.assertEqual(db.get_events()[0].task_ids, ["999"])
 
@@ -208,12 +272,12 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
 
-        async def do_async(task_id: int, note: str) -> dict:
+        async def task_note(task_id: int, note: str) -> dict:
             """Fake tool."""
             return {"ok": True}
 
-        tools = _build_tools(registry, {"do_async": do_async})
-        result = asyncio.run(tools["do_async"].fn(task_id=7, note="working"))
+        tools = _build_tools(registry, {"task_note": task_note})
+        result = asyncio.run(tools["task_note"].fn(task_id=7, note="working"))
 
         self.assertEqual(result, {"ok": True})
         events = db.get_events()
@@ -222,10 +286,10 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # The note body ("working") is not persisted -- subject is the tool name
         # and the payload carries only names/outcome ("ok" is unlisted, so no
         # field is lifted).
-        self.assertEqual(events[0].subject, "do_async")
+        self.assertEqual(events[0].subject, "task_note")
         self.assertEqual(
             events[0].payload,
-            {"tool": "do_async", "args": ["note", "task_id"], "outcome": "ok"},
+            {"tool": "task_note", "args": ["note", "task_id"], "outcome": "ok"},
         )
 
     def test_input_required_leg_emits_no_event(self):
@@ -402,21 +466,135 @@ class TestPayloadEnrichment(unittest.TestCase):
         self.assertEqual(server_mod._result_payload_fields("x"), {})
 
 
+#: Every built-in command that must NOT attribute its event to the id it was
+#: handed (#1040). Hand-maintained on purpose and asserted to be the exact
+#: complement of :data:`ATTRIBUTING_TOOLS` below, so adding a command forces a
+#: deliberate classification instead of silently inheriting a default.
+#:
+#: Most are plain reads. Three write, and are here anyway because what they write
+#: IS the billing record, so attributing them would bill the act of correcting a
+#: task's time: ``assign_event`` (the retag write), ``normalize_timesheets``, and
+#: ``resync`` (which ingests external history rather than doing work).
+#: ``get_employee_id`` only writes a local id cache.
+_READ_TOOLS = frozenset(
+    {
+        "assign_event",
+        "discover_runs",
+        "get_activities",
+        "get_employee_id",
+        "get_mail_status",
+        "get_models",
+        "get_task",
+        "get_task_attachments",
+        "get_task_chatter",
+        "get_tasks",
+        "get_todo",
+        "get_uid",
+        "list_runs",
+        "normalize_timesheets",
+        "optimize_sessions",
+        "query_sessions",
+        "read_attachment",
+        "read_knowledge_article",
+        "report_runs",
+        "resync",
+        "search_activity_types",
+        "search_chatter",
+        "search_count",
+        "search_knowledge_articles",
+        "search_projects",
+        "search_tasks",
+        "task_aging",
+        "task_list",
+        "task_status",
+        "timesheet_summary",
+        "unbilled_hours",
+        "unlogged_time_report",
+    }
+)
+
+
+class TestAttributingToolSet(unittest.TestCase):
+    """Every built-in is classified exactly once: attributing OR read (#1040).
+
+    This is the pin the fix rests on. The dispatch emitter defaults an unlisted
+    tool to NON-attributing, which is the safe side for billing but a silent one:
+    a new mutating command would stop attributing and nobody would notice. So the
+    partition is asserted over the live registry — adding a command fails this
+    test until its side is stated.
+    """
+
+    def test_sets_are_disjoint(self):
+        self.assertEqual(server_mod.ATTRIBUTING_TOOLS & _READ_TOOLS, frozenset())
+
+    def test_every_builtin_is_classified_exactly_once(self):
+        classified = server_mod.ATTRIBUTING_TOOLS | _READ_TOOLS
+        self.assertEqual(set(BUILTIN_COMMANDS), classified)
+
+    def test_no_classified_name_is_unknown_to_the_registry(self):
+        # Catches a typo or a renamed command on either side of the partition.
+        for name in sorted(server_mod.ATTRIBUTING_TOOLS | _READ_TOOLS):
+            self.assertIn(name, BUILTIN_COMMANDS, name)
+
+    def test_the_tools_the_issue_names_do_not_attribute(self):
+        # The exact tools #1040 measured phantom sessions from.
+        for name in ("get_task", "get_task_chatter", "get_tasks", "search_tasks"):
+            self.assertNotIn(name, server_mod.ATTRIBUTING_TOOLS, name)
+
+    def test_the_session_mutators_do_attribute(self):
+        for name in ("start_task", "stop_task", "resume_task", "task_note"):
+            self.assertIn(name, server_mod.ATTRIBUTING_TOOLS, name)
+
+
 class TestEventHelpers(unittest.TestCase):
+    #: One attributing and one read tool, both of which really take a ``task_id``.
+    MUTATING = "task_note"
+    READING = "get_task"
+
     def test_task_ids_coercible_int(self):
-        self.assertEqual(server_mod._event_task_ids({"task_id": 5}), ["5"])
+        self.assertEqual(
+            server_mod._event_task_ids(self.MUTATING, {"task_id": 5}), ["5"]
+        )
 
     def test_task_ids_coercible_str(self):
-        self.assertEqual(server_mod._event_task_ids({"task_id": "5"}), ["5"])
+        self.assertEqual(
+            server_mod._event_task_ids(self.MUTATING, {"task_id": "5"}), ["5"]
+        )
 
     def test_task_ids_absent(self):
-        self.assertEqual(server_mod._event_task_ids({}), [])
+        self.assertEqual(server_mod._event_task_ids(self.MUTATING, {}), [])
 
     def test_task_ids_none(self):
-        self.assertEqual(server_mod._event_task_ids({"task_id": None}), [])
+        self.assertEqual(
+            server_mod._event_task_ids(self.MUTATING, {"task_id": None}), []
+        )
 
     def test_task_ids_non_coercible(self):
-        self.assertEqual(server_mod._event_task_ids({"task_id": "abc"}), [])
+        self.assertEqual(
+            server_mod._event_task_ids(self.MUTATING, {"task_id": "abc"}), []
+        )
+
+    def test_read_tool_yields_no_attribution_hint(self):
+        self.assertEqual(server_mod._event_task_ids(self.READING, {"task_id": 5}), [])
+
+    def test_unknown_tool_yields_no_attribution_hint(self):
+        # The default is NON-attributing: a tool nobody classified must not
+        # silently start billing the id it was handed (#1040).
+        self.assertEqual(server_mod._event_task_ids("brand_new", {"task_id": 5}), [])
+
+    def test_queried_ids_are_the_exact_complement(self):
+        self.assertEqual(
+            server_mod._queried_task_ids(self.READING, {"task_id": 5}), ["5"]
+        )
+        self.assertEqual(
+            server_mod._queried_task_ids(self.MUTATING, {"task_id": 5}), []
+        )
+
+    def test_queried_ids_drop_a_non_task_value(self):
+        for value in (None, "abc", object()):
+            self.assertEqual(
+                server_mod._queried_task_ids(self.READING, {"task_id": value}), []
+            )
 
     def test_bound_arguments_excludes_ctx(self):
         def sample(task_id, ctx=None):

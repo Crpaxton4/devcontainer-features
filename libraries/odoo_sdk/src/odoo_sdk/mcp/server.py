@@ -25,12 +25,15 @@ from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, GATED_TOOL_TAG, gated_opt_in
 # them without importing a surface, while every existing patch target on this
 # module (``odoo_sdk.mcp.server._emit_tool_event`` and friends) keeps working.
 from odoo_sdk.commands.dispatch_telemetry import (  # noqa: F401
+    ATTRIBUTING_TOOLS,
+    READ_TASK_IDS_PAYLOAD_KEY,
     _BOUNDARY_ERRORS,
     _RESULT_PAYLOAD_KEYS,
     _emit_tool_event,
     _error_payload,
     _event_task_ids,
     _outcome_line,
+    _queried_task_ids,
     _result_payload_fields,
 )
 
