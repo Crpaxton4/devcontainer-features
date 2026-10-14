@@ -131,6 +131,32 @@ out="$(run "$green" 0)"
 expect "green passes"        "$(field "$out" passed)"     "true"
 expect "green counts tests"  "$(field "$out" tests_run)"  "2"
 expect "mode is container"   "$(field "$out" mode)"       "container"
+
+# ---------- container mode wins over a reachable docker (#1039) ----------------
+# Inside the devcontainer `docker` is on PATH too (the host's daemon), and the
+# project stack can be running on that host. The old docker-first order picked
+# host mode from inside the stack and ran `docker exec` against a container this
+# process is not in. A stub docker that claims the stack is up must still lose
+# to the local odoo + pg_isready, and must never be asked to exec anything.
+dockerbin="$work/dockerbin"; mkdir -p "$dockerbin"
+cat > "$dockerbin/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_FAKE_CALLS"
+case "${1:-}" in
+  ps) echo "myrepo-odoo-1"; exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$dockerbin/docker"
+: > "$work/docker-calls"
+out="$(DOCKER_FAKE_CALLS="$work/docker-calls" PATH="$dockerbin:$bin:$PATH" ODOO_RC="$conf" \
+  ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 ODOO_FAKE_ARGS="$work/args" \
+  ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" WORKTREE_ADDONS_BASE="$work/addons" \
+  bash "$SUT" myrepo 4242 mymodule 2>/dev/null | tail -1)"
+expect "local odoo beats a reachable docker stack" "$(field "$out" mode)" "container"
+expect "the local run still passes"                "$(field "$out" passed)" "true"
+grep -q '^exec' "$work/docker-calls"
+expect "docker exec was never attempted" "$?" "1"
 expect "green has no failures" "$(nfail "$out")"          "0"
 expect "green status"        "$(field "$out" status)"     "passed"
 expect "green tallies its one suite" "$(suites "$out")"   "mymodule:2/2/0"
