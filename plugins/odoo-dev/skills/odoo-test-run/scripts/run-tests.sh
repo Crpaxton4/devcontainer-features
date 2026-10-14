@@ -31,12 +31,14 @@
 #   - Odoo major detected and recorded; 16-19 share the
 #     --test-enable/--test-tags/--stop-after-init surface
 #
-# Two execution modes, detected rather than configured:
-#   host        docker is present and <project>-odoo-1 is running -> docker exec
-#   container   no docker, but odoo and postgres answer here -> run directly
-# The lifted original only knew the first. Inside the devcontainer — where the
+# Two execution modes, detected rather than configured, container FIRST:
+#   container   odoo and postgres answer here -> run directly
+#   host        otherwise, docker is present and <project>-odoo-1 is running
+#               -> docker exec
+# The lifted original only knew host mode. Inside the devcontainer — where the
 # checkout is bind-mounted and odoo is on PATH — it failed on `docker: command
-# not found`, which reads as a broken script rather than a wrong assumption.
+# not found`; once docker-from-docker put `docker` on PATH in there too, the
+# docker-first order picked host mode from inside the stack (#1039).
 #
 # Last stdout line: {"passed","status","error","db","module","odoo_version",
 #   "module_target_series","mode","produced_by",
@@ -138,12 +140,19 @@ odoo_c="${proj}-odoo-1"
 dbname="${proj}_test_${task_id}${suffix}"
 
 # ---- mode detection ----------------------------------------------------------
+# Container mode is tried FIRST. Inside the devcontainer `docker` is on PATH too
+# (docker-from-docker, the host's daemon), and the project stack can be running
+# on that host, so the old docker-first order picked host mode from inside the
+# container and ran `docker exec` against a stack this process is not in; Odoo
+# died 0.4 s into init with no traceback and every run read `tests_run: 0`
+# (#1039). A shell where `odoo` and `pg_isready` both answer IS the stack, and
+# needs no PATH shim to say so.
 mode=""
-if command -v docker >/dev/null 2>&1 \
+if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
+  mode="container"
+elif command -v docker >/dev/null 2>&1 \
    && docker ps --filter "name=^${odoo_c}$" --format '{{.Names}}' | grep -q .; then
   mode="host"
-elif command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
-  mode="container"
 else
   echo "no way to run Odoo: docker is absent or ${odoo_c} is not running (run odoo-task-env's stack-ensure.sh first), and this is not a working Odoo container" >&2
   exit 2
