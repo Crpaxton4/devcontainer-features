@@ -44,8 +44,9 @@ target series.
   core addons of the running Odoo. The data dir is stated too, per run. `--addons-path`
   and `--data-dir` replace them.
 - Enterprise is opt-in: set `ODOO_ENTERPRISE_ADDONS` to its directory when the module needs it.
-- Two modes are detected: `host` (docker and a running `<project>-odoo-1`) and
-  `container` (inside the stack). Exit 2 means neither is available.
+- Two modes are detected, `container` first: `container` when `odoo` and `pg_isready`
+  answer here (inside the stack), else `host` (docker and a running
+  `<project>-odoo-1`). Exit 2 means neither is available.
 - `--with-tours` resolves a browser first and exits 6 instead of running when there is none.
 - `--put <artifacts_dir>` writes the result into `<artifacts_dir>/task.json` under
   `test.<module>` through the plugin's artifact script. stdout still prints the JSON.
