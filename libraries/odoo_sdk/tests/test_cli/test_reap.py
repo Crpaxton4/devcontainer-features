@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import odoo_sdk.cli.__main__ as cli
-from odoo_sdk.state import LocalStateClient
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY, LocalStateClient
 from odoo_sdk.state.db import tracker_db_path
 from odoo_sdk.reap import REAP_THRESHOLD_ENV
 from odoo_sdk.billing.timesheet import ABORTED_ANCHOR_NAME, ANCHOR_NAME
@@ -182,14 +182,24 @@ class TestReapCommand(_ReapEnv):
 
 
 class TestAttachExclusion(_ReapEnv):
+    def _attached(self) -> list[str]:
+        """The attachment-only ids the last event recorded, sorted.
+
+        Read off the payload marker rather than ``task_ids``: since #1040 a
+        ``claude:*`` hook event does not BILL the runs it merely attached to, so
+        the marker — the input to the reaper's staleness clock — is where the
+        exclusion this class tests is observable.
+        """
+        payload = self.db.get_events()[-1].payload or {}
+        return sorted(payload.get(ATTACHED_TASK_IDS_PAYLOAD_KEY, []))
+
     def test_stale_run_excluded_from_attachment(self) -> None:
         fresh, stale_running, stale_awaiting = self._seed_fresh_and_stale()
         self._log_event(
             ["log-event", "--source", "claude:PreToolUse", "--attach-active-run"]
         )
-        events = self.db.get_events()
         # Only the fresh run's task id is attached; stale runs are excluded.
-        self.assertEqual(events[-1].task_ids, ["1"])
+        self.assertEqual(self._attached(), ["1"])
 
     def test_env_override_widens_threshold(self) -> None:
         # With a 48h threshold, a 30h-old run is no longer stale and re-attaches.
@@ -198,8 +208,7 @@ class TestAttachExclusion(_ReapEnv):
         self._log_event(
             ["log-event", "--source", "claude:PreToolUse", "--attach-active-run"]
         )
-        events = self.db.get_events()
-        self.assertEqual(sorted(events[-1].task_ids), ["1", "2", "3"])
+        self.assertEqual(self._attached(), ["1", "2", "3"])
 
 
 if __name__ == "__main__":

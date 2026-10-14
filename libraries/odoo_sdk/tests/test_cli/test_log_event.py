@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from odoo_sdk.state import LocalStateClient as TaskStateDB
 from odoo_sdk.state.db import tracker_db_path
 from tests.support import provision_schema
@@ -169,13 +170,20 @@ class TestLogEvent(unittest.TestCase):
             _run(["log-event", "--source", "claude:SessionStart"])
         mock_assert.assert_not_called()
 
-    def test_attach_active_run_attaches_active_task_ids(self) -> None:
+    def test_attach_active_run_records_runs_without_billing_the_fanout(self) -> None:
+        # #1040: a hook event used to BILL every open run, so one keystroke in an
+        # unrelated repo minted a parallel wall-clock session per forgotten run.
+        # The ids are still recorded as attachment-only provenance (#779), which
+        # is what the reaper's clock reads; they are no longer billable.
         db = TaskStateDB()
         db.create_run(101, "Task A", 1, "Proj")
         db.create_run(202, "Task B", 1, "Proj")
         _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
-        events = TaskStateDB().get_events()
-        self.assertEqual(sorted(events[0].task_ids), ["101", "202"])
+        event = TaskStateDB().get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
+        )
 
     def test_attach_active_run_no_active_runs_yields_empty(self) -> None:
         _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
@@ -216,7 +224,11 @@ class TestLogEvent(unittest.TestCase):
         # The stated branch also overrides the cwd-derived provenance column.
         self.assertEqual(events[0].branch, "28788-hook-fix")
 
-    def test_branch_flag_active_run_still_wins(self) -> None:
+    def test_branch_flag_does_not_bill_an_uncorroborated_run(self) -> None:
+        # The active run still wins the resolution — the branch's 28788 never
+        # attributes — but a run the session branch does not corroborate is
+        # attachment-only, so a hook event bills nothing rather than billing the
+        # wrong task (#1040).
         db = TaskStateDB()
         db.create_run(101, "Task A", 1, "Proj")
         _run(
@@ -229,8 +241,29 @@ class TestLogEvent(unittest.TestCase):
                 "28788-hook-fix",
             ]
         )
-        events = TaskStateDB().get_events()
-        self.assertEqual(events[0].task_ids, ["101"])
+        event = TaskStateDB().get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["101"])
+
+    def test_branch_corroborated_run_still_bills_and_drops_the_rest(self) -> None:
+        # The session sits on task 28788's own branch, so that run is genuine
+        # attribution and keeps billing; the other open run is the fan-out.
+        db = TaskStateDB()
+        db.create_run(28788, "Task A", 1, "Proj")
+        db.create_run(202, "Task B", 1, "Proj")
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PostToolUse",
+                "--attach-active-run",
+                "--branch",
+                "28788-hook-fix",
+            ]
+        )
+        event = TaskStateDB().get_events()[0]
+        self.assertEqual(event.task_ids, ["28788"])
+        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["202"])
 
     def test_no_attach_flag_leaves_task_ids_empty(self) -> None:
         # The attribution policy moved into LogEventCommand (#507), but the flag

@@ -8,7 +8,9 @@ No terminal, no live Odoo — the impure fetches happen in the driver.
 import unittest
 from datetime import datetime, timezone
 
-from odoo_sdk.state import EventRecord
+from odoo_sdk.commands.dispatch_telemetry import READ_TASK_IDS_PAYLOAD_KEY
+from odoo_sdk.state import ATTACHED_TASK_IDS_PAYLOAD_KEY, EventRecord
+from odoo_sdk.tui import evidence as evidence_mod
 from odoo_sdk.tui.evidence import (
     STRONG,
     WEAK,
@@ -17,6 +19,7 @@ from odoo_sdk.tui.evidence import (
     classify_confidence,
     compute_overlaps,
     event_citation,
+    event_is_read_only,
     event_unvalidated,
     logged_flag,
     overlap_seconds,
@@ -38,15 +41,33 @@ def _session(sid, task_id, start, end, events=None):
     }
 
 
-def _event(event_id, source="commit", external_id=None, payload=None):
+def _event(event_id, source="commit", external_id=None, payload=None, task_ids=None):
     return EventRecord(
         id=event_id,
         source=source,
         timestamp=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
-        task_ids=["24648"],
+        task_ids=["24648"] if task_ids is None else task_ids,
         repo="acme/web",
         payload=payload,
         external_id=external_id,
+    )
+
+
+def _read_event(event_id, queried="99999"):
+    """An agent dispatch event that only READ a task (#1040)."""
+    return _event(
+        event_id,
+        source="agent",
+        payload={"tool": "get_task", READ_TASK_IDS_PAYLOAD_KEY: [queried]},
+    )
+
+
+def _attached_event(event_id, task_id="24648"):
+    """A hook/agent event naming ``task_id`` only because its run was open (#779)."""
+    return _event(
+        event_id,
+        source="claude:PreToolUse",
+        payload={ATTACHED_TASK_IDS_PAYLOAD_KEY: [task_id]},
     )
 
 
@@ -254,6 +275,86 @@ class TestBuildReviewCards(unittest.TestCase):
         cards = build_review_cards([session], {}, {}, {})
         self.assertEqual(cards[0].citations, ())
         self.assertEqual(cards[0].confidence, WEAK)  # zero events -> weak
+        # Vacuous truth is not read-only: there is no evidence to describe.
+        self.assertFalse(cards[0].read_only)
+
+
+# ── Read-only / attachment-only sessions (#1040) ────────────────────────────
+
+
+class TestPayloadKeyParity(unittest.TestCase):
+    """The two payload keys this module READS are owned by their producers.
+
+    Both spellings are duplicated here as module literals (the
+    ``unvalidated_task_ids`` precedent) rather than imported, because the TUI is
+    a surface and must not reach past core into the state layer. That makes the
+    spelling a two-sided string contract, so it is pinned the way the
+    ``claude:`` prefix is: a rename on either side fails loudly instead of
+    silently returning every read session to "looks like real work".
+    """
+
+    def test_read_key_matches_the_dispatch_emitter(self):
+        self.assertEqual(evidence_mod._READ_KEY, READ_TASK_IDS_PAYLOAD_KEY)
+
+    def test_attached_key_matches_the_state_layer(self):
+        self.assertEqual(evidence_mod._ATTACHED_KEY, ATTACHED_TASK_IDS_PAYLOAD_KEY)
+
+
+class TestEventIsReadOnly(unittest.TestCase):
+    def test_agent_read_event_is_read_only(self):
+        self.assertTrue(event_is_read_only(_read_event(10), "24648"))
+
+    def test_agent_event_with_no_attribution_is_read_only(self):
+        self.assertTrue(
+            event_is_read_only(
+                _event(10, source="agent", task_ids=[]),
+                "24648",
+            )
+        )
+
+    def test_attachment_only_event_is_read_only(self):
+        self.assertTrue(event_is_read_only(_attached_event(10), "24648"))
+
+    def test_attachment_marking_another_task_is_not_read_only(self):
+        # The marker is per id: an event can be attachment-only for a forgotten
+        # run while genuinely naming this one.
+        self.assertFalse(event_is_read_only(_attached_event(10, "70002"), "24648"))
+
+    def test_commit_event_is_real_evidence(self):
+        self.assertFalse(event_is_read_only(_event(10, external_id="git:abc"), "24648"))
+
+    def test_mutating_agent_event_is_real_evidence(self):
+        self.assertFalse(
+            event_is_read_only(
+                _event(10, source="agent", payload={"tool": "task_note"}), "24648"
+            )
+        )
+
+    def test_non_dict_payload_is_no_signal(self):
+        self.assertFalse(
+            event_is_read_only(_event(10, source="agent", payload="oops"), "24648")
+        )
+
+
+class TestReadOnlyCards(unittest.TestCase):
+    def test_all_read_events_flag_the_card(self):
+        session = _session(
+            1, "24648", (9, 0), (11, 0), events=[{"event_id": 10}, {"event_id": 11}]
+        )
+        events = {1: [_read_event(10), _read_event(11)]}
+        self.assertTrue(build_review_cards([session], events, {}, {})[0].read_only)
+
+    def test_one_real_event_clears_the_flag(self):
+        session = _session(
+            1, "24648", (9, 0), (11, 0), events=[{"event_id": 10}, {"event_id": 11}]
+        )
+        events = {1: [_read_event(10), _event(11, external_id="git:abc1234")]}
+        self.assertFalse(build_review_cards([session], events, {}, {})[0].read_only)
+
+    def test_attachment_only_session_flags_the_card(self):
+        session = _session(1, "24648", (9, 0), (11, 0), events=[{"event_id": 10}])
+        events = {1: [_attached_event(10)]}
+        self.assertTrue(build_review_cards([session], events, {}, {})[0].read_only)
 
 
 if __name__ == "__main__":

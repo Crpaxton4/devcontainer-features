@@ -284,6 +284,42 @@ class TestReviewBodyLines(unittest.TestCase):
         body = "\n".join(review_body_lines([card], 0, True))
         self.assertIn("no linked events", body)
 
+    def _read_only_card(self, **kw):
+        base = dict(
+            session_id=1,
+            task_id="24648",
+            started_at="2026-07-01T09:00:00",
+            ended_at="2026-07-01T09:40:00",
+            hours=0.67,
+            confidence=WEAK,
+            logged_hours=0.0,
+            logged_flag="",
+            overlaps=(),
+            citations=("agent",),
+            unvalidated=False,
+            read_only=True,
+        )
+        base.update(kw)
+        return ReviewCard(**base)
+
+    def test_read_only_badge_on_the_card_line(self):
+        # #1040: the badge that says this session may be worth nothing at all.
+        body = "\n".join(review_body_lines([self._read_only_card()], 0, False))
+        self.assertIn("read-only", body)
+
+    def test_read_only_badge_leads_the_other_badges(self):
+        card = self._read_only_card(logged_hours=2.0, logged_flag="partial")
+        line = "\n".join(review_body_lines([card], 0, False))
+        self.assertLess(line.index("read-only"), line.index("logged 2.0h"))
+
+    def test_read_only_detail_in_the_pane(self):
+        body = "\n".join(review_body_lines([self._read_only_card()], 0, True))
+        self.assertIn("read-only: every event is an agent read", body)
+
+    def test_a_normal_card_carries_no_read_only_badge(self):
+        body = "\n".join(review_body_lines(_cards(), 0, True))
+        self.assertNotIn("read-only", body)
+
 
 # ── Entering review and the badges it computes ──────────────────────────────
 

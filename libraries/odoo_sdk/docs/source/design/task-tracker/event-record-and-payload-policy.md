@@ -82,16 +82,48 @@ that used to disagree. The rule:
    the rest through `int`, so `5`, `"5"`, and `" 5 "` all record as `"5"`;
 2. otherwise the event attributes to every *non-stale* active run
    (`_active_run_task_ids`, sharing `reap`'s staleness predicate), because any
-   interaction with a task — read-only inspection included — is active work on it;
-3. with no active run (or `attach_active_run=False`) the scope is empty:
+   interaction with a task — read-only inspection included — is active work on it.
+   An id that lands here for no reason beyond that run being open is also
+   recorded as attachment-only (`attached_run_task_ids`, #779), which is what
+   keeps the reaper's staleness clock from being refreshed by the very
+   attachment it is meant to stop;
+3. with no active run, the `<task-id>-<slug>` convention of the *caller-stated*
+   branch recovers the id (#574), so a session on a task branch that was never
+   `start_task`-ed still attributes. A branch whose first path segment is a
+   conventional-commit type (`docs/`, `fix/`, `feat/`, …) is ignored: that is the
+   GitHub-issue convention, so its digit run is an issue number, not an Odoo task
+   id (#1040);
+4. with none of the above (or `attach_active_run=False`) the scope is empty:
    untargeted session-level activity, which is excluded from derivation
    permanently and can therefore never bill.
+
+One post-resolution exclusion then applies, in `execute`: for a `claude:*` hook
+source, `billable_task_ids` removes the attachment-only ids from `task_ids`
+(#1040). The shim fires on every tool use in the container and states no task, so
+rule 2 used to bill one keystroke to every open run — six forgotten runs meant
+six parallel wall-clock sessions. The ids stay in the payload (the reaper reads
+them); they are simply not attribution. The exclusion is hook-scoped: a
+`source="agent"` tool call made inside an open run is a human driving that run,
+which is the #507 behaviour.
 
 Before #507 the MCP wrapper attributed an event only when the dispatched tool's
 signature literally contained a `task_id` parameter, so two tools doing
 equivalent work on the same task landed on opposite sides of the derivation
-filter. `_event_task_ids` (`odoo_sdk/mcp/server.py`) still derives that
-signature-bound `task_id`, but now hands it over only as a *hint*.
+filter. `_event_task_ids` (`odoo_sdk/commands/dispatch_telemetry.py`) still
+derives that signature-bound `task_id`, but now hands it over only as a *hint* —
+and since #1040 only for a tool in `ATTRIBUTING_TOOLS`, the explicit frozenset of
+built-ins that MUTATE the task they name (`start_task`, `stop_task`,
+`resume_task`, `close_task`, `abort_task`, `abort_run`, `stop_run`, `stop_all`,
+`task_note`, `task_question`, `create_task`, `schedule_activity`,
+`mark_activity_done`). A READ tool's queried id is recorded under
+`read_task_ids` in the payload instead: reading a task is not a claim that the
+task was worked, and tagging it minted one derived session — floored to 0.25 h by
+`min_session_hours` — per investigation read. `assign_event`,
+`normalize_timesheets`, and `resync` write, but what they write *is* the billing
+record, so they are non-attributing too; otherwise correcting a task's time would
+bill that correction to the task. The partition over every built-in command is
+pinned by `tests/test_mcp/test_server_events.py`, so a new command must state its
+side rather than inherit the non-attributing default silently.
 
 **Provenance (`repo` / `branch`).** Resolved from the working tree at write time
 (`current_repo_label`, `current_branch_label`) unless the caller states them
@@ -222,10 +254,12 @@ Listed, not fixed here. Each is a candidate for its own issue.
    `_emit_tool_event` now writes the reconstructable
    `{"tool", "args", "outcome", ...identifier fields}` shape in place of the
    former `{"tool": name}` subject-duplicate. *(was the core of #510.)*
-2. **Attribution basis is not recorded.** `resolve_task_ids` returns the scope
-   but not whether it came from an explicit hint or the active-run fallback, so
-   the #507 decision is invisible in the row. A payload field would make it
-   verifiable. *(pairs with #507.)*
+2. **Attribution basis is not recorded.** *(Partly resolved by #779 / #1040.)*
+   `resolve_attribution` now reports which ids rule 2 alone produced, and the
+   command records them under `attached_run_task_ids`; a read tool's queried id
+   is recorded under `read_task_ids`. What is still unrecorded is the positive
+   case — a row does not say whether its ids came from an explicit hint or from
+   the session branch. *(pairs with #507.)*
 3. **Argument names are not recorded.** The minimalism stance excludes argument
    *values*; it need not exclude their *names*, which reveal shape rather than
    content and would explain an attribution. *(pairs with #510 question 2.)*

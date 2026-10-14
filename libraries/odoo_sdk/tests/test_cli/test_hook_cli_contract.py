@@ -31,6 +31,7 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import odoo_sdk.cli.__main__ as cli
@@ -179,10 +180,17 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._nongit, ignore_errors=True)
 
-    def _run_shim_argv(self, subject: str, payload: str) -> None:
+    def _run_shim_argv(
+        self, subject: str, payload: str, branch: Optional[str] = None
+    ) -> None:
         """Invoke ``cli.main`` with the argv ``claude-event-hook`` assembles for a
         PreToolUse event: ``log-event --source claude:PreToolUse
-        --attach-active-run --subject <tool> --payload <json>``."""
+        --attach-active-run --subject <tool> [--branch <b>] --payload <json>``.
+
+        The shim always forwards the session's branch (#574); ``branch=None``
+        models the one case where it has none to forward (a detached HEAD or a
+        non-repo cwd), which since #1040 is also the case where an open run is
+        attachment-only and therefore not billed."""
         argv = [
             "odoo-sdk",
             "log-event",
@@ -191,6 +199,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             "--attach-active-run",
             "--subject",
             subject,
+            *(["--branch", branch] if branch is not None else []),
             "--payload",
             payload,
         ]
@@ -201,20 +210,35 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         ):
             cli.main()
 
+    def _predicate_matches(self) -> int:
+        """Rows in the real table matching the real billing predicate."""
+        conn = sqlite3.connect(str(tracker_db_path(self._state)))
+        try:
+            (count,) = conn.execute(
+                f"SELECT COUNT(*) FROM events WHERE {_DEVELOPMENT_SOURCE_PREDICATE}"
+            ).fetchone()
+        finally:
+            conn.close()
+        return count
+
     def test_full_hook_vector_lands_a_billing_eligible_row(self) -> None:
         db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
+        db.create_run(28788, "Task A", 1, "Proj")
         db.create_run(202, "Task B", 1, "Proj")
 
-        self._run_shim_argv("Bash", '{"session_id": "s-1", "tool_name": "Bash"}')
+        self._run_shim_argv(
+            "Bash", '{"session_id": "s-1", "tool_name": "Bash"}', "28788-hook-fix"
+        )
 
         events = TaskStateDB().get_events()
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event.source, "claude:PreToolUse")
         self.assertEqual(event.subject, "Bash")
-        # --attach-active-run must have attached BOTH active runs' task ids.
-        self.assertEqual(sorted(event.task_ids), ["101", "202"])
+        # The session is on task 28788's own branch, so --attach-active-run
+        # attributes it to that run and that run ALONE: the other open run is
+        # the #1040 fan-out, recorded as provenance but never billed.
+        self.assertEqual(event.task_ids, ["28788"])
         # --payload must have persisted verbatim, alongside the attachment-only
         # provenance the command records for the ids rule 2 alone attributed
         # (#779) — the marker is additive and never rewrites a caller's keys.
@@ -223,21 +247,32 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             {
                 "session_id": "s-1",
                 "tool_name": "Bash",
-                ATTACHED_TASK_IDS_PAYLOAD_KEY: event.task_ids,
+                ATTACHED_TASK_IDS_PAYLOAD_KEY: ["202"],
             },
         )
 
         # The persisted row must satisfy the billing predicate — this is what
         # makes a hook event sessionize/bill. A prefix drift would persist a row
         # that never bills; assert the real predicate matches it.
-        conn = sqlite3.connect(str(tracker_db_path(self._state)))
-        try:
-            (count,) = conn.execute(
-                f"SELECT COUNT(*) FROM events WHERE {_DEVELOPMENT_SOURCE_PREDICATE}"
-            ).fetchone()
-        finally:
-            conn.close()
-        self.assertEqual(count, 1)
+        self.assertEqual(self._predicate_matches(), 1)
+
+    def test_hook_vector_without_a_task_branch_bills_no_run(self) -> None:
+        # The #1040 fan-out vector: two runs left open, a session with no task
+        # branch to corroborate either. The row still lands and still matches the
+        # billing predicate (so it keeps the reaper's clock and the session
+        # narrative), but it attributes to NO task instead of to both.
+        db = TaskStateDB()
+        db.create_run(101, "Task A", 1, "Proj")
+        db.create_run(202, "Task B", 1, "Proj")
+
+        self._run_shim_argv("Bash", '{"session_id": "s-1", "tool_name": "Bash"}')
+
+        event = TaskStateDB().get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
+        )
+        self.assertEqual(self._predicate_matches(), 1)
 
     def test_captured_prompt_names_the_session_end_to_end(self) -> None:
         # #710 across the whole vector: the shim's payload goes through the real
