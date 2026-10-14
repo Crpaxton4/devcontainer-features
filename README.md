@@ -155,50 +155,47 @@ claude plugin update  odoo-dev    # version-triggered: refetches only when plugi
 
 The repo is private, so both go through your existing `gh`/git credentials. For a fast edit loop, a checkout at `<config>/skills/odoo-dev/` loads in place as `odoo-dev@skills-dir` — never alongside an installed copy, or every skill, agent and command registers twice and competes for the same triggers.
 
-Start at [`odoo-dev:odoo-dev-map`](plugins/odoo-dev/skills/odoo-dev-map/SKILL.md). It routes work to the skill or agent that owns it and never does the stage work itself. What follows is a map; the `SKILL.md` and agent files are the territory.
+The five slash commands in [`plugins/odoo-dev/commands/`](plugins/odoo-dev/commands) are the only entry points: `/odoo-dev:plan`, `/odoo-dev:task`, `/odoo-dev:test`, `/odoo-dev:pr` and `/odoo-dev:upgrade`. What follows is a map; the `SKILL.md`, agent and command files are the territory.
 
 ### Inventory
 
-**16 skills, 5 subagents, 5 slash commands** — the counts [`plugins/odoo-dev/scripts/validate.sh`](plugins/odoo-dev/scripts/validate.sh) asserts. Reference a skill as `odoo-dev:<name>`; frontmatter names stay bare and the namespace is derived. Individual plugin skills cannot be switched off — `skillOverrides` never reaches a plugin-sourced skill — so the only granularity is the whole plugin or none of it.
+**14 skills, 4 subagents, 5 slash commands** — the counts [`plugins/odoo-dev/scripts/validate.sh`](plugins/odoo-dev/scripts/validate.sh) asserts. Reference a skill as `odoo-dev:<name>`; frontmatter names stay bare and the namespace is derived. Individual plugin skills cannot be switched off — `skillOverrides` never reaches a plugin-sourced skill — so the only granularity is the whole plugin or none of it.
 
 | Group | Skills (under [`plugins/odoo-dev/skills/`](plugins/odoo-dev/skills)) |
 | --- | --- |
 | Delivery — the doer chain, one step per skill | `odoo-repo-map`, `odoo-prior-art`, `odoo-task-env`, `odoo-test-run`, `odoo-code-review`, `odoo-pr`, `odoo-release` |
-| Consulting | `discovery-notes`, `odoo-quote`, `fibonacci-estimate`, `odoo-design-doc` |
-| Platform | `odoo-devcontainer`, `odoo-populate-db`, `odoo-upgrade`, `principles`, `odoo-dev-map` |
+| Consulting | `discovery-notes`, `estimate`, `odoo-design-doc` |
+| Platform | `odoo-devcontainer`, `odoo-populate-db`, `odoo-upgrade`, `principles` |
 
 Agents are plain subagents, in [`plugins/odoo-dev/agents/`](plugins/odoo-dev/agents). Their names carry the `odoo-dev-` prefix because plugin agent names are **not** auto-namespaced and would otherwise collide across plugins.
 
-| Agent | Owns | Writes |
+| Agent | Owns | Writes (section of `task.json`) |
 | --- | --- | --- |
-| [`odoo-dev-scoper`](plugins/odoo-dev/agents/odoo-dev-scoper.md) | Discovery, prior-art verdict, estimate, design doc. Never touches a repo | `05-scope.json` |
-| [`odoo-dev-builder`](plugins/odoo-dev/agents/odoo-dev-builder.md) | One task, one worktree: code, tests, conventional commits | `10-env.json`, `20-build.json` |
-| [`odoo-dev-tester`](plugins/odoo-dev/agents/odoo-dev-tester.md) | Independent evidence: tests, tours, the Odoo review lens. **Cannot edit code** | `30-test.json`, `35-review.json` |
-| [`odoo-dev-pr`](plugins/odoo-dev/agents/odoo-dev-pr.md) | Push, local CodeRabbit review, draft PR, promotion, chatter notes | `50-pr.json`, `60-release.json` |
-| [`odoo-dev-upgrader`](plugins/odoo-dev/agents/odoo-dev-upgrader.md) | Cross-version porting, 16 → 17 → 18 → 19 | `10-env.json`, `20-build.json` |
+| [`odoo-dev-builder`](plugins/odoo-dev/agents/odoo-dev-builder.md) | One task, one worktree: code, tests, a green self-test, conventional commits | `build` |
+| [`odoo-dev-tester`](plugins/odoo-dev/agents/odoo-dev-tester.md) | Independent evidence: tests, tours, the Odoo review lens. **Cannot edit code** | `review` (`test` is written by the test script) |
+| [`odoo-dev-pr`](plugins/odoo-dev/agents/odoo-dev-pr.md) | Push, local CodeRabbit review, draft PR, promotion, chatter notes | nothing |
+| [`odoo-dev-upgrader`](plugins/odoo-dev/agents/odoo-dev-upgrader.md) | Cross-version porting, 16 → 17 → 18 → 19 | `build` |
 
-One slash command per agent, in [`plugins/odoo-dev/commands/`](plugins/odoo-dev/commands): `/odoo-dev:quote`, `/odoo-dev:task`, `/odoo-dev:upgrade`, `/odoo-dev:test`, and `/odoo-dev:pr` (which also carries the release route, `/odoo-dev:pr release <from> <to>`). Each resolves the paths its agent needs and dispatches it. **No command chains to another** — you type the next one once you have read what the last one returned.
+One forked slash command per agent, in [`plugins/odoo-dev/commands/`](plugins/odoo-dev/commands): `/odoo-dev:task`, `/odoo-dev:test`, `/odoo-dev:upgrade`, and `/odoo-dev:pr` (which also carries the release route, `/odoo-dev:pr release <from> <to>`, and needs no task directory for it). Each resolves the paths its agent needs and dispatches it. `/odoo-dev:plan` runs inline: it enters plan mode, writes the spec (prior art, acceptance criteria, step plan with a verify check per step, hours) into the native plan file, and on approval stores it as the `plan` section. **No command chains to another** — you type the next one once you have read what the last one returned. Iterate is a re-run of `/odoo-dev:task`: the builder reads the latest test and review sections and fixes those failures first.
 
 ### Dispatch
 
-Routing ends in a `Task` call, not in a recommendation: naming the owning agent in prose dispatches nothing. `subagent_type` is the namespaced name (`odoo-dev:odoo-dev-builder`, and the same shape for the other four) — a bare name does not resolve, and the fallback to `general-purpose` drops every `skills:` preload, `disallowedTools` entry and hook the definition carries.
+Routing ends in a `Task` call, not in a recommendation: naming the owning agent in prose dispatches nothing. `subagent_type` is the namespaced name (`odoo-dev:odoo-dev-builder`, and the same shape for the other three) — a bare name does not resolve, and the fallback to `general-purpose` drops every `skills:` preload, `disallowedTools` entry and hook the definition carries.
 
-Every spawn prompt carries two absolute paths, typed out in full in every call: the **artifacts directory** and [`scripts/artifact.sh`](plugins/odoo-dev/scripts/artifact.sh). A subagent's Bash call inherits no environment and keeps no state from the call before it, so a variable name in a command is not a path — it expands to nothing and the command runs without it. There is no evidence gate in front of any of this: the artifacts are evidence an agent reads and reports on, never a precondition that blocks the work.
+Every spawn prompt carries two absolute paths, typed out in full in every call: the **artifacts directory** and [`scripts/artifact.sh`](plugins/odoo-dev/scripts/artifact.sh). A subagent's Bash call inherits no environment and keeps no state from the call before it, so a variable name in a command is not a path — it expands to nothing and the command runs without it. There is no evidence gate in front of any of this: the artifacts are evidence an agent reads and reports on, never a precondition that blocks the work. Every command ends with one fixed status block (`status`, `artifact`, one sentence, `next`) and one small table for its stage.
 
 | Workflow | Chain |
 | --- | --- |
-| Scoping and quoting | `scoper` → `05-scope.json` → `builder` |
-| Task delivery | `builder` → `tester` → `pr` |
+| Plan | `/odoo-dev:plan` → `plan` section → `/odoo-dev:task` |
+| Task delivery | `builder` → `tester` → `pr`; red tests go back to `builder` |
 | Version upgrade | `upgrader` → `tester` → `pr` |
-| Release | `pr` → draft release PR + a note on every included task |
+| Release | `pr release <from> <to>` → draft release PR + a note on every included task; no task directory |
 
 ### Handoff artifacts
 
-Append-only JSON in a per-task directory, written only through `artifact.sh` — artifacts survive compaction, a session boundary, a killed subagent, and a human taking over mid-chain, and a JSON blob in a prompt survives none of those.
+One file per task, `<state dir>/tasks/<id>/task.json`, written only through `artifact.sh`, with one section per stage: `plan` (the approved plan, verbatim), `build` (`worktree`, `branch`, `modules`, `odoo_version`, `default_branch`), `test` (one entry per module, written by `run-tests.sh --put` and never re-typed by an agent) and `review` (`findings`, `criteria_results`). Each command reads and writes only its section. A section exists only when a later step branches on it and no script already provides the same thing.
 
-`00-context` · `05-scope` · `10-env` · `20-build` · `30-test` · `35-review` · `50-pr` · `60-release`
-
-`artifact.sh` validates required fields and cheap types before the file is named, writes atomically, and **never overwrites**: a second put of a stage lands at `<stage>.2.json`, and `get` reads the latest revision while `list` shows them all — so a chain can recover from a red test, but "green on the third try" can never read as "green".
+`artifact.sh set` validates the payload (JSON, the required keys of the section, cheap types) and replaces the section in place with an atomic write; `get` reads a section or a key, `--raw` unquotes the plan markdown; `list` names the sections on disk; `sections` prints the schema. The file holds the latest state only. A re-run is safe through the scripts — `pr-open.sh` edits the open PR on the head and `writeback.sh --dedupe-key` posts once — not through a record.
 
 ### Hooks
 

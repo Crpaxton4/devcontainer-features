@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: estimate-change-request
+description: Should fire odoo-dev:estimate for an hours request on an Odoo change.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    The client wants a delivery-date field on sale orders that syncs to the picking. How many hours should we estimate for them?
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: fires-estimate
+    tool: Skill
+    input_match: "estimate"
+    min: 1
+expected_outcome: >-
+  The estimate skill is invoked for the hours. odoo-prior-art may fire first, because
+  a build-versus-adopt verdict changes which lines are estimated at all; that is the
+  composition the plan command spells out and this case does not forbid it. The full
+  scope path for a task with an id is /odoo-dev:plan, which cannot be model-invoked,
+  so a prose request lands on the estimate skill inline.

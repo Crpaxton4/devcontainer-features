@@ -1,0 +1,21 @@
+schema_version: "1.1"
+name: release-ad-hoc-branch-pair
+description: Should dispatch the odoo-dev-pr subagent for a release the user took no part in.
+tags: [trigger, positive, train]
+plugins: [odoo-dev]
+execution:
+  prompt: |
+    Open the release PR from UAT into main on the Acme repo. I wasn't involved in those tasks — just promote whatever has merged.
+  max_turns: 3
+  timeout_seconds: 180
+runs: 2
+graders:
+  - type: tool_used
+    name: spawns-odoo-dev-pr
+    tool: Task
+    input_match: "odoo-dev-pr"
+    min: 1
+expected_outcome: >-
+  A Task call spawns odoo-dev-pr on the release route. No task directory, no earlier
+  artifact and no confirmed branch flow is required: the inputs are the two branch
+  names and the checkout, and the manifest and the draft PR come from the scripts.

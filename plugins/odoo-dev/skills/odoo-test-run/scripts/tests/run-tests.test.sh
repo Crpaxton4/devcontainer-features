@@ -364,5 +364,35 @@ PATH="$nobrowser:$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC
   bash "$SUT" myrepo 4242 mymodule --with-tours >/dev/null 2>&1 || rc=$?
 expect "no browser + --with-tours exits 6" "$rc" "6"
 
+# ---------- --put writes the result into task.json ------------------------------
+# The test section of task.json is written by this script and never re-typed by an
+# agent. stdout still carries the JSON; the entry lands under test.<module>.
+rm -rf "$work/addons/.worktrees/task-4242/mymodule"   # no declared tours here
+putdir="$work/artifacts-dir"
+out="$(run "$green" 0 --put "$putdir")"
+expect "--put still prints the JSON on stdout" "$(field "$out" passed)" "true"
+[ -f "$putdir/task.json" ]
+expect "--put creates task.json" "$?" "0"
+entry="$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify(o.test.mymodule))' "$putdir/task.json" 2>/dev/null)"
+expect "--put lands the run under test.<module>" "$(field "$entry" produced_by)" "run-tests.sh"
+expect "--put stores the verdict verbatim"       "$(field "$entry" tests_run)" "2"
+# A series mismatch goes through the same path, so the refusal is on disk too.
+run "$green" 0 --target-series 17.0 --put "$putdir" >/dev/null
+entry="$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify(o.test.mymodule))' "$putdir/task.json" 2>/dev/null)"
+expect "--put records a series mismatch as the latest entry" "$(field "$entry" status)" "series_mismatch"
+
+# A write that cannot happen is exit 7 with the reason on stderr, never a silent
+# stdout-only run that reads as filed.
+: > "$work/not-a-dir"
+rc=0
+PATH="$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 \
+  ODOO_FAKE_ARGS="$work/args" ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" \
+  WORKTREE_ADDONS_BASE="$work/addons" \
+  bash "$SUT" myrepo 4242 mymodule --put "$work/not-a-dir" >"$work/put.out" 2>"$work/put.err" || rc=$?
+expect "--put that cannot write exits 7" "$rc" "7"
+case "$(cat "$work/put.err")" in *"could not write the test entry"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL exit 7 should say why: $(cat "$work/put.err")" >&2 ;; esac
+expect "the JSON was still printed before the refusal" "$(field "$(tail -1 "$work/put.out")" passed)" "true"
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

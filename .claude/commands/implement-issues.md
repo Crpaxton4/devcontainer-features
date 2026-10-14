@@ -374,8 +374,9 @@ One template, filled per worker.
     - `persisted-paths.tsv` ↔ `devcontainer-feature.json` ↔ `setup.sh` ↔
       `setup.ps1` must move together.
     - `plugins/odoo-dev/scripts/validate.sh` carries hard-coded inventory counts
-      for skills, agents and commands, plus a router-completeness gate in
-      `skills/odoo-dev-map/SKILL.md`. **Read the current numbers out of
+      for skills, agents and commands, plus a commands-to-agents completeness
+      gate (each agent dispatched by exactly one forked command; `plan.md`
+      inline). **Read the current numbers out of
       `validate.sh` — do not quote them from here.** This bullet used to name
       them and drifted (#847): it said 15 skills while the gate asserted 16. A
       count copied into prose is a second registry, which is the same defect as

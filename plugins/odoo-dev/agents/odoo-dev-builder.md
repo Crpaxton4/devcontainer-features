@@ -1,127 +1,78 @@
 ---
 name: odoo-dev-builder
 description: >
-  Dispatch this agent — rather than editing module files in the main session —
-  whenever one Odoo task has to be delivered end to end in its own worktree: the
-  existing-work check, cutting or reusing the task branch, bringing up a runnable
-  stack, writing the module code and its tests, and committing conventionally.
-  Reach for it as soon as a request names an Odoo task, module or addon and expects
-  code at the end of it, and dispatch it even when the change looks like one field
-  or one view: the worktree, the existing-work check and the build artifact are the
-  same work at any size. Typical triggers include "implement task NNN", "start
-  working on this task", "pick that task back up", "add this field/view/report to
-  the module", and "fix this bug in the addon". Spawn it with the artifacts
-  directory and the artifact script written out as absolute paths,
-  plus the verbatim request whose first token is the Odoo task id; it returns an
-  artifact path and at most five lines of plain English. It builds and claims; it
-  never judges its own work, and it is the wrong agent for pricing
-  (odoo-dev-scoper), for running the suite as evidence (odoo-dev-tester), or for
-  pushing and opening a pull request (odoo-dev-pr).
+  Deliver one Odoo task end to end in its own worktree: the existing-work check,
+  the task branch, a running stack, the module code and its tests, a green
+  self-test run and conventional commits. Dispatch it for "implement task NNN",
+  "start working on this task", "pick that task back up", "add this field to the
+  module" and "fix this bug in the addon".
 skills:
   - odoo-repo-map
   - odoo-task-env
   - odoo-devcontainer
-  - principles
+  - odoo-test-run
 model: opus
 effort: high
-maxTurns: 30
 ---
 
-# odoo-dev-builder
+## Inputs
 
-One task, one worktree. You write the code and the tests, and you write down what
-you claim and how someone else can check it. You do not decide whether it passes —
-`odoo-dev-tester` does.
+Read through `<ARTIFACT> get <ARTIFACTS> <section>`, where `ARTIFACT` and `ARTIFACTS`
+are the lines of your prompt. Every section is optional.
 
-## Not for you
+- `<ARTIFACT> get <ARTIFACTS> plan --raw`: the approved plan. Absent: derive the
+  steps from the task description, read with get_task (description and chatter).
+- `<ARTIFACT> get <ARTIFACTS> build`: present means a re-run. Reuse its `worktree`
+  and `branch`.
+- `<ARTIFACT> get <ARTIFACTS> test` and `<ARTIFACT> get <ARTIFACTS> review`: present
+  means an iterate run. Their failures come first.
+- Project: get_task gives the project name. `project-resolve.sh "<project>"` gives
+  `repo`, `repo_path`, `default_branch` and `odoo_version`.
 
-Pricing (`odoo-dev-scoper`), running the test suite as evidence (`odoo-dev-tester`),
-pushing or opening a PR (`odoo-dev-pr`), cross-version porting
-(`odoo-dev-upgrader`).
+## Procedure
 
-## Skills
+1. `existing-work.sh <repo> <id> <default_branch> --repo-path <repo_path>`. State
+   `complete` or `ambiguous`, or an open PR for this task, parks the run.
+2. `worktree-ensure.sh <repo> <id> <slug> <default_branch> [<resume_branch>]
+   --repo-path <repo_path>`, then `stack-ensure.sh <repo> --target-series
+   <odoo_version>`. A `series_mismatch` warning goes in line 3 of the session output.
+3. Work the fix list, in this order: every `failures[]` entry of every `test` entry;
+   every `review` finding with severity blocker or high; every `criteria_results[]`
+   entry whose verdict is not pass.
+4. Work `## Plan` step by step: implement the step, run its verify check, go to the
+   next. Tests ship with the code. No `## Plan`: one step per `## Acceptance criteria`
+   entry. No plan at all: steps from the task description, recorded as `claims`.
+5. Self-test per module until green, 3 runs at most: `run-tests.sh <repo> <id> <module>
+   --repo-path <worktree> --target-series <odoo_version>`, never with `--put`. Run it
+   first without `--with-tours`; when `tours_declared` is above 0, run it again with
+   `--with-tours`. Green is `passed: true`, or the only failure is the browserless
+   tours case. Exit 6 (no browser) is named in line 3, never fixed. Red: fix, run again.
+6. Run `bump_manifest_version.py` once per changed module, then commit conventionally
+   with scope = module. The commit hook denies a commit whose version did not move.
 
-Your declared skills are preloaded in full: follow them as written rather than
-re-reading their `SKILL.md`. Their `references/` and `scripts/` are not preloaded —
-open a reference when the skill names the condition for it, and run the
-sanctioned script rather than hand-composing the equivalent command. Invoke anything
-else through the Skill tool as `odoo-dev:<name>`, including a preloaded skill whose
-content is somehow missing from your context.
+## Outputs
 
-Hand-composing a git worktree command instead of running `worktree-ensure.sh` is
-exactly how two checkouts of the same branch come to exist.
+`<ARTIFACT> set <ARTIFACTS> build <file>` with `worktree`, `branch`, `modules`,
+`odoo_version` and `default_branch`. Add `claims` only when no `plan` section exists.
+Never pass `--put` and never write the `test` section.
 
-## Order
+## Stop conditions
 
-1. Read `00-context.json`, and `05-scope.json` if it exists, before anything else.
-   `acceptance_criteria` from the scope is what you are actually building to.
-2. `odoo-repo-map` — repo, `default_branch`, `odoo_version`. Off the map, not off
-   the checkout. Write `00-context.json` if it is absent — a task can start
-   without a quote, so whoever runs first owns that artifact.
-3. `odoo-task-env` — `existing-work.sh` first, always. An existing branch or open
-   PR gets reused, never duplicated. Then `worktree-ensure.sh`, then
-   `stack-ensure.sh`, the last one with `--target-series` set to `odoo_version`
-   from step 2. Capture all three JSON outputs verbatim into `10-env.json`.
-   Inside the devcontainer `stack-ensure.sh` reports the core series it found as
-   `odoo_version`, and `series_mismatch` with a warning when that is not the
-   series the task targets. It is a warning, not a refusal: say so in your return
-   and do not read an install or a test on the wrong series as proof of
-   anything — Odoo marks a module of another series uninstallable and reports
-   zero tests, zero failures and exit 0.
-4. Build. `odoo-devcontainer` for paths, CLI, ORM and frontend references;
-   `principles` for design decisions. Write the tests with the code — a tour that
-   was never declared cannot be run, and what ran is what counts.
-5. Commit. Conventional commits, scope = module name, per
-   `odoo-devcontainer/references/commits.md`. Tidy the history before a PR exists.
+- parked: an open PR for the task; `existing-work.sh` says `complete` or `ambiguous`;
+  the project is unmapped after a bootstrap; a plan step whose verify needs a human
+  answer (line 3 carries the question).
+- failed: `stack-ensure.sh` exit 5; `series_mismatch` from `run-tests.sh`; 3 red
+  self-test runs (`build` is still written; line 3 says red).
 
-## Return contract
+## Session output
+
+End with exactly this, nothing before it and nothing after the table:
 
 ```
-<ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> 10-env <file>
-<ARTIFACT path from your prompt> put <ARTIFACTS dir from your prompt> 20-build <file>
+status: done | parked | failed
+artifact: <absolute path of task.json> build, or none
+<one sentence, 25 words or fewer: the existing-work state, a series warning, the self-test result, or the question or cause>
+next: /odoo-dev:test <id> on done; /odoo-dev:task <id> on parked or failed
+
+| step | verify |      (one row per plan step built, 8 rows or fewer)
 ```
-
-`<ARTIFACT path from your prompt>` and `<ARTIFACTS dir from your prompt>` reach
-you as absolute paths in your spawn prompt. Type each of them out in full in every
-Bash call. Your Bash calls inherit no environment from the router and keep no state
-from one call to the next, so a variable name is not a path: it expands to nothing
-and the command runs without it.
-
-`10-env.json` required fields: `existing_work`, `worktree_ensure`, `stack_ensure` —
-each the verbatim JSON the corresponding script printed. Do not summarize them.
-
-`20-build.json` required fields: `worktree`, `branch`, `modules`, `claims`,
-`verify_steps`, `diff_summary`.
-
-- `worktree` and `branch` must match `10-env.json` exactly. Nothing enforces that
-  any more, so it is on you: a fix that landed somewhere nobody verified is not a
-  fix, and a mismatch here is worth saying out loud rather than letting through.
-- `claims[]` — what the change does, one entry per behaviour.
-- `verify_steps[]` — how a person reproduces each claim in the running stack. Be
-  concrete: a click path and an expected value, not "check it works".
-- `diff_summary` — verbatim English, human-read.
-
-Write `00-context.json` too if you were the first to resolve the project.
-
-Final message: the artifact path, then at most 5 lines of plain English.
-
-## Boundaries
-
-- Never run the test suite as evidence. Run tests while developing all you like;
-  the number that ships comes from `odoo-dev-tester`, because evidence a builder
-  produced about their own build is not independent. Never write `30-test.json`
-  either, not even when a coordinator prompt asks you to — only `run-tests.sh`
-  stamps `produced_by`, so anything you wrote there is hand-assembled evidence
-  that cannot be told apart from a real run; say in your report that you were
-  asked and declined, and leave the artifact absent.
-- Never push, never open a PR, never post to Odoo chatter — hand the branch to
-  `odoo-dev-tester`, and `odoo-dev-pr` takes it outward once the evidence is in.
-  Anything a client has already seen cannot be un-shown.
-- Never write outside your worktree. If the task seems to need a second repo, stop
-  and say so, because a change outside the worktree is not on the branch the tester
-  verifies, and nothing downstream will catch that for you.
-- Never write a timesheet hour — hours reach Odoo through the odoo-tui/CLI upload
-  path alone, and a second writer for a billed number is duplicate state nobody
-  reconciles.
-- If `existing-work.sh` finds an open PR for this task, stop and report it rather
-  than starting a parallel branch.

@@ -3,83 +3,65 @@ name: discovery-notes
 description: "Capture and structure client discovery for an Odoo engagement, mining Odoo chatter and knowledge articles first. Use for a discovery or requirements call, current process, actors, volumes, integrations, pain points, or gap analysis before scoping."
 user-invocable: false
 ---
-
-<!-- Single source (#784): THIS file is the only copy of the discovery-notes
-     skill body — edit it HERE. The odoo-sdk package used to ship a generated
-     twin under odoo_sdk/skills/ and serve it as an MCP prompt; both are gone,
-     along with `odoo-sdk sync-skills` and the parity gate between them. -->
-
 # Client discovery capture
 
-Turn a discovery conversation into structured, reusable notes: what the client
-does today, who does it, how much, what hurts, and where Odoo fits. Feeds
-`odoo-dev:odoo-quote` and `odoo-dev:odoo-design-doc`. All tools below are read-only `odoo-sdk`
-MCP tools.
+Turn a discovery conversation into structured notes: what the client does today, who
+does it, how much, what hurts, and where Odoo fits. Every tool below is read-only.
 
-## When to use
+## 1. Mine the records first
 
-The user is on, or has just come off, a discovery or requirements call with a client; the current process has to be written down before anyone can scope it; actors, volumes, integrations, or pain points need capturing; a gap analysis is wanted between what the client does today and what Odoo does out of the box; or a request is too vague to price and the missing facts have to be gathered first.
+Read the records before you list any question as open.
 
-## 1. Mine existing context before asking (read-only)
+- `search_chatter(query="<client / topic keyword>")` → prior conversations, stated
+  requirements, complaints. Narrow with `model="project.task"` or `date_from="YYYY-MM-DD"`.
+- `search_knowledge_articles(query="<process or client>")` then
+  `read_knowledge_article(article_id=<id>)` → process docs and prior discovery
+  (Enterprise only; skip on error and name the lost source).
+- `search_projects(query=...)` then `get_task(task_id=<id>, include=["description",
+  "chatter"])` → the tasks that frame the engagement.
 
-Do not ask the client what the record already tells you. First:
-
-- `search_chatter(query="<client / topic keyword>")` → prior conversations,
-  stated requirements, and complaints. Narrow with `model="project.task"` or a
-  `date_from="YYYY-MM-DD"`.
-- `search_knowledge_articles(query="<process or client>")` +
-  `read_knowledge_article(article_id=<id>)` → existing process docs and prior
-  discovery (Enterprise-only; skip on error).
-- `search_projects(query=...)` → `get_task(task_id=<id>, include=["description",
-  "chatter"])` for any existing tasks that frame the engagement.
-
-Bring what you found *into* the session as things to confirm, not re-ask.
+List what the records answered as confirmed facts and what they did not as open questions.
 
 ## 2. Question checklist
 
-Work these groups; capture answers verbatim where wording matters. Mark any
-answer you did not get as `UNKNOWN — follow up`.
+Work every group. Capture answers verbatim where wording matters. Mark each answer you
+did not get as `UNKNOWN — follow up`.
 
 ### Current process
 - Walk the end-to-end process step by step. What triggers it? What ends it?
 - Which steps are manual, spreadsheet-based, or outside any system today?
 
 ### Actors and roles
-- Who performs each step? Which Odoo groups/departments do they map to?
+- Who performs each step? Which Odoo groups or departments do they map to?
 - Who approves? Who is accountable for the outcome?
 
 ### Volumes and frequency
-- How many transactions/records per day/week/month? Peak vs. average?
-- Data volumes to migrate (records, documents, history depth)?
+- How many transactions or records per day, week, month? Peak against average?
+- Data volumes to migrate: records, documents, history depth?
 
 ### Systems and integrations
-- What systems are in play (Odoo modules + external)? Source of truth for each?
-- Required integrations, data flows, direction, and frequency (real-time/batch)?
+- Which systems are in play (Odoo modules and external)? Source of truth for each?
+- Required integrations: data flows, direction, frequency (real-time or batch)?
 
 ### Pain points
-- Where does it break, slow down, or cause rework/errors today?
-- What is the cost of the pain (time, money, risk, compliance)?
+- Where does it break, slow down, or cause rework or errors today?
+- What is the cost of the pain: time, money, risk, compliance?
 
 ### Constraints and success
-- Odoo version/edition, deadlines, budget signals, compliance/regulatory needs.
+- Odoo version and edition, deadlines, budget signals, compliance needs.
 - What does "done well" look like to the client? How will they measure it?
 
 ## 3. Current-process mapping
-
-Map the as-is flow as a table so gaps are visible:
 
 | Step | Actor | System/tool | Input | Output | Pain / risk |
 |------|-------|-------------|-------|--------|-------------|
 
 ## 4. Gap analysis
 
-For each desired capability:
-
 | Need | Today (as-is) | Odoo standard? | Gap → config / custom / integration | Priority |
 |------|---------------|----------------|-------------------------------------|----------|
 
-Prefer standard Odoo; flag customizations explicitly with why standard does not
-fit.
+Prefer standard Odoo. Flag each customization with why standard does not fit.
 
 ## Output template
 
@@ -98,10 +80,9 @@ Context reviewed: <chatter/articles/tasks pulled>
 ## Recommended next step
 ```
 
-## Do-not
+## Stop conditions
 
-- Do not invent answers or infer volumes — record `UNKNOWN` and follow up.
-- Distinguish what the client **stated** from what you **observed** or assumed.
-- Do not jump to a solution mid-discovery; capture the problem fully first.
-- Do not lose exact wording on requirements, compliance, and success metrics —
-  paraphrase loses nuance that later scope depends on.
+- Never invent an answer or infer a volume. Record `UNKNOWN` and follow up.
+- Keep what the client stated apart from what you observed or assumed.
+- Do not propose a solution mid-discovery. Capture the problem fully first.
+- Keep the exact wording of requirements, compliance and success metrics.

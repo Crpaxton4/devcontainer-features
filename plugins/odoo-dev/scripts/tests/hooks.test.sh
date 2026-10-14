@@ -79,22 +79,20 @@ denied() {
 
 TESTER=odoo-dev-tester
 
-allowed "$ALLOWLIST" "tester: artifact.sh put" \
-  "$TESTER" "artifact.sh put /tmp/artifacts 30-test /tmp/run.json"
-allowed "$ALLOWLIST" "tester: artifact.sh by plugin-root path" \
-  "$TESTER" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh" put /tmp/a 30-test -'
+allowed "$ALLOWLIST" "tester: artifact.sh get build" \
+  "$TESTER" "artifact.sh get /tmp/artifacts build"
+allowed "$ALLOWLIST" "tester: artifact.sh get plan --raw by plugin-root path" \
+  "$TESTER" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh" get /tmp/a plan --raw'
 
-# The checkpoint (#961). The tester has no Edit/Write and no redirection, so the
-# only reachable shapes are a path it did not write and the inline payload — and
-# the inline one is the one that has to pass, because there is no path.
-allowed "$ALLOWLIST" "tester: artifact.sh put progress from a file" \
-  "$TESTER" "artifact.sh put /tmp/artifacts progress /tmp/p.json"
-allowed "$ALLOWLIST" "tester: artifact.sh put progress --json inline" \
-  "$TESTER" 'artifact.sh put /tmp/artifacts progress --json {"units":[{"unit":"acme_sale","kind":"module-under-test","status":"in-progress","note":"unit tests green, tours not started"}]}'
-# What the agent file warns about: an ampersand in a note is a deny, and the reason
-# is the ampersand rather than anything about the stage.
+# The review section is the tester's only write. It has no Edit/Write and no
+# redirection, so the inline --json form is the one that has to pass: there is no
+# file it could have written first.
+allowed "$ALLOWLIST" "tester: artifact.sh set review --json inline" \
+  "$TESTER" 'artifact.sh set /tmp/artifacts review --json {"findings":[],"criteria_results":[{"criterion":"1","verdict":"pass","evidence":"test_a"}]}'
+# An ampersand inside the payload is a deny, and the reason is the ampersand rather
+# than anything about the section.
 denied "$ALLOWLIST" "tester: an ampersand inside the inline payload" "contains &" \
-  "$TESTER" 'artifact.sh put /tmp/artifacts progress --json {"units":[{"unit":"a","kind":"suite","status":"failed","note":"2 failures & 1 error"}]}'
+  "$TESTER" 'artifact.sh set /tmp/artifacts review --json {"findings":[{"file":"a.py","line":1,"severity":"high","what":"2 failures & 1 error"}]}'
 allowed "$ALLOWLIST" "tester: browser-ensure.sh" "$TESTER" "browser-ensure.sh"
 allowed "$ALLOWLIST" "tester: module-classify.sh" "$TESTER" "module-classify.sh /tmp/wt"
 
@@ -122,11 +120,11 @@ denied "$ALLOWLIST" "tester: bash -c with a real redirect" "redirects somewhere 
 denied "$ALLOWLIST" "tester: python -c open(f,w)" "not on the odoo-dev-tester allowlist" \
   "$TESTER" 'python -c "open(\"/tmp/f\",\"w\").write(\"x\")"'
 denied "$ALLOWLIST" "tester: chaining behind an allowlisted first token" "contains ;" \
-  "$TESTER" "artifact.sh put x; rm -rf /tmp/y"
+  "$TESTER" "artifact.sh set x; rm -rf /tmp/y"
 denied "$ALLOWLIST" "tester: && chaining" "contains &" \
-  "$TESTER" "artifact.sh put x && rm -rf /tmp/y"
+  "$TESTER" "artifact.sh set x && rm -rf /tmp/y"
 denied "$ALLOWLIST" "tester: command substitution" "contains \$(" \
-  "$TESTER" 'artifact.sh put $(rm -rf /tmp/y)'
+  "$TESTER" 'artifact.sh set $(rm -rf /tmp/y)'
 denied "$ALLOWLIST" "tester: pipe into a writer" "contains |" \
   "$TESTER" "artifact.sh list /tmp/a | tee /tmp/f"
 denied "$ALLOWLIST" "tester: a second line" "spans more than one line" \
@@ -134,7 +132,7 @@ denied "$ALLOWLIST" "tester: a second line" "spans more than one line" \
 denied "$ALLOWLIST" "tester: tee" "not on the odoo-dev-tester allowlist" \
   "$TESTER" "tee /tmp/f"
 denied "$ALLOWLIST" "tester: a bare \$VAR the hook cannot resolve" "not on the odoo-dev-tester allowlist" \
-  "$TESTER" '$ARTIFACT put /tmp/a 30-test -'
+  "$TESTER" '$ARTIFACT set /tmp/a review --json {}'
 
 allowed "$ALLOWLIST" "tester: git status"     "$TESTER" "git status"
 allowed "$ALLOWLIST" "tester: git -C diff"    "$TESTER" "git -C /tmp/wt diff --stat"

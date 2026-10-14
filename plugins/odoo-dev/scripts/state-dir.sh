@@ -24,28 +24,26 @@
 #     caller resolves it through here.
 #   * a task id is ^[0-9]+$ and nothing else, so a word of prose can never become a
 #     directory (see gate 18 in validate.sh, and the `tasks/Create` bug it exists for)
-#   * a release directory is releases/<from>-to-<to>, with each branch name plain
-#     ([A-Za-z0-9][A-Za-z0-9._-]*) and containing no `..`
+#   * a task's artifacts live in <state>/tasks/<id>/ — one task.json (artifact.sh)
+#     plus whatever deliverables a stage puts beside it. The release route keeps no
+#     directory at all: its scripts are re-run safe and it writes nothing to disk.
 #
 # Two ways in:
 #
-#   sourced — defines odoo_dev_state_dir, odoo_dev_artifacts_dir and
-#             odoo_dev_valid_branch, and does nothing else. artifact.sh sources it
-#             so that a bare task id resolves the same way everywhere.
+#   sourced — defines odoo_dev_state_dir and odoo_dev_artifacts_dir, and does
+#             nothing else. artifact.sh sources it so that a bare task id resolves
+#             the same way everywhere.
 #
 #   run     — the CLI the command preambles call:
 #
-#               state-dir.sh                                             # the state dir
-#               state-dir.sh task    [--create] [--else TEXT] -- <task-arg>
-#               state-dir.sh release [--create] [--else TEXT] -- <task-arg> <from> <to>
+#               state-dir.sh                                      # the state dir
+#               state-dir.sh task [--create] [--else TEXT] -- <task-arg>
 #
-#             `task` and `release` ALWAYS exit 0: a non-zero exit inside `!`…``
-#             aborts the whole command expansion, so an unusable argument prints the
-#             --else marker on stdout instead and the command body says what the
-#             dispatched agent must do when it reads a marker rather than a path.
-#             Without --create the directory must already exist. `release` takes the
-#             command's first argument too, because the route is only the release
-#             route when that argument is the literal word `release`.
+#             `task` ALWAYS exits 0: a non-zero exit inside `!`…`` aborts the whole
+#             command expansion, so an unusable argument prints the --else marker on
+#             stdout instead and the command body says what the dispatched agent must
+#             do when it reads a marker rather than a path. Without --create the
+#             directory must already exist.
 #
 #             A malformed CLI invocation — an unknown mode, the wrong number of
 #             operands — is a bug in the command file rather than something a user
@@ -68,30 +66,13 @@ odoo_dev_artifacts_dir() {
   esac
 }
 
-# A branch name plain enough to be half of a directory name. `..` is rejected
-# separately because `.` is otherwise legal, and `releases/../..` is the traversal
-# this whole check exists to stop.
-odoo_dev_valid_branch() {
-  case "$1" in
-    [A-Za-z0-9]*) ;;
-    *) return 1 ;;
-  esac
-  case "$1" in
-    *[!A-Za-z0-9._-]*) return 1 ;;
-  esac
-  case "$1" in
-    *..*) return 1 ;;
-  esac
-  return 0
-}
-
 # Sourced: the functions above are the whole payload. Everything below is the CLI.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 set -euo pipefail
 
 usage() {
-  echo "usage: state-dir.sh [task|release [--create] [--else TEXT] -- <args>]" >&2
+  echo "usage: state-dir.sh [task [--create] [--else TEXT] -- <task-arg>]" >&2
   exit 2
 }
 
@@ -100,7 +81,7 @@ usage() {
 mode="$1"
 shift
 case "$mode" in
-  task | release) ;;
+  task) ;;
   *) usage ;;
 esac
 
@@ -118,19 +99,12 @@ while [ $# -gt 0 ]; do
 done
 
 # From here on nothing but a malformed invocation may exit non-zero.
+[ $# -eq 1 ] || usage
 dir=""
-if [ "$mode" = task ]; then
-  [ $# -eq 1 ] || usage
-  case "$1" in
-    '' | *[!0-9]*) ;;
-    *) dir="$(odoo_dev_state_dir)/tasks/$1" ;;
-  esac
-else
-  [ $# -eq 3 ] || usage
-  if [ "$1" = release ] && odoo_dev_valid_branch "$2" && odoo_dev_valid_branch "$3"; then
-    dir="$(odoo_dev_state_dir)/releases/$2-to-$3"
-  fi
-fi
+case "$1" in
+  '' | *[!0-9]*) ;;
+  *) dir="$(odoo_dev_state_dir)/tasks/$1" ;;
+esac
 
 [ -n "$dir" ] || { printf '%s\n' "$marker"; exit 0; }
 

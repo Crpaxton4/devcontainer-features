@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: estimate-split-hours
-description: Should fire odoo-dev:fibonacci-estimate, and only that skill.
+description: Should fire odoo-dev:estimate for a re-cut of existing numbers.
 tags: [trigger, positive, train]
 plugins: [odoo-dev]
 execution:
@@ -11,17 +11,11 @@ execution:
 runs: 2
 graders:
   - type: tool_used
-    name: fires-fibonacci-estimate
+    name: fires-estimate
     tool: Skill
-    input_match: "fibonacci-estimate"
+    input_match: "estimate"
     min: 1
-  - type: tool_used
-    name: does-not-fire-odoo-quote
-    tool: Skill
-    input_match: "odoo-quote"
-    max: 0
 expected_outcome: >-
-  The fibonacci-estimate skill is invoked and odoo-quote is not. The numbers on an
-  estimate that already exists are the whole job here: there is no client, no Odoo
-  project to pull context from, and no quote document to write. odoo-quote firing
-  as well is the double-fire the two descriptions were rewritten to stop.
+  The estimate skill is invoked. The numbers on an estimate that already exists are
+  the whole job here: there is no client, no Odoo project to pull context from, and
+  no document to write, so the generic estimate skill fires on its own.

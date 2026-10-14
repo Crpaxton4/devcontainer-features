@@ -63,25 +63,28 @@ done
 # actually shipped there.
 PLUGIN_SHADOWED=(
   discovery-notes
-  fibonacci-estimate
   odoo-code-review
   odoo-design-doc
-  odoo-quote
 )
 
-# Group 2 — retired outright (#700). No plugin twin, no packaged source, no
-# replacement: it shadows nothing. It is still feature-seeded debris that loads
-# as a personal skill and still spends description budget on every turn, so it
-# is still a stray and the feature still deletes it — it just gets different
-# advice, since there is no plugin copy to fall back on.
+# Group 2 — retired outright. No plugin twin, no packaged source, no replacement
+# under the same name: a loose copy shadows nothing. It is still feature-seeded
+# debris that loads as a personal skill and still spends description budget on
+# every turn, so it is still a stray and the feature still deletes it — it just
+# gets different advice, since there is no plugin copy to fall back on.
+# client-status-report was retired in #700; fibonacci-estimate and odoo-quote
+# were folded into the plugin's generic `estimate` skill, which never shipped
+# loose and so is in neither list.
 RETIRED_NO_TWIN=(
   client-status-report
+  fibonacci-estimate
+  odoo-quote
 )
 
 # NOT managed by either list, deliberately: ingest, lint, llm-wiki-workspace,
 # process and query. They sit beside the strays in <config>/skills/ on the
 # machine that reported #778, but this feature never seeded them and no plugin
-# ships them — they are the user's own personal skills (odoo-dev-map/SKILL.md
+# ships them — they are the user's own personal skills (the plugin README.md
 # records ingest, process, query and lint as Second Brain skills). Reporting
 # them would be a false positive and deleting them would be data loss, so they
 # are out of scope for this report and for the feature's cleanup alike. The
@@ -116,7 +119,7 @@ fi
 for name in "${strays[@]}"; do
   case " ${RETIRED_NO_TWIN[*]} " in
     *" $name "*)
-      echo "stray: $SKILLS_DIR/$name/SKILL.md is a retired skill (#700) with no odoo-dev twin" ;;
+      echo "stray: $SKILLS_DIR/$name/SKILL.md is a retired skill with no odoo-dev twin" ;;
     *)
       echo "stray: $SKILLS_DIR/$name/SKILL.md shadows odoo-dev:$name" ;;
   esac
@@ -139,7 +142,7 @@ fi
   echo
   echo "  rm -rf \"\$CLAUDE_CONFIG_DIR\"/skills/$rm_target"
   echo
-  echo "The five that moved into the plugin load as personal skills alongside"
+  echo "The ones that moved into the plugin load as personal skills alongside"
   echo "their odoo-dev twins and compete for the same triggers; those twins stay"
   echo "installed via -"
   echo
