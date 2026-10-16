@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v3.0.0...odoo-dev-plugin-v4.0.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-dev:** /odoo-dev:quote is now /odoo-dev:plan; artifact.sh put/stages are now set/sections over one task.json; the odoo-dev-scoper agent, the odoo-dev-map, odoo-quote and fibonacci-estimate skills and state-dir.sh release mode are removed.
+
+### Features
+
+* **odoo-dev:** a per-session throwaway test database, so parallel runs cannot collide ([#1069](https://github.com/Crpaxton4/devcontainer-features/issues/1069)) ([1f492d4](https://github.com/Crpaxton4/devcontainer-features/commit/1f492d45fe966a7b992085b119f5cbc4f78c6e0a))
+* **odoo-dev:** an unattended implementer agent, its invariants file and a guard hook behind the irreversible lines ([#1067](https://github.com/Crpaxton4/devcontainer-features/issues/1067)) ([f30bd93](https://github.com/Crpaxton4/devcontainer-features/commit/f30bd935368becd2430f72701f502dadee61e981))
+* **odoo-dev:** simplify the agents, commands, skills and artifacts; session rules move to CLAUDE.md ([#1042](https://github.com/Crpaxton4/devcontainer-features/issues/1042)) ([c251f6a](https://github.com/Crpaxton4/devcontainer-features/commit/c251f6a9803d402866c3bf8065cf0d3b882ade07))
+
+
+### Bug Fixes
+
+* **odoo-dev:** quote ${CLAUDE_PLUGIN_ROOT} in the hooks.json commands so plugin validate --strict passes on 2.1.295 ([#1044](https://github.com/Crpaxton4/devcontainer-features/issues/1044)) ([ae8ceac](https://github.com/Crpaxton4/devcontainer-features/commit/ae8ceacb2c68001a80051ae6d3469aad81209437)), closes [#1043](https://github.com/Crpaxton4/devcontainer-features/issues/1043)
+* **odoo-dev:** run-tests.sh picks container mode first, so a docker on PATH inside the devcontainer no longer forces host mode ([#1045](https://github.com/Crpaxton4/devcontainer-features/issues/1045)) ([5e47d31](https://github.com/Crpaxton4/devcontainer-features/commit/5e47d31a396a7de6a4ce02baa8e55385d2c5240f)), closes [#1039](https://github.com/Crpaxton4/devcontainer-features/issues/1039)
+
 ## [3.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v2.0.0...odoo-dev-plugin-v3.0.0) (2026-10-09)
 
 
