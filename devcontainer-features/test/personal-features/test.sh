@@ -612,6 +612,16 @@ check "sync-claude-mcp runs clean against a stub claude" bash -c \
 check "sync-claude-mcp installs odoo-dev pinned to the devcontainer-features marketplace" bash -c \
   "grep -qF 'plugin install --scope user odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
 
+# #1052: "already installed" is satisfied by any cached copy, so the plugin is
+# refreshed explicitly - the marketplace clone first (a plugin update has nothing
+# newer to install until the clone has moved), then the plugin itself.
+check "sync-claude-mcp updates the devcontainer-features marketplace (#1052)" bash -c \
+  "grep -qxF 'plugin marketplace update devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
+check "sync-claude-mcp updates odoo-dev pinned to the devcontainer-features marketplace (#1052)" bash -c \
+  "grep -qxF 'plugin update odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\""
+check "sync-claude-mcp updates the marketplace before the plugin (#1052)" bash -c \
+  "[ \"\$(grep -nxF 'plugin marketplace update devcontainer-features' \"$MCP_STUB_BIN/claude.calls\" | head -n 1 | cut -d: -f1)\" -lt \"\$(grep -nxF 'plugin update odoo-dev@devcontainer-features' \"$MCP_STUB_BIN/claude.calls\" | head -n 1 | cut -d: -f1)\" ]"
+
 # The mempalace install is qualified the same way, and for a second reason: the
 # `claude plugin update mempalace@mempalace` that follows it is qualified, and
 # the two used to disagree - a bare install beside a qualified update, so on a
@@ -664,6 +674,25 @@ check "sync-claude-mcp exits 0 when the odoo-dev plugin install fails" bash -c \
   "CLAUDE_CONFIG_DIR=\"$MCP_FAIL_CONFIG\" PATH=\"$MCP_FAIL_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp 2>/dev/null"
 check "sync-claude-mcp keeps the loose copies when the plugin install fails" bash -c \
   "test -f \"$MCP_FAIL_CONFIG/skills/odoo-quote/SKILL.md\""
+
+# #1052: the refresh is best-effort. Install succeeds, both update calls fail
+# (offline runner): the run still exits 0, warns, and logs the version it kept.
+MCP_UPD_BIN="$MCP_TEST_ROOT/bin-update-fails"
+MCP_UPD_CONFIG="$MCP_TEST_ROOT/claude-home-update-fails"
+MCP_UPD_LOG="$MCP_TEST_ROOT/update-fails.log"
+mkdir -p "$MCP_UPD_BIN" "$MCP_UPD_CONFIG/plugins"
+printf '{"version":2,"plugins":{"odoo-dev@devcontainer-features":[{"scope":"user","version":"1.2.0"}]}}\n' \
+  > "$MCP_UPD_CONFIG/plugins/installed_plugins.json"
+cat > "$MCP_UPD_BIN/claude" <<'STUB'
+#!/bin/sh
+case "$*" in "plugin marketplace update"*|"plugin update odoo-dev"*) exit 1 ;; esac
+exit 0
+STUB
+chmod +x "$MCP_UPD_BIN/claude"
+check "sync-claude-mcp exits 0 when the odoo-dev plugin update fails (#1052)" bash -c \
+  "CLAUDE_CONFIG_DIR=\"$MCP_UPD_CONFIG\" PATH=\"$MCP_UPD_BIN:\$PATH\" /usr/local/bin/sync-claude-mcp >/dev/null 2>\"$MCP_UPD_LOG\""
+check "sync-claude-mcp warns, naming the kept version, when the plugin update fails (#1052)" bash -c \
+  "grep -qF \"could not update the 'odoo-dev' plugin; this container keeps version 1.2.0\" \"$MCP_UPD_LOG\" && grep -qF \"could not update the 'devcontainer-features' marketplace\" \"$MCP_UPD_LOG\""
 
 # --- sync-claude-mcp: the provision marker (#806) -----------------------------
 # A container running pre-migration feature scripts used to be indistinguishable
@@ -1160,6 +1189,56 @@ check "worktree-context-hook stays silent and exits 0 for a non-worktree cwd (#8
 check "the emitted context says its constraint list is not exhaustive (#809)" bash -c \
   "/usr/local/bin/worktree-context-hook < \"$HOOKS_TEST_ROOT/wt-payload.json\" | jq -r '.hookSpecificOutput.additionalContext' | grep -qi 'not exhaustive'"
 
+# (a4) #1052: a FOURTH SessionStart hook, odoo-dev-plugin-drift-check.sh, warns
+# when the installed odoo-dev plugin is not the one the marketplace clone carries.
+# Same publish-then-reference treatment (#803); it prints one line or nothing.
+DRIFT_HOOK=/usr/local/share/personal-features/hooks/odoo-dev-plugin-drift-check.sh
+check "odoo-dev-plugin-drift-check is staged, executable and passes shell syntax check (#1052)" bash -c \
+  "test -x $DRIFT_HOOK && bash -n $DRIFT_HOOK"
+check "sync-claude-hooks publishes the drift check into the shared config dir (#1052)" bash -c \
+  "test -x \"$HK_A/hooks/odoo-dev-plugin-drift-check.sh\" && cmp -s $DRIFT_HOOK \"$HK_A/hooks/odoo-dev-plugin-drift-check.sh\""
+check "settings.json registers the drift check on SessionStart with a 5s timeout, on a both-sides command (#1052)" bash -c \
+  "jq -e '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"odoo-dev-plugin-drift-check.sh\")) | .hooks[] | select(.timeout == 5 and (.command | startswith(\"\\\"\${CLAUDE_CONFIG_DIR:-\")))] | length == 1' \"$HK_A/settings.json\" >/dev/null"
+
+# Fake $CLAUDE_CONFIG_DIR trees: <dir> <installed> <marketplace> then the cache
+# version directories. An "orphan:<v>" argument is a directory Claude Code has
+# marked superseded with .orphaned_at - the normal state right after an update.
+drift_fixture() {
+  local d="$1" installed="$2" avail="$3" v
+  shift 3
+  mkdir -p "$d/plugins/marketplaces/devcontainer-features/plugins/odoo-dev/.claude-plugin"
+  printf '{"version":2,"plugins":{"odoo-dev@devcontainer-features":[{"scope":"user","version":"%s"}]}}\n' \
+    "$installed" > "$d/plugins/installed_plugins.json"
+  printf '{"name":"odoo-dev","version":"%s"}\n' "$avail" \
+    > "$d/plugins/marketplaces/devcontainer-features/plugins/odoo-dev/.claude-plugin/plugin.json"
+  for v in "$@"; do
+    case "$v" in
+    orphan:*)
+      mkdir -p "$d/plugins/cache/devcontainer-features/odoo-dev/${v#orphan:}"
+      date +%s > "$d/plugins/cache/devcontainer-features/odoo-dev/${v#orphan:}/.orphaned_at"
+      ;;
+    *) mkdir -p "$d/plugins/cache/devcontainer-features/odoo-dev/$v" ;;
+    esac
+  done
+}
+DRIFT_OK="$HOOKS_TEST_ROOT/drift-ok"
+DRIFT_STALE="$HOOKS_TEST_ROOT/drift-stale"
+DRIFT_MULTI="$HOOKS_TEST_ROOT/drift-multi"
+DRIFT_NONE="$HOOKS_TEST_ROOT/drift-none"
+drift_fixture "$DRIFT_OK" 4.0.0 4.0.0 4.0.0 orphan:1.2.0
+drift_fixture "$DRIFT_STALE" 1.2.0 4.0.0 1.2.0
+drift_fixture "$DRIFT_MULTI" 4.0.0 4.0.0 1.2.0 4.0.0
+mkdir -p "$DRIFT_NONE"
+
+check "the drift check is silent and exits 0 when installed and marketplace versions match, beside an orphaned old copy (#1052)" bash -c \
+  "out=\"\$(CLAUDE_CONFIG_DIR=\"$DRIFT_OK\" $DRIFT_HOOK </dev/null)\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+check "the drift check warns with one line naming both versions and the remedy when they differ (#1052)" bash -c \
+  "out=\"\$(CLAUDE_CONFIG_DIR=\"$DRIFT_STALE\" $DRIFT_HOOK </dev/null)\"; rc=\$?; [ \$rc -eq 0 ] && [ \"\$(printf '%s\n' \"\$out\" | wc -l)\" = 1 ] && printf '%s' \"\$out\" | grep -qF 'installed version is 1.2.0' && printf '%s' \"\$out\" | grep -qF 'carries 4.0.0' && printf '%s' \"\$out\" | grep -qF 'claude plugin update odoo-dev@devcontainer-features'"
+check "the drift check warns and names the directories when two live version directories exist (#1052)" bash -c \
+  "out=\"\$(CLAUDE_CONFIG_DIR=\"$DRIFT_MULTI\" $DRIFT_HOOK </dev/null)\"; rc=\$?; [ \$rc -eq 0 ] && [ \"\$(printf '%s\n' \"\$out\" | wc -l)\" = 1 ] && printf '%s' \"\$out\" | grep -qF '2 version directories' && printf '%s' \"\$out\" | grep -qF '1.2.0, 4.0.0'"
+check "the drift check is silent and exits 0 when no plugin registry exists (#1052)" bash -c \
+  "out=\"\$(CLAUDE_CONFIG_DIR=\"$DRIFT_NONE\" $DRIFT_HOOK </dev/null)\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+
 # (b) Running the sync TWICE yields no duplicate feature entries.
 check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run)" bash -c \
   "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command | contains(\"claude-event-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
@@ -1167,10 +1246,10 @@ check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run
 # only ever stripped by its OWN marker in HOOK_MARKERS. Without that marker it
 # would survive the strip and be re-appended, accumulating one duplicate per
 # container create - re-run twice more and pin the count at exactly one. The
-# SessionStart group count is THREE since #811: event shim, worktree context,
-# palace recall.
+# SessionStart group count is FOUR since #1052: event shim, worktree context,
+# palace recall, odoo-dev plugin drift check.
 check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '3' ]"
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"odoo-dev-plugin-drift-check.sh\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
 
 # --- #811/#812/#813/#907/#832: the shared security policy rides the same merge --
 # The Feature used to ship the MECHANISMS that read this machine's config and
@@ -1549,18 +1628,19 @@ check "the staleness report survives a create that writes no hook entries" bash 
 # #833s sibling: an entry no HOOK_MARKERS marker matches accumulates a duplicate
 # on every container create. The #804 mechanism deliberately adds NO hook entry,
 # so assert the settings file still carries only the KNOWN feature programs -
-# five of them since #811, which added the two security guards and the palace
-# recall hook alongside the event shim and the worktree-context hook.
+# six of them since #1052 (five since #811, which added the two security guards
+# and the palace recall hook alongside the event shim and the worktree-context
+# hook; #1052 adds the odoo-dev plugin drift check).
 #
 # Three assertions, not one, so extending the roster cannot quietly weaken this
-# into a tautology: (1) every command in the file is one of the five - an entry
-# from anywhere else, the heartbeat included, fails here; (2) all five are
+# into a tautology: (1) every command in the file is one of the six - an entry
+# from anywhere else, the heartbeat included, fails here; (2) all six are
 # actually present - an allowlist that matches nothing would otherwise pass (1)
 # trivially; (3) no command string appears twice - the duplicate-accumulation
 # failure this check is a sibling of. The event shim's seven entries differ by
 # their event-name argument, so every one of the commands is distinct.
 check "the heartbeat mechanism adds no hook entry of its own" bash -c \
-  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
+  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh|odoo-dev-plugin-drift-check[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh odoo-dev-plugin-drift-check.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
 

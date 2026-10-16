@@ -30,7 +30,7 @@ inject overrides through that command's ``pullers`` seam, while
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
-from odoo_sdk.tracking.models import EventRecord, SessionWindow, TaskRun
+from odoo_sdk.tracking.models import EventRecord, SessionSource, SessionWindow, TaskRun
 
 if TYPE_CHECKING:  # pragma: no cover
     from odoo_sdk.records.recordset import OdooRecordset
@@ -181,6 +181,7 @@ class StateStore(Protocol):
         gap_secs: int,
         task_id: Optional[str] = None,
         repo: Optional[str] = None,
+        source: SessionSource | str = SessionSource.BOTH,
     ) -> list[SessionWindow]: ...
 
     def get_session_upload(self, session_key: str) -> Optional[dict]: ...

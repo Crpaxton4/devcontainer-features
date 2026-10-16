@@ -87,6 +87,10 @@ WORKTREE_HOOK_CMD="${PERSONAL_FEATURES_WORKTREE_HOOK_CMD:-/usr/local/bin/worktre
 #   mempalace-recall.sh  - SessionStart; palace recall as additionalContext. #744
 #                          asserted its existence and refused to STUB it; shipping
 #                          the real script masks nothing, so it is owned now.
+# A fourth rides the same staging (#1052):
+#   odoo-dev-plugin-drift-check.sh - SessionStart; one warning line on stdout when
+#                          the installed odoo-dev plugin differs from the
+#                          marketplace clone, silent otherwise.
 SHARED_HOOKS_DIR="${PERSONAL_FEATURES_SHARED_HOOKS_DIR:-/usr/local/share/personal-features/hooks}"
 
 # The settings FRAGMENT (#811, #812): permissions.deny, env, autoMode.environment
@@ -112,7 +116,7 @@ SETTINGS_FRAGMENT="${PERSONAL_FEATURES_SETTINGS_FRAGMENT:-/usr/local/share/perso
 # absolute-path entries an earlier hand-edit left in settings.json are stripped
 # and replaced by the published, per-machine-expanded ones rather than left to sit
 # beside them (the same #803 migration the event shim gets).
-HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","force-push-guard.sh","mempalace-recall.sh"]'
+HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","force-push-guard.sh","mempalace-recall.sh","odoo-dev-plugin-drift-check.sh"]'
 
 # The programs a feature-owned hook command goes on to EXEC. Resolving the hook
 # command itself is only half of what a working hook needs: claude-event-hook
@@ -421,6 +425,7 @@ WORKTREE_SHIM="$HOOK_DIR/worktree-context-hook"
 GUARD_API_SHIM="$HOOK_DIR/odoo-api-guard.sh"
 GUARD_PUSH_SHIM="$HOOK_DIR/force-push-guard.sh"
 RECALL_SHIM="$HOOK_DIR/mempalace-recall.sh"
+DRIFT_SHIM="$HOOK_DIR/odoo-dev-plugin-drift-check.sh"
 
 # The command literal written into settings.json. Claude Code runs hook commands
 # through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
@@ -446,6 +451,9 @@ GUARD_API_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/odoo-api-guard.sh"'
 GUARD_PUSH_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/force-push-guard.sh"'
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 RECALL_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/mempalace-recall.sh"'
+# And the odoo-dev plugin drift check (#1052), same per-machine expansion.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+DRIFT_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/odoo-dev-plugin-drift-check.sh"'
 
 # publish_shim <implementation-in-image> <destination-under-$HOOK_DIR>
 # Same atomic-rename discipline as the settings write below: stage inside
@@ -473,6 +481,7 @@ publish_shim "$WORKTREE_HOOK_CMD" "$WORKTREE_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/odoo-api-guard.sh" "$GUARD_API_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/force-push-guard.sh" "$GUARD_PUSH_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/mempalace-recall.sh" "$RECALL_SHIM"
+publish_shim "$SHARED_HOOKS_DIR/odoo-dev-plugin-drift-check.sh" "$DRIFT_SHIM"
 
 # Refuse to write a command that resolves nowhere — the #803 failure mode. With
 # no shim published and none left by an earlier run, writing the entries anyway
@@ -514,6 +523,16 @@ else
     RECALL_GROUPS='[]'
 fi
 
+# The plugin drift check (#1052): 5s, since it only reads three small local
+# files. Omitted, not stubbed, when its shim is absent (an image that predates it).
+if [ -x "$DRIFT_SHIM" ]; then
+    DRIFT_GROUPS="$(jq -n --arg cmd "$DRIFT_CMD" \
+        '[ { "hooks": [ {"type":"command","command":$cmd,"timeout":5} ] } ]')"
+else
+    note "no odoo-dev plugin drift check at $DRIFT_SHIM; omitting its SessionStart entry."
+    DRIFT_GROUPS='[]'
+fi
+
 GUARD_GROUPS='[]'
 if [ -x "$GUARD_API_SHIM" ]; then
     GUARD_GROUPS="$(jq -n --argjson acc "$GUARD_GROUPS" --arg cmd "$GUARD_API_CMD" \
@@ -549,9 +568,10 @@ fi
 # matcher (the shim excludes mcp__odoo-mcp__* itself). Every command here must
 # be matched by HOOK_MARKERS — see the contract note beside it.
 #
-# SessionStart carries THREE feature groups: the event shim first (so the
+# SessionStart carries FOUR feature groups: the event shim first (so the
 # `.hooks.SessionStart[0]` the #803 tests pin stays the event shim), then the
-# worktree-context hook, then the palace recall (#811). They are separate groups
+# worktree-context hook, then the palace recall (#811), then the odoo-dev plugin
+# drift check (#1052). They are separate groups
 # because they are separate programs with different contracts — the event shim must
 # never write to stdout, and the other two exist precisely to write to it.
 #
@@ -559,9 +579,10 @@ fi
 # group per security guard (#811). Separate groups rather than one group with two
 # commands, so a guard whose shim is missing drops out on its own.
 OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" \
-               --argjson recall "$RECALL_GROUPS" --argjson guards "$GUARD_GROUPS" '
+               --argjson recall "$RECALL_GROUPS" --argjson drift "$DRIFT_GROUPS" \
+               --argjson guards "$GUARD_GROUPS" '
   {
-    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt + $recall),
+    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt + $recall + $drift),
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
     "PreToolUse":       ([ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ] + $guards),
     "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],

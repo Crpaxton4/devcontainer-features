@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from odoo_sdk.commands.dispatch_telemetry import _is_dispatched_run
-from odoo_sdk.state import EventRecord, LocalStateClient, session_key
+from odoo_sdk.state import EventRecord, LocalStateClient, SessionSource, session_key
 from odoo_sdk.state.run_sessions import from_us, to_us
 from odoo_sdk.state.runs_store import RunOutcome, RunStore
 from tests.support import make_state_db
@@ -114,6 +114,63 @@ class TestAgreement:
                 ("101", at(300), at(330)),
             ]
         )
+
+    def test_source_events_returns_the_event_windows_and_never_reads_runs(
+        self, state, runs
+    ):
+        seed_work(state, as_events=True)
+        add_run(runs, at(600), at(630), task="303")
+        with patch("odoo_sdk.state.run_sessions.read_runs") as read:
+            windows = sessions(state, source="events")
+        read.assert_not_called()
+        assert sorted(shape(windows)) == sorted(
+            [
+                ("101", at(0), at(40)),
+                ("202", at(10), at(20)),
+                ("101", at(300), at(330)),
+            ]
+        )
+
+    def test_source_events_does_not_need_the_run_record_to_exist(self, tmp_path):
+        seed_work(make_state_db(tmp_path / "tracker.db"), as_events=True)
+        client = LocalStateClient(
+            tmp_path / "tracker.db", runs_db=tmp_path / "missing_runs.db"
+        )
+        assert len(sessions(client, source="events")) == 3
+        assert not (tmp_path / "missing_runs.db").exists()
+
+    def test_source_runs_returns_the_run_only_windows(self, state, runs):
+        add_event(state, at(700), task="404")
+        seed_work(runs, as_events=False)
+        windows = sessions(state, source="runs")
+        assert sorted(shape(windows)) == sorted(
+            [
+                ("101", at(0), at(40)),
+                ("202", at(10), at(20)),
+                ("101", at(300), at(330)),
+            ]
+        )
+
+    def test_source_both_equals_the_default_merge(self, state, runs):
+        seed_work(state, as_events=True)
+        add_run(runs, at(600), at(630), task="303")
+        assert shape(sessions(state, source="both")) == shape(sessions(state))
+        assert len(sessions(state, source="both")) == 4
+
+    def test_the_two_single_sources_agree_for_the_same_work(self, state, runs):
+        seed_work(state, as_events=True)
+        seed_work(runs, as_events=False)
+        assert shape(sessions(state, source="events")) == shape(
+            sessions(state, source="runs")
+        )
+
+    def test_source_accepts_the_enum(self, state, runs):
+        add_run(runs, at(0), at(30))
+        assert len(sessions(state, source=SessionSource.RUNS)) == 1
+
+    def test_an_unknown_source_is_rejected(self, state):
+        with pytest.raises(ValueError, match="unknown session source 'nope'"):
+            sessions(state, source="nope")
 
     def test_a_spread_task_is_two_sessions_with_two_contexts(self, state, runs):
         # Nine in the morning and again at four: two contexts, not one.
@@ -394,7 +451,7 @@ class TestSourceAvailability:
         timeout (shortened here) instead of falling back to the event store. It
         does not prove behaviour under WAL, where readers are not blocked.
         """
-        monkeypatch.setattr("odoo_sdk.state.run_sessions.BUSY_TIMEOUT_MS", 100)
+        monkeypatch.setattr("odoo_sdk.state.runs_store.BUSY_TIMEOUT_MS", 100)
         path = tmp_path / "locked.db"
         holder = sqlite3.connect(path, isolation_level=None)
         holder.execute("PRAGMA journal_mode=DELETE")
@@ -412,7 +469,7 @@ class TestSourceAvailability:
             holder.close()
 
     def test_read_runs_matches_iter_runs(self, state, runs, tmp_path):
-        """The read-only path must agree with RunStore.iter_runs (the __new__ seam)."""
+        """The read-only path must agree with RunStore.iter_runs."""
         from odoo_sdk.state.run_sessions import read_runs
 
         add_run(runs, at(0), at(5))
@@ -420,6 +477,24 @@ class TestSourceAvailability:
         got = read_runs(tmp_path / "runs.db", 0, 2**62, expected=True)
         assert got == runs.iter_runs(start_us=0, end_us=2**62)
         assert len(got) == 2
+
+    def test_open_read_only_on_a_missing_path_creates_nothing(self, tmp_path):
+        path = tmp_path / "new_dir" / "runs.db"
+        with pytest.raises(FileNotFoundError, match="runs.db"):
+            RunStore.open_read_only(path)
+        assert not path.exists()
+        assert not path.parent.exists()
+
+    def test_a_write_through_the_read_only_store_fails(self, runs, tmp_path):
+        add_run(runs, at(0), at(5))
+        store = RunStore.open_read_only(tmp_path / "runs.db")
+        try:
+            assert store.path == tmp_path / "runs.db"
+            assert len(store.iter_runs()) == 1
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                add_run(store, at(9), at(9))
+        finally:
+            store.close()
 
     def test_a_naive_stored_timestamp_does_not_crash_the_merge(
         self, state, runs, tmp_path

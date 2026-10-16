@@ -152,11 +152,17 @@ dead-letters the jobs it was running. So start the call as a background Bash cal
 (run_in_background), and wait for it to finish. Do not poll in a loop. Do not
 start a second run while it is active.
 
+Known limit: the dispatcher runs in the process tree of this host session. Keep the
+session open until the run returns. If the session ends, the run is killed and every
+job that was running becomes a `KILLED_BY_SIGNAL` dead letter. Alternative not built:
+detach the dispatcher with `setsid` and poll the result file (design section 22, F17).
+
 The script prints `dispatch.sh: result file: <path>` on stderr, copies stdout to
 that file, and after an exit of 0 or 1 writes the same path to `runs/latest.txt` in
 the orchestrator home (`$ODOO_ORCHESTRATOR_HOME`, default
-`~/.local/state/odoo-orchestrator`). A run that exits 2 or 3 stored nothing, so
-its file is removed and `latest.txt` is not changed. When the
+`~/.local/state/odoo-orchestrator`). A run that exits with any other code
+stored nothing, so its file is removed and `latest.txt` is not changed. Exits 74
+and 127 happen before any result file exists. When the
 process has exited, read its exit code first. Then read the result file with Read.
 The result is `{"batch_id", "jobs": [...]}`. Do not copy the JSON into a command.
 The dispatcher read each brief at submission and stored the text, so the path only
@@ -173,10 +179,10 @@ Exit codes:
 - 3: another dispatcher holds the lock. There is no flag to skip it. Do not retry
   in a loop. Tell the user. `dispatch.sh dead-letters` shows the state meanwhile.
   Mark nothing handled.
-- 127: no dispatcher was found. Tell the user to put `dispatch` on PATH or set
-  `ODOO_ORCHESTRATOR_DISPATCHER_DIR`. Mark nothing handled.
 - 74: the script could not create the orchestrator home. Show the stderr text.
   Mark nothing handled.
+- 127: no dispatcher was found. Tell the user to put `dispatch` on PATH or set
+  `ODOO_ORCHESTRATOR_DISPATCHER_DIR`. Mark nothing handled.
 
 After exit 0 or 1, run `orchestrator.py handled <job_id> ...` for the old dead
 letter `job_id`s whose tasks were in the array you just submitted.

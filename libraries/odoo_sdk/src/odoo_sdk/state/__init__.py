@@ -22,6 +22,7 @@ from .db import (
 from .models import (
     EventRecord,
     InvalidStateTransitionError,
+    SessionSource,
     SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
@@ -40,6 +41,7 @@ __all__ = [
     "TaskState",
     "TaskRun",
     "EventRecord",
+    "SessionSource",
     "SessionWindow",
     "session_key",
     "SCHEMA_DDL",
