@@ -1,5 +1,28 @@
 # Changelog
 
+## [8.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v7.0.1...personal-features-v8.0.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **odoo-sdk:** a dispatched run (ODOO_UNATTENDED) no longer writes agent or hook events; its time comes from runs.db.
+* **odoo-dev:** /odoo-dev:quote is now /odoo-dev:plan; artifact.sh put/stages are now set/sections over one task.json; the odoo-dev-scoper agent, the odoo-dev-map, odoo-quote and fibonacci-estimate skills and state-dir.sh release mode are removed.
+
+### Features
+
+* **dispatcher:** a host-side dispatcher that runs one task per container session and records it ([#1068](https://github.com/Crpaxton4/devcontainer-features/issues/1068)) ([9f43a92](https://github.com/Crpaxton4/devcontainer-features/commit/9f43a927501ba6f6192e1f05898ca3861f78381b))
+* **odoo-dev:** simplify the agents, commands, skills and artifacts; session rules move to CLAUDE.md ([#1042](https://github.com/Crpaxton4/devcontainer-features/issues/1042)) ([c251f6a](https://github.com/Crpaxton4/devcontainer-features/commit/c251f6a9803d402866c3bf8065cf0d3b882ade07))
+* **odoo-orchestrator:** a host plugin that hardens tasks into briefs and queues the approved ones ([#1070](https://github.com/Crpaxton4/devcontainer-features/issues/1070)) ([19be4c6](https://github.com/Crpaxton4/devcontainer-features/commit/19be4c67d94f0748b588145b5bfdcca7b6e94371))
+* **odoo-sdk:** job store, run record and artifact bundle index for the task dispatcher ([#1066](https://github.com/Crpaxton4/devcontainer-features/issues/1066)) ([43a6860](https://github.com/Crpaxton4/devcontainer-features/commit/43a686096f9449597b24170edcbbc8761ba43ddc))
+* **odoo-sdk:** sessionization reads the run record, so billing is measured and not inferred ([#1071](https://github.com/Crpaxton4/devcontainer-features/issues/1071)) ([5805d0f](https://github.com/Crpaxton4/devcontainer-features/commit/5805d0fbedff0664a4b8f63e0d8cea73ceec618d))
+
+
+### Bug Fixes
+
+* **odoo-sdk:** agent read tools no longer tag the queried task ([8399de0](https://github.com/Crpaxton4/devcontainer-features/commit/8399de0609a8247d4bc0a62fbaa30dc2828a4ca2)), closes [#1040](https://github.com/Crpaxton4/devcontainer-features/issues/1040) [#779](https://github.com/Crpaxton4/devcontainer-features/issues/779)
+* **odoo-sdk:** agent read tools no longer tag the queried task; hook fan-out, ref-decoration and stage-flip chatter stop billing phantom sessions ([#1047](https://github.com/Crpaxton4/devcontainer-features/issues/1047)) ([8399de0](https://github.com/Crpaxton4/devcontainer-features/commit/8399de0609a8247d4bc0a62fbaa30dc2828a4ca2))
+* **odoo-sdk:** the implement_task prompt names one task.json and run-tests.sh --put, not the NN-*.json stages ([#1041](https://github.com/Crpaxton4/devcontainer-features/issues/1041)) ([651827e](https://github.com/Crpaxton4/devcontainer-features/commit/651827e377fc012de80f2d199d060fbcf5fb1751))
+
 ## [7.0.1](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v7.0.0...personal-features-v7.0.1) (2026-10-09)
 
 
