@@ -15,12 +15,15 @@ def state_root(tmp_path, monkeypatch):
 
 @pytest.fixture
 def settings(tmp_path):
+    invariants = tmp_path / "unattended-invariants.md"
+    invariants.write_text("Standing line.\nNever ask.\n", "utf-8")
     return Settings(
         repos_dir=tmp_path / "repos",
         config_root=tmp_path / "central",
         owner="acme",
         plugin_root=tmp_path / "plugin",
-        invariants_file="/plugin/prompts/unattended-invariants.md",
+        invariants_file=str(invariants),
+        invariants=invariants.read_text("utf-8"),
         agent="odoo-dev:odoo-dev-implementer",
         min_available_gb=1,
         settle_s=0,

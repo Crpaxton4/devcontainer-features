@@ -37,9 +37,10 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert rest[:4] == [
         "--agent",
         settings.agent,
-        "--append-system-prompt-file",
-        settings.invariants_file,
+        "--append-system-prompt",
+        "Standing line.\nNever ask.\n",  # the file's text, not its path
     ]
+    assert settings.invariants_file not in argv
     assert (
         "--output-format" in rest
         and rest[rest.index("--output-format") + 1] == "stream-json"
