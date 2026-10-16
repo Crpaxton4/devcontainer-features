@@ -40,6 +40,7 @@ class StreamParser:
         self.envelope_text: str | None = None
         self.saw_output = False
         self.unreadable = False
+        self.parsed_any = False
 
     def feed(self, line: str) -> str | None:
         text = line.strip()
@@ -54,6 +55,7 @@ class StreamParser:
             return None
         if not isinstance(event, dict):
             return None
+        self.parsed_any = True
         if event.get("type") == "result":
             self.envelope, self.envelope_text = event, text
         return self._remember(event)

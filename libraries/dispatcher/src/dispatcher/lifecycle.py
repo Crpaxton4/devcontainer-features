@@ -24,6 +24,7 @@ here builds a container. Non-negotiable points, each with its reason:
 
 import json
 import os
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from .schema import schema_argument
 from .settings import (
     ARTIFACTS_TARGET,
     Settings,
+    WORKSPACE_TARGET,
     normalize_project,
 )
 
@@ -45,6 +47,11 @@ DISALLOWED_TOOLS = "Bash(docker:*) Edit(~/.claude/**) Write(~/.claude/**)"
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
 ACTIVE_REPOS_VARIABLE = "ODOO_ACTIVE_REPOS"
+#: Admission holds the single admission thread, and the per-job deadline does
+#: not cover it, so every call made while admitting has its own timeout.
+UP_TIMEOUT_S = 1200
+INSPECT_TIMEOUT_S = 60
+STOP_TIMEOUT_S = 120
 
 
 class StageError(RuntimeError):
@@ -87,15 +94,25 @@ class Shell:
         return Completed(done.returncode, done.stdout, done.stderr)
 
     def spawn(self, argv: list[str], *, env: dict[str, str]) -> subprocess.Popen:
+        # Own session and process group, so the whole host-side tree (the CLI
+        # and anything holding its pipes) can be killed with one killpg.
         return subprocess.Popen(
             argv,
             env=env,
+            start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
+
+    def killpg(self, proc: subprocess.Popen, sig: int) -> None:
+        """Signal the process group of a spawned child (its pgid is its pid)."""
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def child_env(
@@ -186,6 +203,19 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
     ]
 
 
+def kill_pattern(task_id: str) -> str:
+    """Extended regex for ``pkill -f``: this task's ``claude -p`` command line.
+
+    Anchored with ``^``: the command line must *start* with ``claude`` (or
+    ``node <path>/claude``, how a script install runs), so a sibling's inlined
+    brief containing ``claude -p <task> `` further along never matches. The task
+    id is followed by whitespace, so task 12 never matches task 123. Task ids
+    are plain names, so escaping ``.`` is the only metacharacter to handle.
+    """
+    task = task_id.replace(".", r"\.")
+    return rf"^(([^ ]*/)?node )?([^ ]*/)?claude -p {task}[[:space:]]"
+
+
 def kill_in_container(
     shell: Shell, container_id: str, task_id: str, env: dict[str, str]
 ) -> str:
@@ -193,12 +223,13 @@ def kill_in_container(
 
     Killing the host ``devcontainer exec`` process does not reach the process it
     started in the container. ``pkill -f`` matches the ``claude -p <task>``
-    command line (the task id is followed by whitespace, so task 12 never
-    matches task 123). Never verified, so the note says what is known.
+    command line, anchored at the start (see :func:`kill_pattern`) so a sibling
+    job's argv that merely contains that text is never matched. Never verified,
+    so the note says what is known.
     """
     if not container_id:
         return "no container id is known; the container-side process may still be alive"
-    pattern = "claude -p " + task_id.replace(".", r"\.") + "[[:space:]]"
+    pattern = kill_pattern(task_id)
     done = shell.run(
         ["docker", "exec", container_id, "pkill", "-KILL", "-f", "--", pattern],
         env=env,
@@ -243,7 +274,7 @@ def _failure_text(what: str, result: Completed) -> str:
 
 def up(shell: Shell, settings: Settings, repo: str, env: dict[str, str]) -> str:
     """Start (or reuse) the project's container and return its id."""
-    result = shell.run(render_up(settings, repo), env=env)
+    result = shell.run(render_up(settings, repo), env=env, timeout=UP_TIMEOUT_S)
     if result.returncode != 0:
         raise ContainerStartError(_failure_text("devcontainer up", result))
     return _container_id(result)
@@ -262,12 +293,16 @@ def assert_mounts(
 ) -> None:
     """Assert, after the container is up, that the binds are the ones we asked for.
 
-    The workspace mount's source must be the real ``--workspace-folder`` and the
-    ``/artifacts`` mount's source must be the bundle root. Anything else, or no
-    bind at all, is the silent empty-directory case. Asserted, never created.
+    The bind at ``/mnt/extra-addons`` (where the config declares the workspace
+    and where ``reap`` assumes it) must have the real ``--workspace-folder`` as
+    its source, by exact equality so a parent-directory bind is rejected too.
+    The ``/artifacts`` bind's source must be the bundle root. Anything else, or
+    no bind at all, is the silent empty-directory case. Asserted, never created.
     """
     result = shell.run(
-        ["docker", "inspect", "--format", "{{json .Mounts}}", container_id], env=env
+        ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+        env=env,
+        timeout=INSPECT_TIMEOUT_S,
     )
     if result.returncode != 0:
         raise MountInvalidError(_failure_text("docker inspect", result))
@@ -279,9 +314,10 @@ def assert_mounts(
     wanted_workspace = os.path.realpath(settings.workspace(repo))
     wanted_artifacts = os.path.realpath(artifacts_root())
     problems = []
-    if wanted_workspace not in binds.values():
+    if binds.get(WORKSPACE_TARGET) != wanted_workspace:
         problems.append(
-            f"no bind mount has source {wanted_workspace} (the --workspace-folder)"
+            f"{WORKSPACE_TARGET} is not a bind of {wanted_workspace} "
+            f"(the --workspace-folder; found {binds.get(WORKSPACE_TARGET)!r})"
         )
     if binds.get(ARTIFACTS_TARGET) != wanted_artifacts:
         problems.append(
@@ -300,10 +336,15 @@ def stop_project(shell: Shell, repo: str, env: dict[str, str]) -> bool:
     Idempotent and best effort: a failure here never fails a job.
     """
     project = normalize_project(repo)
-    done = shell.run(["docker", "compose", "-p", project, "stop"], env=env)
+    done = shell.run(
+        ["docker", "compose", "-p", project, "stop"], env=env, timeout=STOP_TIMEOUT_S
+    )
     if done.returncode == 0:
         return True
-    return shell.run(["docker", "stop", container_name(repo)], env=env).returncode == 0
+    fallback = shell.run(
+        ["docker", "stop", container_name(repo)], env=env, timeout=STOP_TIMEOUT_S
+    )
+    return fallback.returncode == 0
 
 
 def stop_if_idle(shell: Shell, store, repo: str, env: dict[str, str]) -> bool:

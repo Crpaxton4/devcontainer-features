@@ -6,6 +6,12 @@ day remove hours of work from a run that failed just before its push, so the
 new thing must exist before the old one goes: the branch must exist on the
 remote and match the worktree's HEAD. Otherwise the worktree is left alone and
 the result says so.
+
+Known limitation, and a safe one: a worktree the agent made inside the container
+has a ``.git`` file holding in-container absolute paths that do not resolve on
+the host, so ``git -C <worktree>`` fails here and the worktree is left alone.
+In practice this module will rarely reap. No path in it reaps unpushed work,
+which is the half that matters; the gap is only that cleanup does not happen.
 """
 
 import os

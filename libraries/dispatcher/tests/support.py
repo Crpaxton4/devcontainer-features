@@ -2,16 +2,33 @@
 
 import io
 import json
+import signal
 import threading
 
 from dispatcher.lifecycle import Completed
 
 
+class PipeHeldOpen:
+    """A stdout whose pipe a grandchild still holds: iteration never reaches EOF."""
+
+    def __init__(self, lines=()):
+        self._lines = [line + "\n" for line in lines]
+        self.never = threading.Event()
+
+    def __iter__(self):
+        yield from self._lines
+        self.never.wait(30)
+
+
 class FakeProc:
     """A Popen stand-in fed from a script of stdout lines."""
 
-    def __init__(self, lines=(), returncode=0, stderr="", hang=False):
-        self.stdout = io.StringIO("".join(line + "\n" for line in lines))
+    def __init__(self, lines=(), returncode=0, stderr="", hang=False, pipe_held=False):
+        self.stdout = (
+            PipeHeldOpen(lines)
+            if pipe_held
+            else io.StringIO("".join(line + "\n" for line in lines))
+        )
         self.stderr = io.StringIO(stderr)
         self._rc = returncode
         self._done = threading.Event()
@@ -19,6 +36,7 @@ class FakeProc:
             self._done.set()
         self.killed = False
         self.terminated = False
+        self.pid = 4242
 
     def poll(self):
         return self._rc if self._done.is_set() else None
@@ -43,6 +61,8 @@ class FakeShell:
 
     def __init__(self):
         self.calls = []
+        self.timeouts = []
+        self.groups = []
         self.spawned = []
         self.replies = []  # (prefix list, Completed)
         self.proc = FakeProc()
@@ -53,10 +73,18 @@ class FakeShell:
 
     def run(self, argv, *, env, timeout=None):
         self.calls.append((list(argv), env))
+        self.timeouts.append((list(argv), timeout))
         for prefix, completed in self.replies:
             if argv[: len(prefix)] == prefix:
                 return completed
         return Completed(0, "", "")
+
+    def killpg(self, proc, sig):
+        self.groups.append(sig)
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
 
     def spawn(self, argv, *, env):
         self.spawned.append((list(argv), env))

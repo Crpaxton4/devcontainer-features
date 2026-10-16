@@ -26,7 +26,17 @@ from odoo_sdk.state.jobs import (
     JobStore,
 )
 
+from odoo_sdk.state.dispatch_state import resolve_now_us
+from odoo_sdk.state.runs_store import RunStore
+
+from .collect import StreamParser, read_task_record, record_then_collect, worktree_of
 from .deadletter import STATEMENTS
+from .lifecycle import INSPECT_TIMEOUT_S, container_name, transcript_path
+from .reap import host_worktree
+
+#: Linux caps one argv string at 128 KiB (MAX_ARG_STRLEN); the prompt
+#: ``<task>\n\n<brief>`` is one. Over it, exec fails with E2BIG on every retry.
+MAX_PROMPT_BYTES = 120_000
 
 _COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -69,6 +79,13 @@ def _element(index: int, raw: object) -> JobSpec:
         raise SubmissionError(f"{where}: brief {path!r} is not readable as text: {exc}")
     if not text.strip():
         raise SubmissionError(f"{where}: brief {path!r} is empty")
+    if "\0" in text:
+        raise SubmissionError(f"{where}: brief {path!r} contains a NUL character")
+    if len(f"{task}\n\n{text}".encode()) > MAX_PROMPT_BYTES:
+        raise SubmissionError(
+            f"{where}: brief {path!r} is too large to pass on a command line "
+            f"(limit {MAX_PROMPT_BYTES} bytes)"
+        )
     return JobSpec(repo=repo, task_id=task, brief=text, round=rnd)
 
 
@@ -123,13 +140,93 @@ def submit(store: JobStore, specs: list[JobSpec], batch_id: str) -> list[Job]:
     return jobs
 
 
-def reconcile(store: JobStore) -> list[str]:
+def _orphan_facts(job: Job, record: dict, shell, settings, env) -> list[str]:
+    """What can be seen of an orphan's container and worktree, and what cannot."""
+    facts = []
+    if shell is None or settings is None:
+        return ["the container and worktree were not inspected"]
+    name = container_name(job.repo)
+    done = shell.run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", name],
+        env=env,
+        timeout=INSPECT_TIMEOUT_S,
+    )
+    if done.returncode == 0:
+        state = "running" if done.stdout.strip() == "true" else "not running"
+        facts.append(
+            f"container {name} is {state}; a session process of the dead "
+            "dispatcher may still be alive inside it"
+        )
+    else:
+        facts.append(
+            f"container {name} could not be inspected (exit {done.returncode}); "
+            "a session process may still be alive"
+        )
+    worktree = worktree_of(record)
+    host = host_worktree(worktree, settings.workspace(job.repo)) if worktree else None
+    if host is None:
+        facts.append("no worktree is recorded in task.json")
+    else:
+        where = "exists and was left in place" if host.is_dir() else "does not exist"
+        facts.append(f"worktree {host} {where}")
+    return facts
+
+
+def reconcile(
+    store: JobStore,
+    runs: RunStore | None = None,
+    shell=None,
+    settings=None,
+    env: dict[str, str] | None = None,
+) -> list[str]:
     """Startup: every RUNNING record is lying; dead-letter it as ORPHANED_BY_RESTART.
 
     Runs before anything is admitted, or the duplicate gate would block those
-    tasks forever.
+    tasks forever. Each orphan's container and worktree are inspected where
+    possible and what could not be seen is said so. An orphan that had a
+    session id gets a FAILED run row (that time was really spent), and every
+    orphan gets a bundle. Nothing here stops a container or removes a worktree.
     """
-    return store.reconcile_orphans(detail=STATEMENTS[DeadReason.ORPHANED_BY_RESTART])
+    ids = []
+    for job in store.list_by_state(JobState.RUNNING):
+        record = read_task_record(job.job_id)
+        facts = _orphan_facts(job, record, shell, settings, env)
+        if runs is not None:
+            facts.append(_record_orphan(runs, job, record, settings))
+        detail = " ".join(
+            [STATEMENTS[DeadReason.ORPHANED_BY_RESTART], "; ".join(facts) + "."]
+        )
+        ended = max(resolve_now_us(None), job.started_us or 0)
+        store.dead_letter(
+            job.job_id, DeadReason.ORPHANED_BY_RESTART, detail=detail, now_us=ended
+        )
+        ids.append(job.job_id)
+    return ids
+
+
+def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
+    parser = StreamParser()
+    parser.session_id = job.session_id
+    transcript = transcript_path(settings, job.session_id) if settings else None
+    try:
+        write = record_then_collect(
+            runs,
+            parser=parser,
+            job=job,
+            ended_us=max(resolve_now_us(None), job.started_us or 0),
+            failed=True,
+            transcript=transcript,
+            record=record,
+        )
+    except Exception as exc:  # reconcile must always finish
+        return f"the run could not be recorded: {exc}"
+    if write.record_error is not None:
+        return f"the run row could not be written: {write.record_error}"
+    return (
+        "a FAILED run row was written"
+        if write.recorded
+        else "no run row was written (no session id, or already recorded)"
+    )
 
 
 def pending_jobs(store: JobStore) -> list[Job]:

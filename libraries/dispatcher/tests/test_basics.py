@@ -314,3 +314,58 @@ def test_detail_carries_everything_seen():
         and "num_turns=4" in detail
         and "stderr tail: boom" in detail
     )
+
+
+def test_brief_with_a_nul_or_too_large_is_rejected_at_submission(tmp_path):
+    nul = _brief(tmp_path, "nul.md", "a\0b")
+    big = _brief(tmp_path, "big.md", "x" * (queue.MAX_PROMPT_BYTES + 1))
+    for path, needle in ((nul, "NUL"), (big, "too large")):
+        arg = json.dumps([{"repo": "a", "task": "1", "brief": path}])
+        with pytest.raises(queue.SubmissionError, match=needle):
+            queue.parse_submission(arg)
+    ok = _brief(tmp_path, "ok.md", "x" * (queue.MAX_PROMPT_BYTES - 10))
+    queue.parse_submission(json.dumps([{"repo": "a", "task": "1", "brief": ok}]))
+    assert JobStore().list_by_state(JobState.PENDING) == []  # nothing stored
+
+
+def test_lock_error_names_the_holder(tmp_path):
+    import os
+
+    path = tmp_path / "dispatcher.lock"
+    with DispatcherLock(path):
+        with pytest.raises(AlreadyRunningError, match=f"pid {os.getpid()}"):
+            DispatcherLock(path).acquire()
+    path.write_text("not a pid")
+    held = os.open(path, os.O_RDWR)
+    import fcntl
+
+    fcntl.flock(held, fcntl.LOCK_EX)
+    with pytest.raises(AlreadyRunningError, match="pid unknown"):
+        DispatcherLock(path).acquire()
+    os.close(held)
+
+
+def test_valid_events_without_a_result_is_missing_not_unreadable():
+    ending = Ending(0, saw_output=True, parsed_any=True)
+    assert classify(ending)[0] is DeadReason.STRUCTURED_OUTPUT_MISSING
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda v: v.pop("tests"),
+        lambda v: v.pop("modules"),
+        lambda v: v.update(tests={"ran": True, "passed": True, "failures": []}),
+        lambda v: v.update(tests={"ran": 1, "passed": True}),
+        lambda v: v.update(modules="m"),
+        lambda v: v.update(questions=[{"question": "q"}]),
+        lambda v: v.update(friction=[{"tool": "t"}]),
+        lambda v: v.update(summary="   "),
+        lambda v: v.update(changes=[1]),
+    ],
+)
+def test_incomplete_structured_values_are_not_usable(mutate):
+    value = json.loads(json.dumps(GOOD))
+    mutate(value)
+    assert schema.usable_structured({"structured_output": value}) is None
+    assert schema.usable_structured({"structured_output": GOOD}) is not None

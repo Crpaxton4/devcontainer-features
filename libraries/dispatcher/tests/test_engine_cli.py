@@ -1,6 +1,7 @@
 """The admission loop, one job's life, and the entry point."""
 
 import json
+import signal
 import threading
 
 import pytest
@@ -9,7 +10,7 @@ from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
 from dispatcher import cli, queue
-from dispatcher.engine import Engine
+from dispatcher.engine import Engine, JobRun
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
@@ -185,6 +186,50 @@ def test_deadline_guard_kills_a_hung_job(world):
     assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
     assert shell.commands("docker", "exec", "c", "pkill")  # the container side, too
     assert "container-side" in dead.detail
+
+
+def test_deadline_fires_while_a_grandchild_holds_the_pipe(world, monkeypatch):
+    """EOF never arrives, yet the guard must still record KILLED_BY_DEADLINE and free the slot."""
+    import time
+
+    import dispatcher.engine as eng
+
+    monkeypatch.setattr(eng, "READER_GRACE_S", 0.2)
+    engine, shell, _ = world
+    engine.settings = engine.settings.__class__(
+        **{**engine.settings.__dict__, "deadline_s": 0.05}
+    )
+    shell.proc = FakeProc(stream()[:1], hang=True, pipe_held=True)
+    (job,) = _submit(engine, ("qoc", "100"))
+    start = time.monotonic()
+    engine.run()
+    assert time.monotonic() - start < 10
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
+    assert signal.SIGKILL in shell.groups  # the process group, not just the CLI
+    assert shell.commands("docker", "exec", "c", "pkill")
+    assert "container-side" in dead.detail
+    assert (
+        engine.jobs.count_live("qoc") == 0 and engine.jobs.running_task_ids() == set()
+    )
+    assert shell.commands("docker", "compose", "-p", "qoc", "stop")
+    shell.proc.stdout.never.set()
+
+
+def test_terminate_signals_the_process_group(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "101"))
+    run = JobRun(engine, job)
+    run.proc = shell.proc = FakeProc(hang=True)
+    run.terminate()
+    assert shell.groups == [signal.SIGTERM] and shell.proc.terminated
+
+
+def test_request_stop_does_not_deadlock_when_the_lock_is_held(world):
+    engine, _, _ = world
+    with engine._lock:  # a signal handler arriving inside _start
+        engine.request_stop()
+    assert engine._stop.is_set()
 
 
 def test_exit_nonzero_and_unreadable(world):
@@ -433,6 +478,7 @@ def test_cli_reconciles_orphans_at_startup(monkeypatch, tmp_path, capsys):
     store = JobStore()
     (job,) = queue.submit(store, [queue.JobSpec("qoc", "1", "x")], "b")
     store.mark_running(job.job_id)
+    monkeypatch.setattr(cli, "Shell", FakeShell)
     monkeypatch.setattr(cli.signal, "signal", lambda *a: None)
     assert cli.main(["run"]) == cli.EXIT_OK
     capsys.readouterr()

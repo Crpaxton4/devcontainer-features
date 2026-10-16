@@ -70,22 +70,51 @@ def schema_argument() -> str:
     return json.dumps(RUN_SCHEMA, separators=(",", ":"))
 
 
+_TYPES = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "boolean": bool,
+}
+
+
+def conforms(value, schema: dict) -> bool:
+    """Check ``value`` against the subset of JSON Schema that RUN_SCHEMA uses.
+
+    The harness enforces the schema, but the dispatcher does not take a billing
+    decision on trust: a value missing a required field is not a complete run.
+    """
+    if "enum" in schema:
+        return value in schema["enum"]
+    kind = schema.get("type")
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind in _TYPES and not isinstance(value, _TYPES[kind]):
+        return False
+    if kind == "array":
+        return all(conforms(item, schema["items"]) for item in value)
+    if kind == "object":
+        if any(key not in value for key in schema.get("required", ())):
+            return False
+        props = schema.get("properties", {})
+        return all(conforms(value[k], props[k]) for k in props if k in value)
+    return True
+
+
 def usable_structured(envelope: dict | None) -> dict | None:
     """Return the structured value when a usable one arrived, else None.
 
-    Usable means a dict with a non-empty ``summary`` string (the description a
-    run is billed with) and an ``outcome`` that is one of the reported values.
-    Status fields of the envelope are deliberately ignored.
+    Usable means it conforms to :data:`RUN_SCHEMA` (every required field
+    present and well typed) and its ``summary`` is not blank, since the summary
+    is the description a run is billed with. Status fields of the envelope are
+    deliberately ignored.
     """
     if not isinstance(envelope, dict):
         return None
     value = envelope.get("structured_output")
     if not isinstance(value, dict):
         return None
-    summary = value.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        return None
-    if value.get("outcome") not in REPORTED_OUTCOMES:
+    if not conforms(value, RUN_SCHEMA) or not value["summary"].strip():
         return None
     return value
 

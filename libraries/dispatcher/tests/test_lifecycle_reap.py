@@ -464,7 +464,11 @@ def test_no_session_means_no_run_row_but_still_a_bundle():
     "reported,questions,expected",
     [
         ("done", [], RunOutcome.COMPLETED),
-        ("done", [{"question": "q"}], RunOutcome.COMPLETED_WITH_QUESTIONS),
+        (
+            "done",
+            [{"question": "q", "assumption": "a", "why": "w"}],
+            RunOutcome.COMPLETED_WITH_QUESTIONS,
+        ),
         ("partial", [], RunOutcome.COMPLETED_WITH_QUESTIONS),
         ("blocked", [], RunOutcome.BLOCKED),
     ],
@@ -520,7 +524,146 @@ def test_kill_in_container_notes_what_is_known():
     shell = FakeShell()
     note = lifecycle.kill_in_container(shell, "cid", "12.3", {})
     cmd = shell.commands("docker", "exec", "cid", "pkill")[0]
-    assert cmd[-1] == r"claude -p 12\.3[[:space:]]" and "not verified" in note
+    assert cmd[-1] == lifecycle.kill_pattern("12.3") and "not verified" in note
     shell.reply(["docker", "exec"], Completed(1, "", "no process"))
     assert "may still be alive" in lifecycle.kill_in_container(shell, "cid", "1", {})
     assert "may still be alive" in lifecycle.kill_in_container(shell, "", "1", {})
+
+
+@pytest.mark.parametrize(
+    "cmdline,matches",
+    [
+        ("claude -p 123\n\nbrief", True),
+        ("/usr/local/bin/claude -p 123 more", True),
+        ("node /usr/lib/node_modules/.bin/claude -p 123\n\nbrief", True),
+        ("claude -p 1234\n\nbrief", False),
+        ("claude -p 12\n\nbrief", False),
+        ("claude -p 99\n\nthe brief says claude -p 123 and more", False),
+        ("sh -c claude -p 123 x", False),
+    ],
+)
+def test_kill_pattern_is_anchored(cmdline, matches):
+    """Checked with grep -E, the same extended regex dialect pkill uses."""
+    found = subprocess.run(
+        ["grep", "-Ezc", "--", lifecycle.kill_pattern("123")],
+        input=cmdline,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert (found == "1") is matches
+
+
+def test_kill_pattern_cannot_be_widened_by_a_dotted_task():
+    assert lifecycle.kill_pattern("1.2").count(r"1\.2") == 1
+
+
+def test_mount_assertion_checks_the_workspace_destination(settings):
+    shell = FakeShell()
+    mounts = json.loads(_mounts(settings))
+    mounts[0]["Destination"] = "/somewhere/else"
+    shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
+    with pytest.raises(lifecycle.MountInvalidError, match="/mnt/extra-addons"):
+        lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+
+
+def test_mount_assertion_rejects_a_parent_directory_bind(settings):
+    shell = FakeShell()
+    mounts = json.loads(_mounts(settings))
+    mounts[0]["Source"] = str(settings.workspace("qoc").parent)
+    shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
+    with pytest.raises(lifecycle.MountInvalidError):
+        lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+
+
+def test_admission_calls_carry_timeouts(settings):
+    shell = FakeShell()
+    shell.reply(["devcontainer", "up"], _up_ok())
+    shell.reply(["docker", "inspect"], Completed(0, _mounts(settings)))
+    lifecycle.up(shell, settings, "qoc", {})
+    lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+    lifecycle.stop_project(shell, "qoc", {})
+    seen = {tuple(a[:2]): t for a, t in shell.timeouts}
+    assert seen[("devcontainer", "up")] == 1200
+    assert seen[("docker", "inspect")] == 60
+    assert seen[("docker", "compose")] == 120
+
+
+def test_up_timeout_is_a_start_failure(settings):
+    shell = FakeShell()
+    shell.reply(["devcontainer", "up"], Completed(124, "", "timed out after 1200s"))
+    with pytest.raises(lifecycle.ContainerStartError, match="timed out"):
+        lifecycle.up(shell, settings, "qoc", {})
+
+
+def test_real_killpg_reaches_a_grandchild_holding_the_pipe():
+    """sh runs a background sleep that inherits the pipe; killpg must free it."""
+    import time
+
+    shell = Shell()
+    proc = shell.spawn(["sh", "-c", "sleep 8 & wait"], env=dict(os.environ))
+    time.sleep(0.2)
+    start = time.monotonic()
+    shell.killpg(proc, 9)
+    assert proc.stdout.read() == ""  # EOF arrives because the whole group died
+    proc.wait()
+    assert time.monotonic() - start < 4
+    shell.killpg(proc, 9)  # already gone: no error
+
+
+def _orphan(shell=None, session="s-orphan", worktree=None):
+    store, runs = JobStore(), RunStore()
+    (job,) = queue.submit(store, [queue.JobSpec("qoc", "1", "brief")], "b")
+    store.mark_running(job.job_id)
+    if session:
+        store.set_session(job.job_id, session)
+    if worktree:
+        d = bundle_dir(job.job_id)
+        d.mkdir(parents=True)
+        (d / "task.json").write_text(json.dumps({"build": {"worktree": worktree}}))
+    return store, runs, job
+
+
+def test_reconcile_inspects_and_writes_a_failed_run_for_a_session(settings):
+    store, runs, job = _orphan(worktree="/mnt/extra-addons/.worktrees/x")
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(0, "true\n"))
+    assert queue.reconcile(store, runs, shell, settings) == [job.job_id]
+    dead = store.get(job.job_id)
+    assert dead.dead_reason == "ORPHANED_BY_RESTART"
+    assert "container qoc-odoo-1 is running" in dead.detail
+    assert "may still be alive" in dead.detail and "does not exist" in dead.detail
+    assert "FAILED run row was written" in dead.detail
+    assert runs.get_run("s-orphan").outcome is RunOutcome.FAILED
+    assert runs.get_artifacts(job.job_id) is not None
+
+
+def test_reconcile_says_what_it_could_not_see(settings):
+    store, runs, job = _orphan(session="")
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(1, "", "gone"))
+    queue.reconcile(store, runs, shell, settings)
+    detail = store.get(job.job_id).detail
+    assert "could not be inspected" in detail and "no worktree is recorded" in detail
+    assert "no run row was written" in detail and runs.iter_runs() == []
+    assert bundle_dir(job.job_id).is_dir()
+
+
+def test_reconcile_without_tools_still_dead_letters():
+    store, _, job = _orphan(session="")
+    queue.reconcile(store)
+    assert "were not inspected" in store.get(job.job_id).detail
+
+
+def test_reconcile_survives_a_failing_run_write(settings, monkeypatch):
+    store, runs, job = _orphan()
+    monkeypatch.setattr(
+        runs, "record_run", lambda **k: (_ for _ in ()).throw(RuntimeError("db"))
+    )
+    queue.reconcile(store, runs, FakeShell(), settings)
+    assert "could not be written" in store.get(job.job_id).detail
+    store2, runs2, job2 = _orphan(session="")
+    monkeypatch.setattr(
+        queue, "record_then_collect", lambda **k: (_ for _ in ()).throw(OSError("x"))
+    )
+    queue.reconcile(store2, runs2, FakeShell(), settings)
+    assert "could not be recorded" in store2.get(job2.job_id).detail

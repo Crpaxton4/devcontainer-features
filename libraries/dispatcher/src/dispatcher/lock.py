@@ -19,6 +19,15 @@ class AlreadyRunningError(RuntimeError):
     """Another dispatcher holds the lock on this state root."""
 
 
+def _holder(fd: int) -> str:
+    """The pid the holder wrote into the lock file, or ``unknown``."""
+    try:
+        text = os.pread(fd, 32, 0).decode().strip()
+    except OSError:
+        return "unknown"
+    return text if text.isdigit() else "unknown"
+
+
 class DispatcherLock:
     """Hold ``path`` exclusively until :meth:`release` (or process exit)."""
 
@@ -32,9 +41,10 @@ class DispatcherLock:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
+            holder = _holder(fd)
             os.close(fd)
             raise AlreadyRunningError(
-                f"another dispatcher holds {self.path}; "
+                f"another dispatcher (pid {holder}) holds {self.path}; "
                 "point a second dispatcher at a second state root"
             ) from exc
         self._fd = fd

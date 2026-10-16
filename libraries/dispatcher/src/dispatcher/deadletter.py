@@ -73,6 +73,7 @@ class Ending:
     saw_output: bool = False
     envelope: dict | None = None
     unreadable: bool = False
+    parsed_any: bool = False
     stderr_tail: str = ""
 
 
@@ -128,4 +129,8 @@ def _cause(ending: Ending) -> DeadReason:
         return DeadReason.SESSION_LAUNCH_FAILED
     if ending.returncode:
         return DeadReason.SESSION_EXIT_NONZERO
+    # Exit 0 with output but no result object: valid events with nothing to
+    # read are MISSING; output that never parsed at all is UNREADABLE.
+    if ending.parsed_any:
+        return DeadReason.STRUCTURED_OUTPUT_MISSING
     return DeadReason.STRUCTURED_OUTPUT_UNREADABLE

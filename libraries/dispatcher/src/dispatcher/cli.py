@@ -77,14 +77,15 @@ def _run(jobs_argument: str | None) -> int:
             print(f"dispatch: {exc}", file=sys.stderr)
             return EXIT_USAGE
         store, runs = JobStore(), RunStore()
-        reconcile(store)  # before anything is admitted
+        shell = Shell()
+        reconcile(store, runs, shell, settings)  # before anything is admitted
         batch_id = new_id()
         submitted = submit(store, specs, batch_id) if specs else []
         engine = Engine(
             settings,
             store,
             runs,
-            Shell(),
+            shell,
             AdmissionGate(settings.min_available_gb, settings.settle_s),
         )
         for signum in (signal.SIGINT, signal.SIGTERM):

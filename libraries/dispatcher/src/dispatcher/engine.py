@@ -15,6 +15,7 @@ that crash. The order inside it is fixed:
 5. only then the idle check, which may stop the container.
 """
 
+import signal
 import sys
 import threading
 from collections import deque
@@ -53,6 +54,12 @@ from .reap import ReapResult, reap
 from .settings import Settings
 
 STDERR_TAIL_LINES = 40
+#: After the host process has exited, the stream is already in the pipe and is
+#: read in moments. If it is not finished by then, something else still holds
+#: the pipe (a grandchild) and the reader is abandoned instead of waited for.
+READER_GRACE_S = 10
+#: Upper bound on waiting for the deadline's container-side kill to finish.
+DEADLINE_KILL_WAIT_S = 60
 
 
 def _stderr_log(message: str) -> None:
@@ -75,6 +82,7 @@ class JobRun:
         self._finished = False
         self.container_id = ""
         self.container_kill_note = ""
+        self._deadline_done = threading.Event()
 
     # -- helpers --------------------------------------------------------
 
@@ -143,16 +151,30 @@ class JobRun:
         finally:
             self.finish()
 
-    def terminate(self) -> None:
+    def _signal_tree(self, sig: int) -> None:
+        """Signal the host-side process group, not just the ``devcontainer`` CLI."""
         proc = self.proc
         if proc is not None and proc.poll() is None:
-            proc.terminate()
+            self.engine.shell.killpg(proc, sig)
+
+    def terminate(self) -> None:
+        self._signal_tree(signal.SIGTERM)
 
     def _on_deadline(self) -> None:
+        """The wall-clock guard. Runs on the timer thread, never after EOF.
+
+        Kills the host process group, then makes a best effort inside the
+        container. It must not depend on the output stream ending: a process
+        that still holds the pipe would keep EOF from ever arriving.
+        """
         self.deadline_hit = True
-        proc = self.proc
-        if proc is not None and proc.poll() is None:
-            proc.kill()
+        try:
+            self._signal_tree(signal.SIGKILL)
+            self.container_kill_note = lifecycle.kill_in_container(
+                self.engine.shell, self.container_id, self.job.task_id, self._env()
+            )
+        finally:
+            self._deadline_done.set()
 
     def _session(self) -> None:
         job = self.job
@@ -173,20 +195,20 @@ class JobRun:
         timer = threading.Timer(self.settings.deadline_s, self._on_deadline)
         timer.daemon = True
         timer.start()
+        reader = threading.Thread(target=self._read_stream, daemon=True)
+        reader.start()
         try:
-            self._read_stream()
             returncode = self.proc.wait()
+            reader.join(timeout=READER_GRACE_S)
         finally:
             timer.cancel()
             if self.proc.poll() is None:
-                self.proc.kill()
+                self._signal_tree(signal.SIGKILL)
                 self.proc.wait()
         drain.join(timeout=5)
-        self.ended_us = self.engine.clock()  # before the container-side kill
+        self.ended_us = self.engine.clock()  # before any waiting on the kill
         if self.deadline_hit:
-            self.container_kill_note = lifecycle.kill_in_container(
-                self.engine.shell, self.container_id, self.job.task_id, self._env()
-            )
+            self._deadline_done.wait(DEADLINE_KILL_WAIT_S)
         parser = self.parser
         self.ending = Ending(
             returncode=returncode,
@@ -194,6 +216,7 @@ class JobRun:
             saw_output=parser.saw_output,
             envelope=parser.envelope,
             unreadable=parser.unreadable,
+            parsed_any=parser.parsed_any,
             stderr_tail="\n".join(tail)[-2000:],
         )
 
@@ -316,7 +339,9 @@ class Engine:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._active: list[JobRun] = []
-        self._lock = threading.Lock()
+        # Reentrant: request_stop runs from a signal handler on the main thread,
+        # which may already hold this lock inside _start.
+        self._lock = threading.RLock()
 
     def note(self, job_id: str, reaped: ReapResult, write: RunWrite) -> None:
         self.notes[job_id] = {
