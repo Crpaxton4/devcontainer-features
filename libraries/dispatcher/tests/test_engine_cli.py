@@ -10,7 +10,7 @@ from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir, now_us
 from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
-from dispatcher import cli, queue
+from dispatcher import cli, lifecycle, queue
 from dispatcher.engine import MEMORY_READ_ATTEMPTS, Engine, JobRun
 from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
@@ -521,6 +521,38 @@ def test_worktree_is_left_alone_when_reap_cannot_prove_a_push(world):
     )
     engine.run()
     assert "does not exist" in engine.notes[job.job_id]["reap"]
+
+
+def test_a_pushed_worktree_is_reaped_through_the_container_before_the_idle_check(
+    world, settings
+):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "92"))
+    (settings.workspace("qoc") / ".worktrees/x").mkdir(parents=True)
+    write_task_record(
+        job.job_id,
+        job.task_id,
+        json.dumps(
+            {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
+        ),
+    )
+    sha = "c" * 40
+    git = [*lifecycle.render_exec_prefix(settings, "qoc"), "--", "git"]
+    wt = "/mnt/extra-addons/.worktrees/x"
+    shell.reply([*git, "-C", wt, "status"], Completed(0, ""))
+    shell.reply([*git, "-C", wt, "rev-parse"], Completed(0, sha + "\n"))
+    shell.reply(
+        [*git, "-C", "/mnt/extra-addons", "ls-remote"],
+        Completed(0, f"{sha}\trefs/heads/feat\n"),
+    )
+    engine.run()
+    assert engine.notes[job.job_id]["reaped"] is True
+    argvs = [c for c, _ in shell.calls]
+    removal = next(i for i, c in enumerate(argvs) if "remove" in c)
+    assert argvs[removal][:2] == ["devcontainer", "exec"]
+    idle = [i for i, c in enumerate(argvs) if c[:2] == ["docker", "compose"]]
+    assert all(removal < i for i in idle)
 
 
 def test_reap_exception_is_contained(world, monkeypatch):
