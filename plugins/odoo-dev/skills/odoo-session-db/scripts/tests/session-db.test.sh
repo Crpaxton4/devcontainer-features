@@ -51,6 +51,8 @@ cat > "$stub" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$STUB_ARGS"
 printf 'noise line\n%s\n' "$STUB_JSON"
+[ -z "${STUB_TRAILER:-}" ] || printf '%s\n' "$STUB_TRAILER"
+exit "${STUB_RC:-0}"
 STUB
 chmod +x "$stub"
 want="qoc_test_4242$a"
@@ -75,6 +77,52 @@ expect "a database that was not dropped exits 3" "$rc" "3"
 STUB_JSON='not json'
 rc=0; SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A >/dev/null 2>&1 || rc=$?
 expect "a result that is not JSON exits 3" "$rc" "3"
+
+# Item 1: a failing run keeps its JSON and its exit code.
+STUB_JSON="{\"db\":\"$want\",\"db_dropped\":true,\"status\":\"failed\",\"passed\":false}"
+rc=0; out="$(STUB_RC=1 SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A 2>/dev/null)" || rc=$?
+expect "a failing run exits with the run-tests.sh code" "$rc" "1"
+expect "a failing run still prints its JSON" "$(printf '%s\n' "$out" | tail -1)" "$STUB_JSON"
+rc=0; STUB_RC=5 SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A >/dev/null 2>&1 || rc=$?
+expect "another exit code is passed through" "$rc" "5"
+
+# Item 2: a trailing line after the JSON does not hide the result.
+STUB_JSON="{\"db\":\"$want\",\"db_dropped\":true,\"status\":\"passed\"}"
+rc=0; out="$(STUB_TRAILER='warn: x' SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A 2>/dev/null)" || rc=$?
+expect "a trailing warning line gives exit 0" "$rc" "0"
+expect "the JSON is printed with the warning" "$(printf '%s\n' "$out" | grep -c '"status":"passed"')" "1"
+
+# Item 3: series_mismatch created no database, so db_dropped false is legitimate.
+STUB_JSON="{\"db\":\"$want\",\"db_dropped\":false,\"status\":\"series_mismatch\",\"passed\":false}"
+rc=0; SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A >/dev/null 2>&1 || rc=$?
+expect "series_mismatch is not exit 3" "$rc" "0"
+STUB_JSON="{\"db\":\"$want\",\"db_dropped\":false,\"status\":\"failed\"}"
+rc=0; SESSION_DB_RUN_TESTS="$stub" bash "$SUT" run QOC 4242 mod --session-id sess-A >/dev/null 2>&1 || rc=$?
+expect "db_dropped false on any other status is still exit 3" "$rc" "3"
+
+# Item 4: bytes, not characters, in any locale; and a task id charset.
+e25="$(printf 'é%.0s' $(seq 1 25))"
+for loc in C.UTF-8 C; do
+  rc=0; LC_ALL=$loc bash "$SUT" name qoc "$e25" --session-id s >/dev/null 2>&1 || rc=$?
+  expect "multibyte task id over 63 bytes exits 2 under $loc" "$rc" "2"
+done
+rc=0; bash "$SUT" name qoc "a b;c" --session-id s >/dev/null 2>&1 || rc=$?
+expect "a task id with a space and a semicolon exits 2" "$rc" "2"
+rc=0; bash "$SUT" name qoc "" --session-id s >/dev/null 2>&1 || rc=$?
+expect "an empty task id exits 2" "$rc" "2"
+rc=0; bash "$SUT" name qoc AB_c-9 --session-id s >/dev/null 2>&1 || rc=$?
+expect "a task id of letters, digits, underscore, hyphen is accepted" "$rc" "0"
+
+# Item 5: --session-id errors, and the --db-suffix forms.
+rc=0; bash "$SUT" name qoc 1 --session-id "" >/dev/null 2>&1 || rc=$?
+expect "an empty --session-id exits 2" "$rc" "2"
+rc=0; bash "$SUT" name qoc 1 --session-id >"$work/sid.out" 2>"$work/sid.err" || rc=$?
+expect "--session-id with no value exits 2" "$rc" "2"
+expect "--session-id with no value says what is wrong" "$(grep -c 'non-empty value' "$work/sid.err")" "1"
+rc=0; bash "$SUT" run qoc 1 m --db-suffix=x >/dev/null 2>&1 || rc=$?
+expect "--db-suffix=x is refused" "$rc" "2"
+rc=0; bash "$SUT" run qoc 1 m -- --db-suffix x >/dev/null 2>&1 || rc=$?
+expect "--db-suffix after -- is refused" "$rc" "2"
 
 # ---------- run, against the REAL run-tests.sh ---------------------------------
 bin="$work/bin"; mkdir -p "$bin" "$work/addons" "$work/core-addons"
@@ -127,6 +175,13 @@ expect "a second session never touches the first session's database" \
   "$(grep -cF "$nameA" "$work/db-calls")" "0"
 expect "the second session uses its own name" \
   "$(grep '^createdb' "$work/db-calls" | awk '{print $NF}')" "$nameB"
+
+# Two live runs on one session id use one name: the id is the session, so the
+# promise is "same id, same name", and two ids never share one (checked above).
+: > "$work/db-calls"
+real_run sess-A >/dev/null; real_run sess-A >/dev/null
+expect "two runs on one id use one database name" \
+  "$(grep '^createdb' "$work/db-calls" | awk '{print $NF}' | sort -u | wc -l | tr -d ' ')" "1"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

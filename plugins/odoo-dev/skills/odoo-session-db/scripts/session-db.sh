@@ -22,12 +22,20 @@
 #   name    prints the database name run-tests.sh will use for this session.
 #   run     runs run-tests.sh with --db-suffix and prints its result JSON. Fails
 #           closed (exit 3) if the database run-tests.sh reports is not the
-#           database named here, or was not dropped, because then two tools
-#           disagree about which database to drop.
+#           database named here, or was not dropped (a series_mismatch result
+#           creates no database, so it is exempt). The result is printed BEFORE
+#           the checks, so a failing run or a failed check never hides it. When
+#           run-tests.sh itself exits non-zero, that code is returned.
+#           The check REPORTS a disagreement late, it does not prevent one:
+#           run-tests.sh runs dropdb on the name it computed before this script
+#           can look, and it has no way to be told a name. The normalisation
+#           here is a second copy of its own. No input is known where they differ.
 #
-# The session id comes from --session-id, else $SESSION_DB_ID, else random.
+# The session id comes from --session-id, else $SESSION_DB_ID, else random. An
+# empty or missing --session-id value is an error, never a fall back to random.
 #
-# Exit codes: 0 ok | 2 usage | 3 name or drop disagreement (run only)
+# Exit codes: 0 ok | 2 usage | 3 name or drop disagreement (run only) | else the
+# exit code of run-tests.sh
 # Env: SESSION_DB_RUN_TESTS overrides the run-tests.sh path (tests only).
 set -euo pipefail
 
@@ -41,7 +49,7 @@ PG_NAME_MAX=63
 die() { echo "session-db.sh: $*" >&2; exit "${2:-2}"; }
 
 # Same normalisation as run-tests.sh: lowercase, then strip. The agreement is
-# checked on every `run`, so a change there that is not made here is caught.
+# checked on every `run`, but late (see the header).
 norm_repo() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g'; }
 
 make_suffix() { # make_suffix <session-id or empty>
@@ -55,11 +63,14 @@ make_suffix() { # make_suffix <session-id or empty>
 }
 
 make_name() { # make_name <repo> <task_id> <suffix>
-  local proj name
+  local proj name nbytes
+  case "$2" in ''|*[!0-9A-Za-z_-]*) die "task_id must match [0-9A-Za-z_-]+: $2" ;; esac
   proj="$(norm_repo "$1")"
   [ -n "$proj" ] || die "repo name normalizes to nothing: $1"
   name="${proj}_test_${2}${3}"
-  [ "${#name}" -le "$PG_NAME_MAX" ] || die "database name is ${#name} bytes, over the Postgres limit of $PG_NAME_MAX: $name"
+  # Bytes, not characters: ${#name} counts characters in a UTF-8 locale.
+  nbytes="$(printf '%s' "$name" | LC_ALL=C wc -c | tr -d ' ')"
+  [ "$nbytes" -le "$PG_NAME_MAX" ] || die "database name is $nbytes bytes, over the Postgres limit of $PG_NAME_MAX: $name"
   printf '%s' "$name"
 }
 
@@ -72,7 +83,9 @@ sid="${SESSION_DB_ID:-}"
 rest=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --session-id) sid="${2:?--session-id needs a value}"; shift 2 ;;
+    --session-id)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then die "--session-id needs a non-empty value"; fi
+      sid="$2"; shift 2 ;;
     *) rest+=("$1"); shift ;;
   esac
 done
@@ -89,16 +102,36 @@ case "$cmd" in
     [ $# -ge 3 ] || die "usage: session-db.sh run <repo> <task_id> <module> [--session-id ID] [run-tests.sh options]"
     repo="$1"; task_id="$2"; module="$3"; shift 3
     for a in "$@"; do
-      [ "$a" != "--db-suffix" ] || die "--db-suffix is set by this script; do not pass it"
+      case "$a" in
+        --db-suffix|--db-suffix=*) die "--db-suffix is set by this script; do not pass it" ;;
+      esac
     done
     suffix="$(make_suffix "$sid")"
     want="$(make_name "$repo" "$task_id" "$suffix")"
-    out="$("$RUN_TESTS" "$repo" "$task_id" "$module" --db-suffix "$suffix" "$@")" || exit $?
-    last="$(printf '%s\n' "$out" | tail -1)"
-    got="$(printf '%s' "$last" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(j.db+" "+j.db_dropped)' 2>/dev/null)" \
-      || die "run-tests.sh did not end with a JSON result" 3
+    rc=0
+    out="$("$RUN_TESTS" "$repo" "$task_id" "$module" --db-suffix "$suffix" "$@")" || rc=$?
+    # Print the result BEFORE any check, so no check can hide it.
     printf '%s\n' "$out"
-    [ "${got% *}" = "$want" ] || die "run-tests.sh used database '${got% *}', this script named '$want'" 3
-    [ "${got#* }" = "true" ] || die "database $want was not dropped" 3 ;;
+    # The last line that parses as a JSON object is the result, so a trailing
+    # warning line cannot hide it.
+    got="$(printf '%s\n' "$out" | node -e '
+      const lines = require("fs").readFileSync(0, "utf8").split("\n").reverse();
+      for (const l of lines) {
+        try {
+          const j = JSON.parse(l);
+          if (j && typeof j === "object") { console.log(j.db + " " + j.db_dropped + " " + j.status); process.exit(0); }
+        } catch (e) { /* not JSON */ }
+      }
+      process.exit(1);' 2>/dev/null)" || {
+      [ "$rc" -eq 0 ] || exit "$rc"
+      die "run-tests.sh printed no JSON result" 3
+    }
+    read -r got_db got_dropped got_status <<<"$got"
+    [ "$got_db" = "$want" ] || die "run-tests.sh used database '$got_db', this script named '$want'" 3
+    # A series_mismatch result creates no database, so there is nothing to drop.
+    if [ "$got_dropped" != "true" ] && [ "$got_status" != "series_mismatch" ]; then
+      die "database $want was not dropped" 3
+    fi
+    exit "$rc" ;;
   *) die "unknown command: $cmd" ;;
 esac

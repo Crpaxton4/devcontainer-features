@@ -25,8 +25,15 @@ drops it.
 
 → the result JSON of `run-tests.sh`, unchanged. Read `status` as in `odoo-dev:odoo-test-run`.
 
-- Pass the same `--session-id` (or export `SESSION_DB_ID`) on every call in a session.
-  The suffix is a hash of it, so the name is the same for the whole session.
+- Pass the same `--session-id` on every call in a session. The suffix is a hash of it,
+  so the name is the same for the whole session. An empty value exits 2.
+- `SESSION_DB_ID` works the same way, but an exported value is inherited by every
+  parallel subagent. That gives them all one suffix and brings the collision back.
+  Each session must set its own id. Prefer `--session-id`.
+- The result JSON is always printed, also when the run fails. The script then exits with
+  the exit code of `run-tests.sh`. `series_mismatch` creates no database, so it is not
+  an exit 3.
+- `task_id` must match `[0-9A-Za-z_-]+`.
 - With no session id the suffix is random for each call. That is still unique.
 - The script exits 3 if the database `run-tests.sh` reports is not the database named
   here, or was not dropped. Treat exit 3 as a failed run. Do not retry on the same name.
