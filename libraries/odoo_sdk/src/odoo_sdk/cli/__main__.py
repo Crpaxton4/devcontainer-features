@@ -64,6 +64,7 @@ from odoo_sdk.commands.dispatch_telemetry import (
     _BOUNDARY_ERRORS,
     _emit_tool_event,
     _error_payload,
+    _is_dispatched_run,
 )
 from odoo_sdk.errors import TrackerStateMissingError
 from odoo_sdk.sessionization import EventType
@@ -851,7 +852,11 @@ def _emit_cmd_event(
     _emit_tool_event` pipeline the MCP server uses, with ``via="cli"`` marking
     the dispatch surface in the payload. Best-effort like the MCP wrapper: a
     failing state store must never turn a successful dispatch into an error.
+    A dispatched run (``ODOO_UNATTENDED``) emits nothing: the run record
+    measures it (#1065).
     """
+    if _is_dispatched_run():
+        return
     try:
         _emit_tool_event(registry.state_client, name, kwargs, result, via="cli")
     except Exception:

@@ -201,7 +201,13 @@ fi
 # and the flag applies no repo filter, so a hook firing in project A attaches to
 # an active run started in project B. That is the SDK's intended behaviour —
 # do not describe this as scoped to the current project.
-set -- log-event --source "claude:$HOOK_NAME" --attach-active-run
+# A dispatched run (ODOO_UNATTENDED, set by the dispatcher) is measured by the
+# run record (#1065), so its hook events carry no attribution: nothing is
+# attached to an open run.
+set -- log-event --source "claude:$HOOK_NAME"
+case "${ODOO_UNATTENDED:-}" in
+    "" | 0) set -- "$@" --attach-active-run ;;
+esac
 [ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
 [ -n "$BRANCH" ] && set -- "$@" --branch "$BRANCH"
 [ -n "$REPO" ] && set -- "$@" --repo "$REPO"
