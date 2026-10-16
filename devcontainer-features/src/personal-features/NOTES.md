@@ -661,6 +661,26 @@ and deleting them would be data loss, since the remedy here is `rm -rf`. The
 parity gate asserts neither list ever acquires one, and the Feature test seeds
 two of them as decoys that must survive a cleanup run.
 
+**The plugin is refreshed on every create, and a stale one is announced (#1052).**
+"Already installed" is satisfied by any cached copy, so a `~/.claude` seeded months
+ago kept running `odoo-dev` 1.2.0 while main had moved on, and bugs already fixed
+there came back. After the install step, `sync-claude-mcp` now runs
+`claude plugin marketplace update devcontainer-features` and then
+`claude plugin update odoo-dev@devcontainer-features`, and logs the installed
+version before and after (`version 1.2.0 -> 4.0.0`). Both are best-effort: a
+failure warns and never fails container create. A running session keeps the version
+it loaded, so a refreshed plugin takes effect in the next session. As a second line
+of defence, `hooks/odoo-dev-plugin-drift-check.sh` is registered on `SessionStart`
+(published and referenced like the other hooks, 5s timeout). With no network it
+compares the version in `$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json` with
+`plugin.json` in the marketplace clone, and counts the version directories under
+`plugins/cache/devcontainer-features/odoo-dev/` that carry no `.orphaned_at` marker
+(Claude Code marks the superseded copy that way after an update, so counting it
+would warn after every healthy update). On a difference, or more than one live
+directory, it prints one `WARNING: the odoo-dev plugin ...` line naming the
+versions and the fix, `claude plugin update odoo-dev@devcontainer-features`. When
+all is consistent it prints nothing. It always exits 0 and needs `jq`.
+
 ## Provision marker: telling a stale image from a current one (#806)
 
 Every step in `sync-claude-mcp` reports what it *did*. None of them can report
