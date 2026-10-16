@@ -28,7 +28,7 @@ OUTSIDE="$TMP/outside"
 mkdir -p "$REPO" "$OUTSIDE"
 # The run trigger must come from each case, never from the caller's environment, and
 # HOME must resolve outside any git tree so the ~ and $HOME cases are about the guard.
-unset ODOO_UNATTENDED
+unset ODOO_UNATTENDED CLAUDE_CONFIG_DIR
 export HOME="$OUTSIDE"
 gitq() { git -C "$REPO" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
 gitq init -q -b main
@@ -292,6 +292,51 @@ OUT="$(printf 'not json' | env ODOO_UNATTENDED=1 bash "$GUARD" 2>/dev/null)"; RC
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then
   ok "unparseable payload while ODOO_UNATTENDED is set -> denied"
 else bad "unparseable payload with ODOO_UNATTENDED: rc=$RC out=${OUT:-<silence>}"; fi
+
+# --- the Claude configuration directory, in a git tree or not ----------------------
+# HOME is $OUTSIDE, so ~/.claude is $OUTSIDE/.claude, which is not in any git tree.
+denied "config: redirect to ~/.claude/settings.json" "Claude configuration directory" "echo x > ~/.claude/settings.json"
+denied "config: append with no spaces" "Claude configuration directory" "echo x>>~/.claude/settings.json"
+denied "config: redirect by \$HOME" "Claude configuration directory" 'echo x > $HOME/.claude/settings.json'
+denied "config: redirect by absolute path" "Claude configuration directory" "echo x > $OUTSIDE/.claude/settings.json"
+denied "config: tee into it" "Claude configuration directory" "echo x | tee ~/.claude/settings.json"
+denied "config: tee -a into it" "Claude configuration directory" "echo x | tee -a $OUTSIDE/.claude/hooks/h.sh"
+denied "config: sed -i in it" "Claude configuration directory" "sed -i s/a/b/ ~/.claude/settings.json"
+denied "config: perl -pi in it" "Claude configuration directory" "perl -pi -e s/a/b/ ~/.claude/settings.json"
+denied "config: a nested new directory" "Claude configuration directory" "echo x > ~/.claude/new/dir/f.json"
+denied "config: through a relative path from inside it" "Claude configuration directory" "cd ~/.claude && echo x > settings.json"
+denied "config: bash -c" "Claude configuration directory" "bash -c 'echo x > ~/.claude/settings.json'"
+allowed "config: reading it" "cat ~/.claude/settings.json"
+allowed "config: a sibling that only shares the prefix" "echo x > $OUTSIDE/.claude-other/f.json"
+allowed "config: a different file under HOME" "echo x > ~/notes.txt"
+
+# CLAUDE_CONFIG_DIR relocates the directory; the guard follows it and keeps ~/.claude.
+RELOC="$TMP/relocated-config"
+mkdir -p "$RELOC"
+# cfgrun <command>: run with CLAUDE_CONFIG_DIR set to the relocated directory
+cfgrun() { OUT="$(payload "$AGENT" "$1" "$REPO" | env CLAUDE_CONFIG_DIR="$RELOC" bash "$GUARD" 2>/dev/null)"; RC=$?; }
+cfg_denied() {
+  cfgrun "$2"
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' \
+     && printf '%s' "$OUT" | grep -qF "Claude configuration directory"; then ok "$1 -> denied"
+  else bad "$1: expected a config deny, rc=$RC out=${OUT:-<silence>}"; fi
+}
+cfg_allowed() {
+  cfgrun "$2"
+  if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, rc=$RC out=${OUT:-<silence>}"; fi
+}
+cfg_denied "relocated: redirect into CLAUDE_CONFIG_DIR" "echo x > $RELOC/settings.json"
+cfg_denied "relocated: tee into CLAUDE_CONFIG_DIR" "echo x | tee $RELOC/settings.json"
+cfg_denied "relocated: sed -i in CLAUDE_CONFIG_DIR" "sed -i s/a/b/ $RELOC/settings.json"
+cfg_denied "relocated: by variable" 'echo x > $CLAUDE_CONFIG_DIR/settings.json'
+cfg_denied "relocated: ~/.claude is still guarded" "echo x > ~/.claude/settings.json"
+cfg_allowed "relocated: a path beside CLAUDE_CONFIG_DIR" "echo x > $RELOC-beside/f.json"
+cfg_allowed "relocated: reading CLAUDE_CONFIG_DIR" "cat $RELOC/settings.json"
+# The run trigger works on the same rule: a pr fork cannot write the settings either.
+envrun 1 "odoo-dev-pr" "echo x > ~/.claude/settings.json"
+if printf '%s' "$OUT" | grep -qF "Claude configuration directory"; then ok "pr fork under ODOO_UNATTENDED, config write -> denied"
+else bad "pr fork config write: out=${OUT:-<silence>}"; fi
 
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""

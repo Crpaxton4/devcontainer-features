@@ -32,6 +32,9 @@
 #   - sed -i, perl -i, tee and a shell redirect aimed at a file inside a git working
 #     tree (a gitignored path, a path outside any tree and an unresolvable ~ or $VAR
 #     target pass),
+#   - the same four writes aimed at the Claude configuration directory, whether or
+#     not it is in a git tree: CLAUDE_CONFIG_DIR when set, and ~/.claude always. An
+#     Edit or Write deny rule does not constrain Bash, so this is the route it closes.
 #   - docker, docker-compose, podman, nerdctl, ctr and buildah in any form.
 #
 # HOW FAR IT SEES. The command is tokenised with quotes and redirect operators, split
@@ -125,6 +128,35 @@ const expand = (p) => {
     (m, a, b) => (process.env[a || b] !== undefined ? process.env[a || b] : m));
   return /[$`]/.test(s) ? null : s;
 };
+
+// Is this path inside the Claude configuration directory? Independent of git: the
+// settings, hooks and permissions that govern an unattended session must not be
+// rewritable by that session. CLAUDE_CONFIG_DIR is read first, because a relocated
+// directory is not under ~/.claude; ~/.claude is always guarded as well. Symlinks are
+// resolved on the nearest existing ancestor so a link into the directory is caught.
+const inConfigDir = (target, cwd) => {
+  const e = expand(target);
+  if (e === null) return false;
+  const roots = [];
+  for (const r of [process.env.CLAUDE_CONFIG_DIR ? expand(process.env.CLAUDE_CONFIG_DIR) : null,
+                   process.env.HOME ? path.join(process.env.HOME, ".claude") : null]) {
+    if (!r) continue;
+    roots.push(path.resolve(r));
+    try { roots.push(fs.realpathSync(r)); } catch { /* not created yet */ }
+  }
+  const abs = path.resolve(cwd, e);
+  const cands = [abs];
+  let dir = abs;
+  while (!fs.existsSync(dir)) {
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  try { cands.push(path.join(fs.realpathSync(dir), path.relative(dir, abs))); } catch { /* unreadable */ }
+  return cands.some((c) => roots.some((r) => c === r || c.startsWith(r + path.sep)));
+};
+const CONFIG_ADVICE = " The Claude configuration directory holds the settings, hooks and " +
+  "permissions that govern this session, and an unattended run never rewrites them.";
 
 // Is this path inside a git working tree, and not gitignored?
 const inTree = (target, cwd) => {
@@ -346,6 +378,9 @@ const checkRedirects = (toks, cwd) => {
   for (let i = 0; i < toks.length; i += 1) {
     if (!toks[i].redir || !toks[i + 1] || toks[i + 1].redir || toks[i + 1].here) continue;
     const target = toks[i + 1].t;
+    if (inConfigDir(target, cwd)) {
+      deny("Refused: a shell redirect into " + target + ", inside the Claude configuration directory." + CONFIG_ADVICE);
+    }
     if (inTree(target, cwd)) {
       deny("Refused: a shell redirect into " + target + ", a file inside a git working " +
            "tree. Use the Edit or Write tool, which leaves a reviewable diff.");
@@ -444,6 +479,9 @@ const checkSimple = (toks, st, depth) => {
       let files = args.filter((a) => !a.startsWith("-"));
       const scripted = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression") || a.startsWith("--file"));
       if (!scripted) files = files.slice(1);     // the first operand is the script
+      if (files.some((f) => inConfigDir(f, st.cwd))) {
+        deny("Refused: " + head + " -i edits a file inside the Claude configuration directory." + CONFIG_ADVICE);
+      }
       if (files.some((f) => inTree(f, st.cwd))) {
         deny("Refused: " + head + " -i edits a file inside a git working tree in place. " +
              "Use the Edit tool, which leaves a reviewable diff.");
@@ -453,6 +491,9 @@ const checkSimple = (toks, st, depth) => {
   }
   if (head === "tee") {
     for (const f of args.filter((a) => !a.startsWith("-"))) {
+      if (inConfigDir(f, st.cwd)) {
+        deny("Refused: tee writes " + f + ", inside the Claude configuration directory." + CONFIG_ADVICE);
+      }
       if (inTree(f, st.cwd)) {
         deny("Refused: tee writes " + f + ", a file inside a git working tree. Use the " +
              "Write tool, which leaves a reviewable diff.");
