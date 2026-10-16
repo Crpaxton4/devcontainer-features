@@ -4,7 +4,8 @@
 #
 # Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all] [--db-suffix S]
 #                     [--with-tours] [--repo-path DIR] [--addons-path P]
-#                     [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]
+#                     [--data-dir DIR] [--target-series NN.0] [--odoo-bin PATH]
+#                     [--odoo-conf PATH] [--put ARTIFACTS_DIR]
 #
 #   --test-tags:     Odoo's test-tag grammar, passed to odoo verbatim. The default
 #                    is /<module>: only the module under test runs. Without a
@@ -16,7 +17,20 @@
 #                    against the series this container's core actually runs. No
 #                    flag means no comparison — every caller that is not
 #                    series-aware passes none — so the check is absent rather
-#                    than passed.
+#                    than passed. When it disagrees with the container's core
+#                    and no --odoo-bin was given, the devcontainer's SIDE CORE
+#                    for that series is used if it exists (see below) and the
+#                    run goes on; only without one is the result a refusal.
+#   --odoo-bin:      the Odoo executable to run in place of `odoo` (the version
+#                    probe, the core-addons probe and the test run all use it).
+#                    It forces container mode: a side core exists only inside
+#                    the devcontainer, so exit 2 when `odoo` and pg_isready do
+#                    not answer here. The core-addons probe imports the `odoo`
+#                    package of THAT core, found beside the binary (see below).
+#   --odoo-conf:     a config file passed as `-c PATH` to every odoo invocation
+#                    (version probe and test run). Without it the ambient
+#                    config is auto-loaded, as before. addons_path is still
+#                    never read from it.
 #   --put:           after the result JSON is built, write it into
 #                    <ARTIFACTS_DIR>/task.json under test.<module> through the
 #                    plugin's artifact.sh. stdout still prints the JSON. A failed
@@ -46,8 +60,23 @@
 # not found`; once docker-from-docker put `docker` on PATH in there too, the
 # docker-first order picked host mode from inside the stack (#1039).
 #
+# Side core (#1055): the devcontainer ships a second Odoo per extra series as
+#   $ODOO_SRC_ROOT/odooNN-bin with odooNN.conf beside it (ODOO_SRC_ROOT defaults
+#   to /var/lib/odoo/src, as in odoo-prior-art's addons_paths.sh). A project on
+#   18.0 in a 19.0 container has no other way to get test evidence. So, in
+#   container mode with no --odoo-bin, a --target-series that disagrees with the
+#   container's major makes this script look for odooNN-bin AND odooNN.conf. If
+#   both exist it uses them and goes on (odoo_version is then the side core's
+#   version and odoo_bin names the binary); if not, the series_mismatch refusal
+#   stands and its error names the two paths that were looked for.
+#   The core-addons probe must import the side core's own `odoo` package, so it
+#   runs with PYTHONPATH set to the source tree found beside the binary: for
+#   <dir>/odooNN-bin that is <dir>/odooNN, then <dir> itself, each only when it
+#   holds odoo/__init__.py. When none does (a packaged core) the probe runs
+#   plain; pass --addons-path if that resolves the wrong core.
+#
 # Last stdout line: {"passed","status","error","db","module","odoo_version",
-#   "module_target_series","mode","produced_by",
+#   "odoo_bin","module_target_series","mode","produced_by",
 #   "tests_run","suites":[{"module","collected","executed","failed"}],
 #   "collected_is_executed","addons_path","data_dir","tours_declared","tours_run",
 #   "tours_passed","failures":[{"test","error"}],"log_file","log_excerpt",
@@ -95,15 +124,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all (default /<module>)] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]" >&2; exit 2; }
+[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all (default /<module>)] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--odoo-bin PATH] [--odoo-conf PATH] [--put ARTIFACTS_DIR]" >&2; exit 2; }
 repo="$1"; task_id="$2"; module="$3"; shift 3
 
 tags=""; suffix=""; with_tours=false; repo_path=""; addons_override=""; data_dir_override=""
-target_series=""; put_dir=""
+target_series=""; put_dir=""; odoo_bin=""; odoo_conf=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --test-tags) tags="${2:?}"; shift 2 ;;
     --target-series) target_series="${2:?}"; shift 2 ;;
+    --odoo-bin) odoo_bin="${2:?}"; shift 2 ;;
+    --odoo-conf) odoo_conf="${2:?}"; shift 2 ;;
     --db-suffix) suffix="${2:?}"; shift 2 ;;
     --repo-path) repo_path="${2:?}"; shift 2 ;;
     --addons-path) addons_override="${2:?}"; shift 2 ;;
@@ -158,9 +189,17 @@ dbname="${proj}_test_${task_id}${suffix}"
 # died 0.4 s into init with no traceback and every run read `tests_run: 0`
 # (#1039). A shell where `odoo` and `pg_isready` both answer IS the stack, and
 # needs no PATH shim to say so.
+#
+# An explicit --odoo-bin is a side core, which exists only in here: it is never
+# run through docker exec, so host mode is not an option for it.
+odoo_bin_explicit=false
+if [ -n "$odoo_bin" ]; then odoo_bin_explicit=true; else odoo_bin="odoo"; fi
 mode=""
-if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
+if command -v "$odoo_bin" >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
   mode="container"
+elif [ "$odoo_bin_explicit" = true ]; then
+  echo "--odoo-bin $odoo_bin needs container mode: '$odoo_bin' must be executable here and pg_isready must answer. A side core is not reachable through docker exec." >&2
+  exit 2
 elif command -v docker >/dev/null 2>&1 \
    && docker ps --filter "name=^${odoo_c}$" --format '{{.Names}}' | grep -q .; then
   mode="host"
@@ -184,13 +223,13 @@ else
   db_run() { "$@" ${TEST_DB_ROLE:+-U "$TEST_DB_ROLE"}; }
 fi
 
-version_raw="$(odoo_run odoo --version 2>/dev/null | tail -1)"
-major="$(printf '%s' "$version_raw" | { grep -oE '[0-9]+' || true; } | head -1)"
-major="${major:-0}"
-case "$major" in
-  16|17|18|19) : ;;  # same test-flag surface; adjust here if a version diverges
-  *) echo "WARN unrecognized Odoo version '$version_raw' — using standard flags" >&2 ;;
-esac
+# read_version — sets version_raw and major from $odoo_bin (with -c $odoo_conf).
+read_version() {
+  version_raw="$(odoo_run "$odoo_bin" ${odoo_conf:+-c "$odoo_conf"} --version 2>/dev/null | tail -1)"
+  major="$(printf '%s' "$version_raw" | { grep -oE '[0-9]+' || true; } | head -1)"
+  major="${major:-0}"
+}
+read_version
 
 # ---- series mismatch, which is NOT "no tests" either -------------------------
 # An 18.0 module on a 19.0 core is not a failing test and not a crash. Odoo reads
@@ -211,22 +250,46 @@ if [ -n "$target_series" ]; then
     exit 2
   }
 fi
+
+# Side core (#1055): the container's major differs from the module's, and nobody
+# named a binary. The devcontainer ships odooNN-bin + odooNN.conf for the other
+# series; use them when BOTH exist, and re-read the version from the side core so
+# the comparison below, and the result, describe the core that will run.
+side_note=""
+if [ -n "$target_major" ] && [ "$target_major" != "$major" ] \
+   && [ "$odoo_bin_explicit" = false ] && [ "$mode" = container ]; then
+  side_root="${ODOO_SRC_ROOT:-/var/lib/odoo/src}"
+  side_bin="$side_root/odoo${target_major}-bin"
+  side_conf="$side_root/odoo${target_major}.conf"
+  if [ -x "$side_bin" ] && [ -f "$side_conf" ]; then
+    odoo_bin="$side_bin"; odoo_conf="$side_conf"
+    read_version
+  else
+    side_note=" (no side core for ${target_major}.0: looked for $side_bin and $side_conf)"
+  fi
+fi
+
+case "$major" in
+  16|17|18|19) : ;;  # same test-flag surface; adjust here if a version diverges
+  *) echo "WARN unrecognized Odoo version '$version_raw' — using standard flags" >&2 ;;
+esac
+
 if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
   if [ "$major" = 0 ]; then
-    mismatch_error="could not read this container's Odoo series (odoo --version said '$version_raw') and the module targets $target_series — refusing to run: a series that cannot be proved equal is not equal"
+    mismatch_error="could not read this container's Odoo series (odoo --version said '$version_raw') and the module targets $target_series — refusing to run: a series that cannot be proved equal is not equal${side_note}"
   else
-    mismatch_error="this container runs Odoo ${major}.0 but the module targets $target_series — refusing to run: Odoo sets installable=False on a manifest from another series, installs nothing, and still reports 0 failed, 0 error(s) of 0 tests with exit 0"
+    mismatch_error="this container runs Odoo ${major}.0 but the module targets $target_series — refusing to run: Odoo sets installable=False on a manifest from another series, installs nothing, and still reports 0 failed, 0 error(s) of 0 tests with exit 0${side_note}"
   fi
   # The SAME key set as the completed-run emitter at the bottom of this script, so
   # a reader never has to branch on which path wrote the artifact; the offline
   # suite asserts the two key sets are identical. Nothing ran, so every count is 0
   # and the paths a run would have stated are null rather than invented.
   mismatch_json="$(node -e '
-    const [db, module_, version, target, mode, err] = process.argv.slice(1);
+    const [db, module_, version, target, mode, err, bin] = process.argv.slice(1);
     console.log(JSON.stringify({
       passed: false, status: "series_mismatch", error: err,
       db, module: module_,
-      odoo_version: version, module_target_series: target, mode,
+      odoo_version: version, odoo_bin: bin, module_target_series: target, mode,
       produced_by: "run-tests.sh",
       tests_run: 0,
       suites: [], collected_is_executed: true,
@@ -236,7 +299,7 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
       log_file: null, log_excerpt: "",
       db_dropped: false,
     }));
-  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error")"
+  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error" "$odoo_bin")"
   emit "$mismatch_json"
   exit 0  # a series mismatch is a RESULT, like a test failure
 fi
@@ -258,13 +321,28 @@ worktree_addons="$WORKTREE_ADDONS_BASE/$WORKTREE_SUBDIR/task-${task_id}"
 if [ -n "$addons_override" ]; then
   addons="$addons_override"
 else
-  core_addons="$( { odoo_run python3 -c 'import odoo, os
+  # A side core's `odoo` package is not what plain python3 imports, so the probe
+  # gets the source tree beside the binary on PYTHONPATH (see the header).
+  probe_path=""
+  if [ "$odoo_bin" != odoo ]; then
+    bin_abs="$(command -v "$odoo_bin" || true)"
+    bin_dir="$(dirname "$bin_abs")"; bin_stem="$(basename "$bin_abs")"; bin_stem="${bin_stem%-bin}"
+    for cand in "$bin_dir/$bin_stem" "$bin_dir"; do
+      if [ -f "$cand/odoo/__init__.py" ]; then probe_path="${probe_path:+$probe_path:}$cand"; fi
+    done
+  fi
+  probe_py='import odoo, os
 pkg = os.path.dirname(os.path.abspath(odoo.__file__))
 out = []
 for d in (os.path.join(pkg, "addons"), os.path.join(os.path.dirname(pkg), "addons")):
     if d not in out and os.path.isdir(d):
         out.append(d)
-print(",".join(out))' 2>/dev/null || true; } | tail -1 | tr -d '\r')"
+print(",".join(out))'
+  core_addons="$( { if [ -n "$probe_path" ]; then
+      odoo_run_env "PYTHONPATH=$probe_path" python3 -c "$probe_py"
+    else
+      odoo_run python3 -c "$probe_py"
+    fi 2>/dev/null || true; } | tail -1 | tr -d '\r')"
   [ -n "$core_addons" ] || {
     echo "could not resolve Odoo's core addons directory from the running Odoo (importing odoo failed). Pass --addons-path explicitly — addons_path is deliberately not read from odoo.conf." >&2
     exit 2
@@ -369,7 +447,7 @@ done
 #                         which is host-global (one shared server)
 set +e
 if [ -n "$browser_env" ]; then
-  odoo_run_env "$browser_env" odoo \
+  odoo_run_env "$browser_env" "$odoo_bin" ${odoo_conf:+-c "$odoo_conf"} \
     --addons-path="$addons" --data-dir="$data_dir" \
     -d "$dbname" -i "$module" \
     --test-enable ${tags:+--test-tags "$tags"} \
@@ -378,7 +456,7 @@ if [ -n "$browser_env" ]; then
     --stop-after-init \
     >"$log" 2>&1
 else
-  odoo_run odoo \
+  odoo_run "$odoo_bin" ${odoo_conf:+-c "$odoo_conf"} \
     --addons-path="$addons" --data-dir="$data_dir" \
     -d "$dbname" -i "$module" \
     --test-enable ${tags:+--test-tags "$tags"} \
@@ -491,7 +569,7 @@ result_json="$(node -e '
   const fs = require("fs");
   const [logFile, passed, dbname, module_, version, dropped, testsRun,
          toursDeclared, toursRun, toursPassed, tourGap, mode, status,
-         registryError, addonsPath, dataDir, targetSeries] = process.argv.slice(1);
+         registryError, addonsPath, dataDir, targetSeries, odooBin] = process.argv.slice(1);
   const text = fs.readFileSync(logFile, "utf8");
   const lines = text.split("\n");
 
@@ -577,7 +655,9 @@ result_json="$(node -e '
     // odoo_version is the core this run used; module_target_series is what the
     // caller said the module is FOR, null when nobody said. The pair is the only
     // way a reader can tell a real zero from a series mismatch (#978).
-    odoo_version: version, module_target_series: targetSeries || null, mode,
+    // odoo_bin: the executable this run used, "odoo" unless a side core was
+    // selected (--odoo-bin or the --target-series auto-select, #1055).
+    odoo_version: version, odoo_bin: odooBin, module_target_series: targetSeries || null, mode,
     // Provenance, not a number: downstream readers cannot otherwise tell this
     // artifact from one an agent hand-assembled around its own claim (#982).
     produced_by: "run-tests.sh",
@@ -592,7 +672,7 @@ result_json="$(node -e '
   }));
 ' "$log" "$passed" "$dbname" "$module" "$version_raw" "$db_dropped" "$tests_run" \
   "$tours_declared" "$tours_run" "$tours_passed" "$tour_gap" "$mode" "$status" \
-  "$registry_error" "$addons" "$data_dir" "$target_series")"
+  "$registry_error" "$addons" "$data_dir" "$target_series" "$odoo_bin")"
 emit "$result_json"
 
 [ "$passed" = true ] || exit 0  # a test failure is a RESULT, not a script error

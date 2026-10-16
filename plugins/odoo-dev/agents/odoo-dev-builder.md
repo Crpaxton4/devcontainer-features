@@ -43,7 +43,9 @@ are the lines of your prompt. Every section is optional.
    next. Tests ship with the code. No `## Plan`: one step per `## Acceptance criteria`
    entry. No plan at all: steps from the task description, recorded as `claims`.
 5. Self-test per module until green, 3 runs at most: `run-tests.sh <repo> <id> <module>
-   --repo-path <worktree> --target-series <odoo_version>`, never with `--put`. Run it
+   --repo-path <worktree> --target-series <odoo_version>`, never with `--put`. A series
+   that differs from the container's selects its side core (`odooNN-bin`) by itself when
+   it exists; `--odoo-bin` and `--odoo-conf` name one by hand. Run it
    first without `--with-tours`; when `tours_declared` is above 0, run it again with
    `--with-tours`. Green is `passed: true`, or the only failure is the browserless
    tours case. Exit 6 (no browser) is named in line 3, never fixed. Red: fix, run again.

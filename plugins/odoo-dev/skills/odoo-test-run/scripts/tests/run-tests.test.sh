@@ -38,9 +38,9 @@ argv_grep() { grep -qF -- "$1" "$work/args" && echo yes || echo no; }
 bin="$work/bin"; mkdir -p "$bin"
 cat > "$bin/odoo" <<'STUB'
 #!/usr/bin/env bash
-case "${1:-}" in
-  --version) echo "Odoo Server 18.0-20260810"; exit 0 ;;
-esac
+for a in "$@"; do
+  [ "$a" = --version ] && { echo "Odoo Server 18.0-20260810"; exit 0; }
+done
 printf '%s\n' "$@" > "$ODOO_FAKE_ARGS"
 cat "$ODOO_FAKE_LOG"
 exit "${ODOO_FAKE_RC:-0}"
@@ -64,7 +64,7 @@ real_python3="$(command -v python3 || true)"
 cat > "$bin/python3" <<STUB
 #!/usr/bin/env bash
 case "\${2-}" in
-  *"import odoo"*) printf '%s\n' "$work/core-addons"; exit 0 ;;
+  *"import odoo"*) printf '%s\n' "\${PYTHONPATH-}" > "$work/probe-pythonpath"; printf '%s\n' "$work/core-addons"; exit 0 ;;
 esac
 exec "${real_python3:-/usr/bin/python3}" "\$@"
 STUB
@@ -85,6 +85,11 @@ run() { # run <log-fixture> <rc> [extra args...]
     WORKTREE_ADDONS_BASE="$work/addons" \
     bash "$SUT" myrepo 4242 mymodule "$@" 2>/dev/null | tail -1
 }
+
+# The side-core auto-select looks under $ODOO_SRC_ROOT (default /var/lib/odoo/src,
+# which a real devcontainer may well populate). Pin it to an empty dir so no test
+# below depends on the machine; the side-core tests point it somewhere else.
+export ODOO_SRC_ROOT="$work/no-src"
 
 # ---------- fixtures -----------------------------------------------------------
 green="$work/green.log"
@@ -337,6 +342,81 @@ expect "no flag means no target to compare" "$(field "$greenout" module_target_s
 
 run "$green" 0 --target-series nonsense >/dev/null 2>&1
 expect "a target that names no series is a usage error" "$?" "2"
+
+# The refusal names the side core it looked for (#1055), so a reader knows what
+# to provide. ODOO_SRC_ROOT is the empty dir pinned at the top.
+case "$(field "$mm" error)" in *"$work/no-src/odoo17-bin"*"$work/no-src/odoo17.conf"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL the refusal should name the side-core paths: $(field "$mm" error)" >&2 ;; esac
+expect "a plain run reports the default binary" "$(field "$greenout" odoo_bin)" "odoo"
+expect "the refusal reports the binary too"     "$(field "$mm" odoo_bin)" "odoo"
+
+# ---------- side core: --odoo-bin / --odoo-conf and the auto-select (#1055) ------
+# The container core answers 18.0; the side core is a 17.0 odoo17-bin + odoo17.conf
+# under ODOO_SRC_ROOT, with its source tree beside it (odoo17/odoo/__init__.py).
+side="$work/src"; mkdir -p "$side/odoo17/odoo"
+: > "$side/odoo17/odoo/__init__.py"
+cat > "$side/odoo17-bin" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do
+  [ "$a" = --version ] && { echo "Odoo Server 17.0-20261001"; exit 0; }
+done
+printf '%s\n' "$@" > "$ODOO_FAKE_ARGS"
+cat "$ODOO_FAKE_LOG"
+exit "${ODOO_FAKE_RC:-0}"
+STUB
+chmod +x "$side/odoo17-bin"
+printf '[options]\n' > "$side/odoo17.conf"
+
+# Auto-select: a mismatching target plus both files runs the side core.
+rm -f "$work/args" "$work/probe-pythonpath"
+out="$(ODOO_SRC_ROOT="$side" run "$green" 0 --target-series 17.0)"
+expect "auto-select runs instead of refusing" "$(field "$out" status)" "passed"
+expect "auto-select reports the side core's version" "$(field "$out" odoo_version)" "Odoo Server 17.0-20261001"
+expect "auto-select reports the binary used" "$(field "$out" odoo_bin)" "$side/odoo17-bin"
+expect "auto-select stays in container mode" "$(field "$out" mode)" "container"
+expect "auto-select passes the side conf as -c" "$(argv_has "-c")$(argv_has "$side/odoo17.conf")" "yesyes"
+expect "auto-select runs the side core's tests" "$(field "$out" tests_run)" "2"
+expect "the core-addons probe imports the side core's tree" "$(cat "$work/probe-pythonpath")" "$side/odoo17"
+expect "auto-select keeps the result's key set" "$(keys "$out")" "$(keys "$greenout")"
+
+# Binary without its conf is not a side core: the refusal stands.
+partial="$work/partial-src"; mkdir -p "$partial"
+cp "$side/odoo17-bin" "$partial/odoo17-bin"
+mm="$(ODOO_SRC_ROOT="$partial" run "$green" 0 --target-series 17.0)"
+expect "a side core without its conf is still a mismatch" "$(field "$mm" status)" "series_mismatch"
+
+# An explicit --odoo-bin wins over the auto-select, even when a side core exists.
+mm="$(ODOO_SRC_ROOT="$side" run "$green" 0 --odoo-bin "$bin/odoo" --target-series 17.0)"
+expect "an explicit --odoo-bin is never auto-replaced" "$(field "$mm" status)" "series_mismatch"
+case "$(field "$mm" error)" in *"no side core"*) fail=$((fail+1)); echo "FAIL explicit --odoo-bin should not search for a side core" >&2 ;;
+  *) pass=$((pass+1)) ;; esac
+
+# --odoo-bin replaces the binary, alone.
+rm -f "$work/args"
+out="$(run "$green" 0 --odoo-bin "$side/odoo17-bin")"
+expect "--odoo-bin replaces odoo"         "$(field "$out" odoo_bin)" "$side/odoo17-bin"
+expect "--odoo-bin reports its version"   "$(field "$out" odoo_version)" "Odoo Server 17.0-20261001"
+expect "--odoo-bin runs the tests"        "$(field "$out" tests_run)" "2"
+expect "--odoo-bin adds no -c by itself"  "$(argv_has "-c")" "no"
+expect "--odoo-bin keeps container mode"  "$(field "$out" mode)" "container"
+
+# --odoo-conf alone adds -c to the ambient odoo.
+rm -f "$work/args"
+out="$(run "$green" 0 --odoo-conf "$side/odoo17.conf")"
+expect "--odoo-conf passes -c PATH" "$(argv_has "-c")$(argv_has "$side/odoo17.conf")" "yesyes"
+expect "--odoo-conf keeps the default binary" "$(field "$out" odoo_bin)" "odoo"
+
+# --odoo-bin forces container mode: a binary that is not here is a usage error,
+# even when docker claims the project stack is up (it is not reachable by exec).
+: > "$work/docker-calls"
+rc=0
+DOCKER_FAKE_CALLS="$work/docker-calls" PATH="$dockerbin:$bin:$PATH" ODOO_RC="$conf" \
+  ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 ODOO_FAKE_ARGS="$work/args" \
+  ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" WORKTREE_ADDONS_BASE="$work/addons" \
+  bash "$SUT" myrepo 4242 mymodule --odoo-bin "$work/no-such-bin" >/dev/null 2>&1 || rc=$?
+expect "--odoo-bin that is missing exits 2" "$rc" "2"
+grep -q '^exec' "$work/docker-calls"
+expect "--odoo-bin never falls back to docker exec" "$?" "1"
 
 # ---------- tours ----------------------------------------------------------------
 mkdir -p "$work/addons/.worktrees/task-4242/mymodule"
