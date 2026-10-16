@@ -71,7 +71,7 @@ def map_reported_outcome(reported: str | None, question_count: int = 0) -> RunOu
     job (no valid object) is stored as ``FAILED`` directly, and an unknown
     reported value is ``FAILED`` rather than a softer kind of success.
     """
-    if not isinstance(question_count, int):
+    if isinstance(question_count, bool) or not isinstance(question_count, int):
         question_count = 0  # total: a non-int count is treated as no questions
     if reported == "done":
         return (
@@ -328,16 +328,18 @@ class RunStore:
     ) -> list[RunRecord]:
         """Return runs ordered by ``started_us`` (then session id).
 
-        A run belongs to the half-open window ``[start_us, end_us)`` when it
-        overlaps it: ``ended_us > start_us`` and ``started_us < end_us``. So a
-        run (10, 20) is in [10, 20) and not in [20, 30): adjacent windows never
-        both return it. A zero-length run at exactly ``start_us`` is excluded.
+        A run is in window ``[start_us, end_us)`` when ``started_us < end_us``
+        and either ``ended_us > start_us`` or it is zero-length
+        (``started_us == ended_us``) with ``started_us >= start_us``; so
+        adjacent windows never both return a run and no run is in none.
         Either bound may be None.
         """
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT {_RUN_COLUMNS} FROM runs "
-                "WHERE (?1 IS NULL OR ended_us > ?1) AND (?2 IS NULL OR started_us < ?2) "
+                "WHERE (?1 IS NULL OR ended_us > ?1 "
+                "OR (started_us = ended_us AND started_us >= ?1)) "
+                "AND (?2 IS NULL OR started_us < ?2) "
                 "ORDER BY started_us, session_id",
                 (start_us, end_us),
             ).fetchall()

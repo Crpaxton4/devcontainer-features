@@ -811,11 +811,34 @@ def test_adjacent_windows_never_both_return_a_run(runs):
     ids = lambda **kw: [r.session_id for r in runs.iter_runs(**kw)]
     assert ids(start_us=10, end_us=20) == ["a", "z"]
     assert ids(start_us=20, end_us=30) == []
-    assert ids(start_us=15, end_us=16) == ["a"]  # zero-length run at start_us is out
+    assert ids(start_us=15, end_us=16) == ["a", "z"]  # zero-length at start_us is in
     assert ids(start_us=19, end_us=20) == ["a"]
 
 
-@pytest.mark.parametrize("count", [None, "2", 2.5, [1], b"1"])
+def test_every_run_is_in_exactly_one_partitioning_window(runs):
+    spans = [(10, 20), (20, 30), (1, 100), (5, 10), (15, 15), (20, 20), (10, 10)]
+    for i, (a, b) in enumerate(spans):
+        record(runs, session_id=f"s{i}", started_us=a, ended_us=b)
+    edges = [0, 10, 15, 20, 25, 30, 100, 101]
+    for i, (a, b) in enumerate(spans):
+        windows = [
+            (lo, hi)
+            for lo, hi in zip(edges, edges[1:])
+            if f"s{i}" in [r.session_id for r in runs.iter_runs(start_us=lo, end_us=hi)]
+        ]
+        if a == b:
+            assert len(windows) == 1, (a, b, windows)
+        else:  # a span run appears in each window it overlaps, never none
+            assert windows, (a, b)
+    zero = lambda lo, hi: [
+        r.session_id
+        for r in runs.iter_runs(start_us=lo, end_us=hi)
+        if r.started_us == r.ended_us
+    ]
+    assert zero(10, 15) == ["s6"] and zero(15, 20) == ["s4"] and zero(20, 25) == ["s5"]
+
+
+@pytest.mark.parametrize("count", [None, "2", 2.5, [1], b"1", True, False])
 def test_outcome_mapping_survives_a_non_int_question_count(count):
     assert map_reported_outcome("done", count) is RunOutcome.COMPLETED
     assert map_reported_outcome("blocked", count) is RunOutcome.BLOCKED
