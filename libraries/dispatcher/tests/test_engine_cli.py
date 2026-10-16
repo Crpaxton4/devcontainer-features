@@ -210,6 +210,50 @@ def test_workspace_mount_invalid(world):
     assert not shell.spawned
 
 
+PG = ["docker", "exec", "c", "pg_isready"]
+ODOO = ["docker", "exec", "c", "odoo", "--version"]
+
+
+def test_admit_probes_readiness_after_the_mount_assertion(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "18"))
+    run = JobRun(engine, engine.jobs.get(job.job_id))
+    assert run.admit() is True
+    assert len(shell.commands(*PG)) == 1 and len(shell.commands(*ODOO)) == 1
+    argvs = [c for c, _ in shell.calls]
+    inspect = argvs.index(shell.commands("docker", "inspect")[0])
+    assert inspect < argvs.index(PG) < argvs.index(ODOO)
+
+
+def test_a_slow_probe_is_retried_and_the_job_proceeds(world, monkeypatch):
+    engine, shell, _ = world
+    slept = []
+    monkeypatch.setattr(lifecycle.time, "sleep", slept.append)
+    shell.queue_reply(PG, Completed(2, "", "no response"), Completed(1))
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "19"))
+    engine.run()
+    assert len(shell.commands(*PG)) == 3
+    assert slept == [lifecycle.READY_POLL_S] * 2
+    assert engine.jobs.get(job.job_id).state is JobState.DONE
+
+
+def test_an_expired_wait_is_a_container_start_failure(world, monkeypatch):
+    engine, shell, _ = world
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda s: None)
+    monkeypatch.setattr(lifecycle, "READY_TIMEOUT_S", 0)
+    shell.reply(PG, Completed(2, "", "accepting no connections"))
+    shell.reply(ODOO, Completed(127, "", "odoo: not found"))
+    (job,) = _submit(engine, ("qoc", "20"))
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert "pg_isready exit=2" in dead.detail
+    assert "accepting no connections" in dead.detail
+    assert "odoo --version exit=127" in dead.detail
+    assert not shell.spawned and engine.runs.get_artifacts(job.job_id) is not None
+
+
 def test_unexpected_admit_error_dead_letters_then_raises(world):
     engine, shell, _ = world
     shell.replies[0] = (["devcontainer", "up"], Completed(0, "x"))

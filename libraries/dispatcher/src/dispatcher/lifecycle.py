@@ -33,6 +33,8 @@ import json
 import os
 import signal
 import subprocess
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +71,13 @@ STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
 #: Admission holds the single admission thread, and the per-job deadline does
 #: not cover it, so every call made while admitting has its own timeout.
 UP_TIMEOUT_S = 1200
+#: The wait for postgres and odoo to answer inside a started container
+#: (:func:`wait_ready`). It is under ``UP_TIMEOUT_S``: a cold start that is
+#: still not answering after this long is a failed start, not a slow one.
+READY_TIMEOUT_S = 180
+READY_POLL_S = 2
+#: One probe call. A hung ``docker exec`` must not eat the wait unseen.
+READY_PROBE_TIMEOUT_S = 30
 INSPECT_TIMEOUT_S = 60
 STOP_TIMEOUT_S = 120
 
@@ -304,6 +313,57 @@ def up(shell: Shell, settings: Settings, repo: str, env: dict[str, str]) -> str:
     if result.returncode != 0:
         raise ContainerStartError(_failure_text("devcontainer up", result))
     return _container_id(result)
+
+
+def _probe(
+    shell: Shell, container_id: str, argv: list[str], env: dict[str, str]
+) -> tuple[bool, str]:
+    """Run one readiness probe inside the container. Returns (passed, text)."""
+    done = shell.run(
+        ["docker", "exec", container_id, *argv],
+        env=env,
+        timeout=READY_PROBE_TIMEOUT_S,
+    )
+    name = " ".join(argv)
+    if done.returncode == 0:
+        return True, f"{name} ok"
+    return False, _failure_text(name, done)
+
+
+def wait_ready(
+    shell: Shell,
+    container_id: str,
+    env: dict[str, str],
+    *,
+    timeout_s: float | None = None,
+    poll_s: float | None = None,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> None:
+    """Wait until postgres and odoo answer inside the started container.
+
+    ``devcontainer up`` returns when the container is running, not when its
+    services answer. The probes are the ones ``stack-ensure.sh`` uses
+    (``pg_isready`` and ``odoo --version``), run through ``docker exec`` as
+    :func:`kill_in_container` does. Both run on every attempt so that an
+    expired wait reports both. An expired wait raises ``ContainerStartError``
+    with the last output of each probe. The defaults are read at call time.
+    """
+    timeout_s = READY_TIMEOUT_S if timeout_s is None else timeout_s
+    poll_s = READY_POLL_S if poll_s is None else poll_s
+    sleep = time.sleep if sleep is None else sleep
+    clock = time.monotonic if clock is None else clock
+    deadline = clock() + timeout_s
+    while True:
+        pg_ok, pg_text = _probe(shell, container_id, ["pg_isready"], env)
+        odoo_ok, odoo_text = _probe(shell, container_id, ["odoo", "--version"], env)
+        if pg_ok and odoo_ok:
+            return
+        if clock() >= deadline:
+            raise ContainerStartError(
+                f"readiness: not ready after {timeout_s}s: {pg_text} / {odoo_text}"
+            )
+        sleep(poll_s)
 
 
 def _bind_sources(mounts: list[dict]) -> dict[str, str]:

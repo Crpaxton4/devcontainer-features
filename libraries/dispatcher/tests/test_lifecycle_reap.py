@@ -669,6 +669,62 @@ def test_up_timeout_is_a_start_failure(settings):
         lifecycle.up(shell, settings, "qoc", {})
 
 
+class _Clock:
+    """A fake clock whose sleep advances it, so a wait expires without waiting."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.slept = []
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def test_wait_ready_returns_when_both_probes_pass():
+    shell, clock = FakeShell(), _Clock()
+    lifecycle.wait_ready(shell, "cid", {}, sleep=clock.sleep, clock=lambda: clock.now)
+    assert shell.commands("docker", "exec", "cid", "pg_isready")
+    assert shell.commands("docker", "exec", "cid", "odoo", "--version")
+    assert clock.slept == []
+    assert {t for _, t in shell.timeouts} == {lifecycle.READY_PROBE_TIMEOUT_S}
+
+
+def test_wait_ready_retries_until_both_pass():
+    shell, clock = FakeShell(), _Clock()
+    shell.queue_reply(["docker", "exec", "cid", "pg_isready"], Completed(2))
+    shell.queue_reply(["docker", "exec", "cid", "odoo"], Completed(1), Completed(1))
+    lifecycle.wait_ready(shell, "cid", {}, sleep=clock.sleep, clock=lambda: clock.now)
+    assert len(shell.commands("docker", "exec", "cid", "odoo", "--version")) == 3
+    assert clock.slept == [lifecycle.READY_POLL_S] * 2
+
+
+def test_wait_ready_expiry_names_both_probes_and_the_last_output():
+    shell, clock = FakeShell(), _Clock()
+    shell.reply(["docker", "exec", "cid", "pg_isready"], Completed(2, "", "x" * 2000))
+    shell.reply(["docker", "exec", "cid", "odoo"], Completed(124, "", "timed out"))
+    with pytest.raises(lifecycle.ContainerStartError) as raised:
+        lifecycle.wait_ready(
+            shell,
+            "cid",
+            {},
+            timeout_s=10,
+            poll_s=4,
+            sleep=clock.sleep,
+            clock=lambda: clock.now,
+        )
+    detail = raised.value.detail
+    assert detail.startswith("readiness: not ready after 10s: pg_isready exit=2: ")
+    assert "x" * 1000 in detail and "x" * 1001 not in detail
+    assert "odoo --version exit=124: timed out" in detail
+    assert clock.slept == [4, 4, 4]  # attempts at t=0, 4, 8, 12: expired at 12
+
+
+def test_wait_ready_defaults_are_bounded_under_the_up_timeout():
+    assert lifecycle.READY_TIMEOUT_S < lifecycle.UP_TIMEOUT_S
+    assert lifecycle.READY_PROBE_TIMEOUT_S < lifecycle.READY_TIMEOUT_S
+
+
 def test_real_killpg_reaches_a_grandchild_holding_the_pipe():
     """sh runs a background sleep that inherits the pipe; killpg must free it."""
     import time

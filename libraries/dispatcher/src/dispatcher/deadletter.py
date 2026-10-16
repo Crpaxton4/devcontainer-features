@@ -22,7 +22,8 @@ STATEMENTS: dict[DeadReason, str] = {
         "Rejected at the gate: the task already had a live job. Nothing ran."
     ),
     DeadReason.CONTAINER_START_FAILED: (
-        "Bringing the container up did not succeed. No session ever existed."
+        "Bringing the container up did not succeed, or it did not become ready "
+        "(postgres and odoo answering) in time. No session ever existed."
     ),
     DeadReason.WORKSPACE_MOUNT_INVALID: (
         "The container came up and the mount assertion found the wrong thing "

@@ -107,7 +107,8 @@ class JobRun:
     # -- phase 1: admit (serial, calling thread) ------------------------
 
     def admit(self) -> bool:
-        """Mark running, make the bundle, bring the container up, assert mounts.
+        """Mark running, make the bundle, bring the container up, assert mounts,
+        wait until postgres and odoo answer.
 
         Returns True when the session may start. A failure here is a dead
         letter with a cause and a bundle, and no session.
@@ -143,6 +144,7 @@ class JobRun:
         lifecycle.assert_mounts(
             engine.shell, self.settings, job.repo, container_id, env
         )
+        lifecycle.wait_ready(engine.shell, container_id, env)
 
     # -- phase 2: the session (worker thread) ---------------------------
 
