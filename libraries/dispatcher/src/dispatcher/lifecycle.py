@@ -36,11 +36,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_sdk.state.dispatch_state import artifacts_root
+from odoo_sdk.state.dispatch_state import artifacts_root, odoo_dev_dir
 
 from .schema import schema_argument
 from .settings import (
     ARTIFACTS_TARGET,
+    ODOO_DEV_MOUNT_TARGET,
     Settings,
     WORKSPACE_TARGET,
     normalize_project,
@@ -149,13 +150,15 @@ def render_up(settings: Settings, repo: str) -> list[str]:
     This deliberately does not call ``stack-ensure.sh``. Its create path runs
     ``devcontainer up --workspace-folder`` with no ``--config`` and no
     ``--mount``, so it cannot create a container for these repos (they carry no
-    ``.devcontainer``) and could not add the ``/artifacts`` bind. Do not "fix"
-    this back. The memory gate stands in for eviction, and stopping an idle
-    editor stack is a manual step.
+    ``.devcontainer``). Do not "fix" this back. The memory gate stands in for
+    eviction, and stopping an idle editor stack is a manual step.
 
-    The bundle *root* is mounted at ``/artifacts`` because one container serves
+    No ``--mount`` is passed. ``devcontainer up`` on a running container ignores
+    it, and a container that VS Code made is the normal state. The Feature binds
+    the host ``~/.config/odoo-dev`` at ``/usr/local/share/odoo-dev`` in every
+    container, and the bundle root lives under that bind. One container serves
     several jobs of a project; each job points ``ODOO_DEV_STATE_DIR`` at its own
-    subdirectory.
+    subdirectory of the bundle root.
     """
     argv = [
         "devcontainer",
@@ -164,8 +167,6 @@ def render_up(settings: Settings, repo: str) -> list[str]:
         str(settings.config(repo)),
         "--workspace-folder",
         str(settings.workspace(repo)),
-        "--mount",
-        f"type=bind,source={artifacts_root()},target={ARTIFACTS_TARGET}",
         "--additional-features",
         settings.additional_features,
     ]
@@ -351,8 +352,9 @@ def assert_mounts(
     The bind at ``/mnt/extra-addons`` (where the config declares the workspace
     and where ``reap`` assumes it) must have the real ``--workspace-folder`` as
     its source, by exact equality so a parent-directory bind is rejected too.
-    The ``/artifacts`` bind's source must be the bundle root. Anything else, or
-    no bind at all, is wrong. This checks paths only and cannot see whether the
+    The ``/usr/local/share/odoo-dev`` bind (the Feature's) must have the host
+    odoo-dev directory as its source, and the bundle root must lie under it.
+    Anything else, or no bind at all, is wrong. This checks paths only and cannot see whether the
     source holds the repo; :func:`require_workspace` covers that before ``up``.
     Asserted, never created.
     """
@@ -369,17 +371,24 @@ def assert_mounts(
         raise MountInvalidError(f"docker inspect output is not JSON: {exc}")
     binds = _bind_sources(mounts or [])
     wanted_workspace = os.path.realpath(settings.workspace(repo))
-    wanted_artifacts = os.path.realpath(artifacts_root())
+    wanted_odoo_dev = os.path.realpath(odoo_dev_dir())
     problems = []
     if binds.get(WORKSPACE_TARGET) != wanted_workspace:
         problems.append(
             f"{WORKSPACE_TARGET} is not a bind of {wanted_workspace} "
             f"(the --workspace-folder; found {binds.get(WORKSPACE_TARGET)!r})"
         )
-    if binds.get(ARTIFACTS_TARGET) != wanted_artifacts:
+    if binds.get(ODOO_DEV_MOUNT_TARGET) != wanted_odoo_dev:
         problems.append(
-            f"{ARTIFACTS_TARGET} is not a bind of {wanted_artifacts}"
-            f" (found {binds.get(ARTIFACTS_TARGET)!r})"
+            f"{ODOO_DEV_MOUNT_TARGET} is not a bind of {wanted_odoo_dev} "
+            f"(found {binds.get(ODOO_DEV_MOUNT_TARGET)!r}); the container was "
+            "created without the personal-features Feature: stop it and let "
+            "the dispatcher create it"
+        )
+    elif not Path(os.path.realpath(artifacts_root())).is_relative_to(wanted_odoo_dev):
+        problems.append(
+            f"the bundle root {artifacts_root()} is not under {wanted_odoo_dev}, "
+            f"so the container cannot see it at {ARTIFACTS_TARGET}"
         )
     if problems:
         raise MountInvalidError("; ".join(problems) + f"; binds={binds}")

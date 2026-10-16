@@ -7,7 +7,7 @@ import signal
 import threading
 
 import pytest
-from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir, now_us
+from odoo_sdk.state.dispatch_state import bundle_dir, now_us, odoo_dev_dir
 from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
@@ -37,7 +37,11 @@ def world(settings, tmp_path):
             "Source": str(settings.workspace("qoc")),
             "Destination": "/mnt/extra-addons",
         },
-        {"Type": "bind", "Source": str(artifacts_root()), "Destination": "/artifacts"},
+        {
+            "Type": "bind",
+            "Source": str(odoo_dev_dir()),
+            "Destination": "/usr/local/share/odoo-dev",
+        },
     ]
     shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
     jobs, runs = JobStore(), RunStore()
@@ -409,8 +413,13 @@ def test_gate_blocks_admission_until_memory_returns(world):
 
 
 def _ticking_clock(step_us):
-    """A clock that moves ``step_us`` forward on every call."""
-    now = [0]
+    """A clock that moves ``step_us`` forward on every call.
+
+    It starts at the wall clock: ``mark_running`` stamps the job row with the
+    real time, and the job row's ``ended_us`` (taken from this clock since the
+    run row's clock moved to the spawn) must never fall below it.
+    """
+    now = [now_us()]
 
     def clock():
         now[0] += step_us
@@ -712,8 +721,8 @@ def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
                     },
                     {
                         "Type": "bind",
-                        "Source": str(artifacts_root()),
-                        "Destination": "/artifacts",
+                        "Source": str(odoo_dev_dir()),
+                        "Destination": "/usr/local/share/odoo-dev",
                     },
                 ]
             ),
