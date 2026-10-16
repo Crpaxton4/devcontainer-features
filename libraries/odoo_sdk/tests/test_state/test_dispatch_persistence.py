@@ -16,6 +16,7 @@ from odoo_sdk.state.artifacts import (
     BUNDLE_FILES,
     collect_artifacts,
     ensure_bundle_dir,
+    task_record_path,
 )
 from odoo_sdk.state.jobs import (
     DeadReason,
@@ -33,6 +34,15 @@ from odoo_sdk.state.migrations import (
 from odoo_sdk.state.runs_store import RunOutcome, RunStore, map_reported_outcome
 
 T0 = 1_760_000_000_000_000  # 2025-10-09T08:53:20Z
+TASK = "42"
+
+
+def write_task_json(bundle, text, task_id=TASK):
+    """Write the agent's record where state-dir.sh does: tasks/<task_id>/task.json."""
+    path = task_record_path(bundle, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
 
 
 @pytest.fixture
@@ -608,11 +618,12 @@ def test_ensure_bundle_dir(tmp_path):
 
 def test_collect_full_bundle(tmp_path, runs):
     bundle = ensure_bundle_dir("j1", tmp_path)
-    (bundle / "task.json").write_text('{"spec": 1}')
+    write_task_json(bundle, '{"spec": 1}')
     transcript = tmp_path / "t.jsonl"
     transcript.write_text("line\n")
     h = collect_artifacts(
         "j1",
+        TASK,
         session_id="s1",
         transcript=transcript,
         envelope='{"r": 1}',
@@ -631,8 +642,20 @@ def test_collect_full_bundle(tmp_path, runs):
     assert index.dir == str(bundle) and index.has_session and index.missing == ""
 
 
+def test_task_json_is_read_at_the_nested_path_only(tmp_path):
+    bundle = ensure_bundle_dir("j1", tmp_path)
+    assert task_record_path(bundle, TASK) == bundle / "tasks" / TASK / "task.json"
+    (bundle / "task.json").write_text("{}")  # the old, wrong location
+    write_task_json(bundle, "{}", task_id="43")  # another task's record
+    h = collect_artifacts("j1", TASK, root=tmp_path, now_us=T0)
+    assert not h.has_task_json
+    assert any("the agent wrote no task.json" in line for line in h.missing)
+    write_task_json(bundle, "{}")
+    assert collect_artifacts("j1", TASK, root=tmp_path, now_us=T0).has_task_json
+
+
 def test_collect_for_a_job_that_never_had_a_session(tmp_path, runs):
-    h = collect_artifacts("j2", runs=runs, root=tmp_path, now_us=T0)
+    h = collect_artifacts("j2", TASK, runs=runs, root=tmp_path, now_us=T0)
     assert (h.has_task_json, h.has_session, h.has_envelope, h.bytes) == (
         False,
         False,
@@ -647,7 +670,7 @@ def test_collect_for_a_job_that_never_had_a_session(tmp_path, runs):
 
 def test_missing_transcript_file_is_recorded(tmp_path):
     h = collect_artifacts(
-        "j1", transcript=tmp_path / "gone.jsonl", root=tmp_path, now_us=T0
+        "j1", TASK, transcript=tmp_path / "gone.jsonl", root=tmp_path, now_us=T0
     )
     assert not h.has_session
     assert any("does not exist" in line for line in h.missing)
@@ -655,17 +678,17 @@ def test_missing_transcript_file_is_recorded(tmp_path):
 
 def test_half_written_task_json_is_recorded_not_raised(tmp_path):
     bundle = ensure_bundle_dir("j1", tmp_path)
-    (bundle / "task.json").write_text('{"spec": ')
-    h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+    write_task_json(bundle, '{"spec": ')
+    h = collect_artifacts("j1", TASK, root=tmp_path, now_us=T0)
     assert not h.has_task_json
     assert any("not valid JSON" in line for line in h.missing)
 
 
 def test_unreadable_task_json_is_recorded(tmp_path):
     bundle = ensure_bundle_dir("j1", tmp_path)
-    (bundle / "task.json").write_text("{}")
+    write_task_json(bundle, "{}")
     with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
-        h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+        h = collect_artifacts("j1", TASK, root=tmp_path, now_us=T0)
     assert any("unreadable" in line for line in h.missing)
 
 
@@ -676,6 +699,7 @@ def test_collection_failures_never_raise_and_never_touch_the_run(tmp_path, runs)
     blocker.write_text("a file where the bundle root should be")
     h = collect_artifacts(
         "j1",
+        TASK,
         session_id="s1",
         transcript=tmp_path / "x",
         envelope="{}",
@@ -695,7 +719,7 @@ def test_index_failure_is_swallowed(tmp_path):
         def record_artifacts(self, **kw):
             raise sqlite3.OperationalError("disk full")
 
-    h = collect_artifacts("j1", runs=Broken(), root=tmp_path, now_us=T0)
+    h = collect_artifacts("j1", TASK, runs=Broken(), root=tmp_path, now_us=T0)
     assert h.job_id == "j1"
 
 
@@ -704,13 +728,13 @@ def test_envelope_write_failure_is_recorded(tmp_path):
     with patch(
         "odoo_sdk.state.artifacts._replace_atomically", side_effect=OSError("full")
     ):
-        h = collect_artifacts("j1", envelope="{}", root=tmp_path, now_us=T0)
+        h = collect_artifacts("j1", TASK, envelope="{}", root=tmp_path, now_us=T0)
     assert not h.has_envelope
     assert any("envelope.json: OSError" in line for line in h.missing)
 
 
 def test_collect_default_clock(tmp_path):
-    h = collect_artifacts("j1", root=tmp_path)
+    h = collect_artifacts("j1", TASK, root=tmp_path)
     assert h.harvested_us > T0
 
 
@@ -747,8 +771,8 @@ def test_insert_or_replace_cannot_rewrite_evidence(runs, sql):
 
 def test_collect_survives_deeply_nested_task_json(tmp_path):
     bundle = ensure_bundle_dir("j1", tmp_path)
-    (bundle / "task.json").write_text("[" * 200000 + "]" * 200000)
-    h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+    write_task_json(bundle, "[" * 200000 + "]" * 200000)
+    h = collect_artifacts("j1", TASK, root=tmp_path, now_us=T0)
     assert not h.has_task_json
     assert any("not valid JSON" in line for line in h.missing)
 
@@ -758,7 +782,7 @@ def test_collect_survives_an_unreadable_bundle_directory(tmp_path):
     bundle = ensure_bundle_dir("j1", tmp_path)
     bundle.chmod(0)
     try:
-        h = collect_artifacts("j1", envelope="{}", root=tmp_path, now_us=T0)
+        h = collect_artifacts("j1", TASK, envelope="{}", root=tmp_path, now_us=T0)
     finally:
         bundle.chmod(0o700)
     assert not h.has_task_json
@@ -767,13 +791,13 @@ def test_collect_survives_an_unreadable_bundle_directory(tmp_path):
 
 def test_collect_survives_a_task_json_check_that_raises(tmp_path):
     with patch.object(Path, "is_file", side_effect=PermissionError("denied")):
-        h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+        h = collect_artifacts("j1", TASK, root=tmp_path, now_us=T0)
     assert any("unreadable" in line for line in h.missing)
 
 
 def test_non_str_job_id_is_a_value_error(tmp_path):
     with pytest.raises(ValueError):
-        collect_artifacts(5, root=tmp_path)
+        collect_artifacts(5, TASK, root=tmp_path)
     with pytest.raises(ValueError):
         dispatch_state.bundle_dir(None, tmp_path)
 
@@ -871,11 +895,13 @@ def test_open_store_closes_the_connection_when_migration_fails(tmp_path):
 def test_explicit_zero_now_us_is_honoured(tmp_path):
     assert dispatch_state.resolve_now_us(0) == 0
     assert dispatch_state.resolve_now_us(None) > T0
-    assert collect_artifacts("j1", root=tmp_path, now_us=0).harvested_us == 0
+    assert collect_artifacts("j1", TASK, root=tmp_path, now_us=0).harvested_us == 0
 
 
 def test_second_collection_does_not_update_the_index(tmp_path, runs):
-    collect_artifacts("j1", runs=runs, root=tmp_path, now_us=T0)
-    collect_artifacts("j1", envelope="{}", runs=runs, root=tmp_path, now_us=T0 + 1)
+    collect_artifacts("j1", TASK, runs=runs, root=tmp_path, now_us=T0)
+    collect_artifacts(
+        "j1", TASK, envelope="{}", runs=runs, root=tmp_path, now_us=T0 + 1
+    )
     index = runs.get_artifacts("j1")
     assert (index.has_envelope, index.harvested_us) == (False, T0)

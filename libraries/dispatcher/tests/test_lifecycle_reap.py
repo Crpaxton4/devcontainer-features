@@ -12,7 +12,7 @@ from odoo_sdk.state.runs_store import RunOutcome, RunStore
 from dispatcher import collect, lifecycle, queue
 from dispatcher.lifecycle import Completed, Shell
 from dispatcher.reap import host_worktree, reap
-from support import GOOD, FakeShell, stream
+from support import GOOD, FakeShell, stream, write_task_record
 
 
 def test_exec_command_line_is_section_eight_exactly(settings):
@@ -358,16 +358,15 @@ def test_stream_parser_flags_unreadable_result_and_ignores_noise():
 
 
 def test_task_record_helpers(state_root):
-    d = bundle_dir("j1")
-    d.mkdir(parents=True)
-    assert collect.read_task_record("j1") == {}
-    (d / "task.json").write_text("{bad")
-    assert collect.read_task_record("j1") == {}
-    (d / "task.json").write_text("[1]")
-    assert collect.read_task_record("j1") == {}
+    bundle_dir("j1").mkdir(parents=True)
+    assert collect.read_task_record("j1", "42") == {}
+    write_task_record("j1", "42", "{bad")
+    assert collect.read_task_record("j1", "42") == {}
+    write_task_record("j1", "42", "[1]")
+    assert collect.read_task_record("j1", "42") == {}
     record = {"build": {"branch": "b", "worktree": "/w"}, "pr": {"number": 7}}
-    (d / "task.json").write_text(json.dumps(record))
-    got = collect.read_task_record("j1")
+    write_task_record("j1", "42", json.dumps(record))
+    got = collect.read_task_record("j1", "42")
     assert (
         collect.branch_of(got),
         collect.worktree_of(got),
@@ -377,6 +376,25 @@ def test_task_record_helpers(state_root):
     assert collect.pr_number_of({"pr": {"number": True}}) == 0
     assert collect.pr_number_of({}) == 0
     assert collect.branch_of({"build": []}) == "" and collect.worktree_of({}) == ""
+
+
+def test_the_record_state_dir_sh_writes_is_the_record_the_collector_reads(state_root):
+    record = {"build": {"branch": "b", "worktree": "/w"}}
+    path = write_task_record("j1", "42", json.dumps(record))
+    assert path == bundle_dir("j1") / "tasks" / "42" / "task.json"
+    got = collect.read_task_record("j1", "42")
+    assert (collect.branch_of(got), collect.worktree_of(got)) == ("b", "/w")
+    assert collect.collect_artifacts("j1", "42").has_task_json
+    assert collect.read_task_record("j1", "43") == {}  # another task's record
+
+
+def test_a_top_level_task_json_is_not_the_agents_record(state_root):
+    bundle_dir("j1").mkdir(parents=True)
+    (bundle_dir("j1") / "task.json").write_text('{"build": {"branch": "old"}}')
+    assert collect.read_task_record("j1", "42") == {}
+    harvest = collect.collect_artifacts("j1", "42")
+    assert not harvest.has_task_json
+    assert any("the agent wrote no task.json" in line for line in harvest.missing)
 
 
 def _job():
@@ -617,9 +635,9 @@ def _orphan(shell=None, session="s-orphan", worktree=None):
     if session:
         store.set_session(job.job_id, session)
     if worktree:
-        d = bundle_dir(job.job_id)
-        d.mkdir(parents=True)
-        (d / "task.json").write_text(json.dumps({"build": {"worktree": worktree}}))
+        write_task_record(
+            job.job_id, job.task_id, json.dumps({"build": {"worktree": worktree}})
+        )
     return store, runs, job
 
 

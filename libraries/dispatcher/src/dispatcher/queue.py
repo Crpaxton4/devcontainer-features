@@ -189,7 +189,7 @@ def reconcile(
     """
     ids = []
     for job in store.list_by_state(JobState.RUNNING):
-        record = read_task_record(job.job_id)
+        record = read_task_record(job.job_id, job.task_id)
         facts = _orphan_facts(job, record, shell, settings, env)
         if runs is not None:
             facts.append(_record_orphan(runs, job, record, settings))
