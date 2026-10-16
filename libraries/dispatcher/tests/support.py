@@ -68,15 +68,24 @@ class FakeShell:
         self.groups = []
         self.spawned = []
         self.replies = []  # (prefix list, Completed)
+        self.queued = []  # (prefix list, Completed), each used once, first
         self.proc = FakeProc()
         self.spawn_error = None
 
     def reply(self, prefix, completed):
         self.replies.append((prefix, completed))
 
+    def queue_reply(self, prefix, *completed):
+        """Answer the next matching calls in order, then fall back to ``reply``."""
+        self.queued.extend((prefix, one) for one in completed)
+
     def run(self, argv, *, env, timeout=None):
         self.calls.append((list(argv), env))
         self.timeouts.append((list(argv), timeout))
+        for index, (prefix, completed) in enumerate(self.queued):
+            if argv[: len(prefix)] == prefix:
+                del self.queued[index]
+                return completed
         for prefix, completed in self.replies:
             if argv[: len(prefix)] == prefix:
                 return completed
