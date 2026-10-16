@@ -1,0 +1,84 @@
+name: "CI - odoo-orchestrator plugin"
+
+# Every gate for the odoo-orchestrator Claude Code plugin at
+# plugins/odoo-orchestrator/. No job needs secrets, Docker, Odoo or anything
+# beyond the read-only default token. The plugin is Odoo-agnostic and ships one
+# command, so there is no SDK path in the filter, unlike plugin-odoo-dev.yaml.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'plugins/odoo-orchestrator/**'
+      - '.claude-plugin/marketplace.json'
+      - '.github/workflows/plugin-orchestrator.yaml'
+  pull_request:
+    paths:
+      - 'plugins/odoo-orchestrator/**'
+      - '.claude-plugin/marketplace.json'
+      - '.github/workflows/plugin-orchestrator.yaml'
+  workflow_dispatch:
+
+# A superseded push to the same ref has nothing left to prove.
+concurrency:
+  group: plugin-orchestrator-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: "plugin gates (plugins/odoo-orchestrator/scripts/validate.sh)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # validate.sh FAILS rather than skips when the CLI is missing, so a green
+      # run always means the manifest gate really ran.
+      REQUIRE_CLAUDE: "1"
+      # Kept in step with CLAUDE_CODE_VERSION in plugin-odoo-dev.yaml. Bump both
+      # together.
+      CLAUDE_CODE_VERSION: "2.1.295"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: "Install the Claude Code CLI"
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: "Run every gate"
+        run: bash plugins/odoo-orchestrator/scripts/validate.sh
+
+  # Plain shellcheck at default severity, as validate.yaml applies it to other
+  # shell entry points. This plugin ships two small scripts that are clean at
+  # that level, so there is no reason to lower the bar to -S error.
+  shellcheck:
+    name: "shellcheck plugins/odoo-orchestrator"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHELLCHECK_VERSION: "0.10.0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: "Install pinned shellcheck"
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+
+      - name: "Lint every plugin shell script"
+        run: |
+          find plugins/odoo-orchestrator -name '*.sh' -type f | sort | xargs shellcheck
