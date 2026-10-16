@@ -3,7 +3,6 @@ description: Deliver one Odoo task in its own worktree — existing-work check, 
 argument-hint: <task-id>
 arguments: [task]
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
-disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-builder
 background: false

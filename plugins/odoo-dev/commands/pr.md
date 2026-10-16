@@ -3,7 +3,6 @@ description: Open a client-visible draft pull request — one finished Odoo task
 argument-hint: <task-id> | release <from-branch> <to-branch>
 arguments: [task]
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
-disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-pr
 background: false

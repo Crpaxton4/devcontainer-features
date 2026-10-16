@@ -3,7 +3,6 @@ description: Port one Odoo task's modules to a target major series — preflight
 argument-hint: <task-id> <target-series> [<ssh-host>]
 arguments: [task]
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
-disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-upgrader
 background: false
