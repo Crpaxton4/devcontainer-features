@@ -9,6 +9,10 @@ from dispatcher.settings import Settings
 def state_root(tmp_path, monkeypatch):
     root = tmp_path / "state"
     monkeypatch.setenv("ODOO_DISPATCH_STATE_DIR", str(root))
+    # One mechanism: HOME points into tmp, so the default odoo-dev directory
+    # (~/.config/odoo-dev) and the default bundle root under it stay in tmp.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("DISPATCH_ARTIFACTS_DIR", raising=False)
     monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
     return root
 

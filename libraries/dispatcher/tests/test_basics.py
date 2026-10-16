@@ -251,6 +251,24 @@ def test_settings_defaults_and_errors(tmp_path):
     assert normalize_project("QOC_Repo.x") == "qoc_repox"
 
 
+def test_settings_refuse_a_bundle_root_the_container_cannot_see(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    invariants = tmp_path / "inv.md"
+    invariants.write_text("host text", "utf-8")
+    env = {
+        "DISPATCH_REPOS_DIR": "/r",
+        "DISPATCH_CONFIG_ROOT": "/c",
+        "DISPATCH_REPO_OWNER": "o",
+        "DISPATCH_INVARIANTS_FILE": str(invariants),
+    }
+    Settings.from_env(env)  # unset: the default sits under the odoo-dev directory
+    inside = str(tmp_path / "home" / ".config" / "odoo-dev" / "x" / "artifacts")
+    Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": inside})
+    with pytest.raises(SettingsError, match="not under") as caught:
+        Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": str(tmp_path / "out")})
+    assert "DISPATCH_ARTIFACTS_DIR" in str(caught.value)
+
+
 # -- schema and the success test ----------------------------------------
 
 

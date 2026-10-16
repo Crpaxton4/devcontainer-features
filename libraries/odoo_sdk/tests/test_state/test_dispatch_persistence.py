@@ -99,6 +99,25 @@ def test_state_paths(tmp_path):
     assert dispatch_state.now_us() > T0
 
 
+def test_artifacts_root_resolution_order(tmp_path):
+    home = tmp_path / "home"
+    state = {"ODOO_DISPATCH_STATE_DIR": str(tmp_path / "state"), "HOME": str(home)}
+    default = home / ".config" / "odoo-dev" / "dispatch" / "artifacts"
+    with patch.dict(os.environ, state, clear=True):
+        assert dispatch_state.odoo_dev_dir() == home / ".config" / "odoo-dev"
+        assert dispatch_state.artifacts_root() == default  # not under the state root
+        assert dispatch_state.bundle_dir("j") == default / "j"
+        assert dispatch_state.artifacts_root(tmp_path) == tmp_path / "artifacts"
+    env = {**state, "DISPATCH_ARTIFACTS_DIR": str(tmp_path / "chosen")}
+    with patch.dict(os.environ, env, clear=True):
+        assert dispatch_state.artifacts_root() == tmp_path / "chosen"
+        assert dispatch_state.artifacts_root(tmp_path) == tmp_path / "artifacts"
+    with patch.dict(os.environ, {**env, "DISPATCH_ARTIFACTS_DIR": "~/b"}, clear=True):
+        assert dispatch_state.artifacts_root() == home / "b"
+    with patch.dict(os.environ, {**env, "DISPATCH_ARTIFACTS_DIR": ""}, clear=True):
+        assert dispatch_state.artifacts_root() == default
+
+
 @pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "a\\b"])
 def test_bundle_dir_rejects_non_components(bad, tmp_path):
     with pytest.raises(ValueError):

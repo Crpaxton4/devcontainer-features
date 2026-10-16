@@ -26,7 +26,7 @@ STATEMENTS: dict[DeadReason, str] = {
     ),
     DeadReason.WORKSPACE_MOUNT_INVALID: (
         "The container came up and the mount assertion found the wrong thing "
-        "at the workspace or artifacts path."
+        "at the workspace or the odoo-dev mount."
     ),
     DeadReason.SESSION_LAUNCH_FAILED: (
         "The session never started: bad flags, a missing binary, or a "

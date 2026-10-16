@@ -43,6 +43,14 @@ Variables (all optional unless marked required):
     personal-features Feature, never empty). The Feature provides ``claude``,
     ``/usr/local/share/claude-home`` and ``/usr/local/share/odoo-dev`` in a
     container that the dispatcher creates cold.
+``DISPATCH_ARTIFACTS_DIR``
+    The bundle root on the HOST (default ``~/.config/odoo-dev/dispatch/artifacts``),
+    read by :func:`odoo_sdk.state.dispatch_state.artifacts_root`. The container
+    sees it at ``/usr/local/share/odoo-dev/dispatch/artifacts`` through the bind
+    that the Feature makes of ``~/.config/odoo-dev``. A value outside that
+    directory is a settings error (exit 2), because the container cannot see it.
+    A running container keeps the mounts it was created with, so the dispatcher
+    passes no ``--mount`` of its own.
 """
 
 import os
@@ -51,13 +59,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from odoo_sdk.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
+
 DEFAULT_AGENT = "odoo-dev:odoo-dev-implementer"
 DEFAULT_ADDITIONAL_FEATURES = (
     '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
 )
 INVARIANTS_RELATIVE = Path("prompts") / "unattended-invariants.md"
 WORKSPACE_TARGET = "/mnt/extra-addons"
-ARTIFACTS_TARGET = "/artifacts"
+#: Where the personal-features Feature binds the host ``~/.config/odoo-dev``.
+ODOO_DEV_MOUNT_TARGET = "/usr/local/share/odoo-dev"
+#: The bundle root as the container sees it (under the Feature's odoo-dev bind).
+ARTIFACTS_TARGET = f"{ODOO_DEV_MOUNT_TARGET}/dispatch/artifacts"
 
 
 class SettingsError(RuntimeError):
@@ -74,6 +87,24 @@ def read_invariants(path: str) -> str:
         return Path(path).read_text("utf-8")
     except OSError as exc:
         raise SettingsError(f"cannot read the invariants file {path}: {exc}") from exc
+
+
+def check_artifacts_dir(env: Mapping[str, str]) -> None:
+    """Raise :class:`SettingsError` when ``DISPATCH_ARTIFACTS_DIR`` is not visible.
+
+    The container sees the host only through the Feature's bind of
+    ``~/.config/odoo-dev``, so the bundle root must sit under that directory.
+    """
+    value = env.get(DISPATCH_ARTIFACTS_DIR_ENV)
+    if not value:
+        return
+    wanted = Path(value).expanduser().resolve()
+    if not wanted.is_relative_to(odoo_dev_dir().resolve()):
+        raise SettingsError(
+            f"{DISPATCH_ARTIFACTS_DIR_ENV}={value} is not under {odoo_dev_dir()}, "
+            f"the directory that the Feature binds at {ODOO_DEV_MOUNT_TARGET}; "
+            "the container could not see the bundles"
+        )
 
 
 def normalize_project(repo: str) -> str:
@@ -148,6 +179,7 @@ class Settings:
             }
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc
+        check_artifacts_dir(env)
         invariants_file = env.get("DISPATCH_INVARIANTS_FILE") or str(
             plugin_root / INVARIANTS_RELATIVE
         )

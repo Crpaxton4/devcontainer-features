@@ -5,7 +5,7 @@ import os
 import subprocess
 
 import pytest
-from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir
+from odoo_sdk.state.dispatch_state import bundle_dir, odoo_dev_dir
 from odoo_sdk.state.jobs import JobStore
 from odoo_sdk.state.runs_store import RunOutcome, RunStore
 
@@ -27,7 +27,7 @@ def test_exec_command_line_is_section_eight_exactly(settings):
         "--workspace-folder",
         ws,
         "--remote-env",
-        "ODOO_DEV_STATE_DIR=/artifacts/job-1",
+        "ODOO_DEV_STATE_DIR=/usr/local/share/odoo-dev/dispatch/artifacts/job-1",
         "--remote-env",
         "ODOO_UNATTENDED=1",  # the contract with plugins/odoo-dev/hooks/unattended-guard.sh
         "--",
@@ -63,12 +63,13 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert not any("COMPOSE_PROJECT_NAME" in a for a in argv)
 
 
-def test_up_command_line_mounts_the_bundle_root(settings):
+def test_up_command_line_passes_no_mount(settings):
     argv = lifecycle.render_up(settings, "qoc")
     assert argv[:2] == ["devcontainer", "up"]
     assert "--override-config" not in argv
-    mount = argv[argv.index("--mount") + 1]
-    assert mount == f"type=bind,source={artifacts_root()},target=/artifacts"
+    # A running container ignores --mount; the Feature's odoo-dev bind carries the bundle.
+    assert "--mount" not in argv
+    assert "--additional-features" in argv
     assert argv[argv.index("--workspace-folder") + 1] == str(settings.workspace("qoc"))
     features = argv[argv.index("--additional-features") + 1]
     assert features == (
@@ -115,7 +116,7 @@ def test_up_failures(settings, reply):
         lifecycle.up(shell, settings, "qoc", {})
 
 
-def _mounts(settings, artifacts=None, workspace=None):
+def _mounts(settings, odoo_dev=None, workspace=None):
     return json.dumps(
         [
             {
@@ -125,8 +126,8 @@ def _mounts(settings, artifacts=None, workspace=None):
             },
             {
                 "Type": "bind",
-                "Source": str(artifacts or artifacts_root()),
-                "Destination": "/artifacts",
+                "Source": str(odoo_dev or odoo_dev_dir()),
+                "Destination": "/usr/local/share/odoo-dev",
             },
         ]
     )
@@ -153,20 +154,21 @@ def test_mount_assertion_catches_missing_binds(settings, stdout, needle):
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
 
 
-def test_mount_assertion_catches_wrong_source_and_missing_artifacts(settings, tmp_path):
+def test_mount_assertion_catches_wrong_source_and_wrong_odoo_dev(settings, tmp_path):
     shell = FakeShell()
     shell.reply(
         ["docker", "inspect"],
         Completed(
             0,
             _mounts(
-                settings, artifacts=tmp_path / "other", workspace=tmp_path / "wrong"
+                settings, odoo_dev=tmp_path / "other", workspace=tmp_path / "wrong"
             ),
         ),
     )
     with pytest.raises(lifecycle.MountInvalidError) as err:
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
-    assert "workspace-folder" in err.value.detail and "/artifacts" in err.value.detail
+    detail = err.value.detail
+    assert "workspace-folder" in detail and "/usr/local/share/odoo-dev" in detail
 
 
 def test_mount_assertion_inspect_failure(settings):
@@ -744,12 +746,34 @@ def test_reconcile_survives_a_failing_run_write(settings, monkeypatch):
     assert "could not be recorded" in store2.get(job2.job_id).detail
 
 
-def test_artifacts_bind_is_asserted_on_its_own(settings):
+def test_odoo_dev_bind_is_asserted_on_its_own(settings):
     shell = FakeShell()
-    mounts = json.loads(_mounts(settings))[:1]  # workspace right, no /artifacts
+    mounts = json.loads(_mounts(settings))[:1]  # workspace right, no Feature bind
     shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
-    with pytest.raises(lifecycle.MountInvalidError, match="/artifacts"):
+    with pytest.raises(lifecycle.MountInvalidError, match="personal-features") as err:
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+    assert "stop it and let the dispatcher create it" in err.value.detail
+    assert "/usr/local/share/odoo-dev" in err.value.detail
+
+
+def test_bundle_root_outside_the_odoo_dev_bind_is_refused(
+    settings, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DISPATCH_ARTIFACTS_DIR", str(tmp_path / "elsewhere"))
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(0, _mounts(settings)))
+    with pytest.raises(lifecycle.MountInvalidError, match="cannot see it") as err:
+        lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+    assert "personal-features" not in err.value.detail  # the bind itself is right
+
+
+def test_bundle_root_under_the_odoo_dev_bind_passes(settings, monkeypatch):
+    monkeypatch.setenv(
+        "DISPATCH_ARTIFACTS_DIR", str(odoo_dev_dir() / "dispatch" / "other")
+    )
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(0, _mounts(settings)))
+    lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
 
 
 def test_every_subprocess_has_a_timeout(settings):

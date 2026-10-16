@@ -5,7 +5,7 @@ The root is a directory on a local filesystem. It holds::
     <root>/jobs.db              job store (disposable working state)
     <root>/runs.db              run record (irreplaceable evidence)
     <root>/dispatcher.lock      singleton advisory lock file (never a database)
-    <root>/artifacts/<job_id>/  one artifact bundle per job
+    $DISPATCH_ARTIFACTS_DIR/<job_id>/  bundle per job; not under <root> (odoo-dev bind)
 
 Resolution order: ``$ODOO_DISPATCH_STATE_DIR`` (override), then
 ``$ODOO_TASK_TRACKER_DIR`` (the tracker's own root), then the tracker default
@@ -23,6 +23,9 @@ from .db import _default_root
 DISPATCH_STATE_DIR_ENV = "ODOO_DISPATCH_STATE_DIR"
 #: The tracker's state root variable; the dispatcher default.
 TRACKER_DIR_ENV = "ODOO_TASK_TRACKER_DIR"
+#: The bundle root on the host. It must sit under :func:`odoo_dev_dir`, which
+#: the personal-features Feature binds into every container.
+DISPATCH_ARTIFACTS_DIR_ENV = "DISPATCH_ARTIFACTS_DIR"
 
 JOBS_DB_FILENAME = "jobs.db"
 RUNS_DB_FILENAME = "runs.db"
@@ -64,9 +67,24 @@ def lock_path(root: Path | None = None) -> Path:
     return (root or state_root()) / LOCK_FILENAME
 
 
+def odoo_dev_dir() -> Path:
+    """Return the host directory the Feature binds at ``/usr/local/share/odoo-dev``."""
+    return Path.home() / ".config" / "odoo-dev"
+
+
 def artifacts_root(root: Path | None = None) -> Path:
-    """Return the bundle root, the directory bind-mounted into containers."""
-    return (root or state_root()) / ARTIFACTS_DIRNAME
+    """Return the bundle root, which the Feature's odoo-dev bind carries.
+
+    An explicit ``root`` (tests) gives ``<root>/artifacts``. Otherwise
+    ``$DISPATCH_ARTIFACTS_DIR``, then ``~/.config/odoo-dev/dispatch/artifacts``.
+    The state root plays no part, so ``jobs.db`` and ``runs.db`` stay local.
+    """
+    if root is not None:
+        return root / ARTIFACTS_DIRNAME
+    value = os.environ.get(DISPATCH_ARTIFACTS_DIR_ENV)
+    if value:
+        return Path(value).expanduser()
+    return odoo_dev_dir() / "dispatch" / ARTIFACTS_DIRNAME
 
 
 def bundle_dir(job_id: str, root: Path | None = None) -> Path:
