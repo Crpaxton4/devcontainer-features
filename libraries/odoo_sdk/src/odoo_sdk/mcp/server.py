@@ -32,6 +32,7 @@ from odoo_sdk.commands.dispatch_telemetry import (  # noqa: F401
     _emit_tool_event,
     _error_payload,
     _event_task_ids,
+    _is_dispatched_run,
     _outcome_line,
     _queried_task_ids,
     _result_payload_fields,
@@ -239,6 +240,10 @@ def _event_emitting(
     signature = inspect.signature(tool_fn)
 
     def emit(result: Any, args: tuple, kwargs: dict) -> None:
+        if _is_dispatched_run():
+            # A dispatched run is measured by the run record (#1065): the
+            # dispatcher holds the clock and the task, so no event is written.
+            return
         if isinstance(result, InputRequiredResult):
             # A SEP-2322 input-required leg (#664) is an ask, not an outcome:
             # recording it as a successful dispatch would write a spurious

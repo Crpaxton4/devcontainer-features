@@ -93,6 +93,7 @@ class QuerySessionsCommand(Command):
             "started_at": session.started_at.isoformat(),
             "ended_at": session.ended_at.isoformat(),
             "duration_secs": session.duration_seconds,
+            **({"has_failed_run": True} if session.has_failed else {}),
         }
         if include_events:
             summary["events"] = self._events_for(session.event_ids)

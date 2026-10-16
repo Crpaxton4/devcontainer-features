@@ -19,6 +19,7 @@ of any one transport:
   append the one ``source="agent"`` event a successful dispatch records.
 """
 
+import os
 import subprocess
 from typing import Any, Optional, Tuple
 
@@ -230,6 +231,21 @@ def _outcome_line(result: Any) -> str:
         message = error.get("message", "") if isinstance(error, dict) else str(error)
         return f"error: {message}" if message else "error"
     return "ok"
+
+
+#: Set to ``1`` by the dispatcher on every container session it starts. Such a
+#: session is measured by the run record (#1065), so its tool calls must not
+#: also emit attributing events.
+UNATTENDED_ENV = "ODOO_UNATTENDED"
+
+
+def _is_dispatched_run() -> bool:
+    """Return whether this process is inside a dispatched, unattended run.
+
+    Any non-empty value counts, including ``0``: the odoo-dev guard hook uses the
+    same rule, so the guard and the billing evidence never disagree.
+    """
+    return os.environ.get(UNATTENDED_ENV, "") != ""
 
 
 def _emit_tool_event(

@@ -12,6 +12,7 @@ from typing import Optional
 
 from odoo_sdk._utils import as_utc
 
+from .run_sessions import merge_runs
 from .models import (
     AGENTLESS_REPO,
     AGENTLESS_REPO_LABEL,
@@ -950,7 +951,9 @@ def _parse_derived_window(row: tuple) -> SessionWindow:
 class LocalStateClient:
     """SQLite-backed state store for task tracking sessions."""
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(
+        self, db_path: Optional[Path] = None, *, runs_db: Optional[Path] = None
+    ):
         """Bind to a tracker DB path WITHOUT touching the filesystem (#369).
 
         Construction is inert — no git remote, directory, or schema work. A missing
@@ -959,6 +962,33 @@ class LocalStateClient:
         :func:`tracker_db_path`; tests and callers pass an explicit path.
         """
         self._db_path = Path(db_path) if db_path is not None else tracker_db_path()
+        # The run record (#1065) is a second sessionization source. A client on
+        # the central tracker DB (no ``db_path``) reads ``runs.db`` under the
+        # dispatcher state root. A client given an explicit ``db_path`` reads
+        # the run record only when ``runs_db`` names one, so a test DB or a
+        # per-project client never picks up a stray ``runs.db``. The file is
+        # never created from the read path.
+        self._runs_db = Path(runs_db) if runs_db is not None else None
+        self._runs_enabled = runs_db is not None or db_path is None
+
+    def _runs_overlapping(
+        self, start: datetime, end: datetime, task_id: Optional[str]
+    ) -> list:
+        """Return the run-record rows overlapping ``[start, end)``, or ``[]``.
+
+        Strictly read-only (see :func:`~odoo_sdk.state.run_sessions.read_runs`):
+        the file is never created, migrated or written. A corrupt or locked file
+        raises rather than silently falling back to the event-store answer.
+        """
+        from .dispatch_state import runs_db_path
+        from .run_sessions import read_runs, to_us
+
+        if not self._runs_enabled:
+            return []
+        explicit = self._runs_db is not None
+        path = self._runs_db if explicit else runs_db_path()
+        runs = read_runs(path, to_us(start), to_us(end), expected=explicit)
+        return [r for r in runs if task_id is None or r.task_id == task_id]
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -1720,11 +1750,14 @@ class LocalStateClient:
             "wstart": _normalize_utc_isoformat(_widen(start, -margin)),
             "wend": _normalize_utc_isoformat(_widen(end, margin)),
         }
+        runs = self._runs_overlapping(
+            _widen(start, -margin), _widen(end, margin), task_id
+        )
         extra = ""
         if task_id is not None:
             extra += " AND task_key = :task_id"
             params["task_id"] = task_id
-        if repo is not None:
+        if repo is not None and not runs:
             # Repo is post-aggregation display metadata (#352), so the filter
             # matches the same COALESCE(MAX(...)) display expression the SELECT
             # projects, applied in the HAVING alongside the overlap predicate.
@@ -1733,7 +1766,14 @@ class LocalStateClient:
         sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [_parse_derived_window(r) for r in rows]
+        windows = [_parse_derived_window(r) for r in rows]
+        if not runs:
+            return windows
+        # The run record is a second source (#1065). Repo is display metadata a
+        # run can supply, so its filter moves after the merge.
+        return merge_runs(
+            windows, runs, gap_secs=gap_secs, start=start, end=end, repo=repo
+        )
 
     def get_events_by_ids(self, ids: list[int]) -> list[EventRecord]:
         """Return the events with the given ids, in the order requested.

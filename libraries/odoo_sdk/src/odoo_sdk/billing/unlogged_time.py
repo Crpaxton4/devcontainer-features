@@ -65,6 +65,7 @@ def _session_dict(window: SessionWindow) -> dict[str, Any]:
         "started_at": window.started_at.isoformat(),
         "ended_at": window.ended_at.isoformat(),
         "duration_secs": window.duration_seconds,
+        **({"has_failed_run": True} if window.has_failed else {}),
     }
 
 

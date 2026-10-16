@@ -277,13 +277,19 @@ def _upload_one(
     hours = _billable_hours(raw_hours, minimum, step)
     key = session.get("session_key", "")
     timesheet_id: Optional[int] = None
+    failed = bool(session.get("has_failed_run", False))
     if not dry_run:
+        description = _derived_description(state, task_id, session)
+        if failed:
+            # A dead-lettered run is real time, but whether it bills is a human
+            # call: the line says so, and the dry run shows the same flag.
+            description = f"[failed run] {description}"
         timesheet_id = reconcile_session(
             client,
             state,
             task_id,
             key,
-            _derived_description(state, task_id, session),
+            description,
             hours,
             datetime.fromisoformat(session["started_at"]),
             datetime.fromisoformat(session["ended_at"]),
@@ -293,6 +299,7 @@ def _upload_one(
         "session_key": key,
         "hours": hours,
         "timesheet_id": timesheet_id,
+        **({"has_failed_run": True} if failed else {}),
     }
 
 
