@@ -58,6 +58,8 @@ STDERR_TAIL_LINES = 40
 #: poll interval apart) before it is treated as fatal. The gate itself still
 #: raises on a bad read and never admits on a guess.
 MEMORY_READ_ATTEMPTS = 5
+#: How long to wait for the stderr drain once the host process has exited.
+DRAIN_GRACE_S = 5
 #: After the host process has exited, the stream is already in the pipe and is
 #: read in moments. If it is not finished by then, something else still holds
 #: the pipe (a grandchild) and the reader is abandoned instead of waited for.
@@ -214,7 +216,10 @@ class JobRun:
             self.terminate()
         tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
         drain = threading.Thread(
-            target=_drain, args=(self.proc.stderr, tail), daemon=True
+            target=_drain,
+            args=(self.proc.stderr, tail),
+            daemon=True,
+            name=f"drain-{job.job_id}",
         )
         drain.start()
         timer = threading.Timer(self.settings.deadline_s, self._on_deadline)
@@ -232,7 +237,7 @@ class JobRun:
             if self.proc.poll() is None:
                 self._signal_tree(signal.SIGKILL)
                 self.proc.wait()
-        drain.join(timeout=5)
+        drain.join(timeout=DRAIN_GRACE_S)
         self.ended_us = self.engine.clock()  # before any waiting on the kill
         if self.deadline_hit:
             self._deadline_done.wait(DEADLINE_KILL_WAIT_S)

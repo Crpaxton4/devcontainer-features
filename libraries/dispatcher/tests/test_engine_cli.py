@@ -22,6 +22,7 @@ from support import GOOD, FakeProc, FakeShell, stream
 @pytest.fixture
 def world(settings, tmp_path):
     (settings.workspace("qoc") / ".git").mkdir(parents=True)
+    (settings.workspace("qoc") / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     shell = FakeShell()
     mem = tmp_path / "meminfo"
     mem.write_text("MemAvailable: 9999999 kB\n")
@@ -198,6 +199,7 @@ def test_deadline_fires_while_a_grandchild_holds_the_pipe(world, monkeypatch):
     import dispatcher.engine as eng
 
     monkeypatch.setattr(eng, "READER_GRACE_S", 0.2)
+    monkeypatch.setattr(eng, "DRAIN_GRACE_S", 0.2)
     engine, shell, _ = world
     engine.settings = engine.settings.__class__(
         **{**engine.settings.__dict__, "deadline_s": 0.05}
@@ -211,7 +213,7 @@ def test_deadline_fires_while_a_grandchild_holds_the_pipe(world, monkeypatch):
     assert not [
         t
         for t in threading.enumerate()
-        if t.name.startswith("reader-") and not t.daemon
+        if t.name.startswith(("reader-", "drain-")) and not t.daemon
     ]
     dead = engine.jobs.get(job.job_id)
     assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
@@ -223,6 +225,7 @@ def test_deadline_fires_while_a_grandchild_holds_the_pipe(world, monkeypatch):
     )
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")
     shell.proc.stdout.never.set()
+    shell.proc.stderr.never.set()
 
 
 def test_terminate_signals_the_process_group(world):
@@ -491,6 +494,7 @@ def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
     )
     ws = tmp_path / "repos" / "qoc"
     (ws / ".git").mkdir(parents=True)
+    (ws / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     shell.reply(
         ["docker", "inspect"],
         Completed(
@@ -601,6 +605,7 @@ def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatc
     import dispatcher.engine as eng
 
     monkeypatch.setattr(eng, "READER_GRACE_S", 0.4)
+    monkeypatch.setattr(eng, "DRAIN_GRACE_S", 0.2)
     engine, shell, _ = world
     engine.settings = engine.settings.__class__(
         **{**engine.settings.__dict__, "deadline_s": 0.05}
@@ -613,8 +618,51 @@ def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatc
     assert dead.dead_reason == DeadReason.STRUCTURED_OUTPUT_MISSING.value
     assert not shell.commands("docker", "exec", "c", "pkill") and shell.groups == []
     shell.proc.stdout.never.set()
+    shell.proc.stderr.never.set()
 
 
 def test_cli_rejects_a_nul_in_the_brief_path_with_exit_two():
     arg = json.dumps([{"repo": "qoc", "task": "1", "brief": "a\0b"}])
     assert cli.main(["run", arg]) == cli.EXIT_USAGE
+
+
+def _cli_world(monkeypatch, tmp_path, meminfo_text):
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setenv("DISPATCH_POLL_S", "0.01")
+    mem = tmp_path / "mem"
+    mem.write_text(meminfo_text)
+    monkeypatch.setattr(cli, "Shell", FakeShell)
+    monkeypatch.setattr(
+        cli, "AdmissionGate", lambda gb, s: AdmissionGate(gb, 0, meminfo=mem)
+    )
+    handlers = {}
+    monkeypatch.setattr(cli.signal, "signal", lambda n, h: handlers.update({n: h}))
+    return handlers
+
+
+def test_resume_with_a_fatal_memory_error_still_reports_the_pending_jobs(
+    monkeypatch, tmp_path, capsys
+):
+    handlers = _cli_world(monkeypatch, tmp_path, "garbage")
+    store = JobStore()
+    (job,) = queue.submit(store, [queue.JobSpec("qoc", "1", "x")], "b")
+    assert cli.main(["run"]) == cli.EXIT_JOB_ERROR
+    out = capsys.readouterr()
+    assert "remain PENDING" in out.err
+    report = json.loads(out.out)
+    assert [(j["job_id"], j["state"]) for j in report["jobs"]] == [
+        (job.job_id, "PENDING")
+    ]
+
+
+def test_exit_zero_never_leaves_a_job_pending(monkeypatch, tmp_path, capsys):
+    handlers = _cli_world(monkeypatch, tmp_path, "MemAvailable: 10 kB\n")
+    brief = tmp_path / "b.md"
+    brief.write_text("do it")
+    arg = json.dumps([{"repo": "qoc", "task": "1", "brief": str(brief)}])
+    timer = threading.Timer(0.3, lambda: handlers[signal.SIGTERM]())
+    timer.start()
+    assert cli.main(["run", arg]) == cli.EXIT_JOB_ERROR
+    timer.join()
+    report = json.loads(capsys.readouterr().out)
+    assert [j["state"] for j in report["jobs"]] == ["PENDING"]

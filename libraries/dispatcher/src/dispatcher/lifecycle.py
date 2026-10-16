@@ -292,16 +292,30 @@ def _bind_sources(mounts: list[dict]) -> dict[str, str]:
     }
 
 
+def _is_git_checkout(dot_git: Path) -> bool:
+    if dot_git.is_dir():
+        return (dot_git / "HEAD").is_file()
+    if dot_git.is_file():
+        return dot_git.read_text(errors="replace").startswith("gitdir:")
+    return False
+
+
 def require_workspace(settings: Settings, repo: str) -> None:
     """Refuse to start unless ``<repos>/<repo>`` is a git checkout.
 
     A missing or empty directory would pass :func:`assert_mounts` (the bind
     source path is identical) and the session would run in an empty tree and be
-    billed. ``.git`` may be a directory or a file (a worktree), so only its
-    existence is required.
+    billed. ``.git`` is either a directory holding ``HEAD`` or a file (a
+    worktree) that begins with ``gitdir:``; an empty or junk ``.git`` is refused.
+
+    Known: an unreadable workspace or parent directory makes ``Path.exists``
+    raise ``PermissionError`` (Python 3.13). That is not a MountInvalidError, so
+    ``JobRun.admit`` dead-letters the job as CONTAINER_START_FAILED and
+    re-raises, which aborts ``run()`` and leaves other jobs PENDING until the
+    next run. Rare, and loud (exit 1), so it is left as it is.
     """
     workspace = settings.workspace(repo)
-    if not (workspace / ".git").exists():
+    if not _is_git_checkout(workspace / ".git"):
         raise MountInvalidError(
             f"{workspace} is missing, empty or not a git checkout (no .git); "
             "docker would bind an empty directory and the session would run in it"

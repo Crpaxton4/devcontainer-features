@@ -712,5 +712,18 @@ def test_require_workspace(settings):
     (settings.workspace("qoc")).mkdir(parents=True)
     with pytest.raises(lifecycle.MountInvalidError):
         lifecycle.require_workspace(settings, "qoc")
-    (settings.workspace("qoc") / ".git").write_text("gitdir: x")  # a worktree file
+    dot_git = settings.workspace("qoc") / ".git"
+    dot_git.write_text("")  # an empty .git file
+    with pytest.raises(lifecycle.MountInvalidError):
+        lifecycle.require_workspace(settings, "qoc")
+    dot_git.write_text("junk")
+    with pytest.raises(lifecycle.MountInvalidError):
+        lifecycle.require_workspace(settings, "qoc")
+    dot_git.write_text("gitdir: /elsewhere/.git/worktrees/x")  # a worktree file
+    lifecycle.require_workspace(settings, "qoc")
+    dot_git.unlink()
+    dot_git.mkdir()  # an empty .git directory
+    with pytest.raises(lifecycle.MountInvalidError):
+        lifecycle.require_workspace(settings, "qoc")
+    (dot_git / "HEAD").write_text("ref: refs/heads/main\n")
     lifecycle.require_workspace(settings, "qoc")

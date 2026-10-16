@@ -13,8 +13,10 @@ optional ``"round": <int>``. ``run`` prints one JSON object on stdout
 (``{"batch_id": ..., "jobs": [...]}``); everything else goes to stderr.
 
 Exit codes: 0 the queue drained (dead letters are data, not failure), 1 a job
-raised inside the dispatcher itself, 2 bad arguments or settings, 3 another
-dispatcher holds the lock.
+raised inside the dispatcher itself, the run stopped fatally, or any job is
+still PENDING when it ends (a stop request, an unreadable memory figure), 2 bad
+arguments or settings, 3 another dispatcher holds the lock. Exit 0 therefore
+means nothing is left PENDING.
 
 The singleton lock is taken first, before anything else, and no flag skips it.
 Running two dispatchers means pointing the second at a second state root
@@ -29,7 +31,7 @@ import sys
 from collections.abc import Sequence
 
 from odoo_sdk.state.dispatch_state import lock_path
-from odoo_sdk.state.jobs import Job, JobStore
+from odoo_sdk.state.jobs import Job, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
 from .engine import Engine
@@ -105,13 +107,20 @@ def _run(jobs_argument: str | None) -> int:
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: engine.request_stop())
         fatal = _run_engine(engine)
-        ids = [job.job_id for job in submitted] or sorted(engine.notes)
+        left = store.list_by_state(JobState.PENDING)
+        # Submitted jobs, jobs that finished here (a resume submits none), and
+        # whatever is still PENDING, so the report never hides what was left.
+        ids = dict.fromkeys(
+            [j.job_id for j in submitted]
+            + sorted(engine.notes)
+            + [j.job_id for j in left]
+        )
         report = {
             "batch_id": batch_id if specs else "",
             "jobs": [job_report(store.get(i), engine.notes.get(i)) for i in ids],
         }
         print(json.dumps(report, indent=2))
-        return EXIT_JOB_ERROR if engine.errors or fatal else EXIT_OK
+        return EXIT_JOB_ERROR if engine.errors or fatal or left else EXIT_OK
 
 
 def _dead_letters() -> int:

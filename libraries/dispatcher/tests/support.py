@@ -29,7 +29,7 @@ class FakeProc:
             if pipe_held
             else io.StringIO("".join(line + "\n" for line in lines))
         )
-        self.stderr = io.StringIO(stderr)
+        self.stderr = PipeHeldOpen() if pipe_held else io.StringIO(stderr)
         self._rc = returncode
         self._done = threading.Event()
         if not hang:
