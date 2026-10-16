@@ -1,7 +1,7 @@
 ---
 description: Read the repo's open GitHub issues, group them into a dependency-ordered plan, and implement them in parallel worktree subagents through to merge.
 argument-hint: "[issue numbers | all]"
-allowed-tools: Bash(git:*), Bash(gh:*), Bash(sed:*)
+allowed-tools: Bash(git:*), Bash(gh:*), Bash(sed:*), Bash(/workspaces/devcontainer-features/.claude/commands/implement-issues/gh-as-owner.sh:*)
 ---
 
 # Implement open issues
@@ -9,7 +9,7 @@ allowed-tools: Bash(git:*), Bash(gh:*), Bash(sed:*)
 Arguments: `$ARGUMENTS` (issue numbers, or empty/`all` for every open issue).
 
 `REPO` is `/workspaces/devcontainer-features` throughout. Every `git` you run
-carries `-C <path>` and every `gh` carries `-R <owner>/<repo>`. Your Bash calls
+carries `-C <path>` and every `gh` carries `-R <owner>/<repo>` or goes through `gh-as-owner.sh gh <repo-path>`, which enters the checkout so no `-R` is needed. Your Bash calls
 keep no working directory between them, so nothing may depend on where the
 session happens to be.
 
@@ -35,9 +35,9 @@ Repo-local credential helper (must print `(none)`): !`git -C /workspaces/devcont
 
 Worktrees: !`git -C /workspaces/devcontainer-features worktree list`
 
-Open issues: !`gh issue list -R "$(git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')" --state open --limit 100 --json number,title,labels --template '{{range .}}#{{.number}} {{.title}}{{"\n"}}{{end}}'`
+Open issues: !`/workspaces/devcontainer-features/.claude/commands/implement-issues/gh-as-owner.sh gh /workspaces/devcontainer-features issue list --state open --limit 100 --json number,title,labels --template '{{range .}}#{{.number}} {{.title}}{{"\n"}}{{end}}'`
 
-Open PRs: !`gh pr list -R "$(git -C /workspaces/devcontainer-features remote get-url origin | sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##')" --state open --json number,title,author,isDraft --template '{{range .}}#{{.number}} [{{.author.login}}]{{if .isDraft}} (draft){{end}} {{.title}}{{"\n"}}{{end}}'`
+Open PRs: !`/workspaces/devcontainer-features/.claude/commands/implement-issues/gh-as-owner.sh gh /workspaces/devcontainer-features pr list --state open --json number,title,author,isDraft --template '{{range .}}#{{.number}} [{{.author.login}}]{{if .isDraft}} (draft){{end}} {{.title}}{{"\n"}}{{end}}'`
 
 **Every injection above must exit 0, including when it finds nothing.** A
 non-zero exit does not render a blank line — it aborts the whole command load
@@ -47,6 +47,16 @@ as exit 1: `git config --get-all` when the key is unset, and `grep` when nothing
 matches. Both are the *healthy* case here, which is why each one ends in an
 `|| echo` giving the empty result a name. Any injection added later needs the
 same treatment.
+
+**Every injection above must also be a plain command, or a pipeline of plain
+commands.** No command substitution, no backticks, no environment prefix. The
+static permission matcher cannot read those forms, so such a line never matches
+`allowed-tools` and is routed to the auto-mode classifier on every load; when
+the classifier is unavailable the whole command fails to load (#1050). That is
+why the two `gh` lists above go through `gh-as-owner.sh gh <repo-path> ...`:
+the wrapper enters the checkout, so `gh` resolves the repo from the origin
+remote and no `-R "$(...)"` is needed. Any computation belongs inside a script
+whose path is listed in `allowed-tools`.
 
 Keep bang-backtick sequences out of the prose in this file. The exact rule the
 loader uses to recognise an injection is not documented here and has not been
