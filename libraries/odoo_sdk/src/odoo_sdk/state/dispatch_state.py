@@ -38,6 +38,11 @@ def now_us() -> int:
     return time.time_ns() // 1000
 
 
+def resolve_now_us(explicit: int | None) -> int:
+    """Return ``explicit`` when given (even 0), else the current clock."""
+    return now_us() if explicit is None else explicit
+
+
 def state_root() -> Path:
     """Resolve the dispatcher state root (see the module docstring)."""
     for name in (DISPATCH_STATE_DIR_ENV, TRACKER_DIR_ENV):
@@ -69,7 +74,13 @@ def artifacts_root(root: Path | None = None) -> Path:
 
 def bundle_dir(job_id: str, root: Path | None = None) -> Path:
     """Return ``artifacts/<job_id>/``; ``job_id`` must be one path component."""
-    if not job_id or job_id in (".", "..") or "/" in job_id or "\\" in job_id:
+    if (
+        not isinstance(job_id, str)
+        or not job_id
+        or job_id in (".", "..")
+        or "/" in job_id
+        or "\\" in job_id
+    ):
         raise ValueError(f"job_id is not a single path component: {job_id!r}")
     return artifacts_root(root) / job_id
 

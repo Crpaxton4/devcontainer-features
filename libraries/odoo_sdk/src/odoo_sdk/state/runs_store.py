@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .dispatch_state import now_us as _now_us, runs_db_path
+from .dispatch_state import resolve_now_us, runs_db_path
 from .migrations import Migration, open_store, transaction
 
 
@@ -71,6 +71,8 @@ def map_reported_outcome(reported: str | None, question_count: int = 0) -> RunOu
     job (no valid object) is stored as ``FAILED`` directly, and an unknown
     reported value is ``FAILED`` rather than a softer kind of success.
     """
+    if not isinstance(question_count, int):
+        question_count = 0  # total: a non-int count is treated as no questions
     if reported == "done":
         return (
             RunOutcome.COMPLETED_WITH_QUESTIONS
@@ -203,7 +205,7 @@ class RunStore:
             self.path,
             RUNS_MIGRATIONS,
             synchronous="FULL",
-            now_us=now_us or _now_us(),
+            now_us=resolve_now_us(now_us),
         )
 
     def close(self) -> None:
@@ -244,39 +246,35 @@ class RunStore:
         """
         if not session_id:
             raise ValueError("a run needs a session_id; no session means no run row")
-        try:
-            with self._tx() as conn:
+        with self._tx() as conn:
+            written = conn.execute(
+                "INSERT INTO runs (session_id, job_id, task_id, repo, branch, "
+                "pr_num, started_us, ended_us, outcome, tool_version, "
+                "transcript, brief) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_id) DO NOTHING",
+                (
+                    session_id,
+                    job_id,
+                    task_id,
+                    repo,
+                    branch,
+                    pr_num,
+                    started_us,
+                    ended_us,
+                    RunOutcome(outcome).value,
+                    tool_version,
+                    transcript,
+                    brief,
+                ),
+            ).rowcount
+            if written != 1:
+                return False  # only the session_id conflict is swallowed
+            if envelope is not None:
+                text = envelope if isinstance(envelope, str) else json.dumps(envelope)
                 conn.execute(
-                    "INSERT INTO runs (session_id, job_id, task_id, repo, branch, "
-                    "pr_num, started_us, ended_us, outcome, tool_version, "
-                    "transcript, brief) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        session_id,
-                        job_id,
-                        task_id,
-                        repo,
-                        branch,
-                        pr_num,
-                        started_us,
-                        ended_us,
-                        RunOutcome(outcome).value,
-                        tool_version,
-                        transcript,
-                        brief,
-                    ),
+                    "INSERT INTO run_envelopes (session_id, envelope) VALUES (?, ?)",
+                    (session_id, text),
                 )
-                if envelope is not None:
-                    text = (
-                        envelope if isinstance(envelope, str) else json.dumps(envelope)
-                    )
-                    conn.execute(
-                        "INSERT INTO run_envelopes (session_id, envelope) VALUES (?, ?)",
-                        (session_id, text),
-                    )
-        except sqlite3.IntegrityError as exc:
-            if "runs.session_id" in str(exc):
-                return False
-            raise
         return True
 
     def record_artifacts(
@@ -293,29 +291,25 @@ class RunStore:
         missing: str = "",
     ) -> bool:
         """Index a job's bundle. True when written, False when already indexed."""
-        try:
-            with self._tx() as conn:
-                conn.execute(
-                    "INSERT INTO run_artifacts (job_id, session_id, dir, "
-                    "has_task_json, has_session, has_envelope, bytes, "
-                    "harvested_us, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        job_id,
-                        session_id,
-                        dir,
-                        int(has_task_json),
-                        int(has_session),
-                        int(has_envelope),
-                        bytes,
-                        harvested_us,
-                        missing,
-                    ),
-                )
-        except sqlite3.IntegrityError as exc:
-            if "run_artifacts.job_id" in str(exc):
-                return False
-            raise
-        return True
+        with self._tx() as conn:
+            written = conn.execute(
+                "INSERT INTO run_artifacts (job_id, session_id, dir, "
+                "has_task_json, has_session, has_envelope, bytes, "
+                "harvested_us, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(job_id) DO NOTHING",
+                (
+                    job_id,
+                    session_id,
+                    dir,
+                    int(has_task_json),
+                    int(has_session),
+                    int(has_envelope),
+                    bytes,
+                    harvested_us,
+                    missing,
+                ),
+            ).rowcount
+        return written == 1
 
     # -- reads ----------------------------------------------------------
 
@@ -334,14 +328,16 @@ class RunStore:
     ) -> list[RunRecord]:
         """Return runs ordered by ``started_us`` (then session id).
 
-        ``start_us`` keeps runs with ``ended_us >= start_us`` and ``end_us``
-        keeps runs with ``started_us < end_us``, i.e. every run overlapping the
-        half-open window. Either bound may be None.
+        A run belongs to the half-open window ``[start_us, end_us)`` when it
+        overlaps it: ``ended_us > start_us`` and ``started_us < end_us``. So a
+        run (10, 20) is in [10, 20) and not in [20, 30): adjacent windows never
+        both return it. A zero-length run at exactly ``start_us`` is excluded.
+        Either bound may be None.
         """
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT {_RUN_COLUMNS} FROM runs "
-                "WHERE (?1 IS NULL OR ended_us >= ?1) AND (?2 IS NULL OR started_us < ?2) "
+                "WHERE (?1 IS NULL OR ended_us > ?1) AND (?2 IS NULL OR started_us < ?2) "
                 "ORDER BY started_us, session_id",
                 (start_us, end_us),
             ).fetchall()

@@ -53,10 +53,11 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
+        conn.execute("COMMIT")
     except BaseException:
-        conn.execute("ROLLBACK")
+        if conn.in_transaction:  # a failed COMMIT leaves the transaction open
+            conn.execute("ROLLBACK")
         raise
-    conn.execute("COMMIT")
 
 
 def _validate(migrations: Sequence[Migration]) -> None:
@@ -126,6 +127,13 @@ def open_store(
         raise sqlite3.OperationalError(f"{path}: journal_mode is {mode!r}, not 'wal'")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Without this, INSERT OR REPLACE deletes the conflicting row without
+    # firing the append-only DELETE triggers.
+    conn.execute("PRAGMA recursive_triggers=ON")
     conn.execute(f"PRAGMA synchronous={synchronous}")
-    apply_migrations(conn, migrations, now_us)
+    try:
+        apply_migrations(conn, migrations, now_us)
+    except BaseException:
+        conn.close()
+        raise
     return conn

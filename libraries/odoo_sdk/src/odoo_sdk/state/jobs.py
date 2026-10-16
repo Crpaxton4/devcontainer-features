@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .dispatch_state import jobs_db_path, now_us as _now_us
+from .dispatch_state import jobs_db_path, resolve_now_us
 from .migrations import Migration, open_store, transaction
 
 
@@ -145,7 +145,7 @@ class JobStore:
             self.path,
             JOBS_MIGRATIONS,
             synchronous="NORMAL",
-            now_us=now_us or _now_us(),
+            now_us=resolve_now_us(now_us),
         )
 
     def close(self) -> None:
@@ -186,11 +186,13 @@ class JobStore:
                         repo,
                         round,
                         brief,
-                        now_us or _now_us(),
+                        resolve_now_us(now_us),
                     ),
                 )
         except sqlite3.IntegrityError as exc:
-            if "jobs.task_id" in str(exc):
+            # SQLITE_CONSTRAINT_UNIQUE is the partial index; a job_id clash is
+            # SQLITE_CONSTRAINT_PRIMARYKEY and must propagate.
+            if exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
                 raise DuplicateTaskInFlightError(task_id) from exc
             raise
         return self.get(job_id)
@@ -212,7 +214,7 @@ class JobStore:
         The row is inserted directly in DEAD_LETTER, so it never takes part in
         the live-job index. Nothing ran: ``started_us`` stays NULL.
         """
-        now = now_us or _now_us()
+        now = resolve_now_us(now_us)
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO jobs (job_id, batch_id, task_id, repo, round, state, "
@@ -252,7 +254,7 @@ class JobStore:
         return self._transition(
             "UPDATE jobs SET state='RUNNING', started_us=?, container=?, worktree=? "
             "WHERE job_id=? AND state='PENDING'",
-            (now_us or _now_us(), container, worktree, job_id),
+            (resolve_now_us(now_us), container, worktree, job_id),
             job_id,
             "start a job that is not PENDING",
         )
@@ -271,7 +273,7 @@ class JobStore:
         return self._transition(
             "UPDATE jobs SET state='DONE', ended_us=?, outcome=? "
             "WHERE job_id=? AND state='RUNNING'",
-            (now_us or _now_us(), outcome, job_id),
+            (resolve_now_us(now_us), outcome, job_id),
             job_id,
             "complete a job that is not RUNNING",
         )
@@ -288,7 +290,7 @@ class JobStore:
         return self._transition(
             "UPDATE jobs SET state='DEAD_LETTER', ended_us=?, dead_reason=?, "
             "detail=? WHERE job_id=? AND state IN ('PENDING','RUNNING')",
-            (now_us or _now_us(), DeadReason(reason).value, detail, job_id),
+            (resolve_now_us(now_us), DeadReason(reason).value, detail, job_id),
             job_id,
             "dead-letter a job that is already finished",
         )
@@ -311,7 +313,7 @@ class JobStore:
             conn.execute(
                 "UPDATE jobs SET state='DEAD_LETTER', ended_us=?, dead_reason=?, "
                 "detail=? WHERE state='RUNNING'",
-                (now_us or _now_us(), DeadReason.ORPHANED_BY_RESTART.value, detail),
+                (resolve_now_us(now_us), DeadReason.ORPHANED_BY_RESTART.value, detail),
             )
         return ids
 

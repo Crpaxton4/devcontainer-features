@@ -544,7 +544,8 @@ def test_iter_runs_window(runs):
         record(runs, session_id=f"s{i}", started_us=a, ended_us=b)
     ids = lambda **kw: [r.session_id for r in runs.iter_runs(**kw)]
     assert ids() == ["s0", "s1", "s2"]
-    assert ids(start_us=40) == ["s1", "s2"]
+    assert ids(start_us=40) == ["s2"]  # s1 ends at 40: window [40, ...) excludes it
+    assert ids(start_us=39) == ["s1", "s2"]
     assert ids(end_us=30) == ["s0"]
     assert ids(start_us=25, end_us=55) == ["s1", "s2"]
 
@@ -716,3 +717,147 @@ def test_envelope_write_failure_is_recorded(tmp_path):
 def test_collect_default_clock(tmp_path):
     h = collect_artifacts("j1", root=tmp_path)
     assert h.harvested_us > T0
+
+
+# -- review regressions -------------------------------------------------------
+
+
+def test_recursive_triggers_are_on(jobs, runs):
+    assert pragma(jobs, "recursive_triggers") == 1
+    assert pragma(runs, "recursive_triggers") == 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT OR REPLACE INTO runs (session_id, job_id, task_id, started_us, "
+        "ended_us, outcome, tool_version) VALUES "
+        "('s1','j1','42',1,99999,'FAILED','x')",
+        "INSERT OR REPLACE INTO run_envelopes (session_id, envelope) "
+        "VALUES ('s1','{}')",
+        "INSERT OR REPLACE INTO run_artifacts (job_id, dir, harvested_us) "
+        "VALUES ('j1','/other',5)",
+        "REPLACE INTO runs (session_id, job_id, task_id, started_us, ended_us, "
+        "outcome, tool_version) VALUES ('s1','j1','42',1,99999,'FAILED','x')",
+    ],
+)
+def test_insert_or_replace_cannot_rewrite_evidence(runs, sql):
+    record(runs)
+    runs.record_artifacts(job_id="j1", dir="/d", harvested_us=T0)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        runs._conn.execute(sql)
+    assert runs.get_run("s1").outcome is RunOutcome.COMPLETED
+    assert runs.get_artifacts("j1").dir == "/d"
+
+
+def test_collect_survives_deeply_nested_task_json(tmp_path):
+    bundle = ensure_bundle_dir("j1", tmp_path)
+    (bundle / "task.json").write_text("[" * 200000 + "]" * 200000)
+    h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+    assert not h.has_task_json
+    assert any("not valid JSON" in line for line in h.missing)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+def test_collect_survives_an_unreadable_bundle_directory(tmp_path):
+    bundle = ensure_bundle_dir("j1", tmp_path)
+    bundle.chmod(0)
+    try:
+        h = collect_artifacts("j1", envelope="{}", root=tmp_path, now_us=T0)
+    finally:
+        bundle.chmod(0o700)
+    assert not h.has_task_json
+    assert h.missing
+
+
+def test_collect_survives_a_task_json_check_that_raises(tmp_path):
+    with patch.object(Path, "is_file", side_effect=PermissionError("denied")):
+        h = collect_artifacts("j1", root=tmp_path, now_us=T0)
+    assert any("unreadable" in line for line in h.missing)
+
+
+def test_non_str_job_id_is_a_value_error(tmp_path):
+    with pytest.raises(ValueError):
+        collect_artifacts(5, root=tmp_path)
+    with pytest.raises(ValueError):
+        dispatch_state.bundle_dir(None, tmp_path)
+
+
+def test_unrelated_not_null_error_is_not_reported_as_already_recorded(runs):
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        runs.record_artifacts(job_id=None, dir="/d", harvested_us=T0)
+    with pytest.raises(sqlite3.IntegrityError):
+        record(runs, session_id=b"x")
+    assert runs.iter_runs() == []
+
+
+def test_envelope_not_written_for_a_duplicate_session(runs):
+    record(runs, envelope={"first": 1})
+    assert record(runs, envelope={"second": 2}) is False
+    assert runs.get_envelope("s1") == {"first": 1}
+
+
+def test_job_id_clash_is_not_a_duplicate_task(jobs):
+    submit(jobs, "j1", task_id="1")
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        submit(jobs, "j1", task_id="2")
+    assert not isinstance(caught.value, DuplicateTaskInFlightError)
+    assert caught.value.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+
+
+def test_adjacent_windows_never_both_return_a_run(runs):
+    record(runs, session_id="a", started_us=10, ended_us=20)
+    record(runs, session_id="z", started_us=15, ended_us=15)
+    ids = lambda **kw: [r.session_id for r in runs.iter_runs(**kw)]
+    assert ids(start_us=10, end_us=20) == ["a", "z"]
+    assert ids(start_us=20, end_us=30) == []
+    assert ids(start_us=15, end_us=16) == ["a"]  # zero-length run at start_us is out
+    assert ids(start_us=19, end_us=20) == ["a"]
+
+
+@pytest.mark.parametrize("count", [None, "2", 2.5, [1], b"1"])
+def test_outcome_mapping_survives_a_non_int_question_count(count):
+    assert map_reported_outcome("done", count) is RunOutcome.COMPLETED
+    assert map_reported_outcome("blocked", count) is RunOutcome.BLOCKED
+
+
+def test_failed_commit_does_not_wedge_the_connection(runs):
+    # A deferred foreign-key violation fails at COMMIT, not at the INSERT.
+    runs._conn.execute("PRAGMA defer_foreign_keys=ON")
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        with runs._tx() as conn:
+            conn.execute(
+                "INSERT INTO run_envelopes (session_id, envelope) VALUES ('g','{}')"
+            )
+    assert not runs._conn.in_transaction
+    assert record(runs)  # later writes still work
+
+
+def test_open_store_closes_the_connection_when_migration_fails(tmp_path):
+    opened = []
+    real = sqlite3.connect
+
+    def spy(*a, **k):
+        conn = real(*a, **k)
+        opened.append(conn)
+        return conn
+
+    bad = (Migration(1, "bad", ("BOGUS SQL",)),)
+    with patch("odoo_sdk.state.migrations.sqlite3.connect", spy):
+        with pytest.raises(sqlite3.OperationalError):
+            open_store(tmp_path / "m.db", bad, synchronous="NORMAL", now_us=T0)
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].execute("SELECT 1")  # closed
+
+
+def test_explicit_zero_now_us_is_honoured(tmp_path):
+    assert dispatch_state.resolve_now_us(0) == 0
+    assert dispatch_state.resolve_now_us(None) > T0
+    assert collect_artifacts("j1", root=tmp_path, now_us=0).harvested_us == 0
+
+
+def test_second_collection_does_not_update_the_index(tmp_path, runs):
+    collect_artifacts("j1", runs=runs, root=tmp_path, now_us=T0)
+    collect_artifacts("j1", envelope="{}", runs=runs, root=tmp_path, now_us=T0 + 1)
+    index = runs.get_artifacts("j1")
+    assert (index.has_envelope, index.harvested_us) == (False, T0)

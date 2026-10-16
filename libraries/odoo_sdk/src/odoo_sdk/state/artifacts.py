@@ -22,7 +22,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dispatch_state import bundle_dir, now_us as _now_us
+from .dispatch_state import bundle_dir, resolve_now_us
 from .runs_store import RunStore
 
 TASK_JSON = "task.json"
@@ -81,11 +81,11 @@ def _store_envelope(directory: Path, envelope: str | None) -> str | None:
 
 def _task_json_problem(directory: Path) -> str | None:
     path = directory / TASK_JSON
-    if not path.is_file():
-        return "the agent wrote no task.json"
     try:
+        if not path.is_file():
+            return "the agent wrote no task.json"
         json.loads(path.read_text(encoding="utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):
         return "task.json is present but is not valid JSON (half-written?)"
     except OSError as exc:
         return f"task.json is unreadable: {exc}"
@@ -129,8 +129,12 @@ def collect_artifacts(
     session passes ``session_id=""`` and still gets a bundle and an index row.
     Only a ``job_id`` that is not one path component raises (``ValueError``),
     before anything is touched.
+
+    Collection is once per job. A second call rewrites the bundle files and
+    ``harvest.json`` but does NOT update the ``run_artifacts`` row, which is
+    write-once (``record_artifacts`` returns False and keeps the first index).
     """
-    harvested_us = now_us or _now_us()
+    harvested_us = resolve_now_us(now_us)
     directory = bundle_dir(job_id, root)
     missing: list[str] = []
     _attempt(
