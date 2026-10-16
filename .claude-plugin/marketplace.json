@@ -12,6 +12,12 @@
       "description": "Odoo consulting and delivery workflows: scoping and quoting, task delivery, testing, PR and release, and version upgrades.",
       "source": "./plugins/odoo-dev",
       "category": "development"
+    },
+    {
+      "name": "odoo-orchestrator",
+      "description": "Host-side orchestrator: pulls Odoo tasks, hardens each into a brief, takes approval per task, and queues the approved set on the dispatcher.",
+      "source": "./plugins/odoo-orchestrator",
+      "category": "development"
     }
   ]
 }

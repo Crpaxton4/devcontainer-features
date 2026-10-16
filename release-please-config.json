@@ -11,6 +11,7 @@
                 "devcontainer-features/src/debian-eol-archives",
                 "devcontainer-features/test/debian-eol-archives",
                 "plugins/odoo-dev",
+                "plugins/odoo-orchestrator",
                 "libraries/dispatcher"
             ],
             "extra-files": [
@@ -62,6 +63,17 @@
         "plugins/odoo-dev": {
             "release-type": "simple",
             "component": "odoo-dev-plugin",
+            "extra-files": [
+                {
+                    "type": "json",
+                    "path": ".claude-plugin/plugin.json",
+                    "jsonpath": "$.version"
+                }
+            ]
+        },
+        "plugins/odoo-orchestrator": {
+            "release-type": "simple",
+            "component": "odoo-orchestrator-plugin",
             "extra-files": [
                 {
                     "type": "json",
