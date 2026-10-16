@@ -61,7 +61,10 @@ def test_up_command_line_mounts_the_bundle_root(settings):
     mount = argv[argv.index("--mount") + 1]
     assert mount == f"type=bind,source={artifacts_root()},target=/artifacts"
     assert argv[argv.index("--workspace-folder") + 1] == str(settings.workspace("qoc"))
-    assert "--additional-features" not in argv
+    features = argv[argv.index("--additional-features") + 1]
+    assert features == (
+        '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+    )
     from dataclasses import replace
 
     argv = lifecycle.render_up(replace(settings, additional_features="{}"), "qoc")

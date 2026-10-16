@@ -220,6 +220,12 @@ def test_settings_defaults_and_errors():
     )
     assert str(s.plugin_root) == "/cp" and str(s.claude_home) == "/cc"
     assert Settings.from_env(env).plugin_root.name == "odoo-dev"
+    default = '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+    assert Settings.from_env(env).additional_features == default
+    empty = {**env, "DISPATCH_ADDITIONAL_FEATURES": ""}
+    assert Settings.from_env(empty).additional_features == default
+    explicit = {**env, "DISPATCH_ADDITIONAL_FEATURES": '{"x":{}}'}
+    assert Settings.from_env(explicit).additional_features == '{"x":{}}'
     with pytest.raises(SettingsError, match="DISPATCH_REPO_OWNER"):
         Settings.from_env({"DISPATCH_REPOS_DIR": "/r"})
     with pytest.raises(SettingsError, match="malformed"):
