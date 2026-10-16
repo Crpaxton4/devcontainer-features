@@ -14,6 +14,16 @@ Session identity (the upload idempotency key): a window that holds any run is
 keyed on the ``session_id`` of its earliest run (by start, then id), see
 :func:`odoo_sdk.tracking.models.session_key`. Events joining or leaving the window
 cannot move that key. A window made only of events keeps the smallest event id.
+
+Known and accepted: an event-keyed window (``1|1``) that a run later joins gets the
+run key (``1|run:s5``). The next upload creates a line under the new key and
+``sweep_orphaned_uploads`` zeroes the old line, so nothing double-bills: the old
+line is rewritten to zero rather than removed. The sweep is scoped to the upload
+range, so two lines carry hours in two narrow cases until the next upload whose
+range overlaps the OLD session's bounds, which then heals it: (a) the range
+overlaps only the run part of the new window, for example a session straddling
+midnight uploaded for day two only; (b) an upload errors between the create and
+the sweep. Pinned by ``test_a_legacy_key_flip_bills_one_line_not_two``.
 A window's ``id`` stays an int for existing consumers: the smallest event id, or
 ``-started_us`` of the earliest run when there are no events.
 
@@ -32,6 +42,9 @@ from typing import Optional
 from odoo_sdk._utils import as_utc
 
 from .models import AGENTLESS_REPO, SessionWindow
+
+#: How long a read waits on a locked ``runs.db`` before the error propagates.
+BUSY_TIMEOUT_MS = 5000
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _US = timedelta(microseconds=1)
@@ -72,7 +85,10 @@ def read_runs(path: Path, start_us: int, end_us: int, *, expected: bool) -> list
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        # RunStore.__init__ opens read-write and migrates, which a reader must not
+        # do, so the store is built without it. That relies on iter_runs touching
+        # only ``_lock`` and ``_conn``; test_read_runs_matches_iter_runs pins it.
         store = RunStore.__new__(RunStore)
         store.path, store._lock, store._conn = path, threading.RLock(), conn
         return store.iter_runs(start_us=start_us, end_us=end_us)

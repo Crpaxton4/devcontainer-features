@@ -385,12 +385,41 @@ class TestSourceAvailability:
         with pytest.raises(sqlite3.DatabaseError):
             sessions(state)
 
-    def test_a_locked_runs_db_raises_and_does_not_fall_back(self, state, runs):
-        add_run(runs, at(0), at(5))
-        locked = sqlite3.OperationalError("database is locked")
-        with patch.object(RunStore, "iter_runs", side_effect=locked):
+    def test_a_locked_runs_db_raises_and_does_not_fall_back(
+        self, tmp_path, monkeypatch
+    ):
+        """A real lock: a journal-mode DELETE db held under BEGIN EXCLUSIVE.
+
+        Proves the ``mode=ro`` read raises ``database is locked`` after the busy
+        timeout (shortened here) instead of falling back to the event store. It
+        does not prove behaviour under WAL, where readers are not blocked.
+        """
+        monkeypatch.setattr("odoo_sdk.state.run_sessions.BUSY_TIMEOUT_MS", 100)
+        path = tmp_path / "locked.db"
+        holder = sqlite3.connect(path, isolation_level=None)
+        holder.execute("PRAGMA journal_mode=DELETE")
+        holder.execute("CREATE TABLE runs (x)")
+        holder.execute("BEGIN EXCLUSIVE")
+        try:
+            state = LocalStateClient(
+                make_state_db(tmp_path / "t.db")._db_path, runs_db=path
+            )
+            add_event(state, at(0))
             with pytest.raises(sqlite3.OperationalError, match="locked"):
                 sessions(state)
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    def test_read_runs_matches_iter_runs(self, state, runs, tmp_path):
+        """The read-only path must agree with RunStore.iter_runs (the __new__ seam)."""
+        from odoo_sdk.state.run_sessions import read_runs
+
+        add_run(runs, at(0), at(5))
+        add_run(runs, at(9), at(9))
+        got = read_runs(tmp_path / "runs.db", 0, 2**62, expected=True)
+        assert got == runs.iter_runs(start_us=0, end_us=2**62)
+        assert len(got) == 2
 
     def test_a_naive_stored_timestamp_does_not_crash_the_merge(
         self, state, runs, tmp_path
@@ -502,3 +531,68 @@ class TestFailedRunVisibleAtUpload:
         row, rec = self.run_upload(False, dry_run=False)
         assert "has_failed_run" not in row
         assert rec.call_args.args[4] == "did work"
+
+
+class TestLegacyKeyFlip:
+    """An event-keyed session that a run later joins still bills exactly once."""
+
+    def upload(self, state, sessions_, lines):
+        pytest.importorskip("markdown_it")
+        from odoo_sdk.billing import timesheet, upload
+
+        def create(client, st, task_id, description, hours, day):
+            lines[len(lines) + 1] = {"unit_amount": hours, "name": description}
+            return len(lines)
+
+        def write(client, line_id, vals):
+            lines[line_id].update(vals)
+
+        rows = [
+            {
+                "task_id": w.task_id,
+                "session_key": session_key(w),
+                "started_at": w.started_at.isoformat(),
+                "ended_at": w.ended_at.isoformat(),
+                "duration_secs": w.duration_seconds,
+            }
+            for w in sessions_
+        ]
+        with (
+            patch.object(timesheet, "_create_session_line", create),
+            patch.object(timesheet, "_write_line", write),
+            patch.object(timesheet, "_find_anchor", return_value=None),
+            patch.object(upload, "_derived_description", return_value="did work"),
+        ):
+            return upload.upload_sessions(
+                Mock(),
+                state,
+                rows,
+                config=Mock(min_session_hours=0.5, round_session_hours=0.25),
+            )
+
+    def test_a_legacy_key_flip_bills_one_line_not_two(self, state, runs):
+        pytest.importorskip("markdown_it")
+        from odoo_sdk.billing.timesheet import ORPHANED_UPLOAD_NAME
+
+        lines: dict[int, dict] = {}
+        add_event(state, at(0))
+        (before,) = sessions(state)
+        assert session_key(before).startswith("101|") and "run:" not in session_key(
+            before
+        )
+        self.upload(state, [before], lines)
+        assert [v["unit_amount"] for v in lines.values()] == [0.5]
+
+        sid = add_run(runs, at(30), at(50))  # lands inside the gap of the event
+        (after,) = sessions(state)
+        assert session_key(after) == f"101|run:{sid}"
+        assert session_key(after) != session_key(before)
+        self.upload(state, [after], lines)
+
+        billed = [v for v in lines.values() if v["unit_amount"] > 0]
+        assert len(billed) == 1 and billed[0]["unit_amount"] >= 0.5
+        zeroed = [v for v in lines.values() if v["unit_amount"] == 0]
+        assert [v["name"] for v in zeroed] == [ORPHANED_UPLOAD_NAME]
+        assert [u["session_key"] for u in state.list_session_uploads()] == [
+            session_key(after)
+        ]
