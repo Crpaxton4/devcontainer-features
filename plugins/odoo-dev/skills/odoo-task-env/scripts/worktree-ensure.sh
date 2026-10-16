@@ -24,6 +24,8 @@
 # (git-free by design — branch setup lives only in the MCP tool layer) is invoked
 # best-effort via `odoo-sdk cmd start_task`, so the local tracking session opens
 # with the worktree. Its identity args are resolved with `odoo-sdk cmd get_tasks`.
+# Skipped, with "tracking": "skipped", when ODOO_TASK_TRACKING=0 or when
+# ODOO_UNATTENDED is non-empty (an unattended run never starts a task).
 # Idempotent server-side: an existing RUNNING session is a no-op success. Any
 # failure here — CLI missing, Odoo unreachable, task not found — is a WARN on
 # stderr and "tracking": "skipped"|"error" in the output, never a failed worktree.
@@ -129,6 +131,9 @@ exec 9>&-
 tracking="skipped"
 if [ "${ODOO_TASK_TRACKING:-1}" = "0" ]; then
   : # explicitly disabled — offline test suites and callers that own tracking themselves
+elif [ -n "${ODOO_UNATTENDED:-}" ]; then
+  # An unattended run never starts a task: the run record measures its time.
+  echo "NOTE ODOO_UNATTENDED is set — tracking session not started" >&2
 elif ! command -v odoo-sdk >/dev/null 2>&1; then
   echo "WARN odoo-sdk is not on PATH — tracking session not started" >&2
 elif ! printf '%s' "$task_id" | grep -qE '^[0-9]+$'; then

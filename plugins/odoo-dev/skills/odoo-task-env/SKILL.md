@@ -70,8 +70,8 @@ failure, 0 with `--soft`.
 
 - Idempotent and flocked per repo. On reuse the branch is read from the worktree.
 - It is the single git writer for the task branch. It calls `odoo-sdk cmd start_task`
-  best-effort; `tracking` says what happened, and `skipped` or `error` is a warning,
-  not a failure.
+  best-effort, and skips the call when `ODOO_UNATTENDED` is set; `tracking` says what
+  happened, and `skipped` or `error` is a warning, not a failure.
 - `<resume_branch>` is adopted as it stands: never reset, rebased or re-cut.
 
 ### 3. Stack
@@ -104,7 +104,7 @@ failure, 0 with `--soft`.
 | `REPOS_DIR` | resolved by `repos-dir.sh` | Non-standard repos tree. A tree with one clone declares itself with `touch <tree>/.odoo-repos-dir` |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |
-| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort tracking probes |
+| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort tracking probes. A non-empty `ODOO_UNATTENDED` also skips `start_task` |
 | `MIN_FREE_GB` | `6` | A different RAM budget |
 | `ODOO_SHARED_COMPOSE` | `$REPOS_DIR/.devcontainer/shared/compose.yml` | The shared postgres and proxy stack lives elsewhere |
 | `ODOO_REPO_MAP_SCRIPTS` | the sibling map skill's `scripts/` | The map skill moved |

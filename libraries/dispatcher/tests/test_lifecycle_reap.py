@@ -48,8 +48,16 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert "--verbose" in rest
     assert json.loads(rest[rest.index("--json-schema") + 1])["required"][0] == "summary"
     assert rest[rest.index("--permission-mode") + 1] == "dontAsk"
-    denied = rest[rest.index("--disallowedTools") + 1].split()
-    assert denied == ["Bash(docker:*)", "Edit(~/.claude/**)", "Write(~/.claude/**)"]
+    denied = [rest[i + 1] for i, arg in enumerate(rest) if arg == "--disallowedTools"]
+    assert denied == [
+        "Bash(docker:*)",
+        "Edit(//usr/local/share/claude-home/**)",
+        "Write(//usr/local/share/claude-home/**)",
+        "mcp__odoo-mcp__start_task",
+        "mcp__odoo-mcp__stop_task",
+    ]
+    assert not any(" " in rule for rule in denied)  # one rule per argument
+    assert not any("~/.claude" in a for a in argv)
     assert "--override-config" not in argv
     assert "--max-turns" not in argv and "--max-budget-usd" not in argv
     assert not any("COMPOSE_PROJECT_NAME" in a for a in argv)
