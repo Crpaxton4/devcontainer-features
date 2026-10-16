@@ -35,7 +35,9 @@ are the lines of your prompt.
 1. `browser-ensure.sh` when a module declares tours.
 2. Per module in `build.modules`: `run-tests.sh <repo> <id> <module> --repo-path
    <worktree> --target-series <odoo_version> --put <ARTIFACTS> [--with-tours]`. The
-   script writes the `test` entry for the module itself.
+   script writes the `test` entry for the module itself. A series that differs from the
+   container's selects the container's side core (`odooNN-bin`) by itself when it exists;
+   `--odoo-bin` and `--odoo-conf` name one by hand.
 3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD`: one
    `criteria_results[]` entry per acceptance criterion, with its evidence and a
    verdict; `findings` with file, line and severity. Then
