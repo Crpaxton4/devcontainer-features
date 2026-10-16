@@ -7,6 +7,7 @@ Never enter plan mode.
 Never force-push, in any variant.
 Never mark a pull request ready, approve one, or merge one.
 Never push to a default or protected branch.
+Never delete a remote branch.
 
 # forbidden routes
 Never create a pull request except through the sanctioned script.
@@ -21,3 +22,6 @@ Never start or stop a task, and never write a timesheet.
 Never report a result that is not in a tool's own output.
 Never edit code to silence a finding about it.
 Never state a number you did not read.
+
+# enforcement
+The irreversible and forbidden-route lines above are also refused by the hook unattended-guard.sh. It engages when the environment variable ODOO_UNATTENDED is set to a non-empty value, in this session and in every subagent it forks. A refusal from that hook is final. Never work around it.

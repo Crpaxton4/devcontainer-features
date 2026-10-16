@@ -26,6 +26,10 @@ trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
 OUTSIDE="$TMP/outside"
 mkdir -p "$REPO" "$OUTSIDE"
+# The run trigger must come from each case, never from the caller's environment, and
+# HOME must resolve outside any git tree so the ~ and $HOME cases are about the guard.
+unset ODOO_UNATTENDED
+export HOME="$OUTSIDE"
 gitq() { git -C "$REPO" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
 gitq init -q -b main
 printf 'tracked\n' > "$REPO/tracked.txt"
@@ -94,7 +98,7 @@ denied "push main by name" "protected branch main" "git push origin main"
 denied "push HEAD:main" "protected branch main" "git push origin HEAD:main"
 denied "push refs/heads/master" "protected branch master" "git push origin feat/x:refs/heads/master"
 denied "push release branch" "protected branch release/1.0" "git push origin release/1.0"
-denied "delete main" "protected branch main" "git push origin :main"
+denied "delete main" "deletes a remote branch" "git push origin :main"
 denied "push with no refspec while on main" "protected branch main" "git push"
 denied "push through gh-as-owner to main" "protected branch main" "gh-as-owner.sh push $REPO main"
 gitq checkout -q -b feat/x
@@ -168,6 +172,126 @@ allowed "git commit" 'git commit -m "feat: x"'
 allowed "git log" "git log --oneline -5"
 allowed "a test run" "bash run-tests.sh --db scratch --modules sale"
 allowed "an empty command" ""
+
+# --- redirect spellings (the guard reads operators, not whole tokens) -------------
+denied "redirect with no space either side" "redirect into" "echo hi>f.txt"
+denied "append with no space either side" "redirect into" "echo hi>>f.txt"
+denied "cat>file" "redirect into" "cat>f.txt"
+denied "redirect to a double-quoted target" "redirect into" 'echo hi >"f.txt"'
+denied "redirect to a single-quoted target" "redirect into" "echo hi >'f.txt'"
+denied "clobber redirect >|" "redirect into" "echo hi >| f.txt"
+denied "ampersand redirect &>" "redirect into" "echo hi &> f.txt"
+denied "xargs tee" "tee writes" "echo hi | xargs tee f.txt"
+denied "descriptor redirect 2>file" "redirect into" "ls 2>err.txt"
+allowed "2>&1 with no spaces" "ls tracked.txt 2>&1 | cat"
+allowed "redirect to /dev/null with no space" "ls tracked.txt >/dev/null"
+allowed "no-space redirect outside any tree" "echo hi>$OUTSIDE/scratch.txt"
+allowed "a quoted target outside any tree" "echo hi > \"$OUTSIDE/scratch.txt\""
+
+# --- unexpandable targets are not judged (no false denials) ------------------------
+allowed "redirect to ~/x" "echo hi > ~/x"
+allowed "redirect to \$HOME/x" 'echo hi > $HOME/x'
+allowed "redirect to a quoted unset variable" 'echo hi > "$LOG_FILE_NOT_SET"'
+allowed "tee to ~/x" "echo hi | tee ~/x"
+
+# --- command position: keywords, wrappers, shells ----------------------------------
+denied "force push in braces" "force push" "{ git push --force origin feat/x; }"
+denied "force push after then" "force push" "if true; then git push --force origin feat/x; fi"
+denied "force push in a for loop" "force push" "for x in a; do git push -f origin feat/x; done"
+denied "force push after !" "force push" "! git push --force origin feat/x"
+denied "env -i git push --force" "force push" "env -i git push --force origin feat/x"
+denied "env -i docker" "docker" "env -i docker ps"
+denied "env -u X docker" "docker" "env -u HOME docker ps"
+denied "timeout git push --force" "force push" "timeout 5 git push --force origin feat/x"
+denied "timeout -s KILL" "force push" "timeout -s KILL 5 git push -f origin feat/x"
+denied "nice git push --force" "force push" "nice -n 5 git push --force origin feat/x"
+denied "stdbuf -o0" "force push" "stdbuf -o0 git push --force origin feat/x"
+denied "setsid git push --force" "force push" "setsid git push --force origin feat/x"
+denied "xargs git push --force" "force push" "echo x | xargs git push --force origin feat/x"
+denied "find -exec git push --force" "force push" "find . -name x -exec git push --force origin feat/x \\;"
+denied "sudo -u x docker" "docker" "sudo -u x docker ps"
+denied "bash -lc" "force push" 'bash -lc "git push --force origin feat/x"'
+denied "bash -ce" "force push" 'bash -ce "git push --force origin feat/x"'
+denied "echo piped to bash" "force push" "echo 'git push --force origin feat/x' | bash"
+denied "printf piped to sh" "force push" "printf 'git push --force origin feat/x' | sh"
+denied "here-string to bash" "force push" "bash <<< 'git push --force origin feat/x'"
+denied "heredoc to bash" "force push" "$(printf '%s\n' "bash <<EOT" "git push --force origin feat/x" "EOT")"
+denied "heredoc piped to bash" "force push" "$(printf '%s\n' "cat <<EOT | bash" "git push --force origin feat/x" "EOT")"
+denied "alias then run" "force push" "alias gp='git push --force origin feat/x'; gp"
+denied "nerdctl" "nerdctl" "nerdctl ps"
+denied "ctr" "ctr" "ctr images ls"
+denied "buildah" "buildah" "buildah images"
+allowed "env with a variable and a harmless command" "env FOO=1 git status"
+allowed "timeout on a harmless command" "timeout 5 git status"
+allowed "xargs on a harmless command" "echo x | xargs echo"
+allowed "echo piped to a non-shell" "echo 'git push --force' | wc -c"
+
+# --- heredoc extraction must not eat real commands ---------------------------------
+denied "here-string does not hide the next line" "docker" "$(printf '%s\n' "cat <<< x" "docker ps")"
+denied "quoted << does not hide the next line" "docker" "$(printf '%s\n' "echo '<<X'" "docker ps")"
+denied "double-quoted << does not hide the next line" "docker" "$(printf '%s\n' 'echo "a << b"' "docker ps")"
+denied "a real heredoc, then a command after it" "docker" "$(printf '%s\n' "cat <<EOT" "body" "EOT" "docker ps")"
+
+# --- protected branches are case-insensitive ---------------------------------------
+denied "push UAT" "protected branch UAT" "git push origin UAT"
+denied "push HEAD:UAT" "protected branch UAT" "git push origin HEAD:UAT"
+denied "push Staging" "protected branch Staging" "git push origin Staging"
+denied "push Main" "protected branch Main" "git push origin Main"
+allowed "push a branch that merely contains main" "git push origin feat/main-menu"
+
+# --- push option parsing, deletes, --repo and cd -----------------------------------
+denied "push --repo=origin main" "protected branch main" "git push --repo=origin main"
+denied "push --repo origin main" "protected branch main" "git push --repo origin main"
+denied "push --delete" "deletes a remote branch" "git push origin --delete feat/x"
+denied "push -d" "deletes a remote branch" "git push -d origin feat/x"
+denied "push :branch" "deletes a remote branch" "git push origin :feat/x"
+allowed "push -o value is not a refspec" "git push -o ci.skip origin feat/x"
+MAINCO="$TMP/mainco"
+mkdir -p "$MAINCO"
+git -C "$MAINCO" init -q -b main
+git -C "$MAINCO" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m init
+denied "cd into a main checkout, then push" "protected branch main" "cd $MAINCO && git push origin"
+denied "cd then push HEAD" "protected branch main" "cd $MAINCO; git push origin HEAD"
+allowed "cd into the feature checkout, then push" "cd $REPO && git push origin"
+
+# --- pull request routes -----------------------------------------------------------
+denied "gh pr create direct" "gh pr create" "gh pr create --draft --title t"
+denied "gh-as-owner gh pr create" "gh pr create" "gh-as-owner.sh gh pr create --title t"
+denied "gh api merge route" "merges or reviews" "gh api repos/o/r/pulls/5/merge -X PUT"
+denied "gh api merge route, bare" "merges or reviews" "gh api repos/o/r/pulls/5/merge"
+denied "gh api review POST" "merges or reviews" "gh api repos/o/r/pulls/5/reviews -f event=APPROVE"
+denied "gh api graphql merge" "merges or reviews" "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
+allowed "gh api reading reviews" "gh api repos/o/r/pulls/5/reviews"
+allowed "gh api reading comments" "gh api repos/o/r/pulls/5/comments"
+
+# --- the run trigger: ODOO_UNATTENDED, whatever the agent is ------------------------
+# envrun <env value> <agent_type> <command>
+envrun() { OUT="$(payload "$2" "$3" "$REPO" | env ODOO_UNATTENDED="$1" bash "$GUARD" 2>/dev/null)"; RC=$?; }
+env_denied() {
+  envrun "$2" "$3" "$4"
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then ok "$1 -> denied"
+  else bad "$1: expected a deny, rc=$RC out=${OUT:-<silence>}"; fi
+}
+env_allowed() {
+  envrun "$2" "$3" "$4"
+  if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, rc=$RC out=${OUT:-<silence>}"; fi
+}
+env_denied "pr fork, push --force, ODOO_UNATTENDED=1" 1 "odoo-dev-pr" "git push --force origin feat/x"
+env_denied "pr fork, push main" 1 "odoo-dev:odoo-dev-pr" "git push origin main"
+env_denied "pr fork, gh pr ready" 1 "odoo-dev-pr" "gh pr ready 12"
+env_denied "builder fork, docker" 1 "odoo-dev-builder" "docker ps"
+env_denied "tester fork, redirect into the tree" 1 "odoo-dev-tester" "echo hi > tracked.txt"
+env_denied "main session of the run" 1 "" "git push -f origin feat/x"
+env_denied "any non-empty value engages, including 0" 0 "odoo-dev-pr" "git push -f origin feat/x"
+env_allowed "pr fork, an ordinary push" 1 "odoo-dev-pr" "git push -u origin feat/x"
+env_allowed "pr fork, gh pr view" 1 "odoo-dev-pr" "gh pr view 12"
+env_allowed "variable empty: pr fork, force push passes" "" "odoo-dev-pr" "git push --force origin feat/x"
+env_allowed "variable empty: interactive docker passes" "" "" "docker ps"
+OUT="$(printf 'not json' | env ODOO_UNATTENDED=1 bash "$GUARD" 2>/dev/null)"; RC=$?
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then
+  ok "unparseable payload while ODOO_UNATTENDED is set -> denied"
+else bad "unparseable payload with ODOO_UNATTENDED: rc=$RC out=${OUT:-<silence>}"; fi
 
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""

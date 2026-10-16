@@ -188,6 +188,7 @@ let bad = 0, forked = 0, inline = [];
 const dispatched = new Map();
 for (const c of cmds) {
   const m = fm(path.join(cmdsDir, c));
+  if (/^disable-model-invocation:\s*true\s*$/m.test(m)) { console.log(`  FAIL ${c}: carries disable-model-invocation: true — the commands must stay agent-invocable so an agent can chain plan, task, test and pr (#1060)`); bad++; }
   const a = (m.match(/^agent:\s*(.+)$/m) || [])[1]?.trim();
   if (!a) { inline.push(c); continue; }
   forked++;
