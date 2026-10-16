@@ -45,6 +45,10 @@
 #       770 root, 771 child of 770, 772 child of 771, 773 and 774 roots.
 #       An explicit ordered list, never discovery - so release-please and
 #       Dependabot PRs cannot leak in without needing a filter to exclude them.
+#
+# Output: progress streams to stderr one line at a time, each prefixed
+# "stack-merge:" (see step()), so a caller that tails the output sees which node
+# is in flight. Capture with 2>&1; stdout carries only the final "landed" line.
 
 set -euo pipefail
 
@@ -119,6 +123,12 @@ done
 die() {
     printf 'stack-merge: %s\n' "$1" >&2
     exit "${2:-2}"
+}
+
+# One progress line per step, to stderr, so it is neither block-buffered nor
+# mixed into the machine-readable stdout. Same prefix as every cause line.
+step() {
+    printf 'stack-merge: %s\n' "$*" >&2
 }
 
 # --repo is required and absolute on purpose: the script must be impossible to
@@ -340,6 +350,7 @@ sync_node() {
     fi
 
     set_cursor "$key"
+    step "syncing #$pr"
     rc=0
     out=$(gh pr update-branch "$pr" -R "$SLUG" 2>&1) || rc=$?
     if ((rc != 0)) && ! printf '%s' "$out" | grep -qiE "$ALREADY_CURRENT_RE"; then
@@ -359,6 +370,7 @@ merge_node() {
     base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
 
     set_cursor "$key"
+    step "merging #$pr (base $BASE)"
     # Deliberately NOT --delete-branch. Deleting the head ref here deletes the
     # base branch of every child PR still pointing at it, and GitHub closes a
     # PR whose base branch disappears - before restack_child can retarget it.
@@ -554,8 +566,11 @@ merge_node() {
             waited=$((waited + CHECK_POLL))
         fi
     done
-    printf '%s\n' "$out"
+    # gh's merge output goes to stderr, and only when there is some: stdout is
+    # reserved for the final "landed" line.
+    [[ -z $out ]] || printf '%s\n' "$out" >&2
     add_done "$key"
+    step "merged #$pr"
 
     git -C "$REPO" fetch origin --quiet
 }
@@ -568,6 +583,7 @@ delete_merged_branch() {
 
     branch=$(head_branch "$pr")
     set_cursor "$key"
+    step "deleting branch $branch"
     # Act, then check - never check, then act. A pre-check cannot be atomic with
     # the delete: with deleteBranchOnMerge on, GitHub is deleting this same ref
     # asynchronously from the merge that just happened, so ls-remote can still
@@ -593,9 +609,11 @@ restack_child() {
         # the script never inspects the worktree to guess which case it is in.
         if is_done "$child:rebase-started"; then
             set_cursor "$child:rebase"
+            step "continuing rebase of $child_branch"
             git -C "$OPS" rebase --continue
         else
-            git -C "$OPS" checkout -B "$child_branch" "origin/$child_branch"
+            step "rebasing $child_branch onto origin/$BASE (parent #$parent)"
+            git -C "$OPS" checkout -B "$child_branch" "origin/$child_branch" >&2
             add_done "$child:rebase-started"
             set_cursor "$child:rebase"
             git -C "$OPS" rebase --onto "origin/$BASE" "$parent_sha"
@@ -622,7 +640,8 @@ restack_child() {
         # treats a refused merge: if the base is now BASE, the step is done.
         current_base=$(gh pr view "$child" -R "$SLUG" --json baseRefName --jq .baseRefName)
         if [[ $current_base != "$BASE" ]]; then
-            if ! gh pr edit "$child" -R "$SLUG" --base "$BASE"; then
+            step "retargeting #$child to $BASE"
+            if ! gh pr edit "$child" -R "$SLUG" --base "$BASE" >&2; then
                 current_base=$(gh pr view "$child" -R "$SLUG" --json baseRefName --jq .baseRefName)
                 [[ $current_base == "$BASE" ]] ||
                     die "#$child retarget to $BASE failed and the base is still $current_base" 1
@@ -633,6 +652,7 @@ restack_child() {
 
     if ! is_done "$child:push"; then
         set_cursor "$child:push"
+        step "pushing $child_branch"
         git -C "$OPS" push --force-with-lease origin "$child_branch"
         add_done "$child:push"
     fi
@@ -684,13 +704,14 @@ fi
 # that promise false. Guarded on the path because a resume inherits the worktree
 # the first attempt left behind, mid-rebase and all.
 if [[ ! -d $OPS ]]; then
-    git -C "$REPO" worktree add --detach "$OPS" "origin/$BASE"
+    git -C "$REPO" worktree add --detach "$OPS" "origin/$BASE" >&2
 fi
 
 # --------------------------------------------------------------------------
 # Train
 # --------------------------------------------------------------------------
 
+step "train: ${#ORDER[@]} nodes: ${ORDER[*]}"
 for pr in "${ORDER[@]}"; do
     sync_node "$pr"
     merge_node "$pr"
@@ -699,6 +720,7 @@ for pr in "${ORDER[@]}"; do
         restack_child "$child" "$pr"
     done
     delete_merged_branch "$pr"
+    step "finished #$pr"
 done
 
 # Exit 0 is a promise the caller acts on - Phase 8 says "exit 0 means the stack
