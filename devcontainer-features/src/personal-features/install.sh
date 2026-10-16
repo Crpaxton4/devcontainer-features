@@ -223,6 +223,8 @@ install -d -m 0755 /usr/local/share/personal-features/hooks
 install -m 0755 "$(dirname "$0")/hooks/odoo-api-guard.sh" /usr/local/share/personal-features/hooks/odoo-api-guard.sh
 install -m 0755 "$(dirname "$0")/hooks/force-push-guard.sh" /usr/local/share/personal-features/hooks/force-push-guard.sh
 install -m 0755 "$(dirname "$0")/hooks/mempalace-recall.sh" /usr/local/share/personal-features/hooks/mempalace-recall.sh
+# The odoo-dev plugin drift warning (#1052): a SessionStart hook shipped the same way.
+install -m 0755 "$(dirname "$0")/hooks/odoo-dev-plugin-drift-check.sh" /usr/local/share/personal-features/hooks/odoo-dev-plugin-drift-check.sh
 install -m 0644 "$(dirname "$0")/settings-fragment.json" /usr/local/share/personal-features/settings-fragment.json
 # The guard's own case table ships beside it, for the reason #811 is about: a
 # policy whose check lives somewhere the provisioned machine cannot reach is a
@@ -1332,6 +1334,63 @@ else
     echo "WARNING: sync-claude-mcp: could not install the 'odoo-dev' plugin; install it later with 'claude plugin install --scope user odoo-dev@devcontainer-features' - the next container create will also retry." >&2
 fi
 
+# --- odoo-dev plugin: refresh to the marketplace head (#1052) ----------------
+# "already installed" above is satisfied by ANY cached copy, however old - the
+# same trap the mempalace block closes with `claude plugin update` (#741). Here
+# nothing did: $CLAUDE_CONFIG_DIR is the host's ~/.claude bind mount, so a
+# container seeded from a host that installed odoo-dev months ago kept running
+# that revision (1.2.0 beside a marketplace at 4.0.0) and the bugs already fixed
+# on main came back. Two steps, in this order: the marketplace clone is only a
+# snapshot of the repo as of the last pull, so `plugin update` has nothing newer
+# to install until `marketplace update` has moved it.
+#
+# Best-effort, like the mempalace refresh: the plugin works at whatever revision
+# is cached, so a failure here (offline runner, no GitHub auth) costs freshness,
+# not function, and must never fail container create. Each call sits in an `if`
+# so a nonzero exit stays off this script's exit status. The version is read
+# from the registry Claude Code keeps in $CLAUDE_CONFIG_DIR before and after, so
+# the create log says what changed. The session-start drift check
+# (hooks/odoo-dev-plugin-drift-check.sh) is the second line of defence for a refresh that
+# failed here or ran in some other container.
+odoo_dev_plugin_version() {
+    command -v python3 >/dev/null 2>&1 || { echo unknown; return 0; }
+    PF_PLUGIN_REGISTRY="$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json" python3 -c '
+import json, os
+
+try:
+    with open(os.environ["PF_PLUGIN_REGISTRY"]) as handle:
+        loaded = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+
+# {"version": 2, "plugins": {"odoo-dev@devcontainer-features": [{"version": "4.0.0", ...}]}}
+plugins = loaded.get("plugins") if isinstance(loaded, dict) else None
+entries = plugins.get("odoo-dev@devcontainer-features") if isinstance(plugins, dict) else None
+for entry in entries if isinstance(entries, list) else []:
+    version = entry.get("version") if isinstance(entry, dict) else None
+    if isinstance(version, str) and version:
+        print(version)
+        break
+' 2>/dev/null || true
+}
+
+if [ "$odoo_dev_installed" -eq 1 ]; then
+    odoo_dev_before="$(odoo_dev_plugin_version)"
+    [ -n "$odoo_dev_before" ] || odoo_dev_before="unknown"
+    if claude plugin marketplace update devcontainer-features; then
+        echo "sync-claude-mcp: marketplace 'devcontainer-features' is up to date"
+    else
+        echo "WARNING: sync-claude-mcp: could not update the 'devcontainer-features' marketplace; the odoo-dev refresh below can only reach the revision already cloned in \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR). Check network/GitHub auth, or run 'claude plugin marketplace update devcontainer-features' by hand." >&2
+    fi
+    if claude plugin update odoo-dev@devcontainer-features; then
+        odoo_dev_after="$(odoo_dev_plugin_version)"
+        [ -n "$odoo_dev_after" ] || odoo_dev_after="unknown"
+        echo "sync-claude-mcp: plugin 'odoo-dev@devcontainer-features' version $odoo_dev_before -> $odoo_dev_after"
+    else
+        echo "WARNING: sync-claude-mcp: could not update the 'odoo-dev' plugin; this container keeps version $odoo_dev_before from \$CLAUDE_CONFIG_DIR ($CLAUDE_CONFIG_DIR), which may be stale. Run 'claude plugin update odoo-dev@devcontainer-features' by hand." >&2
+    fi
+fi
+
 # --- provision marker: make "these scripts are old" a visible state (#806) ---
 # Everything above reports only what it DID. A feature script too old to carry a
 # step reports nothing at all - and the container-create log it would have
@@ -1383,6 +1442,7 @@ pf_add_script /usr/local/share/personal-features/claude-wrapper
 pf_add_script /usr/local/share/personal-features/hooks/odoo-api-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
+pf_add_script /usr/local/share/personal-features/hooks/odoo-dev-plugin-drift-check.sh
 pf_add_script /usr/local/share/personal-features/settings-fragment.json
 # The staged persisted-paths manifest (#974), in this set for the same stated
 # reason as the settings fragment one line up: this list fingerprints file
