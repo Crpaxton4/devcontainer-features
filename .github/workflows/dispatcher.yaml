@@ -1,0 +1,85 @@
+name: "CI - dispatcher quality"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'libraries/dispatcher/src/**'
+      - 'libraries/dispatcher/tests/**'
+      - 'libraries/dispatcher/pyproject.toml'
+      - 'libraries/dispatcher/uv.lock'
+      - 'libraries/odoo_sdk/src/odoo_sdk/state/**'
+      - '.github/workflows/dispatcher.yaml'
+  pull_request:
+    paths:
+      - 'libraries/dispatcher/src/**'
+      - 'libraries/dispatcher/tests/**'
+      - 'libraries/dispatcher/pyproject.toml'
+      - 'libraries/dispatcher/uv.lock'
+      - 'libraries/odoo_sdk/src/odoo_sdk/state/**'
+      - '.github/workflows/dispatcher.yaml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: libraries/dispatcher
+
+jobs:
+  tests:
+    name: "Tests & Coverage"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
+      - name: Install test dependencies
+        run: uv sync --group test
+
+      - name: Run tests and coverage
+        run: |
+          uv run coverage run -m pytest tests
+          uv run coverage report
+          mkdir -p reports/coverage
+          uv run coverage json -o reports/coverage/coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dispatcher-coverage-report
+          path: libraries/dispatcher/reports/coverage/
+
+  static:
+    name: "Static Analysis"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install static analysis dependencies
+        run: uv sync --group static-analysis
+
+      - name: Check formatting
+        run: uv run black --check src tests
+
+      - name: Check complexity
+        run: uv run complexipy src
+
+      - name: Upload static analysis reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dispatcher-static-analysis-report
+          path: libraries/dispatcher/reports/
