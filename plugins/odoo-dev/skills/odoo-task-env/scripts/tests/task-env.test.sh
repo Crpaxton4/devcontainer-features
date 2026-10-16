@@ -103,6 +103,17 @@ rc=$?
 expect_exit "no docker and no odoo exits 5" 5 $rc
 case "$out" in *"HOST"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL exit-5 message should name the host context: $out" >&2 ;; esac
 
+# odoo on PATH but postgres not answering is not a working container: with no
+# docker either there is nowhere to run, so exit 5 rather than a half-true "in-container".
+mkdir -p "$work/pgfail"
+for b in bash dirname grep head tail; do ln -sf "$(command -v $b)" "$work/pgfail/$b"; done
+printf '#!/usr/bin/env bash\necho "Odoo Server 19.0-20260810"\n' > "$work/pgfail/odoo"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$work/pgfail/pg_isready"
+chmod +x "$work/pgfail/odoo" "$work/pgfail/pg_isready"
+out="$(PATH="$work/pgfail" "$work/pgfail/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>&1)"
+rc=$?
+expect_exit "odoo without a reachable postgres and no docker exits 5" 5 $rc
+
 # In-container: the core series is REPORTED, and a stated target that disagrees
 # with it is flagged rather than left for a green 0-test run to not mention (#978).
 # A PATH holding only what that branch needs, with a stubbed 19.0 odoo on it.
@@ -114,7 +125,7 @@ chmod +x "$work/inbin/odoo" "$work/inbin/pg_isready"
 
 out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>/dev/null | tail -1)"
 expect "in-container still says so" "$(field "$out" status)" "in-container"
-expect "in-container reports the core series" "$(field "$out" odoo_version)" "19.0"
+expect "in-container reports the full odoo --version line" "$(field "$out" odoo_version)" "Odoo Server 19.0-20260810"
 expect "no target means no verdict" "$(field "$out" series_mismatch)" "null"
 
 rc=0
@@ -128,6 +139,64 @@ done
 
 out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --target-series 19.0 2>/dev/null | tail -1)"
 expect "the matching series is not flagged" "$(field "$out" series_mismatch)" "null"
+
+# docker on PATH changes nothing (#1053): the devcontainer mounts the host socket,
+# so odoo + pg_isready decide. The docker stub records any call, because a call
+# would mean the host path ran.
+mkdir -p "$work/dockbin"
+for b in bash dirname grep head tail; do ln -sf "$(command -v $b)" "$work/dockbin/$b"; done
+cp "$work/inbin/odoo" "$work/inbin/pg_isready" "$work/dockbin/"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.calls"\nexit 1\n' "$work" > "$work/dockbin/docker"
+chmod +x "$work/dockbin/docker"
+rc=0
+out="$(PATH="$work/dockbin" "$work/dockbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>/dev/null)" || rc=$?
+expect_exit "docker plus odoo plus postgres exits 0" 0 $rc
+expect "docker on PATH still reports in-container" "$(field "$out" status)" "in-container"
+[ ! -e "$work/docker.calls" ]; expect_exit "the host path never called docker" 0 $?
+
+# --repo-path is accepted in container mode, in both spellings, and ignored.
+out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --repo-path "$work/nonexistent" 2>/dev/null)"
+expect "--repo-path DIR is accepted in a container" "$(field "$out" status)" "in-container"
+out="$(PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" --repo-path="$work/nonexistent" somerepo 2>/dev/null)"
+expect "--repo-path=DIR is accepted in a container" "$(field "$out" status)" "in-container"
+PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --repo-path >/dev/null 2>&1
+expect_exit "--repo-path without a value is a usage error" 2 $?
+
+# side_cores: every ODOO_SRC_ROOT/odooNN-bin that is executable AND has odooNN.conf
+# beside it; [] otherwise. odoo17-bin has no conf and odoo16-bin is not executable.
+src="$work/src"; mkdir -p "$src"
+out="$(ODOO_SRC_ROOT="$src" PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>/dev/null)"
+expect "no side cores means an empty list" "$(node -e 'console.log(JSON.stringify(JSON.parse(process.argv[1]).side_cores))' "$out")" "[]"
+printf '#!/usr/bin/env bash\necho "Odoo Server 18.0-20260101"\n' > "$src/odoo18-bin"
+printf '#!/usr/bin/env bash\necho "Odoo Server 17.0-20260101"\n' > "$src/odoo17-bin"
+printf '#!/usr/bin/env bash\necho "Odoo Server 16.0-20260101"\n' > "$src/odoo16-bin"
+chmod +x "$src/odoo18-bin" "$src/odoo17-bin"
+: > "$src/odoo18.conf"; : > "$src/odoo16.conf"
+out="$(ODOO_SRC_ROOT="$src" PATH="$work/inbin" "$work/inbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>/dev/null)"
+expect "only a bin with a conf beside it is a side core" "$(node -e 'console.log(JSON.stringify(JSON.parse(process.argv[1]).side_cores))' "$out")" \
+  "[{\"series\":\"18.0\",\"bin\":\"$src/odoo18-bin\",\"conf\":\"$src/odoo18.conf\",\"version\":\"Odoo Server 18.0-20260101\"}]"
+expect "the core is still the container's own" "$(field "$out" odoo_version)" "Odoo Server 19.0-20260810"
+
+# Host mode (docker, no working odoo) with a repos tree that cannot be resolved:
+# an explicit exit 2 that names the fix, never a bare set -e death. repos-dir.sh is
+# replaced by a stub that fails as the real one does when no candidate qualifies.
+mkdir -p "$work/hostbin" "$work/fakemap"
+for b in bash dirname; do ln -sf "$(command -v $b)" "$work/hostbin/$b"; done
+cp "$work/dockbin/docker" "$work/hostbin/docker"
+printf '#!/usr/bin/env bash\necho "could not resolve the repos tree" >&2\nexit 1\n' > "$work/fakemap/repos-dir.sh"
+chmod +x "$work/fakemap/repos-dir.sh"
+out="$(ODOO_REPO_MAP_SCRIPTS="$work/fakemap" REPOS_DIR="" PATH="$work/hostbin" "$work/hostbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo 2>&1)"
+rc=$?
+expect_exit "host mode with no repos tree exits 2" 2 $rc
+for word in --repo-path REPOS_DIR; do
+  case "$out" in *"$word"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL the repos-tree error should name $word: $out" >&2 ;; esac
+done
+# --repo-path makes the repo itself resolvable; a path that is not a directory is exit 2 too.
+out="$(ODOO_REPO_MAP_SCRIPTS="$work/fakemap" REPOS_DIR="" PATH="$work/hostbin" "$work/hostbin/bash" "$SCRIPTS/stack-ensure.sh" somerepo --repo-path "$work/nonexistent" 2>&1)"
+rc=$?
+expect_exit "host mode with a missing --repo-path exits 2" 2 $rc
+case "$out" in *"repo not found"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL a missing --repo-path should say 'repo not found': $out" >&2 ;; esac
+[ ! -e "$work/docker.calls" ]; expect_exit "the host failures happened before any docker call" 0 $?
 
 # ---------- preflight -----------------------------------------------------------
 # Context detection is the whole point: the lifted original only knew the host
@@ -155,6 +224,17 @@ node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("g
 expect_exit "names the checks that failed" 0 $?
 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" >/dev/null 2>&1
 expect_exit "hard mode exits 1 on failure" 1 $?
+
+# docker on PATH next to a working odoo + postgres is still a devcontainer (#1053).
+mkdir -p "$work/pfdock"
+for b in bash dirname node free awk ls wc; do ln -sf "$(command -v $b)" "$work/pfdock/$b"; done
+cp "$work/dockbin/odoo" "$work/dockbin/pg_isready" "$work/dockbin/docker" "$work/pfdock/"
+out="$(PATH="$work/pfdock" "$work/pfdock/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+expect "docker plus odoo plus postgres is a devcontainer" "$(field "$out" context)" "devcontainer"
+[ ! -e "$work/docker.calls" ]; expect_exit "preflight ran no docker check in a container" 0 $?
+# docker alone (no working odoo) is still the host.
+out="$(PATH="$work/hostbin:$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+expect "docker without odoo is the host" "$(field "$out" context)" "host"
 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft >/dev/null 2>&1
 expect_exit "--soft exits 0 anyway" 0 $?
 
