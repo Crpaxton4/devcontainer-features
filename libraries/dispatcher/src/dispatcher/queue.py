@@ -35,7 +35,9 @@ from .lifecycle import INSPECT_TIMEOUT_S, container_name, transcript_path
 from .reap import host_worktree
 
 #: Linux caps one argv string at 128 KiB (MAX_ARG_STRLEN); the prompt
-#: ``<task>\n\n<brief>`` is one. Over it, exec fails with E2BIG on every retry.
+#: ``<entry> <task>\n\n<brief>`` is one. Over it, exec fails with E2BIG on every
+#: retry. The 11 KB under the cap covers the entry, which is a short command
+#: name, so only ``<task>\n\n<brief>`` is counted.
 MAX_PROMPT_BYTES = 120_000
 
 _COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

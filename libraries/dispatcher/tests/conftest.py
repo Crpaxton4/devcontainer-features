@@ -28,7 +28,7 @@ def settings(tmp_path):
         plugin_root=tmp_path / "plugin",
         invariants_file=str(invariants),
         invariants=invariants.read_text("utf-8"),
-        agent="odoo-dev:odoo-dev-implementer",
+        entry="/odoo-dev:implement",
         min_available_gb=1,
         settle_s=0,
         poll_s=0.01,

@@ -18,8 +18,12 @@ Variables (all optional unless marked required):
     text with ``--append-system-prompt``, as it inlines the brief. A missing or
     unreadable file is a settings error (exit 2). Default
     ``<plugin root>/prompts/unattended-invariants.md``.
-``DISPATCH_AGENT``
-    The in-container implementation agent (default ``odoo-dev:odoo-dev-implementer``).
+``DISPATCH_ENTRY``
+    The slash command (or ``/plugin:workflow``) that starts the session; the
+    task id and the brief follow it in the prompt (default
+    ``/odoo-dev:implement``). It replaces ``DISPATCH_AGENT``: a run with
+    ``DISPATCH_AGENT`` still set is a settings error, so a stale configuration
+    fails loudly and never runs under the wrong entry.
 ``MIN_FREE_GB``
     Admission threshold on available memory, in GB (default 6, the same knob
     ``stack-ensure.sh`` evicts on).
@@ -61,7 +65,7 @@ from pathlib import Path
 
 from odoo_sdk.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
 
-DEFAULT_AGENT = "odoo-dev:odoo-dev-implementer"
+DEFAULT_ENTRY = "/odoo-dev:implement"
 DEFAULT_ADDITIONAL_FEATURES = (
     '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
 )
@@ -107,6 +111,16 @@ def check_artifacts_dir(env: Mapping[str, str]) -> None:
         )
 
 
+def check_no_stale_agent(env: Mapping[str, str]) -> None:
+    """Raise :class:`SettingsError` when the retired ``DISPATCH_AGENT`` is set."""
+    if env.get("DISPATCH_AGENT"):
+        raise SettingsError(
+            "DISPATCH_AGENT is retired: the session now starts at a slash "
+            "command, not at an agent. Unset it, and set DISPATCH_ENTRY "
+            f"(default {DEFAULT_ENTRY}) to change the entry"
+        )
+
+
 def normalize_project(repo: str) -> str:
     """The compose project name for a repo, as compose derives it."""
     return re.sub(r"[^a-z0-9_-]", "", repo.lower())
@@ -119,7 +133,7 @@ class Settings:
     owner: str
     plugin_root: Path
     invariants_file: str
-    agent: str
+    entry: str
     min_available_gb: float
     settle_s: float
     poll_s: float
@@ -180,6 +194,7 @@ class Settings:
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc
         check_artifacts_dir(env)
+        check_no_stale_agent(env)
         invariants_file = env.get("DISPATCH_INVARIANTS_FILE") or str(
             plugin_root / INVARIANTS_RELATIVE
         )
@@ -190,7 +205,7 @@ class Settings:
             plugin_root=plugin_root,
             invariants_file=invariants_file,
             invariants=read_invariants(invariants_file),
-            agent=env.get("DISPATCH_AGENT") or DEFAULT_AGENT,
+            entry=env.get("DISPATCH_ENTRY") or DEFAULT_ENTRY,
             claude_home=Path(claude_home),
             additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")
             or DEFAULT_ADDITIONAL_FEATURES,

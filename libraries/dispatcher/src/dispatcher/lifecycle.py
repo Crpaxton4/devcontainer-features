@@ -31,6 +31,7 @@ here builds a container. Non-negotiable points, each with its reason:
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -43,6 +44,7 @@ from odoo_sdk.state.dispatch_state import artifacts_root, odoo_dev_dir
 from .schema import schema_argument
 from .settings import (
     ARTIFACTS_TARGET,
+    DEFAULT_ENTRY,
     ODOO_DEV_MOUNT_TARGET,
     Settings,
     WORKSPACE_TARGET,
@@ -212,6 +214,11 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
     ``ODOO_UNATTENDED``, and a forked subagent inherits the session
     environment. Without this variable every protection in that hook is
     decorative during an unattended run. Do not drop it as redundant.
+
+    The prompt starts with ``settings.entry`` (``/odoo-dev:implement``), a
+    forked command that names its own agent, so there is no ``--agent`` flag.
+    A slash command in the prompt string expands before the run, and ``-p``
+    waits for the fork. The task id is the command's first argument.
     """
     return [
         *render_exec_prefix(settings, repo),
@@ -222,9 +229,7 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         "--",
         "claude",
         "-p",
-        f"{task_id}\n\n{brief}",
-        "--agent",
-        settings.agent,
+        f"{settings.entry} {task_id}\n\n{brief}",
         "--append-system-prompt",
         settings.invariants,
         "--output-format",
@@ -238,33 +243,50 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
     ]
 
 
-def kill_pattern(task_id: str) -> str:
+def _ere_literal(text: str) -> str:
+    """``text`` as an extended-regex literal: only word characters, ``:``, ``/``, ``-`` stay bare."""
+    return re.sub(r"[^\w:/-]", lambda found: "\\" + found.group(), text)
+
+
+def kill_pattern(task_id: str, entry: str = DEFAULT_ENTRY) -> str:
     """Extended regex for ``pkill -f``: this task's ``claude -p`` command line.
 
-    Anchored with ``^``: the command line must *start* with ``claude`` (or
-    ``node <path>/claude``, how a script install runs), so a sibling's inlined
-    brief containing ``claude -p <task> `` further along never matches. The task
-    id is followed by whitespace, so task 12 never matches task 123. Task ids
-    are plain names, so escaping ``.`` is the only metacharacter to handle.
+    The line is ``claude -p <entry> <task> ...``, but the process the kernel
+    shows is not always ``claude``: the container's ``claude`` is a wrapper
+    (personal-features ``install.sh``) that replaces itself with the real
+    binary, so the line can start with ``<path>/claude.exe``, or with
+    ``node <path>/cli.js``. All of those match.
+
+    Anchored with ``^``: the command line must *start* with one of them, so a
+    sibling's inlined brief containing ``claude -p <entry> <task> `` further
+    along never matches. The entry and the task id are literals, and the task
+    id is followed by whitespace, so task 12 never matches task 123.
     """
-    task = task_id.replace(".", r"\.")
-    return rf"^(([^ ]*/)?node )?([^ ]*/)?claude -p {task}[[:space:]]"
+    return (
+        r"^(([^ ]*/)?node )?([^ ]*/)?(claude(\.exe)?|cli\.js) -p "
+        rf"{_ere_literal(entry)} {_ere_literal(task_id)}[[:space:]]"
+    )
 
 
 def kill_in_container(
-    shell: Shell, container_id: str, task_id: str, env: dict[str, str]
+    shell: Shell,
+    container_id: str,
+    task_id: str,
+    env: dict[str, str],
+    entry: str = DEFAULT_ENTRY,
 ) -> str:
     """Best effort: stop the job's ``claude`` inside the container. Returns a note.
 
     Killing the host ``devcontainer exec`` process does not reach the process it
-    started in the container. ``pkill -f`` matches the ``claude -p <task>``
-    command line, anchored at the start (see :func:`kill_pattern`) so a sibling
-    job's argv that merely contains that text is never matched. Never verified,
-    so the note says what is known.
+    started in the container. ``pkill -f`` matches the
+    ``claude -p <entry> <task>`` command line, anchored at the start (see
+    :func:`kill_pattern`) so a sibling job's argv that merely contains that text
+    is never matched. Pass ``settings.entry``: the default is only right while
+    ``DISPATCH_ENTRY`` is unset. Never verified, so the note says what is known.
     """
     if not container_id:
         return "no container id is known; the container-side process may still be alive"
-    pattern = kill_pattern(task_id)
+    pattern = kill_pattern(task_id, entry)
     done = shell.run(
         ["docker", "exec", container_id, "pkill", "-KILL", "-f", "--", pattern],
         env=env,

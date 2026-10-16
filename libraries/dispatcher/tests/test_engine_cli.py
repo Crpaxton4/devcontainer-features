@@ -615,6 +615,24 @@ def test_request_stop_terminates_running_sessions(world):
     assert dead.detail.count("[a kill was sent to the container-side claude") == 1
 
 
+def test_a_stop_kill_uses_the_configured_entry(world):
+    """The stop path renders the pkill pattern with settings.entry, as the deadline does."""
+    engine, shell, _ = world
+    engine.settings = dataclasses.replace(engine.settings, entry="/x:y")
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    _submit(engine, ("qoc", "71"))
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    (cmd,) = shell.commands("docker", "exec", "c", "pkill")
+    assert cmd[-1] == lifecycle.kill_pattern("71", "/x:y") and "/x:y" in cmd[-1]
+
+
 def test_idle_check_failure_never_fails_a_job(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))

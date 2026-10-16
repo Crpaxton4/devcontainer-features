@@ -9,7 +9,12 @@ from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from dispatcher import deadletter, gates, queue, schema
 from dispatcher.deadletter import Ending, classify
 from dispatcher.lock import AlreadyRunningError, DispatcherLock
-from dispatcher.settings import Settings, SettingsError, normalize_project
+from dispatcher.settings import (
+    DEFAULT_ENTRY,
+    Settings,
+    SettingsError,
+    normalize_project,
+)
 from support import GOOD
 
 # -- lock ---------------------------------------------------------------
@@ -205,10 +210,10 @@ def test_settings_from_env(tmp_path):
     )
     assert s.invariants_file == str(prompts / "unattended-invariants.md")
     assert s.invariants == "default text"
-    assert (s.min_available_gb, s.deadline_s, s.agent) == (
+    assert (s.min_available_gb, s.deadline_s, s.entry) == (
         3,
         21600,
-        "odoo-dev:odoo-dev-implementer",
+        "/odoo-dev:implement",
     )
 
 
@@ -242,6 +247,11 @@ def test_settings_defaults_and_errors(tmp_path):
     with pytest.raises(SettingsError, match="malformed"):
         Settings.from_env({**env, "MIN_FREE_GB": "x"})
     assert Settings.from_env(env).admit_timeout_s == 1800
+    assert Settings.from_env({**env, "DISPATCH_ENTRY": ""}).entry == DEFAULT_ENTRY
+    assert Settings.from_env({**env, "DISPATCH_ENTRY": "/p:w"}).entry == "/p:w"
+    with pytest.raises(SettingsError, match="DISPATCH_AGENT is retired") as stale:
+        Settings.from_env({**env, "DISPATCH_AGENT": "odoo-dev:odoo-dev-implementer"})
+    assert "DISPATCH_ENTRY" in str(stale.value)
     assert (
         Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "90"}).admit_timeout_s
         == 90
