@@ -75,7 +75,7 @@ def _element(index: int, raw: object) -> JobSpec:
         raise SubmissionError(f"{where}: round must be an integer >= 1")
     try:
         text = Path(path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError: NUL in the path, bad UTF-8
         raise SubmissionError(f"{where}: brief {path!r} is not readable as text: {exc}")
     if not text.strip():
         raise SubmissionError(f"{where}: brief {path!r} is empty")

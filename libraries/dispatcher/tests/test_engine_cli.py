@@ -19,6 +19,7 @@ from support import GOOD, FakeProc, FakeShell, stream
 
 @pytest.fixture
 def world(settings, tmp_path):
+    (settings.workspace("qoc") / ".git").mkdir(parents=True)
     shell = FakeShell()
     mem = tmp_path / "meminfo"
     mem.write_text("MemAvailable: 9999999 kB\n")
@@ -181,7 +182,7 @@ def test_deadline_guard_kills_a_hung_job(world):
     shell.proc = FakeProc(stream()[:1], hang=True)
     (job,) = _submit(engine, ("qoc", "18"))
     engine.run()
-    assert shell.proc.killed
+    assert shell.proc.killed and signal.SIGKILL in shell.groups
     dead = engine.jobs.get(job.job_id)
     assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
     assert shell.commands("docker", "exec", "c", "pkill")  # the container side, too
@@ -203,7 +204,13 @@ def test_deadline_fires_while_a_grandchild_holds_the_pipe(world, monkeypatch):
     (job,) = _submit(engine, ("qoc", "100"))
     start = time.monotonic()
     engine.run()
-    assert time.monotonic() - start < 10
+    # FakeProc.wait times out after 5s, so a missing killpg cannot hide here.
+    assert time.monotonic() - start < 3
+    assert not [
+        t
+        for t in threading.enumerate()
+        if t.name.startswith("reader-") and not t.daemon
+    ]
     dead = engine.jobs.get(job.job_id)
     assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
     assert signal.SIGKILL in shell.groups  # the process group, not just the CLI
@@ -432,6 +439,7 @@ def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
         Completed(0, json.dumps({"outcome": "success", "containerId": "c"})),
     )
     ws = tmp_path / "repos" / "qoc"
+    (ws / ".git").mkdir(parents=True)
     shell.reply(
         ["docker", "inspect"],
         Completed(
@@ -485,3 +493,77 @@ def test_cli_reconciles_orphans_at_startup(monkeypatch, tmp_path, capsys):
     assert cli.main(["dead-letters"]) == cli.EXIT_OK
     dead = json.loads(capsys.readouterr().out)
     assert dead[0]["dead_reason"] == "ORPHANED_BY_RESTART"
+
+
+def test_missing_or_empty_workspace_is_a_mount_failure(world, tmp_path):
+    import shutil
+
+    engine, shell, _ = world
+    shutil.rmtree(engine.settings.workspace("qoc") / ".git")  # empty directory
+    (a,) = _submit(engine, ("qoc", "110"))
+    engine.run()
+    shutil.rmtree(engine.settings.workspace("qoc"))  # missing altogether
+    (b,) = _submit(engine, ("qoc", "111"))
+    engine.run()
+    for job in (a, b):
+        dead = engine.jobs.get(job.job_id)
+        assert dead.dead_reason == DeadReason.WORKSPACE_MOUNT_INVALID.value
+        assert "not a git checkout" in dead.detail
+    assert not shell.commands("devcontainer", "up") and not shell.spawned
+
+
+def test_a_stop_during_admission_is_honoured(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD), hang=True)  # would run forever
+    original = shell.run
+
+    def run(argv, **kw):
+        if argv[:2] == ["devcontainer", "up"]:
+            engine.request_stop()  # Ctrl-C during a cold up
+        return original(argv, **kw)
+
+    shell.run = run
+    (job,) = _submit(engine, ("qoc", "120"))
+    engine.run()
+    assert not shell.spawned
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert "during admission" in dead.detail
+    assert engine.jobs.count_live("qoc") == 0
+
+
+def test_a_stop_while_spawning_terminates_the_new_session(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    real_spawn = shell.spawn
+    shell.spawn = lambda argv, env: (engine.request_stop(), real_spawn(argv, env=env))[
+        1
+    ]
+    (job,) = _submit(engine, ("qoc", "121"))
+    engine.run()
+    assert shell.proc.terminated
+    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+
+
+def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatch):
+    """The host process exited 0 but a grandchild holds the pipe; the timer fires in the grace."""
+    import dispatcher.engine as eng
+
+    monkeypatch.setattr(eng, "READER_GRACE_S", 0.4)
+    engine, shell, _ = world
+    engine.settings = engine.settings.__class__(
+        **{**engine.settings.__dict__, "deadline_s": 0.05}
+    )
+    shell.proc = FakeProc(stream()[:1], returncode=0, pipe_held=True)
+    (job,) = _submit(engine, ("qoc", "130"))
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason != DeadReason.KILLED_BY_DEADLINE.value
+    assert dead.dead_reason == DeadReason.STRUCTURED_OUTPUT_MISSING.value
+    assert not shell.commands("docker", "exec", "c", "pkill") and shell.groups == []
+    shell.proc.stdout.never.set()
+
+
+def test_cli_rejects_a_nul_in_the_brief_path_with_exit_two():
+    arg = json.dumps([{"repo": "qoc", "task": "1", "brief": "a\0b"}])
+    assert cli.main(["run", arg]) == cli.EXIT_USAGE

@@ -12,8 +12,12 @@ here builds a container. Non-negotiable points, each with its reason:
   stack.
 * ``--workspace-folder`` decides whether the container holds the code or an
   empty directory. Docker answers a missing bind source by creating an empty
-  root-owned directory, so the mounts are asserted after the container is up.
-  The dispatcher asserts the mount; it never creates it.
+  root-owned directory, so the workspace is checked before ``up``
+  (:func:`require_workspace`: it must be a git checkout) and the mounts are
+  asserted after (:func:`assert_mounts`, paths only). The two together are
+  needed: Docker reports the source path unchanged whether the directory holds
+  the repo, is empty, or was just created for it. The dispatcher never creates
+  the mount or the workspace.
 * ``--append-system-prompt-file`` is required here. It was retired for the global
   ``claude`` wrapper (#740) because a flag reaches only the session the wrapper
   starts, never a forked subagent. The dispatcher is neither wrapper.
@@ -288,6 +292,22 @@ def _bind_sources(mounts: list[dict]) -> dict[str, str]:
     }
 
 
+def require_workspace(settings: Settings, repo: str) -> None:
+    """Refuse to start unless ``<repos>/<repo>`` is a git checkout.
+
+    A missing or empty directory would pass :func:`assert_mounts` (the bind
+    source path is identical) and the session would run in an empty tree and be
+    billed. ``.git`` may be a directory or a file (a worktree), so only its
+    existence is required.
+    """
+    workspace = settings.workspace(repo)
+    if not (workspace / ".git").exists():
+        raise MountInvalidError(
+            f"{workspace} is missing, empty or not a git checkout (no .git); "
+            "docker would bind an empty directory and the session would run in it"
+        )
+
+
 def assert_mounts(
     shell: Shell, settings: Settings, repo: str, container_id: str, env: dict[str, str]
 ) -> None:
@@ -297,7 +317,9 @@ def assert_mounts(
     and where ``reap`` assumes it) must have the real ``--workspace-folder`` as
     its source, by exact equality so a parent-directory bind is rejected too.
     The ``/artifacts`` bind's source must be the bundle root. Anything else, or
-    no bind at all, is the silent empty-directory case. Asserted, never created.
+    no bind at all, is wrong. This checks paths only and cannot see whether the
+    source holds the repo; :func:`require_workspace` covers that before ``up``.
+    Asserted, never created.
     """
     result = shell.run(
         ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],

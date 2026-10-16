@@ -129,6 +129,7 @@ class JobRun:
         )
         ensure_bundle_dir(job.job_id)
         env = self._env()
+        lifecycle.require_workspace(self.settings, job.repo)
         container_id = lifecycle.up(engine.shell, self.settings, job.repo, env)
         self.container_id = container_id
         lifecycle.assert_mounts(
@@ -152,7 +153,14 @@ class JobRun:
             self.finish()
 
     def _signal_tree(self, sig: int) -> None:
-        """Signal the host-side process group, not just the ``devcontainer`` CLI."""
+        """Signal the host-side process group, not just the ``devcontainer`` CLI.
+
+        Known limit: this skips once the host process has exited (``poll()`` is
+        not None). A grandchild that outlives it and holds the pipe is then never
+        killed from the host; the reader and drain threads (both daemon) live
+        until it exits. Only the container-side pkill on the deadline path can
+        reach an in-container process.
+        """
         proc = self.proc
         if proc is not None and proc.poll() is None:
             self.engine.shell.killpg(proc, sig)
@@ -167,6 +175,11 @@ class JobRun:
         container. It must not depend on the output stream ending: a process
         that still holds the pipe would keep EOF from ever arriving.
         """
+        if self.proc is None or self.proc.poll() is not None:
+            # The host process already exited by itself (we may be in the reader
+            # grace period): this is not a deadline kill, so record nothing.
+            self._deadline_done.set()
+            return
         self.deadline_hit = True
         try:
             self._signal_tree(signal.SIGKILL)
@@ -181,12 +194,20 @@ class JobRun:
         argv = lifecycle.render_exec(
             self.settings, job.repo, job.task_id, job.job_id, job.brief
         )
+        if self.engine._stop.is_set():  # a stop arrived during admission
+            self._fail(
+                DeadReason.KILLED_BY_SIGNAL,
+                "a stop was requested during admission; the session never started",
+            )
+            return
         try:
             self.proc = self.engine.shell.spawn(argv, env=self._env())
         except OSError as exc:
             self.ended_us = self.engine.clock()
             self.ending = Ending(127, stderr_tail=str(exc))
             return
+        if self.engine._stop.is_set():  # a stop arrived while spawning
+            self.terminate()
         tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
         drain = threading.Thread(
             target=_drain, args=(self.proc.stderr, tail), daemon=True
@@ -195,7 +216,9 @@ class JobRun:
         timer = threading.Timer(self.settings.deadline_s, self._on_deadline)
         timer.daemon = True
         timer.start()
-        reader = threading.Thread(target=self._read_stream, daemon=True)
+        reader = threading.Thread(
+            target=self._read_stream, daemon=True, name=f"reader-{job.job_id}"
+        )
         reader.start()
         try:
             returncode = self.proc.wait()
@@ -353,7 +376,14 @@ class Engine:
         }
 
     def request_stop(self) -> None:
-        """Admit nothing more and terminate running sessions (they dead-letter)."""
+        """Admit nothing more and terminate running sessions (they dead-letter).
+
+        Known limit: this and SIGTERM signal only the host process group. The
+        container-side ``claude`` keeps running until the idle check stops the
+        container, while the job is already labelled KILLED_BY_SIGNAL. A job
+        admitted but not yet started is stopped by the check at the top of
+        ``JobRun._session``.
+        """
         self._stop.set()
         with self._lock:
             for run in list(self._active):

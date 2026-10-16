@@ -81,6 +81,8 @@ _TYPES = {
 def _is_type(value, kind: str | None) -> bool:
     """True when ``value`` has JSON type ``kind`` (no type means anything goes)."""
     if kind == "integer":
+        if isinstance(value, float):  # JSON Schema: 3.0 is an integer
+            return value.is_integer()
         return isinstance(value, int) and not isinstance(value, bool)
     return kind not in _TYPES or isinstance(value, _TYPES[kind])
 
@@ -123,7 +125,13 @@ def usable_structured(envelope: dict | None) -> dict | None:
     value = envelope.get("structured_output")
     if not isinstance(value, dict):
         return None
-    if not conforms(value, RUN_SCHEMA) or not value["summary"].strip():
+    if not conforms(value, RUN_SCHEMA):
+        return None
+    # Deliberate departure from the schema: a blank summary is rejected. The
+    # summary is the description a run is billed with, and a run with none is a
+    # dead letter by design (section 10), even though rejecting a legitimate
+    # result is the costlier direction of error. Chosen, not an oversight.
+    if not value["summary"].strip():
         return None
     return value
 

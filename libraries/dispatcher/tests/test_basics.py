@@ -369,3 +369,40 @@ def test_incomplete_structured_values_are_not_usable(mutate):
     mutate(value)
     assert schema.usable_structured({"structured_output": value}) is None
     assert schema.usable_structured({"structured_output": GOOD}) is not None
+
+
+def test_prompt_size_boundary_is_inclusive(tmp_path):
+    def arg(size):
+        return json.dumps(
+            [
+                {
+                    "repo": "a",
+                    "task": "1",
+                    "brief": _brief(tmp_path, f"b{size}", "x" * size),
+                }
+            ]
+        )
+
+    exactly = queue.MAX_PROMPT_BYTES - len("1\n\n")
+    queue.parse_submission(arg(exactly))  # the limit itself is allowed
+    with pytest.raises(queue.SubmissionError, match="too large"):
+        queue.parse_submission(arg(exactly + 1))
+
+
+def test_a_nul_in_the_brief_path_is_a_submission_error():
+    arg = json.dumps([{"repo": "a", "task": "1", "brief": "a\0b"}])
+    with pytest.raises(queue.SubmissionError, match="not readable"):
+        queue.parse_submission(arg)
+
+
+def test_outcome_enum_is_checked():
+    value = {**GOOD, "outcome": "great"}
+    assert schema.usable_structured({"structured_output": value}) is None
+
+
+def test_an_integral_float_is_an_integer_but_a_bool_is_not():
+    ok = {**GOOD, "tests": {"ran": 3.0, "passed": True, "failures": []}}
+    assert schema.usable_structured({"structured_output": ok}) is not None
+    for bad in (3.5, True, "3"):
+        value = {**GOOD, "tests": {"ran": bad, "passed": True, "failures": []}}
+        assert schema.usable_structured({"structured_output": value}) is None

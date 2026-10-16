@@ -667,3 +667,50 @@ def test_reconcile_survives_a_failing_run_write(settings, monkeypatch):
     )
     queue.reconcile(store2, runs2, FakeShell(), settings)
     assert "could not be recorded" in store2.get(job2.job_id).detail
+
+
+def test_artifacts_bind_is_asserted_on_its_own(settings):
+    shell = FakeShell()
+    mounts = json.loads(_mounts(settings))[:1]  # workspace right, no /artifacts
+    shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
+    with pytest.raises(lifecycle.MountInvalidError, match="/artifacts"):
+        lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+
+
+def test_every_subprocess_has_a_timeout(settings):
+    shell = FakeShell()
+    lifecycle.kill_in_container(shell, "cid", "1", {})
+    shell.reply(["docker", "compose"], Completed(1))
+    lifecycle.stop_project(shell, "qoc", {})
+    reap(shell, settings.workspace("qoc"), "/mnt/extra-addons/.w", "b")
+    seen = {tuple(a[:2]): t for a, t in shell.timeouts}
+    assert seen[("docker", "exec")] == 30
+    assert seen[("docker", "stop")] == 120 and seen[("docker", "compose")] == 120
+
+
+def test_git_calls_have_a_timeout(repo):
+    shell = FakeShell()
+    shell.reply(["git"], Completed(0, ""))
+    shell.reply(
+        ["git", "-C", str(repo), "ls-remote"], Completed(0, "abc\trefs/heads/f\n")
+    )
+    reap(shell, repo, "/mnt/extra-addons/.worktrees/t1", "feat")
+    gits = [t for a, t in shell.timeouts if a[0] == "git"]
+    assert gits and set(gits) == {120}
+
+
+def test_reconcile_inspect_has_a_timeout(settings):
+    store, runs, _ = _orphan(session="")
+    shell = FakeShell()
+    queue.reconcile(store, runs, shell, settings)
+    assert [t for a, t in shell.timeouts if a[:2] == ["docker", "inspect"]] == [60]
+
+
+def test_require_workspace(settings):
+    with pytest.raises(lifecycle.MountInvalidError, match="not a git checkout"):
+        lifecycle.require_workspace(settings, "qoc")
+    (settings.workspace("qoc")).mkdir(parents=True)
+    with pytest.raises(lifecycle.MountInvalidError):
+        lifecycle.require_workspace(settings, "qoc")
+    (settings.workspace("qoc") / ".git").write_text("gitdir: x")  # a worktree file
+    lifecycle.require_workspace(settings, "qoc")
