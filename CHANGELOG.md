@@ -1,5 +1,20 @@
 # Changelog
 
+## [8.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.0.0...personal-features-v8.1.0) (2026-10-16)
+
+
+### Features
+
+* **dispatcher:** put the bundle root on the Feature's odoo-dev mount and drop the --mount that a running container ignores ([#1111](https://github.com/Crpaxton4/devcontainer-features/issues/1111)) ([ab6266a](https://github.com/Crpaxton4/devcontainer-features/commit/ab6266a64c1c8c81aded3a06547390a0ad012529))
+* **odoo-sdk:** add a source selector (events, runs, both) to the sessions query so the agreement check can be run ([#1102](https://github.com/Crpaxton4/devcontainer-features/issues/1102)) ([6b68777](https://github.com/Crpaxton4/devcontainer-features/commit/6b687779f52b733ba27d7995b986180ba67cef74)), closes [#1086](https://github.com/Crpaxton4/devcontainer-features/issues/1086)
+* **personal-features:** refresh the odoo-dev plugin on postCreate and warn at session start when the installed version drifts ([#1109](https://github.com/Crpaxton4/devcontainer-features/issues/1109)) ([24ebaa0](https://github.com/Crpaxton4/devcontainer-features/commit/24ebaa0935258170ae04d460663842bac146fc86)), closes [#1052](https://github.com/Crpaxton4/devcontainer-features/issues/1052)
+
+
+### Bug Fixes
+
+* **dispatcher:** read the agent's task.json at tasks/&lt;task_id&gt;/task.json where state-dir.sh writes it ([#1099](https://github.com/Crpaxton4/devcontainer-features/issues/1099)) ([a968ff4](https://github.com/Crpaxton4/devcontainer-features/commit/a968ff4db7b5084c8bf30df42d2e271646582e69))
+* **odoo-sdk:** give RunStore a read-only constructor so read_runs stops building it with __new__ ([#1095](https://github.com/Crpaxton4/devcontainer-features/issues/1095)) ([0df9fef](https://github.com/Crpaxton4/devcontainer-features/commit/0df9fef94f2492b0846877c237d68e0db81535f4))
+
 ## [8.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v7.0.1...personal-features-v8.0.0) (2026-10-16)
 
 
