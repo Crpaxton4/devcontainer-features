@@ -286,6 +286,44 @@ def test_terminate_signals_the_process_group(world):
     assert shell.groups == [signal.SIGTERM] and shell.proc.terminated
 
 
+def test_a_stop_kill_that_did_not_run_is_noted_in_the_detail(world):
+    engine, shell, _ = world
+    shell.reply(["docker", "exec", "c", "pkill"], Completed(1, "", "no such container"))
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    (job,) = _submit(engine, ("qoc", "71"))
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    detail = engine.jobs.get(job.job_id).detail
+    assert "[the container-side kill did not run (exit 1: no such container)" in detail
+
+
+def test_a_stop_on_a_finished_host_process_kills_nothing_in_the_container(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "72"))
+    run = JobRun(engine, job)
+    run.proc = shell.proc = FakeProc()  # already exited
+    run.terminate()
+    run._kill_after_stop()
+    assert not run.stop_requested and not shell.commands("docker", "exec")
+
+
+def test_a_stop_after_the_deadline_kill_keeps_the_first_note(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "73"))
+    run = JobRun(engine, job)
+    run.container_id = "c"
+    run.stop_requested = True
+    run.container_kill_note = "first"
+    run._kill_after_stop()
+    assert run.container_kill_note == "first" and not shell.commands("docker", "exec")
+
+
 def test_request_stop_does_not_deadlock_when_the_lock_is_held(world):
     engine, _, _ = world
     with engine._lock:  # a signal handler arriving inside _start
@@ -448,7 +486,10 @@ def test_request_stop_terminates_running_sessions(world):
     engine.request_stop()
     t.join(10)
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert len(shell.commands("docker", "exec", "c", "pkill")) == 1
+    assert dead.detail.count("[a kill was sent to the container-side claude") == 1
 
 
 def test_idle_check_failure_never_fails_a_job(world):
@@ -646,7 +687,10 @@ def test_a_stop_while_spawning_terminates_the_new_session(world):
     (job,) = _submit(engine, ("qoc", "121"))
     engine.run()
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert shell.commands("docker", "exec", "c", "pkill")
+    assert "container-side" in dead.detail
 
 
 def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatch):
