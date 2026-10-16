@@ -11,6 +11,7 @@ skills:
   - odoo-task-env
   - odoo-devcontainer
   - odoo-test-run
+  - odoo-session-db
 model: opus
 effort: high
 ---
@@ -42,8 +43,14 @@ are the lines of your prompt. Every section is optional.
 4. Work `## Plan` step by step: implement the step, run its verify check, go to the
    next. Tests ship with the code. No `## Plan`: one step per `## Acceptance criteria`
    entry. No plan at all: steps from the task description, recorded as `claims`.
-5. Self-test per module until green, 3 runs at most: `run-tests.sh <repo> <id> <module>
-   --repo-path <worktree> --target-series <odoo_version>`, never with `--put`. A series
+5. Self-test per module until green, 3 runs at most: `session-db.sh run <repo> <id>
+   <module> --session-id <session id> --repo-path <worktree> --target-series
+   <odoo_version>`, never with `--put`. `session-db.sh` is the script of the
+   `odoo-session-db` skill. It runs `run-tests.sh` on a database that no other session
+   can name. The session id is the job id: read the environment variable
+   `ODOO_DEV_STATE_DIR` with `printenv`. When its path contains `/dispatch/artifacts/`,
+   the job id is the last part of that path. Otherwise leave out `--session-id`, and
+   `session-db.sh` picks a random suffix. Never pass `--db-suffix`. A series
    that differs from the container's selects its side core (`odooNN-bin`) by itself when
    it exists; `--odoo-bin` and `--odoo-conf` name one by hand. Run it
    first without `--with-tours`; when `tours_declared` is above 0, run it again with

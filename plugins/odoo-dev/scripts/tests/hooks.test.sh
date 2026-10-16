@@ -95,6 +95,19 @@ denied "$ALLOWLIST" "tester: an ampersand inside the inline payload" "contains &
   "$TESTER" 'artifact.sh set /tmp/artifacts review --json {"findings":[{"file":"a.py","line":1,"severity":"high","what":"2 failures & 1 error"}]}'
 allowed "$ALLOWLIST" "tester: browser-ensure.sh" "$TESTER" "browser-ensure.sh"
 allowed "$ALLOWLIST" "tester: module-classify.sh" "$TESTER" "module-classify.sh /tmp/wt"
+# The tester runs the suite through session-db.sh (#1078), so two sessions on one
+# task cannot drop each other's database. Only that exact name passes.
+allowed "$ALLOWLIST" "tester: session-db.sh run" "$TESTER" \
+  "$ROOT/skills/odoo-session-db/scripts/session-db.sh run repo 1 mod --session-id abc --put /x"
+denied "$ALLOWLIST" "tester: a script named like session-db.sh" "not on the odoo-dev-tester allowlist" \
+  "$TESTER" "$ROOT/skills/odoo-session-db/scripts/session-db.sh.bak run repo 1 mod"
+# The allowlist admits the script, so the tester must carry the skill that tells it
+# where the script is. Without the skill the tester runs run-tests.sh by name.
+if grep -qE '^  - odoo-session-db$' "$ROOT/agents/odoo-dev-tester.md"; then
+  ok "tester: agents/odoo-dev-tester.md lists the odoo-session-db skill"
+else
+  bad "tester: agents/odoo-dev-tester.md does not list the odoo-session-db skill"
+fi
 
 # 2>/dev/null must not be what decides anything. run-tests.sh keeps it and passes;
 # existing-work.sh keeps it and is refused for the one true reason — it is not a
