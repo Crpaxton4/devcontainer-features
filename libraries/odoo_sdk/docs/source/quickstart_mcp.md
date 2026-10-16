@@ -26,6 +26,11 @@ Handled server-side; doing it by hand double-counts:
 - **Sessions are derived, not ingested.** No `ingest_sessions` step — they are
   computed from the `events` timeseries in SQL at query time, so
   `query_sessions` and `odoo-tui` always reflect current events.
+- **The sessions query can read one source.** By default `query_sessions` merges
+  the event store and the run record. The optional `source` argument (`events`,
+  `runs` or `both`) reads one alone, so the two can be compared. From a shell:
+  `odoo-sdk cmd query_sessions --args '{"source": "runs"}'`. An unknown value
+  is an error (exit 1).
 - **Claude Code lifecycle hooks log themselves.** In a provisioned devcontainer
   they are forwarded to `odoo-sdk log-event` as `claude:<Hook>` events.
   `PreToolUse`/`PostToolUse` for this server's own tools (`mcp__odoo-mcp__*`,

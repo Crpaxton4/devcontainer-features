@@ -19,6 +19,7 @@ from .models import (
     AGENTLESS_REPO_SENTINEL,
     EventRecord,
     InvalidStateTransitionError,
+    SessionSource,
     SessionWindow,
     TaskAlreadyRunningError,
     TaskNotRunningError,
@@ -817,6 +818,17 @@ def _normalize_utc_isoformat(ts: datetime) -> str:
     naive sentinels still sort past every real row).
     """
     return as_utc(ts).isoformat()
+
+
+def _coerce_session_source(source: "SessionSource | str") -> SessionSource:
+    """Return ``source`` as a :class:`SessionSource`, or raise :class:`ValueError`."""
+    try:
+        return SessionSource(source)
+    except ValueError:
+        allowed = ", ".join(s.value for s in SessionSource)
+        raise ValueError(
+            f"unknown session source {source!r}; expected one of: {allowed}"
+        ) from None
 
 
 def _derivation_margin(gap_secs: int) -> timedelta:
@@ -1719,6 +1731,7 @@ class LocalStateClient:
         gap_secs: int,
         task_id: Optional[str] = None,
         repo: Optional[str] = None,
+        source: SessionSource | str = SessionSource.BOTH,
     ) -> list[SessionWindow]:
         """Derive whole sessions overlapping ``[start, end]`` directly from events.
 
@@ -1740,7 +1753,14 @@ class LocalStateClient:
         ``owner/repo`` when any event carried one, else :data:`AGENTLESS_REPO`
         (pass ``""`` to select purely repo-less sessions). Results are ordered
         by start time.
+
+        ``source`` (#1086) picks the record read: ``events`` is the event store
+        alone and never opens the run record, ``runs`` is the run record alone,
+        and ``both`` (the default) merges them. A client with no run record
+        configured reads no runs whatever ``source`` says. Any other value
+        raises :class:`ValueError`.
         """
+        source = _coerce_session_source(source)
         margin = _derivation_margin(gap_secs)
         params: dict[str, object] = {
             "agentless": AGENTLESS_REPO,
@@ -1750,8 +1770,12 @@ class LocalStateClient:
             "wstart": _normalize_utc_isoformat(_widen(start, -margin)),
             "wend": _normalize_utc_isoformat(_widen(end, margin)),
         }
-        runs = self._runs_overlapping(
-            _widen(start, -margin), _widen(end, margin), task_id
+        runs = (
+            []
+            if source is SessionSource.EVENTS
+            else self._runs_overlapping(
+                _widen(start, -margin), _widen(end, margin), task_id
+            )
         )
         extra = ""
         if task_id is not None:
@@ -1764,9 +1788,11 @@ class LocalStateClient:
             extra += " AND COALESCE(MAX(NULLIF(repo, '')), :agentless) = :repo"
             params["repo"] = repo
         sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
-        with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        windows = [_parse_derived_window(r) for r in rows]
+        windows: list[SessionWindow] = []
+        if source is not SessionSource.RUNS:
+            with self._connect() as conn:
+                rows = conn.execute(sql, params).fetchall()
+            windows = [_parse_derived_window(r) for r in rows]
         if not runs:
             return windows
         # The run record is a second source (#1065). Repo is display metadata a
