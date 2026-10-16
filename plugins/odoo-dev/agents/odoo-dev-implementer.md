@@ -9,6 +9,7 @@ description: >
 skills:
   - odoo-repo-map
   - odoo-devcontainer
+  - odoo-session-db
 model: opus
 effort: high
 ---
