@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from odoo_sdk.state.artifacts import Harvest, TASK_JSON, collect_artifacts
+from odoo_sdk.state.artifacts import Harvest, collect_artifacts, task_record_path
 from odoo_sdk.state.dispatch_state import bundle_dir
 from odoo_sdk.state.runs_store import RunOutcome, RunStore, map_reported_outcome
 
@@ -70,10 +70,11 @@ class StreamParser:
         return None
 
 
-def read_task_record(job_id: str, root: Path | None = None) -> dict:
+def read_task_record(job_id: str, task_id: str, root: Path | None = None) -> dict:
     """The agent's own ``task.json`` from the bundle, or ``{}`` when unusable."""
+    path = task_record_path(bundle_dir(job_id, root), task_id)
     try:
-        data = json.loads((bundle_dir(job_id, root) / TASK_JSON).read_text("utf-8"))
+        data = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -171,6 +172,7 @@ def record_then_collect(
     try:
         write.harvest = collect_artifacts(
             job.job_id,
+            job.task_id,
             session_id=parser.session_id,
             transcript=transcript,
             envelope=parser.envelope_text,

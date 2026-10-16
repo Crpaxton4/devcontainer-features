@@ -288,7 +288,7 @@ class JobRun:
         self._decide()
         started = resolve_now_us(job.started_us)
         ended = max(resolve_now_us(self.ended_us), started)
-        record = read_task_record(job.job_id)
+        record = read_task_record(job.job_id, job.task_id)
         transcript = lifecycle.transcript_path(self.settings, self.parser.session_id)
         write = record_then_collect(
             engine.runs,

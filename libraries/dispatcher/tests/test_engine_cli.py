@@ -16,7 +16,7 @@ from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, FakeShell, stream
+from support import GOOD, FakeProc, FakeShell, stream, write_task_record
 
 
 @pytest.fixture
@@ -422,12 +422,12 @@ def test_worktree_is_left_alone_when_reap_cannot_prove_a_push(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     (job,) = _submit(engine, ("qoc", "90"))
-    d = bundle_dir(job.job_id)
-    d.mkdir(parents=True)
-    (d / "task.json").write_text(
+    write_task_record(
+        job.job_id,
+        job.task_id,
         json.dumps(
             {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
-        )
+        ),
     )
     engine.run()
     assert "does not exist" in engine.notes[job.job_id]["reap"]
