@@ -52,6 +52,10 @@ expect "worktree status created" "$(field "$out" status)" "created"
 expect "worktree path" "$(field "$out" worktree)" "$repo/.worktrees/task-4242"
 [ -d "$repo/.worktrees/task-4242" ]; expect_exit "worktree exists on disk" 0 $?
 grep -qxF '.worktrees/' "$repo/.git/info/exclude"; expect_exit "worktrees excluded" 0 $?
+# A new task branch must have no upstream: git's default would track origin/UAT,
+# and a bare "git push" would then target the base branch.
+git -C "$repo/.worktrees/task-4242" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1
+expect_exit "new task branch has no upstream" 128 $?
 
 # ---------- rerun reuses, and reads the branch off the worktree ---------------
 # Renaming the branch simulates a renamed Odoo task: the slug argument is now
@@ -66,6 +70,17 @@ git -C "$repo" branch 5150#human-style-branch UAT
 out="$(bash "$SCRIPTS/worktree-ensure.sh" anyrepo 5150 auto-slug UAT '5150#human-style-branch' --repo-path "$repo" 2>&1 | tail -1)"
 expect "resume adopts the given branch" "$(field "$out" branch)" '5150#human-style-branch'
 expect "resume creates the worktree" "$(field "$out" status)" "created"
+
+# A resume branch that exists only on origin is checked out tracking its own
+# origin ref (not the base), so the upstream stays correct.
+git -C "$repo" branch 5151-remote-only UAT
+git -C "$repo" push --quiet origin 5151-remote-only
+git -C "$repo" branch -D 5151-remote-only >/dev/null
+out="$(bash "$SCRIPTS/worktree-ensure.sh" anyrepo 5151 auto-slug UAT 5151-remote-only --repo-path "$repo" 2>&1 | tail -1)"
+expect "remote-only resume creates the worktree" "$(field "$out" status)" "created"
+expect "remote-only resume tracks its own origin ref" \
+  "$(git -C "$repo/.worktrees/task-5151" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>&1)" \
+  "origin/5151-remote-only"
 
 bash "$SCRIPTS/worktree-ensure.sh" anyrepo 6000 s UAT 'no-such-branch' --repo-path "$repo" >/dev/null 2>&1
 expect_exit "missing resume branch is an error" 2 $?

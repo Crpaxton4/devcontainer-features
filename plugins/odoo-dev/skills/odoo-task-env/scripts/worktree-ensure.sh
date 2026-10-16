@@ -6,7 +6,9 @@
 # Effects (all idempotent):
 #   - appends ".worktrees/" to the repo's .git/info/exclude (grep-before-append)
 #   - creates <repo>/$WORKTREE_SUBDIR/task-<id> on branch "<id>-<slug>" from
-#     origin/<base_branch>, or reuses the existing worktree/branch
+#     origin/<base_branch> with NO upstream (--no-track), or reuses the existing
+#     worktree/branch. pr-open.sh sets the upstream with "push -u" on the first
+#     push, so a bare "git push" before that fails instead of pushing to the base.
 #
 # Resume: given a 5th argument, that EXACT ref is adopted instead of computing
 # "<id>-<slug>" — a human branch (<id>#<slug>) is continued rather than restarted
@@ -116,7 +118,7 @@ else
   if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$repo_dir" worktree add "$wt" "$branch"
   else
-    git -C "$repo_dir" worktree add "$wt" -b "$branch" "origin/$default_branch"
+    git -C "$repo_dir" worktree add --no-track "$wt" -b "$branch" "origin/$default_branch"
   fi
   status="created"
 fi
