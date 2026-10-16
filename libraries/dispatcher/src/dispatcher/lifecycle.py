@@ -157,9 +157,9 @@ def render_up(settings: Settings, repo: str) -> list[str]:
         str(settings.workspace(repo)),
         "--mount",
         f"type=bind,source={artifacts_root()},target={ARTIFACTS_TARGET}",
+        "--additional-features",
+        settings.additional_features,
     ]
-    if settings.additional_features:
-        argv += ["--additional-features", settings.additional_features]
     return argv
 
 

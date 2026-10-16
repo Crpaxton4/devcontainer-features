@@ -31,7 +31,10 @@ Variables (all optional unless marked required):
     The host ``.claude`` directory (default ``$CLAUDE_CONFIG_DIR``, then
     ``~/.claude``), where session transcripts land.
 ``DISPATCH_ADDITIONAL_FEATURES``
-    Optional JSON passed to ``devcontainer up --additional-features``.
+    JSON passed to ``devcontainer up --additional-features`` (default the
+    personal-features Feature, never empty). The Feature provides ``claude``,
+    ``/usr/local/share/claude-home`` and ``/usr/local/share/odoo-dev`` in a
+    container that the dispatcher creates cold.
 """
 
 import os
@@ -41,6 +44,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_AGENT = "odoo-dev:odoo-dev-implementer"
+DEFAULT_ADDITIONAL_FEATURES = (
+    '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+)
 INVARIANTS_RELATIVE = Path("prompts") / "unattended-invariants.md"
 WORKSPACE_TARGET = "/mnt/extra-addons"
 ARTIFACTS_TARGET = "/artifacts"
@@ -68,7 +74,7 @@ class Settings:
     poll_s: float
     deadline_s: float
     claude_home: Path
-    additional_features: str = ""
+    additional_features: str = DEFAULT_ADDITIONAL_FEATURES
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
@@ -128,6 +134,7 @@ class Settings:
             or str(plugin_root / INVARIANTS_RELATIVE),
             agent=env.get("DISPATCH_AGENT") or DEFAULT_AGENT,
             claude_home=Path(claude_home),
-            additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES", ""),
+            additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")
+            or DEFAULT_ADDITIONAL_FEATURES,
             **numbers,
         )
