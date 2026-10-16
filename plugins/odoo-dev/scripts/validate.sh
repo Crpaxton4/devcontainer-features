@@ -312,7 +312,7 @@ run_suite "task-tracking.test.sh"  "$SKILLS/odoo-task-env/scripts/tests/task-tra
 run_suite "writeback.test.sh"      "$HERE/tests/writeback.test.sh"
 run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-tests.test.sh"
 run_suite "session-db.test.sh"     "$SKILLS/odoo-session-db/scripts/tests/session-db.test.sh"
-run_suite "populate-db.test.sh"   "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
+run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/populate-db.test.sh"
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
 run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-all.test.sh"
