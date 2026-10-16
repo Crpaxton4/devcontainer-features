@@ -195,7 +195,11 @@ class JobRun:
         if not self.stop_requested or self.deadline_hit or self.container_kill_note:
             return
         self.container_kill_note = lifecycle.kill_in_container(
-            self.engine.shell, self.container_id, self.job.task_id, self._env()
+            self.engine.shell,
+            self.container_id,
+            self.job.task_id,
+            self._env(),
+            self.settings.entry,
         )
 
     def _on_deadline(self) -> None:
@@ -214,7 +218,11 @@ class JobRun:
         try:
             self._signal_tree(signal.SIGKILL)
             self.container_kill_note = lifecycle.kill_in_container(
-                self.engine.shell, self.container_id, self.job.task_id, self._env()
+                self.engine.shell,
+                self.container_id,
+                self.job.task_id,
+                self._env(),
+                self.settings.entry,
             )
         finally:
             self._deadline_done.set()

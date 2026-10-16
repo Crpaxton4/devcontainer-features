@@ -12,6 +12,7 @@ from odoo_sdk.state.runs_store import RunOutcome, RunStore
 from dispatcher import collect, lifecycle, queue
 from dispatcher.lifecycle import Completed, Shell
 from dispatcher.reap import host_worktree, reap
+from dispatcher.settings import DEFAULT_ENTRY
 from support import GOOD, FakeShell, stream, write_task_record
 
 
@@ -32,11 +33,14 @@ def test_exec_command_line_is_section_eight_exactly(settings):
         "ODOO_UNATTENDED=1",  # the contract with plugins/odoo-dev/hooks/unattended-guard.sh
         "--",
     ]
-    assert argv[11:14] == ["claude", "-p", "1234\n\nthe brief"]
+    assert argv[11:14] == [
+        "claude",
+        "-p",
+        "/odoo-dev:implement 1234\n\nthe brief",  # the entry, then the task id
+    ]
     rest = argv[14:]
-    assert rest[:4] == [
-        "--agent",
-        settings.agent,
+    assert "--agent" not in argv  # the forked command names its own agent
+    assert rest[:2] == [
         "--append-system-prompt",
         "Standing line.\nNever ask.\n",  # the file's text, not its path
     ]
@@ -599,6 +603,10 @@ def test_kill_in_container_notes_what_is_known():
     note = lifecycle.kill_in_container(shell, "cid", "12.3", {})
     cmd = shell.commands("docker", "exec", "cid", "pkill")[0]
     assert cmd[-1] == lifecycle.kill_pattern("12.3") and "not verified" in note
+    lifecycle.kill_in_container(shell, "cid", "12.3", {}, "/x:run")  # a set entry
+    assert shell.commands("docker", "exec", "cid", "pkill")[-1][-1] == (
+        lifecycle.kill_pattern("12.3", "/x:run")
+    )
     shell.reply(["docker", "exec"], Completed(1, "", "no process"))
     assert "may still be alive" in lifecycle.kill_in_container(shell, "cid", "1", {})
     assert "may still be alive" in lifecycle.kill_in_container(shell, "", "1", {})
@@ -607,19 +615,37 @@ def test_kill_in_container_notes_what_is_known():
 @pytest.mark.parametrize(
     "cmdline,matches",
     [
-        ("claude -p 123\n\nbrief", True),
-        ("/usr/local/bin/claude -p 123 more", True),
-        ("node /usr/lib/node_modules/.bin/claude -p 123\n\nbrief", True),
-        ("claude -p 1234\n\nbrief", False),
-        ("claude -p 12\n\nbrief", False),
-        ("claude -p 99\n\nthe brief says claude -p 123 and more", False),
-        ("sh -c claude -p 123 x", False),
+        ("claude -p /odoo-dev:implement 123\n\nbrief", True),
+        ("/usr/local/bin/claude -p /odoo-dev:implement 123 more", True),
+        (
+            "node /usr/lib/node_modules/.bin/claude -p /odoo-dev:implement 123\n\nb",
+            True,
+        ),
+        (
+            "/x/@anthropic-ai/claude-code/bin/claude.exe -p /odoo-dev:implement 123 b",
+            True,
+        ),
+        ("claude.exe -p /odoo-dev:implement 123\n\nbrief", True),
+        ("node /x/@anthropic-ai/claude-code/cli.js -p /odoo-dev:implement 123 b", True),
+        ("cli.js -p /odoo-dev:implement 123\n\nbrief", True),
+        ("claude -p /odoo-dev:implement 1234\n\nbrief", False),
+        ("claude -p /odoo-dev:implement 12\n\nbrief", False),
+        (
+            "claude -p /odoo-dev:implement 99\n\nsays claude -p /odoo-dev:implement 123 x",
+            False,
+        ),
+        ("sh -c claude -p /odoo-dev:implement 123 x", False),
+        ("claude -p /odoo-dev:test 123\n\nbrief", False),  # another entry
+        ("claude -p 123\n\nbrief --agent odoo-dev:odoo-dev-implementer", False),
+        ("claude --agent odoo-dev:odoo-dev-implementer -p 123\n\nbrief", False),
+        ("claude -p /odoo-dev:implementX 123\n\nbrief", False),
+        ("not-claude.exe -p /odoo-dev:implement 123 x", False),
     ],
 )
 def test_kill_pattern_is_anchored(cmdline, matches):
     """Checked with grep -E, the same extended regex dialect pkill uses."""
     found = subprocess.run(
-        ["grep", "-Ezc", "--", lifecycle.kill_pattern("123")],
+        ["grep", "-Ezc", "--", lifecycle.kill_pattern("123", "/odoo-dev:implement")],
         input=cmdline,
         capture_output=True,
         text=True,
@@ -627,8 +653,13 @@ def test_kill_pattern_is_anchored(cmdline, matches):
     assert (found == "1") is matches
 
 
-def test_kill_pattern_cannot_be_widened_by_a_dotted_task():
+def test_kill_pattern_defaults_to_the_default_entry():
+    assert lifecycle.kill_pattern("5") == lifecycle.kill_pattern("5", DEFAULT_ENTRY)
+
+
+def test_kill_pattern_cannot_be_widened_by_a_dotted_task_or_entry():
     assert lifecycle.kill_pattern("1.2").count(r"1\.2") == 1
+    assert lifecycle.kill_pattern("1", "/a.b:c").count(r"/a\.b:c") == 1
 
 
 def test_mount_assertion_checks_the_workspace_destination(settings):
