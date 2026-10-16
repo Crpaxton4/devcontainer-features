@@ -83,8 +83,8 @@ n_skills="$(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l)"
 n_agents="$(find "$AGENTS" -maxdepth 1 -name '*.md' | wc -l)"
 n_cmds="$(find "$COMMANDS" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
 [ "$n_skills" -eq 14 ] && ok "14 skills"   || bad "expected 14 skills, found $n_skills"
-[ "$n_agents" -eq 4 ]  && ok "4 agents"    || bad "expected 4 agents, found $n_agents"
-[ "$n_cmds"   -eq 5 ]  && ok "5 commands"  || bad "expected 5 commands, found $n_cmds"
+[ "$n_agents" -eq 5 ]  && ok "5 agents"    || bad "expected 5 agents, found $n_agents"
+[ "$n_cmds"   -eq 6 ]  && ok "6 commands"  || bad "expected 6 commands, found $n_cmds"
 
 # A plugin command and a plugin skill share one namespace: both register as
 # `odoo-dev:<stem>`, and the loader keeps ONE entry per name. So commands/pr.md
@@ -173,9 +173,10 @@ done < <(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 [ "$over" -eq 0 ] && ok "every body <= 500 lines"
 
 # --- 6. commands <-> agents completeness ----------------------------------------
-# The five commands are the only entry points. Each agent is dispatched by exactly
+# The six commands are the only entry points. Each agent is dispatched by exactly
 # one forked command; every command with an `agent:` key names an agent file and
-# forks; every command is user-invoked only; exactly one command (plan) is inline.
+# forks; exactly one command (plan) is inline. A command is model-invocable, so an
+# agent can chain the stages (#1060).
 gate "commands <-> agents completeness"
 node -e '
 const fs = require("fs"), path = require("path");
@@ -187,7 +188,7 @@ let bad = 0, forked = 0, inline = [];
 const dispatched = new Map();
 for (const c of cmds) {
   const m = fm(path.join(cmdsDir, c));
-  if (!/^disable-model-invocation:\s*true\s*$/m.test(m)) { console.log(`  FAIL ${c}: needs disable-model-invocation: true`); bad++; }
+  if (/^disable-model-invocation:\s*true\s*$/m.test(m)) { console.log(`  FAIL ${c}: carries disable-model-invocation: true — the commands must stay agent-invocable so an agent can chain plan, task, test and pr (#1060)`); bad++; }
   const a = (m.match(/^agent:\s*(.+)$/m) || [])[1]?.trim();
   if (!a) { inline.push(c); continue; }
   forked++;
@@ -302,6 +303,7 @@ run_suite() {
 run_suite "state-dir.test.sh"      "$HERE/tests/state-dir.test.sh"
 run_suite "setup.test.sh"          "$HERE/tests/setup.test.sh"
 run_suite "hooks.test.sh"          "$HERE/tests/hooks.test.sh"
+run_suite "unattended-guard.test.sh" "$HERE/tests/unattended-guard.test.sh"
 run_suite "module-classify.test.sh" "$HERE/tests/module-classify.test.sh"
 run_suite "repo-map.test.sh"       "$SKILLS/odoo-repo-map/scripts/tests/repo-map.test.sh"
 run_suite "existing-work.test.sh"  "$SKILLS/odoo-task-env/scripts/tests/existing-work.test.sh"
