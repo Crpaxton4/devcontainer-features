@@ -135,6 +135,7 @@ def record_then_collect(
     *,
     parser: StreamParser,
     job,
+    started_us: int,
     ended_us: int,
     failed: bool,
     transcript: Path | None,
@@ -146,6 +147,7 @@ def record_then_collect(
     A job with no session id gets no run row (design section 7) but still gets
     a bundle. If the run write itself fails, collection still runs and the
     error is returned for the caller to surface once everything else is done.
+    ``started_us`` is the session spawn, or the admit time when none happened.
     """
     write = RunWrite(outcome=stored_outcome(parser.envelope, failed))
     if parser.session_id:
@@ -154,10 +156,10 @@ def record_then_collect(
                 session_id=parser.session_id,
                 job_id=job.job_id,
                 task_id=job.task_id,
-                # The job's start is mark_running, so this interval includes any
-                # cold container start this task caused: that time was spent on it.
-                started_us=job.started_us,
-                ended_us=max(ended_us, job.started_us),
+                # The run row's clock runs from the session spawn; the job row keeps the
+                # admit time, so a cold container start shows there and is not billed.
+                started_us=started_us,
+                ended_us=max(ended_us, started_us),
                 outcome=write.outcome,
                 tool_version=parser.tool_version or UNKNOWN_TOOL_VERSION,
                 repo=job.repo,

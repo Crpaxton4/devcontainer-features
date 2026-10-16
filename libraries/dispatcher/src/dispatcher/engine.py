@@ -82,6 +82,7 @@ class JobRun:
         self.cause: tuple[DeadReason, str] | None = None
         self.ending: Ending | None = None
         self.ended_us: int | None = None
+        self.spawned_us: int | None = None  # the run row's start; None before a spawn
         self.proc = None
         self.deadline_hit = False
         self.reap_result = ReapResult(False, "no session ran; nothing reaped")
@@ -212,6 +213,7 @@ class JobRun:
             self.ended_us = self.engine.clock()
             self.ending = Ending(127, stderr_tail=str(exc))
             return
+        self.spawned_us = self.engine.clock()
         if self.engine._stop.is_set():  # a stop arrived while spawning
             self.terminate()
         tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
@@ -286,7 +288,9 @@ class JobRun:
     def _finish_steps(self) -> None:
         engine, job = self.engine, self.job
         self._decide()
-        started = resolve_now_us(job.started_us)
+        # No spawn happened (a dead letter in admission): fall back to the admit time.
+        spawned = self.spawned_us if self.spawned_us is not None else job.started_us
+        started = resolve_now_us(spawned)
         ended = max(resolve_now_us(self.ended_us), started)
         record = read_task_record(job.job_id, job.task_id)
         transcript = lifecycle.transcript_path(self.settings, self.parser.session_id)
@@ -294,6 +298,7 @@ class JobRun:
             engine.runs,
             parser=self.parser,
             job=job,
+            started_us=started,
             ended_us=ended,
             failed=self.cause is not None,
             transcript=transcript,
