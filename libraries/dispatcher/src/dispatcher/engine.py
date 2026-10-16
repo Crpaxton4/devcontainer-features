@@ -1,4 +1,4 @@
-"""The admission loop and one job's life (design sections 7, 8 and 10).
+"""The admission loop and one job's life (design sections 7, 8, 10 and 17).
 
 Admission is serial and happens on the calling thread: measure, admit, bring
 the project's container up and assert its mounts, let the machine settle, and

@@ -1,6 +1,6 @@
 """Reading a session's stream, writing its run row, then collecting artifacts.
 
-The order is the point, and it is the order of design sections 7 and 10:
+The order is the point, and it is the order of design sections 7, 10 and 17:
 
 1. the envelope is parsed (:class:`StreamParser`),
 2. the run row is written (:func:`record_then_collect`),
@@ -144,7 +144,7 @@ def record_then_collect(
 ) -> RunWrite:
     """Write the run row, then collect artifacts. Neither step may block the other.
 
-    A job with no session id gets no run row (design section 7) but still gets
+    A job with no session id gets no run row (design section 17) but still gets
     a bundle. If the run write itself fails, collection still runs and the
     error is returned for the caller to surface once everything else is done.
     ``started_us`` is the session spawn, or the admit time when none happened.

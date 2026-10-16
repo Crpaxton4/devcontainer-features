@@ -35,7 +35,7 @@ class JobState(str, Enum):
 
 
 class DeadReason(str, Enum):
-    """The ten dead-letter causes (section 7). Each value is a full statement."""
+    """The ten dead-letter causes (section 18). Each value is a full statement."""
 
     DUPLICATE_TASK_IN_FLIGHT = "DUPLICATE_TASK_IN_FLIGHT"
     CONTAINER_START_FAILED = "CONTAINER_START_FAILED"
