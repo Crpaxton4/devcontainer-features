@@ -14,7 +14,9 @@ Variables (all optional unless marked required):
     Root of the odoo-dev plugin (default ``$CLAUDE_PLUGIN_ROOT``, then the
     checkout this package lives in).
 ``DISPATCH_INVARIANTS_FILE``
-    The invariants file path as the *container* sees it. Default
+    A HOST path. The dispatcher reads the file once per run and inlines its
+    text with ``--append-system-prompt``, as it inlines the brief. A missing or
+    unreadable file is a settings error (exit 2). Default
     ``<plugin root>/prompts/unattended-invariants.md``.
 ``DISPATCH_AGENT``
     The in-container implementation agent (default ``odoo-dev:odoo-dev-implementer``).
@@ -56,6 +58,18 @@ class SettingsError(RuntimeError):
     """A required setting is missing or malformed."""
 
 
+def read_invariants(path: str) -> str:
+    """The text of the invariants file, read on the host.
+
+    Raises :class:`SettingsError` naming the path when it cannot be read, so a
+    missing file stops the run at startup and is never a dead letter.
+    """
+    try:
+        return Path(path).read_text("utf-8")
+    except OSError as exc:
+        raise SettingsError(f"cannot read the invariants file {path}: {exc}") from exc
+
+
 def normalize_project(repo: str) -> str:
     """The compose project name for a repo, as compose derives it."""
     return re.sub(r"[^a-z0-9_-]", "", repo.lower())
@@ -75,6 +89,7 @@ class Settings:
     deadline_s: float
     claude_home: Path
     additional_features: str = DEFAULT_ADDITIONAL_FEATURES
+    invariants: str = ""  # the text of ``invariants_file``, read once by from_env
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
@@ -125,13 +140,16 @@ class Settings:
             }
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc
+        invariants_file = env.get("DISPATCH_INVARIANTS_FILE") or str(
+            plugin_root / INVARIANTS_RELATIVE
+        )
         return cls(
             repos_dir=Path(repos),
             config_root=Path(env["DISPATCH_CONFIG_ROOT"]),
             owner=env["DISPATCH_REPO_OWNER"],
             plugin_root=plugin_root,
-            invariants_file=env.get("DISPATCH_INVARIANTS_FILE")
-            or str(plugin_root / INVARIANTS_RELATIVE),
+            invariants_file=invariants_file,
+            invariants=read_invariants(invariants_file),
             agent=env.get("DISPATCH_AGENT") or DEFAULT_AGENT,
             claude_home=Path(claude_home),
             additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")

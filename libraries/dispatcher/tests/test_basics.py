@@ -188,11 +188,14 @@ def test_reconcile_orphans_running_jobs():
 
 
 def test_settings_from_env(tmp_path):
+    prompts = tmp_path / "p" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "unattended-invariants.md").write_text("default text", "utf-8")
     env = {
         "REPOS_DIR": "/r",
         "DISPATCH_CONFIG_ROOT": "/c",
         "DISPATCH_REPO_OWNER": "acme",
-        "DISPATCH_PLUGIN_ROOT": "/p",
+        "DISPATCH_PLUGIN_ROOT": str(tmp_path / "p"),
         "MIN_FREE_GB": "3",
         "DISPATCH_CLAUDE_HOME": "/h",
     }
@@ -201,7 +204,8 @@ def test_settings_from_env(tmp_path):
     assert (
         str(s.config("qoc")) == "/c/github.com/acme/qoc/.devcontainer/devcontainer.json"
     )
-    assert s.invariants_file == "/p/prompts/unattended-invariants.md"
+    assert s.invariants_file == str(prompts / "unattended-invariants.md")
+    assert s.invariants == "default text"
     assert (s.min_available_gb, s.deadline_s, s.agent) == (
         3,
         21600,
@@ -209,11 +213,14 @@ def test_settings_from_env(tmp_path):
     )
 
 
-def test_settings_defaults_and_errors():
+def test_settings_defaults_and_errors(tmp_path):
+    invariants = tmp_path / "inv.md"
+    invariants.write_text("host text", "utf-8")
     env = {
         "DISPATCH_REPOS_DIR": "/r",
         "DISPATCH_CONFIG_ROOT": "/c",
         "DISPATCH_REPO_OWNER": "o",
+        "DISPATCH_INVARIANTS_FILE": str(invariants),
     }
     s = Settings.from_env(
         {**env, "CLAUDE_PLUGIN_ROOT": "/cp", "CLAUDE_CONFIG_DIR": "/cc"}
@@ -226,6 +233,11 @@ def test_settings_defaults_and_errors():
     assert Settings.from_env(empty).additional_features == default
     explicit = {**env, "DISPATCH_ADDITIONAL_FEATURES": '{"x":{}}'}
     assert Settings.from_env(explicit).additional_features == '{"x":{}}'
+    assert Settings.from_env(env).invariants == "host text"
+    missing = tmp_path / "gone.md"
+    with pytest.raises(SettingsError, match="invariants file") as caught:
+        Settings.from_env({**env, "DISPATCH_INVARIANTS_FILE": str(missing)})
+    assert str(missing) in str(caught.value)
     with pytest.raises(SettingsError, match="DISPATCH_REPO_OWNER"):
         Settings.from_env({"DISPATCH_REPOS_DIR": "/r"})
     with pytest.raises(SettingsError, match="malformed"):

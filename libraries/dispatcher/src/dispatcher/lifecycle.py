@@ -18,9 +18,12 @@ here builds a container. Non-negotiable points, each with its reason:
   needed: Docker reports the source path unchanged whether the directory holds
   the repo, is empty, or was just created for it. The dispatcher never creates
   the mount or the workspace.
-* ``--append-system-prompt-file`` is required here. It was retired for the global
-  ``claude`` wrapper (#740) because a flag reaches only the session the wrapper
-  starts, never a forked subagent. The dispatcher is neither wrapper.
+* ``--append-system-prompt`` carries the invariants text, read on the host and
+  inlined like the brief (#1083). A ``-file`` flag would need a path the
+  container can open, and the plugin lives in the marketplace cache there. The
+  flag was retired for the global ``claude`` wrapper (#740) because a flag
+  reaches only the session the wrapper starts, never a forked subagent. The
+  dispatcher is neither wrapper.
 * Two independent idempotent lifecycle checks, not a state machine: ``up`` on
   dispatch, and stop when the project has nothing running and nothing pending.
   Stop, never remove, and never touch the shared sidecars.
@@ -206,8 +209,8 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         f"{task_id}\n\n{brief}",
         "--agent",
         settings.agent,
-        "--append-system-prompt-file",
-        settings.invariants_file,
+        "--append-system-prompt",
+        settings.invariants,
         "--output-format",
         "stream-json",
         "--verbose",

@@ -604,6 +604,18 @@ def test_cli_usage_errors(monkeypatch, tmp_path, capsys):
     assert JobStore().list_by_state(JobState.PENDING) == []  # nothing stored
 
 
+def test_cli_missing_invariants_file_is_a_usage_error(monkeypatch, tmp_path, capsys):
+    _env(monkeypatch, tmp_path)
+    gone = tmp_path / "gone.md"
+    monkeypatch.setenv("DISPATCH_INVARIANTS_FILE", str(gone))
+    brief = tmp_path / "b.md"
+    brief.write_text("x")
+    arg = json.dumps([{"repo": "qoc", "task": "1", "brief": str(brief)}])
+    assert cli.main(["run", arg]) == cli.EXIT_USAGE
+    assert str(gone) in capsys.readouterr().err
+    assert JobStore().list_by_state(JobState.PENDING) == []  # not a dead letter
+
+
 def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
     _env(monkeypatch, tmp_path)
     mem = tmp_path / "mem"
