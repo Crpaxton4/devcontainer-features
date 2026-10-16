@@ -422,12 +422,15 @@ def test_run_row_is_written_before_artifacts_are_collected(monkeypatch, tmp_path
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us + 3,
         ended_us=job.started_us + 5,
         failed=False,
         transcript=None,
         record={"build": {"branch": "feat"}},
     )
     assert order == ["run", "collect"]
+    row = runs.get_run("sess-1")  # the run row's clock is the argument, not the job's
+    assert (row.started_us, row.ended_us) == (job.started_us + 3, job.started_us + 5)
     assert write.recorded and write.outcome is RunOutcome.COMPLETED
     run = runs.get_run("sess-1")
     assert (run.branch, run.tool_version, run.brief, run.task_id) == (
@@ -450,6 +453,7 @@ def test_absence_changes_nothing_else_and_failed_run_is_failed():
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=True,
         transcript=None,
@@ -469,6 +473,7 @@ def test_no_session_means_no_run_row_but_still_a_bundle():
         runs,
         parser=collect.StreamParser(),
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=True,
         transcript=None,
@@ -511,6 +516,7 @@ def test_a_failing_run_write_does_not_stop_collection_and_is_surfaced(monkeypatc
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=False,
         transcript=None,
@@ -530,6 +536,7 @@ def test_collection_failure_is_a_note_not_an_error(monkeypatch):
         RunStore(),
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=False,
         transcript=None,
@@ -651,7 +658,10 @@ def test_reconcile_inspects_and_writes_a_failed_run_for_a_session(settings):
     assert "container qoc-odoo-1 is running" in dead.detail
     assert "may still be alive" in dead.detail and "does not exist" in dead.detail
     assert "FAILED run row was written" in dead.detail
-    assert runs.get_run("s-orphan").outcome is RunOutcome.FAILED
+    assert "timed from the admit time" in dead.detail
+    assert "no spawn time survives a restart" in dead.detail
+    row = runs.get_run("s-orphan")
+    assert row.outcome is RunOutcome.FAILED and row.started_us == dead.started_us
     assert runs.get_artifacts(job.job_id) is not None
 
 
