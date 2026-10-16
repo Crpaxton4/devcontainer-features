@@ -41,6 +41,22 @@ for helper in dispatch.sh orchestrator.py; do
     fi
 done
 
+gate "run.md lists every exit code dispatch.sh returns"
+# The literal exits of dispatch.sh, plus the dispatcher's own codes it passes through.
+codes=$(
+    {
+        grep -oE 'exit [0-9]+' "$ROOT/scripts/dispatch.sh" | cut -d' ' -f2
+        printf '%s\n' 0 1 2 3
+    } | sort -un
+)
+for code in $codes; do
+    if grep -qE "^- $code:" "$ROOT/commands/run.md"; then
+        ok "exit $code is listed in run.md"
+    else
+        bad "exit $code is returned by dispatch.sh but is not listed in run.md as '- $code:'"
+    fi
+done
+
 gate "helper unit tests"
 if python3 -m unittest discover -s "$ROOT/scripts/tests" -t "$ROOT/scripts/tests"; then ok "unittest"; else bad "unittest"; fi
 
