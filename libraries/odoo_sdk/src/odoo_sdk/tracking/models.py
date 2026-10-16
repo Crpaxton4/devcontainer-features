@@ -54,6 +54,19 @@ def format_repo_label(repo: Optional[str]) -> str:
     return repo if repo else AGENTLESS_REPO_LABEL
 
 
+class SessionSource(str, Enum):
+    """Which record the sessions query reads (#1086).
+
+    ``BOTH`` is the default: the legacy event store merged with the run record.
+    ``EVENTS`` and ``RUNS`` read one source alone, so the #1065 agreement check
+    (the same work sessionized over each source gives the same answer) can run.
+    """
+
+    EVENTS = "events"
+    RUNS = "runs"
+    BOTH = "both"
+
+
 class TaskState(str, Enum):
     #: Actively being worked; the only state that accrues fresh wall clock.
     RUNNING = "RUNNING"

@@ -315,6 +315,20 @@ class TestCmdLazyClient(unittest.TestCase):
         self.assertEqual(json.loads(out), [])
         make_client.assert_not_called()
 
+    def test_query_sessions_takes_a_source_key_in_args(self):
+        # #1086: the sessions query selects its record through the JSON args.
+        db = _tmp_db()
+        with _patched(_registry(db)):
+            code, out = _run_cli(
+                "cmd", "query_sessions", "--args", json.dumps({"source": "events"})
+            )
+            self.assertEqual((code, json.loads(out)), (0, []))
+            code, out = _run_cli(
+                "cmd", "query_sessions", "--args", json.dumps({"source": "nope"})
+            )
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["error"]["type"], "ValueError")
+
     def test_list_builds_no_state_and_no_client(self):
         # ``cmd --list`` walks the real (unpatched) registry factory: with the
         # OdooClient constructor patched to explode, listing still succeeds and
