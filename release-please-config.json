@@ -10,7 +10,8 @@
                 "devcontainer-features/test/second-brain",
                 "devcontainer-features/src/debian-eol-archives",
                 "devcontainer-features/test/debian-eol-archives",
-                "plugins/odoo-dev"
+                "plugins/odoo-dev",
+                "libraries/dispatcher"
             ],
             "extra-files": [
                 {
@@ -44,6 +45,17 @@
                     "type": "json",
                     "path": "devcontainer-feature.json",
                     "jsonpath": "$.version"
+                }
+            ]
+        },
+        "libraries/dispatcher": {
+            "release-type": "simple",
+            "component": "dispatcher",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
                 }
             ]
         },
