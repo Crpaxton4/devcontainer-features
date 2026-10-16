@@ -31,14 +31,27 @@ if [[ ${1:-} != run ]]; then
 fi
 
 home=${ODOO_ORCHESTRATOR_HOME:-$HOME/.local/state/odoo-orchestrator}
+tilde='~'  # a variable, so the patterns below match a literal tilde
 case $home in
+    "$tilde") home=$HOME ;;
+    "$tilde"/*) home=$HOME/${home#"$tilde"/} ;;
     /*) ;;
     *) home=$PWD/$home ;;
 esac
-mkdir -p "$home/runs" || exit 127
+if ! mkdir -p "$home/runs"; then
+    printf 'dispatch.sh: cannot create %s/runs\n' "$home" >&2
+    exit 74
+fi
 out="$home/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
-printf '%s\n' "$out" >"$home/runs/latest.txt"
 printf 'dispatch.sh: result file: %s\n' "$out" >&2
 
 "${cmd[@]}" "$@" | tee "$out"
-exit "${PIPESTATUS[0]}"
+rc=${PIPESTATUS[0]}
+# latest.txt names a run that really ran. A run that exits 2 or 3 stored nothing,
+# so its empty file is removed and latest.txt keeps pointing at the last real run.
+if [[ $rc -eq 0 || $rc -eq 1 ]]; then
+    printf '%s\n' "$out" >"$home/runs/latest.txt"
+else
+    rm -f "$out"
+fi
+exit "$rc"

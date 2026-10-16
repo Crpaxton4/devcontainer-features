@@ -77,6 +77,23 @@ class Lint(unittest.TestCase):
         ):
             self.assertTrue(orch.lint(text), text)
 
+    def test_flags_bare_code_file_names(self):
+        for text in (
+            "Use the sale_order.py file",
+            "Open res_partner.xml and edit",
+            "Edit `sale_order.py`",
+            "Change line 40 of sale_order.py",
+        ):
+            self.assertTrue(orch.lint(text), text)
+
+    def test_ordinary_prose_is_not_sql(self):
+        for text in (
+            "The user can select a customer from the dropdown.",
+            "Salespeople select the lines they want from the quote.",
+            "We must update every set of prices when the list changes.",
+        ):
+            self.assertEqual(orch.lint(text), [], text)
+
     def test_flags_oversize(self):
         self.assertTrue(orch.lint("a" * 100_001))
 
@@ -97,6 +114,23 @@ class Approval(Base):
     def test_approve_rejects_a_missing_file(self):
         with self.assertRaises(ValueError):
             orch.approve("7", "/nonexistent/brief.md")
+
+    def test_approve_rejects_a_file_outside_the_drafts(self):
+        outside = Path(self.tmp.name) / "other.md"
+        outside.write_text("text")
+        with self.assertRaises(ValueError):
+            orch.approve("7", str(outside))
+        with self.assertRaises(ValueError):
+            orch.approve("7", "/etc/passwd")
+
+    def test_approve_rejects_another_tasks_draft_and_an_empty_draft(self):
+        other = orch.plan_path("8")
+        other.write_text("text")
+        with self.assertRaises(ValueError):
+            orch.approve("7", str(other))
+        empty = orch.plan_path("7")  # plan-path creates an empty file
+        with self.assertRaises(ValueError):
+            orch.approve("7", str(empty))
 
 
 class DeadLetters(Base):

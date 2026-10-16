@@ -38,6 +38,15 @@ behaviour they point at, and write the behaviour. The same holds for Revise
 feedback and for the answers in step 5: translate them into behaviour, never paste
 them through.
 
+Also never say which Odoo mechanism to use: a wizard, a computed or stored field,
+a scheduled or automated action, an index, a record rule, a migration, a specific
+view type. Say what must be true, and let the container choose the mechanism.
+
+A name that is both a business word and a technical name, such as a menu, a
+group or a report name, is allowed only as the business word the customer uses
+for it ("the Sales Managers group may approve discounts"). Never use it to point
+at the code or the configuration behind it.
+
 Examples, each a prescriptive sentence and its rewrite as a requirement:
 
 - Before: "Change the compute method on the partner model so it sums open
@@ -52,9 +61,14 @@ Examples, each a prescriptive sentence and its rewrite as a requirement:
 - Before: "Add an XPath on the partner form view to put the field after Phone."
   After: "A salesperson editing a customer sees the new field next to the phone
   number."
+- Before: "Add a scheduled action that recalculates the credit limit every night."
+  After: "A customer's credit limit is never more than a day out of date. A
+  salesperson who opens a customer in the morning sees the limit that reflects
+  yesterday's payments."
 - Before: "Run odoo-bin -u sale_custom to verify." After: "Acceptance: the existing
-  sales behaviour still works, and the new behaviour is shown working by
-  automated tests that a reviewer can read."
+  sales behaviour still works, and the new behaviour works as the criteria above
+  describe. A reviewer will look for evidence of both. This says what the
+  reviewer needs to see, not how you must build or test."
 - Before: "Use a SELECT on the invoice table to find unpaid rows." After: "The
   report lists every invoice that is posted and not fully paid, with its due date
   and amount."
@@ -139,8 +153,10 @@ dead-letters the jobs it was running. So start the call as a background Bash cal
 start a second run while it is active.
 
 The script prints `dispatch.sh: result file: <path>` on stderr, copies stdout to
-that file, and writes the same path to `runs/latest.txt` in the orchestrator home
-(`$ODOO_ORCHESTRATOR_HOME`, default `~/.local/state/odoo-orchestrator`). When the
+that file, and after an exit of 0 or 1 writes the same path to `runs/latest.txt` in
+the orchestrator home (`$ODOO_ORCHESTRATOR_HOME`, default
+`~/.local/state/odoo-orchestrator`). A run that exits 2 or 3 stored nothing, so
+its file is removed and `latest.txt` is not changed. When the
 process has exited, read its exit code first. Then read the result file with Read.
 The result is `{"batch_id", "jobs": [...]}`. Do not copy the JSON into a command.
 The dispatcher read each brief at submission and stored the text, so the path only
@@ -159,6 +175,8 @@ Exit codes:
   Mark nothing handled.
 - 127: no dispatcher was found. Tell the user to put `dispatch` on PATH or set
   `ODOO_ORCHESTRATOR_DISPATCHER_DIR`. Mark nothing handled.
+- 74: the script could not create the orchestrator home. Show the stderr text.
+  Mark nothing handled.
 
 After exit 0 or 1, run `orchestrator.py handled <job_id> ...` for the old dead
 letter `job_id`s whose tasks were in the array you just submitted.

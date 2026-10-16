@@ -33,7 +33,8 @@ MAX_BRIEF_BYTES = 100_000
 _EXT = (
     r"py|xml|csv|js|ts|tsx|jsx|scss|css|html|sql|json|yaml|yml|sh|conf|cfg|toml|md|txt"
 )
-_COMMANDS = r"git|docker|devcontainer|odoo-bin|odoo|pytest|uv|pip|npm|bash|sh|make|psql|curl"
+_CODE_EXT = r"py|xml|js|ts|tsx|jsx|scss|sql|sh|yaml|yml|conf|toml"
+_COMMANDS =r"git|docker|devcontainer|odoo-bin|odoo|pytest|uv|pip|npm|bash|sh|make|psql|curl"
 
 # Obvious cases only. A module, model or method name has no lexical marker, so
 # a brief can pass every rule here and still prescribe the change.
@@ -41,9 +42,14 @@ LINT_RULES = (
     ("a code block", re.compile(r"^\s*(```|~~~)")),
     ("a shell prompt line", re.compile(r"^\s*\$\s+\S")),
     ("a file path", re.compile(rf"(?<![\w/:.-])(?:\.{{0,2}}/)?(?:[\w.-]+/)+[\w.-]+\.(?:{_EXT})\b")),
+    # A bare name is flagged only for code-like extensions. md, csv, txt and json
+    # stay exempt because they are business words ("totals.csv export"), and
+    # node.js is a product name.
+    ("a file name", re.compile(rf"(?<![\w/:.-])(?!node\.js\b)[\w-]+(?:\.[\w-]+)*\.(?:{_CODE_EXT})\b")),
     ("a command", re.compile(rf"`(?:{_COMMANDS})\s[^`]*`")),
     ("a command", re.compile(r"\b(?:odoo-bin|docker compose|devcontainer up|pytest)\b")),
-    ("SQL", re.compile(r"\b(?:SELECT\s.+\sFROM|INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+\w+\s+SET)\b", re.I)),
+    # Upper case only: "select a customer from the list" is ordinary prose.
+    ("SQL", re.compile(r"\b(?:SELECT\s.+\sFROM|INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+\w+\s+SET)\b")),
     ("an XPath", re.compile(r"//\w+\[|\bxpath\b", re.I)),
 )
 
@@ -81,8 +87,12 @@ def plan_path(task: str) -> Path:
 def approve(task: str, path: str) -> None:
     """Record the brief the user approved for a task (the latest approval wins)."""
     _check_task(task)
-    if not Path(path).is_file():
-        raise ValueError(f"no such brief: {path}")
+    brief = Path(path).resolve()
+    drafts = (home() / "briefs" / task).resolve()
+    if drafts not in brief.parents:
+        raise ValueError(f"{path} is not a draft of task {task} (expected under {drafts})")
+    if not brief.is_file() or brief.stat().st_size == 0:
+        raise ValueError(f"the brief is missing or empty: {path}")
     folder = home() / "approved"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{task}.txt").write_text(str(Path(path).resolve()) + "\n", encoding="utf-8")
