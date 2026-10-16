@@ -5,6 +5,9 @@ import json
 import signal
 import threading
 
+from odoo_sdk.state.artifacts import task_record_path
+from odoo_sdk.state.dispatch_state import bundle_dir
+
 from dispatcher.lifecycle import Completed
 
 
@@ -65,15 +68,24 @@ class FakeShell:
         self.groups = []
         self.spawned = []
         self.replies = []  # (prefix list, Completed)
+        self.queued = []  # (prefix list, Completed), each used once, first
         self.proc = FakeProc()
         self.spawn_error = None
 
     def reply(self, prefix, completed):
         self.replies.append((prefix, completed))
 
+    def queue_reply(self, prefix, *completed):
+        """Answer the next matching calls in order, then fall back to ``reply``."""
+        self.queued.extend((prefix, one) for one in completed)
+
     def run(self, argv, *, env, timeout=None):
         self.calls.append((list(argv), env))
         self.timeouts.append((list(argv), timeout))
+        for index, (prefix, completed) in enumerate(self.queued):
+            if argv[: len(prefix)] == prefix:
+                del self.queued[index]
+                return completed
         for prefix, completed in self.replies:
             if argv[: len(prefix)] == prefix:
                 return completed
@@ -119,6 +131,14 @@ def stream(session_id="sess-1", structured=None, **result):
         ),
         json.dumps(envelope),
     ]
+
+
+def write_task_record(job_id, task_id, text):
+    """Write the agent's record where state-dir.sh does: tasks/<task_id>/task.json."""
+    path = task_record_path(bundle_dir(job_id), task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
 
 
 GOOD = {

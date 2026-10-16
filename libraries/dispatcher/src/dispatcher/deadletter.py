@@ -1,4 +1,4 @@
-"""The ten dead-letter causes of design section 7, and how a session ending picks one.
+"""The ten dead-letter causes of design section 18, and how a session ending picks one.
 
 The cause names where in its own sequence the dispatcher was when things
 stopped. No upstream status string is parsed to get it. Status fields (subtype,
@@ -22,11 +22,12 @@ STATEMENTS: dict[DeadReason, str] = {
         "Rejected at the gate: the task already had a live job. Nothing ran."
     ),
     DeadReason.CONTAINER_START_FAILED: (
-        "Bringing the container up did not succeed. No session ever existed."
+        "Bringing the container up did not succeed, or it did not become ready "
+        "(postgres and odoo answering) in time. No session ever existed."
     ),
     DeadReason.WORKSPACE_MOUNT_INVALID: (
         "The container came up and the mount assertion found the wrong thing "
-        "at the workspace or artifacts path."
+        "at the workspace or the odoo-dev mount."
     ),
     DeadReason.SESSION_LAUNCH_FAILED: (
         "The session never started: bad flags, a missing binary, or a "

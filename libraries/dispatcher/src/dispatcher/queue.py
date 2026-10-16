@@ -35,7 +35,9 @@ from .lifecycle import INSPECT_TIMEOUT_S, container_name, transcript_path
 from .reap import host_worktree
 
 #: Linux caps one argv string at 128 KiB (MAX_ARG_STRLEN); the prompt
-#: ``<task>\n\n<brief>`` is one. Over it, exec fails with E2BIG on every retry.
+#: ``<entry> <task>\n\n<brief>`` is one. Over it, exec fails with E2BIG on every
+#: retry. The 11 KB under the cap covers the entry, which is a short command
+#: name, so only ``<task>\n\n<brief>`` is counted.
 MAX_PROMPT_BYTES = 120_000
 
 _COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -189,7 +191,7 @@ def reconcile(
     """
     ids = []
     for job in store.list_by_state(JobState.RUNNING):
-        record = read_task_record(job.job_id)
+        record = read_task_record(job.job_id, job.task_id)
         facts = _orphan_facts(job, record, shell, settings, env)
         if runs is not None:
             facts.append(_record_orphan(runs, job, record, settings))
@@ -213,6 +215,7 @@ def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
             runs,
             parser=parser,
             job=job,
+            started_us=job.started_us or 0,
             ended_us=max(resolve_now_us(None), job.started_us or 0),
             failed=True,
             transcript=transcript,
@@ -223,7 +226,8 @@ def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
     if write.record_error is not None:
         return f"the run row could not be written: {write.record_error}"
     return (
-        "a FAILED run row was written"
+        "a FAILED run row was written, timed from the admit time "
+        "because no spawn time survives a restart"
         if write.recorded
         else "no run row was written (no session id, or already recorded)"
     )
@@ -236,9 +240,3 @@ def pending_jobs(store: JobStore) -> list[Job]:
     for job in jobs:
         first_seen.setdefault(job.repo, len(first_seen))
     return sorted(jobs, key=lambda job: first_seen[job.repo])
-
-
-def live_repos(store: JobStore) -> list[str]:
-    """Repos with a PENDING or RUNNING job: the queue's in-flight projects."""
-    jobs = store.list_by_state(JobState.PENDING) + store.list_by_state(JobState.RUNNING)
-    return sorted({job.repo for job in jobs})

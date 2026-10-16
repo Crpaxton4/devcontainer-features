@@ -14,13 +14,25 @@ Variables (all optional unless marked required):
     Root of the odoo-dev plugin (default ``$CLAUDE_PLUGIN_ROOT``, then the
     checkout this package lives in).
 ``DISPATCH_INVARIANTS_FILE``
-    The invariants file path as the *container* sees it. Default
+    A HOST path. The dispatcher reads the file once per run and inlines its
+    text with ``--append-system-prompt``, as it inlines the brief. A missing or
+    unreadable file is a settings error (exit 2). Default
     ``<plugin root>/prompts/unattended-invariants.md``.
-``DISPATCH_AGENT``
-    The in-container implementation agent (default ``odoo-dev:odoo-dev-implementer``).
+``DISPATCH_ENTRY``
+    The slash command (or ``/plugin:workflow``) that starts the session; the
+    task id and the brief follow it in the prompt (default
+    ``/odoo-dev:implement``). It replaces ``DISPATCH_AGENT``: a run with
+    ``DISPATCH_AGENT`` still set is a settings error, so a stale configuration
+    fails loudly and never runs under the wrong entry.
 ``MIN_FREE_GB``
     Admission threshold on available memory, in GB (default 6, the same knob
     ``stack-ensure.sh`` evicts on).
+``DISPATCH_ADMIT_TIMEOUT_S``
+    How long the run waits for memory with nothing admitted and no job running
+    (default 1800). When that time passes while jobs are pending, the run ends
+    with the jobs still ``PENDING`` and exit 1, and stderr names the threshold
+    and the last measured figure. The dispatcher never evicts a stack: stopping
+    an idle editor stack is a manual step.
 ``DISPATCH_SETTLE_S``
     Seconds to let the machine settle after admitting a job (default 5).
 ``DISPATCH_POLL_S``
@@ -31,7 +43,18 @@ Variables (all optional unless marked required):
     The host ``.claude`` directory (default ``$CLAUDE_CONFIG_DIR``, then
     ``~/.claude``), where session transcripts land.
 ``DISPATCH_ADDITIONAL_FEATURES``
-    Optional JSON passed to ``devcontainer up --additional-features``.
+    JSON passed to ``devcontainer up --additional-features`` (default the
+    personal-features Feature, never empty). The Feature provides ``claude``,
+    ``/usr/local/share/claude-home`` and ``/usr/local/share/odoo-dev`` in a
+    container that the dispatcher creates cold.
+``DISPATCH_ARTIFACTS_DIR``
+    The bundle root on the HOST (default ``~/.config/odoo-dev/dispatch/artifacts``),
+    read by :func:`odoo_sdk.state.dispatch_state.artifacts_root`. The container
+    sees it at ``/usr/local/share/odoo-dev/dispatch/artifacts`` through the bind
+    that the Feature makes of ``~/.config/odoo-dev``. A value outside that
+    directory is a settings error (exit 2), because the container cannot see it.
+    A running container keeps the mounts it was created with, so the dispatcher
+    passes no ``--mount`` of its own.
 """
 
 import os
@@ -40,14 +63,62 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_AGENT = "odoo-dev:odoo-dev-implementer"
+from odoo_sdk.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
+
+DEFAULT_ENTRY = "/odoo-dev:implement"
+DEFAULT_ADDITIONAL_FEATURES = (
+    '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+)
 INVARIANTS_RELATIVE = Path("prompts") / "unattended-invariants.md"
 WORKSPACE_TARGET = "/mnt/extra-addons"
-ARTIFACTS_TARGET = "/artifacts"
+#: Where the personal-features Feature binds the host ``~/.config/odoo-dev``.
+ODOO_DEV_MOUNT_TARGET = "/usr/local/share/odoo-dev"
+#: The bundle root as the container sees it (under the Feature's odoo-dev bind).
+ARTIFACTS_TARGET = f"{ODOO_DEV_MOUNT_TARGET}/dispatch/artifacts"
 
 
 class SettingsError(RuntimeError):
     """A required setting is missing or malformed."""
+
+
+def read_invariants(path: str) -> str:
+    """The text of the invariants file, read on the host.
+
+    Raises :class:`SettingsError` naming the path when it cannot be read, so a
+    missing file stops the run at startup and is never a dead letter.
+    """
+    try:
+        return Path(path).read_text("utf-8")
+    except OSError as exc:
+        raise SettingsError(f"cannot read the invariants file {path}: {exc}") from exc
+
+
+def check_artifacts_dir(env: Mapping[str, str]) -> None:
+    """Raise :class:`SettingsError` when ``DISPATCH_ARTIFACTS_DIR`` is not visible.
+
+    The container sees the host only through the Feature's bind of
+    ``~/.config/odoo-dev``, so the bundle root must sit under that directory.
+    """
+    value = env.get(DISPATCH_ARTIFACTS_DIR_ENV)
+    if not value:
+        return
+    wanted = Path(value).expanduser().resolve()
+    if not wanted.is_relative_to(odoo_dev_dir().resolve()):
+        raise SettingsError(
+            f"{DISPATCH_ARTIFACTS_DIR_ENV}={value} is not under {odoo_dev_dir()}, "
+            f"the directory that the Feature binds at {ODOO_DEV_MOUNT_TARGET}; "
+            "the container could not see the bundles"
+        )
+
+
+def check_no_stale_agent(env: Mapping[str, str]) -> None:
+    """Raise :class:`SettingsError` when the retired ``DISPATCH_AGENT`` is set."""
+    if env.get("DISPATCH_AGENT"):
+        raise SettingsError(
+            "DISPATCH_AGENT is retired: the session now starts at a slash "
+            "command, not at an agent. Unset it, and set DISPATCH_ENTRY "
+            f"(default {DEFAULT_ENTRY}) to change the entry"
+        )
 
 
 def normalize_project(repo: str) -> str:
@@ -62,13 +133,15 @@ class Settings:
     owner: str
     plugin_root: Path
     invariants_file: str
-    agent: str
+    entry: str
     min_available_gb: float
     settle_s: float
     poll_s: float
     deadline_s: float
+    admit_timeout_s: float
     claude_home: Path
-    additional_features: str = ""
+    additional_features: str = DEFAULT_ADDITIONAL_FEATURES
+    invariants: str = ""  # the text of ``invariants_file``, read once by from_env
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
@@ -116,18 +189,25 @@ class Settings:
                 "settle_s": float(env.get("DISPATCH_SETTLE_S", 5)),
                 "poll_s": float(env.get("DISPATCH_POLL_S", 15)),
                 "deadline_s": float(env.get("DISPATCH_DEADLINE_S", 21600)),
+                "admit_timeout_s": float(env.get("DISPATCH_ADMIT_TIMEOUT_S", 1800)),
             }
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc
+        check_artifacts_dir(env)
+        check_no_stale_agent(env)
+        invariants_file = env.get("DISPATCH_INVARIANTS_FILE") or str(
+            plugin_root / INVARIANTS_RELATIVE
+        )
         return cls(
             repos_dir=Path(repos),
             config_root=Path(env["DISPATCH_CONFIG_ROOT"]),
             owner=env["DISPATCH_REPO_OWNER"],
             plugin_root=plugin_root,
-            invariants_file=env.get("DISPATCH_INVARIANTS_FILE")
-            or str(plugin_root / INVARIANTS_RELATIVE),
-            agent=env.get("DISPATCH_AGENT") or DEFAULT_AGENT,
+            invariants_file=invariants_file,
+            invariants=read_invariants(invariants_file),
+            entry=env.get("DISPATCH_ENTRY") or DEFAULT_ENTRY,
             claude_home=Path(claude_home),
-            additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES", ""),
+            additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")
+            or DEFAULT_ADDITIONAL_FEATURES,
             **numbers,
         )

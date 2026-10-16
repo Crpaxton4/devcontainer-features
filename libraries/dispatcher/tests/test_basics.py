@@ -9,7 +9,12 @@ from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from dispatcher import deadletter, gates, queue, schema
 from dispatcher.deadletter import Ending, classify
 from dispatcher.lock import AlreadyRunningError, DispatcherLock
-from dispatcher.settings import Settings, SettingsError, normalize_project
+from dispatcher.settings import (
+    DEFAULT_ENTRY,
+    Settings,
+    SettingsError,
+    normalize_project,
+)
 from support import GOOD
 
 # -- lock ---------------------------------------------------------------
@@ -168,7 +173,6 @@ def test_submit_groups_by_project_and_rejects_duplicates(tmp_path):
     assert jobs[3].state is JobState.DEAD_LETTER
     assert jobs[3].dead_reason == DeadReason.DUPLICATE_TASK_IN_FLIGHT.value
     assert [j.job_id for j in queue.pending_jobs(store)] == [j.job_id for j in jobs[:3]]
-    assert queue.live_repos(store) == ["a", "b"]
 
 
 def test_reconcile_orphans_running_jobs():
@@ -188,11 +192,14 @@ def test_reconcile_orphans_running_jobs():
 
 
 def test_settings_from_env(tmp_path):
+    prompts = tmp_path / "p" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "unattended-invariants.md").write_text("default text", "utf-8")
     env = {
         "REPOS_DIR": "/r",
         "DISPATCH_CONFIG_ROOT": "/c",
         "DISPATCH_REPO_OWNER": "acme",
-        "DISPATCH_PLUGIN_ROOT": "/p",
+        "DISPATCH_PLUGIN_ROOT": str(tmp_path / "p"),
         "MIN_FREE_GB": "3",
         "DISPATCH_CLAUDE_HOME": "/h",
     }
@@ -201,30 +208,75 @@ def test_settings_from_env(tmp_path):
     assert (
         str(s.config("qoc")) == "/c/github.com/acme/qoc/.devcontainer/devcontainer.json"
     )
-    assert s.invariants_file == "/p/prompts/unattended-invariants.md"
-    assert (s.min_available_gb, s.deadline_s, s.agent) == (
+    assert s.invariants_file == str(prompts / "unattended-invariants.md")
+    assert s.invariants == "default text"
+    assert (s.min_available_gb, s.deadline_s, s.entry) == (
         3,
         21600,
-        "odoo-dev:odoo-dev-implementer",
+        "/odoo-dev:implement",
     )
 
 
-def test_settings_defaults_and_errors():
+def test_settings_defaults_and_errors(tmp_path):
+    invariants = tmp_path / "inv.md"
+    invariants.write_text("host text", "utf-8")
     env = {
         "DISPATCH_REPOS_DIR": "/r",
         "DISPATCH_CONFIG_ROOT": "/c",
         "DISPATCH_REPO_OWNER": "o",
+        "DISPATCH_INVARIANTS_FILE": str(invariants),
     }
     s = Settings.from_env(
         {**env, "CLAUDE_PLUGIN_ROOT": "/cp", "CLAUDE_CONFIG_DIR": "/cc"}
     )
     assert str(s.plugin_root) == "/cp" and str(s.claude_home) == "/cc"
     assert Settings.from_env(env).plugin_root.name == "odoo-dev"
+    default = '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+    assert Settings.from_env(env).additional_features == default
+    empty = {**env, "DISPATCH_ADDITIONAL_FEATURES": ""}
+    assert Settings.from_env(empty).additional_features == default
+    explicit = {**env, "DISPATCH_ADDITIONAL_FEATURES": '{"x":{}}'}
+    assert Settings.from_env(explicit).additional_features == '{"x":{}}'
+    assert Settings.from_env(env).invariants == "host text"
+    missing = tmp_path / "gone.md"
+    with pytest.raises(SettingsError, match="invariants file") as caught:
+        Settings.from_env({**env, "DISPATCH_INVARIANTS_FILE": str(missing)})
+    assert str(missing) in str(caught.value)
     with pytest.raises(SettingsError, match="DISPATCH_REPO_OWNER"):
         Settings.from_env({"DISPATCH_REPOS_DIR": "/r"})
     with pytest.raises(SettingsError, match="malformed"):
         Settings.from_env({**env, "MIN_FREE_GB": "x"})
+    assert Settings.from_env(env).admit_timeout_s == 1800
+    assert Settings.from_env({**env, "DISPATCH_ENTRY": ""}).entry == DEFAULT_ENTRY
+    assert Settings.from_env({**env, "DISPATCH_ENTRY": "/p:w"}).entry == "/p:w"
+    with pytest.raises(SettingsError, match="DISPATCH_AGENT is retired") as stale:
+        Settings.from_env({**env, "DISPATCH_AGENT": "odoo-dev:odoo-dev-implementer"})
+    assert "DISPATCH_ENTRY" in str(stale.value)
+    assert (
+        Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "90"}).admit_timeout_s
+        == 90
+    )
+    with pytest.raises(SettingsError, match="malformed"):
+        Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "soon"})
     assert normalize_project("QOC_Repo.x") == "qoc_repox"
+
+
+def test_settings_refuse_a_bundle_root_the_container_cannot_see(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    invariants = tmp_path / "inv.md"
+    invariants.write_text("host text", "utf-8")
+    env = {
+        "DISPATCH_REPOS_DIR": "/r",
+        "DISPATCH_CONFIG_ROOT": "/c",
+        "DISPATCH_REPO_OWNER": "o",
+        "DISPATCH_INVARIANTS_FILE": str(invariants),
+    }
+    Settings.from_env(env)  # unset: the default sits under the odoo-dev directory
+    inside = str(tmp_path / "home" / ".config" / "odoo-dev" / "x" / "artifacts")
+    Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": inside})
+    with pytest.raises(SettingsError, match="not under") as caught:
+        Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": str(tmp_path / "out")})
+    assert "DISPATCH_ARTIFACTS_DIR" in str(caught.value)
 
 
 # -- schema and the success test ----------------------------------------

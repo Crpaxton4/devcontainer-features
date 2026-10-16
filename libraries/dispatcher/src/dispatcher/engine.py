@@ -1,4 +1,4 @@
-"""The admission loop and one job's life (design sections 7, 8 and 10).
+"""The admission loop and one job's life (design sections 7, 8, 10 and 17).
 
 Admission is serial and happens on the calling thread: measure, admit, bring
 the project's container up and assert its mounts, let the machine settle, and
@@ -49,7 +49,7 @@ from .lifecycle import (
     StageError,
     child_env,
 )
-from .queue import live_repos, pending_jobs
+from .queue import pending_jobs
 from .reap import ReapResult, reap
 from .settings import Settings
 
@@ -82,12 +82,14 @@ class JobRun:
         self.cause: tuple[DeadReason, str] | None = None
         self.ending: Ending | None = None
         self.ended_us: int | None = None
+        self.spawned_us: int | None = None  # the run row's start; None before a spawn
         self.proc = None
         self.deadline_hit = False
         self.reap_result = ReapResult(False, "no session ran; nothing reaped")
         self._finished = False
         self.container_id = ""
         self.container_kill_note = ""
+        self.stop_requested = False  # set by terminate; acted on by the run's thread
         self._deadline_done = threading.Event()
 
     # -- helpers --------------------------------------------------------
@@ -97,7 +99,7 @@ class JobRun:
         return self.engine.settings
 
     def _env(self) -> dict[str, str]:
-        return child_env(live_repos(self.engine.jobs))
+        return child_env()
 
     def _fail(self, reason: DeadReason, detail: str) -> None:
         self.cause = (reason, describe(reason, None) + " " + detail)
@@ -105,7 +107,8 @@ class JobRun:
     # -- phase 1: admit (serial, calling thread) ------------------------
 
     def admit(self) -> bool:
-        """Mark running, make the bundle, bring the container up, assert mounts.
+        """Mark running, make the bundle, bring the container up, assert mounts,
+        wait until postgres and odoo answer.
 
         Returns True when the session may start. A failure here is a dead
         letter with a cause and a bundle, and no session.
@@ -141,6 +144,7 @@ class JobRun:
         lifecycle.assert_mounts(
             engine.shell, self.settings, job.repo, container_id, env
         )
+        lifecycle.wait_ready(engine.shell, container_id, env)
 
     # -- phase 2: the session (worker thread) ---------------------------
 
@@ -164,15 +168,39 @@ class JobRun:
         Known limit: this skips once the host process has exited (``poll()`` is
         not None). A grandchild that outlives it and holds the pipe is then never
         killed from the host; the reader and drain threads (both daemon) live
-        until it exits. Only the container-side pkill on the deadline path can
-        reach an in-container process.
+        until it exits. Both kill paths (the deadline and a stop request) also
+        reach the container side through ``kill_in_container``, a best-effort
+        ``pkill`` whose exit is not verified.
         """
         proc = self.proc
         if proc is not None and proc.poll() is None:
             self.engine.shell.killpg(proc, sig)
 
     def terminate(self) -> None:
+        """Stop request: signal the host group now, kill in the container later.
+
+        This runs from the signal handler, so it must not block. The blocking
+        ``docker exec`` is left to the run's own thread (``_kill_after_stop``).
+        """
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            self.stop_requested = True
         self._signal_tree(signal.SIGTERM)
+
+    def _kill_after_stop(self) -> None:
+        """Run on the run's thread once the host process exits after a stop.
+
+        The deadline path, if it fired, has its own container kill and note.
+        """
+        if not self.stop_requested or self.deadline_hit or self.container_kill_note:
+            return
+        self.container_kill_note = lifecycle.kill_in_container(
+            self.engine.shell,
+            self.container_id,
+            self.job.task_id,
+            self._env(),
+            self.settings.entry,
+        )
 
     def _on_deadline(self) -> None:
         """The wall-clock guard. Runs on the timer thread, never after EOF.
@@ -190,7 +218,11 @@ class JobRun:
         try:
             self._signal_tree(signal.SIGKILL)
             self.container_kill_note = lifecycle.kill_in_container(
-                self.engine.shell, self.container_id, self.job.task_id, self._env()
+                self.engine.shell,
+                self.container_id,
+                self.job.task_id,
+                self._env(),
+                self.settings.entry,
             )
         finally:
             self._deadline_done.set()
@@ -212,6 +244,7 @@ class JobRun:
             self.ended_us = self.engine.clock()
             self.ending = Ending(127, stderr_tail=str(exc))
             return
+        self.spawned_us = self.engine.clock()
         if self.engine._stop.is_set():  # a stop arrived while spawning
             self.terminate()
         tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
@@ -231,6 +264,7 @@ class JobRun:
         reader.start()
         try:
             returncode = self.proc.wait()
+            self._kill_after_stop()
             reader.join(timeout=READER_GRACE_S)
         finally:
             timer.cancel()
@@ -286,14 +320,17 @@ class JobRun:
     def _finish_steps(self) -> None:
         engine, job = self.engine, self.job
         self._decide()
-        started = resolve_now_us(job.started_us)
+        # No spawn happened (a dead letter in admission): fall back to the admit time.
+        spawned = self.spawned_us if self.spawned_us is not None else job.started_us
+        started = resolve_now_us(spawned)
         ended = max(resolve_now_us(self.ended_us), started)
-        record = read_task_record(job.job_id)
+        record = read_task_record(job.job_id, job.task_id)
         transcript = lifecycle.transcript_path(self.settings, self.parser.session_id)
         write = record_then_collect(
             engine.runs,
             parser=self.parser,
             job=job,
+            started_us=started,
             ended_us=ended,
             failed=self.cause is not None,
             transcript=transcript,
@@ -310,7 +347,8 @@ class JobRun:
         try:
             self.reap_result = reap(
                 engine.shell,
-                self.settings.workspace(self.job.repo),
+                self.settings,
+                self.job.repo,
                 worktree_of(record),
                 branch_of(record),
                 self._env(),
@@ -372,6 +410,7 @@ class Engine:
         self._wake = threading.Event()
         self._active: list[JobRun] = []
         self._memory_failures = 0
+        self._last_admit_us = self.clock()  # reset by run() and by each admission
         # Reentrant: request_stop runs from a signal handler on the main thread,
         # which may already hold this lock inside _start.
         self._lock = threading.RLock()
@@ -388,11 +427,11 @@ class Engine:
     def request_stop(self) -> None:
         """Admit nothing more and terminate running sessions (they dead-letter).
 
-        Known limit: this and SIGTERM signal only the host process group. The
-        container-side ``claude`` keeps running until the idle check stops the
-        container, while the job is already labelled KILLED_BY_SIGNAL. A job
-        admitted but not yet started is stopped by the check at the top of
-        ``JobRun._session``.
+        Each run gets SIGTERM on its host process group. The run's own thread
+        then makes the same best-effort container-side ``pkill`` as the deadline
+        path, once the host process exits, and puts its note in the dead-letter
+        detail. The handler never waits on ``docker``. A job admitted but not yet
+        started is stopped by the check at the top of ``JobRun._session``.
         """
         self._stop.set()
         with self._lock:
@@ -402,6 +441,7 @@ class Engine:
 
     def run(self) -> None:
         threads: list[threading.Thread] = []
+        self._last_admit_us = self.clock()
         try:
             while not self._stop.is_set() and self._step(threads):
                 pass
@@ -423,16 +463,43 @@ class Engine:
                 self._sleep()
             return bool(threads)
         if not self._room():
+            if self._waited_too_long(threads):
+                return False
             self.log(
                 f"waiting: memory is below the "
                 f"{self.gate.min_available_kb // 1024} MB threshold, or unreadable"
             )
             self._sleep()
             return True
+        self._last_admit_us = self.clock()
         run = JobRun(self, pending[0])
         if run.admit():
             self._start(run, threads)
             self.gate.settle()
+        return True
+
+    def _waited_too_long(self, threads: list[threading.Thread]) -> bool:
+        """True, after logging why, when nothing has been admitted for too long.
+
+        The timer only runs while no job is running: a running job holds the
+        memory and its end can free it, so that wait is not a stall. The run
+        then ends with the jobs still PENDING, and ``cli`` exits 1.
+        """
+        now = self.clock()
+        if threads:
+            self._last_admit_us = now
+            return False
+        limit_s = self.settings.admit_timeout_s
+        if now - self._last_admit_us < limit_s * 1_000_000:
+            return False
+        last = self.gate.last_available_kb
+        figure = "no readable figure" if last is None else f"{last // 1024} MB"
+        self.log(
+            f"dispatch: stopping, nothing was admitted for {limit_s:g} s: available "
+            f"memory is below the {self.gate.min_available_kb // 1024} MB threshold "
+            f"(last measured: {figure}); unadmitted jobs remain PENDING. Stop an "
+            "idle editor stack, then rerun `dispatch run` to resume"
+        )
         return True
 
     def _room(self) -> bool:

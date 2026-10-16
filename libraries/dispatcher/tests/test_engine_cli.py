@@ -1,22 +1,23 @@
 """The admission loop, one job's life, and the entry point."""
 
+import dataclasses
 import json
 import os
 import signal
 import threading
 
 import pytest
-from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir
+from odoo_sdk.state.dispatch_state import bundle_dir, now_us, odoo_dev_dir
 from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
-from dispatcher import cli, queue
+from dispatcher import cli, lifecycle, queue
 from dispatcher.engine import MEMORY_READ_ATTEMPTS, Engine, JobRun
 from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, FakeShell, stream
+from support import GOOD, FakeProc, FakeShell, stream, write_task_record
 
 
 @pytest.fixture
@@ -36,7 +37,11 @@ def world(settings, tmp_path):
             "Source": str(settings.workspace("qoc")),
             "Destination": "/mnt/extra-addons",
         },
-        {"Type": "bind", "Source": str(artifacts_root()), "Destination": "/artifacts"},
+        {
+            "Type": "bind",
+            "Source": str(odoo_dev_dir()),
+            "Destination": "/usr/local/share/odoo-dev",
+        },
     ]
     shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
     jobs, runs = JobStore(), RunStore()
@@ -68,9 +73,58 @@ def test_a_good_run_completes_and_is_recorded(world):
     assert engine.runs.get_artifacts(job.job_id).has_envelope
     argv, env = shell.spawned[0]
     assert argv[0:2] == ["devcontainer", "exec"] and "COMPOSE_PROJECT_NAME" not in env
-    assert env["ODOO_ACTIVE_REPOS"] == "qoc"
+    assert "ODOO_ACTIVE_REPOS" not in env
     assert bundle_dir(job.job_id).is_dir()
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")  # idle: stopped
+
+
+def test_the_run_rows_clock_starts_at_the_spawn_not_at_admission(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    base = now_us()
+    clock = [base]
+    engine.clock = lambda: clock[0]
+    up_s, session_s = 1200, 30
+
+    def advance(seconds):
+        clock[0] += seconds * 1_000_000
+
+    real_run, real_wait = shell.run, shell.proc.wait
+    shell.run = lambda argv, **k: (
+        advance(up_s) if argv[:2] == ["devcontainer", "up"] else None
+    ) or real_run(argv, **k)
+    shell.proc.wait = lambda: advance(session_s) or real_wait()
+    (job,) = _submit(engine, ("qoc", "10"))
+    engine.run()
+    admitted = engine.jobs.get(job.job_id).started_us  # the wall clock at mark_running
+    run = engine.runs.get_run("sess-1")
+    assert run.started_us == base + up_s * 1_000_000  # the spawn, after devcontainer up
+    assert run.ended_us - run.started_us == session_s * 1_000_000
+    assert (
+        run.started_us - admitted > (up_s - 60) * 1_000_000
+    )  # the cold start is not billed
+    assert admitted < base + 60 * 1_000_000  # the job row keeps the admit time
+
+
+def test_a_run_row_without_a_spawn_falls_back_to_the_admit_time(world, monkeypatch):
+    engine, shell, _ = world
+    shell.replies[0] = (
+        ["devcontainer", "up"],
+        Completed(1, "", "compose file missing"),
+    )
+    seen = {}
+    import dispatcher.engine as eng
+
+    real = eng.record_then_collect
+    monkeypatch.setattr(
+        eng, "record_then_collect", lambda *a, **k: seen.update(k) or real(*a, **k)
+    )
+    (job,) = _submit(engine, ("qoc", "14"))
+    engine.run()
+    admitted = engine.jobs.get(job.job_id).started_us
+    assert not shell.spawned and admitted > 0
+    assert seen["started_us"] == admitted and seen["ended_us"] >= admitted
+    assert engine.runs.iter_runs() == []  # no session id, so no run row
 
 
 def test_collection_runs_before_the_container_may_stop(world, monkeypatch):
@@ -156,6 +210,50 @@ def test_workspace_mount_invalid(world):
     assert not shell.spawned
 
 
+PG = ["docker", "exec", "c", "pg_isready"]
+ODOO = ["docker", "exec", "c", "odoo", "--version"]
+
+
+def test_admit_probes_readiness_after_the_mount_assertion(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "18"))
+    run = JobRun(engine, engine.jobs.get(job.job_id))
+    assert run.admit() is True
+    assert len(shell.commands(*PG)) == 1 and len(shell.commands(*ODOO)) == 1
+    argvs = [c for c, _ in shell.calls]
+    inspect = argvs.index(shell.commands("docker", "inspect")[0])
+    assert inspect < argvs.index(PG) < argvs.index(ODOO)
+
+
+def test_a_slow_probe_is_retried_and_the_job_proceeds(world, monkeypatch):
+    engine, shell, _ = world
+    slept = []
+    monkeypatch.setattr(lifecycle.time, "sleep", slept.append)
+    shell.queue_reply(PG, Completed(2, "", "no response"), Completed(1))
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "19"))
+    engine.run()
+    assert len(shell.commands(*PG)) == 3
+    assert slept == [lifecycle.READY_POLL_S] * 2
+    assert engine.jobs.get(job.job_id).state is JobState.DONE
+
+
+def test_an_expired_wait_is_a_container_start_failure(world, monkeypatch):
+    engine, shell, _ = world
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda s: None)
+    monkeypatch.setattr(lifecycle, "READY_TIMEOUT_S", 0)
+    shell.reply(PG, Completed(2, "", "accepting no connections"))
+    shell.reply(ODOO, Completed(127, "", "odoo: not found"))
+    (job,) = _submit(engine, ("qoc", "20"))
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert "pg_isready exit=2" in dead.detail
+    assert "accepting no connections" in dead.detail
+    assert "odoo --version exit=127" in dead.detail
+    assert not shell.spawned and engine.runs.get_artifacts(job.job_id) is not None
+
+
 def test_unexpected_admit_error_dead_letters_then_raises(world):
     engine, shell, _ = world
     shell.replies[0] = (["devcontainer", "up"], Completed(0, "x"))
@@ -235,6 +333,44 @@ def test_terminate_signals_the_process_group(world):
     run.proc = shell.proc = FakeProc(hang=True)
     run.terminate()
     assert shell.groups == [signal.SIGTERM] and shell.proc.terminated
+
+
+def test_a_stop_kill_that_did_not_run_is_noted_in_the_detail(world):
+    engine, shell, _ = world
+    shell.reply(["docker", "exec", "c", "pkill"], Completed(1, "", "no such container"))
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    (job,) = _submit(engine, ("qoc", "71"))
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    detail = engine.jobs.get(job.job_id).detail
+    assert "[the container-side kill did not run (exit 1: no such container)" in detail
+
+
+def test_a_stop_on_a_finished_host_process_kills_nothing_in_the_container(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "72"))
+    run = JobRun(engine, job)
+    run.proc = shell.proc = FakeProc()  # already exited
+    run.terminate()
+    run._kill_after_stop()
+    assert not run.stop_requested and not shell.commands("docker", "exec")
+
+
+def test_a_stop_after_the_deadline_kill_keeps_the_first_note(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "73"))
+    run = JobRun(engine, job)
+    run.container_id = "c"
+    run.stop_requested = True
+    run.container_kill_note = "first"
+    run._kill_after_stop()
+    assert run.container_kill_note == "first" and not shell.commands("docker", "exec")
 
 
 def test_request_stop_does_not_deadlock_when_the_lock_is_held(world):
@@ -320,6 +456,80 @@ def test_gate_blocks_admission_until_memory_returns(world):
     assert "waiting" in logs[0]
 
 
+def _ticking_clock(step_us):
+    """A clock that moves ``step_us`` forward on every call.
+
+    It starts at the wall clock: ``mark_running`` stamps the job row with the
+    real time, and the job row's ``ended_us`` (taken from this clock since the
+    run row's clock moved to the spawn) must never fall below it.
+    """
+    now = [now_us()]
+
+    def clock():
+        now[0] += step_us
+        return now[0]
+
+    return clock
+
+
+def test_the_memory_wait_is_bounded_and_leaves_the_job_pending(world):
+    engine, shell, mem = world
+    _write_atomic(mem, "MemAvailable: 2048 kB\n")
+    engine.clock = _ticking_clock(1_000_000_000)  # 1000 s per call; limit is 1800 s
+    logs = []
+    engine.log = logs.append
+    (job,) = _submit(engine, ("qoc", "51"))
+    engine.run()
+    assert engine.jobs.get(job.job_id).state is JobState.PENDING and not shell.spawned
+    assert len(logs) == 2 and "waiting" in logs[0]
+    assert "1800 s" in logs[1] and "1024 MB threshold" in logs[1]
+    assert "last measured: 2 MB" in logs[1] and "remain PENDING" in logs[1]
+
+
+def test_an_unreadable_figure_is_named_when_the_wait_ends(world):
+    engine, _, mem = world
+    mem.write_text("garbage")
+    engine.clock = _ticking_clock(2_000_000_000)
+    logs = []
+    engine.log = logs.append
+    _submit(engine, ("qoc", "52"))
+    engine.run()
+    assert "no readable figure" in logs[-1]
+
+
+def test_a_running_job_resets_the_wait_clock(world):
+    engine, _, mem = world
+    _write_atomic(mem, "MemAvailable: 10 kB\n")
+    now = [0]
+    engine.clock = lambda: now[0]
+    engine._last_admit_us = 0
+    busy = threading.Event()
+    worker = threading.Thread(target=busy.wait)
+    worker.start()
+    try:
+        now[0] = 5000 * 1_000_000  # far past the 1800 s limit
+        # a live job holds the memory, so this is not a stall
+        assert engine._waited_too_long([worker]) is False
+        assert engine._last_admit_us == now[0]
+    finally:
+        busy.set()
+        worker.join()
+    now[0] += 1799 * 1_000_000
+    assert engine._waited_too_long([]) is False
+    now[0] += 1_000_000
+    assert engine._waited_too_long([]) is True
+
+
+def test_an_admission_within_the_timeout_is_unaffected(world):
+    engine, shell, _ = world
+    engine.settings = dataclasses.replace(engine.settings, admit_timeout_s=0)
+    engine.clock = _ticking_clock(1_000_000_000)
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "53"))
+    engine.run()
+    assert engine.jobs.get(job.job_id).state is JobState.DONE and not engine.errors
+
+
 def _write_atomic(path, text):
     """Write-then-rename, so a concurrent reader never sees a partial file."""
     tmp = path.with_name(path.name + ".tmp")
@@ -399,7 +609,28 @@ def test_request_stop_terminates_running_sessions(world):
     engine.request_stop()
     t.join(10)
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert len(shell.commands("docker", "exec", "c", "pkill")) == 1
+    assert dead.detail.count("[a kill was sent to the container-side claude") == 1
+
+
+def test_a_stop_kill_uses_the_configured_entry(world):
+    """The stop path renders the pkill pattern with settings.entry, as the deadline does."""
+    engine, shell, _ = world
+    engine.settings = dataclasses.replace(engine.settings, entry="/x:y")
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    _submit(engine, ("qoc", "71"))
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    (cmd,) = shell.commands("docker", "exec", "c", "pkill")
+    assert cmd[-1] == lifecycle.kill_pattern("71", "/x:y") and "/x:y" in cmd[-1]
 
 
 def test_idle_check_failure_never_fails_a_job(world):
@@ -422,15 +653,47 @@ def test_worktree_is_left_alone_when_reap_cannot_prove_a_push(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     (job,) = _submit(engine, ("qoc", "90"))
-    d = bundle_dir(job.job_id)
-    d.mkdir(parents=True)
-    (d / "task.json").write_text(
+    write_task_record(
+        job.job_id,
+        job.task_id,
         json.dumps(
             {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
-        )
+        ),
     )
     engine.run()
     assert "does not exist" in engine.notes[job.job_id]["reap"]
+
+
+def test_a_pushed_worktree_is_reaped_through_the_container_before_the_idle_check(
+    world, settings
+):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "92"))
+    (settings.workspace("qoc") / ".worktrees/x").mkdir(parents=True)
+    write_task_record(
+        job.job_id,
+        job.task_id,
+        json.dumps(
+            {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
+        ),
+    )
+    sha = "c" * 40
+    git = [*lifecycle.render_exec_prefix(settings, "qoc"), "--", "git"]
+    wt = "/mnt/extra-addons/.worktrees/x"
+    shell.reply([*git, "-C", wt, "status"], Completed(0, ""))
+    shell.reply([*git, "-C", wt, "rev-parse"], Completed(0, sha + "\n"))
+    shell.reply(
+        [*git, "-C", "/mnt/extra-addons", "ls-remote"],
+        Completed(0, f"{sha}\trefs/heads/feat\n"),
+    )
+    engine.run()
+    assert engine.notes[job.job_id]["reaped"] is True
+    argvs = [c for c, _ in shell.calls]
+    removal = next(i for i, c in enumerate(argvs) if "remove" in c)
+    assert argvs[removal][:2] == ["devcontainer", "exec"]
+    idle = [i for i, c in enumerate(argvs) if c[:2] == ["docker", "compose"]]
+    assert all(removal < i for i in idle)
 
 
 def test_reap_exception_is_contained(world, monkeypatch):
@@ -482,6 +745,18 @@ def test_cli_usage_errors(monkeypatch, tmp_path, capsys):
     assert JobStore().list_by_state(JobState.PENDING) == []  # nothing stored
 
 
+def test_cli_missing_invariants_file_is_a_usage_error(monkeypatch, tmp_path, capsys):
+    _env(monkeypatch, tmp_path)
+    gone = tmp_path / "gone.md"
+    monkeypatch.setenv("DISPATCH_INVARIANTS_FILE", str(gone))
+    brief = tmp_path / "b.md"
+    brief.write_text("x")
+    arg = json.dumps([{"repo": "qoc", "task": "1", "brief": str(brief)}])
+    assert cli.main(["run", arg]) == cli.EXIT_USAGE
+    assert str(gone) in capsys.readouterr().err
+    assert JobStore().list_by_state(JobState.PENDING) == []  # not a dead letter
+
+
 def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
     _env(monkeypatch, tmp_path)
     mem = tmp_path / "mem"
@@ -508,8 +783,8 @@ def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
                     },
                     {
                         "Type": "bind",
-                        "Source": str(artifacts_root()),
-                        "Destination": "/artifacts",
+                        "Source": str(odoo_dev_dir()),
+                        "Destination": "/usr/local/share/odoo-dev",
                     },
                 ]
             ),
@@ -597,7 +872,10 @@ def test_a_stop_while_spawning_terminates_the_new_session(world):
     (job,) = _submit(engine, ("qoc", "121"))
     engine.run()
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert shell.commands("docker", "exec", "c", "pkill")
+    assert "container-side" in dead.detail
 
 
 def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatch):
@@ -649,6 +927,23 @@ def test_resume_with_a_fatal_memory_error_still_reports_the_pending_jobs(
     assert cli.main(["run"]) == cli.EXIT_JOB_ERROR
     out = capsys.readouterr()
     assert "remain PENDING" in out.err
+    report = json.loads(out.out)
+    assert [(j["job_id"], j["state"]) for j in report["jobs"]] == [
+        (job.job_id, "PENDING")
+    ]
+
+
+def test_the_bounded_memory_wait_exits_one_and_names_the_threshold(
+    monkeypatch, tmp_path, capsys
+):
+    _cli_world(monkeypatch, tmp_path, "MemAvailable: 3072 kB\n")
+    monkeypatch.setenv("DISPATCH_ADMIT_TIMEOUT_S", "0")
+    monkeypatch.setenv("MIN_FREE_GB", "1")
+    store = JobStore()
+    (job,) = queue.submit(store, [queue.JobSpec("qoc", "1", "x")], "b")
+    assert cli.main(["run"]) == cli.EXIT_JOB_ERROR
+    out = capsys.readouterr()
+    assert "1024 MB threshold" in out.err and "last measured: 3 MB" in out.err
     report = json.loads(out.out)
     assert [(j["job_id"], j["state"]) for j in report["jobs"]] == [
         (job.job_id, "PENDING")

@@ -5,14 +5,15 @@ import os
 import subprocess
 
 import pytest
-from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir
+from odoo_sdk.state.dispatch_state import bundle_dir, odoo_dev_dir
 from odoo_sdk.state.jobs import JobStore
 from odoo_sdk.state.runs_store import RunOutcome, RunStore
 
 from dispatcher import collect, lifecycle, queue
 from dispatcher.lifecycle import Completed, Shell
 from dispatcher.reap import host_worktree, reap
-from support import GOOD, FakeShell, stream
+from dispatcher.settings import DEFAULT_ENTRY
+from support import GOOD, FakeShell, stream, write_task_record
 
 
 def test_exec_command_line_is_section_eight_exactly(settings):
@@ -27,19 +28,23 @@ def test_exec_command_line_is_section_eight_exactly(settings):
         "--workspace-folder",
         ws,
         "--remote-env",
-        "ODOO_DEV_STATE_DIR=/artifacts/job-1",
+        "ODOO_DEV_STATE_DIR=/usr/local/share/odoo-dev/dispatch/artifacts/job-1",
         "--remote-env",
         "ODOO_UNATTENDED=1",  # the contract with plugins/odoo-dev/hooks/unattended-guard.sh
         "--",
     ]
-    assert argv[11:14] == ["claude", "-p", "1234\n\nthe brief"]
-    rest = argv[14:]
-    assert rest[:4] == [
-        "--agent",
-        settings.agent,
-        "--append-system-prompt-file",
-        settings.invariants_file,
+    assert argv[11:14] == [
+        "claude",
+        "-p",
+        "/odoo-dev:implement 1234\n\nthe brief",  # the entry, then the task id
     ]
+    rest = argv[14:]
+    assert "--agent" not in argv  # the forked command names its own agent
+    assert rest[:2] == [
+        "--append-system-prompt",
+        "Standing line.\nNever ask.\n",  # the file's text, not its path
+    ]
+    assert settings.invariants_file not in argv
     assert (
         "--output-format" in rest
         and rest[rest.index("--output-format") + 1] == "stream-json"
@@ -47,21 +52,33 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert "--verbose" in rest
     assert json.loads(rest[rest.index("--json-schema") + 1])["required"][0] == "summary"
     assert rest[rest.index("--permission-mode") + 1] == "dontAsk"
-    denied = rest[rest.index("--disallowedTools") + 1].split()
-    assert denied == ["Bash(docker:*)", "Edit(~/.claude/**)", "Write(~/.claude/**)"]
+    denied = [rest[i + 1] for i, arg in enumerate(rest) if arg == "--disallowedTools"]
+    assert denied == [
+        "Bash(docker:*)",
+        "Edit(//usr/local/share/claude-home/**)",
+        "Write(//usr/local/share/claude-home/**)",
+        "mcp__odoo-mcp__start_task",
+        "mcp__odoo-mcp__stop_task",
+    ]
+    assert not any(" " in rule for rule in denied)  # one rule per argument
+    assert not any("~/.claude" in a for a in argv)
     assert "--override-config" not in argv
     assert "--max-turns" not in argv and "--max-budget-usd" not in argv
     assert not any("COMPOSE_PROJECT_NAME" in a for a in argv)
 
 
-def test_up_command_line_mounts_the_bundle_root(settings):
+def test_up_command_line_passes_no_mount(settings):
     argv = lifecycle.render_up(settings, "qoc")
     assert argv[:2] == ["devcontainer", "up"]
     assert "--override-config" not in argv
-    mount = argv[argv.index("--mount") + 1]
-    assert mount == f"type=bind,source={artifacts_root()},target=/artifacts"
+    # A running container ignores --mount; the Feature's odoo-dev bind carries the bundle.
+    assert "--mount" not in argv
+    assert "--additional-features" in argv
     assert argv[argv.index("--workspace-folder") + 1] == str(settings.workspace("qoc"))
-    assert "--additional-features" not in argv
+    features = argv[argv.index("--additional-features") + 1]
+    assert features == (
+        '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
+    )
     from dataclasses import replace
 
     argv = lifecycle.render_up(replace(settings, additional_features="{}"), "qoc")
@@ -69,10 +86,10 @@ def test_up_command_line_mounts_the_bundle_root(settings):
 
 
 def test_child_env_never_carries_compose_project_name():
-    env = lifecycle.child_env(["a", "b"], {"COMPOSE_PROJECT_NAME": "x", "HOME": "/h"})
+    env = lifecycle.child_env({"COMPOSE_PROJECT_NAME": "x", "HOME": "/h"})
     assert "COMPOSE_PROJECT_NAME" not in env
-    assert env["ODOO_ACTIVE_REPOS"] == "a,b" and env["HOME"] == "/h"
-    assert "COMPOSE_PROJECT_NAME" not in lifecycle.child_env([])
+    assert env == {"HOME": "/h"}
+    assert "COMPOSE_PROJECT_NAME" not in lifecycle.child_env()
 
 
 def _up_ok(cid="cid1"):
@@ -103,7 +120,7 @@ def test_up_failures(settings, reply):
         lifecycle.up(shell, settings, "qoc", {})
 
 
-def _mounts(settings, artifacts=None, workspace=None):
+def _mounts(settings, odoo_dev=None, workspace=None):
     return json.dumps(
         [
             {
@@ -113,8 +130,8 @@ def _mounts(settings, artifacts=None, workspace=None):
             },
             {
                 "Type": "bind",
-                "Source": str(artifacts or artifacts_root()),
-                "Destination": "/artifacts",
+                "Source": str(odoo_dev or odoo_dev_dir()),
+                "Destination": "/usr/local/share/odoo-dev",
             },
         ]
     )
@@ -141,20 +158,21 @@ def test_mount_assertion_catches_missing_binds(settings, stdout, needle):
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
 
 
-def test_mount_assertion_catches_wrong_source_and_missing_artifacts(settings, tmp_path):
+def test_mount_assertion_catches_wrong_source_and_wrong_odoo_dev(settings, tmp_path):
     shell = FakeShell()
     shell.reply(
         ["docker", "inspect"],
         Completed(
             0,
             _mounts(
-                settings, artifacts=tmp_path / "other", workspace=tmp_path / "wrong"
+                settings, odoo_dev=tmp_path / "other", workspace=tmp_path / "wrong"
             ),
         ),
     )
     with pytest.raises(lifecycle.MountInvalidError) as err:
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
-    assert "workspace-folder" in err.value.detail and "/artifacts" in err.value.detail
+    detail = err.value.detail
+    assert "workspace-folder" in detail and "/usr/local/share/odoo-dev" in detail
 
 
 def test_mount_assertion_inspect_failure(settings):
@@ -221,36 +239,36 @@ def test_shell_wraps_subprocess(tmp_path):
 # -- reap ---------------------------------------------------------------
 
 
-def _git(*args, cwd):
-    subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args],
-        cwd=cwd,
-        check=True,
-        capture_output=True,
-        env={
-            **os.environ,
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-        },
-    )
+WT = "/mnt/extra-addons/.worktrees/t1"
+HEAD = "a" * 40
 
 
 @pytest.fixture
-def repo(tmp_path):
-    remote = tmp_path / "remote.git"
-    work = tmp_path / "repos" / "qoc"
-    work.mkdir(parents=True)
-    _git("init", "--bare", "-b", "main", str(remote), cwd=tmp_path)
-    _git("init", "-b", "main", cwd=work)
-    _git("remote", "add", "origin", str(remote), cwd=work)
-    (work / "f").write_text("1")
-    _git("add", "f", cwd=work)
-    _git("commit", "-m", "init", cwd=work)
-    _git("push", "origin", "main", cwd=work)
-    _git("worktree", "add", "-b", "feat", ".worktrees/t1", cwd=work)
-    return work
+def worktree(settings):
+    """The worktree as the host sees it through the mount: it only has to exist."""
+    (settings.workspace("qoc") / ".worktrees/t1").mkdir(parents=True)
+
+
+def _exec(settings):
+    """The argv every container-side command must start with."""
+    return lifecycle.render_exec_prefix(settings, "qoc") + ["--"]
+
+
+def _container_git(settings, shell, *, status="", head=HEAD, remote=None, rc=None):
+    """Script the container-side git answers; ``rc`` fails the named command."""
+    pre = _exec(settings) + ["git"]
+    remote = f"{HEAD}\trefs/heads/feat\n" if remote is None else remote
+    rc = rc or {}
+    for name, prefix, out in [
+        ("remove", ["-C", "/mnt/extra-addons", "worktree", "remove"], ""),
+        ("ls-remote", ["-C", "/mnt/extra-addons", "ls-remote"], remote),
+        ("rev-parse", ["-C", WT, "rev-parse"], head + "\n"),
+        ("status", ["-C", WT, "status"], status),
+    ]:
+        if name in rc:
+            shell.reply(pre + prefix, Completed(rc[name], "", "bad"))
+        else:
+            shell.reply(pre + prefix, Completed(0, out))
 
 
 def test_host_worktree_translation(tmp_path):
@@ -261,31 +279,93 @@ def test_host_worktree_translation(tmp_path):
     assert host_worktree("/elsewhere/x", tmp_path) is None
 
 
-def test_reap_leaves_an_unpushed_branch_alone(repo):
-    result = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    assert not result.reaped and "does not exist on the remote" in result.note
-    assert (repo / ".worktrees/t1").is_dir()
-
-
-def test_reap_removes_a_pushed_matching_worktree(repo):
-    _git("push", "origin", "feat", cwd=repo / ".worktrees/t1")
-    result = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    assert result.reaped
-    assert not (repo / ".worktrees/t1").exists()
-
-
-def test_reap_refuses_dirty_and_diverged_worktrees(repo):
-    wt = repo / ".worktrees/t1"
-    _git("push", "origin", "feat", cwd=wt)
-    (wt / "new").write_text("x")
-    assert (
-        "uncommitted"
-        in reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat").note
+def test_render_exec_prefix_names_the_project_container(settings):
+    assert lifecycle.render_exec_prefix(settings, "qoc") == [
+        "devcontainer",
+        "exec",
+        "--config",
+        str(settings.config("qoc")),
+        "--workspace-folder",
+        str(settings.workspace("qoc")),
+    ]
+    assert lifecycle.render_exec(settings, "qoc", "1", "j", "b")[:6] == (
+        lifecycle.render_exec_prefix(settings, "qoc")
     )
-    _git("add", "new", cwd=wt)
-    _git("commit", "-m", "more", cwd=wt)
-    note = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat").note
-    assert "does not match" in note and wt.is_dir()
+
+
+def test_reap_removes_a_pushed_matching_worktree_through_the_container(
+    settings, worktree
+):
+    shell = FakeShell()
+    _container_git(settings, shell)
+    env = {"PATH": "/bin"}
+    result = reap(shell, settings, "qoc", WT, "feat", env)
+    assert result.reaped and WT in result.note
+    assert [c[len(_exec(settings)) + 1 :] for c, _ in shell.calls] == [
+        ["-C", WT, "status", "--porcelain"],
+        ["-C", WT, "rev-parse", "HEAD"],
+        [
+            "-C",
+            "/mnt/extra-addons",
+            "ls-remote",
+            "--heads",
+            "origin",
+            "refs/heads/feat",
+        ],
+        ["-C", "/mnt/extra-addons", "worktree", "remove", WT],
+    ]
+    assert all(c[: len(_exec(settings))] == _exec(settings) for c, _ in shell.calls)
+    assert all(c[len(_exec(settings))] == "git" for c, _ in shell.calls)
+    assert all(e == env for _, e in shell.calls)
+    assert {t for _, t in shell.timeouts} == {120}
+
+
+@pytest.mark.parametrize(
+    "answers,needle",
+    [
+        ({"status": " M f\n"}, "uncommitted"),
+        ({"remote": ""}, "does not exist on the remote"),
+        ({"remote": f"{'b' * 40}\trefs/heads/feat\n"}, "does not match"),
+    ],
+)
+def test_reap_leaves_an_unpushed_worktree_alone(settings, worktree, answers, needle):
+    shell = FakeShell()
+    _container_git(settings, shell, **answers)
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert not result.reaped and needle in result.note and WT in result.note
+    assert not shell.commands(
+        *_exec(settings), "git", "-C", "/mnt/extra-addons", "worktree"
+    )
+
+
+@pytest.mark.parametrize(
+    "command,reason",
+    [
+        ("status", "git status failed: bad"),
+        ("rev-parse", "git rev-parse failed: bad"),
+        ("ls-remote", "git ls-remote failed: bad"),
+        ("remove", "git worktree remove failed: bad"),
+    ],
+)
+def test_reap_reports_a_failing_container_command_as_a_note(
+    settings, worktree, command, reason
+):
+    shell = FakeShell()
+    _container_git(settings, shell, rc={command: 1})
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert (
+        not result.reaped and reason in result.note and "left in place" in result.note
+    )
+
+
+def test_reap_reports_a_devcontainer_exec_that_cannot_reach_the_container(
+    settings, worktree
+):
+    shell = FakeShell()
+    shell.reply(_exec(settings), Completed(1, "No container found", ""))
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert not result.reaped and "No container found" in result.note
+    assert len(shell.calls) == 1  # it stops at the first failure
 
 
 @pytest.mark.parametrize(
@@ -295,44 +375,17 @@ def test_reap_refuses_dirty_and_diverged_worktrees(repo):
         ("/mnt/extra-addons/x", "", "nothing reaped"),
         ("/etc/passwd", "b", "not a worktree"),
         ("/mnt/extra-addons/../escape", "b", "not a worktree"),
+        ("/mnt/extra-addons/a/../../etc", "b", "not a worktree"),
         ("/mnt/extra-addons/", "b", "not a worktree"),
-        ("/mnt/extra-addons/missing", "b", "does not exist"),
+        ("/mnt/extra-addonsx/y", "b", "not a worktree"),
+        ("/mnt/extra-addons/missing", "b", "does not exist; nothing to reap"),
     ],
 )
-def test_reap_guards(repo, path, branch, needle):
-    result = reap(Shell(), repo, path, branch)
+def test_reap_guards(settings, worktree, path, branch, needle):
+    shell = FakeShell()
+    result = reap(shell, settings, "qoc", path, branch)
     assert not result.reaped and needle in result.note
-
-
-def test_reap_reports_git_failures(repo):
-    shell = FakeShell()
-    wt = "/mnt/extra-addons/.worktrees/t1"
-    for prefix, reason in [
-        (["git", "-C", str(repo / ".worktrees/t1"), "status"], "git status failed"),
-        (
-            ["git", "-C", str(repo / ".worktrees/t1"), "rev-parse"],
-            "git rev-parse failed",
-        ),
-        (["git", "-C", str(repo), "ls-remote"], "git ls-remote failed"),
-    ]:
-        shell = FakeShell()
-        shell.reply(prefix, Completed(1, "", "bad"))
-        shell.reply(
-            ["git", "-C", str(repo / ".worktrees/t1"), "status"], Completed(0, "")
-        )
-        shell.reply(["git"], Completed(0, "abc\n"))
-        shell.replies.sort(key=lambda r: -len(r[0]))
-        assert reason in reap(shell, repo, wt, "feat").note
-    shell = FakeShell()
-    shell.reply(["git", "-C", str(repo), "worktree"], Completed(1, "", "locked"))
-    shell.reply(["git", "-C", str(repo / ".worktrees/t1"), "status"], Completed(0, ""))
-    shell.reply(["git"], Completed(0, "abc\n"))
-    shell.replies.sort(key=lambda r: -len(r[0]))
-    shell.replies.insert(
-        0,
-        (["git", "-C", str(repo), "ls-remote"], Completed(0, "abc\trefs/heads/feat\n")),
-    )
-    assert "locked" in reap(shell, repo, wt, "feat").note
+    assert shell.calls == []  # no guard reaches the container
 
 
 # -- collection and recording -------------------------------------------
@@ -358,16 +411,15 @@ def test_stream_parser_flags_unreadable_result_and_ignores_noise():
 
 
 def test_task_record_helpers(state_root):
-    d = bundle_dir("j1")
-    d.mkdir(parents=True)
-    assert collect.read_task_record("j1") == {}
-    (d / "task.json").write_text("{bad")
-    assert collect.read_task_record("j1") == {}
-    (d / "task.json").write_text("[1]")
-    assert collect.read_task_record("j1") == {}
+    bundle_dir("j1").mkdir(parents=True)
+    assert collect.read_task_record("j1", "42") == {}
+    write_task_record("j1", "42", "{bad")
+    assert collect.read_task_record("j1", "42") == {}
+    write_task_record("j1", "42", "[1]")
+    assert collect.read_task_record("j1", "42") == {}
     record = {"build": {"branch": "b", "worktree": "/w"}, "pr": {"number": 7}}
-    (d / "task.json").write_text(json.dumps(record))
-    got = collect.read_task_record("j1")
+    write_task_record("j1", "42", json.dumps(record))
+    got = collect.read_task_record("j1", "42")
     assert (
         collect.branch_of(got),
         collect.worktree_of(got),
@@ -377,6 +429,25 @@ def test_task_record_helpers(state_root):
     assert collect.pr_number_of({"pr": {"number": True}}) == 0
     assert collect.pr_number_of({}) == 0
     assert collect.branch_of({"build": []}) == "" and collect.worktree_of({}) == ""
+
+
+def test_the_record_state_dir_sh_writes_is_the_record_the_collector_reads(state_root):
+    record = {"build": {"branch": "b", "worktree": "/w"}}
+    path = write_task_record("j1", "42", json.dumps(record))
+    assert path == bundle_dir("j1") / "tasks" / "42" / "task.json"
+    got = collect.read_task_record("j1", "42")
+    assert (collect.branch_of(got), collect.worktree_of(got)) == ("b", "/w")
+    assert collect.collect_artifacts("j1", "42").has_task_json
+    assert collect.read_task_record("j1", "43") == {}  # another task's record
+
+
+def test_a_top_level_task_json_is_not_the_agents_record(state_root):
+    bundle_dir("j1").mkdir(parents=True)
+    (bundle_dir("j1") / "task.json").write_text('{"build": {"branch": "old"}}')
+    assert collect.read_task_record("j1", "42") == {}
+    harvest = collect.collect_artifacts("j1", "42")
+    assert not harvest.has_task_json
+    assert any("the agent wrote no task.json" in line for line in harvest.missing)
 
 
 def _job():
@@ -404,12 +475,15 @@ def test_run_row_is_written_before_artifacts_are_collected(monkeypatch, tmp_path
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us + 3,
         ended_us=job.started_us + 5,
         failed=False,
         transcript=None,
         record={"build": {"branch": "feat"}},
     )
     assert order == ["run", "collect"]
+    row = runs.get_run("sess-1")  # the run row's clock is the argument, not the job's
+    assert (row.started_us, row.ended_us) == (job.started_us + 3, job.started_us + 5)
     assert write.recorded and write.outcome is RunOutcome.COMPLETED
     run = runs.get_run("sess-1")
     assert (run.branch, run.tool_version, run.brief, run.task_id) == (
@@ -432,6 +506,7 @@ def test_absence_changes_nothing_else_and_failed_run_is_failed():
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=True,
         transcript=None,
@@ -451,6 +526,7 @@ def test_no_session_means_no_run_row_but_still_a_bundle():
         runs,
         parser=collect.StreamParser(),
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=True,
         transcript=None,
@@ -493,6 +569,7 @@ def test_a_failing_run_write_does_not_stop_collection_and_is_surfaced(monkeypatc
         runs,
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=False,
         transcript=None,
@@ -512,6 +589,7 @@ def test_collection_failure_is_a_note_not_an_error(monkeypatch):
         RunStore(),
         parser=parser,
         job=job,
+        started_us=job.started_us,
         ended_us=job.started_us,
         failed=False,
         transcript=None,
@@ -525,6 +603,10 @@ def test_kill_in_container_notes_what_is_known():
     note = lifecycle.kill_in_container(shell, "cid", "12.3", {})
     cmd = shell.commands("docker", "exec", "cid", "pkill")[0]
     assert cmd[-1] == lifecycle.kill_pattern("12.3") and "not verified" in note
+    lifecycle.kill_in_container(shell, "cid", "12.3", {}, "/x:run")  # a set entry
+    assert shell.commands("docker", "exec", "cid", "pkill")[-1][-1] == (
+        lifecycle.kill_pattern("12.3", "/x:run")
+    )
     shell.reply(["docker", "exec"], Completed(1, "", "no process"))
     assert "may still be alive" in lifecycle.kill_in_container(shell, "cid", "1", {})
     assert "may still be alive" in lifecycle.kill_in_container(shell, "", "1", {})
@@ -533,19 +615,37 @@ def test_kill_in_container_notes_what_is_known():
 @pytest.mark.parametrize(
     "cmdline,matches",
     [
-        ("claude -p 123\n\nbrief", True),
-        ("/usr/local/bin/claude -p 123 more", True),
-        ("node /usr/lib/node_modules/.bin/claude -p 123\n\nbrief", True),
-        ("claude -p 1234\n\nbrief", False),
-        ("claude -p 12\n\nbrief", False),
-        ("claude -p 99\n\nthe brief says claude -p 123 and more", False),
-        ("sh -c claude -p 123 x", False),
+        ("claude -p /odoo-dev:implement 123\n\nbrief", True),
+        ("/usr/local/bin/claude -p /odoo-dev:implement 123 more", True),
+        (
+            "node /usr/lib/node_modules/.bin/claude -p /odoo-dev:implement 123\n\nb",
+            True,
+        ),
+        (
+            "/x/@anthropic-ai/claude-code/bin/claude.exe -p /odoo-dev:implement 123 b",
+            True,
+        ),
+        ("claude.exe -p /odoo-dev:implement 123\n\nbrief", True),
+        ("node /x/@anthropic-ai/claude-code/cli.js -p /odoo-dev:implement 123 b", True),
+        ("cli.js -p /odoo-dev:implement 123\n\nbrief", True),
+        ("claude -p /odoo-dev:implement 1234\n\nbrief", False),
+        ("claude -p /odoo-dev:implement 12\n\nbrief", False),
+        (
+            "claude -p /odoo-dev:implement 99\n\nsays claude -p /odoo-dev:implement 123 x",
+            False,
+        ),
+        ("sh -c claude -p /odoo-dev:implement 123 x", False),
+        ("claude -p /odoo-dev:test 123\n\nbrief", False),  # another entry
+        ("claude -p 123\n\nbrief --agent odoo-dev:odoo-dev-implementer", False),
+        ("claude --agent odoo-dev:odoo-dev-implementer -p 123\n\nbrief", False),
+        ("claude -p /odoo-dev:implementX 123\n\nbrief", False),
+        ("not-claude.exe -p /odoo-dev:implement 123 x", False),
     ],
 )
 def test_kill_pattern_is_anchored(cmdline, matches):
     """Checked with grep -E, the same extended regex dialect pkill uses."""
     found = subprocess.run(
-        ["grep", "-Ezc", "--", lifecycle.kill_pattern("123")],
+        ["grep", "-Ezc", "--", lifecycle.kill_pattern("123", "/odoo-dev:implement")],
         input=cmdline,
         capture_output=True,
         text=True,
@@ -553,8 +653,13 @@ def test_kill_pattern_is_anchored(cmdline, matches):
     assert (found == "1") is matches
 
 
-def test_kill_pattern_cannot_be_widened_by_a_dotted_task():
+def test_kill_pattern_defaults_to_the_default_entry():
+    assert lifecycle.kill_pattern("5") == lifecycle.kill_pattern("5", DEFAULT_ENTRY)
+
+
+def test_kill_pattern_cannot_be_widened_by_a_dotted_task_or_entry():
     assert lifecycle.kill_pattern("1.2").count(r"1\.2") == 1
+    assert lifecycle.kill_pattern("1", "/a.b:c").count(r"/a\.b:c") == 1
 
 
 def test_mount_assertion_checks_the_workspace_destination(settings):
@@ -595,6 +700,62 @@ def test_up_timeout_is_a_start_failure(settings):
         lifecycle.up(shell, settings, "qoc", {})
 
 
+class _Clock:
+    """A fake clock whose sleep advances it, so a wait expires without waiting."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.slept = []
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def test_wait_ready_returns_when_both_probes_pass():
+    shell, clock = FakeShell(), _Clock()
+    lifecycle.wait_ready(shell, "cid", {}, sleep=clock.sleep, clock=lambda: clock.now)
+    assert shell.commands("docker", "exec", "cid", "pg_isready")
+    assert shell.commands("docker", "exec", "cid", "odoo", "--version")
+    assert clock.slept == []
+    assert {t for _, t in shell.timeouts} == {lifecycle.READY_PROBE_TIMEOUT_S}
+
+
+def test_wait_ready_retries_until_both_pass():
+    shell, clock = FakeShell(), _Clock()
+    shell.queue_reply(["docker", "exec", "cid", "pg_isready"], Completed(2))
+    shell.queue_reply(["docker", "exec", "cid", "odoo"], Completed(1), Completed(1))
+    lifecycle.wait_ready(shell, "cid", {}, sleep=clock.sleep, clock=lambda: clock.now)
+    assert len(shell.commands("docker", "exec", "cid", "odoo", "--version")) == 3
+    assert clock.slept == [lifecycle.READY_POLL_S] * 2
+
+
+def test_wait_ready_expiry_names_both_probes_and_the_last_output():
+    shell, clock = FakeShell(), _Clock()
+    shell.reply(["docker", "exec", "cid", "pg_isready"], Completed(2, "", "x" * 2000))
+    shell.reply(["docker", "exec", "cid", "odoo"], Completed(124, "", "timed out"))
+    with pytest.raises(lifecycle.ContainerStartError) as raised:
+        lifecycle.wait_ready(
+            shell,
+            "cid",
+            {},
+            timeout_s=10,
+            poll_s=4,
+            sleep=clock.sleep,
+            clock=lambda: clock.now,
+        )
+    detail = raised.value.detail
+    assert detail.startswith("readiness: not ready after 10s: pg_isready exit=2: ")
+    assert "x" * 1000 in detail and "x" * 1001 not in detail
+    assert "odoo --version exit=124: timed out" in detail
+    assert clock.slept == [4, 4, 4]  # attempts at t=0, 4, 8, 12: expired at 12
+
+
+def test_wait_ready_defaults_are_bounded_under_the_up_timeout():
+    assert lifecycle.READY_TIMEOUT_S < lifecycle.UP_TIMEOUT_S
+    assert lifecycle.READY_PROBE_TIMEOUT_S < lifecycle.READY_TIMEOUT_S
+
+
 def test_real_killpg_reaches_a_grandchild_holding_the_pipe():
     """sh runs a background sleep that inherits the pipe; killpg must free it."""
     import time
@@ -617,9 +778,9 @@ def _orphan(shell=None, session="s-orphan", worktree=None):
     if session:
         store.set_session(job.job_id, session)
     if worktree:
-        d = bundle_dir(job.job_id)
-        d.mkdir(parents=True)
-        (d / "task.json").write_text(json.dumps({"build": {"worktree": worktree}}))
+        write_task_record(
+            job.job_id, job.task_id, json.dumps({"build": {"worktree": worktree}})
+        )
     return store, runs, job
 
 
@@ -633,7 +794,10 @@ def test_reconcile_inspects_and_writes_a_failed_run_for_a_session(settings):
     assert "container qoc-odoo-1 is running" in dead.detail
     assert "may still be alive" in dead.detail and "does not exist" in dead.detail
     assert "FAILED run row was written" in dead.detail
-    assert runs.get_run("s-orphan").outcome is RunOutcome.FAILED
+    assert "timed from the admit time" in dead.detail
+    assert "no spawn time survives a restart" in dead.detail
+    row = runs.get_run("s-orphan")
+    assert row.outcome is RunOutcome.FAILED and row.started_us == dead.started_us
     assert runs.get_artifacts(job.job_id) is not None
 
 
@@ -669,12 +833,34 @@ def test_reconcile_survives_a_failing_run_write(settings, monkeypatch):
     assert "could not be recorded" in store2.get(job2.job_id).detail
 
 
-def test_artifacts_bind_is_asserted_on_its_own(settings):
+def test_odoo_dev_bind_is_asserted_on_its_own(settings):
     shell = FakeShell()
-    mounts = json.loads(_mounts(settings))[:1]  # workspace right, no /artifacts
+    mounts = json.loads(_mounts(settings))[:1]  # workspace right, no Feature bind
     shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
-    with pytest.raises(lifecycle.MountInvalidError, match="/artifacts"):
+    with pytest.raises(lifecycle.MountInvalidError, match="personal-features") as err:
         lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+    assert "stop it and let the dispatcher create it" in err.value.detail
+    assert "/usr/local/share/odoo-dev" in err.value.detail
+
+
+def test_bundle_root_outside_the_odoo_dev_bind_is_refused(
+    settings, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DISPATCH_ARTIFACTS_DIR", str(tmp_path / "elsewhere"))
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(0, _mounts(settings)))
+    with pytest.raises(lifecycle.MountInvalidError, match="cannot see it") as err:
+        lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
+    assert "personal-features" not in err.value.detail  # the bind itself is right
+
+
+def test_bundle_root_under_the_odoo_dev_bind_passes(settings, monkeypatch):
+    monkeypatch.setenv(
+        "DISPATCH_ARTIFACTS_DIR", str(odoo_dev_dir() / "dispatch" / "other")
+    )
+    shell = FakeShell()
+    shell.reply(["docker", "inspect"], Completed(0, _mounts(settings)))
+    lifecycle.assert_mounts(shell, settings, "qoc", "cid", {})
 
 
 def test_every_subprocess_has_a_timeout(settings):
@@ -682,21 +868,17 @@ def test_every_subprocess_has_a_timeout(settings):
     lifecycle.kill_in_container(shell, "cid", "1", {})
     shell.reply(["docker", "compose"], Completed(1))
     lifecycle.stop_project(shell, "qoc", {})
-    reap(shell, settings.workspace("qoc"), "/mnt/extra-addons/.w", "b")
     seen = {tuple(a[:2]): t for a, t in shell.timeouts}
     assert seen[("docker", "exec")] == 30
     assert seen[("docker", "stop")] == 120 and seen[("docker", "compose")] == 120
 
 
-def test_git_calls_have_a_timeout(repo):
+def test_container_git_calls_have_a_timeout(settings, worktree):
     shell = FakeShell()
-    shell.reply(["git"], Completed(0, ""))
-    shell.reply(
-        ["git", "-C", str(repo), "ls-remote"], Completed(0, "abc\trefs/heads/f\n")
-    )
-    reap(shell, repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    gits = [t for a, t in shell.timeouts if a[0] == "git"]
-    assert gits and set(gits) == {120}
+    _container_git(settings, shell)
+    reap(shell, settings, "qoc", WT, "feat")
+    execs = [t for a, t in shell.timeouts if a[:2] == ["devcontainer", "exec"]]
+    assert len(execs) == 4 and set(execs) == {120}
 
 
 def test_reconcile_inspect_has_a_timeout(settings):
