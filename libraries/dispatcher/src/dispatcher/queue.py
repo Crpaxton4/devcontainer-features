@@ -238,9 +238,3 @@ def pending_jobs(store: JobStore) -> list[Job]:
     for job in jobs:
         first_seen.setdefault(job.repo, len(first_seen))
     return sorted(jobs, key=lambda job: first_seen[job.repo])
-
-
-def live_repos(store: JobStore) -> list[str]:
-    """Repos with a PENDING or RUNNING job: the queue's in-flight projects."""
-    jobs = store.list_by_state(JobState.PENDING) + store.list_by_state(JobState.RUNNING)
-    return sorted({job.repo for job in jobs})

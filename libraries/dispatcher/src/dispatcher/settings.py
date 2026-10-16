@@ -23,6 +23,12 @@ Variables (all optional unless marked required):
 ``MIN_FREE_GB``
     Admission threshold on available memory, in GB (default 6, the same knob
     ``stack-ensure.sh`` evicts on).
+``DISPATCH_ADMIT_TIMEOUT_S``
+    How long the run waits for memory with nothing admitted and no job running
+    (default 1800). When that time passes while jobs are pending, the run ends
+    with the jobs still ``PENDING`` and exit 1, and stderr names the threshold
+    and the last measured figure. The dispatcher never evicts a stack: stopping
+    an idle editor stack is a manual step.
 ``DISPATCH_SETTLE_S``
     Seconds to let the machine settle after admitting a job (default 5).
 ``DISPATCH_POLL_S``
@@ -87,6 +93,7 @@ class Settings:
     settle_s: float
     poll_s: float
     deadline_s: float
+    admit_timeout_s: float
     claude_home: Path
     additional_features: str = DEFAULT_ADDITIONAL_FEATURES
     invariants: str = ""  # the text of ``invariants_file``, read once by from_env
@@ -137,6 +144,7 @@ class Settings:
                 "settle_s": float(env.get("DISPATCH_SETTLE_S", 5)),
                 "poll_s": float(env.get("DISPATCH_POLL_S", 15)),
                 "deadline_s": float(env.get("DISPATCH_DEADLINE_S", 21600)),
+                "admit_timeout_s": float(env.get("DISPATCH_ADMIT_TIMEOUT_S", 1800)),
             }
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc

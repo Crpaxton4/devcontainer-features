@@ -168,7 +168,6 @@ def test_submit_groups_by_project_and_rejects_duplicates(tmp_path):
     assert jobs[3].state is JobState.DEAD_LETTER
     assert jobs[3].dead_reason == DeadReason.DUPLICATE_TASK_IN_FLIGHT.value
     assert [j.job_id for j in queue.pending_jobs(store)] == [j.job_id for j in jobs[:3]]
-    assert queue.live_repos(store) == ["a", "b"]
 
 
 def test_reconcile_orphans_running_jobs():
@@ -242,6 +241,13 @@ def test_settings_defaults_and_errors(tmp_path):
         Settings.from_env({"DISPATCH_REPOS_DIR": "/r"})
     with pytest.raises(SettingsError, match="malformed"):
         Settings.from_env({**env, "MIN_FREE_GB": "x"})
+    assert Settings.from_env(env).admit_timeout_s == 1800
+    assert (
+        Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "90"}).admit_timeout_s
+        == 90
+    )
+    with pytest.raises(SettingsError, match="malformed"):
+        Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "soon"})
     assert normalize_project("QOC_Repo.x") == "qoc_repox"
 
 

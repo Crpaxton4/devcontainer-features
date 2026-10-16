@@ -54,9 +54,11 @@ class AdmissionGate:
         self.settle_s = settle_s
         self._meminfo = meminfo
         self._sleep = sleep
+        self.last_available_kb: int | None = None  # the last good reading
 
     def available_kb(self) -> int:
-        return read_available_kb(self._meminfo)
+        self.last_available_kb = read_available_kb(self._meminfo)
+        return self.last_available_kb
 
     def has_room(self) -> bool:
         """True when measured available memory is at or above the threshold."""

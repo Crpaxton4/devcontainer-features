@@ -29,5 +29,6 @@ def settings(tmp_path):
         settle_s=0,
         poll_s=0.01,
         deadline_s=60,
+        admit_timeout_s=1800,
         claude_home=tmp_path / "claude",
     )
