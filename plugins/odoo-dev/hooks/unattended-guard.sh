@@ -77,7 +77,9 @@ const deny = (reason) => {
   process.exit(0);
 };
 
-const PROTECTED = /^(main|master|dev|develop|staging|uat|production|prod|trunk|release\/.+)$/i;
+// Names, plus Odoo series branches (19.0, 18.0, 17.0-dev, odoo-19.0) for the case where
+// origin/HEAD does not name them. Task branches are <id>-<slug> and match none of these.
+const PROTECTED = /^(main|master|dev|develop|staging|uat|production|prod|trunk|release\/.+|\d+\.\d.*|odoo.*)$/i;
 const CONTAINERS = new Set(["docker", "docker-compose", "podman", "nerdctl", "ctr", "buildah"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 const KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "}",
@@ -184,9 +186,22 @@ const inTree = (target, cwd) => {
 const SHELL_LINE = /(^|[\s|;&(`\/])(bash|sh|zsh|dash|ksh)(\s|$)/;
 const extractHeredocs = (s) => {
   let out = "", quote = null, pending = [], lineStart = 0;
-  const bodies = [];
+  const bodies = [], subs = [];
   for (let i = 0; i < s.length;) {
     const c = s[i];
+    // Inside $( ) the quote state starts afresh, so a heredoc whose << sits in a
+    // $( ) that is itself inside double quotes is still a heredoc, and its body is
+    // taken out instead of being read as commands.
+    if (c === "$" && s[i + 1] === "(" && quote !== "\x27") {
+      subs.push({ q: quote, d: 0 }); quote = null; out += "$("; i += 2; continue;
+    }
+    if (quote === null && subs.length && (c === "(" || c === ")")) {
+      const top = subs[subs.length - 1];
+      if (c === "(") top.d += 1;
+      else if (top.d > 0) top.d -= 1;
+      else quote = subs.pop().q;
+      out += c; i += 1; continue;
+    }
     if (quote) {
       if (c === "\\" && quote === "\"" && i + 1 < s.length) { out += s.slice(i, i + 2); i += 2; continue; }
       if (c === quote) quote = null;
@@ -286,10 +301,39 @@ const parse = (s) => {
 };
 
 // Nested commands: $( ... ) and backticks.
+// Quote-aware: a single-quoted region and an escaped backtick or dollar are text, not
+// a substitution. An unescaped backtick or $( ) inside double quotes DOES run in a
+// real shell, so it is read.
 const nested = (s) => {
   const out = [];
-  for (const m of s.matchAll(/\$\(([^()]*)\)/g)) out.push(m[1]);
-  for (const m of s.matchAll(/`([^`]*)`/g)) out.push(m[1]);
+  let dq = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === "\\") { i += 1; continue; }
+    if (!dq && c === "\x27") {
+      const e = s.indexOf("\x27", i + 1);
+      if (e < 0) break;
+      i = e; continue;
+    }
+    if (c === "\"") { dq = !dq; continue; }
+    if (c === "`") {
+      let j = i + 1;
+      while (j < s.length && s[j] !== "`") j += s[j] === "\\" ? 2 : 1;
+      out.push(s.slice(i + 1, j));
+      i = j; continue;
+    }
+    if (c === "$" && s[i + 1] === "(") {
+      let depth = 1, j = i + 2;
+      while (j < s.length && depth > 0) {
+        if (s[j] === "\\") { j += 2; continue; }
+        if (s[j] === "(") depth += 1;
+        else if (s[j] === ")") depth -= 1;
+        j += 1;
+      }
+      out.push(s.slice(i + 2, j - 1));
+      i = j - 1; continue;
+    }
+  }
   return out;
 };
 
@@ -352,9 +396,9 @@ const checkGh = (args) => {
     if (args[i].startsWith("-")) continue;
     pos.push(args[i]);
   }
-  if (pos[0] === "pr" && ["merge", "ready", "review"].includes(pos[1])) {
+  if (pos[0] === "pr" && ["merge", "ready", "review", "close"].includes(pos[1])) {
     deny("Refused: gh pr " + pos[1] + " is never allowed unattended. A human merges, " +
-         "readies and reviews.");
+         "readies, reviews and closes.");
   }
   if (pos[0] === "pr" && pos[1] === "create") {
     deny("Refused: a direct gh pr create. The odoo-dev:odoo-pr skill owns pull request " +
@@ -362,14 +406,27 @@ const checkGh = (args) => {
   }
   if (pos[0] === "api") {
     // A review route is only refused when the call writes: reading reviews is fine.
-    const mi = args.findIndex((a) => a === "-X" || a === "--method");
-    const method = (mi >= 0 ? (args[mi + 1] || "") : "").toUpperCase();
+    // -X M, -XM, --method M and --method=M all name the method.
+    let method = "";
+    for (let i = 0; i < args.length; i += 1) {
+      const a = args[i];
+      if (a === "-X" || a === "--method") method = args[i + 1] || "";
+      else if (a.startsWith("--method=")) method = a.slice(9);
+      else if (/^-X./.test(a)) method = a.slice(2).replace(/^=/, "");
+    }
+    method = method.toUpperCase();
     const writes = (method !== "" && method !== "GET") ||
-      args.some((a) => /^(-f|-F|--field|--raw-field|--input)$/.test(a));
+      (method === "" && args.some((a) => /^(-f|-F|--field|--raw-field|--input)$/.test(a)));
     if (args.some((a) => /\/pulls\/[^/\s]*\/merge\b/.test(a) ||
                          (writes && /\/pulls\/[^/\s]*\/reviews?\b/.test(a)) || GQL.test(a))) {
       deny("Refused: this gh api call merges or reviews a pull request, which is the same " +
            "as gh pr merge or review.");
+    }
+    // A write to git/refs moves or deletes a branch; /merges merges one. Both are the
+    // git-side force push, delete and merge that this guard already refuses.
+    if (writes && args.some((a) => /\/git\/refs\b/.test(a) || /\/merges\b/.test(a))) {
+      deny("Refused: this gh api call writes a git ref or merges a branch, which is the " +
+           "same as a force push, a remote branch delete or a merge.");
     }
   }
 };
@@ -503,7 +560,8 @@ const checkSimple = (toks, st, depth) => {
 };
 
 function analyse(cmd, st, depth) {
-  const { text, bodies } = extractHeredocs(cmd);
+  // A backslash-newline joins two lines into one command, before anything is read.
+  const { text, bodies } = extractHeredocs(cmd.replace(/\\\r?\n/g, ""));
   for (const seg of parse(text)) checkSimple(seg, st, depth);
   for (const inner of nested(text)) {
     if (depth < 4) analyse(inner, { cwd: st.cwd }, depth + 1);

@@ -338,6 +338,46 @@ envrun 1 "odoo-dev-pr" "echo x > ~/.claude/settings.json"
 if printf '%s' "$OUT" | grep -qF "Claude configuration directory"; then ok "pr fork under ODOO_UNATTENDED, config write -> denied"
 else bad "pr fork config write: out=${OUT:-<silence>}"; fi
 
+# --- backslash line continuations join lines before anything is read ---------------
+denied "continuation: flag on the next line" "force push" "$(printf '%s\n' 'git push origin x \' '--force')"
+denied "continuation: subcommand on the next line" "force push" "$(printf '%s\n' 'git \' 'push --force origin x')"
+denied "continuation: gh pr merge split" "gh pr merge" "$(printf '%s\n' 'gh pr \' '  merge 5')"
+denied "continuation: protected branch on the next line" "protected branch main" "$(printf '%s\n' 'git push origin \' 'main')"
+denied "continuation: docker split" "docker" "$(printf '%s\n' 'doc\' 'ker ps')"
+allowed "continuation: a harmless command" "$(printf '%s\n' 'git status \' '--short')"
+
+# --- quoted text is text: commit messages and PR bodies may name the forbidden things
+QT="'"
+allowed "quoted: escaped backticks in a double-quoted commit message" 'git commit -m "never use \`git push --force\`"'
+allowed "quoted: backticks in a single-quoted commit message" "git commit -m ${QT}never use \`docker ps\` here${QT}"
+allowed "quoted: escaped backticks in a PR body" 'gh-as-owner.sh pr-create /w --body "Do not call \`gh pr merge\`..."'
+allowed "quoted: single-quoted \$( ) is text" "git commit -m ${QT}never run \$(docker ps)${QT}"
+allowed "quoted: heredoc commit message inside \$( ) in double quotes" "$(printf '%s\n' "git commit -m \"\$(cat <<${QT}EOF${QT}" 'never git push --force or `docker ps` or do not' "don${QT}t" 'EOF' ')"')"
+allowed "quoted: heredoc PR body inside \$( )" "$(printf '%s\n' "gh-as-owner.sh pr-create /w --body \"\$(cat <<${QT}EOF${QT}" 'docker ps > tracked.txt; gh pr merge 5' 'EOF' ')"')"
+denied "quoted: an unescaped backtick in double quotes really runs" "docker" 'git commit -m "x `docker ps` y"'
+denied "quoted: a real \$( ) in double quotes runs" "docker" 'echo "$(docker ps)"'
+denied "quoted: a command after a quoted message still counts" "force push" "git commit -m ${QT}a \`b\`${QT} && git push --force origin x"
+
+# --- gh api: every spelling of the method, and the ref and merge routes -------------
+denied "gh api --method=POST on reviews" "merges or reviews" "gh api repos/a/b/pulls/5/reviews --method=POST"
+denied "gh api -XPOST on reviews" "merges or reviews" "gh api repos/a/b/pulls/5/reviews -XPOST"
+denied "gh api force-update of a ref" "git ref" "gh api repos/a/b/git/refs/heads/main -X PATCH -f sha=x -F force=true"
+denied "gh api delete of a ref" "git ref" "gh api repos/a/b/git/refs/heads/x -X DELETE"
+denied "gh api DELETE by --method=" "git ref" "gh api repos/a/b/git/refs/heads/x --method=DELETE"
+denied "gh api ref DELETE by -XDELETE" "git ref" "gh api repos/a/b/git/refs/heads/x -XDELETE"
+denied "gh api merges route" "git ref" "gh api repos/a/b/merges -f base=main -f head=x"
+denied "gh pr close" "gh pr close" "gh pr close 5"
+allowed "gh api reading a ref" "gh api repos/a/b/git/refs/heads/main"
+allowed "gh api reading a ref with --method=GET" "gh api repos/a/b/git/refs/heads/main --method=GET"
+allowed "gh api reading reviews with -XGET" "gh api repos/a/b/pulls/5/reviews -XGET"
+
+# --- Odoo series branches are protected by name ------------------------------------
+denied "push 19.0" "protected branch 19.0" "git push origin 19.0"
+denied "push HEAD:18.0" "protected branch 18.0" "git push origin HEAD:18.0"
+denied "push 17.0-dev" "protected branch 17.0-dev" "git push origin 17.0-dev"
+denied "push odoo-19.0" "protected branch odoo-19.0" "git push origin odoo-19.0"
+allowed "push a task branch <id>-<slug>" "git push -u origin 30412-add-field"
+
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""
 allowed "tester agent, docker" "docker ps" "odoo-dev-tester"
