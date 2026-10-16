@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v4.0.0...odoo-dev-plugin-v4.1.0) (2026-10-16)
+
+
+### Features
+
+* **odoo-dev:** run-tests.sh can run the devcontainer side core (odooNN-bin) when the container and project series differ ([#1106](https://github.com/Crpaxton4/devcontainer-features/issues/1106)) ([30e54b6](https://github.com/Crpaxton4/devcontainer-features/commit/30e54b619cd0d0fcdddc4aa256825bb7a6922f21)), closes [#1055](https://github.com/Crpaxton4/devcontainer-features/issues/1055)
+
+
+### Bug Fixes
+
+* **dispatcher,odoo-dev:** deny the tracking tools and the real config path with one --disallowedTools rule per argument ([5039e81](https://github.com/Crpaxton4/devcontainer-features/commit/5039e81788cda677c57e6a58e2b1fe5b56654b19))
+* **dispatcher,odoo-dev:** deny the tracking tools and the real config path with one --disallowedTools rule per argument; gate the start_task call on ODOO_UNATTENDED ([#1107](https://github.com/Crpaxton4/devcontainer-features/issues/1107)) ([5039e81](https://github.com/Crpaxton4/devcontainer-features/commit/5039e81788cda677c57e6a58e2b1fe5b56654b19))
+* **odoo-dev:** oca_check.py rejects a bad --csv before the scan with a usage error ([#1100](https://github.com/Crpaxton4/devcontainer-features/issues/1100)) ([1730d1d](https://github.com/Crpaxton4/devcontainer-features/commit/1730d1d0c7c1eca42a3bc363b326e95ac1f7d10b)), closes [#1057](https://github.com/Crpaxton4/devcontainer-features/issues/1057)
+* **odoo-dev:** run-tests.sh defaults --test-tags to /&lt;module&gt;; --test-tags all widens ([94379e6](https://github.com/Crpaxton4/devcontainer-features/commit/94379e60899dcfde2970be750b5e40c06781eb2c))
+* **odoo-dev:** run-tests.sh defaults --test-tags to /&lt;module&gt;; --test-tags all widens to every installed module ([#1096](https://github.com/Crpaxton4/devcontainer-features/issues/1096)) ([94379e6](https://github.com/Crpaxton4/devcontainer-features/commit/94379e60899dcfde2970be750b5e40c06781eb2c))
+* **odoo-dev:** stack-ensure.sh and preflight.sh detect the container before docker, accept --repo-path and always print JSON or a non-zero error ([#1110](https://github.com/Crpaxton4/devcontainer-features/issues/1110)) ([c506310](https://github.com/Crpaxton4/devcontainer-features/commit/c5063104766702c477611b6cd531620665864978))
+* **odoo-dev:** the tester and the builder run the suite through session-db.sh with the job id as session id, and the allowlist admits it ([#1119](https://github.com/Crpaxton4/devcontainer-features/issues/1119)) ([c57f7ff](https://github.com/Crpaxton4/devcontainer-features/commit/c57f7ffddb662511b550e6e99c0b15ffdc0d2fe2)), closes [#1078](https://github.com/Crpaxton4/devcontainer-features/issues/1078)
+* **odoo-dev:** worktree-ensure.sh creates the task branch with --no-track so a bare git push cannot target the base branch ([#1116](https://github.com/Crpaxton4/devcontainer-features/issues/1116)) ([3a93fbd](https://github.com/Crpaxton4/devcontainer-features/commit/3a93fbd611ffb4b07df30710ffb64ed6bfdee40e)), closes [#1054](https://github.com/Crpaxton4/devcontainer-features/issues/1054)
+
 ## [4.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v3.0.0...odoo-dev-plugin-v4.0.0) (2026-10-16)
 
 
