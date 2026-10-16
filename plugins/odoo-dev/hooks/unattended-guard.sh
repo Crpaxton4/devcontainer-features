@@ -388,7 +388,7 @@ const checkPush = (args, dir) => {
   }
 };
 
-const GQL = /mergePullRequest|enablePullRequestAutoMerge|markPullRequestReadyForReview|addPullRequestReview|submitPullRequestReview/;
+const GQL = /mergePullRequest|enablePullRequestAutoMerge|markPullRequestReadyForReview|addPullRequestReview|submitPullRequestReview|createRef|updateRef|deleteRef|closePullRequest/;
 const checkGh = (args) => {
   const pos = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -427,6 +427,13 @@ const checkGh = (args) => {
     if (writes && args.some((a) => /\/git\/refs\b/.test(a) || /\/merges\b/.test(a))) {
       deny("Refused: this gh api call writes a git ref or merges a branch, which is the " +
            "same as a force push, a remote branch delete or a merge.");
+    }
+    // Branch protection edits, and closing a pull request by PATCH, are the same class.
+    if (writes && args.some((a) => /\/branches\/.+\/protection\b/.test(a))) {
+      deny("Refused: this gh api call changes branch protection.");
+    }
+    if (args.includes("state=closed") && args.some((a) => /\/pulls\/\d+\/?$/.test(a))) {
+      deny("Refused: this gh api call closes a pull request, which is the same as gh pr close.");
     }
   }
 };
@@ -560,8 +567,10 @@ const checkSimple = (toks, st, depth) => {
 };
 
 function analyse(cmd, st, depth) {
-  // A backslash-newline joins two lines into one command, before anything is read.
-  const { text, bodies } = extractHeredocs(cmd.replace(/\\\r?\n/g, ""));
+  // A backslash-newline joins two lines into one command, before anything is read, but
+  // only when the run of backslashes is odd: with an even run the last backslash is
+  // itself escaped, and the newline ends the command.
+  const { text, bodies } = extractHeredocs(cmd.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1"));
   for (const seg of parse(text)) checkSimple(seg, st, depth);
   for (const inner of nested(text)) {
     if (depth < 4) analyse(inner, { cwd: st.cwd }, depth + 1);

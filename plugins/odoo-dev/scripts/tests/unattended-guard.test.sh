@@ -371,6 +371,23 @@ allowed "gh api reading a ref" "gh api repos/a/b/git/refs/heads/main"
 allowed "gh api reading a ref with --method=GET" "gh api repos/a/b/git/refs/heads/main --method=GET"
 allowed "gh api reading reviews with -XGET" "gh api repos/a/b/pulls/5/reviews -XGET"
 
+# --- GraphQL ref mutations, protection and PATCH-close -----------------------------
+denied "graphql updateRef (a force update)" "merges or reviews" "gh api graphql -f query='mutation { updateRef(input: {refId: \"x\", oid: \"y\", force: true}) { clientMutationId } }'"
+denied "graphql deleteRef" "merges or reviews" "gh api graphql -f query='mutation { deleteRef(input: {refId: \"x\"}) { clientMutationId } }'"
+denied "graphql createRef" "merges or reviews" "gh api graphql -f query='mutation { createRef(input: {}) { clientMutationId } }'"
+denied "graphql closePullRequest" "merges or reviews" "gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
+denied "gh api PATCH pulls/N state=closed" "closes a pull request" "gh api repos/a/b/pulls/5 -X PATCH -f state=closed"
+denied "gh api branch protection DELETE" "branch protection" "gh api repos/a/b/branches/main/protection -X DELETE"
+allowed "graphql read-only query" "gh api graphql -f query='query { viewer { login } }'"
+allowed "gh api reading branch protection" "gh api repos/a/b/branches/main/protection"
+
+# --- an even run of backslashes does not continue the line -------------------------
+denied "even backslashes: docker on the next line" "docker" "$(printf '%s\n' 'echo foo \\' 'docker ps')"
+denied "even backslashes: force push on the next line" "force push" "$(printf '%s\n' 'echo foo \\' 'git push --force origin x')"
+denied "odd run (three backslashes) still continues" "force push" "$(printf '%s\n' 'git push origin x \\\' ' --force')"
+denied "odd backslash (one) with CRLF: still continues" "force push" "$(printf 'git push origin x \\\r\n--force')"
+allowed "even backslashes: two harmless lines" "$(printf '%s\n' 'echo foo \\' 'git status')"
+
 # --- Odoo series branches are protected by name ------------------------------------
 denied "push 19.0" "protected branch 19.0" "git push origin 19.0"
 denied "push HEAD:18.0" "protected branch 18.0" "git push origin HEAD:18.0"
