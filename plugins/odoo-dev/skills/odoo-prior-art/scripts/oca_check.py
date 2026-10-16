@@ -22,7 +22,9 @@ location `OCA/<repo> (series,…)`, or the literal `none` when a full,
 healthy scan found nothing. The scan that proves `none` is provenance and
 belongs in the workbook's Evidence sheet, never in the cell. Exit code 0
 on success even when mismatches are reported; exit 2 on a partial scan
-(network failures — CSV left untouched, absence unproven).
+(network failures — CSV left untouched, absence unproven), and exit 2 before
+any scan when --csv names a file that is absent, empty, or lacks the
+"Module Name" or "OCA repo" column (`oca_check.py: --csv FILE: <reason>`).
 
 The JSON index also carries `oca_alt`: for every module the org ships, the
 literal `already OCA: <repo>/<module>` that the workbook's
@@ -177,21 +179,49 @@ def local_modules(addons_paths):
     return out
 
 
+CSV_REQUIRED_COLUMNS = ("Module Name", "OCA repo")
+
+
+def csv_problem(csv_path):
+    """Why `csv_path` cannot be filled in, or None when it can: the file
+    must exist, hold a header row, and carry the join key and the target
+    column. main() asks this before the scan and update_csv() asks it again
+    before the write, so the two cannot disagree."""
+    if not csv_path.is_file():
+        return "file not found" if not csv_path.exists() else "not a file"
+    try:
+        with csv_path.open(newline="", encoding="utf-8-sig") as fh:
+            fieldnames = csv.DictReader(fh).fieldnames
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        return f"cannot read: {exc}"
+    if not fieldnames:
+        return "empty file (no header row)"
+    missing = [c for c in CSV_REQUIRED_COLUMNS if c not in fieldnames]
+    if missing:
+        return (f"header lacks column {', '.join(map(repr, missing))} — "
+                f"regenerate the CSV with the current module_inventory.py")
+    return None
+
+
+def exit_bad_csv(csv_path, problem):
+    print(f"oca_check.py: --csv {csv_path}: {problem}", file=sys.stderr)
+    sys.exit(2)
+
+
 def update_csv(csv_path, results, clear_absent):
     """Fill the 'OCA repo' column with `OCA/<repo> (series,…)`, or with
     `none` once a full scan has proven the absence. clear_absent=False on
     --repos subset scans: a subset proves presence, never absence, so
     verified cells from earlier full scans must survive — and `none` is
     only ever written when it has been proven."""
+    problem = csv_problem(csv_path)
+    if problem:
+        exit_bad_csv(csv_path, problem)
     # utf-8-sig on both ends so an Excel BOM survives the round-trip
     with csv_path.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         fieldnames = list(reader.fieldnames)
         rows = list(reader)
-    if "OCA repo" not in fieldnames:
-        print(f"ERROR: no 'OCA repo' column in {csv_path} — regenerate the "
-              f"CSV with the current module_inventory.py", file=sys.stderr)
-        sys.exit(1)
     for row in rows:
         # Module Name carries the technical name and nothing else.
         technical = row["Module Name"].strip()
@@ -230,6 +260,11 @@ def main():
     for path in addons_paths:
         if not path.is_dir():
             parser.error(f"not a directory: {path}")
+    # Before the scan: a bad --csv found after it throws the whole scan away.
+    if args.csv:
+        problem = csv_problem(args.csv)
+        if problem:
+            exit_bad_csv(args.csv, problem)
     series = [s.strip() for s in args.series.split(",") if s.strip()]
     args.cache.mkdir(parents=True, exist_ok=True)
 
