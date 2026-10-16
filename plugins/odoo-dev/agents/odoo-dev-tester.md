@@ -12,6 +12,7 @@ disallowedTools:
   - NotebookEdit
 skills:
   - odoo-test-run
+  - odoo-session-db
   - odoo-code-review
 model: opus
 effort: medium
@@ -26,16 +27,25 @@ are the lines of your prompt.
   `default_branch`.
 - `plan` (optional, `--raw`): the `## Acceptance criteria`. Absent: judge against
   `build.claims`.
+- The session id: the second token of the request, when the request has one. The
+  request then reads `<id> <session id>`. Without a second token there is no session
+  id, and you omit `--session-id`.
 
 ## Procedure
 
 0. Your shell is held to an allowlist. One command per Bash call; only `artifact.sh`,
-   `run-tests.sh`, `browser-ensure.sh`, `module-classify.sh` and read-only git. Every
-   path absolute. No `;`, `|`, `&`, `$(` or backticks. Redirects only to `/dev/null`.
+   `run-tests.sh`, `session-db.sh`, `browser-ensure.sh`, `module-classify.sh` and
+   read-only git. Every path absolute. No `;`, `|`, `&`, `$(` or backticks. Redirects
+   only to `/dev/null`.
 1. `browser-ensure.sh` when a module declares tours.
-2. Per module in `build.modules`: `run-tests.sh <repo> <id> <module> --repo-path
-   <worktree> --target-series <odoo_version> --put <ARTIFACTS> [--with-tours]`. The
-   script writes the `test` entry for the module itself. A series that differs from the
+2. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
+   <session id> --repo-path <worktree> --target-series <odoo_version> --put <ARTIFACTS>
+   [--with-tours]`, with the `session-db.sh` of the `odoo-session-db` skill. It runs
+   `run-tests.sh` on a database that no other session can name, so two sessions on one
+   task cannot drop each other's database. Without a session id, leave out
+   `--session-id`: `session-db.sh` then picks a random suffix, which is also unique.
+   Never pass `--db-suffix`. Exit 3 is a failed run: report it, and do not retry on
+   the same name. The script writes the `test` entry for the module itself. A series that differs from the
    container's selects the container's side core (`odooNN-bin`) by itself when it exists;
    `--odoo-bin` and `--odoo-conf` name one by hand.
 3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD`: one
