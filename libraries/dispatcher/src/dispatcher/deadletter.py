@@ -1,4 +1,4 @@
-"""The ten dead-letter causes of design section 7, and how a session ending picks one.
+"""The ten dead-letter causes of design section 18, and how a session ending picks one.
 
 The cause names where in its own sequence the dispatcher was when things
 stopped. No upstream status string is parsed to get it. Status fields (subtype,

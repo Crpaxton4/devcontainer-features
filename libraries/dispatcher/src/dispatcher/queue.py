@@ -189,7 +189,7 @@ def reconcile(
     """
     ids = []
     for job in store.list_by_state(JobState.RUNNING):
-        record = read_task_record(job.job_id)
+        record = read_task_record(job.job_id, job.task_id)
         facts = _orphan_facts(job, record, shell, settings, env)
         if runs is not None:
             facts.append(_record_orphan(runs, job, record, settings))
@@ -213,6 +213,7 @@ def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
             runs,
             parser=parser,
             job=job,
+            started_us=job.started_us or 0,
             ended_us=max(resolve_now_us(None), job.started_us or 0),
             failed=True,
             transcript=transcript,
@@ -223,7 +224,8 @@ def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
     if write.record_error is not None:
         return f"the run row could not be written: {write.record_error}"
     return (
-        "a FAILED run row was written"
+        "a FAILED run row was written, timed from the admit time "
+        "because no spawn time survives a restart"
         if write.recorded
         else "no run row was written (no session id, or already recorded)"
     )

@@ -38,7 +38,7 @@ Every script prints one JSON object as its last stdout line. Write every path in
 | Script and arguments | Prints | Exit |
 |---|---|---|
 | `addons_paths.sh [--series V]` | the trees to grep and the missing ones | 0 |
-| `oca_check.py [PATH ...] --series 16.0,17.0,18.0,19.0 [--csv inventory.csv]` | whether each local module is an OCA module, verified against the org | 0 · 2 PARTIAL SCAN |
+| `oca_check.py [PATH ...] --series 16.0,17.0,18.0,19.0 [--csv inventory.csv]` | whether each local module is an OCA module, verified against the org | 0 · 2 PARTIAL SCAN or bad `--csv` |
 | `oca_catalog.py --series 19.0 -o catalog.csv` | every OCA module on a series as one CSV (about 1,300 rows) | 0 |
 
 Run `oca_check.py` before `oca_catalog.py`: the catalog reuses the branch listings the
@@ -46,6 +46,10 @@ checker caches. Both need an authenticated `gh`.
 
 `exit 2` — PARTIAL SCAN: network trouble, or more than 10% of repos failed → a partial
 scan proves presence, never absence; never report `none` from it. Run it again, or stop.
+
+`exit 2` before any scan — `--csv` is absent, empty, or lacks the `Module Name` or
+`OCA repo` column. stderr says `oca_check.py: --csv FILE: <reason>`. Regenerate the CSV
+with `module_inventory.py`, or drop `--csv`. This is not PARTIAL SCAN: no scan ran.
 
 ## Output shape
 

@@ -6,7 +6,6 @@ The root is a directory on a local filesystem. It holds::
     <root>/runs.db              run record (irreplaceable evidence)
     <root>/dispatcher.lock      singleton advisory lock file (never a database)
     <root>/artifacts/<job_id>/  one artifact bundle per job
-    <root>/friction/<date>.md   append-only friction log
 
 Resolution order: ``$ODOO_DISPATCH_STATE_DIR`` (override), then
 ``$ODOO_TASK_TRACKER_DIR`` (the tracker's own root), then the tracker default
@@ -16,7 +15,6 @@ files from ``tracker.db`` and create themselves on first use.
 
 import os
 import time
-from datetime import date
 from pathlib import Path
 
 from .db import _default_root
@@ -30,7 +28,6 @@ JOBS_DB_FILENAME = "jobs.db"
 RUNS_DB_FILENAME = "runs.db"
 LOCK_FILENAME = "dispatcher.lock"
 ARTIFACTS_DIRNAME = "artifacts"
-FRICTION_DIRNAME = "friction"
 
 
 def now_us() -> int:
@@ -83,8 +80,3 @@ def bundle_dir(job_id: str, root: Path | None = None) -> Path:
     ):
         raise ValueError(f"job_id is not a single path component: {job_id!r}")
     return artifacts_root(root) / job_id
-
-
-def friction_path(day: date, root: Path | None = None) -> Path:
-    """Return ``friction/<date>.md`` for ``day``."""
-    return (root or state_root()) / FRICTION_DIRNAME / f"{day.isoformat()}.md"

@@ -163,6 +163,24 @@ def render_up(settings: Settings, repo: str) -> list[str]:
     return argv
 
 
+def render_exec_prefix(settings: Settings, repo: str) -> list[str]:
+    """``devcontainer exec --config X --workspace-folder Y``, without the ``--``.
+
+    The one place that names the project's container for ``exec``. The session
+    command (:func:`render_exec`) and the reap (``reap.py``) both start from
+    it, so the two cannot reach different containers. The caller adds its own
+    options (``--remote-env``) and then ``--`` and the command.
+    """
+    return [
+        "devcontainer",
+        "exec",
+        "--config",
+        str(settings.config(repo)),
+        "--workspace-folder",
+        str(settings.workspace(repo)),
+    ]
+
+
 def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief: str):
     """The dispatch command line of design section 8, exactly.
 
@@ -177,12 +195,7 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
     decorative during an unattended run. Do not drop it as redundant.
     """
     return [
-        "devcontainer",
-        "exec",
-        "--config",
-        str(settings.config(repo)),
-        "--workspace-folder",
-        str(settings.workspace(repo)),
+        *render_exec_prefix(settings, repo),
         "--remote-env",
         f"{STATE_DIR_VARIABLE}={ARTIFACTS_TARGET}/{job_id}",
         "--remote-env",

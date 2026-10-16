@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from odoo_sdk.state import SessionWindow, session_key
+from odoo_sdk.state import SessionSource, SessionWindow, session_key
 from odoo_sdk.billing.upload import range_bounds
 
 from ..command import Command
@@ -42,6 +42,7 @@ class QuerySessionsCommand(Command):
         repo: Optional[str] = None,
         strategy_name: Optional[str] = None,
         include_events: bool = True,
+        source: str = SessionSource.BOTH.value,
     ) -> list[dict[str, Any]]:
         """Return overlapping sessions as summary dicts.
 
@@ -53,8 +54,19 @@ class QuerySessionsCommand(Command):
         :param strategy_name: Restrict to one strategy (``development`` or
             ``review``, #378 item 6), or None for all.
         :param include_events: When True, embed each session's linked events.
+        :param source: Which record to read: ``events`` (the event store alone),
+            ``runs`` (the run record alone) or ``both`` (merged, the default).
+            Reading one source alone is how the #1065 agreement check is run.
+            Any other value raises :class:`ValueError`.
         :return: A list of session dicts ordered by start time.
         """
+        try:
+            source_choice = SessionSource(source)
+        except ValueError:
+            allowed = ", ".join(s.value for s in SessionSource)
+            raise ValueError(
+                f"source must be one of: {allowed} (got {source!r})"
+            ) from None
         # The shared range_bounds keeps the query window and the upload path's
         # orphan-sweep window on one inclusive-date semantic (see #354).
         lo, hi = range_bounds(start_date, end_date)
@@ -64,6 +76,7 @@ class QuerySessionsCommand(Command):
             gap_secs=self.config.session_gap_secs,
             task_id=task_id,
             repo=repo,
+            source=source_choice,
         )
         # A session's strategy is a per-group label the derivation now computes
         # (development-family vs review-family), so the strategy filter is applied

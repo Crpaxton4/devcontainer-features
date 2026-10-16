@@ -1,4 +1,4 @@
-"""The run schema (design section 10) and the one success test.
+"""The run schema (design section 19) and the one success test.
 
 The schema is passed to ``claude --json-schema``; the harness enforces it and
 returns the validated object as ``structured_output`` in the result envelope.
@@ -129,7 +129,7 @@ def usable_structured(envelope: dict | None) -> dict | None:
         return None
     # Deliberate departure from the schema: a blank summary is rejected. The
     # summary is the description a run is billed with, and a run with none is a
-    # dead letter by design (section 10), even though rejecting a legitimate
+    # dead letter by design (section 19), even though rejecting a legitimate
     # result is the costlier direction of error. Chosen, not an oversight.
     if not value["summary"].strip():
         return None

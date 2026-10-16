@@ -6,17 +6,17 @@ import signal
 import threading
 
 import pytest
-from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir
+from odoo_sdk.state.dispatch_state import artifacts_root, bundle_dir, now_us
 from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
-from dispatcher import cli, queue
+from dispatcher import cli, lifecycle, queue
 from dispatcher.engine import MEMORY_READ_ATTEMPTS, Engine, JobRun
 from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, FakeShell, stream
+from support import GOOD, FakeProc, FakeShell, stream, write_task_record
 
 
 @pytest.fixture
@@ -71,6 +71,55 @@ def test_a_good_run_completes_and_is_recorded(world):
     assert env["ODOO_ACTIVE_REPOS"] == "qoc"
     assert bundle_dir(job.job_id).is_dir()
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")  # idle: stopped
+
+
+def test_the_run_rows_clock_starts_at_the_spawn_not_at_admission(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    base = now_us()
+    clock = [base]
+    engine.clock = lambda: clock[0]
+    up_s, session_s = 1200, 30
+
+    def advance(seconds):
+        clock[0] += seconds * 1_000_000
+
+    real_run, real_wait = shell.run, shell.proc.wait
+    shell.run = lambda argv, **k: (
+        advance(up_s) if argv[:2] == ["devcontainer", "up"] else None
+    ) or real_run(argv, **k)
+    shell.proc.wait = lambda: advance(session_s) or real_wait()
+    (job,) = _submit(engine, ("qoc", "10"))
+    engine.run()
+    admitted = engine.jobs.get(job.job_id).started_us  # the wall clock at mark_running
+    run = engine.runs.get_run("sess-1")
+    assert run.started_us == base + up_s * 1_000_000  # the spawn, after devcontainer up
+    assert run.ended_us - run.started_us == session_s * 1_000_000
+    assert (
+        run.started_us - admitted > (up_s - 60) * 1_000_000
+    )  # the cold start is not billed
+    assert admitted < base + 60 * 1_000_000  # the job row keeps the admit time
+
+
+def test_a_run_row_without_a_spawn_falls_back_to_the_admit_time(world, monkeypatch):
+    engine, shell, _ = world
+    shell.replies[0] = (
+        ["devcontainer", "up"],
+        Completed(1, "", "compose file missing"),
+    )
+    seen = {}
+    import dispatcher.engine as eng
+
+    real = eng.record_then_collect
+    monkeypatch.setattr(
+        eng, "record_then_collect", lambda *a, **k: seen.update(k) or real(*a, **k)
+    )
+    (job,) = _submit(engine, ("qoc", "14"))
+    engine.run()
+    admitted = engine.jobs.get(job.job_id).started_us
+    assert not shell.spawned and admitted > 0
+    assert seen["started_us"] == admitted and seen["ended_us"] >= admitted
+    assert engine.runs.iter_runs() == []  # no session id, so no run row
 
 
 def test_collection_runs_before_the_container_may_stop(world, monkeypatch):
@@ -237,6 +286,44 @@ def test_terminate_signals_the_process_group(world):
     assert shell.groups == [signal.SIGTERM] and shell.proc.terminated
 
 
+def test_a_stop_kill_that_did_not_run_is_noted_in_the_detail(world):
+    engine, shell, _ = world
+    shell.reply(["docker", "exec", "c", "pkill"], Completed(1, "", "no such container"))
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    (job,) = _submit(engine, ("qoc", "71"))
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    detail = engine.jobs.get(job.job_id).detail
+    assert "[the container-side kill did not run (exit 1: no such container)" in detail
+
+
+def test_a_stop_on_a_finished_host_process_kills_nothing_in_the_container(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "72"))
+    run = JobRun(engine, job)
+    run.proc = shell.proc = FakeProc()  # already exited
+    run.terminate()
+    run._kill_after_stop()
+    assert not run.stop_requested and not shell.commands("docker", "exec")
+
+
+def test_a_stop_after_the_deadline_kill_keeps_the_first_note(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "73"))
+    run = JobRun(engine, job)
+    run.container_id = "c"
+    run.stop_requested = True
+    run.container_kill_note = "first"
+    run._kill_after_stop()
+    assert run.container_kill_note == "first" and not shell.commands("docker", "exec")
+
+
 def test_request_stop_does_not_deadlock_when_the_lock_is_held(world):
     engine, _, _ = world
     with engine._lock:  # a signal handler arriving inside _start
@@ -399,7 +486,10 @@ def test_request_stop_terminates_running_sessions(world):
     engine.request_stop()
     t.join(10)
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert len(shell.commands("docker", "exec", "c", "pkill")) == 1
+    assert dead.detail.count("[a kill was sent to the container-side claude") == 1
 
 
 def test_idle_check_failure_never_fails_a_job(world):
@@ -422,15 +512,47 @@ def test_worktree_is_left_alone_when_reap_cannot_prove_a_push(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     (job,) = _submit(engine, ("qoc", "90"))
-    d = bundle_dir(job.job_id)
-    d.mkdir(parents=True)
-    (d / "task.json").write_text(
+    write_task_record(
+        job.job_id,
+        job.task_id,
         json.dumps(
             {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
-        )
+        ),
     )
     engine.run()
     assert "does not exist" in engine.notes[job.job_id]["reap"]
+
+
+def test_a_pushed_worktree_is_reaped_through_the_container_before_the_idle_check(
+    world, settings
+):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "92"))
+    (settings.workspace("qoc") / ".worktrees/x").mkdir(parents=True)
+    write_task_record(
+        job.job_id,
+        job.task_id,
+        json.dumps(
+            {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
+        ),
+    )
+    sha = "c" * 40
+    git = [*lifecycle.render_exec_prefix(settings, "qoc"), "--", "git"]
+    wt = "/mnt/extra-addons/.worktrees/x"
+    shell.reply([*git, "-C", wt, "status"], Completed(0, ""))
+    shell.reply([*git, "-C", wt, "rev-parse"], Completed(0, sha + "\n"))
+    shell.reply(
+        [*git, "-C", "/mnt/extra-addons", "ls-remote"],
+        Completed(0, f"{sha}\trefs/heads/feat\n"),
+    )
+    engine.run()
+    assert engine.notes[job.job_id]["reaped"] is True
+    argvs = [c for c, _ in shell.calls]
+    removal = next(i for i, c in enumerate(argvs) if "remove" in c)
+    assert argvs[removal][:2] == ["devcontainer", "exec"]
+    idle = [i for i, c in enumerate(argvs) if c[:2] == ["docker", "compose"]]
+    assert all(removal < i for i in idle)
 
 
 def test_reap_exception_is_contained(world, monkeypatch):
@@ -597,7 +719,10 @@ def test_a_stop_while_spawning_terminates_the_new_session(world):
     (job,) = _submit(engine, ("qoc", "121"))
     engine.run()
     assert shell.proc.terminated
-    assert engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_SIGNAL.value
+    assert shell.commands("docker", "exec", "c", "pkill")
+    assert "container-side" in dead.detail
 
 
 def test_the_timer_firing_after_a_clean_exit_is_not_a_deadline(world, monkeypatch):

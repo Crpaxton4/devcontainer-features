@@ -32,8 +32,6 @@ is kept, but whether it bills is for a human at upload, so it is marked and neve
 dropped.
 """
 
-import sqlite3
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,9 +40,6 @@ from typing import Optional
 from odoo_sdk._utils import as_utc
 
 from .models import AGENTLESS_REPO, SessionWindow
-
-#: How long a read waits on a locked ``runs.db`` before the error propagates.
-BUSY_TIMEOUT_MS = 5000
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _US = timedelta(microseconds=1)
@@ -76,24 +71,18 @@ def read_runs(path: Path, start_us: int, end_us: int, *, expected: bool) -> list
     """
     from .runs_store import RunStore  # lazy: runs_store imports this package's db
 
-    if not path.exists():
-        if expected:
-            raise FileNotFoundError(f"run record not found: {path}")
+    if path.exists() and path.stat().st_size == 0:
         return []
-    if path.stat().st_size == 0:
-        return []
-    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
-        conn.row_factory = sqlite3.Row
-        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-        # RunStore.__init__ opens read-write and migrates, which a reader must not
-        # do, so the store is built without it. That relies on iter_runs touching
-        # only ``_lock`` and ``_conn``; test_read_runs_matches_iter_runs pins it.
-        store = RunStore.__new__(RunStore)
-        store.path, store._lock, store._conn = path, threading.RLock(), conn
+        store = RunStore.open_read_only(path)
+    except FileNotFoundError:
+        if expected:
+            raise
+        return []
+    try:
         return store.iter_runs(start_us=start_us, end_us=end_us)
     finally:
-        conn.close()
+        store.close()
 
 
 @dataclass(frozen=True)

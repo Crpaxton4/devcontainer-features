@@ -37,7 +37,7 @@ from enum import Enum
 from pathlib import Path
 
 from .dispatch_state import resolve_now_us, runs_db_path
-from .migrations import Migration, open_store, transaction
+from .migrations import BUSY_TIMEOUT_MS, Migration, open_store, transaction
 
 
 class RunOutcome(str, Enum):
@@ -198,15 +198,48 @@ class ArtifactIndex:
 class RunStore:
     """Typed operations over ``runs.db``. Creates and migrates it on first use."""
 
-    def __init__(self, path: Path | None = None, *, now_us: int | None = None):
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        now_us: int | None = None,
+        conn: sqlite3.Connection | None = None,
+    ):
+        """Open (creating and migrating) ``path``, or adopt the open ``conn``.
+
+        ``conn`` is for :meth:`open_read_only`; it skips the open and the
+        migration, so callers do not pass it.
+        """
         self.path = path or runs_db_path()
         self._lock = threading.RLock()
-        self._conn = open_store(
+        self._conn = conn or open_store(
             self.path,
             RUNS_MIGRATIONS,
             synchronous="FULL",
             now_us=resolve_now_us(now_us),
         )
+
+    @classmethod
+    def open_read_only(cls, path: Path) -> "RunStore":
+        """Open an existing ``runs.db`` strictly read-only, for a reader.
+
+        The connection is ``mode=ro``: it never creates the file or its
+        directory, never sets the journal mode and never runs a migration, and
+        a write through it fails. An absent file raises
+        :class:`FileNotFoundError`. A corrupt, locked or schema-less file
+        raises the sqlite error when it is first read.
+        """
+        if not path.exists():
+            raise FileNotFoundError(f"run record not found: {path}")
+        conn = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro",
+            uri=True,
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        return cls(path, conn=conn)
 
     def close(self) -> None:
         self._conn.close()

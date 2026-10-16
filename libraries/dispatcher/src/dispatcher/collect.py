@@ -1,6 +1,6 @@
 """Reading a session's stream, writing its run row, then collecting artifacts.
 
-The order is the point, and it is the order of design sections 7 and 10:
+The order is the point, and it is the order of design sections 7, 10 and 17:
 
 1. the envelope is parsed (:class:`StreamParser`),
 2. the run row is written (:func:`record_then_collect`),
@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from odoo_sdk.state.artifacts import Harvest, TASK_JSON, collect_artifacts
+from odoo_sdk.state.artifacts import Harvest, collect_artifacts, task_record_path
 from odoo_sdk.state.dispatch_state import bundle_dir
 from odoo_sdk.state.runs_store import RunOutcome, RunStore, map_reported_outcome
 
@@ -70,10 +70,11 @@ class StreamParser:
         return None
 
 
-def read_task_record(job_id: str, root: Path | None = None) -> dict:
+def read_task_record(job_id: str, task_id: str, root: Path | None = None) -> dict:
     """The agent's own ``task.json`` from the bundle, or ``{}`` when unusable."""
+    path = task_record_path(bundle_dir(job_id, root), task_id)
     try:
-        data = json.loads((bundle_dir(job_id, root) / TASK_JSON).read_text("utf-8"))
+        data = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -134,6 +135,7 @@ def record_then_collect(
     *,
     parser: StreamParser,
     job,
+    started_us: int,
     ended_us: int,
     failed: bool,
     transcript: Path | None,
@@ -142,9 +144,10 @@ def record_then_collect(
 ) -> RunWrite:
     """Write the run row, then collect artifacts. Neither step may block the other.
 
-    A job with no session id gets no run row (design section 7) but still gets
+    A job with no session id gets no run row (design section 17) but still gets
     a bundle. If the run write itself fails, collection still runs and the
     error is returned for the caller to surface once everything else is done.
+    ``started_us`` is the session spawn, or the admit time when none happened.
     """
     write = RunWrite(outcome=stored_outcome(parser.envelope, failed))
     if parser.session_id:
@@ -153,10 +156,10 @@ def record_then_collect(
                 session_id=parser.session_id,
                 job_id=job.job_id,
                 task_id=job.task_id,
-                # The job's start is mark_running, so this interval includes any
-                # cold container start this task caused: that time was spent on it.
-                started_us=job.started_us,
-                ended_us=max(ended_us, job.started_us),
+                # The run row's clock runs from the session spawn; the job row keeps the
+                # admit time, so a cold container start shows there and is not billed.
+                started_us=started_us,
+                ended_us=max(ended_us, started_us),
                 outcome=write.outcome,
                 tool_version=parser.tool_version or UNKNOWN_TOOL_VERSION,
                 repo=job.repo,
@@ -171,6 +174,7 @@ def record_then_collect(
     try:
         write.harvest = collect_artifacts(
             job.job_id,
+            job.task_id,
             session_id=parser.session_id,
             transcript=transcript,
             envelope=parser.envelope_text,

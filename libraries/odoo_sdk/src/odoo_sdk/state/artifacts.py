@@ -3,7 +3,8 @@
 Layout, keyed by job and never by session::
 
     <state root>/artifacts/<job_id>/
-        task.json        the agent's own record (written in place via the mount)
+        tasks/<task_id>/task.json
+                         the agent's own record (written in place via the mount)
         session.jsonl    the raw transcript, copied here at run end
         envelope.json    the result envelope as received
         harvest.json     what was collected, what was not, and why
@@ -25,6 +26,7 @@ from pathlib import Path
 from .dispatch_state import bundle_dir, resolve_now_us
 from .runs_store import RunStore
 
+TASKS_DIRNAME = "tasks"
 TASK_JSON = "task.json"
 SESSION_JSONL = "session.jsonl"
 ENVELOPE_JSON = "envelope.json"
@@ -45,6 +47,15 @@ class Harvest:
     bytes: int
     harvested_us: int
     missing: tuple[str, ...]
+
+
+def task_record_path(bundle: Path, task_id: str) -> Path:
+    """Return the agent's record: ``<bundle>/tasks/<task_id>/task.json``.
+
+    ``state-dir.sh`` puts a task's artifacts under ``$ODOO_DEV_STATE_DIR/tasks/``
+    and the dispatcher sets that variable to the job's bundle directory.
+    """
+    return bundle / TASKS_DIRNAME / task_id / TASK_JSON
 
 
 def ensure_bundle_dir(job_id: str, root: Path | None = None) -> Path:
@@ -79,8 +90,8 @@ def _store_envelope(directory: Path, envelope: str | None) -> str | None:
     return None
 
 
-def _task_json_problem(directory: Path) -> str | None:
-    path = directory / TASK_JSON
+def _task_json_problem(directory: Path, task_id: str) -> str | None:
+    path = task_record_path(directory, task_id)
     try:
         if not path.is_file():
             return "the agent wrote no task.json"
@@ -102,8 +113,7 @@ def _attempt(label: str, step, missing: list[str]) -> None:
         missing.append(f"{label}: {reason}")
 
 
-def _present_size(directory: Path, name: str) -> int | None:
-    path = directory / name
+def _present_size(path: Path) -> int | None:
     try:
         return path.stat().st_size if path.is_file() else None
     except OSError:
@@ -112,6 +122,7 @@ def _present_size(directory: Path, name: str) -> int | None:
 
 def collect_artifacts(
     job_id: str,
+    task_id: str,
     *,
     session_id: str = "",
     transcript: Path | None = None,
@@ -124,7 +135,8 @@ def collect_artifacts(
 
     ``transcript`` is the tool's own transcript path (copied, not moved);
     ``envelope`` is the raw envelope text as received. ``task.json`` is only
-    checked, never written: the agent wrote it through the mount. When ``runs``
+    checked, at :func:`task_record_path` for ``task_id``, never written: the
+    agent wrote it through the mount. When ``runs``
     is given the bundle is indexed in ``run_artifacts``. A job that never had a
     session passes ``session_id=""`` and still gets a bundle and an index row.
     Only a ``job_id`` that is not one path component raises (``ValueError``),
@@ -144,12 +156,13 @@ def collect_artifacts(
     )
     _attempt(SESSION_JSONL, lambda: _store_transcript(directory, transcript), missing)
     _attempt(ENVELOPE_JSON, lambda: _store_envelope(directory, envelope), missing)
-    task_problem = _task_json_problem(directory)
+    task_problem = _task_json_problem(directory, task_id)
     if task_problem:
         missing.append(f"{TASK_JSON}: {task_problem}")
     sizes = {
-        name: _present_size(directory, name)
-        for name in (TASK_JSON, SESSION_JSONL, ENVELOPE_JSON)
+        TASK_JSON: _present_size(task_record_path(directory, task_id)),
+        SESSION_JSONL: _present_size(directory / SESSION_JSONL),
+        ENVELOPE_JSON: _present_size(directory / ENVELOPE_JSON),
     }
     harvest = Harvest(
         job_id=job_id,

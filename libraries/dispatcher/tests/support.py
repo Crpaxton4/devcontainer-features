@@ -5,6 +5,9 @@ import json
 import signal
 import threading
 
+from odoo_sdk.state.artifacts import task_record_path
+from odoo_sdk.state.dispatch_state import bundle_dir
+
 from dispatcher.lifecycle import Completed
 
 
@@ -119,6 +122,14 @@ def stream(session_id="sess-1", structured=None, **result):
         ),
         json.dumps(envelope),
     ]
+
+
+def write_task_record(job_id, task_id, text):
+    """Write the agent's record where state-dir.sh does: tasks/<task_id>/task.json."""
+    path = task_record_path(bundle_dir(job_id), task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
 
 
 GOOD = {
