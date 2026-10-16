@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # stack-ensure.sh — ensure the singleton project stack is running.
 #
-# Usage: stack-ensure.sh <repo> [--target-series NN.0]
+# Usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]
 #
 #   --target-series: the Odoo series the work targets, as in 18.0. Inside the
 #                    devcontainer it is compared against the series this core
 #                    actually runs; no flag means no comparison.
+#   --repo-path:     the checkout of <repo>. On the host it replaces
+#                    $REPOS_DIR/<repo>, so the repo itself needs no repos tree.
+#                    Inside a container it is accepted and ignored.
 #
 # Rules (design doc §4):
 #   - singleton per project: reuse a running <repo>-odoo-1; restart a stopped
@@ -14,13 +17,26 @@
 #   - below the RAM threshold, stop (not remove) the least-recently-created
 #     stack that is not in ODOO_ACTIVE_REPOS (comma-separated allowlist)
 #
-# Two execution contexts, detected rather than configured:
-#   host          docker is available -> the singleton-stack logic below
-#   devcontainer  no docker, but odoo and a reachable postgres -> there is no
-#                 stack to ensure, we are already inside one. Reports
-#                 status "in-container" after proving odoo and postgres answer.
-# The second case used to fail with a bare "docker: command not found", which
-# reads as a broken script rather than "you are in the wrong place".
+# Two execution contexts, detected rather than configured, CONTAINER FIRST:
+#   devcontainer  odoo on PATH and postgres answering pg_isready -> there is no
+#                 stack to ensure, we are already inside one. Reports status
+#                 "in-container". docker may be on PATH too: the devcontainer
+#                 mounts the host socket (docker-from-docker), so docker on PATH
+#                 does not say where this shell runs (#1053, as #1039 for
+#                 run-tests.sh). Odoo plus postgres decide.
+#   host          otherwise, when docker is available -> the singleton-stack
+#                 logic below
+#   neither       exit 5, "wrong place".
+# The docker-first order sent a shell inside the devcontainer down the host path,
+# which cannot resolve a repos tree there.
+#
+# Output guarantee: every exit path prints EITHER one JSON line on stdout and
+# exits 0, OR an error line on stderr and exits non-zero. Nothing exits 0 without
+# JSON. A caller that sees no JSON lost it in its own pipe (for example
+# `| tail -1` hides the exit code): check the exit code first, use pipefail.
+# Exit codes: 0 JSON printed | 1 the stack did not become usable, or a command
+#   inside failed (its own stderr says which) | 2 usage, worktree path, repo or
+#   repos tree not found | 5 neither a working Odoo container nor docker
 #
 # Concurrency: the singleton guarantee lives HERE, not in any caller. The whole
 # decide/evict/create block runs under one HOST-GLOBAL exclusive flock, so
@@ -55,16 +71,23 @@
 # containers, so a repo-map-cased entry silently protected nothing. $REPOS_DIR/$repo
 # keeps the ORIGINAL case — the directory really is "QOC".
 #
-# Series: inside the devcontainer the probed core series is REPORTED as
-# odoo_version, because the caller downstream (build, then test) has no other
-# machine-readable answer to "which Odoo is this". With --target-series, a
-# disagreement also adds "series_mismatch": true and a "warning" naming both
+# Series: inside the devcontainer the probed core is REPORTED as odoo_version,
+# the full last line of `odoo --version` ("Odoo Server 19.0-20260810"), because
+# the caller downstream (build, then test) has no other machine-readable answer
+# to "which Odoo is this". The devcontainer also ships side cores for the other
+# series: side_cores lists each $ODOO_SRC_ROOT/odooNN-bin (default
+# /var/lib/odoo/src) that has odooNN.conf beside it, as
+# {"series","bin","conf","version"}, [] when there is none. run-tests.sh picks a
+# side core by itself; this field tells a caller that the target is runnable here.
+# With --target-series, a disagreement with the core's MAJOR also adds
+# "series_mismatch": true and a "warning" naming both
 # series. It stays a warning and still exits 0: this script ensures a stack, and
 # whether the wrong stack is fatal is the caller's call — run-tests.sh refuses
 # outright on the same comparison (#978).
 #
 # Last stdout line: {"stack": ..., "status": "reused"|"restarted"|"created"|"in-container",
-#   "odoo_version": <in-container only>, "stopped_lru": [...]}
+#   "odoo_version": <in-container only>, "side_cores": <in-container only>,
+#   "stopped_lru": [...]}
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,16 +96,21 @@ MIN_FREE_GB="${MIN_FREE_GB:-6}"
 READY_TIMEOUT_S="${STACK_READY_TIMEOUT_S:-60}"
 LOCK_FILE="${TMPDIR:-/tmp}/odoo-task-env-stack.lock"
 
+usage() { echo "usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]" >&2; exit 2; }
+
 target_series=""
+repo_path=""
 positional=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --target-series) target_series="${2:?}"; shift 2 ;;
+    --target-series) [ $# -ge 2 ] || usage; target_series="$2"; shift 2 ;;
     --target-series=*) target_series="${1#*=}"; shift ;;
+    --repo-path) [ $# -ge 2 ] || usage; repo_path="$2"; shift 2 ;;
+    --repo-path=*) repo_path="${1#*=}"; shift ;;
     *) positional+=("$1"); shift ;;
   esac
 done
-[ "${#positional[@]}" -eq 1 ] || { echo "usage: stack-ensure.sh <repo> [--target-series NN.0]" >&2; exit 2; }
+[ "${#positional[@]}" -eq 1 ] || usage
 repo="${positional[0]}"
 
 # A worktree path would mint a SECOND compose project for the same repo, which
@@ -91,33 +119,75 @@ case "$repo" in
   *"${WORKTREE_SUBDIR:-.worktrees}"*|*/*) echo "refusing: '$repo' must be a bare repo name, never a worktree path" >&2; exit 2 ;;
 esac
 
-if ! command -v docker >/dev/null 2>&1; then
-  # Inside the devcontainer there is no stack to ensure — this IS the stack.
-  # Prove it answers, then say so; anything else here is a wrong-context error.
-  if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
-    # The series this core runs, stated rather than left for a caller to guess:
-    # an 18.0 module on a 19.0 core installs as installable=False and its test
-    # run reports a green zero whose cause appears nowhere (#978). Majors are
-    # compared because a core answers "19.0-20260810" and a target is "19.0".
-    core_major="$(odoo --version 2>/dev/null | tail -1 | { grep -oE '[0-9]+' || true; } | head -1)"
-    core_series="unknown"
-    [ -z "$core_major" ] || core_series="${core_major}.0"
-    target_major=""
-    [ -z "$target_series" ] || target_major="$(printf '%s' "$target_series" | { grep -oE '[0-9]+' || true; } | head -1)"
-    if [ -n "$target_major" ] && [ "$target_major" != "$core_major" ]; then
-      echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_series\", \"series_mismatch\": true, \"warning\": \"this container runs Odoo $core_series but the work targets $target_series — nothing installed or tested here proves anything about $target_series\", \"stopped_lru\": []}"
-    else
-      echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_series\", \"stopped_lru\": []}"
-    fi
-    exit 0
+# json_str <text> -> the text without double quotes and backslashes, so it sits
+# safely between JSON quotes. Paths and version lines carry neither in practice.
+json_str() { local v="$1"; printf '%s' "${v//[\"\\]/}"; }
+
+# side_cores_json -> the side_cores array: one entry per $ODOO_SRC_ROOT/odooNN-bin
+# that is executable and has odooNN.conf beside it; [] when there is none.
+side_cores_json() {
+  local root="${ODOO_SRC_ROOT:-/var/lib/odoo/src}" bin base num conf ver out=""
+  for bin in "$root"/odoo[0-9]*-bin; do
+    [ -x "$bin" ] || continue   # also skips the literal pattern of an empty glob
+    base="${bin##*/}"; num="${base#odoo}"; num="${num%-bin}"
+    case "$num" in ''|*[!0-9]*) continue ;; esac
+    conf="$root/odoo${num}.conf"
+    [ -f "$conf" ] || continue
+    ver="$("$bin" -c "$conf" --version 2>/dev/null | tail -1)" || true
+    out="${out:+$out, }{\"series\": \"${num}.0\", \"bin\": \"$(json_str "$bin")\", \"conf\": \"$(json_str "$conf")\", \"version\": \"$(json_str "$ver")\"}"
+  done
+  printf '[%s]' "$out"
+}
+
+# resolve_repos_dir -> sets REPOS_DIR, or says how to fix it and exits 2. A bare
+# `set -e` death here read as "exit 1, no explanation" (#1053).
+resolve_repos_dir() {
+  [ -z "${REPOS_DIR:-}" ] || return 0
+  REPOS_DIR="$("$REPO_MAP_SCRIPTS/repos-dir.sh" --raw)" || {
+    echo "stack-ensure.sh: cannot resolve the repos tree: pass --repo-path DIR (the checkout of $repo) and set REPOS_DIR (or ODOO_SHARED_COMPOSE for the shared compose file)" >&2
+    exit 2
+  }
+}
+
+# Container first: a shell where odoo and pg_isready both answer IS the stack,
+# whether or not docker is on PATH.
+if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
+  # The core this runs, stated rather than left for a caller to guess: an 18.0
+  # module on a 19.0 core installs as installable=False and its test run reports
+  # a green zero whose cause appears nowhere (#978). Majors are compared because
+  # a core answers "19.0-20260810" and a target is "19.0".
+  core_line="$(odoo --version 2>/dev/null | tail -1)" || true
+  core_major="$(printf '%s' "$core_line" | { grep -oE '[0-9]+' || true; } | head -1)"
+  core_series="unknown"
+  [ -z "$core_major" ] || core_series="${core_major}.0"
+  core_version="$(json_str "${core_line:-unknown}")"
+  side_json="$(side_cores_json)"
+  target_major=""
+  [ -z "$target_series" ] || target_major="$(printf '%s' "$target_series" | { grep -oE '[0-9]+' || true; } | head -1)"
+  if [ -n "$target_major" ] && [ "$target_major" != "$core_major" ]; then
+    echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_version\", \"side_cores\": $side_json, \"series_mismatch\": true, \"warning\": \"this container runs Odoo $core_series but the work targets $target_series — nothing installed or tested here proves anything about $target_series\", \"stopped_lru\": []}"
+  else
+    echo "{\"stack\": \"$repo\", \"status\": \"in-container\", \"odoo_version\": \"$core_version\", \"side_cores\": $side_json, \"stopped_lru\": []}"
   fi
-  echo "docker is not available and this is not a working Odoo container: stack-ensure.sh runs on the HOST (where the repos tree and docker live), or inside a devcontainer that already has odoo + postgres" >&2
+  exit 0
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "neither a working Odoo container (odoo on PATH and pg_isready answering) nor docker is available: stack-ensure.sh runs on the HOST (where the repos tree and docker live), or inside a devcontainer that already has odoo + postgres" >&2
   exit 5
 fi
 
-REPOS_DIR="${REPOS_DIR:-$("$REPO_MAP_SCRIPTS/repos-dir.sh" --raw)}"
-repo_dir="$REPOS_DIR/$repo"
+# ---- host mode -----------------------------------------------------------------
+if [ -n "$repo_path" ]; then
+  repo_dir="$repo_path"
+else
+  resolve_repos_dir
+  repo_dir="$REPOS_DIR/$repo"
+fi
 [ -d "$repo_dir" ] || { echo "repo not found: $repo_dir" >&2; exit 2; }
+if [ -z "${ODOO_SHARED_COMPOSE:-}" ]; then
+  resolve_repos_dir
+  ODOO_SHARED_COMPOSE="$REPOS_DIR/.devcontainer/shared/compose.yml"
+fi
 
 # The one place a compose project name is derived, exactly as compose derives it.
 normalize_project() {
@@ -146,7 +216,7 @@ flock 9
 
 # Shared services first (proxy, postgres, pgweb): idempotent, and --wait blocks
 # on the db healthcheck so nothing below can race initdb.
-docker compose -f "${ODOO_SHARED_COMPOSE:-$REPOS_DIR/.devcontainer/shared/compose.yml}" up -d --wait >&2
+docker compose -f "$ODOO_SHARED_COMPOSE" up -d --wait >&2
 # Self-heal a stale per-project db from the pre-shared layout
 docker rm -f "${proj}-db-1" >/dev/null 2>&1 || true
 

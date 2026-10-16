@@ -11,11 +11,16 @@
 # "these three things are wrong", not "the first thing is wrong" three times in a
 # row. PASS/FAIL per check on stderr, one JSON object as the last stdout line.
 #
-# Context-aware, because the requirements genuinely differ:
-#   host          docker, a populated repos tree, gh, and the devcontainer CLI —
-#                 this is where worktrees and stacks are managed from
+# Context-aware, because the requirements genuinely differ. Detected CONTAINER
+# FIRST: odoo on PATH and pg_isready answering is a devcontainer, even when docker
+# is on PATH too (docker-from-docker mounts the host socket, #1053).
 #   devcontainer  odoo and a reachable postgres; docker and the repos tree are
-#                 neither present nor needed
+#                 neither present nor needed. Also the answer when NEITHER odoo
+#                 plus postgres NOR docker is available: the odoo and postgres
+#                 checks then FAIL by name.
+#   host          otherwise, when docker is available: docker, a populated repos
+#                 tree, gh, and the devcontainer CLI — this is where worktrees
+#                 and stacks are managed from
 # The lifted original only knew the host case and reported four confident
 # failures inside a perfectly good container.
 #
@@ -57,7 +62,13 @@ check() {
   fi
 }
 
-if command -v docker >/dev/null 2>&1; then
+# Container first, as stack-ensure.sh and run-tests.sh do (#1053): inside the
+# devcontainer docker is on PATH too (host socket), so it cannot decide. When
+# neither is true the answer is still "devcontainer": its odoo/postgres checks
+# then FAIL by name, which says what is missing; "host" would say nothing true.
+if command -v odoo >/dev/null 2>&1 && pg_isready >/dev/null 2>&1; then
+  context="devcontainer"
+elif command -v docker >/dev/null 2>&1; then
   context="host"
 else
   context="devcontainer"

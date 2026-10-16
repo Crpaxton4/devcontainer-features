@@ -19,7 +19,11 @@ Inputs: `repo`, `default_branch` and `odoo_version` from the resolved project; t
 | Context | Repos tree | Worktrees | Stacks |
 |---|---|---|---|
 | Host | `$REPOS_DIR/<repo>` | yes | `stack-ensure.sh` manages docker |
-| Devcontainer | not visible; the checkout is bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-path /mnt/extra-addons` | already inside one |
+| Devcontainer | not visible; the checkout is bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-path /mnt/extra-addons` | already inside one; docker may be on PATH, `odoo` + postgres decide |
+
+The context is detected container first: `odoo` on PATH and `pg_isready` answering
+means devcontainer, whether or not `docker` is on PATH (the devcontainer mounts the
+host socket). Only then is `docker` checked for host.
 
 Every script takes `--repo-path DIR` to bypass repos-tree resolution. Inside the
 devcontainer it is required.
@@ -77,18 +81,29 @@ failure, 0 with `--soft`.
 ### 3. Stack
 
 ```bash
-<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0]
+<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]
 ```
 
 → `{"stack","status":"reused"|"restarted"|"created"|"in-container","stopped_lru":[]}`
 
 - One stack per project, host-globally locked, LRU eviction below `MIN_FREE_GB`.
   Readiness is proved before it returns.
-- `in-container` means you are already inside the stack. It reports the series this core
-  runs as `odoo_version`. With `--target-series`, a disagreement adds
-  `"series_mismatch": true` and a `warning`; the exit is still 0.
-- `exit 5` — docker absent and not an Odoo container → stop; you are in the wrong place.
-- `exit 2` — usage → stop; fix the call.
+- `in-container` means you are already inside the stack. It reports the core as
+  `odoo_version`, the full `odoo --version` line (`Odoo Server 19.0-20260810`), and
+  `side_cores`: `[{"series":"18.0","bin","conf","version"}, ...]` for each
+  `$ODOO_SRC_ROOT/odooNN-bin` (default `/var/lib/odoo/src`) with `odooNN.conf` beside
+  it, `[]` when none. With `--target-series`, a disagreement with the core's major adds
+  `"series_mismatch": true` and a `warning`; the exit is still 0. A side core for the
+  target series means `run-tests.sh` can still run it.
+- `--repo-path DIR` is the repo checkout on the host (replaces `$REPOS_DIR/<repo>`);
+  in a container it is accepted and ignored.
+- Every exit path prints one JSON line and exits 0, or prints an error on stderr and
+  exits non-zero. Exit 0 always comes with JSON: if you see none, your pipe (for
+  example `| tail -1`) lost it, so check the exit code.
+- `exit 5` — neither a working Odoo container (`odoo` on PATH and `pg_isready`
+  answering) nor docker → stop; you are in the wrong place.
+- `exit 2` — usage, or on the host the repos tree cannot be resolved (the message names
+  `--repo-path` and `REPOS_DIR`), or the repo directory is missing → stop; fix the call.
 - Never point it at a worktree path. That mints a second compose project for the repo.
 
 ## Re-run
