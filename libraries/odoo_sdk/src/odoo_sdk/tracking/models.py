@@ -205,6 +205,19 @@ class SessionWindow:
     window's ``id`` is the *minimum* of these, so it is stable under append-only
     tail writes (a closed session's earliest event never changes).
     """
+    run_session_id: str = ""
+    """Session id of the earliest run (by start, then id) inside this window.
+
+    Empty for a window made only of events. When set, the window is derived from
+    the run record (#1065) and :func:`session_key` keys on it, so the key does not
+    move when events later join or leave the window.
+    """
+    has_failed: bool = False
+    """True when any run in the window ended ``FAILED`` (a dead letter).
+
+    The time is real and recorded, but whether it bills is a human decision at
+    upload, so the mark travels to the upload path and the timesheet line.
+    """
 
     @property
     def duration_seconds(self) -> float:
@@ -215,7 +228,9 @@ class SessionWindow:
 def session_key(window: SessionWindow) -> str:
     """Return a stable identity string for a derived session window.
 
-    The key is ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
+    A run-derived window (#1065) is keyed ``"{task_id}|run:{session_id}"`` on its
+    earliest run, which is write-once and stable. Otherwise the key is
+    ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
     id. As of #352 sessions partition by task only (the repo is display-only
     metadata, no longer part of the identity), so a task's agent events
     (``repo=""``) and its resync'd commits (``repo="owner/repo"``) share one key
@@ -224,4 +239,6 @@ def session_key(window: SessionWindow) -> str:
     stable across re-derivations and is the idempotency key for per-session
     timesheet uploads.
     """
+    if window.run_session_id:
+        return f"{window.task_id}|run:{window.run_session_id}"
     return f"{window.task_id}|{window.id}"

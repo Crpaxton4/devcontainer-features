@@ -177,7 +177,11 @@ def plan_prune(
     retire_keys: list[str] = []
     for session in prunable:
         if protected.isdisjoint(session.event_ids):
-            retire_keys.append(session_key(session))
+            # A run-derived session still derives from the write-once run record
+            # after its events are gone, so its ledger row must stay: retiring it
+            # would bill the same session a second time (#1065).
+            if not session.run_session_id:
+                retire_keys.append(session_key(session))
         else:
             # Shared with a non-prunable session: keep the whole session so its
             # minimum-id key cannot shift, and leave its ledger mapping in place.

@@ -976,23 +976,18 @@ class LocalStateClient:
     ) -> list:
         """Return the run-record rows overlapping ``[start, end)``, or ``[]``.
 
-        Read-only in effect: an absent ``runs.db`` means no runs, and is never
-        created from the read path.
+        Strictly read-only (see :func:`~odoo_sdk.state.run_sessions.read_runs`):
+        the file is never created, migrated or written. A corrupt or locked file
+        raises rather than silently falling back to the event-store answer.
         """
         from .dispatch_state import runs_db_path
-        from .run_sessions import to_us
-        from .runs_store import RunStore
+        from .run_sessions import read_runs, to_us
 
         if not self._runs_enabled:
             return []
-        path = self._runs_db if self._runs_db is not None else runs_db_path()
-        if not path.exists():
-            return []
-        store = RunStore(path)
-        try:
-            runs = store.iter_runs(start_us=to_us(start), end_us=to_us(end))
-        finally:
-            store.close()
+        explicit = self._runs_db is not None
+        path = self._runs_db if explicit else runs_db_path()
+        runs = read_runs(path, to_us(start), to_us(end), expected=explicit)
         return [r for r in runs if task_id is None or r.task_id == task_id]
 
     @contextmanager

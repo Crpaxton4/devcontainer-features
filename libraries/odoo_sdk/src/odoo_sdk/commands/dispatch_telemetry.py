@@ -240,8 +240,12 @@ UNATTENDED_ENV = "ODOO_UNATTENDED"
 
 
 def _is_dispatched_run() -> bool:
-    """Return whether this process is inside a dispatched, unattended run."""
-    return os.environ.get(UNATTENDED_ENV, "") not in ("", "0")
+    """Return whether this process is inside a dispatched, unattended run.
+
+    Any non-empty value counts, including ``0``: the odoo-dev guard hook uses the
+    same rule, so the guard and the billing evidence never disagree.
+    """
+    return os.environ.get(UNATTENDED_ENV, "") != ""
 
 
 def _emit_tool_event(

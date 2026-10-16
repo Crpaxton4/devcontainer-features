@@ -205,9 +205,10 @@ fi
 # run record (#1065), so its hook events carry no attribution: nothing is
 # attached to an open run.
 set -- log-event --source "claude:$HOOK_NAME"
-case "${ODOO_UNATTENDED:-}" in
-    "" | 0) set -- "$@" --attach-active-run ;;
-esac
+# Any non-empty value counts, "0" included (the odoo-dev guard hook's rule).
+if [ -z "${ODOO_UNATTENDED:-}" ]; then
+    set -- "$@" --attach-active-run
+fi
 [ -n "$SUBJECT" ] && set -- "$@" --subject "$SUBJECT"
 [ -n "$BRANCH" ] && set -- "$@" --branch "$BRANCH"
 [ -n "$REPO" ] && set -- "$@" --repo "$REPO"
