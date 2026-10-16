@@ -73,6 +73,8 @@ failure, 0 with `--soft`.
 → `{"worktree","branch","status":"created"|"reused","tracking":"started"|"already_running"|"skipped"|"error"}`
 
 - Idempotent and flocked per repo. On reuse the branch is read from the worktree.
+- A new task branch has no upstream. The first `pr-open.sh` push sets it, so a bare
+  `git push` cannot reach the base branch.
 - It is the single git writer for the task branch. It calls `odoo-sdk cmd start_task`
   best-effort, and skips the call when `ODOO_UNATTENDED` is set; `tracking` says what
   happened, and `skipped` or `error` is a warning, not a failure.
