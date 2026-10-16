@@ -3,7 +3,6 @@ description: Produce independent evidence for one Odoo task branch — unit test
 argument-hint: <task-id>
 arguments: [task]
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
-disable-model-invocation: true
 context: fork
 agent: odoo-dev:odoo-dev-tester
 background: false

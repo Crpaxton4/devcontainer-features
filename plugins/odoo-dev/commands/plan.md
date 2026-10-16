@@ -3,7 +3,6 @@ description: Plan one Odoo task in plan mode — prior-art verdict, acceptance c
 argument-hint: <task-id> [request text]
 arguments: [task]
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
-disable-model-invocation: true
 ---
 
 ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --create --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id' -- "$task"`
