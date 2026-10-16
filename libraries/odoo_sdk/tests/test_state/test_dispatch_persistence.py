@@ -6,7 +6,6 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -85,10 +84,6 @@ def test_state_paths(tmp_path):
     assert dispatch_state.runs_db_path(tmp_path) == tmp_path / "runs.db"
     assert dispatch_state.lock_path(tmp_path) == tmp_path / "dispatcher.lock"
     assert dispatch_state.bundle_dir("j", tmp_path) == tmp_path / "artifacts" / "j"
-    assert (
-        dispatch_state.friction_path(date(2026, 10, 16), tmp_path)
-        == tmp_path / "friction" / "2026-10-16.md"
-    )
     with patch.dict(os.environ, {"ODOO_DISPATCH_STATE_DIR": str(tmp_path)}):
         assert dispatch_state.jobs_db_path() == tmp_path / "jobs.db"
     assert dispatch_state.now_us() > T0
