@@ -78,6 +78,20 @@ _TYPES = {
 }
 
 
+def _is_type(value, kind: str | None) -> bool:
+    """True when ``value`` has JSON type ``kind`` (no type means anything goes)."""
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    return kind not in _TYPES or isinstance(value, _TYPES[kind])
+
+
+def _object_conforms(value: dict, schema: dict) -> bool:
+    if any(key not in value for key in schema.get("required", ())):
+        return False
+    props = schema.get("properties", {})
+    return all(conforms(value[key], props[key]) for key in props if key in value)
+
+
 def conforms(value, schema: dict) -> bool:
     """Check ``value`` against the subset of JSON Schema that RUN_SCHEMA uses.
 
@@ -87,17 +101,12 @@ def conforms(value, schema: dict) -> bool:
     if "enum" in schema:
         return value in schema["enum"]
     kind = schema.get("type")
-    if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if kind in _TYPES and not isinstance(value, _TYPES[kind]):
+    if not _is_type(value, kind):
         return False
     if kind == "array":
         return all(conforms(item, schema["items"]) for item in value)
     if kind == "object":
-        if any(key not in value for key in schema.get("required", ())):
-            return False
-        props = schema.get("properties", {})
-        return all(conforms(value[k], props[k]) for k in props if k in value)
+        return _object_conforms(value, schema)
     return True
 
 
