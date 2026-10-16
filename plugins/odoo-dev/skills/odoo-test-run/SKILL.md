@@ -39,7 +39,9 @@ target series.
   container runs gives `status: "series_mismatch"`, `passed: false`, `tests_run: 0` and an
   `error` naming both series. Nothing ran. Pass the flag whenever the target is known.
 - `--test-tags` takes Odoo's grammar: `/module`, `/module:Class`, `/module:Class.method`,
-  `-tag` to exclude, comma-separated.
+  `-tag` to exclude, comma-separated. The default is `/<module>`, so only the module under
+  test runs. `--test-tags all` removes the filter and runs the tests of every installed
+  module, which does not finish in a usable time on a module with many dependencies.
 - The addons path is stated, never read from `odoo.conf`: the worktree first, then the
   core addons of the running Odoo. The data dir is stated too, per run. `--addons-path`
   and `--data-dir` replace them.

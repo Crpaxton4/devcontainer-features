@@ -2,10 +2,16 @@
 # run-tests.sh — run an Odoo module's tests on a throwaway DB and report machine
 # evidence a PR gate can trust.
 #
-# Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S]
+# Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all] [--db-suffix S]
 #                     [--with-tours] [--repo-path DIR] [--addons-path P]
 #                     [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]
 #
+#   --test-tags:     Odoo's test-tag grammar, passed to odoo verbatim. The default
+#                    is /<module>: only the module under test runs. Without a
+#                    filter Odoo runs the tests of EVERY installed module (the
+#                    whole dependency tree), which does not finish in a usable
+#                    time. The value `all` is the escape: it means no filter, so
+#                    odoo gets --test-enable and no --test-tags.
 #   --target-series: the Odoo series the MODULE targets, as in 18.0. Compared
 #                    against the series this container's core actually runs. No
 #                    flag means no comparison — every caller that is not
@@ -89,7 +95,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]" >&2; exit 2; }
+[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all (default /<module>)] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--put ARTIFACTS_DIR]" >&2; exit 2; }
 repo="$1"; task_id="$2"; module="$3"; shift 3
 
 tags=""; suffix=""; with_tours=false; repo_path=""; addons_override=""; data_dir_override=""
@@ -107,6 +113,11 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# Default the filter to the module under test; `all` is the only way to widen it.
+# The odoo invocations below pass --test-tags only when $tags is non-empty.
+[ -n "$tags" ] || tags="/$module"
+[ "$tags" != "all" ] || tags=""
 
 # emit <json> — print the result, and with --put write it into task.json under
 # test.<module>. Both result paths (series mismatch and completed run) go through
