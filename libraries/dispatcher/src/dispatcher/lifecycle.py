@@ -37,7 +37,12 @@ from .settings import (
     normalize_project,
 )
 
-DISALLOWED_TOOLS = "Bash(docker:*)"
+#: Docker (accident prevention, design section 6) and the configuration
+#: directory: an unattended session must not edit the settings that govern it.
+#: Space separated, as ``--disallowedTools`` takes one rule list. Bash redirects
+#: into the directory cannot be matched by a rule; the guard hook covers those.
+DISALLOWED_TOOLS = "Bash(docker:*) Edit(~/.claude/**) Write(~/.claude/**)"
+UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
 ACTIVE_REPOS_VARIABLE = "ODOO_ACTIVE_REPOS"
 
@@ -111,6 +116,13 @@ def child_env(
 def render_up(settings: Settings, repo: str) -> list[str]:
     """``devcontainer up``: start or reuse the project's container.
 
+    This deliberately does not call ``stack-ensure.sh``. Its create path runs
+    ``devcontainer up --workspace-folder`` with no ``--config`` and no
+    ``--mount``, so it cannot create a container for these repos (they carry no
+    ``.devcontainer``) and could not add the ``/artifacts`` bind. Do not "fix"
+    this back. Instead the dispatcher exports ``ODOO_ACTIVE_REPOS`` to every
+    child (see :func:`child_env`) and the memory gate stands in for eviction.
+
     The bundle *root* is mounted at ``/artifacts`` because one container serves
     several jobs of a project; each job points ``ODOO_DEV_STATE_DIR`` at its own
     subdirectory.
@@ -131,7 +143,18 @@ def render_up(settings: Settings, repo: str) -> list[str]:
 
 
 def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief: str):
-    """The dispatch command line of design section 8, exactly."""
+    """The dispatch command line of design section 8, exactly.
+
+    ``--remote-env ODOO_UNATTENDED=1`` is a contract with the odoo-dev guard
+    hook (``plugins/odoo-dev/hooks/unattended-guard.sh``). The stage commands
+    fork, so inside ``/odoo-dev:pr`` the hook payload's ``agent_type`` is
+    ``odoo-dev-pr``, not ``odoo-dev-implementer``, and an agent-type trigger
+    allows the push, the pull request creation and ``gh pr ready`` that happen
+    in that fork. The hook therefore also engages on any non-empty
+    ``ODOO_UNATTENDED``, and a forked subagent inherits the session
+    environment. Without this variable every protection in that hook is
+    decorative during an unattended run. Do not drop it as redundant.
+    """
     return [
         "devcontainer",
         "exec",
@@ -141,6 +164,8 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         str(settings.workspace(repo)),
         "--remote-env",
         f"{STATE_DIR_VARIABLE}={ARTIFACTS_TARGET}/{job_id}",
+        "--remote-env",
+        f"{UNATTENDED_VARIABLE}=1",
         "--",
         "claude",
         "-p",
@@ -159,6 +184,33 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         "--disallowedTools",
         DISALLOWED_TOOLS,
     ]
+
+
+def kill_in_container(
+    shell: Shell, container_id: str, task_id: str, env: dict[str, str]
+) -> str:
+    """Best effort: stop the job's ``claude`` inside the container. Returns a note.
+
+    Killing the host ``devcontainer exec`` process does not reach the process it
+    started in the container. ``pkill -f`` matches the ``claude -p <task>``
+    command line (the task id is followed by whitespace, so task 12 never
+    matches task 123). Never verified, so the note says what is known.
+    """
+    if not container_id:
+        return "no container id is known; the container-side process may still be alive"
+    pattern = "claude -p " + task_id.replace(".", r"\.") + "[[:space:]]"
+    done = shell.run(
+        ["docker", "exec", container_id, "pkill", "-KILL", "-f", "--", pattern],
+        env=env,
+        timeout=30,
+    )
+    if done.returncode == 0:
+        return "a kill was sent to the container-side claude process; its exit was not verified"
+    return (
+        f"the container-side kill did not run (exit {done.returncode}: "
+        f"{(done.stderr or done.stdout).strip()[:200]}); "
+        "the container-side process may still be alive"
+    )
 
 
 def container_name(repo: str) -> str:

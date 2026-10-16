@@ -19,7 +19,7 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     argv = lifecycle.render_exec(settings, "qoc", "1234", "job-1", "the brief")
     cfg = str(settings.config("qoc"))
     ws = str(settings.workspace("qoc"))
-    assert argv[:9] == [
+    assert argv[:11] == [
         "devcontainer",
         "exec",
         "--config",
@@ -28,10 +28,12 @@ def test_exec_command_line_is_section_eight_exactly(settings):
         ws,
         "--remote-env",
         "ODOO_DEV_STATE_DIR=/artifacts/job-1",
+        "--remote-env",
+        "ODOO_UNATTENDED=1",  # the contract with plugins/odoo-dev/hooks/unattended-guard.sh
         "--",
     ]
-    assert argv[9:12] == ["claude", "-p", "1234\n\nthe brief"]
-    rest = argv[12:]
+    assert argv[11:14] == ["claude", "-p", "1234\n\nthe brief"]
+    rest = argv[14:]
     assert rest[:4] == [
         "--agent",
         settings.agent,
@@ -45,7 +47,8 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert "--verbose" in rest
     assert json.loads(rest[rest.index("--json-schema") + 1])["required"][0] == "summary"
     assert rest[rest.index("--permission-mode") + 1] == "dontAsk"
-    assert rest[rest.index("--disallowedTools") + 1] == "Bash(docker:*)"
+    denied = rest[rest.index("--disallowedTools") + 1].split()
+    assert denied == ["Bash(docker:*)", "Edit(~/.claude/**)", "Write(~/.claude/**)"]
     assert "--override-config" not in argv
     assert "--max-turns" not in argv and "--max-budget-usd" not in argv
     assert not any("COMPOSE_PROJECT_NAME" in a for a in argv)
@@ -511,3 +514,13 @@ def test_collection_failure_is_a_note_not_an_error(monkeypatch):
         record={},
     )
     assert write.recorded and "collection failed" in write.notes[0]
+
+
+def test_kill_in_container_notes_what_is_known():
+    shell = FakeShell()
+    note = lifecycle.kill_in_container(shell, "cid", "12.3", {})
+    cmd = shell.commands("docker", "exec", "cid", "pkill")[0]
+    assert cmd[-1] == r"claude -p 12\.3[[:space:]]" and "not verified" in note
+    shell.reply(["docker", "exec"], Completed(1, "", "no process"))
+    assert "may still be alive" in lifecycle.kill_in_container(shell, "cid", "1", {})
+    assert "may still be alive" in lifecycle.kill_in_container(shell, "", "1", {})

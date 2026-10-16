@@ -181,9 +181,10 @@ def test_deadline_guard_kills_a_hung_job(world):
     (job,) = _submit(engine, ("qoc", "18"))
     engine.run()
     assert shell.proc.killed
-    assert (
-        engine.jobs.get(job.job_id).dead_reason == DeadReason.KILLED_BY_DEADLINE.value
-    )
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.KILLED_BY_DEADLINE.value
+    assert shell.commands("docker", "exec", "c", "pkill")  # the container side, too
+    assert "container-side" in dead.detail
 
 
 def test_exit_nonzero_and_unreadable(world):

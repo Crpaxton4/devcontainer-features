@@ -93,7 +93,11 @@ def worktree_of(record: dict) -> str:
 
 
 def pr_number_of(record: dict) -> int:
-    """Best effort PR number from a ``pr`` section; 0 when none is recorded."""
+    """Read ``pr.number`` if present; 0 when it is not.
+
+    No ``pr`` section is defined in task.json today (artifact.sh has no pr
+    stage), so this is deliberately not a guess: absent means ``pr_num`` 0.
+    """
     pr = record.get("pr")
     candidates = [pr] if isinstance(pr, int) else []
     if isinstance(pr, dict):
@@ -147,6 +151,8 @@ def record_then_collect(
                 session_id=parser.session_id,
                 job_id=job.job_id,
                 task_id=job.task_id,
+                # The job's start is mark_running, so this interval includes any
+                # cold container start this task caused: that time was spent on it.
                 started_us=job.started_us,
                 ended_us=max(ended_us, job.started_us),
                 outcome=write.outcome,

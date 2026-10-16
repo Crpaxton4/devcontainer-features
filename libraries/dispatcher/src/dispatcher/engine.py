@@ -73,6 +73,8 @@ class JobRun:
         self.deadline_hit = False
         self.reap_result = ReapResult(False, "no session ran; nothing reaped")
         self._finished = False
+        self.container_id = ""
+        self.container_kill_note = ""
 
     # -- helpers --------------------------------------------------------
 
@@ -120,6 +122,7 @@ class JobRun:
         ensure_bundle_dir(job.job_id)
         env = self._env()
         container_id = lifecycle.up(engine.shell, self.settings, job.repo, env)
+        self.container_id = container_id
         lifecycle.assert_mounts(
             engine.shell, self.settings, job.repo, container_id, env
         )
@@ -179,7 +182,11 @@ class JobRun:
                 self.proc.kill()
                 self.proc.wait()
         drain.join(timeout=5)
-        self.ended_us = self.engine.clock()
+        self.ended_us = self.engine.clock()  # before the container-side kill
+        if self.deadline_hit:
+            self.container_kill_note = lifecycle.kill_in_container(
+                self.engine.shell, self.container_id, self.job.task_id, self._env()
+            )
         parser = self.parser
         self.ending = Ending(
             returncode=returncode,
@@ -262,6 +269,8 @@ class JobRun:
             jobs.complete(job_id, outcome=write.outcome.value, now_us=ended)
             return
         reason, detail = self.cause
+        if self.container_kill_note:
+            detail = f"{detail} [{self.container_kill_note}]"
         if not self.reap_result.reaped:
             detail = f"{detail} [{self.reap_result.note}]"
         jobs.dead_letter(job_id, reason, detail=detail, now_us=ended)
