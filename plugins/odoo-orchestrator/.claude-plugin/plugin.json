@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "odoo-orchestrator",
+  "displayName": "Odoo Task Orchestrator",
+  "version": "0.0.0",
+  "description": "Host-side orchestrator: pulls Odoo tasks, hardens each into a brief, takes approval per task, and queues the approved set on the dispatcher.",
+  "author": {
+    "name": "Christopher Paxton"
+  },
+  "license": "UNLICENSED",
+  "repository": "https://github.com/Crpaxton4/devcontainer-features",
+  "homepage": "https://github.com/Crpaxton4/devcontainer-features",
+  "keywords": [
+    "odoo",
+    "orchestrator",
+    "dispatcher",
+    "tasks"
+  ]
+}
