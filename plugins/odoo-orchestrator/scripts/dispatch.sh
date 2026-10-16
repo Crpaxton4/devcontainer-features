@@ -2,8 +2,10 @@
 # dispatch.sh - the one place the orchestrator calls the dispatcher.
 #
 # The dispatcher's own exit codes pass through unchanged: 0 drained, 1 a job
-# raised, 2 bad arguments or an unreadable brief, 3 another dispatcher holds the
-# lock. Exit 127 means no dispatcher was found, which the dispatcher never returns.
+# raised, 2 bad arguments, bad settings or an unreadable brief, 3 another
+# dispatcher holds the lock. This script adds two codes the dispatcher never
+# returns: 74 when it cannot create the orchestrator home, and 127 when no
+# dispatcher was found.
 #
 # `run` blocks until the queue drains, which can take far longer than a foreground
 # Bash call lives. Start it in the background and wait for it. A killed run
@@ -47,8 +49,9 @@ printf 'dispatch.sh: result file: %s\n' "$out" >&2
 
 "${cmd[@]}" "$@" | tee "$out"
 rc=${PIPESTATUS[0]}
-# latest.txt names a run that really ran. A run that exits 2 or 3 stored nothing,
-# so its empty file is removed and latest.txt keeps pointing at the last real run.
+# latest.txt names a run that really ran. A run that exits with any code other
+# than 0 or 1 stored nothing, so its empty file is removed and latest.txt keeps
+# pointing at the last real run.
 if [[ $rc -eq 0 || $rc -eq 1 ]]; then
     printf '%s\n' "$out" >"$home/runs/latest.txt"
 else
