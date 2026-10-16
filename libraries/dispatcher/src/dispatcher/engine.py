@@ -337,7 +337,8 @@ class JobRun:
         try:
             self.reap_result = reap(
                 engine.shell,
-                self.settings.workspace(self.job.repo),
+                self.settings,
+                self.job.repo,
                 worktree_of(record),
                 branch_of(record),
                 self._env(),

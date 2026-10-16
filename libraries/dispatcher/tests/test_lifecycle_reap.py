@@ -221,36 +221,36 @@ def test_shell_wraps_subprocess(tmp_path):
 # -- reap ---------------------------------------------------------------
 
 
-def _git(*args, cwd):
-    subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args],
-        cwd=cwd,
-        check=True,
-        capture_output=True,
-        env={
-            **os.environ,
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-        },
-    )
+WT = "/mnt/extra-addons/.worktrees/t1"
+HEAD = "a" * 40
 
 
 @pytest.fixture
-def repo(tmp_path):
-    remote = tmp_path / "remote.git"
-    work = tmp_path / "repos" / "qoc"
-    work.mkdir(parents=True)
-    _git("init", "--bare", "-b", "main", str(remote), cwd=tmp_path)
-    _git("init", "-b", "main", cwd=work)
-    _git("remote", "add", "origin", str(remote), cwd=work)
-    (work / "f").write_text("1")
-    _git("add", "f", cwd=work)
-    _git("commit", "-m", "init", cwd=work)
-    _git("push", "origin", "main", cwd=work)
-    _git("worktree", "add", "-b", "feat", ".worktrees/t1", cwd=work)
-    return work
+def worktree(settings):
+    """The worktree as the host sees it through the mount: it only has to exist."""
+    (settings.workspace("qoc") / ".worktrees/t1").mkdir(parents=True)
+
+
+def _exec(settings):
+    """The argv every container-side command must start with."""
+    return lifecycle.render_exec_prefix(settings, "qoc") + ["--"]
+
+
+def _container_git(settings, shell, *, status="", head=HEAD, remote=None, rc=None):
+    """Script the container-side git answers; ``rc`` fails the named command."""
+    pre = _exec(settings) + ["git"]
+    remote = f"{HEAD}\trefs/heads/feat\n" if remote is None else remote
+    rc = rc or {}
+    for name, prefix, out in [
+        ("remove", ["-C", "/mnt/extra-addons", "worktree", "remove"], ""),
+        ("ls-remote", ["-C", "/mnt/extra-addons", "ls-remote"], remote),
+        ("rev-parse", ["-C", WT, "rev-parse"], head + "\n"),
+        ("status", ["-C", WT, "status"], status),
+    ]:
+        if name in rc:
+            shell.reply(pre + prefix, Completed(rc[name], "", "bad"))
+        else:
+            shell.reply(pre + prefix, Completed(0, out))
 
 
 def test_host_worktree_translation(tmp_path):
@@ -261,31 +261,93 @@ def test_host_worktree_translation(tmp_path):
     assert host_worktree("/elsewhere/x", tmp_path) is None
 
 
-def test_reap_leaves_an_unpushed_branch_alone(repo):
-    result = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    assert not result.reaped and "does not exist on the remote" in result.note
-    assert (repo / ".worktrees/t1").is_dir()
-
-
-def test_reap_removes_a_pushed_matching_worktree(repo):
-    _git("push", "origin", "feat", cwd=repo / ".worktrees/t1")
-    result = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    assert result.reaped
-    assert not (repo / ".worktrees/t1").exists()
-
-
-def test_reap_refuses_dirty_and_diverged_worktrees(repo):
-    wt = repo / ".worktrees/t1"
-    _git("push", "origin", "feat", cwd=wt)
-    (wt / "new").write_text("x")
-    assert (
-        "uncommitted"
-        in reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat").note
+def test_render_exec_prefix_names_the_project_container(settings):
+    assert lifecycle.render_exec_prefix(settings, "qoc") == [
+        "devcontainer",
+        "exec",
+        "--config",
+        str(settings.config("qoc")),
+        "--workspace-folder",
+        str(settings.workspace("qoc")),
+    ]
+    assert lifecycle.render_exec(settings, "qoc", "1", "j", "b")[:6] == (
+        lifecycle.render_exec_prefix(settings, "qoc")
     )
-    _git("add", "new", cwd=wt)
-    _git("commit", "-m", "more", cwd=wt)
-    note = reap(Shell(), repo, "/mnt/extra-addons/.worktrees/t1", "feat").note
-    assert "does not match" in note and wt.is_dir()
+
+
+def test_reap_removes_a_pushed_matching_worktree_through_the_container(
+    settings, worktree
+):
+    shell = FakeShell()
+    _container_git(settings, shell)
+    env = {"PATH": "/bin"}
+    result = reap(shell, settings, "qoc", WT, "feat", env)
+    assert result.reaped and WT in result.note
+    assert [c[len(_exec(settings)) + 1 :] for c, _ in shell.calls] == [
+        ["-C", WT, "status", "--porcelain"],
+        ["-C", WT, "rev-parse", "HEAD"],
+        [
+            "-C",
+            "/mnt/extra-addons",
+            "ls-remote",
+            "--heads",
+            "origin",
+            "refs/heads/feat",
+        ],
+        ["-C", "/mnt/extra-addons", "worktree", "remove", WT],
+    ]
+    assert all(c[: len(_exec(settings))] == _exec(settings) for c, _ in shell.calls)
+    assert all(c[len(_exec(settings))] == "git" for c, _ in shell.calls)
+    assert all(e == env for _, e in shell.calls)
+    assert {t for _, t in shell.timeouts} == {120}
+
+
+@pytest.mark.parametrize(
+    "answers,needle",
+    [
+        ({"status": " M f\n"}, "uncommitted"),
+        ({"remote": ""}, "does not exist on the remote"),
+        ({"remote": f"{'b' * 40}\trefs/heads/feat\n"}, "does not match"),
+    ],
+)
+def test_reap_leaves_an_unpushed_worktree_alone(settings, worktree, answers, needle):
+    shell = FakeShell()
+    _container_git(settings, shell, **answers)
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert not result.reaped and needle in result.note and WT in result.note
+    assert not shell.commands(
+        *_exec(settings), "git", "-C", "/mnt/extra-addons", "worktree"
+    )
+
+
+@pytest.mark.parametrize(
+    "command,reason",
+    [
+        ("status", "git status failed: bad"),
+        ("rev-parse", "git rev-parse failed: bad"),
+        ("ls-remote", "git ls-remote failed: bad"),
+        ("remove", "git worktree remove failed: bad"),
+    ],
+)
+def test_reap_reports_a_failing_container_command_as_a_note(
+    settings, worktree, command, reason
+):
+    shell = FakeShell()
+    _container_git(settings, shell, rc={command: 1})
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert (
+        not result.reaped and reason in result.note and "left in place" in result.note
+    )
+
+
+def test_reap_reports_a_devcontainer_exec_that_cannot_reach_the_container(
+    settings, worktree
+):
+    shell = FakeShell()
+    shell.reply(_exec(settings), Completed(1, "No container found", ""))
+    result = reap(shell, settings, "qoc", WT, "feat")
+    assert not result.reaped and "No container found" in result.note
+    assert len(shell.calls) == 1  # it stops at the first failure
 
 
 @pytest.mark.parametrize(
@@ -295,44 +357,17 @@ def test_reap_refuses_dirty_and_diverged_worktrees(repo):
         ("/mnt/extra-addons/x", "", "nothing reaped"),
         ("/etc/passwd", "b", "not a worktree"),
         ("/mnt/extra-addons/../escape", "b", "not a worktree"),
+        ("/mnt/extra-addons/a/../../etc", "b", "not a worktree"),
         ("/mnt/extra-addons/", "b", "not a worktree"),
-        ("/mnt/extra-addons/missing", "b", "does not exist"),
+        ("/mnt/extra-addonsx/y", "b", "not a worktree"),
+        ("/mnt/extra-addons/missing", "b", "does not exist; nothing to reap"),
     ],
 )
-def test_reap_guards(repo, path, branch, needle):
-    result = reap(Shell(), repo, path, branch)
+def test_reap_guards(settings, worktree, path, branch, needle):
+    shell = FakeShell()
+    result = reap(shell, settings, "qoc", path, branch)
     assert not result.reaped and needle in result.note
-
-
-def test_reap_reports_git_failures(repo):
-    shell = FakeShell()
-    wt = "/mnt/extra-addons/.worktrees/t1"
-    for prefix, reason in [
-        (["git", "-C", str(repo / ".worktrees/t1"), "status"], "git status failed"),
-        (
-            ["git", "-C", str(repo / ".worktrees/t1"), "rev-parse"],
-            "git rev-parse failed",
-        ),
-        (["git", "-C", str(repo), "ls-remote"], "git ls-remote failed"),
-    ]:
-        shell = FakeShell()
-        shell.reply(prefix, Completed(1, "", "bad"))
-        shell.reply(
-            ["git", "-C", str(repo / ".worktrees/t1"), "status"], Completed(0, "")
-        )
-        shell.reply(["git"], Completed(0, "abc\n"))
-        shell.replies.sort(key=lambda r: -len(r[0]))
-        assert reason in reap(shell, repo, wt, "feat").note
-    shell = FakeShell()
-    shell.reply(["git", "-C", str(repo), "worktree"], Completed(1, "", "locked"))
-    shell.reply(["git", "-C", str(repo / ".worktrees/t1"), "status"], Completed(0, ""))
-    shell.reply(["git"], Completed(0, "abc\n"))
-    shell.replies.sort(key=lambda r: -len(r[0]))
-    shell.replies.insert(
-        0,
-        (["git", "-C", str(repo), "ls-remote"], Completed(0, "abc\trefs/heads/feat\n")),
-    )
-    assert "locked" in reap(shell, repo, wt, "feat").note
+    assert shell.calls == []  # no guard reaches the container
 
 
 # -- collection and recording -------------------------------------------
@@ -710,21 +745,17 @@ def test_every_subprocess_has_a_timeout(settings):
     lifecycle.kill_in_container(shell, "cid", "1", {})
     shell.reply(["docker", "compose"], Completed(1))
     lifecycle.stop_project(shell, "qoc", {})
-    reap(shell, settings.workspace("qoc"), "/mnt/extra-addons/.w", "b")
     seen = {tuple(a[:2]): t for a, t in shell.timeouts}
     assert seen[("docker", "exec")] == 30
     assert seen[("docker", "stop")] == 120 and seen[("docker", "compose")] == 120
 
 
-def test_git_calls_have_a_timeout(repo):
+def test_container_git_calls_have_a_timeout(settings, worktree):
     shell = FakeShell()
-    shell.reply(["git"], Completed(0, ""))
-    shell.reply(
-        ["git", "-C", str(repo), "ls-remote"], Completed(0, "abc\trefs/heads/f\n")
-    )
-    reap(shell, repo, "/mnt/extra-addons/.worktrees/t1", "feat")
-    gits = [t for a, t in shell.timeouts if a[0] == "git"]
-    assert gits and set(gits) == {120}
+    _container_git(settings, shell)
+    reap(shell, settings, "qoc", WT, "feat")
+    execs = [t for a, t in shell.timeouts if a[:2] == ["devcontainer", "exec"]]
+    assert len(execs) == 4 and set(execs) == {120}
 
 
 def test_reconcile_inspect_has_a_timeout(settings):
