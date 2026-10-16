@@ -394,7 +394,7 @@ class TestSourceAvailability:
         timeout (shortened here) instead of falling back to the event store. It
         does not prove behaviour under WAL, where readers are not blocked.
         """
-        monkeypatch.setattr("odoo_sdk.state.run_sessions.BUSY_TIMEOUT_MS", 100)
+        monkeypatch.setattr("odoo_sdk.state.runs_store.BUSY_TIMEOUT_MS", 100)
         path = tmp_path / "locked.db"
         holder = sqlite3.connect(path, isolation_level=None)
         holder.execute("PRAGMA journal_mode=DELETE")
@@ -412,7 +412,7 @@ class TestSourceAvailability:
             holder.close()
 
     def test_read_runs_matches_iter_runs(self, state, runs, tmp_path):
-        """The read-only path must agree with RunStore.iter_runs (the __new__ seam)."""
+        """The read-only path must agree with RunStore.iter_runs."""
         from odoo_sdk.state.run_sessions import read_runs
 
         add_run(runs, at(0), at(5))
@@ -420,6 +420,24 @@ class TestSourceAvailability:
         got = read_runs(tmp_path / "runs.db", 0, 2**62, expected=True)
         assert got == runs.iter_runs(start_us=0, end_us=2**62)
         assert len(got) == 2
+
+    def test_open_read_only_on_a_missing_path_creates_nothing(self, tmp_path):
+        path = tmp_path / "new_dir" / "runs.db"
+        with pytest.raises(FileNotFoundError, match="runs.db"):
+            RunStore.open_read_only(path)
+        assert not path.exists()
+        assert not path.parent.exists()
+
+    def test_a_write_through_the_read_only_store_fails(self, runs, tmp_path):
+        add_run(runs, at(0), at(5))
+        store = RunStore.open_read_only(tmp_path / "runs.db")
+        try:
+            assert store.path == tmp_path / "runs.db"
+            assert len(store.iter_runs()) == 1
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                add_run(store, at(9), at(9))
+        finally:
+            store.close()
 
     def test_a_naive_stored_timestamp_does_not_crash_the_merge(
         self, state, runs, tmp_path
