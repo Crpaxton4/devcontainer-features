@@ -53,7 +53,6 @@ from .settings import (
 DISALLOWED_TOOLS = "Bash(docker:*) Edit(~/.claude/**) Write(~/.claude/**)"
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
-ACTIVE_REPOS_VARIABLE = "ODOO_ACTIVE_REPOS"
 #: Admission holds the single admission thread, and the per-job deadline does
 #: not cover it, so every call made while admitting has its own timeout.
 UP_TIMEOUT_S = 1200
@@ -122,18 +121,13 @@ class Shell:
             pass
 
 
-def child_env(
-    active_repos: list[str], base: dict[str, str] | None = None
-) -> dict[str, str]:
+def child_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Environment for every child process.
 
-    ``COMPOSE_PROJECT_NAME`` is removed, never set. ``ODOO_ACTIVE_REPOS`` names
-    the queue's in-flight projects so ``stack-ensure.sh``'s eviction sweep
-    respects them.
+    ``COMPOSE_PROJECT_NAME`` is removed, never set.
     """
     env = dict(os.environ if base is None else base)
     env.pop("COMPOSE_PROJECT_NAME", None)
-    env[ACTIVE_REPOS_VARIABLE] = ",".join(active_repos)
     return env
 
 
@@ -144,8 +138,8 @@ def render_up(settings: Settings, repo: str) -> list[str]:
     ``devcontainer up --workspace-folder`` with no ``--config`` and no
     ``--mount``, so it cannot create a container for these repos (they carry no
     ``.devcontainer``) and could not add the ``/artifacts`` bind. Do not "fix"
-    this back. Instead the dispatcher exports ``ODOO_ACTIVE_REPOS`` to every
-    child (see :func:`child_env`) and the memory gate stands in for eviction.
+    this back. The memory gate stands in for eviction, and stopping an idle
+    editor stack is a manual step.
 
     The bundle *root* is mounted at ``/artifacts`` because one container serves
     several jobs of a project; each job points ``ODOO_DEV_STATE_DIR`` at its own

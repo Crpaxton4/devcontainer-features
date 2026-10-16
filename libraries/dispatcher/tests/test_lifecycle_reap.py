@@ -73,10 +73,10 @@ def test_up_command_line_mounts_the_bundle_root(settings):
 
 
 def test_child_env_never_carries_compose_project_name():
-    env = lifecycle.child_env(["a", "b"], {"COMPOSE_PROJECT_NAME": "x", "HOME": "/h"})
+    env = lifecycle.child_env({"COMPOSE_PROJECT_NAME": "x", "HOME": "/h"})
     assert "COMPOSE_PROJECT_NAME" not in env
-    assert env["ODOO_ACTIVE_REPOS"] == "a,b" and env["HOME"] == "/h"
-    assert "COMPOSE_PROJECT_NAME" not in lifecycle.child_env([])
+    assert env == {"HOME": "/h"}
+    assert "COMPOSE_PROJECT_NAME" not in lifecycle.child_env()
 
 
 def _up_ok(cid="cid1"):

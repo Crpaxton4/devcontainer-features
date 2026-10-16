@@ -1,5 +1,6 @@
 """The admission loop, one job's life, and the entry point."""
 
+import dataclasses
 import json
 import os
 import signal
@@ -68,7 +69,7 @@ def test_a_good_run_completes_and_is_recorded(world):
     assert engine.runs.get_artifacts(job.job_id).has_envelope
     argv, env = shell.spawned[0]
     assert argv[0:2] == ["devcontainer", "exec"] and "COMPOSE_PROJECT_NAME" not in env
-    assert env["ODOO_ACTIVE_REPOS"] == "qoc"
+    assert "ODOO_ACTIVE_REPOS" not in env
     assert bundle_dir(job.job_id).is_dir()
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")  # idle: stopped
 
@@ -405,6 +406,75 @@ def test_gate_blocks_admission_until_memory_returns(world):
     t.join(10)
     assert engine.jobs.get(job.job_id).state is JobState.DONE
     assert "waiting" in logs[0]
+
+
+def _ticking_clock(step_us):
+    """A clock that moves ``step_us`` forward on every call."""
+    now = [0]
+
+    def clock():
+        now[0] += step_us
+        return now[0]
+
+    return clock
+
+
+def test_the_memory_wait_is_bounded_and_leaves_the_job_pending(world):
+    engine, shell, mem = world
+    _write_atomic(mem, "MemAvailable: 2048 kB\n")
+    engine.clock = _ticking_clock(1_000_000_000)  # 1000 s per call; limit is 1800 s
+    logs = []
+    engine.log = logs.append
+    (job,) = _submit(engine, ("qoc", "51"))
+    engine.run()
+    assert engine.jobs.get(job.job_id).state is JobState.PENDING and not shell.spawned
+    assert len(logs) == 2 and "waiting" in logs[0]
+    assert "1800 s" in logs[1] and "1024 MB threshold" in logs[1]
+    assert "last measured: 2 MB" in logs[1] and "remain PENDING" in logs[1]
+
+
+def test_an_unreadable_figure_is_named_when_the_wait_ends(world):
+    engine, _, mem = world
+    mem.write_text("garbage")
+    engine.clock = _ticking_clock(2_000_000_000)
+    logs = []
+    engine.log = logs.append
+    _submit(engine, ("qoc", "52"))
+    engine.run()
+    assert "no readable figure" in logs[-1]
+
+
+def test_a_running_job_resets_the_wait_clock(world):
+    engine, _, mem = world
+    _write_atomic(mem, "MemAvailable: 10 kB\n")
+    now = [0]
+    engine.clock = lambda: now[0]
+    engine._last_admit_us = 0
+    busy = threading.Event()
+    worker = threading.Thread(target=busy.wait)
+    worker.start()
+    try:
+        now[0] = 5000 * 1_000_000  # far past the 1800 s limit
+        # a live job holds the memory, so this is not a stall
+        assert engine._waited_too_long([worker]) is False
+        assert engine._last_admit_us == now[0]
+    finally:
+        busy.set()
+        worker.join()
+    now[0] += 1799 * 1_000_000
+    assert engine._waited_too_long([]) is False
+    now[0] += 1_000_000
+    assert engine._waited_too_long([]) is True
+
+
+def test_an_admission_within_the_timeout_is_unaffected(world):
+    engine, shell, _ = world
+    engine.settings = dataclasses.replace(engine.settings, admit_timeout_s=0)
+    engine.clock = _ticking_clock(1_000_000_000)
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "53"))
+    engine.run()
+    assert engine.jobs.get(job.job_id).state is JobState.DONE and not engine.errors
 
 
 def _write_atomic(path, text):
@@ -786,6 +856,23 @@ def test_resume_with_a_fatal_memory_error_still_reports_the_pending_jobs(
     assert cli.main(["run"]) == cli.EXIT_JOB_ERROR
     out = capsys.readouterr()
     assert "remain PENDING" in out.err
+    report = json.loads(out.out)
+    assert [(j["job_id"], j["state"]) for j in report["jobs"]] == [
+        (job.job_id, "PENDING")
+    ]
+
+
+def test_the_bounded_memory_wait_exits_one_and_names_the_threshold(
+    monkeypatch, tmp_path, capsys
+):
+    _cli_world(monkeypatch, tmp_path, "MemAvailable: 3072 kB\n")
+    monkeypatch.setenv("DISPATCH_ADMIT_TIMEOUT_S", "0")
+    monkeypatch.setenv("MIN_FREE_GB", "1")
+    store = JobStore()
+    (job,) = queue.submit(store, [queue.JobSpec("qoc", "1", "x")], "b")
+    assert cli.main(["run"]) == cli.EXIT_JOB_ERROR
+    out = capsys.readouterr()
+    assert "1024 MB threshold" in out.err and "last measured: 3 MB" in out.err
     report = json.loads(out.out)
     assert [(j["job_id"], j["state"]) for j in report["jobs"]] == [
         (job.job_id, "PENDING")
