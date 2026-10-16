@@ -198,6 +198,26 @@ expect "override run still passes" "$(field "$out" passed)" "true"
 out="$(run "$green" 0 --data-dir "$work/own-data")"
 expect "--data-dir override is honoured" "$(argv_has "--data-dir=$work/own-data")" "yes"
 
+# ---------- --test-tags defaults to /<module>; `all` is the only widening (#1056)
+# With no filter Odoo runs every installed module's tests, which never finishes.
+# The stub records one argv entry per line, so the flag and its value are two lines.
+out="$(run "$green" 0)"
+expect "no --test-tags: --test-enable is passed"     "$(argv_has "--test-enable")" "yes"
+expect "no --test-tags: --test-tags is passed"       "$(argv_has "--test-tags")" "yes"
+expect "no --test-tags: the filter is /<module>"     "$(argv_has "/mymodule")" "yes"
+
+out="$(run "$green" 0 --test-tags all)"
+expect "--test-tags all: --test-enable is passed"    "$(argv_has "--test-enable")" "yes"
+expect "--test-tags all: no --test-tags reaches odoo" "$(argv_has "--test-tags")" "no"
+expect "--test-tags all: no /<module> filter either" "$(argv_has "/mymodule")" "no"
+expect "--test-tags all: the literal 'all' is not passed" "$(argv_has "all")" "no"
+expect "--test-tags all: the run still passes"       "$(field "$out" passed)" "true"
+
+out="$(run "$green" 0 --test-tags /x,-at_install)"
+expect "explicit --test-tags is passed through"      "$(argv_has "--test-tags")" "yes"
+expect "explicit --test-tags value is verbatim"      "$(argv_has "/x,-at_install")" "yes"
+expect "explicit --test-tags replaces the default"   "$(argv_has "/mymodule")" "no"
+
 # Screenshot redirection is unconditional, not tied to --with-tours: ANY failing
 # HttpCase saves a screenshot, and the configured path need not be writable here.
 # When it is not, "PermissionError: /mnt/recordings" replaces the real failure.
