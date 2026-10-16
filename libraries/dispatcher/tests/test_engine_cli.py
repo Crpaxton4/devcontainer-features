@@ -1,6 +1,7 @@
 """The admission loop, one job's life, and the entry point."""
 
 import json
+import os
 import signal
 import threading
 
@@ -10,7 +11,8 @@ from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
 from dispatcher import cli, queue
-from dispatcher.engine import Engine, JobRun
+from dispatcher.engine import MEMORY_READ_ATTEMPTS, Engine, JobRun
+from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
@@ -297,7 +299,7 @@ def test_siblings_share_one_container_which_stops_only_when_all_done(world):
 
 def test_gate_blocks_admission_until_memory_returns(world):
     engine, shell, mem = world
-    mem.write_text("MemAvailable: 10 kB\n")
+    _write_atomic(mem, "MemAvailable: 10 kB\n")
     shell.proc = FakeProc(stream(structured=GOOD))
     (job,) = _submit(engine, ("qoc", "50"))
     logs = []
@@ -309,10 +311,59 @@ def test_gate_blocks_admission_until_memory_returns(world):
             break
         threading.Event().wait(0.01)
     assert engine.jobs.get(job.job_id).state is JobState.PENDING and not shell.spawned
-    mem.write_text("MemAvailable: 9999999 kB\n")
+    _write_atomic(mem, "MemAvailable: 9999999 kB\n")
     t.join(10)
     assert engine.jobs.get(job.job_id).state is JobState.DONE
     assert "waiting" in logs[0]
+
+
+def _write_atomic(path, text):
+    """Write-then-rename, so a concurrent reader never sees a partial file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def test_a_partial_memory_read_is_retried_not_abandoned(world):
+    engine, shell, mem = world
+    mem.write_text("MemTot")  # deliberately partial: no MemAvailable line
+    shell.proc = FakeProc(stream(structured=GOOD))
+    (job,) = _submit(engine, ("qoc", "140"))
+    logs = []
+    engine.log = logs.append
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if any("memory read failed" in m for m in logs):
+            break
+        threading.Event().wait(0.01)
+    assert engine.jobs.get(job.job_id).state is JobState.PENDING and not shell.spawned
+    _write_atomic(mem, "MemAvailable: 9999999 kB\n")
+    t.join(10)
+    assert engine.jobs.get(job.job_id).state is JobState.DONE and not engine.errors
+
+
+def test_a_persistently_unreadable_memory_figure_is_fatal_and_loud(
+    world, capsys, monkeypatch
+):
+    engine, shell, mem = world
+    mem.write_text("garbage")
+    (job,) = _submit(engine, ("qoc", "141"))
+    with pytest.raises(MemoryReadError):
+        engine.run()
+    assert engine.jobs.get(job.job_id).state is JobState.PENDING and not shell.spawned
+    assert engine._memory_failures == MEMORY_READ_ATTEMPTS
+    # through the entry point: non-zero, named on stderr, the job still PENDING
+    assert cli._run_engine(engine) is True
+    assert "remain PENDING" in capsys.readouterr().err
+
+
+def test_a_good_read_resets_the_failure_count(world):
+    engine, _, mem = world
+    mem.write_text("garbage")
+    assert engine._room() is False and engine._memory_failures == 1
+    _write_atomic(mem, "MemAvailable: 9999999 kB\n")
+    assert engine._room() is True and engine._memory_failures == 0
 
 
 def test_admission_is_serial_and_settles(world):

@@ -41,7 +41,7 @@ from .collect import (
     worktree_of,
 )
 from .deadletter import Ending, classify, describe
-from .gates import AdmissionGate
+from .gates import AdmissionGate, MemoryReadError
 from .lifecycle import (
     ContainerStartError,
     MountInvalidError,
@@ -54,6 +54,10 @@ from .reap import ReapResult, reap
 from .settings import Settings
 
 STDERR_TAIL_LINES = 40
+#: A failed read of the memory figure is retried this many times in a row (one
+#: poll interval apart) before it is treated as fatal. The gate itself still
+#: raises on a bad read and never admits on a guess.
+MEMORY_READ_ATTEMPTS = 5
 #: After the host process has exited, the stream is already in the pipe and is
 #: read in moments. If it is not finished by then, something else still holds
 #: the pipe (a grandchild) and the reader is abandoned instead of waited for.
@@ -362,6 +366,7 @@ class Engine:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._active: list[JobRun] = []
+        self._memory_failures = 0
         # Reentrant: request_stop runs from a signal handler on the main thread,
         # which may already hold this lock inside _start.
         self._lock = threading.RLock()
@@ -412,10 +417,10 @@ class Engine:
             if threads:
                 self._sleep()
             return bool(threads)
-        if not self.gate.has_room():
+        if not self._room():
             self.log(
-                f"waiting: {self.gate.available_kb() // 1024} MB available is below "
-                f"the {self.gate.min_available_kb // 1024} MB threshold"
+                f"waiting: memory is below the "
+                f"{self.gate.min_available_kb // 1024} MB threshold, or unreadable"
             )
             self._sleep()
             return True
@@ -424,6 +429,26 @@ class Engine:
             self._start(run, threads)
             self.gate.settle()
         return True
+
+    def _room(self) -> bool:
+        """The gate's answer, treating a bad memory read as transient, then fatal.
+
+        A read can see a half-written file; admitting on a guess is never an
+        option, so the job simply stays PENDING and the read is retried. After
+        ``MEMORY_READ_ATTEMPTS`` consecutive failures the error is raised, which
+        ends the run non-zero with the job still PENDING (and reported as such),
+        never silently drained.
+        """
+        try:
+            has_room = self.gate.has_room()
+        except MemoryReadError as exc:
+            self._memory_failures += 1
+            self.log(f"memory read failed ({self._memory_failures}): {exc}")
+            if self._memory_failures >= MEMORY_READ_ATTEMPTS:
+                raise
+            return False
+        self._memory_failures = 0
+        return has_room
 
     def _start(self, run: JobRun, threads: list[threading.Thread]) -> None:
         with self._lock:

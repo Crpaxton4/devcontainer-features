@@ -33,7 +33,7 @@ from odoo_sdk.state.jobs import Job, JobStore
 from odoo_sdk.state.runs_store import RunStore
 
 from .engine import Engine
-from .gates import AdmissionGate
+from .gates import AdmissionGate, MemoryReadError
 from .lifecycle import Shell
 from .lock import AlreadyRunningError, DispatcherLock
 from .queue import SubmissionError, new_id, parse_submission, reconcile, submit
@@ -68,6 +68,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_engine(engine: Engine) -> bool:
+    """Run the queue. True when it ended on a fatal error with jobs left PENDING."""
+    try:
+        engine.run()
+    except MemoryReadError as exc:
+        print(
+            f"dispatch: stopping, the memory figure stayed unreadable: {exc}; "
+            "unadmitted jobs remain PENDING, rerun `dispatch run` to resume",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def _run(jobs_argument: str | None) -> int:
     with DispatcherLock(lock_path()):  # first, before anything else
         try:
@@ -90,14 +104,14 @@ def _run(jobs_argument: str | None) -> int:
         )
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: engine.request_stop())
-        engine.run()
+        fatal = _run_engine(engine)
         ids = [job.job_id for job in submitted] or sorted(engine.notes)
         report = {
             "batch_id": batch_id if specs else "",
             "jobs": [job_report(store.get(i), engine.notes.get(i)) for i in ids],
         }
         print(json.dumps(report, indent=2))
-        return EXIT_JOB_ERROR if engine.errors else EXIT_OK
+        return EXIT_JOB_ERROR if engine.errors or fatal else EXIT_OK
 
 
 def _dead_letters() -> int:
