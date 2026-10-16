@@ -46,11 +46,23 @@ from .settings import (
     normalize_project,
 )
 
-#: Docker (accident prevention, design section 6) and the configuration
-#: directory: an unattended session must not edit the settings that govern it.
-#: Space separated, as ``--disallowedTools`` takes one rule list. Bash redirects
-#: into the directory cannot be matched by a rule; the guard hook covers those.
-DISALLOWED_TOOLS = "Bash(docker:*) Edit(~/.claude/**) Write(~/.claude/**)"
+#: ``CLAUDE_CONFIG_DIR`` inside the container (personal-features Feature).
+#: A rule path starting with ``//`` is absolute, so it names this directory and
+#: not a path under the project.
+CONTAINER_CLAUDE_HOME = "/usr/local/share/claude-home"
+#: Docker (accident prevention, design section 6), the configuration directory
+#: (an unattended session must not edit the settings that govern it) and the two
+#: task tracking tools (the run record, not the agent, measures the time).
+#: ``render_exec`` passes each rule as its own ``--disallowedTools`` argument.
+#: Bash redirects into the directory cannot be matched by a rule; the guard hook
+#: covers those.
+DISALLOWED_TOOLS = (
+    "Bash(docker:*)",
+    f"Edit(/{CONTAINER_CLAUDE_HOME}/**)",
+    f"Write(/{CONTAINER_CLAUDE_HOME}/**)",
+    "mcp__odoo-mcp__start_task",
+    "mcp__odoo-mcp__stop_task",
+)
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
 #: Admission holds the single admission thread, and the per-job deadline does
@@ -212,8 +224,7 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         schema_argument(),
         "--permission-mode",
         "dontAsk",
-        "--disallowedTools",
-        DISALLOWED_TOOLS,
+        *[arg for rule in DISALLOWED_TOOLS for arg in ("--disallowedTools", rule)],
     ]
 
 

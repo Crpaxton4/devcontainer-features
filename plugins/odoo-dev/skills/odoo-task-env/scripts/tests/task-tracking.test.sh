@@ -130,6 +130,20 @@ out="$(PATH="$stubbin:$PATH" bash "$SCRIPTS/worktree-ensure.sh" anyrepo 9001 fix
 expect "rerun reuses the worktree" "$(field "$out" status)" '"reused"'
 expect "rerun tracking already_running" "$(field "$out" tracking)" '"already_running"'
 
+# ---------- worktree-ensure.sh: ODOO_UNATTENDED skips start_task --------------
+reset_stub
+echo '[{"id":9005,"name":"Fix the thing","project_id":[3,"Project X"]}]' > "$STUB_DIR/get_tasks.json"
+echo '{"run_id":5,"task_id":9005,"state":"RUNNING","already_running":false}' > "$STUB_DIR/start_task.json"
+err="$(ODOO_UNATTENDED=1 PATH="$stubbin:$PATH" bash "$SCRIPTS/worktree-ensure.sh" anyrepo 9005 s UAT --repo-path "$repo" 2>&1 >"$work/out9005")"
+rc=$?
+out="$(tail -1 "$work/out9005")"
+expect_exit "unattended worktree succeeds" 0 $rc
+expect "unattended tracking is skipped" "$(field "$out" tracking)" '"skipped"'
+expect "unattended worktree still created" "$(field "$out" status)" '"created"'
+expect "unattended never calls start_task" "$(grep -c '^start_task|' "$STUB_LOG")" "0"
+expect "unattended never resolves the task" "$(grep -c '^get_tasks|' "$STUB_LOG")" "0"
+case "$err" in *ODOO_UNATTENDED*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL expected the reason on stderr: $err" >&2 ;; esac
+
 # ---------- worktree-ensure.sh: every tracking failure warns, never fails -----
 reset_stub
 echo 1 > "$STUB_DIR/get_tasks.rc"
