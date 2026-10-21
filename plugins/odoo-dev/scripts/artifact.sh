@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # artifact.sh — the only sanctioned way to read and write a task's artifact file.
 #
-# One file per task, four sections. Every stage of the odoo-dev chain reads and
+# One file per task, five sections. Every stage of the odoo-dev chain reads and
 # writes <artifacts_dir>/task.json, and each command touches only its own section:
 #
 #   plan    written by /odoo-dev:plan after approval  ({"markdown": "..."})
@@ -9,6 +9,8 @@
 #                                                      odoo_version, default_branch)
 #   test    written by run-tests.sh --put, one entry per module under test.<module>
 #   review  written by the tester                     (findings, criteria_results)
+#   upgrade written only by upgrade-state.sh (inputs, run, preflight, plan, modules,
+#           install, workbook, assumptions, friction, pr); `build` is derived from it
 #
 # The test section is written by the test script itself, never re-typed by an agent:
 # that is what lets a reader tell a real run from a hand-assembled one.
@@ -60,6 +62,10 @@ const SCHEMA = {
                      "failures","log_file","produced_by","odoo_version",
                      "module_target_series"] },
   review: { required: [], types: {}, fields: ["findings","criteria_results"] },
+  upgrade: { required: ["inputs","run","modules"],
+             types: { modules: "object", assumptions: "array", friction: "array" },
+             fields: ["inputs","run","preflight","plan","modules","install","workbook",
+                      "assumptions","friction","pr"] },
 };
 '
 
