@@ -142,7 +142,7 @@ Invariants define "done" per phase; do not proceed past phase while one fails:
 - Staging upgrade status *successful* before any production request (phase 7).
 - Post-upgrade sentinel checks pass (phase 9).
 
-Living document: when upgrade project surfaces lesson SOP not cover, record in `$ODOO_DEV_STATE_DIR/upgrade-lessons/` (default `~/.local/share/odoo-dev/upgrade-lessons/`) during project (raw capture, one file per project); fold proven lessons into SOP and reference files at next revision.
+Living document: when upgrade project surfaces lesson SOP not cover, record it in `friction[]` of the task artifact (`upgrade-state.sh <artifacts> friction add`); fold proven lessons into SOP and reference files at next revision.
 
 ## References
 

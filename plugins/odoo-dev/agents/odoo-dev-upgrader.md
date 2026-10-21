@@ -85,7 +85,7 @@ are the lines of your prompt.
    After each run, run `upgrade-state.sh <ARTIFACTS> gate install --summary <file>`.
    When `next` prints `STOP budget` or `STOP killed` at any step, end the run with `status: failed` and name that reason in the one-sentence line.
    After step 7, run `upgrade-state.sh <ARTIFACTS> build`.
-8. Append each gotcha the skill did not cover to `<state dir>/upgrade-lessons/`.
+8. Record every friction (a tool that lied, a refused command, a path that did not match, a workaround) with `upgrade-state.sh <ARTIFACTS> friction add …`; a `porting_fact` carries the series pair, the symptom grep and the fix. The empty list is the normal result.
 
 ## Outputs
 
