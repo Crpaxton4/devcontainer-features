@@ -43,8 +43,9 @@ are the lines of your prompt.
    edit `addons_path` or `data_dir`, to make an install pass; a traceback inside core
    or enterprise code is an environment failure, not a port defect.
 2. `worktree-ensure.sh` as the builder does.
-3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and
-   `studio_inventory.py --ssh <host> --artifacts <ARTIFACTS>` when a host was given.
+3. Inventory under `<ARTIFACTS>/inventory/`, in one call: `inventory.sh --artifacts <ARTIFACTS>
+   --worktree <worktree> --series <target> [--ssh <host>]` (the script of the `odoo-upgrade`
+   skill). Exit 10 is a stop; relay its failure lines verbatim.
 4. Prior art per module → `keep`, `replace` or `merge-into-standard`. The verdict and
    `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.

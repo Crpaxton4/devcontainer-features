@@ -11,6 +11,13 @@ references/oca-base-review.md):
                       ENRICH_KEYS — enrichment, "<major> native?" and
                       "OCA <major> alternative"
     studio.csv        optional — studio_inventory.py output (UI-built artifacts)
+    oca_index.json    optional — oca_check.py output. The index is the source
+                      of `OCA <major> alternative` when it lists the module:
+                      its `already OCA: <repo>/<module>` literal wins over the
+                      record's `oca_alt`, and the evidence cell becomes
+                      `oca_check.py <series> index`. The record keys `oca_alt`
+                      and `oca_alt_evidence` stay required (`""` is legal) and
+                      still supply the cell for a module the index does not list.
 
 There is no merge. A missing file, an array file, a file whose `module` differs
 from its name, a missing or extra key is a problem line; fix the record.
@@ -301,9 +308,32 @@ def check_cap(label, value, cap):
         yield (f"{label} is {len(value)} chars (max {cap}): {value[:60]}…")
 
 
+def load_oca_index(workdir, problems):
+    """`<workdir>/oca_index.json` as oca_check.py writes it: (series, oca_alt).
+
+    Absent file: ({}, "") and the enrich records are the only source.
+    """
+    path = workdir / "oca_index.json"
+    if not path.exists():
+        return {}, ""
+    try:
+        index = json.loads(path.read_text())
+        alt = index["oca_alt"]
+        if not isinstance(alt, dict):
+            raise ValueError("oca_alt is not an object")
+    except (ValueError, KeyError) as exc:
+        problems.append(f"{path.name}: unusable ({exc!r})")
+        return {}, ""
+    series = index.get("series", "")
+    if isinstance(series, list):
+        series = ",".join(series)
+    return alt, series
+
+
 def build_inventory(workbook, workdir, source, native_column, notes_column,
                     oca_column, problems):
     seed_rows = list(csv.DictReader(source.open(encoding="utf-8-sig")))
+    index_alt, index_series = load_oca_index(workdir, problems)
     enrich = load_enrich(
         workdir, [r["Module Name"].strip() for r in seed_rows], problems)
     columns = BASE_COLUMNS + [native_column, notes_column, oca_column]
@@ -344,6 +374,10 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
         row[native_column] = verdict
         row[notes_column] = native_notes
         row[oca_column] = enriched.get("oca_alt", SENTINEL)
+        if module in index_alt:
+            # oca_check.py derived the literal from the scan: it wins.
+            row[oca_column] = index_alt[module]
+            alt_evidence = f"oca_check.py {index_series} index"
 
         for column in delivered:
             if (row.get(column) or "").strip() == SENTINEL:
