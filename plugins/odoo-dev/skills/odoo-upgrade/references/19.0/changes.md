@@ -97,25 +97,7 @@ Website/portal/QWeb-frontend changes are NOT enumerated here — research per-ca
 - Data migrations for renamed/removed **core** fields: check OpenUpgrade 19.0 per-module analysis (see Sources) before hand-writing migration scripts.
 
 ## Detection greps
-```bash
-grep -rn "\._cr\b\|\._uid\b\|\._context\b" --include="*.py" .
-grep -rn "osv.expression\|from odoo.osv\|from odoo import SUPERUSER_ID" --include="*.py" .
-grep -rn "type=[\"']json[\"']" --include="*.py" .
-grep -rn "_sql_constraints" --include="*.py" .
-grep -rn "auto_join\|model_create_single\|api\.returns\|ormcache_context\|toggle_active" --include="*.py" .
-grep -rn "\.read_group(\|name_search(.*args=" --include="*.py" .
-grep -rn "globals_dict\|locals_dict\|nocopy" --include="*.py" .
-grep -rn "groups_id" .
-grep -rn "name=\"users\"\|name=\"category_id\"" --include="*.xml" .   # res.groups records
-grep -rn "base\.default_user\b" . | grep -v default_user_group
-grep -rn "name=\"mobile\"\|'mobile'\|\"mobile\"" .                    # removed partner/company field
-grep -rn "res\.partner\.title\|name=\"title\"" --include="*.xml" .
-grep -rn "context_today\|relativedelta" --include="*.xml" .           # rewritable to dynamic dates
-grep -rn "<group expand" --include="*.xml" .                          # search view fails RELAXNG
-grep -rn "procurement\.group\|procurement_group_id\|_prepare_procurement_group_vals" --include="*.py" --include="*.xml" .
-grep -rn "module_category_usability" .
-grep -rn "t-inherit=" --include="*.xml" static/                       # Owl xpath targets, browser-only breakage
-```
+The 19.0 patterns are the `19.0` rows of [detection-patterns.tsv](../detection-patterns.tsv). `scripts/port-plan.py` runs them per module and writes the hits to `plan.json`.
 
 ## Sources
 - https://www.odoo.com/documentation/19.0/developer/reference/backend/orm/changelog.html

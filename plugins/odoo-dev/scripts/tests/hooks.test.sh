@@ -400,6 +400,37 @@ allowed "$COMMITHOOK" "commit: grep for the word" \
   odoo-dev-builder 'grep -rn "git commit" docs/' "$MOD"
 gitq reset -q --hard HEAD
 
+# (11) A port moves the series prefix once. With a default branch to compare with,
+# a prefix that differs from the merge-base counts as bumped on this branch, so a
+# second commit on the module needs no further bump. An unchanged prefix denies.
+PORT="$WT/portrepo"
+mkdir -p "$PORT/ported_mod" "$PORT/other_mod"
+git init -q -b main "$PORT" 2>/dev/null \
+  || { git init -q "$PORT"; git -C "$PORT" symbolic-ref HEAD refs/heads/main; }
+portq() { git -C "$PORT" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
+manifest "$PORT/ported_mod/__manifest__.py" 17.0.1.0.0
+manifest "$PORT/other_mod/__manifest__.py" 17.0.1.0.0
+printf '# base\n' > "$PORT/ported_mod/a.py"
+printf '# base\n' > "$PORT/other_mod/a.py"
+portq add -A
+portq commit -q --no-verify -m "chore: fixture"
+portq update-ref refs/remotes/origin/main HEAD
+portq symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+portq checkout -q -b port-19
+manifest "$PORT/ported_mod/__manifest__.py" 19.0.1.0.0
+printf '# ported\n' >> "$PORT/ported_mod/a.py"
+portq add -A
+portq commit -q --no-verify -m "feat: port ported_mod"
+printf '# more\n' >> "$PORT/ported_mod/a.py"
+portq add ported_mod/a.py
+allowed "$COMMITHOOK" "commit: a second commit on a module whose prefix moved on the branch" \
+  odoo-dev-builder 'git commit -m "fix: more port work"' "$PORT"
+printf '# changed\n' >> "$PORT/other_mod/a.py"
+portq add other_mod/a.py
+denied "$COMMITHOOK" "commit: a module whose prefix is unchanged still needs a bump" \
+  "other_mod (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "fix: other"' "$PORT"
+
 rm -rf "$WT"
 
 echo
