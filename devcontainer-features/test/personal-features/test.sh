@@ -1389,10 +1389,10 @@ check "a pre-seeded user setting survives the merge" bash -c \
   "[ \"\$(jq -r '.model' \"$HK_B/settings.json\")\" = 'opus' ] && [ \"\$(jq -r '.env.FOO' \"$HK_B/settings.json\")\" = 'bar' ]"
 check "a user-authored hook survives the merge" bash -c \
   "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
-# Four PreToolUse groups since #811: the user's, the match-all event group, and
-# one Bash-matched group per security guard.
-check "the feature hooks are added alongside the user's (four PreToolUse groups)" bash -c \
-  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
+# Five PreToolUse groups since #1204: the user's, the match-all event group, one
+# Bash-matched group per security guard (#811), and the Skill-matched usage group.
+check "the feature hooks are added alongside the user's (five PreToolUse groups)" bash -c \
+  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '5' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
 
 # (c2) #803 migration: the stale container-absolute entries an earlier container
 # wrote into the user's real settings.json are stripped and REPLACED, not left to
@@ -1404,11 +1404,11 @@ cat > "$HK_D/settings.json" <<'JSON'
     "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
   } }
 JSON
-# Three PreToolUse groups afterwards: the replacement match-all event group plus
-# the two security guards (#811). What this pins is that NONE of them carries a
+# Four PreToolUse groups afterwards: the replacement match-all event group plus
+# the two security guards (#811) and the Skill-matched usage group (#1204). What this pins is that NONE of them carries a
 # container-absolute command and the stale one is gone rather than beside them.
 check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '3' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '4' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
 
 # (c2b) #811 migration, the same shape: the guards and the recall hook were named
 # from settings.json by their /usr/local/share/claude-home absolute paths while the
