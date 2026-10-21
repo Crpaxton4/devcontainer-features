@@ -45,7 +45,7 @@ Write every path in full: `<base directory>/scripts/<script>`.
 | `module_inventory.py [PATH ...] [-o FILE]` | writes the inventory CSV to `-o` (default `./inventory.csv`; default tree `/mnt/extra-addons`) | 0 · 1 no module found · 2 usage |
 | `studio_inventory.py [--db NAME] [--ssh user@host] [--artifacts DIR] [--csv studio.csv]` | the Studio and UI-built artifacts, read-only SELECTs, through `psql` on the host with `--ssh`; outputs under `DIR/inventory/` | 0 · 2 usage or no connection |
 | `build_workbook.py --workdir DIR -o out.xlsx` | the 4-sheet workbook from the seed CSV and the `enrich_<module>.json` records; the last line carries `problems: N` | 0 · 1 problems found |
-| `install_all.sh --db NAME [--addons-path D] [--data-dir D] [--artifacts D] [--conf F\|--no-conf] [--template] [--per-tree] [--summary F] [--force]` | the JSON summary with `trees[]`, `full`, `passed`; installs every module on a throwaway DB. The test suite passes `--no-conf`; a real run auto-loads `$ODOO_RC`, `/etc/odoo/odoo.conf` or `~/.odoorc` | 0 green · 1 an install failed · 2 usage or safety |
+| `install_all.sh --db NAME --addons-path D [--data-dir D] [--artifacts D] [--conf F\|--no-conf] [--template] [--per-tree] [--summary F] [--force]` | the JSON summary with `trees[]`, `full`, `passed`; installs every module on a throwaway DB. The test suite passes `--no-conf`; a real run auto-loads `$ODOO_RC`, `/etc/odoo/odoo.conf` or `~/.odoorc` | 0 green · 1 an install failed · 2 usage or safety |
 
 ## Rules
 

@@ -2,7 +2,11 @@
 # install_all.sh — install the custom modules of an addons tree onto throwaway
 # databases and report, per independent dependency tree, exactly what broke.
 #
-# Usage: install_all.sh --db <name> [options] [ADDONS_PATH]
+# Usage: install_all.sh --db <name> --addons-path <dir> [options]
+#
+# --addons-path is required (#1167): the tree under test is never inferred, and
+# the conf's addons_path is never appended, so nothing outside the tree under
+# test (plus what Odoo adds itself) can resolve a module.
 #        install_all.sh --help
 #
 # The old shape took its target from `odoo.conf`'s `db_name`, which in a project
@@ -55,7 +59,7 @@
 # With no mode flags this is the plain full install the SOP has always called
 # for: one database, every module, one log.
 #
-# Output: the last stdout line is a JSON summary — {db, addons_path, data_dir,
+# Output: the last stdout line is a JSON summary — {db, addons_path, addons_path_effective, data_dir,
 # odoo_build, mode, template:{db,key,reused,core_modules}, custom_modules,
 # trees:[{modules,db,status,error,module,log}], full:{...}, passed}. Same
 # document to --summary <file>. Odoo's own output goes to a log file per
@@ -70,15 +74,16 @@ usage() {
   cat <<'USAGE'
 install_all.sh — verify an upgrade pass by installing custom modules on throwaway DBs
 
-Usage: install_all.sh --db <name> [options] [ADDONS_PATH]
+Usage: install_all.sh --db <name> --addons-path <dir> [options]
 
 Required:
   --db <name>            target database. No default: this script drops and
                          recreates its target, so it never guesses one.
 
 Options:
-  --addons-path <dir>    addons tree under test (also accepted positionally;
-                         default /mnt/extra-addons)
+  --addons-path <dir>    addons tree under test. Required, no default: the tree
+                         under test is never inferred. Also accepted
+                         positionally. The conf addons_path is ignored.
   --data-dir <dir>       Odoo data_dir for every run — filestore, sessions, and
                          the auto-appended <data_dir>/addons/<series> tree.
                          Default <artifacts>/data; never Odoo's own default.
@@ -101,9 +106,9 @@ Options:
   -h, --help             this text
 
 Examples:
-  install_all.sh --db upgrade_check /mnt/extra-addons
+  install_all.sh --db upgrade_check --addons-path /path/to/worktree
   install_all.sh --db upgrade_check --template --per-tree \
-                 --summary /tmp/install.json /mnt/extra-addons
+                 --summary /tmp/install.json --addons-path /path/to/worktree
 USAGE
 }
 
@@ -144,7 +149,7 @@ fi
   This script DROPS and recreates its target, and it will not guess which
   database you are willing to lose. It used to take the name from odoo.conf's
   db_name, which in a devcontainer is the live project database.
-  Pass a throwaway name:  install_all.sh --db upgrade_check ${addons:-/mnt/extra-addons}"
+  Pass a throwaway name:  install_all.sh --db upgrade_check --addons-path ${addons:-<worktree>}"
 
 valid_dbname() {
   case "$1" in
@@ -158,7 +163,8 @@ valid_dbname() {
 }
 valid_dbname "$db" || die "not a usable database name: '$db' (letters, digits, _ and - only, not starting with a digit)"
 
-addons="${addons:-/mnt/extra-addons}"
+[ -n "$addons" ] || die "--addons-path is required.
+  pass --addons-path <worktree>: the tree under test is never inferred"
 [ -d "$addons" ] || die "addons path is not a directory: $addons"
 addons="$(cd "$addons" && pwd)"
 
@@ -188,12 +194,11 @@ conf_value() { # conf_value <file> <key>
     | tail -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//'
 }
 
-conf_db_name=""; conf_addons=""
+conf_db_name=""
 if [ -n "$conf" ]; then
   [ -r "$conf" ] || die "cannot read the config file: $conf"
   conf_db_name="$(conf_value "$conf" db_name)"
   case "$conf_db_name" in False|false|None|none|"") conf_db_name="" ;; esac
-  conf_addons="$(conf_value "$conf" addons_path)"
 fi
 
 # The target must never be the database the config calls the project database.
@@ -376,8 +381,9 @@ ensure_fresh_db() { # ensure_fresh_db <db> [template]
 
 odoo_args=()
 if [ -n "$conf" ]; then odoo_args+=(-c "$conf"); fi
+# The path Odoo sees is the tree under test plus what Odoo adds itself. The
+# conf's addons_path is never appended: it let dropped modules leak in (#1167).
 addons_arg="$addons"
-if [ -n "$conf_addons" ]; then addons_arg="$addons,$conf_addons"; fi
 odoo_args+=(--addons-path="$addons_arg" --data-dir "$data_dir" --max-cron-threads=0 --stop-after-init)
 
 run_install() { # run_install <db> <modules-csv> <log>
@@ -532,11 +538,12 @@ if [ "$use_template" = true ]; then mode="$mode+template"; fi
 
 summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
   "$modules_csv" "$core_csv" "${template_db:-}" "$template_key" "$template_reused" \
-  "$use_template" <<'PY'
+  "$use_template" "$addons_arg" <<'PY'
 import json, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
- template_db, template_key, template_reused, use_template) = sys.argv[1:13]
+ template_db, template_key, template_reused, use_template,
+ addons_arg) = sys.argv[1:14]
 
 
 def split(value):
@@ -561,7 +568,7 @@ with open(records, encoding="utf-8") as handle:
 
 statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
 summary = {
-    "db": db, "addons_path": addons, "data_dir": data_dir,
+    "db": db, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
     "odoo_build": build_id, "mode": mode,
     "custom_modules": split(modules_csv),
     "template": {
