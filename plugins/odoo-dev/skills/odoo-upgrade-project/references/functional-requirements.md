@@ -1,5 +1,7 @@
 # Functional Requirements from Customizations
 
+The FR and tickets workbook build is removed from `build_workbook.py` by #1144; these documents describe the human process only.
+
 Phase 3 of the inventory workbook. Inventory answer "what modules exist"; requirements answer **"what did the business actually ask for"** — one row per discrete behaviour, traced to source modules, each marked whether target standard or an OCA target module already satisfy it, with a blank Decision column the client fill in.
 
 Why bother when the inventory already has verdicts: a module is a bundle. Client can't drop "bista_sale_custom", but can absolutely drop "hold sales orders for engineering review" once they see it written out. Module-level verdicts are `yes/partial` mush; requirement-level verdicts are decisions. Expect ~4-5 requirements per module (117 modules ⇒ ~500 rows).

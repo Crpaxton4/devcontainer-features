@@ -43,9 +43,9 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 
 ### Phase 2 — Inventory and classification
 
-2.1 `[AI]` Run `module_inventory.py` for inventory CSV; fill `TODO-AI` cells from module code (see [inventory.md](./inventory.md)).
+2.1 `[AI]` Run `module_inventory.py` for inventory CSV; fill `TODO-AI` cells from module code (see `references/inventory.md` of the `odoo-dev:odoo-upgrade` skill).
 2.2 `[AI]` Run `oca_check.py` (now in `odoo-prior-art/scripts/`) against inventory. Author strings lie: module counts as OCA-maintained only when scan finds it in OCA repo for target series.
-2.2b `[AI]` Run `studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv` — read-only, outputs into the task artifacts dir (`<ARTIFACTS>/inventory/`), never `/tmp`; it becomes the **Studio Inventory** sheet. Studio and other UI-built customization lives in database rows, not the repo, so the code inventory cannot see any of it. Classify each row purge / convert-to-code / keep-as-data; `convert-to-code` rows are scope, and each needs a real module plus a migration script to carry its column (see [inventory.md](./inventory.md), [migrations.md](./migrations.md)). Run against a COPY, never production.
+2.2b `[AI]` Run `studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv` — read-only, outputs into the task artifacts dir (`<ARTIFACTS>/inventory/`), never `/tmp`; it becomes the **Studio Inventory** sheet. Studio and other UI-built customization lives in database rows, not the repo, so the code inventory cannot see any of it. Classify each row purge / convert-to-code / keep-as-data; `convert-to-code` rows are scope, and each needs a real module plus a migration script to carry its column (see `references/inventory.md` and `references/migrations.md` of the `odoo-dev:odoo-upgrade` skill). Run against a COPY, never production.
 2.3 `[AI]` Record verdict per module — *keep* (port), *replace* (official target-series build exists), or *drop* — each with one-line evidence-based rationale. Challenge each *keep* against features newly standard in target version (release notes): redundancy with standard = grounds for *drop*/*replace*. Human approves verdict list before any porting starts.
 2.4 `[AI]` Build dependency graph; sort *keep* modules into porting waves.
 2.5 `[MANUAL]` Purchase/download target-series builds of paid vendor modules. No port work on vendor module until official build ruled out.
@@ -54,8 +54,8 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 
 ### Phase 3 — Code port (per wave)
 
-3.1 `[AI]` Mechanical rewrite: run `upgrade_code` (target ≥ 18.0), scoped with `--glob` — see [upgrade-code-tool.md](./upgrade-code-tool.md).
-3.2 `[AI]` Semantic port: fix what rewriter cannot, using target-series `changes.md` for EVERY intermediate major in sequence (never skip hop). Minimum change only; follow [porting-checklist.md](./porting-checklist.md).
+3.1 `[AI]` Mechanical rewrite: run `upgrade_code` (target ≥ 18.0), scoped with `--glob` — see `references/upgrade-code-tool.md` of the `odoo-dev:odoo-upgrade` skill.
+3.2 `[AI]` Semantic port: fix what rewriter cannot, using target-series `changes.md` for EVERY intermediate major in sequence (never skip hop). Minimum change only; follow `references/porting-checklist.md` of the `odoo-dev:odoo-upgrade` skill.
 3.3 `[AI]` Bump each ported manifest to target series prefix. Migration script folders must sit at exactly manifest version (`migrations/<manifest-version>/`) — folder above manifest version silently skipped by MigrationManager.
 3.4 `[AI]` Verification loop: `install_all.sh --db <throwaway> --data-dir <scratch>/data --template --per-tree --summary <scratch>/install.json [ADDONS_PATH]` — fresh-DB install of ALL modules; fix; repeat until zero tracebacks. Then run module test suites on target series.
   - `--db` is REQUIRED and must be a throwaway name. The script drops and recreates it, and it refuses a database that already holds modules beyond `base` (pass `--force` only when you mean it). It never takes the target from `odoo.conf` `db_name` — that is the live project database.
@@ -67,7 +67,7 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 
 ### Phase 4 — Stored-data audit and migration scripts
 
-4.1 `[AI]` Audit every ported module's full baseline-to-port diff against 7-point stored-data checklist (see [migrations.md](./migrations.md)).
+4.1 `[AI]` Audit every ported module's full baseline-to-port diff against 7-point stored-data checklist (see `references/migrations.md` of the `odoo-dev:odoo-upgrade` skill).
 4.2 `[AI]` Write migration scripts ONLY where module-owned stored data changes shape; core-owned data belongs to platform upgrade, never module scripts. Use official `upgrade-util` helpers (`rename_field`, `rename_model`, `rename_xmlid`, `remove_module`, …) or OCA `openupgradelib` over hand-rolled SQL where helper exists. Consult OCA OpenUpgrade per-module `upgrade_analysis` files (github.com/OCA/OpenUpgrade, `openupgrade_scripts`) — they enumerate every core model/field change between the two majors, catch renames manual diff misses.
 4.2b `[AI]` Custom records flagged `noupdate` NOT refreshed by module update: where target-version content must change, update from migration script (`update_record_from_xml()` / `convert_file(mode='init')`).
 4.3 `[AI]` Prove every script idempotent: downgrade trick (`UPDATE ir_module_module SET
@@ -155,6 +155,6 @@ Living document: when upgrade project surfaces lesson SOP not cover, record in `
 4. Odoo — upgrade-util helpers: https://github.com/odoo/upgrade-util
 5. OCA — OpenUpgrade (analysis files, openupgrade_framework/scripts):
    https://github.com/OCA/OpenUpgrade — overview: https://www.odoo-community.org/about/openupgrade
-6. Skill-internal: [inventory.md](./inventory.md), [porting-checklist.md](./porting-checklist.md),
-   [migrations.md](./migrations.md), [upgrade-code-tool.md](./upgrade-code-tool.md),
+6. In the `odoo-dev:odoo-upgrade` skill: `references/inventory.md`, `references/porting-checklist.md`,
+   `references/migrations.md`, `references/upgrade-code-tool.md`,
    per-version `XX.0/changes.md`.

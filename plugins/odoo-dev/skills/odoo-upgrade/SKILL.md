@@ -16,14 +16,11 @@ Load references as needed, never all at once.
 
 | Topic             | Load When                                                    | Ref                                                                    |
 | ----------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Full-Lifecycle SOP | Plan or track the whole upgrade project; anything past code (staging DB upgrade, cutover, go-live); who does what. A planning artifact, never an execution trigger | [sop.md](./references/sop.md) |
+| Upgrade project SOP | Anything past the code port: planning, staging DB upgrade, cutover, tickets, functional requirements | the `odoo-dev:odoo-upgrade-project` skill |
 | Module Inventory  | Start of an upgrade project; estimate or plan effort; build the inventory workbook | [inventory.md](./references/inventory.md)                               |
 | Prior Art (OCA + base) | Decide what not to port; inventory-column mapping | [oca-base-review.md](./references/oca-base-review.md) |
-| Functional Requirements | A client pares down customizations, or a fresh-target-DB project: extract FR-### rows from module code | [functional-requirements.md](./references/functional-requirements.md)   |
 | Porting Checklist | Port any module: workflow order and the verification loop   | [porting-checklist.md](./references/porting-checklist.md)               |
 | Migration Scripts | A ported module renamed its own field, model or xmlid        | [migrations.md](./references/migrations.md)                             |
-| On-Prem Upgrade   | A self-hosted Enterprise customer: run the upgrade.odoo.com client, restore, merge filestore, neutralize, roll back | [on-prem-upgrade.md](./references/on-prem-upgrade.md) |
-| Support Tickets   | A platform-side failure: file it, track it; a blocker until resolved or waived | [support-tickets.md](./references/support-tickets.md) |
 | upgrade_code Tool | Run or explain odoo-bin upgrade_code (target 18.0 or later)  | [upgrade-code-tool.md](./references/upgrade-code-tool.md)               |
 | 17.0 Changes      | Port code to 17.0 (from 16.0)                                | [17.0/changes.md](./references/17.0/changes.md)                         |
 | 18.0 Changes      | Port code to 18.0 (from 17.0)                                | [18.0/changes.md](./references/18.0/changes.md)                         |
@@ -47,7 +44,6 @@ Write every path in full: `<base directory>/scripts/<script>`.
 | `upgrade-preflight.sh --target V --project "<name>" [--ssh H] [--repo-path DIR]` | one `PASS`/`FAIL` line per check on stderr, then one JSON line: `ok`, `failures[]`, `source_db`, `enterprise_path`, `repo`, `repo_path`, `default_branch`, `env_fingerprint` | 0 ok · 10 a check failed · 2 usage |
 | `module_inventory.py [PATH ...]` | the inventory CSV (default tree `/mnt/extra-addons`) | 0 · 2 usage |
 | `studio_inventory.py [--db NAME] [--ssh user@host] [--artifacts DIR] [--csv studio.csv]` | the Studio and UI-built artifacts, read-only SELECTs, through `psql` on the host with `--ssh`; outputs under `DIR/inventory/` | 0 · 2 usage or no connection |
-| `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | drives the upgrade.odoo.com client for on-prem Enterprise; `production` needs `--yes-production` | 0 · 2 usage |
 | `build_workbook.py --workdir DIR -o out.xlsx` | the 4-sheet workbook from the seed CSV and the `enrich_<module>.json` records; the last line carries `problems: N` | 0 · 1 problems found |
 | `install_all.sh --db NAME [--addons-path D] [--data-dir D] [--artifacts D] [--conf F\|--no-conf] [--template [--template-db N]] [--per-tree] [--summary F] [--force] [--keep]` | the JSON summary with `trees[]`, `full`, `passed`; installs every module on a throwaway DB | 0 green · 1 an install failed · 2 usage or safety |
 

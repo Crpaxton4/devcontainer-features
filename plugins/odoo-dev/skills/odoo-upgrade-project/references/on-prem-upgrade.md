@@ -196,4 +196,4 @@ def migrate(cr, version):
 
 `--pre-upgrade-scripts` (16.0+) runs before `base` loads — the right place for
 module rename/merge/remove. Helper signatures and the wider list are in
-[migrations.md](./migrations.md).
+`references/migrations.md` of the `odoo-dev:odoo-upgrade` skill.

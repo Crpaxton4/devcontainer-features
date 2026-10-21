@@ -82,7 +82,7 @@ gate "inventory"
 n_skills="$(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l)"
 n_agents="$(find "$AGENTS" -maxdepth 1 -name '*.md' | wc -l)"
 n_cmds="$(find "$COMMANDS" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
-[ "$n_skills" -eq 15 ] && ok "15 skills"   || bad "expected 15 skills, found $n_skills"
+[ "$n_skills" -eq 16 ] && ok "16 skills"   || bad "expected 16 skills, found $n_skills"
 [ "$n_agents" -eq 5 ]  && ok "5 agents"    || bad "expected 5 agents, found $n_agents"
 [ "$n_cmds"   -eq 6 ]  && ok "6 commands"  || bad "expected 6 commands, found $n_cmds"
 
