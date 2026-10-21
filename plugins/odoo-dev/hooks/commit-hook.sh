@@ -43,6 +43,12 @@ set -uo pipefail
 
 payload="$(cat)"
 
+# Usage log (#1204): record this hook's own run before any early exit. Silent
+# (stdout carries the deny JSON), never fails the hook.
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+  usage-log record hook commit-hook.sh source=odoo-dev </dev/null >/dev/null 2>&1 || true
+fi
+
 # deny <reason> — the PreToolUse deny envelope, exit 0.
 deny() {
   local json

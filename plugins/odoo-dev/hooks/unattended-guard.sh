@@ -55,6 +55,12 @@ set -uo pipefail
 
 payload="$(cat)"
 
+# Usage log (#1204): record this hook's own run before any early exit. Silent
+# (stdout carries the permission JSON), never fails the hook.
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+  usage-log record hook unattended-guard.sh source=odoo-dev </dev/null >/dev/null 2>&1 || true
+fi
+
 if out="$(printf '%s' "$payload" | node -e '
 const fs = require("fs"), path = require("path");
 const { execFileSync } = require("child_process");
