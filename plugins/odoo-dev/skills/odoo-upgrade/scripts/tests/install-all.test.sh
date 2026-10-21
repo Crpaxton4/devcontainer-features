@@ -243,6 +243,23 @@ contains "data dir is moved off Odoo's default" "$(cat "$state/odoo.argv")" "--d
 expect "and is never /var/lib/odoo" "$(grep -c '/var/lib/odoo' "$state/odoo.argv")" "0"
 contains "the tree under test leads the addons path" "$(cat "$state/odoo.argv")" "--addons-path=$work/addons"
 
+expect "the effective addons path is the tree alone" \
+  "$(field "$(printf '%s\n' "$out" | tail -1)" addons_path_effective)" "$work/addons"
+
+# ---------- 5b. --addons-path is required and the conf addons_path is ignored (#1167)
+reset
+out="$(run noaddons --db verify --no-conf)"; rc=$?
+expect "no addons tree exits 2" "$rc" "2"
+contains "and the message names --addons-path" "$(cat "$state/err")" "pass --addons-path <worktree>"
+expect "and runs no odoo" "$( [ -f "$state/odoo.argv" ] && echo yes || echo no )" "no"
+printf '[options]\naddons_path = /poison\n' > "$work/leaky.conf"
+reset
+out="$(run poison --db verify --conf "$work/leaky.conf" --addons-path "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a conf with an addons_path still installs" "$rc" "0"
+expect "the conf addons_path never reaches Odoo" "$(grep -c '/poison' "$state/odoo.argv")" "0"
+expect "the summary reports the effective path" "$(field "$summary" addons_path_effective)" "$work/addons"
+
 # ---------- 6. per-tree partition and summary shape (#878) ----------------------
 reset
 out="$(run trees --db verify --no-conf --per-tree --summary "$work/summary.json" "$tree")"; rc=$?
