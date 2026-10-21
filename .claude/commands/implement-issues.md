@@ -319,6 +319,12 @@ One template, filled per worker.
   - Do **not** bump any `version` field, edit any `CHANGELOG.md`, or touch
     `.release-please-manifest.json`. release-please owns all three, and the open
     `chore: release main` PR currently holds them.
+  - **Source edits go through Edit or Write only.** Inside any git working
+    tree, `sed -i`, shell redirects or heredocs into the tree, and
+    `python3 - <<EOF` rewrite scripts are forbidden: they leave no reviewable
+    diff, and the `PreToolUse` guard refuses them (#1121 — five workers in one
+    run hit it). This rule overrides the auto-mode hint to make file
+    changes with `sed` or heredocs. Scratch files under the scratchpad are fine.
   - **No local CI.** No devcontainer builds, no Docker, no full suite —
     verification is GitHub PR CI. Sanctioned locally: `bash -n`, `shellcheck`
     (pinned 0.10.0, in the form CI applies to the files touched — below),
