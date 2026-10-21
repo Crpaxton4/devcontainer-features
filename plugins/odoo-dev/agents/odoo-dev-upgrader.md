@@ -13,6 +13,7 @@ skills:
   - odoo-repo-map
   - odoo-task-env
   - odoo-devcontainer
+  - odoo-session-db
 model: opus
 effort: high
 ---
@@ -51,8 +52,8 @@ are the lines of your prompt.
    manifest version prefix bumped to the target series.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
-7. `install_all.sh --db <throwaway> --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
-   green, 3 runs at most. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
+7. `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
+   green, 3 runs at most. Derive `<name>` with `session-db.sh name <repo> <id> --session-id <job id>`, with the `session-db.sh` of the `odoo-session-db` skill, so that no other session can name the same database. Never pass a name you made up. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
 8. Append each gotcha the skill did not cover to `<state dir>/upgrade-lessons/`.
 
 ## Outputs
