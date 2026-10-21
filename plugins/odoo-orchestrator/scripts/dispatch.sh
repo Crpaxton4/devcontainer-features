@@ -7,24 +7,21 @@
 # nothing else.
 #
 # The dispatcher's own exit codes pass through unchanged: 0 drained, 1 a job
-# raised, 2 bad arguments, bad settings or an unreadable brief, 3 another
-# dispatcher holds the lock. This script adds two codes the dispatcher never
-# returns: 74 when it cannot create the orchestrator home, and 127 when the stack
-# file was not found. `add` also exits 2 when it gets no JSON argument.
+# raised, 2 bad arguments, bad settings, an unreadable brief or a rejected job
+# array, 3 another dispatcher holds the lock. This script adds one code the
+# dispatcher never returns: 127 when the stack file was not found. `add` also
+# exits 2 when it gets no JSON argument.
 #
 #   add '<json>'  submit the jobs, print the submit result on stdout, start the
-#                 dispatcher container in the background, then check for a short
-#                 time that a PENDING job did not lose a race with an exiting
-#                 container. It does not wait for the jobs.
-#   run ...       blocks until the queue drains, which can take far longer than a
-#                 foreground Bash call lives. Start it in the background and wait
-#                 for it. A killed run dead-letters the jobs it was running.
-#                 stdout is also tee'd to <home>/runs/<UTC time>-<pid>.json and
-#                 that path is printed to stderr first and written to
-#                 <home>/runs/latest.txt, so the result is read from disk. Read
-#                 the file only after the process has exited, and check the exit
-#                 code first.
-#   anything else (report, dead-letters, ...) runs `dispatch` with those arguments.
+#                 dispatcher and web UI containers in the background, then check
+#                 for a short time that a PENDING job did not lose a race with an
+#                 exiting container. It never waits for the jobs. Exit 2 means
+#                 nothing was queued.
+#   anything else (report <batch_id>, dead-letters, ...) runs `dispatch` with
+#                 those arguments. Results are read later with `report`; this
+#                 script writes no result file.
+#   run ...       is such a pass-through. It blocks until the queue drains, so the
+#                 orchestrator does not use it.
 set -uo pipefail
 
 if [[ -z ${ODOO_ORCHESTRATOR_CHECKOUT:-} ]]; then
@@ -99,35 +96,7 @@ case ${1:-} in
         add_jobs "$@"
         exit $?
         ;;
-    run) ;;
     *)
         exec "${dispatch[@]}" "$@"
         ;;
 esac
-
-home=${ODOO_ORCHESTRATOR_HOME:-$HOME/.local/state/odoo-orchestrator}
-tilde='~'  # a variable, so the patterns below match a literal tilde
-case $home in
-    "$tilde") home=$HOME ;;
-    "$tilde"/*) home=$HOME/${home#"$tilde"/} ;;
-    /*) ;;
-    *) home=$PWD/$home ;;
-esac
-if ! mkdir -p "$home/runs"; then
-    printf 'dispatch.sh: cannot create %s/runs\n' "$home" >&2
-    exit 74
-fi
-out="$home/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
-printf 'dispatch.sh: result file: %s\n' "$out" >&2
-
-"${dispatch[@]}" "$@" | tee "$out"
-rc=${PIPESTATUS[0]}
-# latest.txt names a run that really ran. A run that exits with any code other
-# than 0 or 1 stored nothing, so its empty file is removed and latest.txt keeps
-# pointing at the last real run.
-if [[ $rc -eq 0 || $rc -eq 1 ]]; then
-    printf '%s\n' "$out" >"$home/runs/latest.txt"
-else
-    rm -f "$out"
-fi
-exit "$rc"
