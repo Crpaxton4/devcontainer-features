@@ -122,5 +122,22 @@ expect "kill file removed" "$(u next)" "PORT a"
 u init --task 8 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base-branch up --plan "$work/plan.json" --preflight "$work/pf3.json" --max-minutes x 2>/dev/null
 expect "bad max-minutes" "$?" 2
 
+fadd() { u friction add --tool t --expected e --observed "o" --did d "$@" 2>/dev/null; }
+expect "friction list starts empty" "$(u friction list)" "[]"
+fadd --class tooling
+expect "friction add tooling" "$?" 0
+fadd --class porting_fact --series-from 18.0 --series-to 19.0 --symptom-grep "attrs=" --fix "use invisible"
+expect "friction add porting_fact" "$?" 0
+expect "friction list count" "$(u friction list | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).length)')" 2
+expect "friction list porting_fact fix" "$(u friction list | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8"))[1].porting_fact.fix)')" "use invisible"
+expect "friction tooling porting_fact null" "$(u friction list | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8"))[0].porting_fact)')" "null"
+u friction add --tool t --expected e --observed "" --did d --class tooling 2>/dev/null
+expect "friction empty observed" "$?" 2
+fadd --class bogus
+expect "friction bad class" "$?" 2
+fadd --class porting_fact --series-from 18.0 --series-to 19.0 --fix f
+expect "friction porting_fact missing field" "$?" 2
+expect "friction list unchanged after refusals" "$(u friction list | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).length)')" 2
+
 echo "upgrade-state.test.sh: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

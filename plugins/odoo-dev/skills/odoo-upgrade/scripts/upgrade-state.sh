@@ -19,6 +19,13 @@
 #     restores the module and the record and exits 4.
 #   upgrade-state.sh <artifacts> gate workbook --problems N --path P
 #   upgrade-state.sh <artifacts> gate install --summary summary.json
+#   upgrade-state.sh <artifacts> friction add --tool T --expected E --observed O --did D
+#                      --class tooling|porting_fact
+#                      [--series-from S --series-to T2 --symptom-grep G --fix F]
+#     Appends {tool, expected, observed, did, class, at, porting_fact} to
+#     upgrade.friction[]. observed must quote the tool output verbatim (empty: exit 2).
+#     A porting_fact needs all four of the bracketed flags, else porting_fact is null.
+#   upgrade-state.sh <artifacts> friction list     (the friction[] array as JSON)
 #   upgrade-state.sh <artifacts> build
 #
 # Module status runs inventoried, verdict, ported, dropped, installed, tested in that
@@ -49,11 +56,11 @@ ARTIFACT_SH="$HERE/../../../scripts/artifact.sh"
 
 die() { echo "upgrade-state.sh: $*" >&2; exit "${2:-2}"; }
 
-[ $# -ge 2 ] || die "usage: upgrade-state.sh <artifacts> init|next|mark|drop|gate|build ..."
+[ $# -ge 2 ] || die "usage: upgrade-state.sh <artifacts> init|next|mark|drop|gate|friction|build ..."
 ARTS_ARG="$1"; shift
 ARTS="$(odoo_dev_artifacts_dir "$ARTS_ARG")"
 CMD="$1"; shift
-case "$CMD" in init|next|mark|drop|gate|build) ;; *) die "unknown command $CMD" ;; esac
+case "$CMD" in init|next|mark|drop|gate|friction|build) ;; *) die "unknown command $CMD" ;; esac
 
 exec node --input-type=module -e '
 import { execFileSync, spawnSync } from "child_process";
@@ -252,6 +259,24 @@ if (cmd === "gate") {
       }
     }
   } else fail("gate needs workbook or install");
+  touch(u); write("upgrade", u); process.exit(0);
+}
+
+if (cmd === "friction") {
+  const [sub, ...rest] = args;
+  if (sub === "list") { console.log(JSON.stringify(u.friction || [])); process.exit(0); }
+  if (sub !== "add") fail("friction needs add or list");
+  const o = opts(rest, ["tool","expected","observed","did","class","series-from","series-to","symptom-grep","fix"]);
+  for (const k of ["tool","expected","observed","did"]) {
+    if (!o[k] || !o[k].trim()) fail(k === "observed" ? "friction add: observed must quote the tool" + String.fromCharCode(39) + "s output verbatim" : `friction add needs --${k}`);
+  }
+  if (!["tooling","porting_fact"].includes(o.class)) fail("friction add: class must be tooling or porting_fact");
+  const pf = ["series-from","series-to","symptom-grep","fix"];
+  const given = pf.filter(k => o[k]);
+  if (given.length && given.length < pf.length) fail("friction add: a porting_fact needs --series-from, --series-to, --symptom-grep and --fix");
+  u.friction = u.friction || [];
+  u.friction.push({ tool: o.tool, expected: o.expected, observed: o.observed, did: o.did, class: o.class, at: now(),
+    porting_fact: given.length ? { series_from: o["series-from"], series_to: o["series-to"], symptom_grep: o["symptom-grep"], fix: o.fix } : null });
   touch(u); write("upgrade", u); process.exit(0);
 }
 
