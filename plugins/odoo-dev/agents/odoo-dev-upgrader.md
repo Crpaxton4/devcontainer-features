@@ -33,12 +33,10 @@ are the lines of your prompt.
 
 ## Procedure
 
-1. Preflight. Run all four checks, report every failure, then stop on any failure:
-   (a) when a host was given, `ssh -o BatchMode=yes <host> true` answers and
-   `psql -Atc "select current_database()"` on it returns the source database;
-   (b) `preflight.sh --target-series <target> --custom-tree <repo_path>` (the script
-   of the `odoo-task-env` skill; `repo_path` from `project-resolve.sh`) exits 0;
-   (c) `gh auth status` is clean; (d) the repo map resolves the project.
+1. Preflight. Run `upgrade-preflight.sh --target <target> --project "<project>"`,
+   with `--ssh <host>` when a host was given (the script of the `odoo-upgrade`
+   skill). It resolves the project, checks the environment, the addons paths and
+   the host. Relay its list of failures verbatim and never judge them. Exit 10 is a stop.
    Stop on a preflight failure with `realign the environment: <what failed>`.
    Never pin, symlink, patch, swap or re-order an Odoo or enterprise tree, and never
    edit `addons_path` or `data_dir`, to make an install pass; a traceback inside core

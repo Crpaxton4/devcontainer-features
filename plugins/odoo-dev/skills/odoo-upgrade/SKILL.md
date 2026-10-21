@@ -45,6 +45,7 @@ Write every path in full: `<base directory>/scripts/<script>`.
 
 | Script and arguments | Prints | Exit |
 | --- | --- | --- |
+| `upgrade-preflight.sh --target V --project "<name>" [--ssh H] [--repo-path DIR]` | one `PASS`/`FAIL` line per check on stderr, then one JSON line: `ok`, `failures[]`, `source_db`, `enterprise_path`, `repo`, `repo_path`, `default_branch`, `env_fingerprint` | 0 ok · 10 a check failed · 2 usage |
 | `module_inventory.py [PATH ...]` | the inventory CSV (default tree `/mnt/extra-addons`) | 0 · 2 usage |
 | `studio_inventory.py [--db NAME] [--ssh user@host] [--artifacts DIR] [--csv studio.csv]` | the Studio and UI-built artifacts, read-only SELECTs, through `psql` on the host with `--ssh`; outputs under `DIR/inventory/` | 0 · 2 usage or no connection |
 | `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | drives the upgrade.odoo.com client for on-prem Enterprise; `production` needs `--yes-production` | 0 · 2 usage |
