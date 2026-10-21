@@ -7,19 +7,15 @@ Standard deliverable = ONE xlsx, the sheets of the table below, no legend/README
 | Sheet | Rows | Built by |
 |-------|------|----------|
 | Module Inventory | 1/module | this file |
-| Functional Requirements | 1/requirement | the `odoo-dev:odoo-upgrade-project` skill (`references/functional-requirements.md`); built only when its FR input is supplied |
-| Traceability | 1/module | derived — module → requirement IDs + counts + inventory verdicts |
 | Inventory Evidence | 1/module | this file — paths/greps behind every verdict |
 | Studio Inventory | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed; adds `populated` (stored Studio field holds data: `populated`/`empty`/`n/a`) and `view-inline-edit` rows (module view whose arch was edited in the database) |
-| Tickets | 1/ticket | `tickets.csv` — optional, see the `odoo-dev:odoo-upgrade-project` skill (`references/support-tickets.md`); built only when its tickets input is supplied |
 
-Three phases, each a fan-out of read-only agents writing JSON, then one merge script:
+Two phases, each a fan-out of read-only agents writing JSON, then one merge script:
 
 1. **Enrich** (this file) — per module: purpose, area, complexity, 3rd-party, action, `<major> native?`
 2. **OCA/base review** ([oca-base-review.md](./oca-base-review.md)) — per module: `OCA <major> alternative`
-3. **Requirements** (the `odoo-dev:odoo-upgrade-project` skill, `references/functional-requirements.md`) — FR rows + Handled? verdict
 
-Phase 2 read phase 1 output; phase 3 read both. Never reorder.
+Phase 2 read phase 1 output. Never reorder.
 
 ## Generate seed
 
@@ -45,7 +41,7 @@ plugin root in the same place.
 - Stdlib only, no installs. Manifests parsed with `ast.literal_eval`, never imported.
 - Unparseable manifest ⇒ row still emitted (LoC counted, purpose flagged `TODO-AI (manifest unparseable…)`) — fix manifest; never let module drop out of estimate silently.
 - `--target-version` only affects generated apps.odoo.com fallback links.
-- One work dir per project — the task artifacts dir, `<ARTIFACTS>/inventory/`, never `/tmp` and never the session scratchpad (session-scoped, destroyed at the session boundary with no error) — hold seed CSV + all agent JSON + catalog + `studio.csv` + `tickets.csv`. Everything downstream read from there. `<ARTIFACTS>` is the absolute artifacts dir handed to the agent; `--artifacts <ARTIFACTS>` make `studio_inventory.py` default its own outputs there.
+- One work dir per project — the task artifacts dir, `<ARTIFACTS>/inventory/`, never `/tmp` and never the session scratchpad (session-scoped, destroyed at the session boundary with no error) — hold seed CSV + all agent JSON + catalog + `studio.csv`. Everything downstream read from there. `<ARTIFACTS>` is the absolute artifacts dir handed to the agent; `--artifacts <ARTIFACTS>` make `studio_inventory.py` default its own outputs there.
 
 ## Studio inventory
 
@@ -77,7 +73,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 
 | # | Column | Filled by | Semantics |
 |---|--------|-----------|-----------|
-| 1 | Module Name | script | Technical name — the module directory name, and nothing else. No display name, no parentheses. Every other artifact join on this cell: enrichment `module` key, requirement `sources`, Traceability, Evidence. Consumers read it whole, never split it |
+| 1 | Module Name | script | Technical name — the module directory name, and nothing else. No display name, no parentheses. Every other artifact join on this cell: enrichment `module` key, Evidence. Consumers read it whole, never split it |
 | 2 | Display Name | script | manifest `name` verbatim, empty when the manifest carry none. Human label for reading; never join on it |
 | 3 | Module Purpose | script → AI | manifest `summary`, else first `description` line, else `TODO-AI`. AI refine vague ones from module code |
 | 4 | Source version | script | manifest `version` verbatim. Series prefix hint hop count to target, but manifests go stale (never bumped since older series) — treat as hint, confirm against `$ODOO_VERSION`. No series prefix (`1.0`, `1.0.1`) reveal nothing: assume `$ODOO_VERSION` |
@@ -89,7 +85,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | 10 | OCA repo | script → `oca_check.py` | Exactly one of: `none` (no OCA repo ships it — the ONLY negative value), or the **verified** org location `OCA/<repo> (series,…)`, `; `-joined when several repos ship the name. Script seed `claimed — run oca_check.py` when manifest author contain `Odoo Community Association (OCA)` — claim, not proof (see below) — and `none` otherwise. Never write the scan that proved `none` into the cell: that provenance go to the Evidence sheet's OCA alternative evidence column. `build_workbook.py` reject anything else |
 | 11 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
 | 12 | Upgrade action | script seeds → AI proposes → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop). One of: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), `drop` (dead/unused/superseded). Blank when genuinely unsure. Final call = human planning review |
-| 13 | Functional area | AI | ONE bucket from the SAME closed 11-value list the requirements use (`AREA_ORDER` in `build_workbook.py`, validated in both places so the two cannot drift): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: the bucket is assigned **per requirement**, not per module — a module that produce requirements in two areas get one bucket here (the area its primary user sit in) and each requirement get its own. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
+| 13 | Functional area | AI | ONE bucket from a closed 11-value list (`AREA_ORDER` in `build_workbook.py`): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: one bucket per module — the area its primary user sit in. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
 | 14 | `<major> native?` | AI (phase 1) | The **verdict** and nothing else: exactly one of `yes`, `yes/partial`, `partial`, `no`. Does target-version standard (community **or** enterprise) do some/all of this? A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
 | 15 | `<major> native notes` | AI (phase 1) | How and where the target covers it — the sentence that used to be crammed into column 14. ≤ 300 chars. Empty is allowed when the verdict is `no` and there is nothing to add; the receipt (paths grepped) still go to the Evidence sheet |
 | 16 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
@@ -172,9 +168,9 @@ python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/invento
         -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx
 ```
 
-Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` + `fr_*.json` into the 4-sheet workbook (+ CSV siblings). Requirements JSON optional — absent ⇒ 2 sheets.
+Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` into the workbook (+ CSV siblings): Module Inventory and Inventory Evidence, plus Studio Inventory when `studio.csv` is present.
 
-Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, two enrichment files disagreeing on one key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells, requirements without `shall` or carrying weak words, unknown source modules, modules with no requirement. Near-duplicate requirements print separately as a non-blocking review list. Read both and re-run the offending agents — it is the only check that the fan-out followed the brief.
+Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, two enrichment files disagreeing on one key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells (a legacy `yes/partial: <text>` cell is a `native?` verdict outside its four literals, not split). Read it and re-run the offending agents — it is the only check that the fan-out followed the brief.
 
 ## Interpretation for estimating
 

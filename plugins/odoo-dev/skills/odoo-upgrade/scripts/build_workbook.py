@@ -2,17 +2,13 @@
 """Merge inventory CSV + agent JSON into the upgrade-preparation workbook.
 
 Inputs, all in one working dir (see references/inventory.md,
-references/oca-base-review.md, odoo-upgrade-project/references/functional-requirements.md):
+references/oca-base-review.md):
 
     inventory.csv     seeded by module_inventory.py, OCA repo column filled by
                       oca_check.py
     enrich_*.json     phase 1 — per-module enrichment + "<major> native?"
     oca_alt_*.json    phase 2 — per-module "OCA <major> alternative"
-    fr_*.json         phase 3 — functional requirements (optional)
-    fr_merges.json    optional {drop_tmp_id: {keep, note, requirement}}
-    fr_notes.json     optional {tmp_id: "note appended to Notes"}
     studio.csv        optional — studio_inventory.py output (UI-built artifacts)
-    tickets.csv       optional — Odoo support register, see odoo-upgrade-project/references/support-tickets.md
 
 Both agent groups are merged FIELD BY FIELD, per module, across every file in
 the group: an agent may deliver a partial record, and a second file naming the
@@ -21,23 +17,21 @@ A key carrying different non-empty values in two files is a problem line naming
 the module, the key and both files; the first file read (files sorted by name)
 keeps the cell.
 
-Output: one xlsx with Module Inventory / Inventory Evidence / Functional
-Requirements / Traceability, plus Studio Inventory and Tickets when those CSVs
-are present, plus CSV siblings. Everything else the reader
-needs (column semantics, writing rules) lives in the skill, not in the file.
+Output: one xlsx with Module Inventory / Inventory Evidence, plus Studio
+Inventory when that CSV is present, plus CSV siblings. Everything else the
+reader needs (column semantics, writing rules) lives in the skill, not in the
+file.
 
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
             -o <ARTIFACTS>/inventory/acme-upgrade-19.0.xlsx
 
 Prints a validation report — unenriched modules, conflicting enrichment
-files, `TODO-AI` sentinels in a delivered column, over-long cells, inventory
-cells outside their documented vocabulary (Functional area, native verdict, OCA
-repo, OCA alternative), requirements with weak wording or no (case-insensitive)
-"shall", a requirement whose `sources` is not a list of module names, unknown
-source modules, modules with no requirement, and near-duplicate requirements
-across agent groups. Read it: it is the only check that the fan-out agents
-followed the briefs. `problems: 0` means complete AND schema-valid: a column
-still carrying the sentinel is counted, reported and exits non-zero.
+files, `TODO-AI` sentinels in a delivered column, over-long cells, and
+inventory cells outside their documented vocabulary (Functional area, native
+verdict, OCA repo, OCA alternative). Read it: it is the only check that the
+fan-out agents followed the briefs. `problems: 0` means complete AND
+schema-valid: a column still carrying the sentinel is counted, reported and
+exits non-zero.
 """
 
 import argparse
@@ -46,7 +40,7 @@ import itertools
 import json
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -60,13 +54,8 @@ BASE_COLUMNS = ["Module Name", "Display Name", "Module Purpose",
 EVIDENCE_COLUMNS = ["Module", "native? evidence", "OCA alternative evidence",
                     "Vendor release", "Complexity rationale",
                     "Upgrade action rationale", "Notes"]
-FR_KEYS = {"tmp_id", "requirement", "type", "functional_area", "actor",
-           "sources", "evidence", "status_source", "status_note", "handled",
-           "handled_by", "handled_notes", "verification", "notes"}
-# The ONE closed functional-area vocabulary. Both halves of the workbook are
-# validated against this list — the inventory's "Functional area" column and
-# every requirement's functional_area — so the two cannot drift apart and an
-# area copied from a module row into a requirement always passes.
+# The ONE closed functional-area vocabulary: the inventory's "Functional area"
+# column is validated against this list.
 AREA_ORDER = ["Sales", "CRM", "Purchasing", "Inventory", "Manufacturing",
               "Accounting", "HR", "Website/Portal", "Reporting", "Integration",
               "Technical/Base"]
@@ -88,18 +77,14 @@ OCA_ALREADY_RE = re.compile(
     r"^already OCA: [A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 OCA_ALT_RE = re.compile(
     r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+ \((?:full|partial)\)$")
-STATUSES = {"active", "dead", "broken"}
 STUDIO_COLUMNS = ["kind", "technical_name", "model", "label", "owner_module",
                   "active", "classification", "populated", "detail"]
-TICKET_COLUMNS = ["id", "date", "subject", "token", "status",
-                  "blocking_module", "resolution", "link"]
 STUDIO_CLASSIFICATIONS = {"purge", "convert-to-code", "keep-as-data", "review"}
 # Blank is a legal value: only field rows answer the populated question at all.
 STUDIO_POPULATED = {"", "populated", "empty", "n/a"}
 # A view a module ships whose arch was edited in the database is never safe to
 # port unread — the classification is part of the finding, not a suggestion.
 STUDIO_REVIEW_KINDS = {"view-inline-edit"}
-TICKET_STATUSES = {"open", "waiting-odoo", "waiting-us", "resolved", "waived"}
 # "<major> native?" is a VERDICT and nothing else: a closed vocabulary can be
 # filtered and counted in a spreadsheet, which is the single biggest cost lever
 # in the exercise. The explanation lives in "<major> native notes" beside it.
@@ -112,48 +97,6 @@ EVIDENCE_MAX = 300
 # What the seeding script writes when only an agent can answer. In a column the
 # workbook presents as an answer it is an unanswered question, not a value.
 SENTINEL = "TODO-AI"
-# A word inside `backticks` or "double quotes" is a literal the client uses —
-# a delivery type called `normal`, a report called "100% invoiced" — so it is
-# never weak wording. Masked out (length preserved) before the rules run.
-QUOTED_LITERAL = re.compile(r'`[^`]*`|"[^"]*"')
-# The weak-wording rules, one (label, pattern) per defect class, each searched
-# as a predicate over the masked text instead of one flat substring grep: the
-# label is what makes a hit actionable, and the shape of the pattern is what
-# keeps `may` the modal apart from May the month. This list is the source of
-# truth for rule 5 of odoo-upgrade-project/references/functional-requirements.md — change both
-# together, one doc line per label.
-WEAK_WORDS = [
-    # Modal instead of `shall`, recognised by the bare verb that follows it,
-    # so "in May 2026" and "the will of the client" are left alone.
-    ("modal verb",
-     re.compile(r"(?i:\b(?:should|must|will|may|might|could)\b)"
-                r"(?=\s+(?:not\s+)?(?!of\b|the\b|an?\b)[a-z]{2,}\b)")),
-    # "shall be able to X" states a capability, not a behaviour: untestable.
-    ("superfluous infinitive",
-     re.compile(r"\bshall\s+(?:be\s+(?:able\s+to|capable\s+of)"
-                r"|have\s+the\s+ability\s+to"
-                r"|provide\s+the\s+ability\s+to|support|allow)\b"
-                r"|\bis\s+designed\s+to\b", re.I)),
-    # An open list cannot be accepted or rejected — the client signs a blank.
-    ("open-ended clause",
-     re.compile(r"\betc\.|\band so on\b|\bincluding but not limited to\b"
-                r"|\bsuch as\b|\be\.g\.", re.I)),
-    ("and/or", re.compile(r"\band\s*/\s*or\b", re.I)),
-    ("absolute",
-     re.compile(r"\b(?:always|never|all|every|none)\b|\b100%", re.I)),
-    # A comparative needs its baseline: "faster than the 16.0 report".
-    ("bare comparative",
-     re.compile(r"\b(?:faster|better|more|less|improved|enhanced"
-                r"|optimi[sz]ed)\b(?!\s+than\b)", re.I)),
-    # A pronoun opening a clause has no antecedent a tester can resolve.
-    ("pronoun without antecedent",
-     re.compile(r"(?:^|[,;:]\s*)(?P<w>it|this|that|these|those|they)\b",
-                re.I)),
-    ("vague adjective",
-     re.compile(r"\b(?:fast|easy|user-friendly|efficient|appropriate|normal"
-                r"|few|most|timely|properly|quickly|reliable|intuitive"
-                r"|seamless|robust|as needed|if possible)\b", re.I)),
-]
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
@@ -229,14 +172,13 @@ def build_passthrough_sheet(workbook, path, title, columns, widths, problems,
                             validate=None):
     """Fold a flat CSV in as its own sheet, validating what can be validated.
 
-    Studio rows and support tickets are produced elsewhere (studio_inventory.py,
-    a human keeping the register). The workbook is where they get READ, next to
-    the module inventory they change the cost of, so they are copied in rather
-    than regenerated. A missing file is not an error: both sheets are optional.
+    Studio rows are produced elsewhere (studio_inventory.py). The workbook is
+    where they get READ, next to the module inventory they change the cost of,
+    so they are copied in rather than regenerated. A missing file is not an
+    error: the sheet is optional.
 
-    A headers-only file is a register that was STAGED and is still empty —
-    which is exactly how the ticket register is meant to start — so it gets
-    its sheet, its CSV sibling and its `0 total` summary line. Only a file
+    A headers-only file is a register that was STAGED and is still empty, so
+    it gets its sheet, its CSV sibling and its `0` summary line. Only a file
     that is not there at all returns None.
     """
     if not path or not path.exists():
@@ -281,28 +223,10 @@ def validate_studio(row):
         yield f"{kind} row does not name the module whose view was edited"
 
 
-def validate_ticket(row):
-    status = (row.get("status") or "").strip()
-    if status not in TICKET_STATUSES:
-        yield (f"unknown status {status!r} "
-               f"(expected one of {', '.join(sorted(TICKET_STATUSES))})")
-    # A ticket without a token cannot be chased: the token is the only
-    # identifier the upgrade client prints and the only one support can act on.
-    if not (row.get("token") or "").strip():
-        yield f"ticket {row.get('id') or '(unnumbered)'} has no upgrade token"
-    # odoo-upgrade-project/references/sop.md 7.2 makes an unresolved ticket a go-live blocker, and a waiver has
-    # to point at the written waiver.
-    if status == "waived" and not (row.get("resolution") or "").strip():
-        yield (f"ticket {row.get('id') or '(unnumbered)'} is waived with no "
-               f"resolution — record the written waiver")
-
-
 def validate_area(area):
-    """The inventory column answers to the same closed list as the
-    requirements (AREA_ORDER), so an area copied from a module row into a
-    requirement always passes. Compound values (`Sales / Reporting`) fail
-    here on purpose: a module can produce requirements in two areas, and the
-    bucket is assigned per REQUIREMENT, not per module."""
+    """The inventory column answers to one closed list (AREA_ORDER).
+    Compound values (`Sales / Reporting`) fail here on purpose: assign exactly
+    one area per module."""
     if area not in AREA_ORDER:
         yield (f"Functional area {area!r} is not one of the "
                f"{len(AREA_ORDER)} buckets ({', '.join(AREA_ORDER)}) — "
@@ -364,28 +288,6 @@ def check_cap(label, value, cap):
         yield (f"{label} is {len(value)} chars (max {cap}): {value[:60]}…")
 
 
-def split_native(entry, module, native_column, notes_column, review):
-    """Verdict + description, from either shape of the phase-1 record.
-
-    `native` is the verdict and `native_notes` the description. The legacy
-    shape packed both into `native` as `<verdict>: <text>` inside 50
-    characters, which is what made the description unreadable; it is still
-    accepted — split on the first `: ` — and recorded as a review line, so
-    the brief that produced it gets fixed rather than the data rejected.
-    """
-    verdict = (entry.get("native") or SENTINEL).strip()
-    notes = (entry.get("native_notes") or "").strip()
-    if verdict not in NATIVE_VERDICTS and ": " in verdict:
-        head, _, tail = verdict.partition(": ")
-        if head.strip() in NATIVE_VERDICTS:
-            verdict, notes = head.strip(), notes or tail.strip()
-            review.append(
-                f"{module}: {native_column} carried the legacy "
-                f"'<verdict>: <text>' cell — split into {verdict!r} + "
-                f"{notes_column}; fix the phase-1 brief that wrote it")
-    return verdict, notes
-
-
 def build_inventory(workbook, workdir, source, native_column, notes_column,
                     oca_column, problems, review):
     enrich = merge_group_json(workdir, "enrich_*.json", problems)
@@ -401,8 +303,7 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
     inventory_rows, evidence_rows, by_module = [], [], {}
     for seeded in csv.DictReader(source.open(encoding="utf-8-sig")):
         # Module Name is the technical name and nothing else — it is the key
-        # the enrichment JSON, the requirement sources and the Traceability
-        # sheet all join on, so it is used whole, never split.
+        # the enrichment JSON joins on, so it is used whole, never split.
         module = seeded["Module Name"].strip()
         enriched = enrich.get(module)
         alternative = alternatives.get(module)
@@ -412,8 +313,10 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
             problems.append(f"{module}: no OCA alternative row (phase 2)")
         enriched, alternative = enriched or {}, alternative or {}
 
-        verdict, native_notes = split_native(enriched, module, native_column,
-                                             notes_column, review)
+        # `native` is the verdict and nothing else; `native_notes` is the
+        # explanation. A cell that is not exactly one verdict is a problem.
+        verdict = (enriched.get("native") or SENTINEL).strip()
+        native_notes = (enriched.get("native_notes") or "").strip()
         native_evidence = (enriched.get("native_evidence") or "").strip()
         alt_evidence = (alternative.get("oca_alt_evidence") or "").strip()
 
@@ -483,235 +386,6 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
     return columns, inventory_rows, evidence_rows, by_module, sentinels
 
 
-def mask_literals(text):
-    """Blank out `backticked` and "quoted" spans before the wording rules run.
-
-    Length is preserved so clause boundaries either side of the literal read
-    the same to the patterns.
-    """
-    return QUOTED_LITERAL.sub(lambda m: "_" * len(m.group(0)), text)
-
-
-def weak_wording(text):
-    """Every weak-wording rule that fires, as (label, matched text).
-
-    One line per rule, not per occurrence: the author fixes a class of wording,
-    not a list of offsets.
-    """
-    masked = mask_literals(text)
-    hits = []
-    for label, pattern in WEAK_WORDS:
-        match = pattern.search(masked)
-        if match:
-            hits.append((label, match.groupdict().get("w")
-                         or match.group(0)))
-    return hits
-
-
-def normalise_requirement(entry, fallback_id, problems):
-    """Make one entry safe to read with [] everywhere downstream.
-
-    A missing key is already a problem line by the time this runs. The report
-    is the only check that the fan-out agents followed their briefs, so it has
-    to survive a malformed entry rather than be replaced by its traceback: fill
-    what is missing, keep validating, exit non-zero at the end.
-
-    `sources` is the one non-string key, and a one-module requirement reads
-    naturally as a scalar — a bare string is iterable, so left alone it would
-    emit one `unknown source` line per letter. Type it here, once.
-    """
-    entry.setdefault("tmp_id", fallback_id)
-    sources = entry.get("sources", [])
-    kind = type(sources).__name__
-    if isinstance(sources, list):
-        bad = next((m for m in sources if not isinstance(m, str)), None)
-        if bad is not None:
-            kind = f"list containing {type(bad).__name__}"
-    if kind != "list":
-        problems.append(f"{entry['tmp_id']}: sources must be a list of "
-                        f"module names, got {kind}")
-        sources = []
-    entry["sources"] = sources
-    for key in FR_KEYS - {"sources"}:
-        entry.setdefault(key, "")
-
-
-def group_of(tmp_id):
-    """The agent group of a `tmp_id`: everything before the last `-`.
-
-    `A-01` -> `A`, `SALES-07` -> `SALES`, `A1-02` -> `A1`. Comparing the first
-    character alone made `G1`..`G6` — the obvious group naming — one single
-    group, which silently disabled the only cross-group review the fan-out has.
-    """
-    return tmp_id.rsplit("-", 1)[0] if "-" in tmp_id else tmp_id
-
-
-def load_requirements(workdir, inventory, handled_values, problems):
-    requirements = []
-    for path in sorted(workdir.glob("fr_*.json")):
-        if path.name in {"fr_groups.json", "fr_merges.json", "fr_notes.json"}:
-            continue
-        for entry in json.loads(path.read_text()):
-            tmp_id = entry.get("tmp_id", path.name)
-            if set(entry) != FR_KEYS:
-                problems.append(f"{tmp_id}: key mismatch "
-                                f"{sorted(set(entry) ^ FR_KEYS)}")
-            normalise_requirement(entry, tmp_id, problems)
-            if entry.get("handled") not in handled_values:
-                problems.append(f"{tmp_id}: handled={entry.get('handled')!r}")
-            if entry.get("status_source") not in STATUSES:
-                problems.append(
-                    f"{tmp_id}: status={entry.get('status_source')!r}")
-            if entry.get("functional_area") not in AREA_ORDER:
-                problems.append(
-                    f"{tmp_id}: area={entry.get('functional_area')!r}")
-            text = entry.get("requirement", "")
-            for label, word in weak_wording(text):
-                problems.append(
-                    f"{tmp_id}: weak wording [{label}] {word!r}: {text[:80]}")
-            # Case-insensitive, and the message says so: a `Shall` capitalised
-            # by an editor is the convention, not a missing keyword.
-            if not re.search(r"\bshall\b", text, re.I):
-                problems.append(f'{tmp_id}: no "shall" (case-insensitive) '
-                                f'in: {text[:80]}')
-            for module in entry["sources"]:
-                if module not in inventory:
-                    problems.append(f"{tmp_id}: unknown source {module}")
-            requirements.append(entry)
-    return requirements
-
-
-def apply_reconciliation(workdir, requirements):
-    by_tmp = {e.get("tmp_id", ""): e for e in requirements}
-    merges_path = workdir / "fr_merges.json"
-    if merges_path.is_file():
-        for drop, spec in json.loads(merges_path.read_text()).items():
-            dropped, kept = by_tmp.get(drop), by_tmp.get(spec.get("keep"))
-            if not dropped or not kept:
-                continue
-            for module in dropped.get("sources", []):
-                if module not in kept.setdefault("sources", []):
-                    kept["sources"].append(module)
-            kept["evidence"] = (kept.get("evidence", "") + " | "
-                                + dropped.get("evidence", ""))[:400]
-            kept["notes"] = " | ".join(
-                x for x in [kept.get("notes", ""), spec.get("note", "")] if x)
-            if spec.get("requirement"):
-                kept["requirement"] = spec["requirement"]
-            requirements.remove(dropped)
-    notes_path = workdir / "fr_notes.json"
-    if notes_path.is_file():
-        for tmp_id, note in json.loads(notes_path.read_text()).items():
-            entry = by_tmp.get(tmp_id)
-            if entry:
-                entry["notes"] = " | ".join(
-                    x for x in [entry.get("notes", ""), note] if x)
-
-
-def near_duplicates(requirements, threshold=0.33):
-    stop = {"system", "shall", "when", "while", "user", "order", "where"}
-
-    def tokens(text):
-        return {w for w in re.findall(r"[a-z]+", text.lower())
-                if len(w) > 3 and w not in stop}
-
-    pairs = []
-    for left, right in itertools.combinations(requirements, 2):
-        if group_of(left.get("tmp_id", "")) == group_of(
-                right.get("tmp_id", "")):
-            continue
-        a, b = tokens(left["requirement"]), tokens(right["requirement"])
-        if a and b:
-            score = len(a & b) / len(a | b)
-            if score >= threshold:
-                pairs.append((round(score, 2), left["id"], right["id"],
-                              left["requirement"][:70],
-                              right["requirement"][:70]))
-    return sorted(pairs, reverse=True)
-
-
-def build_requirements(workbook, workdir, inventory, native_column,
-                       oca_column, handled_base, problems, review):
-    handled_values = {handled_base, "OCA", "no"}
-    requirements = load_requirements(workdir, inventory, handled_values,
-                                     problems)
-    if not requirements:
-        return [], [], []
-
-    apply_reconciliation(workdir, requirements)
-
-    requirements.sort(key=lambda e: (
-        AREA_ORDER.index(e.get("functional_area"))
-        if e.get("functional_area") in AREA_ORDER else 99,
-        e.get("tmp_id", "")))
-    for number, entry in enumerate(requirements, 1):
-        entry["id"] = f"FR-{number:03d}"
-
-    columns = ["ID", "Requirement", "Type", "Functional area", "Actor",
-               "Source customization(s)", "Status in source", "Handled?",
-               "Handled by", "Handled notes", "Verification", "Evidence",
-               "Notes", "Decision (Keep/Drop/Defer)"]
-    rows = [[e["id"], e.get("requirement", ""), e.get("type", ""),
-             e.get("functional_area", ""), e.get("actor", ""),
-             "; ".join(e.get("sources", [])),
-             e.get("status_source", "") + (f" — {e.get('status_note')}"
-                                           if e.get("status_note") else ""),
-             e.get("handled", ""), e.get("handled_by", ""),
-             e.get("handled_notes", ""), e.get("verification", ""),
-             e.get("evidence", ""), e.get("notes", ""), ""]
-            for e in requirements]
-
-    fills = {handled_base: PatternFill("solid", fgColor="E2EFDA"),
-             "OCA": PatternFill("solid", fgColor="DDEBF7"),
-             "no": PatternFill("solid", fgColor="FCE4D6")}
-    sheet = workbook.create_sheet("Functional Requirements")
-    sheet.append(columns)
-    for entry, row in zip(requirements, rows):
-        sheet.append(row)
-        fill = fills.get(entry.get("handled"))
-        if fill:
-            sheet.cell(row=sheet.max_row, column=8).fill = fill
-        if entry.get("status_source") != "active":
-            sheet.cell(row=sheet.max_row, column=7).font = Font(
-                color="C00000", bold=True)
-    style_sheet(sheet, [9, 70, 16, 14, 16, 34, 18, 10, 34, 34, 44, 34, 36, 14],
-                "C2")
-
-    by_module = defaultdict(list)
-    for entry in requirements:
-        for module in entry.get("sources", []):
-            by_module[module].append(entry)
-    trace_columns = ["Module", "Requirement IDs", "# reqs",
-                     f"# {handled_base}", "# OCA", "# no",
-                     "Inventory: Upgrade action", f"Inventory: {native_column}",
-                     f"Inventory: {oca_column}"]
-    trace_rows = []
-    for module in sorted(inventory, key=str.lower):
-        entries = by_module.get(module, [])
-        counts = Counter(e.get("handled") for e in entries)
-        trace_rows.append([
-            module, ", ".join(e["id"] for e in entries), len(entries),
-            counts[handled_base], counts["OCA"], counts["no"],
-            inventory[module]["Upgrade action"],
-            inventory[module][native_column], inventory[module][oca_column]])
-    trace = workbook.create_sheet("Traceability")
-    trace.append(trace_columns)
-    for row in trace_rows:
-        trace.append(row)
-    style_sheet(trace, [44, 40, 8, 11, 7, 6, 18, 44, 50], "B2")
-
-    uncovered = sorted(set(inventory) - set(by_module))
-    if uncovered:
-        problems.append(f"modules with no requirement: {', '.join(uncovered)}")
-    for score, left, right, left_text, right_text in near_duplicates(
-            requirements):
-        review.append(f"near-duplicate {score} {left}/{right}: "
-                      f"{left_text} || {right_text}")
-
-    return (columns, rows, requirements), (trace_columns, trace_rows), \
-        requirements
-
-
 def default_if_present(workdir, name):
     """Optional inputs are picked up when they exist, never demanded."""
     candidate = workdir / name
@@ -733,16 +407,12 @@ def main():
     parser.add_argument("--studio", type=Path,
                         help="studio_inventory.py CSV "
                              "(default: <workdir>/studio.csv if present)")
-    parser.add_argument("--tickets", type=Path,
-                        help="Odoo support ticket register CSV "
-                             "(default: <workdir>/tickets.csv if present)")
     args = parser.parse_args()
 
     major = args.target_version.split(".")[0]
     native_column = f"{major} native?"
     notes_column = f"{major} native notes"
     oca_column = f"OCA {major} alternative"
-    handled_base = f"base {major}"
     source = args.inventory or args.workdir / "inventory.csv"
     problems, review = [], []
 
@@ -751,23 +421,15 @@ def main():
     inv_columns, inv_rows, evidence_rows, inventory, sentinels = \
         build_inventory(workbook, args.workdir, source, native_column,
                         notes_column, oca_column, problems, review)
-    fr, trace, requirements = build_requirements(
-        workbook, args.workdir, inventory, native_column, oca_column,
-        handled_base, problems, review)
 
     studio = build_passthrough_sheet(
         workbook, args.studio or default_if_present(args.workdir, "studio.csv"),
         "Studio Inventory", STUDIO_COLUMNS, [18, 34, 24, 30, 20, 8, 18, 12, 40],
         problems, validate_studio)
-    tickets = build_passthrough_sheet(
-        workbook, args.tickets or default_if_present(args.workdir, "tickets.csv"),
-        "Tickets", TICKET_COLUMNS, [10, 12, 52, 26, 14, 18, 40, 34],
-        problems, validate_ticket)
 
-    # Requirements sheets are appended after the inventory ones; the workbook
-    # reads inventory-first, so reorder to put requirements second.
-    order = ["Module Inventory", "Functional Requirements", "Traceability",
-             "Inventory Evidence", "Studio Inventory", "Tickets"]
+    # The Studio sheet is appended after the inventory ones; keep the
+    # workbook inventory-first.
+    order = ["Module Inventory", "Inventory Evidence", "Studio Inventory"]
     workbook._sheets.sort(
         key=lambda ws: order.index(ws.title) if ws.title in order else 99)
     workbook.save(args.output)
@@ -775,29 +437,14 @@ def main():
     stem = args.output.with_suffix("")
     write_csv(Path(f"{stem}_inventory.csv"), inv_columns, inv_rows)
     write_csv(Path(f"{stem}_evidence.csv"), EVIDENCE_COLUMNS, evidence_rows)
-    if requirements:
-        write_csv(Path(f"{stem}_requirements.csv"), fr[0], fr[1])
-        write_csv(Path(f"{stem}_traceability.csv"), trace[0], trace[1])
     if studio:
         write_csv(Path(f"{stem}_studio_inventory.csv"), studio[0], studio[1])
-    if tickets:
-        write_csv(Path(f"{stem}_tickets.csv"), tickets[0], tickets[1])
 
     print(f"saved {args.output}: "
           f"{[(ws.title, ws.max_row - 1) for ws in workbook]}")
     if studio:
         print("studio:", dict(Counter(r[STUDIO_COLUMNS.index("classification")]
                                       for r in studio[1])))
-    if tickets:
-        open_tickets = [r for r in tickets[1]
-                        if r[TICKET_COLUMNS.index("status")] not in ("resolved", "waived")]
-        # odoo-upgrade-project/references/sop.md 7.2: every ticket resolved or waived before a production run.
-        print(f"tickets: {len(tickets[1])} total, {len(open_tickets)} still blocking")
-    if requirements:
-        print("handled:", dict(Counter(e["handled"] for e in requirements)))
-        print("status:", dict(Counter(e["status_source"] for e in requirements)))
-        print("area:", dict(Counter(e["functional_area"]
-                                    for e in requirements)))
     # Per-column sentinel counts: the difference between "schema-valid" and
     # "answered". Printed even when empty, so a clean run says so.
     print("sentinels:", dict(sentinels))
