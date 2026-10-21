@@ -33,6 +33,10 @@ expect "init exit" "$?" 0
 expect "next after init" "$(u next)" "PORT a"
 
 u mark a port --json "{\"commit\":\"$sha\",\"manifest\":\"19.0.1.0.0\"}"
+u mark a port --json "{\"commit\":\"$sha\",\"manifest\":\"19.0.1.0.0\",\"upgrade_code_commit\":{\"sha\":\"abc123\",\"diffstat\":\" a.py | 1 +\"}}"
+expect "port upgrade_code_commit stored" "$(bash "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh" get "$A" upgrade | node -e 'const u=JSON.parse(require("fs").readFileSync(0,"utf8")).modules.a.port;console.log(u.upgrade_code_commit.sha+"|"+u.upgrade_code_commit.diffstat.trim())')" "abc123|a.py | 1 +"
+u mark a port --json "{\"commit\":\"$sha\",\"manifest\":\"19.0.1.0.0\",\"upgrade_code_commit\":\"abc123\"}" 2>/dev/null
+expect "port upgrade_code_commit must be an object" "$?" 4
 u mark a status ported
 expect "mark a ported" "$?" 0
 expect "next after a" "$(u next)" "PORT b"

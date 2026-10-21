@@ -12,6 +12,8 @@
 #   upgrade-state.sh <artifacts> next
 #   upgrade-state.sh <artifacts> mark <module> status <state>
 #   upgrade-state.sh <artifacts> mark <module> verdict|port|tests --json '<object>'
+#     mark port needs {commit, manifest}; it also stores an optional
+#     upgrade_code_commit {sha, diffstat} (#1168) as modules.<m>.port.upgrade_code_commit.
 #   upgrade-state.sh <artifacts> drop <module> --config-step TEXT --prod-uninstall --assumption ID
 #                      [--question T] [--reason T] [--alternative T]
 #     One transaction: record the drop (status, drop{}, enrich_<module>.json, the
@@ -183,6 +185,8 @@ if (cmd === "mark") {
     let val;
     try { val = JSON.parse(rest[1]); } catch { fail("--json is not JSON", 4); }
     if (field === "port" && !(val && val.commit && val.manifest)) fail("port needs commit and manifest", 4);
+    const uc = field === "port" && val ? val.upgrade_code_commit : undefined;
+    if (uc !== undefined && !(uc && typeof uc === "object" && !Array.isArray(uc) && uc.sha)) fail("port upgrade_code_commit must be an object with sha", 4);
     rec[field] = val;
   } else fail(`unknown field ${field}`);
   touch(u, m); write("upgrade", u); process.exit(0);

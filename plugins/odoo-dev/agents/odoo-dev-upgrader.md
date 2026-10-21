@@ -65,10 +65,10 @@ are the lines of your prompt.
    drop the module on the target branch. Otherwise port in place with the minimum rewrite
    and record the gap in the notes of the record. Never stop for this decision.
 5. Loop on `upgrade-state.sh <ARTIFACTS> next` while it prints `PORT <module>`. Per that module: run
-   `port-module.sh <module> --to <target> --worktree <W>` first and review its diff (exit 2 means the migrator is missing: report it); then `references/porting-checklist.md` with
+   `port-module.sh <module> --to <target> --worktree <W>` first and review its diff (it commits the rewrite as `chore(<module>): upgrade_code <target>`; exit 2 means the migrator is missing: report it); then `references/porting-checklist.md` with
    `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); bump the manifest with
    `bump_manifest_version.py --series <target>` and commit. Then run
-   `upgrade-state.sh <ARTIFACTS> mark <module> port --json '{"commit":"<sha>","manifest":"<version>"}'`
+   `upgrade-state.sh <ARTIFACTS> mark <module> port --json '{"commit":"<sha>","manifest":"<version>","upgrade_code_commit":<commit>}'` (`<commit>` is the `commit` object of the `port-module.sh` JSON, or omit the key when it is null)
    and `upgrade-state.sh <ARTIFACTS> mark <module> status ported`. To drop a module, run
    `upgrade-state.sh <ARTIFACTS> drop <module> --config-step "<text>" --prod-uninstall --assumption <id>`
    (add `--question`, `--reason` and `--alternative` to fill the assumption entry).
