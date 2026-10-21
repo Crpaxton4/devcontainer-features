@@ -686,7 +686,7 @@ fi
 # Two things about that file were once wrong and are asserted here: it must never
 # survive the run, and its path must not be the one fixed name every concurrent
 # writer would also be holding.
-no_scratch() { [ -z "$(find "$TMP" -maxdepth 1 -name 'map.json.tmp*')" ]; }
+no_scratch() { [ -z "$(find "$TMP" -maxdepth 1 \( -name 'map.json.tmp*' -o -name 'map.json.bak.*' \))" ]; }
 
 seed
 map set-flow Beta ":task,staging,prod" >/dev/null; check "scratch-write-ok" 0 $?
@@ -731,6 +731,7 @@ for p in $pids; do wait "$p" || racers=$((racers+1)); done
 check "concurrent-writers-all-exit-0" 0 "$racers"
 map validate >/dev/null 2>&1; check "concurrent-map-still-validates" 0 $?
 no_scratch; check "concurrent-no-scratch-left" 0 $?
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' "$TMP/map.json.bak" >/dev/null 2>&1; check "concurrent-bak-is-valid-json" 0 $?
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
