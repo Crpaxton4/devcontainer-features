@@ -1,0 +1,50 @@
+name: "CI - orchestrator stack"
+
+# The only automatic gate for stack/compose.yaml and stack/Dockerfile. It needs
+# no secrets: the variables below are dummies that satisfy the ${VAR:?} checks.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'stack/**'
+      - 'libraries/**'
+      - 'plugins/odoo-orchestrator/scripts/dispatch.sh'
+      - '.github/workflows/stack.yaml'
+  pull_request:
+    paths:
+      - 'stack/**'
+      - 'libraries/**'
+      - 'plugins/odoo-orchestrator/scripts/dispatch.sh'
+      - '.github/workflows/stack.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: stack-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SECOND_BRAIN_DIR: /home/ci/second-brain
+  DISPATCH_REPOS_DIR: /home/ci/repos
+  DISPATCH_CONFIG_ROOT: /home/ci/config
+  DISPATCH_REPO_OWNER: ci-owner
+  ODOO_ORCHESTRATOR_CHECKOUT: /home/ci/checkout
+  ODOO_ORCHESTRATOR_UID: "1000"
+  ODOO_ORCHESTRATOR_GID: "1000"
+  ODOO_ORCHESTRATOR_DOCKER_GID: "999"
+
+jobs:
+  stack:
+    name: "Compose config and image build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate the compose file
+        run: docker compose -f stack/compose.yaml config
+
+      - name: Build the dispatcher image
+        run: docker compose -f stack/compose.yaml build dispatcher
