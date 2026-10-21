@@ -721,6 +721,22 @@ process.stdin.on("end", () => {
   const type = typeof p.agent_type === "string" ? p.agent_type : "";
   if (!(RUN || type.startsWith(AGENT_PREFIX) || type.includes(":" + AGENT_PREFIX))) allow();
   AGENT_TYPE = type;
+  // A STOP file under <state dir>/tasks/*/ kills the run: only read-only tools and
+  // upgrade-state.sh (so the agent can read `next`) still pass.
+  if (!["Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "TodoWrite", "Task"].includes(p.tool_name)) {
+    const st = process.env.ODOO_DEV_STATE_DIR ||
+      (process.env.HOME ? process.env.HOME + "/.local/share/odoo-dev" : "");
+    let stop = "";
+    try {
+      const tasks = path.resolve(st, "tasks");
+      if (st) for (const d of fs.readdirSync(tasks)) {
+        if (fs.existsSync(path.join(tasks, d, "STOP"))) { stop = path.join(tasks, d, "STOP"); break; }
+      }
+    } catch { stop = ""; }
+    const c = p.tool_input && typeof p.tool_input.command === "string" ? p.tool_input.command : "";
+    const head = p.tool_name === "Bash" && /^\s*(?:bash\s+)?\S*upgrade-state\.sh(?:\s|$)/.test(c) && !/[;&|<>`$()\n]/.test(c);
+    if (stop && !head) deny("Refused: a STOP file exists at " + stop + "; the run is killed. Only upgrade-state.sh may run.");
+  }
   if (["Edit", "Write", "NotebookEdit"].includes(p.tool_name)) { checkWrite(p); allow(); }
   if (p.tool_name !== "Bash") allow();
   if (p.tool_input && p.tool_input.run_in_background) deny(BG_MSG);
