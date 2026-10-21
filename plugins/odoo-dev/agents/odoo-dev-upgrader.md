@@ -59,13 +59,21 @@ are the lines of your prompt.
    `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
    End with `upgrade-state.sh <ARTIFACTS> mark <module> verdict --json <verdict>`.
+   Decision rule: when native is yes, or yes/partial with the gap closed by a documented
+   configuration step (a field on a standard record, a setting, an operation-type option),
+   drop the module on the target branch. Otherwise port in place with the minimum rewrite
+   and record the gap in the notes of the record. Never stop for this decision.
 5. Loop on `upgrade-state.sh <ARTIFACTS> next` while it prints `PORT <module>`. Per that module: run
    `port-module.sh <module> --to <target> --worktree <W>` first and review its diff (exit 2 means the migrator is missing: report it); then `references/porting-checklist.md` with
    `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); bump the manifest with
    `bump_manifest_version.py --series <target>` and commit. Then run
    `upgrade-state.sh <ARTIFACTS> mark <module> port --json '{"commit":"<sha>","manifest":"<version>"}'`
    and `upgrade-state.sh <ARTIFACTS> mark <module> status ported`. To drop a module, run
-   `upgrade-state.sh <ARTIFACTS> drop <module> --reason "<why>"`.
+   `upgrade-state.sh <ARTIFACTS> drop <module> --reason "<question; assumption; reason; alternative>"`.
+   A drop records three things: (a) the configuration step that replaces the module
+   (standard field path and where it is set) in the `notes` of `enrich_<module>.json`;
+   (b) the production uninstall of the module before the database upgrade (SOP 5.2) as a
+   pull-request item; (c) the question, assumption, reason and alternative as the `--reason`.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
    Then run `upgrade-state.sh <ARTIFACTS> gate workbook --problems <N> --path <xlsx>`.
@@ -85,8 +93,9 @@ upgrade branch when the project has one), plus the
 
 ## Stop conditions
 
-- A module that needs a business decision: record the question in `assumptions[]`
-  with the chosen default, and continue.
+- Never park for a business decision: drop when native covers it, else port in place.
+  The question, assumption, reason and alternative go into `assumptions[]` through
+  `upgrade-state.sh`. Continue.
 - failed: any preflight failure (all of them listed in line 3); an ambiguous project; the workbook prints `problems` above 0 after the records are corrected; the install
   loop reports progress: false.
 - A broken environment is a stop, never a workaround. Report what is broken and end.
