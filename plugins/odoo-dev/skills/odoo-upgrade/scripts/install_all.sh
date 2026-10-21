@@ -59,15 +59,21 @@
 # With no mode flags this is the plain full install the SOP has always called
 # for: one database, every module, one log.
 #
-# Output: the last stdout line is a JSON summary — {db, addons_path, addons_path_effective, data_dir,
-# odoo_build, mode, template:{db,key,reused,core_modules}, custom_modules,
-# trees:[{modules,db,status,error,module,log}], full:{...}, passed}. Same
-# document to --summary <file>. Odoo's own output goes to a log file per
-# database, never to stdout: the log volume is the cost these modes exist to
-# cut, so the paths are reported and the decisive lines are lifted out.
+# Output: the last stdout line is a JSON summary — {status, db, addons_path,
+# addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
+# template:{db,key,reused,core_modules}, custom_modules,
+# trees:[{modules,db,status,error,module,log,class}], full:{...},
+# env_failure:{decisive,log}|null, passed}. status is pass | failed |
+# env_failure | usage. Same document to --summary <file>, written on every exit
+# path once the environment checks have passed. Odoo's own output goes to a log
+# file per database, never to stdout: the log volume is the cost these modes
+# exist to cut, so the paths are reported and the decisive lines are lifted out.
 #
-# Exit: 0 everything installed | 1 an install failed (a RESULT, reported in the
-# summary) | 2 usage, safety refusal, or a broken environment.
+# Exit: 0 green | 1 a port defect (a RESULT, reported in the summary) | 2 usage
+# or safety refusal | 10 environment (a template build failure, or a failure
+# whose decisive frame is outside the tree under test, or a missing core or
+# enterprise dependency). The caller relays the code and never reads the log to
+# classify.
 set -euo pipefail
 
 usage() {
@@ -84,6 +90,8 @@ Options:
   --addons-path <dir>    addons tree under test. Required, no default: the tree
                          under test is never inferred. Also accepted
                          positionally. The conf addons_path is ignored.
+  --enterprise <dir>     enterprise addons tree, appended to the addons path.
+                         Odoo does not find it through the moved data_dir.
   --data-dir <dir>       Odoo data_dir for every run — filestore, sessions, and
                          the auto-appended <data_dir>/addons/<series> tree.
                          Default <artifacts>/data; never Odoo's own default.
@@ -117,12 +125,15 @@ need_value() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
-summary_file=""
+summary_file=""; enterprise=""
+summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
+records=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --db)          need_value --db $#;          db="$2"; shift 2 ;;
     --addons-path) need_value --addons-path $#; addons="$2"; shift 2 ;;
+    --enterprise)  need_value --enterprise $#;  enterprise="$2"; shift 2 ;;
     --data-dir)    need_value --data-dir $#;    data_dir="$2"; shift 2 ;;
     --artifacts)   need_value --artifacts $#;   artifacts="$2"; shift 2 ;;
     --conf)        need_value --conf $#;        conf="$2"; conf_explicit=true; shift 2 ;;
@@ -167,6 +178,10 @@ valid_dbname "$db" || die "not a usable database name: '$db' (letters, digits, _
   pass --addons-path <worktree>: the tree under test is never inferred"
 [ -d "$addons" ] || die "addons path is not a directory: $addons"
 addons="$(cd "$addons" && pwd)"
+if [ -n "$enterprise" ]; then
+  [ -d "$enterprise" ] || die "enterprise path is not a directory: $enterprise"
+  enterprise="$(cd "$enterprise" && pwd)"
+fi
 
 artifacts="${artifacts:-${INSTALL_ALL_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/odoo-install-all}}"
 mkdir -p "$artifacts" || die "cannot create the artifacts dir: $artifacts"
@@ -177,6 +192,7 @@ artifacts="$(cd "$artifacts" && pwd)"
 # --addons-path on its own does not exclude.
 data_dir="${data_dir:-$artifacts/data}"
 mkdir -p "$data_dir" || die "cannot create the data dir: $data_dir"
+records="$artifacts/records.tsv"
 
 # ---- config file ---------------------------------------------------------------
 if [ "$no_conf" = true ]; then
@@ -384,6 +400,9 @@ if [ -n "$conf" ]; then odoo_args+=(-c "$conf"); fi
 # The path Odoo sees is the tree under test plus what Odoo adds itself. The
 # conf's addons_path is never appended: it let dropped modules leak in (#1167).
 addons_arg="$addons"
+# --enterprise adds the enterprise tree explicitly, so the moved data_dir cannot
+# hide it (#1137).
+if [ -n "$enterprise" ]; then addons_arg="$addons,$enterprise"; fi
 odoo_args+=(--addons-path="$addons_arg" --data-dir "$data_dir" --max-cron-threads=0 --stop-after-init)
 
 run_install() { # run_install <db> <modules-csv> <log>
@@ -392,14 +411,15 @@ run_install() { # run_install <db> <modules-csv> <log>
 
 # The failing module and the one line that decides why, lifted out of a log the
 # caller should not have to read. Everything else in that file is core loading.
-extract_failure() { # extract_failure <log> -> "<module>\t<line>"
-  python3 - "$1" <<'PY'
+extract_failure() { # extract_failure <log> <tree> -> "<module>\t<line>\t<env|port>"
+  python3 - "$1" "${2:-}" <<'PY'
 import re, sys
 
 try:
     lines = open(sys.argv[1], errors="replace").read().splitlines()
 except OSError:
     lines = []
+tree = sys.argv[2].rstrip("/") + "/" if sys.argv[2] else ""
 
 module = ""
 LOADING = (
@@ -415,10 +435,12 @@ for line in lines:
 
 EXCEPTION = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure|Exit):")
 decisive = ""
-for line in lines:
+decisive_at = -1
+for index, line in enumerate(lines):
     stripped = line.strip()
     if EXCEPTION.match(stripped):
         decisive = stripped
+        decisive_at = index
 if not decisive:
     for line in lines:
         if " ERROR " in line or " CRITICAL " in line:
@@ -439,15 +461,133 @@ path = re.search(
 if path:
     module = path.group(1)
 
-print("%s\t%s" % (module, decisive.replace("\t", " ")[:400]))
+# Class: env when the failure is not the tree's own code. The decisive frame is
+# the last File "..." line before the exception; outside the tree under test it
+# is core or enterprise code. A decisive line that names a path inside the tree
+# (a ParseError on a custom view) is the tree's own defect even though the last
+# frame is the loader.
+klass = "port"
+frame = ""
+if decisive_at >= 0:
+    for line in reversed(lines[:decisive_at]):
+        found = re.search(r'File "([^"]+)"', line)
+        if found:
+            frame = found.group(1)
+            break
+names_tree = bool(tree) and tree in decisive
+if frame and tree and not frame.startswith(tree) and not names_tree:
+    klass = "env"
+if re.search(r"Unmet dependencies|[Mm]odule\W.*not found", decisive) and not names_tree:
+    klass = "env"
+if "ImportError" in decisive and "odoo.addons." in decisive and not names_tree:
+    klass = "env"
+
+print("%s\t%s\t%s" % (module, decisive.replace("\t", " ")[:400], klass))
 PY
 }
 
-records="$artifacts/records.tsv"
 : > "$records"
-record() { # record <kind> <db> <modules> <status> <module> <error> <log>
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$records"
+record() { # record <kind> <db> <modules> <status> <module> <error> <log> [class]
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${8:-}" >> "$records"
 }
+
+# extract_failure prints "<module>\t<line>\t<class>"; split it into f_module,
+# f_error and f_class. count_failure then counts it by class.
+split_failure() {
+  local rest
+  f_module="${1%%$'\t'*}"
+  rest="${1#*$'\t'}"
+  f_error="${rest%$'\t'*}"
+  f_class="${rest##*$'\t'}"
+}
+count_failure() {
+  failures=$((failures + 1))
+  if [ "$f_class" = env ]; then env_failures=$((env_failures + 1)); fi
+}
+
+# write_summary <status>: status is pass | failed | env_failure | usage. Prints the
+# JSON summary on stdout and writes it to --summary. Writes once per run: the
+# normal end calls it, and the EXIT trap calls it for any other way out.
+write_summary() {
+  [ "$summary_written" = false ] || return 0
+  summary_written=true
+  local mode=full summary
+  if [ "$per_tree" = true ]; then mode=per-tree; fi
+  if [ "$use_template" = true ]; then mode="$mode+template"; fi
+  summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
+    "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
+    "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" <<'PY'
+import json, os, sys
+
+(records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
+ template_db, template_key, template_reused, use_template,
+ addons_arg, status, enterprise, env_decisive, env_log) = sys.argv[1:18]
+
+
+def split(value):
+    return [part for part in value.split(",") if part]
+
+
+trees, full = [], None
+if os.path.exists(records):
+    with open(records, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            kind, target, mods, rstatus, module, error, log, klass = (
+                line.rstrip("\n").split("\t") + [""] * 8)[:8]
+            entry = {
+                "modules": split(mods), "db": target, "status": rstatus,
+                "error": error or None, "module": module or None, "log": log or None,
+                "class": klass or None,
+            }
+            if kind == "tree":
+                trees.append(entry)
+            else:
+                full = entry
+
+statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
+summary = {
+    "status": status,
+    "db": db, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
+    "enterprise_path": enterprise or None,
+    "odoo_build": build_id, "mode": mode,
+    "custom_modules": split(modules_csv),
+    "template": {
+        "db": template_db or None, "key": template_key,
+        "reused": template_reused == "true", "core_modules": split(core_csv),
+    } if use_template == "true" else None,
+    "trees": trees,
+    "full": full,
+    "env_failure": {"decisive": env_decisive, "log": env_log or None} if env_decisive else None,
+    "passed": status == "pass" and bool(statuses) and all(s == "pass" for s in statuses),
+}
+print(json.dumps(summary))
+PY
+)"
+  if [ -n "$summary_file" ]; then
+    mkdir -p "$(dirname "$summary_file")"
+    printf '%s\n' "$summary" > "$summary_file"
+  fi
+  printf '%s\n' "$summary"
+}
+
+# The EXIT trap: write the summary if the run is leaving before its normal end
+# (a refusal, a signal, an unexpected error), then drop the databases.
+on_exit() {
+  local rc=$?
+  if [ "$summary_written" = false ]; then
+    case "$rc" in
+      0)  write_summary pass || true ;;
+      2)  write_summary usage || true ;;
+      10) write_summary env_failure || true ;;
+      *)  write_summary failed || true ;;
+    esac
+  fi
+  cleanup
+  return "$rc"
+}
+trap on_exit EXIT
 
 # ---- template database ---------------------------------------------------------
 template_key="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$build_id
@@ -472,11 +612,13 @@ if [ "$use_template" = true ]; then
     createdb "$template_db" >/dev/null
     template_log="$artifacts/$template_db.log"
     if ! run_install "$template_db" "${core_csv:-base}" "$template_log"; then
-      failure="$(extract_failure "$template_log")"
-      echo "install_all.sh: building the template database failed — ${failure#*$'\t'}" >&2
+      split_failure "$(extract_failure "$template_log" "$addons")"
+      echo "install_all.sh: building the template database failed — $f_error" >&2
       echo "  log: $template_log" >&2
       dropdb --if-exists "$template_db" >/dev/null 2>&1 || true
-      exit 1
+      env_decisive="$f_error"; env_log="$template_log"
+      write_summary env_failure
+      exit 10
     fi
     # Keyed inside the database, so a build or dependency change invalidates it
     # rather than silently masking an incompatibility.
@@ -501,10 +643,10 @@ if [ "$per_tree" = true ]; then
       record tree "$tree_db" "$tree" pass "" "" "$tree_log"
       echo "install_all.sh: tree $index/${#trees[@]} PASS ($tree)" >&2
     else
-      failure="$(extract_failure "$tree_log")"
-      failures=$((failures + 1))
-      record tree "$tree_db" "$tree" fail "${failure%%$'\t'*}" "${failure#*$'\t'}" "$tree_log"
-      echo "install_all.sh: tree $index/${#trees[@]} FAIL ($tree) at ${failure%%$'\t'*}: ${failure#*$'\t'}" >&2
+      split_failure "$(extract_failure "$tree_log" "$addons")"
+      count_failure
+      record tree "$tree_db" "$tree" fail "$f_module" "$f_error" "$tree_log" "$f_class"
+      echo "install_all.sh: tree $index/${#trees[@]} FAIL ($tree) at $f_module [$f_class]: $f_error" >&2
       echo "  log: $tree_log" >&2
     fi
     dropdb --if-exists "$tree_db" >/dev/null 2>&1 || true
@@ -523,70 +665,20 @@ else
   if run_install "$db" "$modules_csv" "$full_log"; then
     record full "$db" "$modules_csv" pass "" "" "$full_log"
   else
-    failure="$(extract_failure "$full_log")"
-    failures=$((failures + 1))
-    record full "$db" "$modules_csv" fail "${failure%%$'\t'*}" "${failure#*$'\t'}" "$full_log"
-    echo "install_all.sh: full install FAILED at ${failure%%$'\t'*}: ${failure#*$'\t'}" >&2
+    split_failure "$(extract_failure "$full_log" "$addons")"
+    count_failure
+    record full "$db" "$modules_csv" fail "$f_module" "$f_error" "$full_log" "$f_class"
+    echo "install_all.sh: full install FAILED at $f_module [$f_class]: $f_error" >&2
     echo "  log: $full_log" >&2
   fi
 fi
 
 # ---- summary -------------------------------------------------------------------
-mode=full
-if [ "$per_tree" = true ]; then mode=per-tree; fi
-if [ "$use_template" = true ]; then mode="$mode+template"; fi
-
-summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
-  "$modules_csv" "$core_csv" "${template_db:-}" "$template_key" "$template_reused" \
-  "$use_template" "$addons_arg" <<'PY'
-import json, sys
-
-(records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
- template_db, template_key, template_reused, use_template,
- addons_arg) = sys.argv[1:14]
-
-
-def split(value):
-    return [part for part in value.split(",") if part]
-
-
-trees, full = [], None
-with open(records, encoding="utf-8") as handle:
-    for line in handle:
-        if not line.strip():
-            continue
-        kind, target, mods, status, module, error, log = (
-            line.rstrip("\n").split("\t") + [""] * 7)[:7]
-        entry = {
-            "modules": split(mods), "db": target, "status": status,
-            "error": error or None, "module": module or None, "log": log or None,
-        }
-        if kind == "tree":
-            trees.append(entry)
-        else:
-            full = entry
-
-statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
-summary = {
-    "db": db, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
-    "odoo_build": build_id, "mode": mode,
-    "custom_modules": split(modules_csv),
-    "template": {
-        "db": template_db or None, "key": template_key,
-        "reused": template_reused == "true", "core_modules": split(core_csv),
-    } if use_template == "true" else None,
-    "trees": trees,
-    "full": full,
-    "passed": bool(statuses) and all(status == "pass" for status in statuses),
-}
-print(json.dumps(summary))
-PY
-)"
-
-if [ -n "$summary_file" ]; then
-  mkdir -p "$(dirname "$summary_file")"
-  printf '%s\n' "$summary" > "$summary_file"
+if [ "$env_failures" -gt 0 ]; then
+  write_summary env_failure
+  exit 10
+elif [ "$failures" -gt 0 ]; then
+  write_summary failed
+  exit 1
 fi
-printf '%s\n' "$summary"
-
-[ "$failures" -eq 0 ] || exit 1
+write_summary pass
