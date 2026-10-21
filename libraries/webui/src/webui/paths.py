@@ -36,6 +36,12 @@ def artifacts_root() -> Path:
     return Path.home() / ".config" / "odoo-dev" / "dispatch" / "artifacts"
 
 
+def usage_log_dir() -> Path | None:
+    """The directory of usage.db and declarations.db; None when unset."""
+    value = os.environ.get("USAGE_LOG_DIR")
+    return Path(value).expanduser() if value else None
+
+
 def orchestrator_home() -> Path:
     override = os.environ.get("ODOO_ORCHESTRATOR_HOME")
     if override:
