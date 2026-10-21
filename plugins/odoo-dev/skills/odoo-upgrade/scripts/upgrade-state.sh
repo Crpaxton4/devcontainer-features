@@ -8,7 +8,9 @@
 # Usage:
 #   upgrade-state.sh <artifacts> init --task ID --from S --to T --worktree W --branch B
 #                      --base-branch BB [--ssh H] --plan plan.json --preflight pf.json
-#                      [--max-minutes N] [--max-install-runs N]
+#                      [--max-minutes N] [--max-install-runs N] [--upgraded-dump DB_OR_PATH]
+#     --upgraded-dump is stored as inputs.upgraded_dump (null without it); it turns on
+#     the UPDATE stage (#1163).
 #   upgrade-state.sh <artifacts> next
 #   upgrade-state.sh <artifacts> mark <module> status <state>
 #   upgrade-state.sh <artifacts> mark <module> verdict|port|tests --json '<object>'
@@ -21,6 +23,9 @@
 #     restores the module and the record and exits 4.
 #   upgrade-state.sh <artifacts> gate workbook --problems N --path P
 #   upgrade-state.sh <artifacts> gate install --summary summary.json
+#   upgrade-state.sh <artifacts> gate update --summary update.json --check post-update.json
+#     Records update {runs, last {summary, green, check}}. green needs summary.passed and
+#     a check with no hits and null_rows 0 in every recompute row.
 #   upgrade-state.sh <artifacts> friction add --tool T --expected E --observed O --did D
 #                      --class tooling|porting_fact
 #                      [--series-from S --series-to T2 --symptom-grep G --fix F]
@@ -36,7 +41,8 @@
 # port.commit exists in the worktree and that the manifest version starts with the
 # target series.
 #
-# `next` prints PREFLIGHT, PORT <module>, GATE workbook, INSTALL, TEST, PR,
+# `next` prints PREFLIGHT, PORT <module>, GATE workbook, INSTALL, TEST, UPDATE (only with
+# inputs.upgraded_dump, until update.last is green), PR,
 # STOP done, STOP blocked_env, STOP killed, STOP budget or STOP failed.
 #
 # run.budget is {max_minutes, max_install_runs}, both null (no limit) unless init got
@@ -98,7 +104,7 @@ const touch = (u, m) => { u.run.updated = now(); if (m) u.modules[m].updated = u
 const mod = (u, m) => { if (!u.modules[m]) fail(`unknown module ${m}`); return u.modules[m]; };
 
 if (cmd === "init") {
-  const o = opts(args, ["task","from","to","worktree","branch","base-branch","ssh","plan","preflight","max-minutes","max-install-runs"]);
+  const o = opts(args, ["task","from","to","worktree","branch","base-branch","ssh","plan","preflight","max-minutes","max-install-runs","upgraded-dump"]);
   for (const k of ["task","from","to","worktree","branch","base-branch","plan","preflight"]) if (!o[k]) fail(`init needs --${k}`);
   for (const k of ["max-minutes","max-install-runs"]) if (o[k] !== undefined && !/^[0-9]+$/.test(o[k])) fail(`--${k} needs a whole number`);
   const budget = { max_minutes: o["max-minutes"] === undefined ? null : Number(o["max-minutes"]),
@@ -120,7 +126,7 @@ if (cmd === "init") {
   const t = now(), modules = {};
   for (const m of plan.order) modules[m] = { status: "inventoried", kind: "custom", updated: t };
   write("upgrade", {
-    inputs: { task: o.task, from: o.from, to: o.to, ssh_host: o.ssh || null, base_branch: o["base-branch"], worktree: o.worktree, branch: o.branch },
+    inputs: { task: o.task, from: o.from, to: o.to, ssh_host: o.ssh || null, base_branch: o["base-branch"], worktree: o.worktree, branch: o.branch, upgraded_dump: o["upgraded-dump"] || null },
     run: { state: "running", step: "PREFLIGHT", started: t, updated: t, budget, kill_file: `${arts}/STOP` },
     preflight: { ok: !!pf.ok, checks: pf.failures || [], env_fingerprint: pf.env_fingerprint || null, env_fingerprint_parts: pf.env_fingerprint_parts || null },
     plan: { order: plan.order },
@@ -153,6 +159,7 @@ if (cmd === "next") {
     else if (u.workbook.problems !== 0) out = "GATE workbook";
     else if (!last || !last.green) out = "INSTALL";
     else if (mods.some(([, s]) => s !== "tested")) out = "TEST";
+    else if (u.inputs.upgraded_dump && !(u.update && u.update.last && u.update.last.green)) out = "UPDATE";
     else out = "PR";
   }
   console.log(out); process.exit(0);
@@ -262,7 +269,15 @@ if (cmd === "gate") {
         if (rec.kind === "custom" && rec.status === "ported" && !skip.has(n)) { rec.status = "installed"; rec.updated = now(); }
       }
     }
-  } else fail("gate needs workbook or install");
+  } else if (which === "update") {
+    const o = opts(rest, ["summary", "check"]);
+    if (!o.summary || !o.check) fail("gate update needs --summary FILE --check FILE");
+    const s = json(o.summary), c = json(o.check);
+    const clean = Array.isArray(c.hits) && c.hits.length === 0 && (c.recompute || []).every(r => r.null_rows === 0);
+    const green = s.passed === true && clean;
+    const prev = u.update || { runs: 0, last: null };
+    u.update = { runs: (prev.runs || 0) + 1, last: { summary: s.status || null, green, check: clean } };
+  } else fail("gate needs workbook, install or update");
   touch(u); write("upgrade", u); process.exit(0);
 }
 

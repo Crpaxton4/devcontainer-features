@@ -88,7 +88,8 @@ are the lines of your prompt.
    When `next` prints `STOP budget` or `STOP killed` at any step, end the run with `status: failed` and name that reason in the one-sentence line.
    After step 7, run `upgrade-state.sh <ARTIFACTS> build`.
 8. Test: `upgrade_tests.sh --repo <repo> --task <id> --worktree <W> --series <target> --artifacts <ARTIFACTS> --session-id <job id> [--enterprise <enterprise_path>]`; it writes `tests` per module into the upgrade state; `total.run` 0 is failed.
-9. Record every friction (a tool that lied, a refused command, a path that did not match, a workaround) with `upgrade-state.sh <ARTIFACTS> friction add …`; a `porting_fact` carries the series pair, the symptom grep and the fix. The empty list is the normal result.
+9. Update, only when the prompt names an upgraded dump (`inputs.upgraded_dump`; `next` prints `UPDATE`): `update_dump.sh --db <dump db> --worktree <W> --series <target> --artifacts <ARTIFACTS> --session-id <job id> --modules <ported modules, comma list> [--enterprise <enterprise_path>] --summary <ARTIFACTS>/update/summary.json`, then `post-update-check.py --db <dump db> --worktree <W> --base <git ref of the source series> --out <ARTIFACTS>/update/post-update.json`, then `upgrade-state.sh <ARTIFACTS> gate update --summary <ARTIFACTS>/update/summary.json --check <ARTIFACTS>/update/post-update.json`. A failure is a stop: report the decisive line.
+10. Record every friction (a tool that lied, a refused command, a path that did not match, a workaround) with `upgrade-state.sh <ARTIFACTS> friction add …`; a `porting_fact` carries the series pair, the symptom grep and the fix. The empty list is the normal result.
 
 ## Outputs
 

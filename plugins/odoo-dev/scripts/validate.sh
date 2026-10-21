@@ -323,6 +323,7 @@ run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/popul
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
 run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-all.test.sh"
+run_suite "update-dump.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/update-dump.test.sh"
 run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
 run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
 run_suite "module-inventory.test.sh" "$SKILLS/odoo-upgrade/scripts/tests/module-inventory.test.sh"

@@ -67,7 +67,7 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 
 ### Phase 4 — Stored-data audit and migration scripts
 
-4.1 `[AI]` Audit every ported module's full baseline-to-port diff against 7-point stored-data checklist (see `references/migrations.md` of the `odoo-dev:odoo-upgrade` skill).
+4.1 `[AI]` Audit every ported module's full baseline-to-port diff against 7-point stored-data checklist (see `references/migrations.md` of the `odoo-dev:odoo-upgrade` skill). `post-update-check.py` generates the recompute list of that audit from the diff.
 4.2 `[AI]` Write migration scripts ONLY where module-owned stored data changes shape; core-owned data belongs to platform upgrade, never module scripts. Use official `upgrade-util` helpers (`rename_field`, `rename_model`, `rename_xmlid`, `remove_module`, …) or OCA `openupgradelib` over hand-rolled SQL where helper exists. Consult OCA OpenUpgrade per-module `upgrade_analysis` files (github.com/OCA/OpenUpgrade, `openupgrade_scripts`) — they enumerate every core model/field change between the two majors, catch renames manual diff misses.
 4.2b `[AI]` Custom records flagged `noupdate` NOT refreshed by module update: where target-version content must change, update from migration script (`update_record_from_xml()` / `convert_file(mode='init')`).
 4.3 `[AI]` Prove every script idempotent: downgrade trick (`UPDATE ir_module_module SET
