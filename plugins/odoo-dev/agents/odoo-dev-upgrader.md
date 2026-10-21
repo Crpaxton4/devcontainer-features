@@ -25,8 +25,8 @@ are the lines of your prompt.
 
 - `plan` (optional, `--raw`): the approved plan.
 - `build` (present means a resume): reuse `worktree` and `branch`.
-- `<ARTIFACTS>/inventory/enrich_<module>.json` records and the git log: a module with
-  a record and a commit is done.
+- `upgrade` (present means a resume): read it through `upgrade-state.sh <ARTIFACTS> next`
+  (the script of the `odoo-upgrade` skill). Its one line says what to do now.
 - Prompt tokens: the task id, the target series, an optional `user@host` for the
   Studio inventory.
 - Project: get_task gives the project name. `project-resolve.sh "<project>" --series <target>`
@@ -43,37 +43,51 @@ are the lines of your prompt.
    Never pin, symlink, patch, swap or re-order an Odoo or enterprise tree, and never
    edit `addons_path` or `data_dir`, to make an install pass; a traceback inside core
    or enterprise code is an environment failure, not a port defect.
+   Keep the JSON line of a green preflight in `<ARTIFACTS>/preflight.json`. Step 3 uses it.
 2. `worktree-ensure.sh` as the builder does, with the upgrade branch from the
    `--series` output of the resolved project in the place of `<default_branch>`.
 3. Inventory under `<ARTIFACTS>/inventory/`, in one call: `inventory.sh --artifacts <ARTIFACTS>
    --worktree <worktree> --series <target> [--ssh <host>]` (the script of the `odoo-upgrade`
    skill). Exit 10 is a stop; relay its failure lines verbatim.
+   Then run `port-plan.py --from <source> --to <target> --worktree <W> --artifacts <ARTIFACTS>`
+   and `upgrade-state.sh <ARTIFACTS> init --task <id> --from <source> --to <target> --worktree <W>
+   --branch <branch> --base-branch <base> [--ssh <host>] --plan <ARTIFACTS>/plan.json
+   --preflight <ARTIFACTS>/preflight.json`. On a resume it prints `STOP blocked_env`
+   when the environment changed: end there.
 4. Prior art per module → the workbook proposes `keep`, `replace` or `merge-into-standard`
    from the verdict; override only with a rationale in the record. The verdict and
    `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
-5. Per module in the order of `plan.json` from `port-plan.py --from <source> --to <target> --worktree <W> --artifacts <ARTIFACTS>`: run
+   End with `upgrade-state.sh <ARTIFACTS> mark <module> verdict --json <verdict>`.
+5. Loop on `upgrade-state.sh <ARTIFACTS> next` while it prints `PORT <module>`. Per that module: run
    `port-module.sh <module> --to <target> --worktree <W>` first and review its diff (exit 2 means the migrator is missing: report it); then `references/porting-checklist.md` with
    `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); bump the manifest with
-   `bump_manifest_version.py --series <target>` and commit.
+   `bump_manifest_version.py --series <target>` and commit. Then run
+   `upgrade-state.sh <ARTIFACTS> mark <module> port --json '{"commit":"<sha>","manifest":"<version>"}'`
+   and `upgrade-state.sh <ARTIFACTS> mark <module> status ported`. To drop a module, run
+   `upgrade-state.sh <ARTIFACTS> drop <module> --reason "<why>"`.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
+   Then run `upgrade-state.sh <ARTIFACTS> gate workbook --problems <N> --path <xlsx>`.
 7. `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
    green. Repeat it with `--previous <last summary>`; stop when stderr says progress: false (same module, same line twice) and report both. Derive `<name>` with `session-db.sh name <repo> <id> --session-id <job id>`, with the `session-db.sh` of the `odoo-session-db` skill, so that no other session can name the same database. Never pass a name you made up. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
+   After each run, run `upgrade-state.sh <ARTIFACTS> gate install --summary <file>`.
+   After step 7, run `upgrade-state.sh <ARTIFACTS> build`.
 8. Append each gotcha the skill did not cover to `<state dir>/upgrade-lessons/`.
 
 ## Outputs
 
-`<ARTIFACT> set <ARTIFACTS> build <file>` with `worktree`, `branch`, `modules` (the
-ported modules), `odoo_version` (the target) and `default_branch`, which holds the base branch the port used (the
+`upgrade-state.sh <ARTIFACTS> build` writes the `build` section from the `upgrade` section:
+`worktree`, `branch`, `modules` (the ported modules), `odoo_version` (the target) and `default_branch`,
+which holds the base branch the port used (the
 upgrade branch when the project has one), plus the
 `<ARTIFACTS>/inventory/` directory. Never run the test suite as evidence.
 
 ## Stop conditions
 
-- parked: any preflight failure (all of them listed in line 3); an ambiguous project;
-  a module that needs a business decision (line 3 carries the question).
-- failed: the workbook prints `problems` above 0 after the records are corrected; the install
+- A module that needs a business decision: record the question in `assumptions[]`
+  with the chosen default, and continue.
+- failed: any preflight failure (all of them listed in line 3); an ambiguous project; the workbook prints `problems` above 0 after the records are corrected; the install
   loop reports progress: false.
 - A broken environment is a stop, never a workaround. Report what is broken and end.
 
@@ -82,10 +96,10 @@ upgrade branch when the project has one), plus the
 End with exactly this, nothing before it and nothing after the table:
 
 ```
-status: done | parked | failed
+status: done | failed
 artifact: <absolute path of task.json> build, or none
 <one sentence, 25 words or fewer: what happened, or the item or cause; name the base branch used>
-next: /odoo-dev:test <id> on done; /odoo-dev:upgrade <id> <series> [<host>] on parked or failed
+next: /odoo-dev:test <id> on done; /odoo-dev:upgrade <id> <series> [<host>] on failed
 
 | module | result |      (rows 1-3: counts ported / skipped / outstanding; then up to 5 outstanding items)
 ```
