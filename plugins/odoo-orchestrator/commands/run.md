@@ -200,16 +200,16 @@ there is nothing to read and end. For each batch id, in order:
 - If the batch has no jobs, it is not known to the dispatcher. Tell the user.
   Do not mark it processed.
 - Otherwise every job is `DONE` or `DEAD_LETTER`. Process the batch with the
-  actions below. Write the `report` JSON to a scratch file with Write, and give
-  that file to `friction` and `records` as an argument. Then run
-  `orchestrator.sh batch-done <batch_id>`.
+  actions below, then run `orchestrator.sh batch-done <batch_id>`.
 
-Actions for a finished batch:
+Actions for a finished batch. Give the `dispatch.sh report <batch_id>` JSON to
+`friction` and `records` on standard input, as in step 1. `report` only reads, so
+run it again for each helper.
 
-1. `orchestrator.sh friction <report file>` appends friction entries not yet
+1. `orchestrator.sh friction` appends friction entries not yet
    written to the dated friction file and prints how many. It is safe to run
    twice. Tell the user the count. An empty report is the normal result.
-2. `orchestrator.sh records <report file>` prints the table. Show it. These are the
+2. `orchestrator.sh records` prints the table. Show it. These are the
    batch's records for import. Write nothing to a timesheet. A job with no
    `bundle` has blank figures.
 3. For each job in state `DEAD_LETTER`, show `dead_reason` and `detail`, and
