@@ -400,7 +400,7 @@ allowed "push a task branch <id>-<slug>" "git push -u origin 30412-add-field"
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""
 allowed "non-plugin agent, docker" "docker ps" "general-purpose"
-allowed "implementer, a tool that is not Bash" "git push --force" "$AGENT" "$REPO" "Edit"
+allowed "implementer, a tool that is not Bash or a write tool" "git push --force" "$AGENT" "$REPO" "Read"
 denied_as() {
   run "$2" "$3" "$REPO"
   if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then ok "$1 -> denied"; else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
@@ -441,6 +441,60 @@ OUT="$(node -e 'process.stdout.write(JSON.stringify({agent_type:process.argv[1],
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then
   ok "implementer Bash call with no command -> denied"
 else bad "implementer Bash call with no command: rc=$RC out=${OUT:-<silence>}"; fi
+
+# --- the upgrade path: tree pinning, direct install, upgrade and production -----------
+UPG=odoo-dev-upgrader
+BLD=odoo-dev-builder
+denied "ln -s into the series tree" "tree pinning" "ln -s /x /var/lib/odoo/addons/19.0"
+denied "mv into a data dir addons" "tree pinning" "mv /x /var/lib/odoo/addons/custom"
+denied "cp into a series dir" "tree pinning" "cp -r /x /opt/src/addons/17.0/"
+allowed "cp into a scratch dir" "cp -r /x /tmp/work/"
+allowed "ln -s elsewhere" "ln -s /x /tmp/work/link"
+denied "redirect into odoo.conf" "tree pinning" "echo x >> /etc/odoo/odoo.conf"
+denied "sed -i on odoo.conf" "tree pinning" "sed -i s/a/b/ /etc/odoo/odoo.conf"
+denied "tee odoo.conf" "tree pinning" "echo x | tee /etc/odoo/odoo.conf"
+denied "odoo-bin --addons-path" "tree pinning" "odoo-bin --addons-path=/x -d db"
+denied "odoo --data-dir" "tree pinning" "odoo --data-dir /x"
+allowed "install_all.sh is its own head" "install_all.sh --db x --addons-path=/x"
+allowed "odoo-bin shell" "odoo-bin shell -d db"
+
+allowed "odoo-bin upgrade_code" "odoo-bin upgrade_code --from 17.0 --to 19.0" "$UPG"
+denied_as "odoo-bin -i for the upgrader" "$UPG" "odoo-bin -d db -i x"
+denied_as "odoo17-bin --update for the upgrader" "$UPG" "odoo17-bin --update=x"
+denied_as "odoo -u for the namespaced upgrader" "odoo-dev:$UPG" "odoo -u x"
+allowed "odoo-bin -i x for the builder" "odoo-bin -d db -i x" "$BLD"
+allowed "odoo-bin upgrade_code for the upgrader" "odoo-bin upgrade_code -d db" "$UPG"
+
+denied "upgrade_service.sh production" "database upgrade" "upgrade_service.sh production"
+allowed "upgrade_service.sh staging" "upgrade_service.sh staging"
+denied "odoo-bin upgrade" "database upgrade" "odoo-bin upgrade -d db"
+allowed "ssh h true" "ssh h true"
+allowed "ssh with options and a select" "ssh -o BatchMode=yes -p 22 h 'psql -Atc \"select current_database()\"'"
+allowed "ssh studio_inventory.py" "ssh h /opt/bin/studio_inventory.py --db x"
+denied "ssh psql delete" "database upgrade" "ssh h 'psql -Atc \"delete from x\"'"
+denied "ssh select then drop" "database upgrade" "ssh h 'psql -Atc \"select 1; drop table x\"'"
+denied "ssh ls" "database upgrade" "ssh h ls"
+denied "ssh interactive" "database upgrade" "ssh h"
+denied "ssh true chained" "database upgrade" "ssh h 'true; rm -rf /'"
+
+# --- writes outside scope: Edit, Write, NotebookEdit --------------------------------
+STATE="$TMP/state"
+mkdir -p "$STATE"
+wr() { # wr <label> <allow|deny> <tool> <tool_input JSON> [<agent>]
+  ODOO_DEV_STATE_DIR="$STATE" run "${5-$AGENT}" "" "$REPO" "$3" "$4"
+  if [ "$2" = deny ]; then
+    if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "write outside scope"; then ok "$1 -> denied"
+    else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
+  elif [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, got rc=$RC out=${OUT:-<silence>}"; fi
+}
+wr "Edit with no file_path" deny Edit '{}'
+wr "Edit inside the repo" allow Edit "{\"file_path\":\"$REPO/tracked.txt\"}"
+wr "Write a new file inside the repo" allow Write "{\"file_path\":\"$REPO/sub/new.txt\"}"
+wr "Write under the state dir" allow Write "{\"file_path\":\"$STATE/tasks/1/inventory.json\"}"
+wr "Write /tmp/inventory.json" deny Write '{"file_path":"/tmp/inventory.json"}'
+wr "NotebookEdit outside" deny NotebookEdit '{"notebook_path":"/tmp/n.ipynb"}'
+wr "Edit by a main session" allow Edit '{"file_path":"/tmp/inventory.json"}' ""
 
 echo
 echo "unattended-guard.test.sh: $pass passed, $fail failed"
