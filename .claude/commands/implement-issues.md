@@ -319,6 +319,12 @@ One template, filled per worker.
   - Do **not** bump any `version` field, edit any `CHANGELOG.md`, or touch
     `.release-please-manifest.json`. release-please owns all three, and the open
     `chore: release main` PR currently holds them.
+  - **Source edits go through Edit or Write only.** Inside any git working
+    tree, `sed -i`, shell redirects or heredocs into the tree, and
+    `python3 - <<EOF` rewrite scripts are forbidden: they leave no reviewable
+    diff, and the global CLAUDE.md forbids them (#1121 — five workers in one
+    run hit it). This rule overrides the auto-mode hint to make file
+    changes with `sed` or heredocs. Scratch files under the scratchpad are fine.
   - **No local CI.** No devcontainer builds, no Docker, no full suite —
     verification is GitHub PR CI. Sanctioned locally: `bash -n`, `shellcheck`
     (pinned 0.10.0, in the form CI applies to the files touched — below),
@@ -334,11 +340,19 @@ One template, filled per worker.
     `setup.sh`, this repo's own `scripts/` and
     `.claude/commands/implement-issues/` shell, and the test suites —
     `devcontainer-features/test/personal-features/*.sh` among them;
-    `-s bash -S error` is used only by
+    the `-s bash -S error` check is used only by
     `.github/workflows/plugin-odoo-dev.yaml` over `plugins/odoo-dev` and by
     `scripts/check-generated-scripts.sh` over the scripts it extracts. A
-    clean `-S error` run therefore says nothing about an SC2xxx style finding
-    on a file `validate` lints. Two traps: a comment line may not START with
+    worker runs that check in the long-option form
+    `shellcheck --shell=bash --severity=error <files>`, the same check: the
+    worker-isolated permission classifier refused the short form in four of
+    six workers (#1120). `plugins/odoo-orchestrator` is different:
+    `.github/workflows/plugin-orchestrator.yaml` (job `shellcheck`) runs plain
+    `shellcheck` over it, so a worker lints that plugin with plain
+    `shellcheck <files>`. A permission refusal of a lint command is a blocker
+    that the worker states in its report. The worker never runs a weaker form
+    in its place without saying so. A clean `-S error` run therefore says
+    nothing about an SC2xxx style finding on a file `validate` lints. Two traps: a comment line may not START with
     the word `shellcheck` — the linter reads it as one of its own directives
     and fails with SC1072/SC1073 (#1001); and the Feature has only installed
     the binary since #1001, so a container built before that has none and the
