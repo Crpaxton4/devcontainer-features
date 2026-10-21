@@ -36,8 +36,8 @@ Method, in order:
 
 Verdict format, one line per capability:
 
-- `native: no` — target standard have nothing equivalent.
-- `native: yes/partial: <how/where in target>` — name target module, feature, or setting. Examples: `yes/partial: mail composer has cc/bcc fields`, `yes/partial: stock.picking has date_done`, `yes/partial: account 'send & print' wizard`.
+- `native: yes | yes/partial | partial | no` — exactly one of these four values, nothing else in the cell. `no` — target standard have nothing equivalent.
+- `native notes: <how/where in target>` — for any value but `no`, name target module, feature, or setting. Examples: `mail composer has cc/bcc fields`, `stock.picking has date_done`, `account 'send & print' wizard`. The explanation never goes in the `native` cell.
 
 Evidence: at least one path in target tree, or exact grep terms tried when answer `no`. "I looked" not evidence.
 
@@ -88,7 +88,8 @@ One block per capability, nothing that not traceable to path or row:
 
 ```
 Capability: <one line, user's words>
-  native: no | yes/partial: <where in target>
+  native: yes | yes/partial | partial | no
+    native notes: <where in target, when not no>
     evidence: <path(s) grepped, or the terms tried>
   oca: none | <repo>/<module> (full|partial)
     evidence: <catalog rows, READMEs fetched, or keywords tried>

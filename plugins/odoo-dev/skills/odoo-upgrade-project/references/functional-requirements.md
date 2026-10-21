@@ -1,6 +1,6 @@
 # Functional Requirements from Customizations
 
-The FR and tickets workbook build is removed from `build_workbook.py` by #1144; these documents describe the human process only.
+The FR and tickets workbook build was removed from `build_workbook.py` by #1144; the workbook has no FR or Tickets sheet. This document describes the human process only.
 
 Phase 3 of the inventory workbook. Inventory answer "what modules exist"; requirements answer **"what did the business actually ask for"** — one row per discrete behaviour, traced to source modules, each marked whether target standard or an OCA target module already satisfy it, with a blank Decision column the client fill in.
 

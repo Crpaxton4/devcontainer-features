@@ -56,7 +56,8 @@ with `module_inventory.py`, or drop `--csv`. This is not PARTIAL SCAN: no scan r
 
 ```
 Capability: <one line, in the user's words>
-  native: no | yes/partial: <where in target>
+  native: yes | yes/partial | partial | no
+    native notes: <where in target, when not no>
     evidence: <path(s) grepped, or the terms tried>
   oca: none | <repo>/<module> (full|partial)
     evidence: <catalog rows, READMEs fetched, or keywords tried>

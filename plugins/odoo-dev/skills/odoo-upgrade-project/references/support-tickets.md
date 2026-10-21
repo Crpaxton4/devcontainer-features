@@ -1,6 +1,6 @@
 # Odoo Support Tickets (Upgrade)
 
-The FR and tickets workbook build is removed from `build_workbook.py` by #1144; these documents describe the human process only.
+The FR and tickets workbook build was removed from `build_workbook.py` by #1144; the workbook has no FR or Tickets sheet. This document describes the human process only.
 
 When upgrade platform fail — not your code — ticket is project artifact, not side errand. Pending platform issue = go-live blocker (sop.md 6.6, 7.2). Needs id, state, place to look up.
 
