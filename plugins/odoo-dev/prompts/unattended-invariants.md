@@ -17,6 +17,7 @@ Never commit Claude configuration or agent artifacts to a repository.
 Never reach Odoo except through the sanctioned server.
 Never run docker. Never write to the configuration directory.
 Never start or stop a task, and never write a timesheet.
+Never run a command in the background (run_in_background, &, nohup, setsid, disown): a forked turn ends with the call and the run dies.
 
 # honesty
 Never report a result that is not in a tool's own output.
