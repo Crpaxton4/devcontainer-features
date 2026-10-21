@@ -286,7 +286,8 @@ env_denied "main session of the run" 1 "" "git push -f origin feat/x"
 env_denied "any non-empty value engages, including 0" 0 "odoo-dev-pr" "git push -f origin feat/x"
 env_allowed "pr fork, an ordinary push" 1 "odoo-dev-pr" "git push -u origin feat/x"
 env_allowed "pr fork, gh pr view" 1 "odoo-dev-pr" "gh pr view 12"
-env_allowed "variable empty: pr fork, force push passes" "" "odoo-dev-pr" "git push --force origin feat/x"
+env_denied "variable empty: pr fork, the agent prefix still engages" "" "odoo-dev-pr" "git push --force origin feat/x"
+env_allowed "variable empty: non-plugin agent, force push passes" "" "general-purpose" "git push --force origin feat/x"
 env_allowed "variable empty: interactive docker passes" "" "" "docker ps"
 OUT="$(printf 'not json' | env ODOO_UNATTENDED=1 bash "$GUARD" 2>/dev/null)"; RC=$?
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then
@@ -397,14 +398,17 @@ allowed "push a task branch <id>-<slug>" "git push -u origin 30412-add-field"
 
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""
-allowed "tester agent, docker" "docker ps" "odoo-dev-tester"
-allowed "builder agent, redirect into the tree" "echo hi > tracked.txt" "odoo-dev-builder"
+allowed "non-plugin agent, docker" "docker ps" "general-purpose"
 allowed "implementer, a tool that is not Bash" "git push --force" "$AGENT" "$REPO" "Edit"
-denied_ns() {
-  run "odoo-dev:$AGENT" "$2" "$REPO"
+denied_as() {
+  run "$2" "$3" "$REPO"
   if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then ok "$1 -> denied"; else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
 }
-denied_ns "namespaced agent type" "git push --force origin feat/x"
+denied_as "tester agent, docker" "odoo-dev-tester" "docker ps"
+denied_as "builder agent, redirect into the tree" "odoo-dev-builder" "echo hi > tracked.txt"
+denied_as "future agent odoo-dev-upgrade-implementer, force push" "odoo-dev-upgrade-implementer" "git push --force origin feat/x"
+denied_as "namespaced agent type" "odoo-dev:$AGENT" "git push --force origin feat/x"
+denied_as "namespaced future agent odoo-dev:odoo-dev-upgrader" "odoo-dev:odoo-dev-upgrader" "git push --force origin feat/x"
 
 # --- fail closed, but only inside the scope ----------------------------------------
 OUT="$(printf 'not json at all %s' "$AGENT" | bash "$GUARD" 2>/dev/null)"; RC=$?

@@ -16,8 +16,9 @@
 #      -pr rather than the implementer. It changes nothing for an interactive
 #      session, because nothing sets it there. "0" and "false" are non-empty and
 #      still engage the guard: set means on, unset means off.
-#   2. The payload agent_type is odoo-dev-implementer, so an implementer session is
-#      guarded even when the variable is missing.
+#   2. The payload agent_type starts with odoo-dev- (or is namespaced, as in
+#      odoo-dev:odoo-dev-upgrader), so any odoo-dev-* agent, including one added
+#      later, is guarded even when the variable is missing.
 # Every other call passes through with no output at all.
 #
 # WHAT IT DENIES
@@ -58,10 +59,10 @@ payload="$(cat)"
 if out="$(printf '%s' "$payload" | node -e '
 const fs = require("fs"), path = require("path");
 const { execFileSync } = require("child_process");
-const AGENT = "odoo-dev-implementer";
+const AGENT_PREFIX = "odoo-dev-";
 const RUN = (process.env.ODOO_UNATTENDED || "") !== "";
-const ADVICE = " This guard binds unattended runs (ODOO_UNATTENDED set, or the " +
-  "odoo-dev-implementer agent): they never force-push, never delete a remote branch, " +
+const ADVICE = " This guard binds unattended runs (ODOO_UNATTENDED set, or any " +
+  "odoo-dev-* agent): they never force-push, never delete a remote branch, " +
   "never open, ready, review or merge a pull request by hand, never push to a " +
   "protected branch, never edit a working tree through a shell, and never run docker.";
 
@@ -587,11 +588,11 @@ process.stdin.on("end", () => {
   let p = null;
   try { p = JSON.parse(raw); } catch { p = null; }
   if (!p || typeof p !== "object" || Array.isArray(p)) {
-    if (RUN || raw.includes(AGENT)) deny("The unattended guard could not parse this hook payload, so it denied rather than guessing.");
+    if (RUN || raw.includes(AGENT_PREFIX)) deny("The unattended guard could not parse this hook payload, so it denied rather than guessing.");
     allow();
   }
   const type = typeof p.agent_type === "string" ? p.agent_type : "";
-  if (!(RUN || type === AGENT || type.endsWith(":" + AGENT))) allow();
+  if (!(RUN || type.startsWith(AGENT_PREFIX) || type.includes(":" + AGENT_PREFIX))) allow();
   if (p.tool_name !== "Bash") allow();
   try {
     const cmd = p.tool_input && typeof p.tool_input.command === "string" ? p.tool_input.command : null;
@@ -616,8 +617,8 @@ if [ -n "${ODOO_UNATTENDED:-}" ]; then
   exit 2
 fi
 case "$payload" in
-  *odoo-dev-implementer*)
-    echo "unattended-guard.sh: node is unavailable, so the odoo-dev-implementer guard cannot run. Denying rather than allowing an unchecked shell." >&2
+  *odoo-dev-*)
+    echo "unattended-guard.sh: node is unavailable, so the odoo-dev-* agent guard cannot run. Denying rather than allowing an unchecked shell." >&2
     exit 2
     ;;
 esac
