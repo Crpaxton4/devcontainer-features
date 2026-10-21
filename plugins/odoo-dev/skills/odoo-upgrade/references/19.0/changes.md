@@ -1,7 +1,7 @@
 # Breaking changes arriving in Odoo 19.0
 Verified against sources 2026-07.
 
-Port direction: 18.0 -> 19.0. Automated tool exists: run Odoo 19 `odoo-bin upgrade_code --from 18.0 --to 19.0` first (see ../upgrade-code-tool.md and ./upgrade-code-scripts.md), then work list manually.
+Port direction: 18.0 -> 19.0. Automated tool exists: run Odoo 19 `odoo-bin upgrade_code --from 18.0 --to 19.0` first (see ../upgrade-code-tool.md and ../upgrade-code-scripts.md), then work list manually.
 
 ## TL;DR
 | Change | Old (18.0) | New (19.0) |

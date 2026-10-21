@@ -1,7 +1,7 @@
 # Breaking changes arriving in Odoo 18.0
 Verified against sources 2026-07.
 
-Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgrade_code --from 17.0 --to 18.0` first (see ../upgrade-code-tool.md and ./upgrade-code-scripts.md), then work list manually.
+Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgrade_code --from 17.0 --to 18.0` first (see ../upgrade-code-tool.md and ../upgrade-code-scripts.md), then work list manually.
 
 ## TL;DR
 | Change | Old (17.0) | New (18.0) |
@@ -43,7 +43,7 @@ Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgra
 - `_flush_search()` deprecated (odoo/odoo#144747); flushing derived from SQL metadata in `execute_query()`.
 
 ## Views / XML
-- `<tree>` -> `<list>` everywhere. Covers: arch root tag `<tree>`/`</tree>` (attributes like `editable="bottom"` unchanged), xpath `expr="//tree"` / `expr="//tree/field[...]"`, `view_mode`/`binding_view_types` field values, `mode="tree"` on inherited views, context key `tree_view_ref` -> `list_view_ref`, `"views"` maps in Python/JS. Core script `17.5-01-tree-to-list.py` does most mechanically (see ./upgrade-code-scripts.md). Do **not** rename XML record ids containing `tree` — dependent modules may reference them.
+- `<tree>` -> `<list>` everywhere. Covers: arch root tag `<tree>`/`</tree>` (attributes like `editable="bottom"` unchanged), xpath `expr="//tree"` / `expr="//tree/field[...]"`, `view_mode`/`binding_view_types` field values, `mode="tree"` on inherited views, context key `tree_view_ref` -> `list_view_ref`, `"views"` maps in Python/JS. Core script `17.5-01-tree-to-list.py` does most mechanically (see ../upgrade-code-scripts.md). Do **not** rename XML record ids containing `tree` — dependent modules may reference them.
 - Chatter: replace whole block
   `<div class="oe_chatter"><field name="message_follower_ids"/><field name="activity_ids"/><field name="message_ids"/></div>`
   with single `<chatter/>` tag (optional attrs exist, e.g. `<chatter reload_on_post="True"/>` as in core views).

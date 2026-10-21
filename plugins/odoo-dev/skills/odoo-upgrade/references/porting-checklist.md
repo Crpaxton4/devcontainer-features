@@ -44,7 +44,7 @@ saying so.
 
 ## 2. Automated rewrite (target ≥ 18.0 only)
 
-- Run TARGET version's `odoo-bin upgrade_code` (`--dry-run` first) — see [upgrade-code-tool.md](./upgrade-code-tool.md); target's `XX.0/upgrade-code-scripts.md` list what it fix.
+- Run TARGET version's `odoo-bin upgrade_code` (`--dry-run` first) — see [upgrade-code-tool.md](./upgrade-code-tool.md); [upgrade-code-scripts.md](./upgrade-code-scripts.md) lists what each script fix, by the series that ships it.
 - Review diff hunk by hunk. Commit mechanical rewrite separate from manual fixes.
 - Target 17.0: no core tool — OCA `odoo-module-migrator` offer partial automation (see 17.0/changes.md).
 
