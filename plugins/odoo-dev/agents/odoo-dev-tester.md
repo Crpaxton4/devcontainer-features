@@ -38,7 +38,7 @@ are the lines of your prompt.
    read-only git. Every path absolute. No `;`, `|`, `&`, `$(` or backticks. Redirects
    only to `/dev/null`.
 1. `browser-ensure.sh` when a module declares tours.
-2. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
+2. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
    <session id> --repo-path <worktree> --target-series <odoo_version> --put <ARTIFACTS>
    [--with-tours]`, with the `session-db.sh` of the `odoo-session-db` skill. It runs
    `run-tests.sh` on a database that no other session can name, so two sessions on one

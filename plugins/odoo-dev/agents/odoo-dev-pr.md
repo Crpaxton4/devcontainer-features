@@ -31,6 +31,8 @@ Release route: nothing is read. The inputs are the two branch names and the chec
 | an Odoo task id | task | follow the preloaded `odoo-dev:odoo-pr` skill end to end |
 | `release` | release | load the Skill `odoo-dev:odoo-release`, then follow it end to end |
 
+Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
+
 The routed skill owns the CodeRabbit dispatch, the body template, the base-branch rule,
 the title convention and the writebacks.
 

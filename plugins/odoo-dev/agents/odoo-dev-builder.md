@@ -43,7 +43,7 @@ are the lines of your prompt. Every section is optional.
 4. Work `## Plan` step by step: implement the step, run its verify check, go to the
    next. Tests ship with the code. No `## Plan`: one step per `## Acceptance criteria`
    entry. No plan at all: steps from the task description, recorded as `claims`.
-5. Self-test per module until green, 3 runs at most: `session-db.sh run <repo> <id>
+5. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it. Self-test per module until green, 3 runs at most: `session-db.sh run <repo> <id>
    <module> --session-id <session id> --repo-path <worktree> --target-series
    <odoo_version>`, never with `--put`. `session-db.sh` is the script of the
    `odoo-session-db` skill. It runs `run-tests.sh` on a database that no other session

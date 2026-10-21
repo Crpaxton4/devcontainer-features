@@ -37,6 +37,9 @@
 #     not it is in a git tree: CLAUDE_CONFIG_DIR when set, and ~/.claude always. An
 #     Edit or Write deny rule does not constrain Bash, so this is the route it closes.
 #   - docker, docker-compose, podman, nerdctl, ctr and buildah in any form.
+#   - a background run: run_in_background on a Bash call, a command ended by a single
+#     &, a nohup or setsid wrapper, and a disown head. A forked turn ends with the
+#     call, so a detached run dies. &&, |&, &> and >&2 are not background.
 #
 # HOW FAR IT SEES. The command is tokenised with quotes and redirect operators, split
 # into simple commands, and looked at through shell keywords, wrappers (env, sudo,
@@ -272,7 +275,7 @@ const parse = (s) => {
     if (c === "\\" && i + 1 < s.length) { cur += s[i + 1]; has = true; i += 1; continue; }
     if (/\s/.test(c) && c !== "\n") { endTok(); continue; }
     if (c === "\n" || c === ";" || c === "(" || c === ")") { endSeg(false); continue; }
-    if (c === "|") { endSeg(true); if (s[i + 1] === "|") { i += 1; from = null; } continue; }
+    if (c === "|") { endSeg(true); if (s[i + 1] === "|") { i += 1; from = null; } else if (s[i + 1] === "&") i += 1; continue; }
     if (c === ">") {
       // A bare number before the operator is a descriptor (2>f), not an argument.
       if (has && !q && /^\d+$/.test(cur)) { cur = ""; has = false; } else endTok();
@@ -293,7 +296,9 @@ const parse = (s) => {
     }
     if (c === "&") {
       if (s[i + 1] === ">") { cur = ""; has = false; continue; }   // &>file: the > follows
-      endSeg(false); if (s[i + 1] === "&") i += 1; continue;
+      if (s[i + 1] === "&") { endSeg(false); i += 1; continue; }
+      endTok(); if (toks.length) toks.bg = true;     // a single &: the segment is detached
+      endSeg(false); continue;
     }
     cur += c; has = true;
   }
@@ -456,10 +461,12 @@ const checkRedirects = (toks, cwd) => {
 // Drop control keywords, assignments and wrapper options so the real command is the head.
 const unwrap = (words) => {
   let w = words.slice();
+  let detached = false;                  // set when nohup or setsid is stripped
   for (let guard = 0; guard < 20 && w.length; guard += 1) {
     if (KEYWORDS.has(w[0]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) { w = w.slice(1); continue; }
     const spec = WRAP[base(w[0])];
     if (!spec) break;
+    if (base(w[0]) === "nohup" || base(w[0]) === "setsid") detached = true;
     let i = 1, skip = spec.pos;
     while (i < w.length) {
       const a = w[i];
@@ -470,16 +477,21 @@ const unwrap = (words) => {
     }
     w = w.slice(i);
   }
+  w.detached = detached;
   return w;
 };
 
+const BG_MSG = "Refused: background runs die with the forked turn; run it in the foreground with a timeout.";
+
 const checkSimple = (toks, st, depth) => {
   checkRedirects(toks, st.cwd);
+  if (toks.bg) deny(BG_MSG);
   const here = toks.findIndex((x) => x.here);
   const hereText = here >= 0 && toks[here + 1] ? toks[here + 1].t : null;
   const words = toks.filter((x, i) => x.t !== undefined && !(i > 0 && toks[i - 1].redir) &&
                                       !(i > 0 && toks[i - 1].here) && !x.here).map((x) => x.t);
   const w = unwrap(words);
+  if (w.detached || (w.length && base(w[0]) === "disown")) deny(BG_MSG);
   if (!w.length) return;
   const head = base(w[0]);
   const args = w.slice(1);
@@ -594,6 +606,7 @@ process.stdin.on("end", () => {
   const type = typeof p.agent_type === "string" ? p.agent_type : "";
   if (!(RUN || type.startsWith(AGENT_PREFIX) || type.includes(":" + AGENT_PREFIX))) allow();
   if (p.tool_name !== "Bash") allow();
+  if (p.tool_input && p.tool_input.run_in_background) deny(BG_MSG);
   try {
     const cmd = p.tool_input && typeof p.tool_input.command === "string" ? p.tool_input.command : null;
     if (cmd === null) deny("This Bash call carried no tool_input.command, so the unattended guard cannot tell what would run.");

@@ -50,7 +50,7 @@ are the lines of your prompt.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
 7. `install_all.sh --db <throwaway> --per-tree --template --summary <file>` until
-   green, 3 runs at most.
+   green, 3 runs at most. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
 8. Append each gotcha the skill did not cover to `<state dir>/upgrade-lessons/`.
 
 ## Outputs

@@ -37,18 +37,19 @@ printf 'ignored.log\n' > "$REPO/.gitignore"
 gitq add -A
 gitq commit -q -m init
 
-# payload <agent_type> <command> <cwd> [<tool_name>]
+# payload <agent_type> <command> <cwd> [<tool_name>] [<extra tool_input JSON>]
 payload() {
   node -e '
-const [type, cmd, cwd, tool] = process.argv.slice(1);
+const [type, cmd, cwd, tool, extra] = process.argv.slice(1);
 const p = {
   session_id: "test-session", cwd, permission_mode: "default",
   hook_event_name: "PreToolUse", tool_name: tool || "Bash",
-  tool_input: { command: cmd }, tool_use_id: "toolu_test",
+  tool_input: Object.assign({ command: cmd }, extra ? JSON.parse(extra) : {}),
+  tool_use_id: "toolu_test",
 };
 if (type) { p.agent_id = "agent-under-test"; p.agent_type = type; }
 process.stdout.write(JSON.stringify(p));
-' "$1" "$2" "${3:-$REPO}" "${4:-}"
+' "$1" "$2" "${3:-$REPO}" "${4:-}" "${5:-}"
 }
 
 OUT=""; RC=0
@@ -206,7 +207,7 @@ denied "timeout git push --force" "force push" "timeout 5 git push --force origi
 denied "timeout -s KILL" "force push" "timeout -s KILL 5 git push -f origin feat/x"
 denied "nice git push --force" "force push" "nice -n 5 git push --force origin feat/x"
 denied "stdbuf -o0" "force push" "stdbuf -o0 git push --force origin feat/x"
-denied "setsid git push --force" "force push" "setsid git push --force origin feat/x"
+denied "ionice git push --force" "force push" "ionice -c3 git push --force origin feat/x"
 denied "xargs git push --force" "force push" "echo x | xargs git push --force origin feat/x"
 denied "find -exec git push --force" "force push" "find . -name x -exec git push --force origin feat/x \\;"
 denied "sudo -u x docker" "docker" "sudo -u x docker ps"
@@ -409,6 +410,22 @@ denied_as "builder agent, redirect into the tree" "odoo-dev-builder" "echo hi > 
 denied_as "future agent odoo-dev-upgrade-implementer, force push" "odoo-dev-upgrade-implementer" "git push --force origin feat/x"
 denied_as "namespaced agent type" "odoo-dev:$AGENT" "git push --force origin feat/x"
 denied_as "namespaced future agent odoo-dev:odoo-dev-upgrader" "odoo-dev:odoo-dev-upgrader" "git push --force origin feat/x"
+
+# --- background runs: a forked turn ends with the call ------------------------------
+allowed "foreground run with a timeout" "timeout 600 install_all.sh --db x"
+denied "trailing &" "background runs die" "install_all.sh --db x &"
+denied "& between two commands" "background runs die" "install_all.sh --db x & echo started"
+denied "nohup wrapper" "background runs die" "nohup install_all.sh --db x"
+denied "setsid wrapper" "background runs die" "setsid install_all.sh --db x"
+denied "timeout then nohup" "background runs die" "timeout 600 nohup install_all.sh --db x"
+denied "disown head" "background runs die" "disown"
+run "$AGENT" "echo hi" "$REPO" "Bash" '{"run_in_background":true}'
+if printf '%s' "$OUT" | grep -qF 'background runs die'; then ok "run_in_background true -> denied"; else bad "run_in_background true: expected a deny, got: ${OUT:-<silence>}"; fi
+allowed "run_in_background false" "echo hi" "$AGENT" "$REPO" "Bash"
+allowed "&& is not background" "true && echo hi"
+allowed "pipe is not background" "echo hi | cat"
+allowed "|& is not background" "echo hi |& cat"
+allowed "&> to a file outside any tree" "echo hi &>/tmp/unattended-guard-bg.log"
 
 # --- fail closed, but only inside the scope ----------------------------------------
 OUT="$(printf 'not json at all %s' "$AGENT" | bash "$GUARD" 2>/dev/null)"; RC=$?
