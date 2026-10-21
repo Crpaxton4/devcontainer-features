@@ -482,6 +482,26 @@ expect "browser-ensure refuses when every candidate is unusable" "$rc" "6"
 case "$(cat "$berr")" in *"no usable headless browser found"*) pass=$((pass+1)) ;;
   *) fail=$((fail+1)); echo "FAIL refusal should name the browser search: $(cat "$berr")" >&2 ;; esac
 
+# A candidate that exists but cannot start must say why: its --version stderr
+# line reaches both the exit-6 message and the --check output.
+brokenbrowser="$work/brokenbrowser"; mkdir -p "$brokenbrowser"
+for candidate in google-chrome chromium chromium-browser google-chrome-stable; do
+  printf '#!/usr/bin/env bash\necho "error while loading shared libraries: libnss3.so" >&2\nexit 127\n' > "$brokenbrowser/$candidate"
+done
+chmod +x "$brokenbrowser"/*
+rc=0
+PATH="$brokenbrowser:$bin:$PATH" ODOO_BROWSER_BIN="" \
+  PLAYWRIGHT_BROWSERS_PATH="$work/no-browsers" \
+  bash "$(dirname "$SUT")/browser-ensure.sh" >/dev/null 2>"$berr" || rc=$?
+expect "browser-ensure exits 6 for a candidate that cannot start" "$rc" "6"
+case "$(cat "$berr")" in *"libnss3.so"*"install-deps"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL exit-6 message should carry the stderr line and the repair: $(cat "$berr")" >&2 ;; esac
+bcheck="$(PATH="$brokenbrowser:$bin:$PATH" ODOO_BROWSER_BIN="" \
+  PLAYWRIGHT_BROWSERS_PATH="$work/no-browsers" \
+  bash "$(dirname "$SUT")/browser-ensure.sh" --check 2>/dev/null)"
+case "$bcheck" in *"no headless browser"*"libnss3.so"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL --check should print the reason: $bcheck" >&2 ;; esac
+
 rc=0
 PATH="$nobrowser:$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 \
   ODOO_FAKE_ARGS="$work/args" ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" \
