@@ -257,7 +257,12 @@ commit_tmp() {
   # Warnings do not stop the write, but a chain whose first element resolves to
   # nothing should say so at the moment someone records it, not only on demand.
   [ -z "$warns" ] || echo "$warns" >&2
-  cp "$MAP" "$MAP.bak"
+  # The backup goes through its own private temp file and an atomic rename. A
+  # fixed "$MAP.bak" is shared by every concurrent writer, and a plain cp onto it
+  # can fail mid-write ("Text file busy", a short read) and abort this writer.
+  local bak_tmp
+  bak_tmp="$(mktemp "$MAP.bak.XXXXXX")"
+  { cat "$MAP" > "$bak_tmp" && mv -f "$bak_tmp" "$MAP.bak"; } || { rm -f "$bak_tmp"; return 1; }
   mv "$tmp" "$MAP"
 }
 
