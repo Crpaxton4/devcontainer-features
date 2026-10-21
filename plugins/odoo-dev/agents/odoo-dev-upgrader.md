@@ -44,8 +44,8 @@ are the lines of your prompt.
 2. `worktree-ensure.sh` as the builder does.
 3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and
    `studio_inventory.py --ssh <host> --artifacts <ARTIFACTS>` when a host was given.
-4. Prior art per module → `keep`, `replace` or `merge-into-standard`. A vendor module
-   is ported in place; its vendor link becomes an outstanding item, never a stop.
+4. Prior art per module → `keep`, `replace` or `merge-into-standard`. A module whose
+   action is `replace` follows the Replace section of `references/porting-checklist.md`.
 5. Per module in topological order: `references/porting-checklist.md` with
    `references/<target>/changes.md`; write `enrich_<module>.json`; commit with the
    manifest version prefix bumped to the target series.

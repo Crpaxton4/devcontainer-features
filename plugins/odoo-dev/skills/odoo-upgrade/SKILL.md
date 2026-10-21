@@ -1,6 +1,6 @@
 ---
 name: odoo-upgrade
-description: "Plan and run code upgrades of custom Odoo modules between major versions (16.0→17.0→18.0→19.0). Use to migrate or port a module or addon, for breaking changes, a module inventory, an upgrade estimate or plan, or the full-lifecycle SOP."
+description: "Plan and run code upgrades of custom Odoo modules between major versions (16.0→17.0→18.0→19.0). Use to migrate or port a module or addon, for breaking changes, a module inventory, or an upgrade estimate or plan."
 user-invocable: false
 ---
 # Odoo Code Upgrade Guide
@@ -54,7 +54,6 @@ Write every path in full: `<base directory>/scripts/<script>`.
 - Never run a database upgrade, a merge to production, or a change to production data.
 - Order: inventory, then the upgrade pass over all modules (upgrade_code, detection
   greps, manual fixes per the target `changes.md`), then `install_all.sh` until green.
-- Install green is not done; tests follow.
 - A multi-version jump works every transition reference in sequence. upgrade_code can run
   once across hops with the target odoo-bin; the install loop runs on the final target only.
 - upgrade_code only when the target is 18.0 or later.

@@ -2,7 +2,7 @@
 
 Inventory = first artifact of every upgrade project. Drives effort estimate, upgrade plan, per-department end-user test plan.
 
-Standard deliverable = ONE xlsx, 4 sheets, no legend/README sheets (column meanings live here, in skill):
+Standard deliverable = ONE xlsx, the sheets of the table below, no legend/README sheets (column meanings live here, in skill):
 
 | Sheet | Rows | Built by |
 |-------|------|----------|
@@ -132,9 +132,9 @@ Read `MISMATCH` lines it prints:
 
 ## Phase 1 — enrichment fan-out
 
-Read-only agents, ~10-12 modules each, grouped by functional area (same-area modules share target-version greps). Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents. Each write ONE JSON array to its own path in the work dir: `enrich_g<N>.json`.
+Read-only agents, ~10-12 modules each, grouped by functional area (same-area modules share target-version greps). Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents. Each write ONE JSON array to its own path in the work dir: `enrich_<module>.json`, one record per module.
 
-Records may be partial, and two groups may cover the same module. `build_workbook.py` merge every `enrich_*.json` — and every `oca_alt_*.json` — **field by field** per module: a key set by exactly one file win, the same value in several files is fine, and two files setting one key to different non-empty values is a problem line naming the module, the key and BOTH files (`acme: enrich_g1.json and enrich_g3.json disagree on native`) with the first file read keeping the cell. So a re-run can write only the keys it re-derived, and nothing an earlier group established is destroyed by a later file that simply omit it. Empty value never overwrite a filled one.
+Records may be partial. `build_workbook.py` merge every `enrich_*.json` — and every `oca_alt_*.json` — **field by field** per module: a key set by exactly one file win, and the same value in several files is fine. A re-run overwrites the module's own `enrich_<module>.json`, so it can write only the keys it re-derived. Empty value never overwrite a filled one.
 
 Give every agent: module dir, seed CSV path, and the source trees —
 
@@ -167,7 +167,7 @@ Agent reply back = one line per module `<module> | <native verdict> | <upgrade_a
 
 ```bash
 python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/inventory --target-version 19.0 \
-        -o /mnt/extra-addons/<client>_upgrade_16_to_19_workbook.xlsx
+        -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx
 ```
 
 Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` + `fr_*.json` into the 4-sheet workbook (+ CSV siblings). Requirements JSON optional — absent ⇒ 2 sheets.

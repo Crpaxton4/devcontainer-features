@@ -17,7 +17,7 @@ Corollary: also check if target version **removed** what feature would extend (d
 
 ## Scoping the question
 
-Answer prior art per **capability**, not per module. Split request into 2–5 concrete, user-facing capabilities first, in user words:
+Answer prior art per **capability**, not per module, except for an upgrade inventory, where the verdict is per module (the upgrader brief). Split request into 2–5 concrete, user-facing capabilities first, in user words:
 
 > "Salesperson sees the customer's carrier account number on the delivery order"
 > "Delivery orders are split by requested date"
