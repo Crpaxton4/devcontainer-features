@@ -26,6 +26,9 @@ odoo-bin -i {install_list} -u {update_list} --stop-after-init
 ### EXTREMELY IMPORTANT
 - [x] **Manifest version** — `{module}` bumped `{version_from}` → `{version_to}`, once for this PR.
 - [ ] {precondition a human has to confirm before this merges}
+- [ ] **Dropped module** — `{module}` is replaced by {configuration step, with the standard field path and where it is set}
+- [ ] **Production uninstall** — uninstall `{module}` on production before the database upgrade (SOP 5.2); the code leaves the repo only after that is confirmed
+- [ ] **Assumption** — {question}: assumed {assumption} because {reason}; alternative {alternative}
 
 ### Changes
 **{module}** — {what changed and why, one short paragraph}
@@ -124,6 +127,10 @@ scheduled for removal, a setting somebody has to flip before the deploy runs. In
 practice those are the lines a reviewer actually acts on, so each one names the
 thing and who confirms it. A PR with no such precondition carries only the manifest
 line.
+
+**The three dropped-module items appear once per dropped module** (Dropped module,
+Production uninstall, Assumption), and are omitted when the PR drops nothing. They
+come from the `drop` record in the upgrade state, so the PR and the record agree.
 
 **Changes** is one entry per module: the module name in bold, then one short
 paragraph saying what changed and why, in the reviewer's terms. Describe the
