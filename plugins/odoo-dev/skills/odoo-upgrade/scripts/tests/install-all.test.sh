@@ -554,5 +554,35 @@ summary="$(printf '%s\n' "$out" | tail -1)"
 expect "a warning before loading starts is ignored" "$rc" "0"
 expect "and is not listed" "$(field "$summary" warnings_new)" "[]"
 
+# --previous (#1140): progress against the last summary.
+reset
+out="$(FAIL_ON=alpha run prog1 --db verify --no-conf --per-tree --summary "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "without --previous progress is null" "$(field "$summary" progress)" "null"
+expect "no progress line without --previous" "$(grep -c 'progress:' "$state/err" || true)" "0"
+
+reset
+out="$(FAIL_ON=alpha run prog2 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the same failure again is progress false" "$(field "$summary" progress)" "false"
+contains "stderr names progress false" "$(cat "$state/err")" "install_all.sh: progress: false"
+
+reset
+out="$(FAIL_ON=alpha_ext run prog3 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a failure on another module is progress true" "$(field "$summary" progress)" "true"
+contains "stderr names progress true" "$(cat "$state/err")" "install_all.sh: progress: true"
+
+reset
+out="$(run prog4 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a green run after a failure is progress true" "$(field "$summary" progress)" "true"
+
+printf 'not json\n' > "$work/bad.json"
+reset
+out="$(run prog5 --db verify --no-conf --previous "$work/bad.json" "$tree")"; rc=$?
+expect "a non-JSON --previous exits 2" "$rc" "2"
+contains "and says so" "$(cat "$state/err")" "is not JSON"
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
