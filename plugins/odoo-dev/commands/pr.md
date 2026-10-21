@@ -8,7 +8,7 @@ agent: odoo-dev:odoo-dev-pr
 background: false
 ---
 
-ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id with a directory already on disk' -- "$task"`
+ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id with a directory already on disk' --missing 'NO ARTIFACTS YET — valid task id, no tasks/<id>/ directory on disk' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
 
 Every path in a Bash call is absolute and written out in full: the two paths
@@ -21,6 +21,9 @@ nothing.
 Route: when the first token of the request is `release`, this is the release route
 (load `odoo-dev:odoo-release` first); it needs no artifacts directory. Otherwise the
 ARTIFACTS line must start with `/` (task route, `odoo-dev:odoo-pr` is preloaded).
+When the ARTIFACTS line starts with `NO ARTIFACTS YET`, reply with that marker text
+verbatim, then say: run `/odoo-dev:implement <task-id>` or `/odoo-dev:plan <task-id>`
+first, because they create the directory; or dispatch the agent directly. Stop.
 Neither: reply with exactly
 `usage: /odoo-dev:pr <task-id> | release <from-branch> <to-branch>` and stop.
 
