@@ -38,8 +38,7 @@ are the lines of your prompt.
    `psql -Atc "select current_database()"` on it returns the source database;
    (b) the container runs the target series; (c) one enterprise addon imports;
    (d) `gh auth status` is clean; (e) the repo map resolves the project.
-2. `worktree-ensure.sh` and `stack-ensure.sh --target-series <target>` as the
-   builder does.
+2. `worktree-ensure.sh` as the builder does.
 3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and
    `studio_inventory.py --ssh <host> --artifacts <ARTIFACTS>` when a host was given.
 4. Prior art per module → `keep`, `replace` or `merge-into-standard`. A vendor module
