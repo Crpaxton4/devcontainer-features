@@ -116,7 +116,7 @@ SETTINGS_FRAGMENT="${PERSONAL_FEATURES_SETTINGS_FRAGMENT:-/usr/local/share/perso
 # absolute-path entries an earlier hand-edit left in settings.json are stripped
 # and replaced by the published, per-machine-expanded ones rather than left to sit
 # beside them (the same #803 migration the event shim gets).
-HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","force-push-guard.sh","mempalace-recall.sh","odoo-dev-plugin-drift-check.sh"]'
+HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","force-push-guard.sh","mempalace-recall.sh","odoo-dev-plugin-drift-check.sh","usage-log-hook.sh"]'
 
 # The programs a feature-owned hook command goes on to EXEC. Resolving the hook
 # command itself is only half of what a working hook needs: claude-event-hook
@@ -426,6 +426,7 @@ GUARD_API_SHIM="$HOOK_DIR/odoo-api-guard.sh"
 GUARD_PUSH_SHIM="$HOOK_DIR/force-push-guard.sh"
 RECALL_SHIM="$HOOK_DIR/mempalace-recall.sh"
 DRIFT_SHIM="$HOOK_DIR/odoo-dev-plugin-drift-check.sh"
+USAGE_SHIM="$HOOK_DIR/usage-log-hook.sh"
 
 # The command literal written into settings.json. Claude Code runs hook commands
 # through `/bin/sh -c`, so this parameter expansion is resolved per machine AT
@@ -454,6 +455,10 @@ RECALL_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/mempalace-recall.sh"'
 # And the odoo-dev plugin drift check (#1052), same per-machine expansion.
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 DRIFT_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/odoo-dev-plugin-drift-check.sh"'
+# And the usage-log hook (#1204). It writes nothing when USAGE_LOG_DIR is unset,
+# which is how a host session sharing this settings.json stays out of the log.
+# shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
+USAGE_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-log-hook.sh"'
 
 # publish_shim <implementation-in-image> <destination-under-$HOOK_DIR>
 # Same atomic-rename discipline as the settings write below: stage inside
@@ -482,6 +487,7 @@ publish_shim "$SHARED_HOOKS_DIR/odoo-api-guard.sh" "$GUARD_API_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/force-push-guard.sh" "$GUARD_PUSH_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/mempalace-recall.sh" "$RECALL_SHIM"
 publish_shim "$SHARED_HOOKS_DIR/odoo-dev-plugin-drift-check.sh" "$DRIFT_SHIM"
+publish_shim "$SHARED_HOOKS_DIR/usage-log-hook.sh" "$USAGE_SHIM"
 
 # Refuse to write a command that resolves nowhere — the #803 failure mode. With
 # no shim published and none left by an earlier run, writing the entries anyway
@@ -533,6 +539,15 @@ else
     DRIFT_GROUPS='[]'
 fi
 
+# The usage-log hook (#1204): one command registered under four events. Omitted,
+# not stubbed, when its shim is absent. 5s: a jq parse and one SQLite insert.
+if [ -x "$USAGE_SHIM" ]; then
+    USAGE_ENTRY="$(jq -n --arg cmd "$USAGE_CMD" '{"type":"command","command":$cmd,"timeout":5}')"
+else
+    note "no usage-log hook at $USAGE_SHIM; omitting its entries."
+    USAGE_ENTRY='null'
+fi
+
 GUARD_GROUPS='[]'
 if [ -x "$GUARD_API_SHIM" ]; then
     GUARD_GROUPS="$(jq -n --argjson acc "$GUARD_GROUPS" --arg cmd "$GUARD_API_CMD" \
@@ -580,16 +595,16 @@ fi
 # commands, so a guard whose shim is missing drops out on its own.
 OURS="$(jq -n --arg cmd "$SHIM_CMD" --argjson wt "$WORKTREE_GROUPS" \
                --argjson recall "$RECALL_GROUPS" --argjson drift "$DRIFT_GROUPS" \
-               --argjson guards "$GUARD_GROUPS" '
+               --argjson guards "$GUARD_GROUPS" --argjson usage "$USAGE_ENTRY" '
   {
-    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt + $recall + $drift),
+    "SessionStart":     ([ { "hooks": [ {"type":"command","command":($cmd+" SessionStart")} ] } ] + $wt + $recall + $drift + ($usage | if . then [ { "hooks": [.] } ] else [] end)),
     "UserPromptSubmit": [ { "hooks": [ {"type":"command","command":($cmd+" UserPromptSubmit")} ] } ],
-    "PreToolUse":       ([ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ] + $guards),
-    "SubagentStart":    [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ],
+    "PreToolUse":       ([ { "matcher":"*", "hooks": [ {"type":"command","command":($cmd+" PreToolUse")} ] } ] + $guards + ($usage | if . then [ { "matcher":"Skill", "hooks": [.] } ] else [] end)),
+    "SubagentStart":    ([ { "hooks": [ {"type":"command","command":($cmd+" SubagentStart")} ] } ] + ($usage | if . then [ { "hooks": [.] } ] else [] end)),
     "SubagentStop":     [ { "hooks": [ {"type":"command","command":($cmd+" SubagentStop")} ] } ],
     "Stop":             [ { "hooks": [ {"type":"command","command":($cmd+" Stop")} ] } ],
     "SessionEnd":       [ { "hooks": [ {"type":"command","command":($cmd+" SessionEnd")} ] } ]
-  }
+  } + (if $usage then { "UserPromptExpansion": [ { "hooks": [$usage] } ] } else {} end)
 ')"
 
 # Resolve the JSON we merge into. An absent file starts from {}. An existing file

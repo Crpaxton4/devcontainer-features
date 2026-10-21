@@ -101,6 +101,7 @@ $paths = @(
     '.config/odoo-task-tracker'
     '.mempalace'
     '.config/odoo-dev'
+    '.local/state/usage-log'
 )
 
 foreach ($path in $paths) {

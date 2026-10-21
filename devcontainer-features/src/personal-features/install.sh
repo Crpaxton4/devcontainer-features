@@ -225,6 +225,8 @@ install -m 0755 "$(dirname "$0")/hooks/force-push-guard.sh" /usr/local/share/per
 install -m 0755 "$(dirname "$0")/hooks/mempalace-recall.sh" /usr/local/share/personal-features/hooks/mempalace-recall.sh
 # The odoo-dev plugin drift warning (#1052): a SessionStart hook shipped the same way.
 install -m 0755 "$(dirname "$0")/hooks/odoo-dev-plugin-drift-check.sh" /usr/local/share/personal-features/hooks/odoo-dev-plugin-drift-check.sh
+# The usage-log hook (#1204): records skill, command and agent uses; declares features.
+install -m 0755 "$(dirname "$0")/hooks/usage-log-hook.sh" /usr/local/share/personal-features/hooks/usage-log-hook.sh
 install -m 0644 "$(dirname "$0")/settings-fragment.json" /usr/local/share/personal-features/settings-fragment.json
 # The guard's own case table ships beside it, for the reason #811 is about: a
 # policy whose check lives somewhere the provisioned machine cannot reach is a
@@ -420,6 +422,14 @@ if [ -f "${_sdk_wheels[0]}" ]; then
     [ -d "$_SDK_ENV" ] || retry uv venv --python "$UV_PYTHON_PIN" "$_SDK_ENV"
     for wheel in "${_sdk_wheels[@]}"; do
         retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+    done
+    # usage_log (#1204): the stdlib-only usage-log writer shares the odoo-sdk
+    # env, because odoo_sdk imports it. Its wheel is bundled beside the SDK's;
+    # a checkout that bundled only the SDK wheel simply has no usage-log.
+    for wheel in "$FEATURE_DIR"/usage_log-*.whl; do
+        [ -f "$wheel" ] || continue
+        retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
+        ln -sf "$_SDK_ENV/bin/usage-log" /usr/local/bin/usage-log
     done
     # Link the entry points once, after all wheels are installed. ALL THREE
     # console scripts must be linked: `odoo-sdk` is the CLI that
@@ -1443,6 +1453,7 @@ pf_add_script /usr/local/share/personal-features/hooks/odoo-api-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/force-push-guard.sh
 pf_add_script /usr/local/share/personal-features/hooks/mempalace-recall.sh
 pf_add_script /usr/local/share/personal-features/hooks/odoo-dev-plugin-drift-check.sh
+pf_add_script /usr/local/share/personal-features/hooks/usage-log-hook.sh
 pf_add_script /usr/local/share/personal-features/settings-fragment.json
 # The staged persisted-paths manifest (#974), in this set for the same stated
 # reason as the settings fragment one line up: this list fingerprints file

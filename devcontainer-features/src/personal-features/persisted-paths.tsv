@@ -64,7 +64,7 @@
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All ten paths are directories today.
+# distinction. All eleven paths are directories today.
 #
 # name	host_source	container_target	env_var	env_value	mode	provision
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
@@ -86,3 +86,7 @@ mempalace	.mempalace/	/usr/local/share/mempalace/	MEMPALACE_PALACE_PATH	/usr/loc
 # release record is discarded on the next rebuild, silently and with no error.
 # ODOO_DEV_STATE_DIR below is what makes the plugin resolve the mount instead.
 odoo-dev	.config/odoo-dev/	/usr/local/share/odoo-dev/	ODOO_DEV_STATE_DIR	/usr/local/share/odoo-dev	0700	container
+# usage-log (#1204): the usage and declaration SQLite stores. Fixed host path (not a
+# host env var, #649). 0777 like shell-history: writers in different containers may
+# run as different uids and each creates its own WAL side files in this directory.
+usage-log	.local/state/usage-log/	/usr/local/share/usage-log/	USAGE_LOG_DIR	/usr/local/share/usage-log	0777	container
