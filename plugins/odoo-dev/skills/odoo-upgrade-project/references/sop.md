@@ -76,8 +76,8 @@ Standing rule throughout: AI never triggers database upgrade, never merges to pr
 ### Phase 5 — Module removals (modules classified *drop*)
 
 5.1 `[AI]` Decouple: remove all code dependencies on dropped modules in change that installs and passes on SOURCE series. Deploy to production first.
-5.2 `[MANUAL]` On production, before any upgrade: drain dropped modules' pending data (e.g. job queues), then uninstall them. Skipping this leaves orphaned "installed" modules with code gone — every registry load errors after upgrade.
-5.3 `[AI]` Delete module code from repo only after production uninstall confirmed.
+5.2 `[MANUAL]` On production, before any upgrade: drain dropped modules' pending data (e.g. job queues), then uninstall them. Skipping this leaves orphaned "installed" modules with code gone — every registry load errors after upgrade. 5.2 and 5.3 as written assume one branch for source and target series.
+5.3 `[AI]` Delete module code from repo only after production uninstall confirmed. With a separate target branch, deleting the module on that branch is safe and keeps it out of the install tree.
 
 ### Phase 6 — Staging database upgrade (odoo.sh)
 
