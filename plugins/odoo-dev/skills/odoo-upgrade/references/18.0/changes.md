@@ -63,17 +63,7 @@ Website/portal/QWeb-frontend changes NOT enumerated here — research per-case w
 - Data migrations for renamed/removed **core** fields: check OpenUpgrade 18.0 per-module analysis (see Sources) before hand-writing migration scripts.
 
 ## Detection greps
-```bash
-grep -rn "<tree\|</tree>\|//tree" --include="*.xml" .
-grep -rn "view_mode.*tree\|tree_view_ref\|mode=\"tree\"" .
-grep -rn "oe_chatter" --include="*.xml" .
-grep -rn "kanban-box\|kanban-tooltip\|oe_kanban_colorpicker" --include="*.xml" .
-grep -rn "user_has_groups\|name_get(\|_name_search\|_check_recursion\|_check_m2m_recursion" --include="*.py" .
-grep -rn "check_access_rights\|check_access_rule\|_filter_access_rules" --include="*.py" .
-grep -rn "group_operator" --include="*.py" .
-grep -rn "from odoo import registry\|inselect\|_flush_search" --include="*.py" .
-grep -rn "@odoo-module\|extra_trigger\|test: true" --include="*.js" .
-```
+The 18.0 patterns are the `18.0` rows of [detection-patterns.tsv](../detection-patterns.tsv). `scripts/port-plan.py` runs them per module and writes the hits to `plan.json`.
 
 ## Sources
 - https://github.com/OCA/maintainer-tools/wiki/Migration-to-version-18.0

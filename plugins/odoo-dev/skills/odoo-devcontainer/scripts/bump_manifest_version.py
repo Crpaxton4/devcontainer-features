@@ -3,9 +3,15 @@
 Bump __manifest__.py version based on conventional commits since main.
 
 Usage:
-    python bump_manifest_version.py [MODULE_PATH]
+    python bump_manifest_version.py [--series NN.0] [MODULE_PATH]
 
 MODULE_PATH defaults to cwd. Must contain __manifest__.py.
+
+--series NN.0 is for a port. It overrides ODOO_VERSION as the series hint, and
+it rewrites the series prefix of a `<series>.A.B.C` version to NN.0 and keeps
+A.B.C: `18.0.1.2.3` with `--series 19.0` becomes `19.0.1.2.3`. The usual bump
+is then applied on top, so the result is `19.0.1.2.4` on a patch bump. Without
+--series the behaviour is as described below.
 
 Accepted version forms — the four Odoo itself accepts. Odoo is not vendored
 here, so this is implemented from the rule in `adapt_version`
@@ -37,6 +43,7 @@ Bump logic (derived from commits since main/master):
     feat                               → minor (resets patch to 0)
     anything else                      → patch
 """
+import argparse
 import ast
 import os
 import re
@@ -188,7 +195,13 @@ def set_version(manifest_path: Path, new_version: str) -> None:
 
 
 def main() -> None:
-    module_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
+    parser = argparse.ArgumentParser(description="Bump a module manifest version.")
+    parser.add_argument("module_dir", nargs="?", default=None)
+    parser.add_argument("--series", default=None, metavar="NN.0")
+    args = parser.parse_args()
+    if args.series is not None and not SERIES_RE.match(args.series):
+        parser.error(f"--series {args.series!r} is not an Odoo series (NN.0)")
+    module_path = Path(args.module_dir).resolve() if args.module_dir else Path.cwd()
     manifest_path = module_path / "__manifest__.py"
 
     if not manifest_path.exists():
@@ -197,11 +210,15 @@ def main() -> None:
     current = get_current_version(manifest_path)
     # The container's Odoo series, and the only source of a series for a
     # version that carries none.
-    series_hint = os.environ.get("ODOO_VERSION", "").strip()
+    series_hint = args.series or os.environ.get("ODOO_VERSION", "").strip()
     try:
         normalized = canonical_version(current, series_hint)
     except ValueError as err:
         sys.exit(f"ERROR: {manifest_path}: {err}")
+    moved = None
+    if args.series and not normalized.startswith(f"{args.series}."):
+        # A port: the series prefix moves, A.B.C stays.
+        moved = f"{args.series}.{normalized.split('.', 2)[2]}"
 
     commits = get_commits(module_path)
     if not commits:
@@ -213,6 +230,11 @@ def main() -> None:
         # bumped-but-still-short version.
         set_version(manifest_path, normalized)
         print(f"{current} → {normalized}  (normalized to <series>.A.B.C)")
+
+    if moved:
+        set_version(manifest_path, moved)
+        print(f"{normalized} → {moved}  (series moved to {args.series})")
+        normalized = moved
 
     new_version = apply_bump(normalized, bump)
     set_version(manifest_path, new_version)

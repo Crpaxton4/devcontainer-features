@@ -38,7 +38,7 @@ saying so.
 
 ## 1. Manifest
 
-- Bump `version` prefix to target series: `19.0.x.y.z`. Keep module's own `x.y.z` tail.
+- Bump `version` prefix to target series with `bump_manifest_version.py --series <target> <module dir>` (`skills/odoo-devcontainer/scripts/`). It keeps the module's own `x.y.z` tail, then applies the usual bump.
 - Check `depends`: renamed/merged/removed in target? Core module renames/merges live in OpenUpgrade's `openupgrade_scripts/apriori.py` (branch = target series) — check before hand-researching.
 - Check `external_dependencies` still importable on target's Python floor.
 
@@ -50,7 +50,7 @@ saying so.
 
 ## 3. Detection greps
 
-- Run `Detection greps` block from target's `changes.md` in module dir. Every hit = work item. Empty grep output ≠ done — greps catch renames, not semantic changes.
+- Read the hits of the module in `plan.json` (`scripts/port-plan.py`, patterns in `references/detection-patterns.tsv`). Every hit = work item. Empty grep output ≠ done — greps catch renames, not semantic changes.
 
 ## 4. Manual fixes
 

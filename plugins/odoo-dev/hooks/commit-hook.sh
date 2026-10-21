@@ -378,6 +378,19 @@ EOF
 modules="$(printf '%s' "$modules" | sed '/^$/d' | sort -u)"
 [ -n "$modules" ] || exit 0
 
+# series_prefix — the `<NN>.0` series of a `<series>.A.B[.C]` version, or nothing
+# for a version that carries none.
+series_prefix() {
+  printf '%s' "$1" | awk -F. 'NF >= 4 && $1 ~ /^[0-9]+$/ && $2 == "0" { print $1 "." $2 }'
+}
+
+# A port moves the series prefix once, on the branch's first commit. The merge-base
+# with the upstream (or the default branch) is where the branch left the line it
+# will merge into, so a prefix that differs from the staged one there means the
+# module is already bumped on this branch. No merge-base, no such exemption.
+mergebase="$(git -C "$repo" merge-base HEAD '@{upstream}' 2>/dev/null \
+  || git -C "$repo" merge-base HEAD origin/HEAD 2>/dev/null)"
+
 stale=""
 while IFS= read -r mod; do
   [ -n "$mod" ] || continue
@@ -394,6 +407,12 @@ while IFS= read -r mod; do
   newv="$(printf '%s' "$new" | manifest_version)"
   [ -n "$oldv" ] && [ -n "$newv" ] || continue
   [ "$oldv" != "$newv" ] && continue
+  if [ -n "$mergebase" ]; then
+    mbv="$(git -C "$repo" show "$mergebase:$mod/__manifest__.py" 2>/dev/null | manifest_version)"
+    mbp="$(series_prefix "$mbv")"
+    newp="$(series_prefix "$newv")"
+    [ -n "$mbp" ] && [ -n "$newp" ] && [ "$mbp" != "$newp" ] && continue
+  fi
   stale="$stale, $mod (still $oldv)"
 done <<EOF
 $modules

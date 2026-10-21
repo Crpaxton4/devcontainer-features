@@ -1,0 +1,41 @@
+series	pattern	include-globs	note
+17.0	attrs=	*.xml	Views: attrs/states (the big one)
+17.0	states="[^"]*"	*.xml	Views: attrs/states (the big one)
+17.0	<attribute name="(attrs|states)"	*.xml	Views: inheritance overrides of attrs/states
+17.0	^(?=.*(column_invisible|<tree))(?=.*invisible=)	*.xml	Tree-view column hiding to re-check per column_invisible semantics
+17.0	states=\{	*.py	Python field states param
+17.0	def name_get|def _name_search|_read_group\(	*.py	ORM overrides needing new signatures or replacements
+17.0	def (pre_init_hook|post_init_hook|uninstall_hook)	*.py	Hooks
+17.0	get_resource_path|get_module_resource	*.py	Deprecated helpers and imports
+17.0	tests.common import.*Form|tests\.common\.Form	*.py	Deprecated helpers and imports
+17.0	\.execute\(	*.py	Raw SQL: candidates for odoo.tools.SQL
+17.0	owl="1"	*.xml	JS and templates
+17.0	related_start_date|related_end_date	*.xml	JS and templates
+17.0	app_settings_block|o_settings_container|o_setting_box	*.xml	Settings views
+17.0	active_id|active_model	*.xml	Deprecated context vars in view attributes (review hits manually)
+18.0	<tree|</tree>|//tree	*.xml
+18.0	view_mode.*tree|tree_view_ref|mode="tree"
+18.0	oe_chatter	*.xml
+18.0	kanban-box|kanban-tooltip|oe_kanban_colorpicker	*.xml
+18.0	user_has_groups|name_get\(|_name_search|_check_recursion|_check_m2m_recursion	*.py
+18.0	check_access_rights|check_access_rule|_filter_access_rules	*.py
+18.0	group_operator	*.py
+18.0	from odoo import registry|inselect|_flush_search	*.py
+18.0	@odoo-module|extra_trigger|test: true	*.js
+19.0	\._cr\b|\._uid\b|\._context\b	*.py
+19.0	osv.expression|from odoo.osv|from odoo import SUPERUSER_ID	*.py
+19.0	type=["']json["']	*.py
+19.0	_sql_constraints	*.py
+19.0	auto_join|model_create_single|api\.returns|ormcache_context|toggle_active	*.py
+19.0	\.read_group\(|name_search\(.*args=	*.py
+19.0	globals_dict|locals_dict|nocopy	*.py
+19.0	groups_id
+19.0	name="users"|name="category_id"	*.xml	res.groups records
+19.0	base\.default_user\b
+19.0	name="mobile"|'mobile'|"mobile"		removed partner/company field
+19.0	res\.partner\.title|name="title"	*.xml
+19.0	context_today|relativedelta	*.xml	rewritable to dynamic dates
+19.0	<group expand	*.xml	search view fails RELAXNG
+19.0	procurement\.group|procurement_group_id|_prepare_procurement_group_vals	*.py,*.xml
+19.0	module_category_usability
+19.0	t-inherit=	static/*.xml	Owl xpath targets, browser-only breakage

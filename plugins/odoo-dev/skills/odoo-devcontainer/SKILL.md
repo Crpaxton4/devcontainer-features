@@ -58,7 +58,7 @@ Write every path in full: `<base directory>/scripts/<script>`.
 
 | Script and arguments | Prints | Exit |
 | --- | --- | --- |
-| `bump_manifest_version.py <module dir> [...]` | the new manifest version per module | 0 |
+| `bump_manifest_version.py [--series NN.0] <module dir>` | the new manifest version. `--series` is for a port: it moves the series prefix to NN.0, keeps A.B.C, then bumps | 0 |
 | `list_modules.sh` | a comma-separated list of all modules | 0 |
 
 ## Rules

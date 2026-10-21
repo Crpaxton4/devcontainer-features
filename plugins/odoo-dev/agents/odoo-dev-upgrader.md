@@ -50,9 +50,9 @@ are the lines of your prompt.
    from the verdict; override only with a rationale in the record. The verdict and
    `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
-5. Per module in topological order: `references/porting-checklist.md` with
-   `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); commit with the
-   manifest version prefix bumped to the target series.
+5. Per module in the order of `plan.json` from `port-plan.py --from <source> --to <target> --worktree <W> --artifacts <ARTIFACTS>`: `references/porting-checklist.md` with
+   `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); bump the manifest with
+   `bump_manifest_version.py --series <target>` and commit.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
 7. `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
