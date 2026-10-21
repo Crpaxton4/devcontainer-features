@@ -61,6 +61,31 @@ expect "a installed" "$(bash "$SUT" "$A" mark a status installed >/dev/null; ech
 u build
 expect "build modules" "$(bash "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh" get "$A" build | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).modules.join(",")+" "+JSON.parse(s).odoo_version))')" "a,b 19.0"
 
+# drop: record, git rm and commit in one transaction
+git -C "$wt" config user.name t; git -C "$wt" config user.email t@t; git -C "$wt" config core.hooksPath /dev/null
+mkdir -p "$wt/d"; printf "{'name': 'D', 'version': '19.0.1.0.0'}\n" > "$wt/d/__manifest__.py"
+git -C "$wt" add -A; git -C "$wt" commit -qm "add d"
+ART="$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh"
+node -e 'const {spawnSync:s}=require("child_process");const a=process.argv[1];const g=s("bash",[process.argv[2],"get",a,"upgrade"],{encoding:"utf8"});const u=JSON.parse(g.stdout);u.modules.d={status:"verdict",kind:"custom"};s("bash",[process.argv[2],"set",a,"upgrade","--json",JSON.stringify(u)])' "$A" "$ART"
+u drop d --prod-uninstall --assumption A1 2>/dev/null
+expect "drop without config-step" "$?" 2
+u drop d --config-step "Set the standard field X on the product" --prod-uninstall --assumption A1 --question Q
+expect "drop exit" "$?" 0
+dget() { bash "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh" get "$A" upgrade | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=JSON.parse(s);console.log(eval(process.argv[1]))})' "$1"; }
+expect "drop status" "$(dget 'u.modules.d.status')" dropped
+dsha="$(dget 'u.modules.d.drop.commit')"
+expect "drop commit is real" "$(git -C "$wt" rev-parse HEAD)" "$dsha"
+expect "module dir gone" "$([ -e "$wt/d" ] && echo present || echo gone)" gone
+expect "assumption entry" "$(dget 'u.assumptions[0].id+"|"+u.assumptions[0].question')" "A1|Q"
+expect "enrich action" "$(node -e 'const e=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(e.upgrade_action+"|"+e.notes+"|"+Object.keys(e).length)' "$A/inventory/enrich_d.json")" "merge-into-standard|Set the standard field X on the product|16"
+
+# a drop whose git rm fails: exit 4, nothing changed
+node -e 'const {spawnSync:s}=require("child_process");const a=process.argv[1];const g=s("bash",[process.argv[2],"get",a,"upgrade"],{encoding:"utf8"});const u=JSON.parse(g.stdout);u.modules.c={status:"inventoried",kind:"custom"};s("bash",[process.argv[2],"set",a,"upgrade","--json",JSON.stringify(u)])' "$A" "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh"
+u drop c --config-step "Use the standard option" --prod-uninstall --assumption A2 2>/dev/null
+expect "failed rm exit" "$?" 4
+expect "failed rm status" "$(dget 'u.modules.c.status+"|"+u.assumptions.length+"|"+(u.modules.c.drop===undefined)')" "inventoried|1|true"
+expect "failed rm leaves no enrich" "$([ -e "$A/inventory/enrich_c.json" ] && echo present || echo absent)" absent
+
 out="$(u init --task 7 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base-branch up \
   --plan "$work/plan.json" --preflight "$work/pf2.json")"
 expect "changed fingerprint" "$out" "STOP blocked_env"

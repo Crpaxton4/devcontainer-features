@@ -11,7 +11,11 @@
 #   upgrade-state.sh <artifacts> next
 #   upgrade-state.sh <artifacts> mark <module> status <state>
 #   upgrade-state.sh <artifacts> mark <module> verdict|port|tests --json '<object>'
-#   upgrade-state.sh <artifacts> drop <module> [--reason TEXT]
+#   upgrade-state.sh <artifacts> drop <module> --config-step TEXT --prod-uninstall --assumption ID
+#                      [--question T] [--reason T] [--alternative T]
+#     One transaction: record the drop (status, drop{}, enrich_<module>.json, the
+#     assumption), then git rm the module and commit it. A failure after the record
+#     restores the module and the record and exits 4.
 #   upgrade-state.sh <artifacts> gate workbook --problems N --path P
 #   upgrade-state.sh <artifacts> gate install --summary summary.json
 #   upgrade-state.sh <artifacts> build
@@ -43,7 +47,7 @@ case "$CMD" in init|next|mark|drop|gate|build) ;; *) die "unknown command $CMD" 
 
 exec node --input-type=module -e '
 import { execFileSync, spawnSync } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "fs";
 
 const [artSh, arts, cmd, ...args] = process.argv.slice(1);
 const fail = (msg, code = 2) => { console.error(`upgrade-state.sh: ${msg}`); process.exit(code); };
@@ -160,12 +164,53 @@ if (cmd === "mark") {
 if (cmd === "drop") {
   const [m, ...rest] = args;
   if (!m) fail("drop needs <module>");
-  const o = opts(rest, ["reason"]);
+  const o = {};
+  for (let i = 0; i < rest.length; i++) {
+    const k = rest[i];
+    if (k === "--prod-uninstall") { o["prod-uninstall"] = true; continue; }
+    if (!["--config-step", "--assumption", "--question", "--reason", "--alternative"].includes(k) || rest[i + 1] === undefined) fail(`bad option ${k}`);
+    o[k.slice(2)] = rest[++i];
+  }
+  for (const k of ["config-step", "assumption"]) if (!o[k]) fail(`drop needs --${k}`);
+  if (!o["prod-uninstall"]) fail("drop needs --prod-uninstall");
   const rec = mod(u, m);
   if (ORDER.indexOf(rec.status) > ORDER.indexOf("dropped") && rec.status !== "failed") fail(`cannot drop ${m} from ${rec.status}`, 4);
+  const wt = u.inputs.worktree;
+  const enrichPath = `${arts}/inventory/enrich_${m}.json`;
+  const ENRICH_KEYS = ["module","purpose","third_party","third_party_link","complexity","upgrade_action","functional_area","native","native_notes","native_evidence","vendor_release","complexity_rationale","upgrade_action_rationale","notes","oca_alt","oca_alt_evidence"];
+  const oldEnrich = existsSync(enrichPath) ? readFileSync(enrichPath, "utf8") : null;
+  const oldRec = JSON.stringify(rec), oldAssumptions = JSON.stringify(u.assumptions);
+  const undo = (step, detail) => {
+    spawnSync("git", ["-C", wt, "restore", "--staged", "--worktree", "--", m]);
+    for (const k of Object.keys(rec)) delete rec[k];
+    Object.assign(rec, JSON.parse(oldRec));
+    u.assumptions = JSON.parse(oldAssumptions);
+    write("upgrade", u);
+    if (oldEnrich === null) rmSync(enrichPath, { force: true }); else writeFileSync(enrichPath, oldEnrich);
+    fail(`drop ${m} failed at ${step}: ${detail}`, 4);
+  };
+  // (1) the record first
+  const step = o["config-step"];
+  let enrich;
+  try { enrich = oldEnrich === null ? Object.fromEntries(ENRICH_KEYS.map(k => [k, ""])) : JSON.parse(oldEnrich); }
+  catch { fail(`${enrichPath} is not JSON`, 4); }
+  enrich.module = m;
+  enrich.upgrade_action = "merge-into-standard";
+  enrich.notes = enrich.notes ? `${enrich.notes}\n${step}` : step;
+  mkdirSync(`${arts}/inventory`, { recursive: true });
+  writeFileSync(enrichPath, JSON.stringify(enrich, null, 2) + "\n");
+  if (!u.assumptions.some(a => a.id === o.assumption))
+    u.assumptions.push({ id: o.assumption, module: m, question: o.question || null, assumption: step, reason: o.reason || null, alternative: o.alternative || null, answer: null, answered_by: null });
   rec.status = "dropped";
-  rec.drop = { assumption: o.reason || null };
-  touch(u, m); write("upgrade", u); process.exit(0);
+  rec.drop = { config_step: step, prod_uninstall: true, assumption: o.assumption, commit: null };
+  touch(u, m); write("upgrade", u);
+  // (2) remove and (3) commit
+  const rm = spawnSync("git", ["-C", wt, "rm", "-r", "-q", "--", m], { encoding: "utf8" });
+  if (rm.status !== 0) undo("git rm", rm.stderr.trim());
+  const cm = spawnSync("git", ["-C", wt, "commit", "-q", "-m", `chore(${m}): drop, replaced by standard — ${step.slice(0, 60)}`], { encoding: "utf8" });
+  if (cm.status !== 0) undo("git commit", (cm.stderr || cm.stdout).trim());
+  rec.drop.commit = execFileSync("git", ["-C", wt, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  write("upgrade", u); process.exit(0);
 }
 
 if (cmd === "gate") {

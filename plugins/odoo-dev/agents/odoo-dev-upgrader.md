@@ -69,11 +69,13 @@ are the lines of your prompt.
    `bump_manifest_version.py --series <target>` and commit. Then run
    `upgrade-state.sh <ARTIFACTS> mark <module> port --json '{"commit":"<sha>","manifest":"<version>"}'`
    and `upgrade-state.sh <ARTIFACTS> mark <module> status ported`. To drop a module, run
-   `upgrade-state.sh <ARTIFACTS> drop <module> --reason "<question; assumption; reason; alternative>"`.
-   A drop records three things: (a) the configuration step that replaces the module
-   (standard field path and where it is set) in the `notes` of `enrich_<module>.json`;
-   (b) the production uninstall of the module before the database upgrade (SOP 5.2) as a
-   pull-request item; (c) the question, assumption, reason and alternative as the `--reason`.
+   `upgrade-state.sh <ARTIFACTS> drop <module> --config-step "<text>" --prod-uninstall --assumption <id>`
+   (add `--question`, `--reason` and `--alternative` to fill the assumption entry).
+   The one command removes the module with `git rm`, commits it, and records three things:
+   (a) the configuration step that replaces the module (standard field path and where it
+   is set) in the `notes` of `enrich_<module>.json`; (b) the production uninstall of the
+   module before the database upgrade (SOP 5.2) as a pull-request item; (c) the assumption
+   entry. The commit hook denies a module deletion that has no dropped entry.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
    Then run `upgrade-state.sh <ARTIFACTS> gate workbook --problems <N> --path <xlsx>`.
