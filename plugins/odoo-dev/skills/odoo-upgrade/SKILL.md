@@ -27,9 +27,8 @@ Load references as needed, never all at once.
 | upgrade_code Tool | Run or explain odoo-bin upgrade_code (target 18.0 or later)  | [upgrade-code-tool.md](./references/upgrade-code-tool.md)               |
 | 17.0 Changes      | Port code to 17.0 (from 16.0)                                | [17.0/changes.md](./references/17.0/changes.md)                         |
 | 18.0 Changes      | Port code to 18.0 (from 17.0)                                | [18.0/changes.md](./references/18.0/changes.md)                         |
-| 18.0 Rewrite Scripts | What Odoo 18 upgrade_code fixes automatically             | [18.0/upgrade-code-scripts.md](./references/18.0/upgrade-code-scripts.md) |
+| upgrade_code Scripts | What each upgrade_code script rewrites, by the series that ships it | [upgrade-code-scripts.md](./references/upgrade-code-scripts.md) |
 | 19.0 Changes      | Port code to 19.0 (from 18.0)                                | [19.0/changes.md](./references/19.0/changes.md)                         |
-| 19.0 Rewrite Scripts | What Odoo 19 upgrade_code fixes automatically             | [19.0/upgrade-code-scripts.md](./references/19.0/upgrade-code-scripts.md) |
 
 A new Odoo version adds a `references/XX.0/` folder and rows here. Folder `XX.0/` holds
 the changes that arrive in XX.0.
