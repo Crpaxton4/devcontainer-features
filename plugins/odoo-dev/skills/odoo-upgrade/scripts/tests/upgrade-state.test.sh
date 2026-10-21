@@ -90,6 +90,15 @@ expect "failed rm exit" "$?" 4
 expect "failed rm status" "$(dget 'u.modules.c.status+"|"+u.assumptions.length+"|"+(u.modules.c.drop===undefined)')" "inventoried|1|true"
 expect "failed rm leaves no enrich" "$([ -e "$A/inventory/enrich_c.json" ] && echo present || echo absent)" absent
 
+# answer: record a decision on an assumption
+expect "answer --list shows the open entry" "$(u answer --list | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(l.length+"|"+l[0].id+"|"+l[0].question)')" "1|A1|Q"
+u answer A1 "keep it" --by user
+expect "answer exit" "$?" 0
+expect "answer stored" "$(dget 'u.assumptions[0].answer+"|"+u.assumptions[0].answered_by+"|"+(typeof u.assumptions[0].answered_at)')" "keep it|user|string"
+expect "answer --list omits answered" "$(u answer --list)" "[]"
+u answer nope x 2>/dev/null
+expect "answer unknown id" "$?" 4
+
 out="$(u init --task 7 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base-branch up \
   --plan "$work/plan.json" --preflight "$work/pf2.json")"
 expect "changed fingerprint" "$out" "STOP blocked_env"

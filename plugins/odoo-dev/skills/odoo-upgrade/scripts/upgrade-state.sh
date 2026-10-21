@@ -33,6 +33,11 @@
 #     upgrade.friction[]. observed must quote the tool output verbatim (empty: exit 2).
 #     A porting_fact needs all four of the bracketed flags, else porting_fact is null.
 #   upgrade-state.sh <artifacts> friction list     (the friction[] array as JSON)
+#   upgrade-state.sh <artifacts> answer <id> <text> [--by NAME]
+#     Sets answer, answered_by (default user) and answered_at on assumptions[] entry <id>.
+#     An unknown id exits 4.
+#   upgrade-state.sh <artifacts> answer --list
+#     Prints {id, module, question, assumption} for each entry with answer null, as JSON.
 #   upgrade-state.sh <artifacts> build
 #
 # Module status runs inventoried, verdict, ported, dropped, installed, tested in that
@@ -64,11 +69,11 @@ ARTIFACT_SH="$HERE/../../../scripts/artifact.sh"
 
 die() { echo "upgrade-state.sh: $*" >&2; exit "${2:-2}"; }
 
-[ $# -ge 2 ] || die "usage: upgrade-state.sh <artifacts> init|next|mark|drop|gate|friction|build ..."
+[ $# -ge 2 ] || die "usage: upgrade-state.sh <artifacts> init|next|mark|drop|gate|friction|answer|build ..."
 ARTS_ARG="$1"; shift
 ARTS="$(odoo_dev_artifacts_dir "$ARTS_ARG")"
 CMD="$1"; shift
-case "$CMD" in init|next|mark|drop|gate|friction|build) ;; *) die "unknown command $CMD" ;; esac
+case "$CMD" in init|next|mark|drop|gate|friction|answer|build) ;; *) die "unknown command $CMD" ;; esac
 
 exec node --input-type=module -e '
 import { execFileSync, spawnSync } from "child_process";
@@ -278,6 +283,21 @@ if (cmd === "gate") {
     const prev = u.update || { runs: 0, last: null };
     u.update = { runs: (prev.runs || 0) + 1, last: { summary: s.status || null, green, check: clean } };
   } else fail("gate needs workbook, install or update");
+  touch(u); write("upgrade", u); process.exit(0);
+}
+
+if (cmd === "answer") {
+  if (args[0] === "--list") {
+    console.log(JSON.stringify(u.assumptions.filter(a => a.answer === null || a.answer === undefined)
+      .map(a => ({ id: a.id, module: a.module, question: a.question, assumption: a.assumption }))));
+    process.exit(0);
+  }
+  const [id, text, ...rest] = args;
+  if (!id || text === undefined) fail("answer needs <id> <text> or --list");
+  const o = opts(rest, ["by"]);
+  const a = u.assumptions.find(x => x.id === id);
+  if (!a) fail(`unknown assumption ${id}`, 4);
+  a.answer = text; a.answered_by = o.by || "user"; a.answered_at = now();
   touch(u); write("upgrade", u); process.exit(0);
 }
 
