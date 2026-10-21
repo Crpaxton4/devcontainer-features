@@ -114,6 +114,12 @@ echo "2026-09-25 10:00:00,000 1 INFO $db odoo.modules.loading: loading 1 modules
 IFS=, read -r -a wanted <<< "$mods"
 for module in "${wanted[@]}"; do
   echo "2026-09-25 10:00:01,000 1 INFO $db odoo.modules.loading: Loading module $module (1/1)"
+  case ",${ODOO_INCOMPAT:-}," in
+    *",$module,"*)
+      echo "2026-09-25 10:00:01,100 1 WARNING $db odoo.modules.module: module $module: incompatible version, setting installable=False"
+      echo "2026-09-25 10:00:01,200 1 CRITICAL $db odoo.modules.loading: Some modules are not loaded, some dependencies or manifest may be missing: ['$module']"
+      exit 1 ;;
+  esac
   case ",${ODOO_FAIL_ON:-}," in
     *",$module,"*)
       echo "2026-09-25 10:00:01,500 1 ERROR $db odoo.tools.convert: while parsing /mnt/extra-addons/$module/views/${module}_views.xml:12"
@@ -149,7 +155,7 @@ art() { echo "$work/art"; }
 
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
-  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
+  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
     bash "$SUT" --artifacts "$work/art-$suffix" "$@" 2>"$state/err"
 }
 
@@ -370,6 +376,59 @@ expect "the new key builds under a new template name" \
 expect "the new closure includes the new dependency" \
   "$(field "$summary" template.core_modules)" '["base", "mail", "stock"]'
 manifest beta "'base', 'mail'"
+
+# ---------- 9. skipped modules: version prefix, installable, dependents (#1134, #1166)
+sk="$work/skaddons"; mkdir -p "$sk"
+skm() { mkdir -p "$sk/$1"; printf '{"name": "%s", "version": "%s", "depends": [%s]%s}\n' "$1" "$2" "$3" "${4:-}" > "$sk/$1/__manifest__.py"; }
+skm good      "19.0.1.0.0" "'base'"
+skm old17     "17.0.1.0.0" "'base'"
+skm bare      "19.0"       "'base'"
+skm noseries  "1.0"        "'base'"
+skm onlyold   "19.0.2.0.0" "'old17'"
+skm dead      "19.0.1.0.0" "'base'" ', "installable": False'
+skm chain     "19.0.1.0.0" "'onlyold'"
+reset
+out="$(run skip --db verify --no-conf --per-tree "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "skips alone do not fail the run" "$rc" "0"
+expect "the series comes from the odoo build" "$(field "$summary" series)" "19.0"
+contains "a 17.0 manifest prints a SKIP line" "$(cat "$state/err")" "SKIP old17: manifest version 17.0.1.0.0 is not 19.0"
+contains "a bare 19.0 prints a SKIP line" "$(cat "$state/err")" "SKIP bare: manifest version 19.0 is not 19.0.x.y.z"
+contains "a dependent prints a SKIP line" "$(cat "$state/err")" "SKIP onlyold: depends on skipped old17"
+contains "and so does the dependent of a dependent" "$(cat "$state/err")" "SKIP chain: depends on skipped onlyold"
+contains "installable False has its own reason" "$(cat "$state/err")" "SKIP dead: installable: False"
+expect "skipped[] lists the reason" "$(field "$summary" skipped.0)" '{"module": "bare", "reason": "manifest version 19.0 is not 19.0.x.y.z"}'
+expect "five modules are skipped" "$(field "$summary" skipped | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" "5"
+expect "a series-less version is installed" "$(field "$summary" custom_modules)" '["good", "noseries"]'
+contains "a skipped module never reaches -i" "$(cat "$state/odoo.argv")" "-i good,noseries"
+expect "nothing expected, nothing flagged" "$(field "$summary" expected_but_skipped)" "[]"
+
+# --expect: a skipped module the port must install fails the run.
+printf '["good", "old17"]\n' > "$work/expect.json"
+reset
+out="$(run expect --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an expected module that is skipped exits 1" "$rc" "1"
+expect "and is listed" "$(field "$summary" expected_but_skipped)" '["old17"]'
+expect "the status is failed" "$(field "$summary" status)" "failed"
+expect "and passed is false though the tree installed" "$(field "$summary" passed)" "false"
+printf '{"modules": ["good"]}\n' > "$work/expect.json"
+reset
+out="$(run expect2 --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+expect "the object form with an installed module passes" "$rc" "0"
+printf '{"nope": 1}\n' > "$work/expect.json"
+reset
+out="$(run expect3 --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+expect "a malformed --expect file is a usage error" "$rc" "2"
+
+# The check_version warning is the decisive line, and the module it names.
+reset
+out="$(INCOMPAT=good run incompat --db verify --no-conf --per-tree "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an incompatible-version log fails the tree" "$rc" "1"
+expect "the named module is lifted" "$(field "$summary" trees.0.module)" "good"
+contains "the warning is the decisive line" "$(field "$summary" trees.0.error)" "incompatible version, setting installable=False"
+expect "and it is a port defect" "$(field "$summary" trees.0.class)" "port"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

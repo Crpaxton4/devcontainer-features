@@ -63,7 +63,8 @@
 # addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
 # template:{db,key,reused,core_modules}, custom_modules,
 # trees:[{modules,db,status,error,module,log,class}], full:{...},
-# env_failure:{decisive,log}|null, passed}. status is pass | failed |
+# env_failure:{decisive,log}|null, series, skipped:[{module,reason}],
+# expected_but_skipped:[module], passed}. status is pass | failed |
 # env_failure | usage. Same document to --summary <file>, written on every exit
 # path once the environment checks have passed. Odoo's own output goes to a log
 # file per database, never to stdout: the log volume is the cost these modes
@@ -74,6 +75,15 @@
 # whose decisive frame is outside the tree under test, or a missing core or
 # enterprise dependency). The caller relays the code and never reads the log to
 # classify.
+#
+# Skipped modules (#1134, #1166): a module Odoo would refuse never reaches `-i`.
+# That is `installable: False`, a manifest version whose series prefix is not the
+# target series (Odoo's check_version turns it into installable=False and logs
+# one warning), and any module that depends on a skipped one. Each is printed as
+# `SKIP <module>: <reason>` on stderr and listed in summary.skipped[]. A version
+# with no series prefix is accepted: Odoo prepends the series. --expect names the
+# modules the port must install; one that is skipped goes to
+# summary.expected_but_skipped[] and the run exits 1.
 set -euo pipefail
 
 usage() {
@@ -109,7 +119,11 @@ Options:
   --per-tree             install each independent custom dependency tree into
                          its own throwaway database first, then the full install
   --summary <file>       write the JSON summary here as well as to stdout
-  --force                proceed even though the target already has modules
+  --expect <file>        JSON array of module names (or an object with a
+                         "modules" array) the port must install. One that is
+                         skipped is listed in expected_but_skipped[] and the
+                         run exits 1 even when every installed tree passed.
+  --force               proceed even though the target already has modules
                          installed. The target is still dropped first.
   -h, --help             this text
 
@@ -125,7 +139,7 @@ need_value() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
-summary_file=""; enterprise=""
+summary_file=""; enterprise=""; expect_file=""; series=""; skipped_tsv=""; expected_skipped=""
 summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
 records=""
 
@@ -138,6 +152,7 @@ while [ $# -gt 0 ]; do
     --artifacts)   need_value --artifacts $#;   artifacts="$2"; shift 2 ;;
     --conf)        need_value --conf $#;        conf="$2"; conf_explicit=true; shift 2 ;;
     --summary)     need_value --summary $#;     summary_file="$2"; shift 2 ;;
+    --expect)      need_value --expect $#;      expect_file="$2"; shift 2 ;;
     --no-conf)   no_conf=true; shift ;;
     --template)  use_template=true; shift ;;
     --per-tree)  per_tree=true; shift ;;
@@ -181,6 +196,10 @@ addons="$(cd "$addons" && pwd)"
 if [ -n "$enterprise" ]; then
   [ -d "$enterprise" ] || die "enterprise path is not a directory: $enterprise"
   enterprise="$(cd "$enterprise" && pwd)"
+fi
+if [ -n "$expect_file" ]; then
+  [ -r "$expect_file" ] || die "cannot read the --expect file: $expect_file"
+  expect_file="$(cd "$(dirname "$expect_file")" && pwd)/$(basename "$expect_file")"
 fi
 
 artifacts="${artifacts:-${INSTALL_ALL_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/odoo-install-all}}"
@@ -260,13 +279,49 @@ if [ -z "$build_id" ]; then
 fi
 build_id="${build_id:-unknown}"
 
-# ---- the addons tree: modules, core dependencies, independent trees -------------
-graph=""
-if ! graph="$(python3 - "$addons" <<'PY'
-import ast, os, sys
+# Target series ("19.0"): the first two parts of odoo.release.version_info, else
+# the first NN.0 in `odoo --version`. Empty when neither says, which disables the
+# version-prefix check rather than guessing.
+series="$(python3 -c 'import odoo.release as r; print("%s.%s" % tuple(r.version_info[:2]))' 2>/dev/null || true)"
+if [ -z "$series" ]; then
+  series="$("$ODOO" --version 2>/dev/null | tr -d '\r' | python3 -c 'import re,sys; m = re.search(r"(?<![\d.])(\d+\.0)(?![\d.])", sys.stdin.read()); print(m.group(1) if m else "")' || true)"
+fi
 
-root = sys.argv[1]
+# ---- the addons tree: modules, core dependencies, independent trees -------------
+graph=""; graph_rc=0
+graph="$(python3 - "$addons" "$series" "$expect_file" <<'PY'
+import ast, json, os, re, sys
+
+root, series, expect_file = sys.argv[1:4]
+expected = []
+if expect_file:
+    try:
+        with open(expect_file, encoding="utf-8") as handle:
+            expected = json.load(handle)
+        if isinstance(expected, dict):
+            expected = expected.get("modules")
+        if not isinstance(expected, list) or not all(isinstance(n, str) for n in expected):
+            raise ValueError("want a JSON array of module names, or an object with a modules array")
+    except Exception as exc:
+        print("install_all.sh: bad --expect file %s: %s" % (expect_file, exc), file=sys.stderr)
+        sys.exit(4)
+
+
+def version_problem(version):
+    # Odoo's check_version: a series prefix other than the target's is refused; a
+    # version with no series prefix gets the series prepended.
+    if not series or not isinstance(version, str):
+        return ""
+    parts = version.split(".")
+    if len(parts) == 2 and parts == series.split("."):
+        return "manifest version %s is not %s.x.y.z" % (version, series)
+    if len(parts) >= 2 and re.fullmatch(r"\d{2}\.0",".".join(parts[:2])) and ".".join(parts[:2]) != series:
+        return "manifest version %s is not %s" % (version, series)
+    return ""
+
+
 mods = {}
+skipped = {}
 for entry in sorted(os.listdir(root)):
     path = os.path.join(root, entry)
     manifest = os.path.join(path, "__manifest__.py")
@@ -278,10 +333,34 @@ for entry in sorted(os.listdir(root)):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    # An uninstallable module is not a verification target; Odoo refuses -i on it.
+    # A module Odoo would refuse is not a verification target; it is reported.
     if data.get("installable") is False:
+        skipped[entry] = "installable: False"
+        continue
+    problem = version_problem(data.get("version"))
+    if problem:
+        skipped[entry] = problem
         continue
     mods[entry] = sorted({str(d) for d in (data.get("depends") or [])})
+
+# A module that depends on a skipped one cannot install either; repeat until
+# no more fall out.
+changed = True
+while changed:
+    changed = False
+    for name in sorted(mods):
+        bad = [d for d in mods[name] if d in skipped]
+        if bad:
+            skipped[name] = "depends on skipped %s" % bad[0]
+            del mods[name]
+            changed = True
+
+for name in sorted(skipped):
+    print("SKIP %s: %s" % (name, skipped[name]), file=sys.stderr)
+    print("SKIPPED\t%s\t%s" % (name, skipped[name]))
+for name in expected:
+    if name in skipped:
+        print("EXPECTED_SKIPPED\t" + name)
 
 if not mods:
     sys.exit(3)
@@ -321,13 +400,18 @@ print("CORE\t" + ",".join(core))
 for tree in trees:
     print("TREE\t" + ",".join(tree))
 PY
-)"; then
+)" || graph_rc=$?
+if [ "$graph_rc" -eq 4 ]; then
+  exit 2
+elif [ "$graph_rc" -ne 0 ]; then
   die "no installable modules with a __manifest__.py under $addons"
 fi
 
 modules_csv=""; core_csv=""; trees=()
-while IFS=$'\t' read -r kind value; do
+while IFS=$'\t' read -r kind value reason; do
   case "$kind" in
+    SKIPPED) skipped_tsv="${skipped_tsv}${value}"$'\t'"${reason}"$'\n' ;;
+    EXPECTED_SKIPPED) expected_skipped="${expected_skipped:+$expected_skipped,}$value" ;;
     MODULES) modules_csv="$value" ;;
     CORE)    core_csv="$value" ;;
     TREE)    trees+=("$value") ;;
@@ -433,6 +517,15 @@ for line in lines:
         if found:
             module = found.group(1)
 
+INCOMPATIBLE = re.compile(r"module ([a-z0-9_]+): .*incompatible version, setting installable=False")
+# Odoo's check_version only logs this and drops the module, so the failure that
+# follows is a symptom. The line is the decisive one and it names the module.
+for line in lines:
+    refused = INCOMPATIBLE.search(line)
+    if refused:
+        print("%s\t%s\tport" % (refused.group(1), line.strip().replace("\t", " ")[:400]))
+        sys.exit(0)
+
 EXCEPTION = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure|Exit):")
 decisive = ""
 decisive_at = -1
@@ -516,12 +609,18 @@ write_summary() {
   if [ "$use_template" = true ]; then mode="$mode+template"; fi
   summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
     "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
-    "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" <<'PY'
+    "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
+    "$series" "$skipped_tsv" "$expected_skipped" <<'PY'
 import json, os, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
  template_db, template_key, template_reused, use_template,
- addons_arg, status, enterprise, env_decisive, env_log) = sys.argv[1:18]
+ addons_arg, status, enterprise, env_decisive, env_log,
+ series, skipped_tsv, expected_skipped) = sys.argv[1:21]
+skipped = [
+    {"module": row.split("\t")[0], "reason": row.split("\t", 1)[1]}
+    for row in skipped_tsv.splitlines() if "\t" in row
+]
 
 
 def split(value):
@@ -551,8 +650,10 @@ summary = {
     "status": status,
     "db": db, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
     "enterprise_path": enterprise or None,
-    "odoo_build": build_id, "mode": mode,
+    "odoo_build": build_id, "series": series or None, "mode": mode,
     "custom_modules": split(modules_csv),
+    "skipped": skipped,
+    "expected_but_skipped": split(expected_skipped),
     "template": {
         "db": template_db or None, "key": template_key,
         "reused": template_reused == "true", "core_modules": split(core_csv),
@@ -560,7 +661,8 @@ summary = {
     "trees": trees,
     "full": full,
     "env_failure": {"decisive": env_decisive, "log": env_log or None} if env_decisive else None,
-    "passed": status == "pass" and bool(statuses) and all(s == "pass" for s in statuses),
+    "passed": status == "pass" and bool(statuses) and all(s == "pass" for s in statuses)
+              and not expected_skipped,
 }
 print(json.dumps(summary))
 PY
@@ -678,6 +780,10 @@ if [ "$env_failures" -gt 0 ]; then
   write_summary env_failure
   exit 10
 elif [ "$failures" -gt 0 ]; then
+  write_summary failed
+  exit 1
+elif [ -n "$expected_skipped" ]; then
+  echo "install_all.sh: expected modules were skipped: $expected_skipped" >&2
   write_summary failed
   exit 1
 fi
