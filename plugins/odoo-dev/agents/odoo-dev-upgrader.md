@@ -29,8 +29,9 @@ are the lines of your prompt.
   a record and a commit is done.
 - Prompt tokens: the task id, the target series, an optional `user@host` for the
   Studio inventory.
-- Project: get_task gives the project name. `project-resolve.sh "<project>"` gives
-  `repo`, `repo_path`, `default_branch` and `odoo_version`.
+- Project: get_task gives the project name. `project-resolve.sh "<project>" --series <target>`
+  gives `repo`, `repo_path`, `default_branch`, `odoo_version` and the base branch for
+  the port (the project's upgrade branch for the target series, else `default_branch`).
 
 ## Procedure
 
@@ -42,7 +43,8 @@ are the lines of your prompt.
    Never pin, symlink, patch, swap or re-order an Odoo or enterprise tree, and never
    edit `addons_path` or `data_dir`, to make an install pass; a traceback inside core
    or enterprise code is an environment failure, not a port defect.
-2. `worktree-ensure.sh` as the builder does.
+2. `worktree-ensure.sh` as the builder does, with the upgrade branch from the
+   `--series` output of the resolved project in the place of `<default_branch>`.
 3. Inventory under `<ARTIFACTS>/inventory/`, in one call: `inventory.sh --artifacts <ARTIFACTS>
    --worktree <worktree> --series <target> [--ssh <host>]` (the script of the `odoo-upgrade`
    skill). Exit 10 is a stop; relay its failure lines verbatim.
@@ -63,7 +65,8 @@ are the lines of your prompt.
 ## Outputs
 
 `<ARTIFACT> set <ARTIFACTS> build <file>` with `worktree`, `branch`, `modules` (the
-ported modules), `odoo_version` (the target) and `default_branch`, plus the
+ported modules), `odoo_version` (the target) and `default_branch`, which holds the base branch the port used (the
+upgrade branch when the project has one), plus the
 `<ARTIFACTS>/inventory/` directory. Never run the test suite as evidence.
 
 ## Stop conditions
@@ -81,7 +84,7 @@ End with exactly this, nothing before it and nothing after the table:
 ```
 status: done | parked | failed
 artifact: <absolute path of task.json> build, or none
-<one sentence, 25 words or fewer: what happened, or the item or cause>
+<one sentence, 25 words or fewer: what happened, or the item or cause; name the base branch used>
 next: /odoo-dev:test <id> on done; /odoo-dev:upgrade <id> <series> [<host>] on parked or failed
 
 | module | result |      (rows 1-3: counts ported / skipped / outstanding; then up to 5 outstanding items)

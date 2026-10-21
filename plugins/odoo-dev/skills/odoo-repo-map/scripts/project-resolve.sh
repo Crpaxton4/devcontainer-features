@@ -2,7 +2,11 @@
 # project-resolve.sh — one Odoo project (or repo folder) -> everything the rest
 # of the delivery suite needs to act on it.
 #
-# Usage: project-resolve.sh "<project name>|<repo folder>" [--next-after <branch>]
+# Usage: project-resolve.sh "<project name>|<repo folder>" [--next-after <branch>] [--series NN.0]
+#
+# --series NN.0 fills upgrade_branch: the entry's upgrade_branch[NN.0] when set,
+# else default_branch. Without --series the key is null. A value that is not
+# NN.0 exits 2.
 #
 # Accepting a repo folder as well as a project name is deliberate: half the
 # callers start from an Odoo task (project name) and half from a checkout the
@@ -61,12 +65,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAP="${REPO_MAP_FILE:-${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/repo-map.json}"
 
-[ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>] [--series NN.0]" >&2; exit 2; }
 key="$1"; shift
-next_after=""
+next_after=""; series=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --next-after) next_after="${2:?}"; shift 2 ;;
+    --series)
+      series="${2:?}"; shift 2
+      case "$series" in
+        [0-9]*.0) ;;
+        *) echo "--series must be an Odoo series like 19.0, got: $series" >&2; exit 2 ;;
+      esac
+      case "${series%.0}" in *[!0-9]*) echo "--series must be an Odoo series like 19.0, got: $series" >&2; exit 2 ;; esac ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -117,7 +128,7 @@ entry_json="$(node --input-type=module -e '
 node --input-type=module -e '
   import { existsSync } from "fs";
   import { execFileSync } from "child_process";
-  const [entryRaw, reposDir, nextAfter] = process.argv.slice(1);
+  const [entryRaw, reposDir, nextAfter, series] = process.argv.slice(1);
   const entry = JSON.parse(entryRaw);
   // branch_flow index 0 when task work starts from a per-task branch. Spelled
   // with a colon, which git forbids in a ref name, so it can never be a branch.
@@ -197,6 +208,9 @@ node --input-type=module -e '
     repo: entry.repo,
     repo_path: repoPresent ? repoPath : null,
     default_branch: entry.default_branch ?? null,
+    // The base an upgrade to --series is cut from and its PR targets: the recorded
+    // branch for that series, else default_branch so a caller always has a base.
+    upgrade_branch: series ? (entry.upgrade_branch?.[series] ?? entry.default_branch ?? null) : null,
     odoo_version: entry.odoo_version ?? null,
     branch_flow: flow,
     flow_confirmed: confirmed,
@@ -206,4 +220,4 @@ node --input-type=module -e '
     release_assignee: entry.release_assignee ?? null,
     release_reviewer: entry.release_reviewer ?? null,
   }));
-' -- "$entry_json" "$repos_dir" "$next_after"
+' -- "$entry_json" "$repos_dir" "$next_after" "$series"
