@@ -82,12 +82,18 @@ entry_json="$(node --input-type=module -e '
   const [file, key] = process.argv.slice(1);
   const data = JSON.parse(readFileSync(file, "utf8"));
   const projects = data.projects;
-  if (projects[key]) { console.log(JSON.stringify({ project: key, ...projects[key] })); process.exit(0); }
+  if (projects[key]) { console.log(JSON.stringify({ project: key, alias_of: null, ...projects[key] })); process.exit(0); }
   const lower = key.toLowerCase();
+  // An alias is a name for an entry, not an entry: it answers as that entry with
+  // `project` as typed. It is tried before the repo-folder match, and because
+  // aliases are not entries the exit-6 ambiguity below is untouched by them.
+  const byAlias = (match) => Object.entries(projects).find(([, e]) => (e.aliases || []).some(match));
+  const hit = byAlias((a) => a === key) || byAlias((a) => a.toLowerCase() === lower);
+  if (hit) { console.log(JSON.stringify({ ...hit[1], project: key, alias_of: hit[0] })); process.exit(0); }
   const byRepo = Object.entries(projects).filter(([, e]) => (e.repo || "").toLowerCase() === lower);
   if (byRepo.length === 1) {
     const [name, entry] = byRepo[0];
-    console.log(JSON.stringify({ project: name, ...entry }));
+    console.log(JSON.stringify({ project: name, alias_of: null, ...entry }));
     process.exit(0);
   }
   if (byRepo.length > 1) {
@@ -187,6 +193,7 @@ node --input-type=module -e '
 
   console.log(JSON.stringify({
     project: entry.project,
+    alias_of: entry.alias_of ?? null,
     repo: entry.repo,
     repo_path: repoPresent ? repoPath : null,
     default_branch: entry.default_branch ?? null,
