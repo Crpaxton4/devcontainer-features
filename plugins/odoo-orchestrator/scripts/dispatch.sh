@@ -47,6 +47,7 @@ fi
 export ODOO_ORCHESTRATOR_UID ODOO_ORCHESTRATOR_GID ODOO_ORCHESTRATOR_DOCKER_GID
 # A missing bind source would be created by the daemon, owned by root.
 mkdir -p "$HOME/.local/state/usage-log"
+mkdir -p "${DISPATCH_ARTIFACTS_DIR:-$HOME/.config/odoo-dev/dispatch/artifacts}"
 
 compose=(docker compose -f "$stack_file")
 dispatch=("${compose[@]}" run --rm -T dispatcher dispatch)
@@ -71,7 +72,7 @@ add_jobs() {
         return "$rc"
     fi
     printf '%s\n' "$out"
-    "${compose[@]}" up -d dispatcher >&2 || return $?
+    "${compose[@]}" up -d dispatcher webui >&2 || return $?
     batch_id=$(printf '%s\n' "$out" | sed -n 's/.*"batch_id": *"\([0-9a-f]*\)".*/\1/p' | head -n 1)
     if [[ -z $batch_id ]]; then
         return 0

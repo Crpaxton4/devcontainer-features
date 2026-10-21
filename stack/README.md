@@ -40,6 +40,22 @@ checkout (read-only), the repos dir, the config root, the Claude home,
 `~/.config/odoo-dev`, the dispatch state dir, the orchestrator home and
 `~/.local/state/usage-log`. Do not nest one of these paths inside another.
 
+## Web UI
+
+`dispatch.sh` starts the `webui` service with the dispatcher. It stays up after the
+dispatcher exits (`restart: unless-stopped`). Open `http://127.0.0.1:8765`. The port
+is published on the loopback interface only. The pages are read-only:
+
+- Jobs: every job by state, refreshed every 3 s, and a detail page per job with
+  the run outcome, the token and cost figures and the files of its artifact dir.
+- Queue: briefs and approved tasks in the orchestrator home that have no job yet.
+- Friction: the `friction/<date>.md` files of the state dir and the orchestrator home.
+
+The service mounts the state dir, the orchestrator home and the usage-log dir
+read-write (a `:ro` bind breaks a WAL reader) and the artifacts dir read-only.
+It does not mount the docker socket. Stop it with
+`docker compose -p odoo-orchestrator stop webui`.
+
 ## Notes
 
 - The container has no memory limit. The admission gate reads `/proc/meminfo`,

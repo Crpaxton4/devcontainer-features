@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Queue{% endblock %}
+{% block content %}
+<h1>Orchestrator queue</h1>
+<p>Briefs and approved tasks whose task has no job row yet.</p>
+{% if tasks %}
+<table>
+  <tr><th>task</th><th>drafts</th><th>approved brief</th></tr>
+  {% for t in tasks %}
+  <tr>
+    <td>{{ t.task }}</td>
+    <td>{{ t.drafts|join(", ") }}</td>
+    <td>{{ t.approved or "not approved" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No brief or approved task is waiting.</p>
+{% endif %}
+{% endblock %}
