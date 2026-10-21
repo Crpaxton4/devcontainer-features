@@ -27,7 +27,7 @@ are present, plus CSV siblings. Everything else the reader
 needs (column semantics, writing rules) lives in the skill, not in the file.
 
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
-            -o /mnt/extra-addons/acme_upgrade_16_to_19_workbook.xlsx
+            -o <ARTIFACTS>/inventory/acme-upgrade-19.0.xlsx
 
 Prints a validation report — unenriched modules, conflicting enrichment
 files, `TODO-AI` sentinels in a delivered column, over-long cells, inventory
