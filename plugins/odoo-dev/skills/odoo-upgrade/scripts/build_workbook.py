@@ -2,7 +2,7 @@
 """Merge inventory CSV + agent JSON into the upgrade-preparation workbook.
 
 Inputs, all in one working dir (see references/inventory.md,
-references/oca-base-review.md, references/functional-requirements.md):
+references/oca-base-review.md, odoo-upgrade-project/references/functional-requirements.md):
 
     inventory.csv     seeded by module_inventory.py, OCA repo column filled by
                       oca_check.py
@@ -12,7 +12,7 @@ references/oca-base-review.md, references/functional-requirements.md):
     fr_merges.json    optional {drop_tmp_id: {keep, note, requirement}}
     fr_notes.json     optional {tmp_id: "note appended to Notes"}
     studio.csv        optional — studio_inventory.py output (UI-built artifacts)
-    tickets.csv       optional — Odoo support register, see references/support-tickets.md
+    tickets.csv       optional — Odoo support register, see odoo-upgrade-project/references/support-tickets.md
 
 Both agent groups are merged FIELD BY FIELD, per module, across every file in
 the group: an agent may deliver a partial record, and a second file naming the
@@ -120,7 +120,7 @@ QUOTED_LITERAL = re.compile(r'`[^`]*`|"[^"]*"')
 # as a predicate over the masked text instead of one flat substring grep: the
 # label is what makes a hit actionable, and the shape of the pattern is what
 # keeps `may` the modal apart from May the month. This list is the source of
-# truth for rule 5 of references/functional-requirements.md — change both
+# truth for rule 5 of odoo-upgrade-project/references/functional-requirements.md — change both
 # together, one doc line per label.
 WEAK_WORDS = [
     # Modal instead of `shall`, recognised by the bare verb that follows it,
@@ -290,7 +290,7 @@ def validate_ticket(row):
     # identifier the upgrade client prints and the only one support can act on.
     if not (row.get("token") or "").strip():
         yield f"ticket {row.get('id') or '(unnumbered)'} has no upgrade token"
-    # sop.md 7.2 makes an unresolved ticket a go-live blocker, and a waiver has
+    # odoo-upgrade-project/references/sop.md 7.2 makes an unresolved ticket a go-live blocker, and a waiver has
     # to point at the written waiver.
     if status == "waived" and not (row.get("resolution") or "").strip():
         yield (f"ticket {row.get('id') or '(unnumbered)'} is waived with no "
@@ -791,7 +791,7 @@ def main():
     if tickets:
         open_tickets = [r for r in tickets[1]
                         if r[TICKET_COLUMNS.index("status")] not in ("resolved", "waived")]
-        # sop.md 7.2: every ticket resolved or waived before a production run.
+        # odoo-upgrade-project/references/sop.md 7.2: every ticket resolved or waived before a production run.
         print(f"tickets: {len(tickets[1])} total, {len(open_tickets)} still blocking")
     if requirements:
         print("handled:", dict(Counter(e["handled"] for e in requirements)))

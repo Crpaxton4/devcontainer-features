@@ -7,17 +7,17 @@ Standard deliverable = ONE xlsx, 4 sheets, no legend/README sheets (column meani
 | Sheet | Rows | Built by |
 |-------|------|----------|
 | Module Inventory | 1/module | this file |
-| Functional Requirements | 1/requirement | [functional-requirements.md](./functional-requirements.md) |
+| Functional Requirements | 1/requirement | the `odoo-dev:odoo-upgrade-project` skill (`references/functional-requirements.md`); built only when its FR input is supplied |
 | Traceability | 1/module | derived — module → requirement IDs + counts + inventory verdicts |
 | Inventory Evidence | 1/module | this file — paths/greps behind every verdict |
 | Studio Inventory | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed; adds `populated` (stored Studio field holds data: `populated`/`empty`/`n/a`) and `view-inline-edit` rows (module view whose arch was edited in the database) |
-| Tickets | 1/ticket | `tickets.csv` — optional, see [support-tickets.md](./support-tickets.md) |
+| Tickets | 1/ticket | `tickets.csv` — optional, see the `odoo-dev:odoo-upgrade-project` skill (`references/support-tickets.md`); built only when its tickets input is supplied |
 
 Three phases, each a fan-out of read-only agents writing JSON, then one merge script:
 
 1. **Enrich** (this file) — per module: purpose, area, complexity, 3rd-party, action, `<major> native?`
 2. **OCA/base review** ([oca-base-review.md](./oca-base-review.md)) — per module: `OCA <major> alternative`
-3. **Requirements** ([functional-requirements.md](./functional-requirements.md)) — FR rows + Handled? verdict
+3. **Requirements** (the `odoo-dev:odoo-upgrade-project` skill, `references/functional-requirements.md`) — FR rows + Handled? verdict
 
 Phase 2 read phase 1 output; phase 3 read both. Never reorder.
 
