@@ -331,6 +331,7 @@ run_suite "inventory.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/inventory
 run_suite "port-plan.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/port-plan.test.sh"
 run_suite "port-module.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/port-module.test.sh"
 run_suite "port-lint.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/port-lint.test.sh"
+run_suite "xpath-check.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/xpath-check.test.sh"
 run_suite "upgrade-state.test.sh"  "$SKILLS/odoo-upgrade/scripts/tests/upgrade-state.test.sh"
 run_suite "bump-manifest.test.sh" "$SKILLS/odoo-devcontainer/scripts/tests/bump-manifest.test.sh"
 run_suite "oca-check.test.sh"      "$SKILLS/odoo-prior-art/scripts/tests/oca-check.test.sh"
