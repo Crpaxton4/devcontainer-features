@@ -40,6 +40,16 @@
 #   - a background run: run_in_background on a Bash call, a command ended by a single
 #     &, a nohup or setsid wrapper, and a disown head. A forked turn ends with the
 #     call, so a detached run dies. &&, |&, &> and >&2 are not background.
+#   - tree pinning: ln -s, mv and cp into */addons/<series> or <data dir>/addons/, any
+#     write to a file named odoo.conf (redirect, sed -i, tee), and --addons-path or
+#     --data-dir on an odoo, odoo-bin or odoo<NN>-bin call,
+#   - direct install: -i, -u, --init and --update on an odoo call, for odoo-dev-upgrade*
+#     agents only (odoo-bin upgrade_code is exempt),
+#   - database upgrade and production: upgrade_service.sh production, odoo upgrade, and
+#     any ssh except "true", psql -Atc "select ..." (read-only) and studio_inventory.py,
+#   - writes outside scope: an Edit, Write or NotebookEdit whose path is neither inside a
+#     git working tree nor under the odoo-dev state dir (ODOO_DEV_STATE_DIR). The
+#     second hooks.json entry routes these tools here.
 #
 # HOW FAR IT SEES. The command is tokenised with quotes and redirect operators, split
 # into simple commands, and looked at through shell keywords, wrappers (env, sudo,
@@ -444,10 +454,34 @@ const checkGh = (args) => {
   }
 };
 
+// Classes for the upgrade path. AGENT_TYPE is set once, by the stdin handler.
+let AGENT_TYPE = "";
+const ODOO_HEAD = /^odoo(\d+)?(-bin)?$/;
+const UPGRADE_AGENT = /odoo-dev-upgrade/;
+const WRITE_SQL = /\b(insert|update|delete|drop|alter|create|truncate|grant)\b/i;
+const SSH_VALUE_OPTS = new Set(["-o", "-p", "-i", "-l", "-F", "-J", "-L", "-R", "-D", "-b", "-c",
+                                "-E", "-e", "-I", "-m", "-O", "-S", "-W", "-w", "-B", "-Q"]);
+const PIN_ADVICE = " The addons path and the data dir are set by the environment, not by the agent.";
+
+// Does this path sit in an addons tree that holds a series (addons/19.0) or in the addons
+// directory under an Odoo data dir? Those are the trees that pinning would redirect.
+const pinsTree = (p, cwd) => {
+  const e = expand(p);
+  if (e === null) return false;
+  const abs = path.resolve(cwd, e) + "/";
+  if (/\/addons\/\d+\.0\//.test(abs)) return true;
+  const roots = ["/var/lib/odoo"];
+  if (process.env.ODOO_DEFAULT_DATA_DIR) roots.push(process.env.ODOO_DEFAULT_DATA_DIR.replace(/\/+$/, ""));
+  return roots.some((r) => abs.startsWith(r + "/addons/"));
+};
+
 const checkRedirects = (toks, cwd) => {
   for (let i = 0; i < toks.length; i += 1) {
     if (!toks[i].redir || !toks[i + 1] || toks[i + 1].redir || toks[i + 1].here) continue;
     const target = toks[i + 1].t;
+    if (base(target) === "odoo.conf") {
+      deny("Refused: tree pinning. A shell redirect into " + target + " rewrites odoo.conf." + PIN_ADVICE);
+    }
     if (inConfigDir(target, cwd)) {
       deny("Refused: a shell redirect into " + target + ", inside the Claude configuration directory." + CONFIG_ADVICE);
     }
@@ -479,6 +513,64 @@ const unwrap = (words) => {
   }
   w.detached = detached;
   return w;
+};
+
+const checkOdoo = (args) => {
+  if (args.some((a) => a === "--addons-path" || a === "--data-dir" ||
+                       a.startsWith("--addons-path=") || a.startsWith("--data-dir="))) {
+    deny("Refused: tree pinning. --addons-path and --data-dir on an Odoo call outside install_all.sh." + PIN_ADVICE);
+  }
+  if (args.includes("upgrade")) {
+    deny("Refused: database upgrade. odoo upgrade is a human-run step.");
+  }
+  if (!UPGRADE_AGENT.test(AGENT_TYPE)) return;
+  const first = args.find((a) => !a.startsWith("-"));
+  if (first === "upgrade_code") return;
+  if (args.some((a) => ["-i", "-u", "--init", "--update"].includes(a) ||
+                       a.startsWith("--init=") || a.startsWith("--update="))) {
+    deny("Refused: direct install. Only the install loop script installs or updates a module, so its cap and summary hold.");
+  }
+};
+
+// The remote command of an ssh call is what follows the host. Only three forms pass.
+const checkSsh = (args) => {
+  const pos = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (pos.length === 0 && args[i].startsWith("-")) {
+      if (SSH_VALUE_OPTS.has(args[i])) i += 1;
+      continue;
+    }
+    pos.push(args[i]);
+  }
+  const cmd = pos.slice(1).join(" ").trim();
+  const chained = /[;&`\n]|\$\(|\|\|/.test(cmd);
+  const readOnly = !chained && (
+    cmd === "true" ||
+    (/^psql\s+-Atc\s+["\x27]?\s*select\b/i.test(cmd) && !WRITE_SQL.test(cmd)) ||
+    base(cmd.split(/\s+/)[0]) === "studio_inventory.py");
+  if (!readOnly) {
+    deny("Refused: database upgrade and production. ssh passes only true, psql -Atc \"select ...\" " +
+         "and studio_inventory.py (got: " + (cmd || "an interactive shell") + ").");
+  }
+};
+
+const checkWrite = (p) => {
+  const ti = p.tool_input && typeof p.tool_input === "object" ? p.tool_input : {};
+  const fp = typeof ti.file_path === "string" && ti.file_path ? ti.file_path
+    : (typeof ti.notebook_path === "string" ? ti.notebook_path : "");
+  if (!fp) deny("Refused: write outside scope. This " + p.tool_name + " call carried no file_path.");
+  const cwd = typeof p.cwd === "string" && p.cwd ? p.cwd : process.cwd();
+  const e = expand(fp);
+  if (e === null) deny("Refused: write outside scope. The path " + fp + " cannot be resolved.");
+  const abs = path.resolve(cwd, e);
+  // Mirrors scripts/state-dir.sh: ODOO_DEV_STATE_DIR, else $HOME/.local/share/odoo-dev.
+  const state = process.env.ODOO_DEV_STATE_DIR ||
+    (process.env.HOME ? process.env.HOME + "/.local/share/odoo-dev" : "");
+  const s = state ? path.resolve(state).replace(/\/+$/, "") : "";
+  if (s && (abs === s || abs.startsWith(s + path.sep))) return;
+  if (inTree(abs, cwd)) return;
+  deny("Refused: write outside scope. " + abs + " is neither inside a git working tree nor " +
+       "under the odoo-dev state directory.");
 };
 
 const BG_MSG = "Refused: background runs die with the forked turn; run it in the foreground with a timeout.";
@@ -534,6 +626,23 @@ const checkSimple = (toks, st, depth) => {
     }
     return;
   }
+  if (head === "ln" || head === "mv" || head === "cp") {
+    const ops = args.filter((a) => !a.startsWith("-"));
+    const last = ops[ops.length - 1];
+    if ((head !== "ln" || args.some((a) => /^-[A-Za-z]*s/.test(a) || a === "--symbolic")) &&
+        last !== undefined && pinsTree(last, st.cwd)) {
+      deny("Refused: tree pinning. " + head + " into " + last + " changes which addons tree Odoo loads." + PIN_ADVICE);
+    }
+    return;
+  }
+  if (ODOO_HEAD.test(head)) { checkOdoo(args); return; }
+  if (/^upgrade_service(\.sh)?$/.test(head)) {
+    if (args.includes("production")) {
+      deny("Refused: database upgrade. upgrade_service.sh production is a human-run step.");
+    }
+    return;
+  }
+  if (head === "ssh") { checkSsh(args); return; }
   if (head === "git") { checkGit(args, st); return; }
   if (head === "gh") { checkGh(args); return; }
   if (/^gh-as-owner(\.sh)?$/.test(head)) {
@@ -556,6 +665,9 @@ const checkSimple = (toks, st, depth) => {
       let files = args.filter((a) => !a.startsWith("-"));
       const scripted = args.some((a) => a === "-e" || a === "-f" || a.startsWith("--expression") || a.startsWith("--file"));
       if (!scripted) files = files.slice(1);     // the first operand is the script
+      if (files.some((f) => base(f) === "odoo.conf")) {
+        deny("Refused: tree pinning. " + head + " -i edits odoo.conf." + PIN_ADVICE);
+      }
       if (files.some((f) => inConfigDir(f, st.cwd))) {
         deny("Refused: " + head + " -i edits a file inside the Claude configuration directory." + CONFIG_ADVICE);
       }
@@ -568,6 +680,9 @@ const checkSimple = (toks, st, depth) => {
   }
   if (head === "tee") {
     for (const f of args.filter((a) => !a.startsWith("-"))) {
+      if (base(f) === "odoo.conf") {
+        deny("Refused: tree pinning. tee writes odoo.conf." + PIN_ADVICE);
+      }
       if (inConfigDir(f, st.cwd)) {
         deny("Refused: tee writes " + f + ", inside the Claude configuration directory." + CONFIG_ADVICE);
       }
@@ -605,6 +720,8 @@ process.stdin.on("end", () => {
   }
   const type = typeof p.agent_type === "string" ? p.agent_type : "";
   if (!(RUN || type.startsWith(AGENT_PREFIX) || type.includes(":" + AGENT_PREFIX))) allow();
+  AGENT_TYPE = type;
+  if (["Edit", "Write", "NotebookEdit"].includes(p.tool_name)) { checkWrite(p); allow(); }
   if (p.tool_name !== "Bash") allow();
   if (p.tool_input && p.tool_input.run_in_background) deny(BG_MSG);
   try {
