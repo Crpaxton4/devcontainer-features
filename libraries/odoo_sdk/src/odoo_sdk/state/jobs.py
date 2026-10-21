@@ -1,7 +1,9 @@
 """The job store: ``jobs.db``, the dispatcher's disposable working state.
 
-Owned by the dispatcher and written by nothing else; regenerable, and safe to
-delete after a quiet week without losing history (the run record is in
+Written by two processes: the dispatcher, and ``dispatch submit``, which inserts
+PENDING rows without the dispatcher lock. WAL mode and ``busy_timeout=5000``
+(see :mod:`odoo_sdk.state.migrations`) cover the second writer. Regenerable, and
+safe to delete after a quiet week without losing history (the run record is in
 ``runs.db``). Callers use :class:`JobStore` and never see SQL.
 
 The duplicate gate is a property of the engine, not of this code: the partial
@@ -197,6 +199,39 @@ class JobStore:
             raise
         return self.get(job_id)
 
+    def submit_all(self, rows: list[dict], *, now_us: int | None = None) -> list[Job]:
+        """Insert every row as PENDING in one transaction, or none of them.
+
+        Each row holds ``job_id, batch_id, task_id, repo, brief`` and an
+        optional ``round``. A live twin (in the store or earlier in ``rows``)
+        rolls the whole batch back and raises DuplicateTaskInFlightError.
+        """
+        now = resolve_now_us(now_us)
+        task_id = ""
+        try:
+            with self._tx() as conn:
+                for row in rows:
+                    task_id = row["task_id"]
+                    conn.execute(
+                        "INSERT INTO jobs (job_id, batch_id, task_id, repo, round, "
+                        "state, brief, submitted_us) "
+                        "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+                        (
+                            row["job_id"],
+                            row["batch_id"],
+                            task_id,
+                            row["repo"],
+                            row.get("round", 1),
+                            row["brief"],
+                            now,
+                        ),
+                    )
+        except sqlite3.IntegrityError as exc:
+            if exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+                raise DuplicateTaskInFlightError(task_id) from exc
+            raise
+        return self.list_by_batch(rows[0]["batch_id"]) if rows else []
+
     def reject_duplicate(
         self,
         *,
@@ -336,6 +371,15 @@ class JobStore:
                 f"SELECT {_COLUMNS} FROM jobs WHERE state=? "
                 "ORDER BY submitted_us, job_id",
                 (JobState(state).value,),
+            ).fetchall()
+        return [Job.from_row(row) for row in rows]
+
+    def list_by_batch(self, batch_id: str) -> list[Job]:
+        """Return the jobs of one batch in insertion order (empty if unknown)."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE batch_id=? ORDER BY rowid",
+                (batch_id,),
             ).fetchall()
         return [Job.from_row(row) for row in rows]
 

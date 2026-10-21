@@ -17,7 +17,7 @@ Corollary: also check if target version **removed** what feature would extend (d
 
 ## Scoping the question
 
-Answer prior art per **capability**, not per module. Split request into 2–5 concrete, user-facing capabilities first, in user words:
+Answer prior art per **capability**, not per module, except for an upgrade inventory, where the verdict is per module (the upgrader brief). Split request into 2–5 concrete, user-facing capabilities first, in user words:
 
 > "Salesperson sees the customer's carrier account number on the delivery order"
 > "Delivery orders are split by requested date"
@@ -36,8 +36,8 @@ Method, in order:
 
 Verdict format, one line per capability:
 
-- `native: no` — target standard have nothing equivalent.
-- `native: yes/partial: <how/where in target>` — name target module, feature, or setting. Examples: `yes/partial: mail composer has cc/bcc fields`, `yes/partial: stock.picking has date_done`, `yes/partial: account 'send & print' wizard`.
+- `native: yes | yes/partial | partial | no` — exactly one of these four values, nothing else in the cell. `no` — target standard have nothing equivalent.
+- `native notes: <how/where in target>` — for any value but `no`, name target module, feature, or setting. Examples: `mail composer has cc/bcc fields`, `stock.picking has date_done`, `account 'send & print' wizard`. The explanation never goes in the `native` cell.
 
 Evidence: at least one path in target tree, or exact grep terms tried when answer `no`. "I looked" not evidence.
 
@@ -52,7 +52,7 @@ python3 <base directory>/scripts/oca_catalog.py --series 19.0 -o oca19_catalog.c
 
 `oca_check.py` (run first) cache one branch listing per repo. `oca_catalog.py` reuse those listings and fetch each module manifest through batched GitHub GraphQL (~60 modules/request, ~25 requests for full 19.0 org). CSV columns: `repo, module, name, summary, description, depends, license, installable, development_status`. Expect ~1,300 rows on mature series. Re-runs only fetch what missing.
 
-Both need authenticated `gh`. `oca_check.py` exit **2** on `PARTIAL SCAN` (network trouble, or >10% of repos failing) and leave CSV untouched — only full healthy scan prove absence, so never report partial scan as `none`.
+Both need authenticated `gh`. `oca_check.py` exit **2** on `PARTIAL SCAN` (network trouble, or >10% of repos failing) and leave CSV untouched — only full healthy scan prove absence, so never report partial scan as `none`. Exit **2** also mean bad `--csv` (absent, empty, or without `Module Name` header), reported before any scan with stderr line `oca_check.py: --csv <path>: <reason>`; two cases differ by stderr and by whether scan ran.
 
 Catalog is search space. Grep it — beat asking model what OCA have.
 
@@ -88,7 +88,8 @@ One block per capability, nothing that not traceable to path or row:
 
 ```
 Capability: <one line, user's words>
-  native: no | yes/partial: <where in target>
+  native: yes | yes/partial | partial | no
+    native notes: <where in target, when not no>
     evidence: <path(s) grepped, or the terms tried>
   oca: none | <repo>/<module> (full|partial)
     evidence: <catalog rows, READMEs fetched, or keywords tried>

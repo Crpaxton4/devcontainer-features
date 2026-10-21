@@ -38,8 +38,9 @@
 #                    the test section is written by the script and never re-typed.
 #
 # Mechanics:
-#   - addons path STATED, never inherited: worktree FIRST so worktree modules
-#     shadow the originals, then the core addons directories resolved from the
+#   - addons path STATED, never inherited: the custom root FIRST (task worktree,
+#     else --repo-path holding the module, else the addons base holding it, else
+#     exit 2; reported as addons_root) so its modules shadow the originals, then the core addons directories resolved from the
 #     RUNNING Odoo (odoo.__file__). addons_path is deliberately NOT read from
 #     odoo.conf — one unrelated broken tree in the ambient config aborts registry
 #     load, and the run then reports zero tests instead of a failure.
@@ -78,7 +79,7 @@
 # Last stdout line: {"passed","status","error","db","module","odoo_version",
 #   "odoo_bin","module_target_series","mode","produced_by",
 #   "tests_run","suites":[{"module","collected","executed","failed"}],
-#   "collected_is_executed","addons_path","data_dir","tours_declared","tours_run",
+#   "collected_is_executed","addons_path","addons_root","enterprise_addons","data_dir","tours_declared","tours_run",
 #   "tours_passed","failures":[{"test","error"}],"log_file","log_excerpt",
 #   "db_dropped"}
 #
@@ -293,7 +294,7 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
       produced_by: "run-tests.sh",
       tests_run: 0,
       suites: [], collected_is_executed: true,
-      addons_path: null, data_dir: null,
+      addons_path: null, addons_root: null, enterprise_addons: null, data_dir: null,
       tours_declared: 0, tours_run: 0, tours_passed: 0,
       failures: [{ test: module_ + ": Odoo series mismatch", error: err }],
       log_file: null, log_excerpt: "",
@@ -318,6 +319,7 @@ fi
 # layouts are probed, in this order: the packaged one (<pkg>/addons, holding
 # base) and the source one (<root>/addons, holding the community modules).
 worktree_addons="$WORKTREE_ADDONS_BASE/$WORKTREE_SUBDIR/task-${task_id}"
+addons_root="override"; enterprise_addons=""
 if [ -n "$addons_override" ]; then
   addons="$addons_override"
 else
@@ -347,14 +349,36 @@ print(",".join(out))'
     echo "could not resolve Odoo's core addons directory from the running Odoo (importing odoo failed). Pass --addons-path explicitly — addons_path is deliberately not read from odoo.conf." >&2
     exit 2
   }
-  addons="${worktree_addons},${core_addons}"
-  # Enterprise is OPT-IN, named by env var, and never discovered from odoo.conf:
-  # a stale ambient enterprise checkout is precisely what aborted the registry in
-  # #887, so it joins the path only when the caller says this module needs it.
-  ent="${ODOO_ENTERPRISE_ADDONS:-}"
-  if [ -n "$ent" ] && odoo_run test -d "$ent"; then
-    addons="${addons},${ent}"
+  # The custom addons root (#1171), first match wins, probed with odoo_run so a
+  # host-mode run asks the container and not the host:
+  #   1. the task worktree  $WORKTREE_ADDONS_BASE/$WORKTREE_SUBDIR/task-<id>
+  #   2. --repo-path DIR, when DIR/<module> exists
+  #   3. $WORKTREE_ADDONS_BASE, when $WORKTREE_ADDONS_BASE/<module> exists
+  # None of them: exit 2, because a path that holds no module installs nothing.
+  if odoo_run test -d "$worktree_addons"; then
+    addons_root="$worktree_addons"
+  elif [ -n "$repo_path" ] && odoo_run test -d "$repo_path/$module"; then
+    addons_root="$repo_path"
+  elif odoo_run test -d "$WORKTREE_ADDONS_BASE/$module"; then
+    addons_root="$WORKTREE_ADDONS_BASE"
+  else
+    echo "no custom addons root holds module $module. Looked at: (1) $worktree_addons, (2) --repo-path ${repo_path:-<not given>}/$module, (3) $WORKTREE_ADDONS_BASE/$module, (4) --addons-path <not given>. Pass --addons-path or --repo-path." >&2
+    exit 2
   fi
+  addons="${addons_root},${core_addons}"
+  # Enterprise is never discovered from odoo.conf: a stale ambient enterprise
+  # checkout is precisely what aborted the registry in #887. ODOO_ENTERPRISE_ADDONS
+  # names it explicitly. Without it, the one place the devcontainer unpacks
+  # enterprise for the target series is probed, and used only when web_enterprise
+  # is really there.
+  ent="${ODOO_ENTERPRISE_ADDONS:-}"
+  if [ -n "$ent" ]; then
+    if odoo_run test -d "$ent"; then enterprise_addons="$ent"; fi
+  else
+    ent_probe="${ODOO_DEFAULT_DATA_DIR:-/var/lib/odoo}/addons/${major}.0"
+    if odoo_run test -d "$ent_probe/web_enterprise"; then enterprise_addons="$ent_probe"; fi
+  fi
+  [ -z "$enterprise_addons" ] || addons="${addons},${enterprise_addons}"
 fi
 
 # ---- tours: declared, and can they actually run? -----------------------------
@@ -540,8 +564,33 @@ tours_run="$( { grep -oE '\.browser: \[[0-9]+/[0-9]+\] Tour [A-Za-z0-9_.]+ ' "$l
 tours_passed="$(grep -cE '\.browser: tour succeeded[[:space:]]*$' "$log" || true)"
 tours_passed="${tours_passed:-0}"
 
+# Odoo 17 logs neither of the lines above. It logs only
+# `odoo.addons.<mod>.tests.<file>.<Class>.browser: test successful`, once per
+# browser test, and a QUnit `browser_js` suite logs the same line. So the 17
+# count is restricted to the classes whose source calls start_tour(), taken
+# from module_src/tests, and counts distinct loggers (the line carries the
+# class, not the method, so a class that runs several tours counts once).
+# Added to the 18+ counts, so a log in either format is counted.
+if [ -n "$module_src" ] && [ -d "$module_src/tests" ]; then
+  tour_classes="$( { grep -rl "start_tour(" "$module_src/tests" --include='*.py' 2>/dev/null || true; } \
+    | while IFS= read -r f; do
+        awk '/^[[:space:]]*class[[:space:]]+[A-Za-z0-9_]+[[:space:]]*\(/ {
+               s = $0; sub(/^[[:space:]]*class[[:space:]]+/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); cls = s }
+             /start_tour\(/ && cls != "" { print cls }' "$f"
+      done | sort -u)"
+  for cls in $tour_classes; do
+    n17="$( { grep -oE "odoo\.addons\.[A-Za-z0-9_.]+\.${cls}\.browser: test successful" "$log" || true; } | sort -u | wc -l | tr -d ' ')"
+    tours_run=$((tours_run + n17))
+    tours_passed=$((tours_passed + n17))
+  done
+fi
+
 passed=false
 [ "$rc" -eq 0 ] && [ "$fail_count" -eq 0 ] && [ "$tests_run" -gt 0 ] && passed=true
+
+# A tour that failed at a step is a failure on every series, whatever the
+# summary line and exit code say.
+if grep -qE 'Tour [A-Za-z0-9_.]+ failed at step' "$log"; then passed=false; fi
 
 # The silent-skip guard. A module that declares tours and ran none did not pass;
 # it did not test. This is the whole reason --with-tours exists.
@@ -569,7 +618,8 @@ result_json="$(node -e '
   const fs = require("fs");
   const [logFile, passed, dbname, module_, version, dropped, testsRun,
          toursDeclared, toursRun, toursPassed, tourGap, mode, status,
-         registryError, addonsPath, dataDir, targetSeries, odooBin] = process.argv.slice(1);
+         registryError, addonsPath, dataDir, targetSeries, odooBin,
+         addonsRoot, enterpriseAddons] = process.argv.slice(1);
   const text = fs.readFileSync(logFile, "utf8");
   const lines = text.split("\n");
 
@@ -595,11 +645,27 @@ result_json="$(node -e '
     const message = named.length ? named[named.length - 1] : (block[block.length - 1] || "");
     failures.push({ test: m[1].trim().slice(0, 200), error: message.slice(0, 300) });
   }
+  // "Tour <name> failed at step" is logged on every series; add it unless a
+  // FAIL:/ERROR: entry above already names that tour.
+  const seenTours = new Set();
+  for (const l of lines) {
+    const t = l.match(/Tour ([A-Za-z0-9_.]+) failed at step[^\n]*/);
+    if (!t || seenTours.has(t[1])) continue;
+    seenTours.add(t[1]);
+    if (failures.some((f) => f.test.includes(t[1]) || f.error.includes(t[1]))) continue;
+    failures.push({ test: module_ + ": tour " + t[1] + " failed", error: t[0].trim().slice(0, 300) });
+  }
   if (tourGap === "true") {
     failures.unshift({
       test: module_ + ": declared tours did not run",
       error: `${toursDeclared} test file(s) call start_tour() but no tour executed — Odoo skips tours when the browser or websocket-client is missing, and logs the skip as a pass. Re-run with --with-tours.`,
     });
+  }
+  // An unmet dependency is the commonest reason an install dies, and the generic
+  // failure says nothing about it. Odoo logs it on odoo.modules.* loggers.
+  const depLine = lines.find((l) => /odoo\.modules\.[A-Za-z.]+.*(Unmet dependencies|which is not installed|not found|Some modules are not loaded)/.test(l));
+  if (depLine) {
+    failures.unshift({ test: module_ + ": missing dependency", error: depLine.trim().slice(0, 300) });
   }
   // A registry abort leaves NO FAIL:/ERROR: line to extract, so the list would be
   // empty — the exact shape that reads as "nothing went wrong here".
@@ -663,7 +729,8 @@ result_json="$(node -e '
     produced_by: "run-tests.sh",
     tests_run: Number(testsRun) || 0,
     suites, collected_is_executed: true,
-    addons_path: addonsPath, data_dir: dataDir,
+    addons_path: addonsPath, addons_root: addonsRoot, enterprise_addons: enterpriseAddons || null,
+    data_dir: dataDir,
     tours_declared: Number(toursDeclared) || 0,
     tours_run: Number(toursRun) || 0,
     tours_passed: Number(toursPassed) || 0,
@@ -672,7 +739,8 @@ result_json="$(node -e '
   }));
 ' "$log" "$passed" "$dbname" "$module" "$version_raw" "$db_dropped" "$tests_run" \
   "$tours_declared" "$tours_run" "$tours_passed" "$tour_gap" "$mode" "$status" \
-  "$registry_error" "$addons" "$data_dir" "$target_series" "$odoo_bin")"
+  "$registry_error" "$addons" "$data_dir" "$target_series" "$odoo_bin" \
+  "$addons_root" "$enterprise_addons")"
 emit "$result_json"
 
 [ "$passed" = true ] || exit 0  # a test failure is a RESULT, not a script error

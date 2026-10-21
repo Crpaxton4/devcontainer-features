@@ -6,13 +6,18 @@
     lint <brief>               a backstop for obvious breaches of the requirement line
     unhandled                  stdin: dead-letters JSON; print the unhandled ones
     handled <job_id>...        record dead letters that are dealt with
-    friction [run.json]        append friction not yet written; print the count
-    records [run.json]         print the batch as a table
+    friction [report.json]     append friction not yet written; print the count
+    records [report.json]      print the batch as a table
+    batch-add <batch_id>       remember a batch that dispatch.sh add submitted
+    batches                    print the remembered batch ids not yet processed
+    batch-done <batch_id>      mark a batch processed
 
-``run.json`` is the file ``dispatch.sh run`` tee'd; without it the JSON is read
-from stdin. The home directory is ``$ODOO_ORCHESTRATOR_HOME`` (made absolute) or
-``~/.local/state/odoo-orchestrator``. It holds ``briefs/<task>/draft-<n>.md``,
-``approved/<task>.txt``, ``handled.txt``, ``friction-done.txt``, ``runs/`` and
+``report.json`` is the object ``dispatch.sh report <batch_id>`` prints; without a
+file it is read from stdin. A job with no ``bundle`` has no envelope: no friction
+and blank figures. The home directory is ``$ODOO_ORCHESTRATOR_HOME`` (made
+absolute) or ``~/.local/state/odoo-orchestrator``. It holds
+``briefs/<task>/draft-<n>.md``, ``approved/<task>.txt``, ``handled.txt``,
+``friction-done.txt``, ``batches.txt``, ``batches-done.txt`` and
 ``friction/<date>.md``. Nothing here writes a timesheet.
 
 The linter is not the enforcement. The requirement line is semantic, and the
@@ -147,8 +152,40 @@ def mark_handled(job_ids: list[str]) -> None:
     _append_ids("handled.txt", job_ids)
 
 
+BATCH_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _check_batch(batch_id: str) -> None:
+    if not BATCH_ID.match(batch_id):
+        raise ValueError(f"batch id must be 32 hex digits: {batch_id!r}")
+
+
+def batch_add(batch_id: str) -> None:
+    """Remember a batch that `dispatch.sh add` returned. Adding twice is harmless."""
+    _check_batch(batch_id)
+    if batch_id not in _ids("batches.txt"):
+        _append_ids("batches.txt", [batch_id])
+
+
+def batches() -> list[str]:
+    """Remembered batch ids not yet processed, oldest first."""
+    try:
+        order = (home() / "batches.txt").read_text(encoding="utf-8", errors="replace").split()
+    except OSError:
+        return []
+    done = _ids("batches-done.txt")
+    return [b for b in dict.fromkeys(order) if b not in done]
+
+
+def batch_done(batch_id: str) -> None:
+    _check_batch(batch_id)
+    _append_ids("batches-done.txt", [batch_id])
+
+
 def _envelope(job: dict) -> dict:
-    bundle = job.get("bundle") or ""
+    bundle = job.get("bundle")
+    if not bundle or not isinstance(bundle, str):
+        return {}
     try:
         data = json.loads((Path(bundle) / "envelope.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -238,6 +275,12 @@ def _dispatch(command: str, args: list[str]) -> int:
         print(friction(_report(args)))
     elif command == "records" and len(args) <= 1:
         print(records(_report(args)))
+    elif command == "batch-add" and len(args) == 1:
+        batch_add(args[0])
+    elif command == "batches" and not args:
+        print("\n".join(batches()))
+    elif command == "batch-done" and len(args) == 1:
+        batch_done(args[0])
     else:
         print(__doc__, file=sys.stderr)
         return 2

@@ -1,0 +1,11 @@
+# Warnings that install_all.sh accepts on every run (#1139).
+# One entry per line: a normalised line ("<logger>: <message>") or a regex that
+# is searched in it. Blank lines and lines starting with # are ignored.
+# A project adds its own entries in <artifacts>/accepted_warnings.txt.
+
+# Every module without an `author` key logs this, once per module.
+^odoo\.modules\.module: Missing .author. key in manifest
+
+# Odoo options that the generated odoo.conf carries but this series does not know.
+^odoo\.tools\.config: .*shell_interface
+^odoo\.tools\.config: .*unknown option

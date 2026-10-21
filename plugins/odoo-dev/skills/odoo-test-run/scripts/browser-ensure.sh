@@ -44,7 +44,24 @@ ARTIFACTS_DIR="${ODOO_TEST_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/odoo-test-run}"
 
 bin=""; source=""
 
-usable() { [ -n "${1:-}" ] && [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
+last_reason=""
+
+# A candidate that exists and is executable but fails to run leaves its
+# diagnosis in last_reason: the first stderr line of --version and, when ldd is
+# available, the shared libraries it cannot find.
+usable() {
+  [ -n "${1:-}" ] && [ -x "$1" ] || return 1
+  local err
+  if err="$("$1" --version 2>&1 >/dev/null)"; then return 0; fi
+  last_reason="$1 failed to run: $(printf '%s\n' "$err" | head -1)"
+  if command -v ldd >/dev/null 2>&1; then
+    local missing
+    missing="$(ldd "$1" 2>/dev/null | grep 'not found' | awk '{print $1}' | paste -sd, - || true)"
+    [ -z "$missing" ] || last_reason="$last_reason; missing libraries: $missing"
+  fi
+  last_reason="$last_reason. Repair: npx playwright install-deps chromium-headless-shell (installs the system libraries)."
+  return 1
+}
 
 # 1. An explicit override wins, exactly as Odoo reads it.
 if usable "${ODOO_BROWSER_BIN:-}"; then
@@ -74,7 +91,7 @@ fi
 # caller on a load path can install anything or be broken by an absent browser.
 if [ "$check" = true ]; then
   if [ -z "$bin" ]; then
-    echo "no headless browser — tours would be SKIPPED and the suite would still report green. Run browser-ensure.sh --install (~100 MB, network) or set ODOO_BROWSER_BIN before --with-tours."
+    echo "no headless browser — tours would be SKIPPED and the suite would still report green. Run browser-ensure.sh --install (~100 MB, network) or set ODOO_BROWSER_BIN before --with-tours.${last_reason:+ Reason: $last_reason}"
   elif ! python3 -c "import websocket" >/dev/null 2>&1; then
     echo "browser present ($("$bin" --version 2>/dev/null | head -1), $source) but websocket-client is not importable by python3, so Odoo would SKIP every tour anyway: pip install websocket-client."
   else
@@ -87,9 +104,9 @@ fi
 if [ -z "$bin" ] && [ "$install" = true ]; then
   echo "installing playwright chromium-headless-shell into $PLAYWRIGHT_CACHE" >&2
   if command -v npx >/dev/null 2>&1; then
-    PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_CACHE" npx --yes playwright install chromium-headless-shell >&2 || true
+    PLAYWRIGHT_SKIP_BROWSER_GC=1 PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_CACHE" npx --yes playwright install chromium-headless-shell >&2 || true
   elif command -v python3 >/dev/null 2>&1 && python3 -c "import playwright" >/dev/null 2>&1; then
-    PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_CACHE" python3 -m playwright install chromium-headless-shell >&2 || true
+    PLAYWRIGHT_SKIP_BROWSER_GC=1 PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_CACHE" python3 -m playwright install chromium-headless-shell >&2 || true
   else
     echo "neither npx nor the python playwright package is available to install a browser" >&2
   fi
@@ -99,7 +116,7 @@ if [ -z "$bin" ] && [ "$install" = true ]; then
 fi
 
 if [ -z "$bin" ]; then
-  echo "no usable headless browser found. Looked at: \$ODOO_BROWSER_BIN; google-chrome/chromium/chromium-browser/google-chrome-stable on PATH; $PLAYWRIGHT_CACHE. Re-run with --install to fetch one, or set ODOO_BROWSER_BIN. Without a browser Odoo SKIPS every tour and the suite is silently green." >&2
+  echo "no usable headless browser found. Looked at: \$ODOO_BROWSER_BIN; google-chrome/chromium/chromium-browser/google-chrome-stable on PATH; $PLAYWRIGHT_CACHE. Re-run with --install to fetch one, or set ODOO_BROWSER_BIN. Without a browser Odoo SKIPS every tour and the suite is silently green.${last_reason:+ A candidate existed but could not start: $last_reason}" >&2
   exit 6
 fi
 

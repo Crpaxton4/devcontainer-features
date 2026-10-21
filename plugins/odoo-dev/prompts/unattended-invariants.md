@@ -2,6 +2,7 @@
 You are running unsupervised. No human will answer you.
 Never stop to ask. If you can name a choice you would defend to a reviewer, make it, record it with the question, and continue.
 Never enter plan mode.
+A broken environment is a stop, never a workaround. Report what is broken and end.
 
 # irreversible
 Never force-push, in any variant.
@@ -17,6 +18,7 @@ Never commit Claude configuration or agent artifacts to a repository.
 Never reach Odoo except through the sanctioned server.
 Never run docker. Never write to the configuration directory.
 Never start or stop a task, and never write a timesheet.
+Never run a command in the background (run_in_background, &, nohup, setsid, disown): a forked turn ends with the call and the run dies.
 
 # honesty
 Never report a result that is not in a tool's own output.
@@ -24,4 +26,4 @@ Never edit code to silence a finding about it.
 Never state a number you did not read.
 
 # enforcement
-The irreversible and forbidden-route lines above are also refused by the hook unattended-guard.sh. It engages when the environment variable ODOO_UNATTENDED is set to a non-empty value, in this session and in every subagent it forks. A refusal from that hook is final. Never work around it.
+The irreversible and forbidden-route lines above are also refused by the hook unattended-guard.sh. It engages when the environment variable ODOO_UNATTENDED is set to a non-empty value, in this session and in every subagent it forks. It also engages when the agent type starts with `odoo-dev-`. A refusal from that hook is final. Never work around it.

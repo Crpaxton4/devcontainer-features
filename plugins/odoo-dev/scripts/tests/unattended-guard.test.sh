@@ -37,18 +37,19 @@ printf 'ignored.log\n' > "$REPO/.gitignore"
 gitq add -A
 gitq commit -q -m init
 
-# payload <agent_type> <command> <cwd> [<tool_name>]
+# payload <agent_type> <command> <cwd> [<tool_name>] [<extra tool_input JSON>]
 payload() {
   node -e '
-const [type, cmd, cwd, tool] = process.argv.slice(1);
+const [type, cmd, cwd, tool, extra] = process.argv.slice(1);
 const p = {
   session_id: "test-session", cwd, permission_mode: "default",
   hook_event_name: "PreToolUse", tool_name: tool || "Bash",
-  tool_input: { command: cmd }, tool_use_id: "toolu_test",
+  tool_input: Object.assign({ command: cmd }, extra ? JSON.parse(extra) : {}),
+  tool_use_id: "toolu_test",
 };
 if (type) { p.agent_id = "agent-under-test"; p.agent_type = type; }
 process.stdout.write(JSON.stringify(p));
-' "$1" "$2" "${3:-$REPO}" "${4:-}"
+' "$1" "$2" "${3:-$REPO}" "${4:-}" "${5:-}"
 }
 
 OUT=""; RC=0
@@ -206,7 +207,7 @@ denied "timeout git push --force" "force push" "timeout 5 git push --force origi
 denied "timeout -s KILL" "force push" "timeout -s KILL 5 git push -f origin feat/x"
 denied "nice git push --force" "force push" "nice -n 5 git push --force origin feat/x"
 denied "stdbuf -o0" "force push" "stdbuf -o0 git push --force origin feat/x"
-denied "setsid git push --force" "force push" "setsid git push --force origin feat/x"
+denied "ionice git push --force" "force push" "ionice -c3 git push --force origin feat/x"
 denied "xargs git push --force" "force push" "echo x | xargs git push --force origin feat/x"
 denied "find -exec git push --force" "force push" "find . -name x -exec git push --force origin feat/x \\;"
 denied "sudo -u x docker" "docker" "sudo -u x docker ps"
@@ -286,7 +287,8 @@ env_denied "main session of the run" 1 "" "git push -f origin feat/x"
 env_denied "any non-empty value engages, including 0" 0 "odoo-dev-pr" "git push -f origin feat/x"
 env_allowed "pr fork, an ordinary push" 1 "odoo-dev-pr" "git push -u origin feat/x"
 env_allowed "pr fork, gh pr view" 1 "odoo-dev-pr" "gh pr view 12"
-env_allowed "variable empty: pr fork, force push passes" "" "odoo-dev-pr" "git push --force origin feat/x"
+env_denied "variable empty: pr fork, the agent prefix still engages" "" "odoo-dev-pr" "git push --force origin feat/x"
+env_allowed "variable empty: non-plugin agent, force push passes" "" "general-purpose" "git push --force origin feat/x"
 env_allowed "variable empty: interactive docker passes" "" "" "docker ps"
 OUT="$(printf 'not json' | env ODOO_UNATTENDED=1 bash "$GUARD" 2>/dev/null)"; RC=$?
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then
@@ -397,14 +399,33 @@ allowed "push a task branch <id>-<slug>" "git push -u origin 30412-add-field"
 
 # --- scope: only the implementer is policed ----------------------------------------
 allowed "main session, force push" "git push --force origin feat/x" ""
-allowed "tester agent, docker" "docker ps" "odoo-dev-tester"
-allowed "builder agent, redirect into the tree" "echo hi > tracked.txt" "odoo-dev-builder"
-allowed "implementer, a tool that is not Bash" "git push --force" "$AGENT" "$REPO" "Edit"
-denied_ns() {
-  run "odoo-dev:$AGENT" "$2" "$REPO"
+allowed "non-plugin agent, docker" "docker ps" "general-purpose"
+allowed "implementer, a tool that is not Bash or a write tool" "git push --force" "$AGENT" "$REPO" "Read"
+denied_as() {
+  run "$2" "$3" "$REPO"
   if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'; then ok "$1 -> denied"; else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
 }
-denied_ns "namespaced agent type" "git push --force origin feat/x"
+denied_as "tester agent, docker" "odoo-dev-tester" "docker ps"
+denied_as "builder agent, redirect into the tree" "odoo-dev-builder" "echo hi > tracked.txt"
+denied_as "future agent odoo-dev-upgrade-implementer, force push" "odoo-dev-upgrade-implementer" "git push --force origin feat/x"
+denied_as "namespaced agent type" "odoo-dev:$AGENT" "git push --force origin feat/x"
+denied_as "namespaced future agent odoo-dev:odoo-dev-upgrader" "odoo-dev:odoo-dev-upgrader" "git push --force origin feat/x"
+
+# --- background runs: a forked turn ends with the call ------------------------------
+allowed "foreground run with a timeout" "timeout 600 install_all.sh --db x"
+denied "trailing &" "background runs die" "install_all.sh --db x &"
+denied "& between two commands" "background runs die" "install_all.sh --db x & echo started"
+denied "nohup wrapper" "background runs die" "nohup install_all.sh --db x"
+denied "setsid wrapper" "background runs die" "setsid install_all.sh --db x"
+denied "timeout then nohup" "background runs die" "timeout 600 nohup install_all.sh --db x"
+denied "disown head" "background runs die" "disown"
+run "$AGENT" "echo hi" "$REPO" "Bash" '{"run_in_background":true}'
+if printf '%s' "$OUT" | grep -qF 'background runs die'; then ok "run_in_background true -> denied"; else bad "run_in_background true: expected a deny, got: ${OUT:-<silence>}"; fi
+allowed "run_in_background false" "echo hi" "$AGENT" "$REPO" "Bash"
+allowed "&& is not background" "true && echo hi"
+allowed "pipe is not background" "echo hi | cat"
+allowed "|& is not background" "echo hi |& cat"
+allowed "&> to a file outside any tree" "echo hi &>/tmp/unattended-guard-bg.log"
 
 # --- fail closed, but only inside the scope ----------------------------------------
 OUT="$(printf 'not json at all %s' "$AGENT" | bash "$GUARD" 2>/dev/null)"; RC=$?
@@ -421,6 +442,80 @@ if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"'
   ok "implementer Bash call with no command -> denied"
 else bad "implementer Bash call with no command: rc=$RC out=${OUT:-<silence>}"; fi
 
+# --- the upgrade path: tree pinning, direct install, upgrade and production -----------
+UPG=odoo-dev-upgrader
+BLD=odoo-dev-builder
+denied "ln -s into the series tree" "tree pinning" "ln -s /x /var/lib/odoo/addons/19.0"
+denied "mv into a data dir addons" "tree pinning" "mv /x /var/lib/odoo/addons/custom"
+denied "cp into a series dir" "tree pinning" "cp -r /x /opt/src/addons/17.0/"
+allowed "cp into a scratch dir" "cp -r /x /tmp/work/"
+allowed "ln -s elsewhere" "ln -s /x /tmp/work/link"
+denied "redirect into odoo.conf" "tree pinning" "echo x >> /etc/odoo/odoo.conf"
+denied "sed -i on odoo.conf" "tree pinning" "sed -i s/a/b/ /etc/odoo/odoo.conf"
+denied "tee odoo.conf" "tree pinning" "echo x | tee /etc/odoo/odoo.conf"
+denied "odoo-bin --addons-path" "tree pinning" "odoo-bin --addons-path=/x -d db"
+denied "odoo --data-dir" "tree pinning" "odoo --data-dir /x"
+allowed "install_all.sh is its own head" "install_all.sh --db x --addons-path=/x"
+allowed "odoo-bin shell" "odoo-bin shell -d db"
+
+allowed "odoo-bin upgrade_code" "odoo-bin upgrade_code --from 17.0 --to 19.0" "$UPG"
+denied_as "odoo-bin -i for the upgrader" "$UPG" "odoo-bin -d db -i x"
+denied_as "odoo17-bin --update for the upgrader" "$UPG" "odoo17-bin --update=x"
+denied_as "odoo -u for the namespaced upgrader" "odoo-dev:$UPG" "odoo -u x"
+allowed "odoo-bin -i x for the builder" "odoo-bin -d db -i x" "$BLD"
+allowed "odoo-bin upgrade_code for the upgrader" "odoo-bin upgrade_code -d db" "$UPG"
+
+denied "upgrade_service.sh production" "database upgrade" "upgrade_service.sh production"
+allowed "upgrade_service.sh staging" "upgrade_service.sh staging"
+denied "odoo-bin upgrade" "database upgrade" "odoo-bin upgrade -d db"
+allowed "ssh h true" "ssh h true"
+allowed "ssh with options and a select" "ssh -o BatchMode=yes -p 22 h 'psql -Atc \"select current_database()\"'"
+allowed "ssh studio_inventory.py" "ssh h /opt/bin/studio_inventory.py --db x"
+denied "ssh psql delete" "database upgrade" "ssh h 'psql -Atc \"delete from x\"'"
+denied "ssh select then drop" "database upgrade" "ssh h 'psql -Atc \"select 1; drop table x\"'"
+denied "ssh ls" "database upgrade" "ssh h ls"
+denied "ssh interactive" "database upgrade" "ssh h"
+denied "ssh true chained" "database upgrade" "ssh h 'true; rm -rf /'"
+
+# --- writes outside scope: Edit, Write, NotebookEdit --------------------------------
+STATE="$TMP/state"
+mkdir -p "$STATE"
+wr() { # wr <label> <allow|deny> <tool> <tool_input JSON> [<agent>]
+  ODOO_DEV_STATE_DIR="$STATE" run "${5-$AGENT}" "" "$REPO" "$3" "$4"
+  if [ "$2" = deny ]; then
+    if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "write outside scope"; then ok "$1 -> denied"
+    else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
+  elif [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, got rc=$RC out=${OUT:-<silence>}"; fi
+}
+wr "Edit with no file_path" deny Edit '{}'
+wr "Edit inside the repo" allow Edit "{\"file_path\":\"$REPO/tracked.txt\"}"
+wr "Write a new file inside the repo" allow Write "{\"file_path\":\"$REPO/sub/new.txt\"}"
+wr "Write under the state dir" allow Write "{\"file_path\":\"$STATE/tasks/1/inventory.json\"}"
+wr "Write /tmp/inventory.json" deny Write '{"file_path":"/tmp/inventory.json"}'
+wr "NotebookEdit outside" deny NotebookEdit '{"notebook_path":"/tmp/n.ipynb"}'
+wr "Edit by a main session" allow Edit '{"file_path":"/tmp/inventory.json"}' ""
+
+# --- a STOP file kills the run -------------------------------------------------------
+KSTATE="$TMP/kstate"
+mkdir -p "$KSTATE/tasks/1"
+kill_case() { # kill_case <label> <allow|deny> <tool> <tool_input JSON> <command>
+  ODOO_DEV_STATE_DIR="$KSTATE" run "$AGENT" "$5" "$REPO" "$3" "$4"
+  if [ "$2" = deny ]; then
+    if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "the run is killed"; then ok "$1 -> denied"
+    else bad "$1: expected a kill deny, got: ${OUT:-<silence>}"; fi
+  elif [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, got rc=$RC out=${OUT:-<silence>}"; fi
+}
+kill_case "no STOP: Edit" allow Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
+kill_case "no STOP: Bash ls" allow Bash '{}' "ls"
+: > "$KSTATE/tasks/1/STOP"
+kill_case "STOP: Edit" deny Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
+kill_case "STOP: Bash ls" deny Bash '{}' "ls"
+kill_case "STOP: upgrade-state.sh next" allow Bash '{}' "bash /p/skills/odoo-upgrade/scripts/upgrade-state.sh /arts next"
+kill_case "STOP: upgrade-state.sh chained" deny Bash '{}' "upgrade-state.sh /arts next; ls"
+kill_case "STOP: Read" allow Read '{"file_path":"/x"}' ""
+
 echo
-echo "unattended-guard.test.sh: $pass passed, $fail failed"
+echo "unattended-guard.test.sh:$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -38,7 +38,7 @@ are the lines of your prompt.
    read-only git. Every path absolute. No `;`, `|`, `&`, `$(` or backticks. Redirects
    only to `/dev/null`.
 1. `browser-ensure.sh` when a module declares tours.
-2. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
+2. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
    <session id> --repo-path <worktree> --target-series <odoo_version> --put <ARTIFACTS>
    [--with-tours]`, with the `session-db.sh` of the `odoo-session-db` skill. It runs
    `run-tests.sh` on a database that no other session can name, so two sessions on one
@@ -48,7 +48,9 @@ are the lines of your prompt.
    the same name. The script writes the `test` entry for the module itself. A series that differs from the
    container's selects the container's side core (`odooNN-bin`) by itself when it exists;
    `--odoo-bin` and `--odoo-conf` name one by hand.
-3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD`: one
+3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD` minus the `upgrade_code` commits
+   (`git log --format=%H --grep='^chore(.*): upgrade_code ' <default_branch>..HEAD` lists them; review the manual
+   commits with `git diff <that commit>..HEAD` per module): one
    `criteria_results[]` entry per acceptance criterion, with its evidence and a
    verdict; `findings` with file, line and severity. Then
    `<ARTIFACT> set <ARTIFACTS> review --json '<one line>'`.
@@ -70,6 +72,7 @@ Fail closed:
 - failed: the `build` section is absent; the stack or the database is unusable;
   `series_mismatch`.
 - Red tests are `done`, not `failed`. The verdict is in the table.
+- A broken environment is a stop, never a workaround. Report what is broken and end.
 
 ## Session output
 

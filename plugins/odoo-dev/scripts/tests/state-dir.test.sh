@@ -49,7 +49,12 @@ expect_sd "prose is not a task id"       "0|M"                  task --create --
 expect_sd "an empty argument is not one" "0|M"                  task --create --else M -- ''
 expect_sd "a path is not a task id"      "0|M"                  task --create --else M -- /tmp
 expect_sd "the route word is not one"    "0|M"                  task --create --else M -- release
-expect_sd "the state dir itself"         "0|$STATE"
+expect_sd "--missing marks a valid id with no dir" "0|MISS"        task --missing MISS --else M -- 999
+expect_sd "--missing leaves an empty arg to --else" "0|M"          task --missing MISS --else M -- ''
+expect_sd "--missing leaves a non-id to --else"  "0|M"             task --missing MISS --else M -- Create
+expect_sd "--missing leaves an existing dir alone" "0|$STATE/tasks/30412" task --missing MISS --else M -- 30412
+expect_sd "without --missing, --else covers a valid id" "0|M"      task --else M -- 999
+expect_sd "the state dir itself"        "0|$STATE"
 
 # Nothing above may have created a directory a well-formed invocation could not ask
 # for. `tasks/Create` is the bug this assertion is named after.
@@ -79,8 +84,8 @@ fi
 # --- artifact.sh: one file, four sections -----------------------------------------
 A="$STATE/tasks/30413"
 
-if [ "$(bash "$ART" sections | paste -sd, -)" = "plan,build,test,review" ]; then
-  ok "artifact.sh: sections are exactly plan, build, test, review"
+if [ "$(bash "$ART" sections | paste -sd, -)" = "plan,build,test,review,upgrade" ]; then
+  ok "artifact.sh: sections are exactly plan, build, test, review, upgrade"
 else
   bad "artifact.sh: sections printed $(bash "$ART" sections | paste -sd, -)"
 fi

@@ -185,6 +185,30 @@ contains "the 4-part failure explains the shape" "$out" \
   "does not start with an Odoo series"
 expect "a series-less 4-part changes nothing" "$(version_of "$dir")" "1.2.3.4"
 
+# --- --series: a port moves the prefix, keeps A.B.C, then bumps --------------
+dir="$(plant mod_port 18.0.1.2.3 "fix: port to 19.0")"
+out="$(env -u ODOO_VERSION python3 "$SUT" --series 19.0 "$dir" 2>&1)"; status=$?
+expect "--series exits 0" "$status" "0"
+expect "--series moves the prefix then patches" "$(version_of "$dir")" "19.0.1.2.4"
+contains "--series move is printed" "$out" "18.0.1.2.3 → 19.0.1.2.3  (series moved to 19.0)"
+
+dir="$(plant mod_port_env 18.0.1.2.3 "fix: series beats env")"
+ODOO_VERSION=18.0 python3 "$SUT" --series 19.0 "$dir" >/dev/null 2>&1
+expect "--series overrides ODOO_VERSION" "$(version_of "$dir")" "19.0.1.2.4"
+
+dir="$(plant mod_port_short 1.0 "fix: series-less takes --series")"
+env -u ODOO_VERSION python3 "$SUT" --series 19.0 "$dir" >/dev/null 2>&1
+expect "--series is the hint for a series-less version" "$(version_of "$dir")" "19.0.1.0.1"
+
+dir="$(plant mod_port_same 19.0.1.2.3 "fix: already in the series")"
+env -u ODOO_VERSION python3 "$SUT" --series 19.0 "$dir" >/dev/null 2>&1
+expect "--series equal to the prefix only bumps" "$(version_of "$dir")" "19.0.1.2.4"
+
+dir="$(plant mod_port_bad 18.0.1.2.3 "fix: bad series")"
+env -u ODOO_VERSION python3 "$SUT" --series master "$dir" >/dev/null 2>&1
+expect "a non-series --series exits 2" "$?" "2"
+expect "a refused --series changes nothing" "$(version_of "$dir")" "18.0.1.2.3"
+
 # --- parse_version, straight on the function ---------------------------------
 # The padding and the 4-tuple shape are apply_bump's contract, and only a
 # direct call shows the tuple rather than the string built from it.

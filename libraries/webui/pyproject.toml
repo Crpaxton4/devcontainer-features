@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webui"
+version = "0.1.0"
+description = "Read-only local web interface for the dispatcher's jobs, the orchestrator queue and the friction log."
+requires-python = ">=3.11"
+# Flask only. Jinja2 comes with it. The package does not import dispatcher or odoo_sdk.
+dependencies = [
+    "flask>=3.1",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=9.1.1",
+]
+static-analysis = [
+    "black>=26.5.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+webui = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+pythonpath = ["src", "tests"]
+
+[tool.black]
+target-version = ["py311"]

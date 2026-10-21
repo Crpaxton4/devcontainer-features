@@ -272,13 +272,14 @@ fi
 # the pinned GitHub-release tools further down. Keep it in step with
 # CLAUDE_CODE_VERSION in .github/workflows/plugin-odoo-dev.yaml.
 #
-# There is a floor here as well as a pin. odoo-ls 1.6.0 sends a
-# `client/registerCapability` request during startup and panics on any error
+# There was a floor here as well as a pin. odoo-ls 1.6.0 sent a
+# `client/registerCapability` request during startup and panicked on any error
 # reply to it, and Claude Code up to 2.1.287 answered that request with
 # `-32601 Unhandled method`, which killed the language server on every session
-# (#1029). Claude Code 2.1.288 and later answer it with `null` instead and the
-# server then runs unchanged, so this pin must never drop below 2.1.288 while
-# ODOO_LS_VERSION is 1.6.0.
+# (#1029). Claude Code 2.1.288 and later answer it with `null` instead. odoo-ls
+# 1.6.1 (ODOO_LS_VERSION) respects the client's dynamicRegistration
+# (odoo/odoo-ls#745), so the 2.1.288 floor is no longer required for the
+# language server to survive. The pin itself is unchanged.
 CLAUDE_CODE_VERSION=2.1.295  # npmjs.com/package/@anthropic-ai/claude-code
 
 export PATH
@@ -2690,13 +2691,13 @@ QSV_VERSION=21.1.0       # github.com/dathere/qsv
 # https://api.github.com/repos/odoo/odoo-ls/releases/latest` lists the assets,
 # and sha256sum each downloaded file.
 #
-# 1.6.0, not the 1.4.0 named in #746: 1.4.0 was current when the issue was
-# written, 1.6.0 is the current non-prerelease (1.5.x are all marked prerelease).
-ODOO_LS_VERSION=1.6.0    # github.com/odoo/odoo-ls
-ODOO_LS_SHA256_TYPESHED=f95e220274f29452ee02204b1b44f2645cb2050839b02ca40b3971aa89bbcf02
+# 1.6.1, not the 1.4.0 named in #746: 1.4.0 was current when the issue was
+# written, 1.6.1 is the current non-prerelease (1.5.x are all marked prerelease).
+ODOO_LS_VERSION=1.6.1    # github.com/odoo/odoo-ls
+ODOO_LS_SHA256_TYPESHED=c6624253966ab66551d908e48fceae4f1d36b6e9f54a2631a9e55ffd1028af03
 case "$ARCH_GNU" in
-    x86_64)  ODOO_LS_SHA256=4424663a03a8433de60e822694e5532bd48bee41229344dfc0c7aaa95fe4b37b ;;
-    aarch64) ODOO_LS_SHA256=e58d06913f1be1b1355f48756760d51d26bdf775c6d6b5a03a485732a9bb952f ;;
+    x86_64)  ODOO_LS_SHA256=c271fc098a114e3b64a6f66aa2d48d879724ca0d629d47536c323d710eef8969 ;;
+    aarch64) ODOO_LS_SHA256=c3c50ba37e4513806a95147c31761979a956171b961ded807b01145a13282055 ;;
 esac
 
 # Installs a pinned GitHub release asset from a deterministic download URL (no

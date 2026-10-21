@@ -82,9 +82,9 @@ gate "inventory"
 n_skills="$(find "$SKILLS" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l)"
 n_agents="$(find "$AGENTS" -maxdepth 1 -name '*.md' | wc -l)"
 n_cmds="$(find "$COMMANDS" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
-[ "$n_skills" -eq 15 ] && ok "15 skills"   || bad "expected 15 skills, found $n_skills"
-[ "$n_agents" -eq 5 ]  && ok "5 agents"    || bad "expected 5 agents, found $n_agents"
-[ "$n_cmds"   -eq 6 ]  && ok "6 commands"  || bad "expected 6 commands, found $n_cmds"
+[ "$n_skills" -eq 16 ] && ok "16 skills"   || bad "expected 16 skills, found $n_skills"
+[ "$n_agents" -eq 6 ]  && ok "6 agents"    || bad "expected 6 agents, found $n_agents"
+[ "$n_cmds"   -eq 7 ]  && ok "7 commands"  || bad "expected 7 commands, found $n_cmds"
 
 # A plugin command and a plugin skill share one namespace: both register as
 # `odoo-dev:<stem>`, and the loader keeps ONE entry per name. So commands/pr.md
@@ -238,6 +238,13 @@ for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort())
       console.log(`  FAIL ${f}: skills: names "${s}", which is not a bundled skill`); bad++;
     }
   }
+  // An agent that runs the suite must also own its database name (#1173).
+  if (sm) {
+    const list = sm[1].split("\n").map(l => l.replace(/^\s*-\s*/, "").trim());
+    if (list.includes("odoo-test-run") && !list.includes("odoo-session-db")) {
+      console.log(`  FAIL ${f}: skills: lists odoo-test-run without odoo-session-db (#1173: the tester fell back to a hand-picked --db-suffix)`); bad++;
+    }
+  }
   // Unsupported for plugin agents, and silently ignored rather than rejected.
   for (const k of ["hooks", "mcpServers"]) {
     if (new RegExp(`^${k}:`, "m").test(fm)) { console.log(`  FAIL ${f}: ${k}: is not supported for plugin agents`); bad++; }
@@ -246,7 +253,7 @@ for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort())
     console.log(`  FAIL ${f}: isolation: worktree — worktree-ensure.sh owns the worktree, and the stack addons path points at that one`); bad++;
   }
 }
-if (bad === 0) console.log("  PASS every agent: named odoo-dev-*, skills resolve, no unsupported keys");
+if (bad === 0) console.log("  PASS every agent: named odoo-dev-*, skills resolve, odoo-test-run comes with odoo-session-db, no unsupported keys");
 process.exit(bad === 0 ? 0 : 1);
 ' "$AGENTS" "$SKILLS" || fails=$((fails + 1))
 
@@ -316,10 +323,19 @@ run_suite "populate-db.test.sh"    "$SKILLS/odoo-populate-db/scripts/tests/popul
 run_suite "pr-open.test.sh"        "$SKILLS/odoo-pr/scripts/tests/pr-open.test.sh"
 run_suite "release-manifest.test.sh" "$SKILLS/odoo-release/scripts/tests/release-manifest.test.sh"
 run_suite "install-all.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/install-all.test.sh"
+run_suite "update-dump.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/update-dump.test.sh"
 run_suite "check-stray-skills.test.sh" "$HERE/tests/check-stray-skills.test.sh"
 run_suite "repos-dir.test.sh"      "$SKILLS/odoo-repo-map/scripts/tests/repos-dir.test.sh"
 run_suite "module-inventory.test.sh" "$SKILLS/odoo-upgrade/scripts/tests/module-inventory.test.sh"
-run_suite "bump-manifest.test.sh"  "$SKILLS/odoo-devcontainer/scripts/tests/bump-manifest.test.sh"
+run_suite "upgrade-preflight.test.sh" "$SKILLS/odoo-upgrade/scripts/tests/upgrade-preflight.test.sh"
+run_suite "inventory.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/inventory.test.sh"
+run_suite "port-plan.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/port-plan.test.sh"
+run_suite "port-module.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/port-module.test.sh"
+run_suite "port-lint.test.sh"      "$SKILLS/odoo-upgrade/scripts/tests/port-lint.test.sh"
+run_suite "xpath-check.test.sh"    "$SKILLS/odoo-upgrade/scripts/tests/xpath-check.test.sh"
+run_suite "upgrade-tests.test.sh"  "$SKILLS/odoo-upgrade/scripts/tests/upgrade-tests.test.sh"
+run_suite "upgrade-state.test.sh"  "$SKILLS/odoo-upgrade/scripts/tests/upgrade-state.test.sh"
+run_suite "bump-manifest.test.sh" "$SKILLS/odoo-devcontainer/scripts/tests/bump-manifest.test.sh"
 run_suite "oca-check.test.sh"      "$SKILLS/odoo-prior-art/scripts/tests/oca-check.test.sh"
 # Registered on purpose, and note what it makes true: gate 21 reconciles this
 # block against disk, and its own suite is IN the block it reconciles. That is

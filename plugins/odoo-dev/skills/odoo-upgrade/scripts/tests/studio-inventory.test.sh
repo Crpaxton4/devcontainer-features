@@ -26,6 +26,36 @@ DB="${STUDIO_TEST_DB:-studio_inventory_test_$$}"
 # last section only.
 DB16="${DB}_16"
 
+# --- #1145: --ssh without --db takes the name from the host ---------------------
+# Needs no postgres: a fake `ssh` answers the transport probe with a database
+# name, says ir_model_fields exists, and answers every other query with no rows.
+STUB_DIR="$(mktemp -d)"
+trap 'rm -rf "$STUB_DIR"' EXIT
+cat >"$STUB_DIR/ssh" <<'STUB'
+#!/usr/bin/env bash
+script="$(cat)"
+case "$script" in
+  *current_database*) echo '{"db":"stubbed_db"}' ;;
+  *to_regclass*ir_model_fields*) echo '{"reg":"ir_model_fields"}' ;;
+  *to_regclass*) echo '{"reg":null}' ;;
+esac
+exit 0
+STUB
+chmod +x "$STUB_DIR/ssh"
+ssh_out="$(PATH="$STUB_DIR:$PATH" PGDATABASE=local_name python3 "$SUT" --ssh stub@host 2>&1)"
+ssh_rc=$?
+ssh_db="$(printf '%s' "$ssh_out" | tail -1 | python3 -c "
+import json,sys; print(json.loads(sys.stdin.read())['db'])" 2>/dev/null)"
+if [ "$ssh_rc" -ne 0 ] || [ "$ssh_db" != "stubbed_db" ]; then
+  echo "FAIL --ssh without --db: rc=$ssh_rc db='$ssh_db'" >&2; echo "$ssh_out" >&2; exit 1
+fi
+env -u PGDATABASE python3 "$SUT" >/dev/null 2>&1
+if [ "$?" -ne 2 ]; then
+  echo "FAIL local without --db or PGDATABASE: wanted exit 2" >&2; exit 1
+fi
+rm -rf "$STUB_DIR"
+trap - EXIT
+
 command -v psql >/dev/null 2>&1 || { echo "SKIP: psql not available"; exit 0; }
 pg_isready >/dev/null 2>&1 || { echo "SKIP: no reachable postgres"; exit 0; }
 

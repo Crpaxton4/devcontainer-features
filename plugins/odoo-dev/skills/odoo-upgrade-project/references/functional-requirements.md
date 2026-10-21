@@ -1,5 +1,7 @@
 # Functional Requirements from Customizations
 
+The FR and tickets workbook build was removed from `build_workbook.py` by #1144; the workbook has no FR or Tickets sheet. This document describes the human process only.
+
 Phase 3 of the inventory workbook. Inventory answer "what modules exist"; requirements answer **"what did the business actually ask for"** — one row per discrete behaviour, traced to source modules, each marked whether target standard or an OCA target module already satisfy it, with a blank Decision column the client fill in.
 
 Why bother when the inventory already has verdicts: a module is a bundle. Client can't drop "bista_sale_custom", but can absolutely drop "hold sales orders for engineering review" once they see it written out. Module-level verdicts are `yes/partial` mush; requirement-level verdicts are decisions. Expect ~4-5 requirements per module (117 modules ⇒ ~500 rows).
@@ -69,7 +71,7 @@ Both base and OCA satisfy ⇒ choose `base <major>` (one less dependency across 
 
 Read-only agents, ~10-12 modules each, grouped by functional area so overlapping behaviours land in one agent and get merged instead of duplicated. Group assignment written once to `fr_groups.json` in the work dir (also the record of who did what).
 
-Inputs per agent: module source; inventory CSV + `enrich_*.json` + `oca_alt_*.json` filtered to its modules (prior analysis — reuse it, but requirements come from the CODE); target community + enterprise trees; OCA catalog CSV. Grep the prior JSON by module name rather than loading whole files.
+Inputs per agent: module source; inventory CSV + `enrich_*.json` filtered to its modules (prior analysis — reuse it, but requirements come from the CODE); target community + enterprise trees; OCA catalog CSV. Grep the prior JSON by module name rather than loading whole files.
 
 Each write ONE `fr_<GROUP>.json` array. Keys, exactly: `tmp_id`, `requirement`, `type`, `functional_area`, `actor`, `sources`, `evidence`, `status_source`, `status_note`, `handled`, `handled_by`, `handled_notes`, `verification`, `notes`.
 

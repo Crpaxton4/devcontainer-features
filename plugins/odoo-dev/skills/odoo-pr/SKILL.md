@@ -11,8 +11,9 @@ and never routed around.
 
 Inputs and paths:
 
-- The worktree and the branch. `owner/repo` and `default_branch` come from the resolved
-  project, never from the GitHub default.
+- The worktree and the branch. `owner/repo` comes from the resolved
+  project. `default_branch` comes from `build` in the task artifact (an upgrade run
+  sets it to the upgrade branch). Neither comes from the GitHub default.
 - Scripts: `<base directory>/scripts/pr-open.sh`. `module-classify.sh`, `writeback.sh`
   and `_gh-url.sh` live at `<plugin root>/scripts`, where `<plugin root>` is two
   directories above `<base directory>`. Write every path in full.
@@ -106,7 +107,7 @@ your own words. No test output, no logs, no tracebacks, no machine paths, no rev
 
 → `{"pr_url","pr_number","action":"created"|"updated","draft","base","head","assigned"}`
 
-- `<base>` is `default_branch` from the project, never from GitHub.
+- `<base>` is `default_branch` from `build` in the task artifact, never from GitHub.
 - Always `--draft` and `--assign-me`. The script never runs `gh pr ready`.
 - Re-run safe: an open PR on this head is edited, never duplicated.
 - `exit 5` — body file missing or empty → fix the body and run again.

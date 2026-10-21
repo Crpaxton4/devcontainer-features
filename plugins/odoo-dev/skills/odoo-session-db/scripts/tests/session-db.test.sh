@@ -126,6 +126,8 @@ expect "--db-suffix after -- is refused" "$rc" "2"
 
 # ---------- run, against the REAL run-tests.sh ---------------------------------
 bin="$work/bin"; mkdir -p "$bin" "$work/addons" "$work/core-addons"
+# run-tests.sh refuses (exit 2) when no custom addons root holds the module (#1171).
+mkdir -p "$work/addons/.worktrees/task-4242"
 cat > "$bin/odoo" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in --version) echo "Odoo Server 18.0-20260810"; exit 0 ;; esac
