@@ -93,14 +93,11 @@ Options:
   --template             build (or reuse) a template database holding the core
                          dependency closure, and create each working database
                          from it
-  --template-db <name>   name the template explicitly (implies --template;
-                         default odoo_tpl_<key12>)
   --per-tree             install each independent custom dependency tree into
                          its own throwaway database first, then the full install
   --summary <file>       write the JSON summary here as well as to stdout
   --force                proceed even though the target already has modules
                          installed. The target is still dropped first.
-  --keep                 keep the per-tree throwaway databases
   -h, --help             this text
 
 Examples:
@@ -115,7 +112,7 @@ need_value() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
-summary_file=""; keep=false
+summary_file=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -125,12 +122,10 @@ while [ $# -gt 0 ]; do
     --artifacts)   need_value --artifacts $#;   artifacts="$2"; shift 2 ;;
     --conf)        need_value --conf $#;        conf="$2"; conf_explicit=true; shift 2 ;;
     --summary)     need_value --summary $#;     summary_file="$2"; shift 2 ;;
-    --template-db) need_value --template-db $#; template_db="$2"; use_template=true; shift 2 ;;
     --no-conf)   no_conf=true; shift ;;
     --template)  use_template=true; shift ;;
     --per-tree)  per_tree=true; shift ;;
     --force)     force=true; shift ;;
-    --keep)      keep=true; shift ;;
     -h|--help)   usage; exit 0 ;;
     --)          shift; break ;;
     -*)          die "unknown option: $1 (--help for the list)" ;;
@@ -357,7 +352,6 @@ guard_target() {
 created_dbs=()
 cleanup() {
   local target
-  if [ "$keep" = true ]; then return 0; fi
   for target in ${created_dbs+"${created_dbs[@]}"}; do
     dropdb --if-exists "$target" >/dev/null 2>&1 || true
   done
@@ -455,8 +449,7 @@ $core_csv")"
 template_reused=false
 template_from=""
 if [ "$use_template" = true ]; then
-  template_db="${template_db:-odoo_tpl_${template_key:0:12}}"
-  valid_dbname "$template_db" || die "not a usable template database name: '$template_db'"
+  template_db="odoo_tpl_${template_key:0:12}"
   stored=""
   if db_exists "$template_db"; then
     if [ -n "$(psql -Atqc "SELECT to_regclass('public.install_all_template')" -d "$template_db" 2>/dev/null || true)" ]; then
@@ -508,7 +501,7 @@ if [ "$per_tree" = true ]; then
       echo "install_all.sh: tree $index/${#trees[@]} FAIL ($tree) at ${failure%%$'\t'*}: ${failure#*$'\t'}" >&2
       echo "  log: $tree_log" >&2
     fi
-    if [ "$keep" != true ]; then dropdb --if-exists "$tree_db" >/dev/null 2>&1 || true; fi
+    dropdb --if-exists "$tree_db" >/dev/null 2>&1 || true
   done
 fi
 

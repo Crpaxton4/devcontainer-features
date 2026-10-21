@@ -24,4 +24,4 @@ Write every path in full: `<base directory>/scripts/<script>`.
 
 | Script and arguments | Prints | Exit |
 | --- | --- | --- |
-| `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | drives the upgrade.odoo.com client for on-prem Enterprise; `production` needs `--yes-production` | 0 · 2 usage |
+| `upgrade_service.sh <test\|production> --target V (--ssh U@H --db D \| --local --dump F --contract C)` | drives the upgrade.odoo.com client for on-prem Enterprise; `production` needs `--yes-production` | 0 · 2 usage · 4 the service run, the restore or the module update failed · 7 production without `--yes-production` |

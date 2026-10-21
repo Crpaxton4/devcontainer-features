@@ -163,6 +163,14 @@ expect "no --db exits 2" "$rc" "2"
 contains "no --db names the flag" "$(cat "$state/err")" "--db <name> is required"
 expect "no --db runs no odoo" "$( [ -f "$state/odoo.argv" ] && echo yes || echo no )" "no"
 
+# The retired flags go through the unknown-option path.
+out="$(run gone --db verify --no-conf --keep "$tree")"; rc=$?
+expect "removed --keep exits 2" "$rc" "2"
+contains "removed --keep is unknown" "$(cat "$state/err")" "unknown option"
+out="$(run gone2 --db verify --no-conf --template-db x "$tree")"; rc=$?
+expect "removed --template-db exits 2" "$rc" "2"
+contains "removed --template-db is unknown" "$(cat "$state/err")" "unknown option"
+
 # ---------- 2. a config that names a database is refused (#880) -----------------
 reset
 conf="$work/odoo.conf"
@@ -274,17 +282,19 @@ expect "the addons path is reported" "$(field "$summary" addons_path)" "$work/ad
 
 # ---------- 8. template build, reuse, and rebuild on a key change (#879) --------
 reset
-out="$(run tpl1 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl1 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 key1="$(field "$summary" template.key)"
+tpl="$(field "$summary" template.db)"
+expect "the template name is derived from the key" "$tpl" "odoo_tpl_${key1:0:12}"
 expect "the first run builds the template" "$(field "$summary" template.reused)" "false"
 expect "the template holds the core closure only" \
   "$(field "$summary" template.core_modules)" '["base", "mail"]'
-contains "core modules are installed into it" "$(head -1 "$state/odoo.argv")" "-d fixedtpl -i base,mail"
-contains "and working dbs come from it" "$(cat "$state/createdb.argv")" "-T fixedtpl verify_t1"
+contains "core modules are installed into it" "$(head -1 "$state/odoo.argv")" "-d $tpl -i base,mail"
+contains "and working dbs come from it" "$(cat "$state/createdb.argv")" "-T $tpl verify_t1"
 
 before="$(wc -l < "$state/odoo.argv")"
-out="$(run tpl2 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl2 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 expect "a matching key is reused" "$(field "$summary" template.reused)" "true"
 expect "the key is stable" "$(field "$summary" template.key)" "$key1"
@@ -294,12 +304,13 @@ expect "and the core closure is not reinstalled" \
 # Change the core dependency set: the key changes, so the template is rebuilt
 # rather than silently reused.
 manifest beta "'base', 'mail', 'stock'"
-out="$(run tpl3 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl3 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 expect "a changed dependency set changes the key" \
   "$( [ "$(field "$summary" template.key)" = "$key1" ] && echo same || echo different )" "different"
 expect "and the template is rebuilt" "$(field "$summary" template.reused)" "false"
-contains "the stale template is dropped first" "$(cat "$state/dropdb.argv")" "fixedtpl"
+expect "the new key builds under a new template name" \
+  "$( [ "$(field "$summary" template.db)" = "$tpl" ] && echo same || echo different )" "different"
 expect "the new closure includes the new dependency" \
   "$(field "$summary" template.core_modules)" '["base", "mail", "stock"]'
 manifest beta "'base', 'mail'"
