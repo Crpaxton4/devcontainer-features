@@ -23,6 +23,8 @@ jobs:
         run: |
           uv build --directory libraries/odoo_sdk
           cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
+          uv build --directory libraries/usage_log
+          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
 
       - name: "Publish Features"
         uses: devcontainers/action@v1
