@@ -6,7 +6,6 @@ Workflow: upgrade pass over ALL modules (steps 1–6 per module, dependency/topo
 
 - Inventory CSV exist; module's `Upgrade action` = `keep`. (`replace` ⇒ download vendor/OCA release instead, under [Replace](#replace-obtaining-the-target-series-build) below; `merge-into-standard`/`drop` ⇒ remove from addons, note data implications for human-run DB upgrade.)
 - Clean git tree, branch for target series.
-- `$ODOO_VERSION` must equal TARGET series for step 7. If not: do upgrade pass anyway, mark every module **untested**, escalate — install loop need target-series devcontainer.
 - Multi-hop (e.g. 16→18): upgrade_code may run ONCE across hops (target odoo-bin carry all scripts); manual work (steps 3–4) done per hop, in sequence, never skip major.
 - 100+ row inventories: batch AI enrichment and porting passes in dependency-ordered chunks (context budget).
 

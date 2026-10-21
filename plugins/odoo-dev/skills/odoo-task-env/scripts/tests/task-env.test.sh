@@ -253,5 +253,15 @@ expect "docker without odoo is the host" "$(field "$out" context)" "host"
 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft >/dev/null 2>&1
 expect_exit "--soft exits 0 anyway" 0 $?
 
+# --target-series compares ODOO_VERSION in the container branch only.
+out="$(ODOO_VERSION=19.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("series:"))?1:0)' "$out"
+expect_exit "a matching target series raises no series failure" 0 $?
+out="$(ODOO_VERSION=17.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("series:")&&x.includes("17.0")&&x.includes("19.0"))?0:1)' "$out"
+expect_exit "a mismatched target series names both values" 0 $?
+ODOO_VERSION=17.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --target-series 19.0 >/dev/null 2>&1
+expect_exit "a mismatched target series exits 1 without --soft" 1 $?
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
