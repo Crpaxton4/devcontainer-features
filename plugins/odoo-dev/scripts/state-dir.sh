@@ -37,13 +37,15 @@
 #   run     — the CLI the command preambles call:
 #
 #               state-dir.sh                                      # the state dir
-#               state-dir.sh task [--create] [--else TEXT] -- <task-arg>
+#               state-dir.sh task [--create] [--else TEXT] [--missing TEXT] -- <task-arg>
 #
 #             `task` ALWAYS exits 0: a non-zero exit inside `!`…`` aborts the whole
 #             command expansion, so an unusable argument prints the --else marker on
 #             stdout instead and the command body says what the dispatched agent must
 #             do when it reads a marker rather than a path. Without --create the
-#             directory must already exist.
+#             directory must already exist. --else is the marker for an argument
+#             that is not a task id. --missing is the marker for a valid task id
+#             whose directory does not exist yet; without --missing, --else covers both.
 #
 #             A malformed CLI invocation — an unknown mode, the wrong number of
 #             operands — is a bug in the command file rather than something a user
@@ -72,7 +74,7 @@ odoo_dev_artifacts_dir() {
 set -euo pipefail
 
 usage() {
-  echo "usage: state-dir.sh [task [--create] [--else TEXT] -- <task-arg>]" >&2
+  echo "usage: state-dir.sh [task [--create] [--else TEXT] [--missing TEXT] -- <task-arg>]" >&2
   exit 2
 }
 
@@ -86,6 +88,7 @@ case "$mode" in
 esac
 
 marker='NO ARTIFACTS DIRECTORY'
+missing=""
 create=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -93,6 +96,9 @@ while [ $# -gt 0 ]; do
     --else)
       [ $# -ge 2 ] || usage
       marker="$2"; shift 2 ;;
+    --missing)
+      [ $# -ge 2 ] || usage
+      missing="$2"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -111,7 +117,7 @@ esac
 if [ "$create" -eq 1 ]; then
   mkdir -p "$dir" 2>/dev/null || { printf '%s\n' "$marker"; exit 0; }
 elif [ ! -d "$dir" ]; then
-  printf '%s\n' "$marker"
+  printf '%s\n' "${missing:-$marker}"
   exit 0
 fi
 
