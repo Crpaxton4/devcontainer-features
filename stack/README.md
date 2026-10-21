@@ -56,6 +56,17 @@ read-write (a `:ro` bind breaks a WAL reader) and the artifacts dir read-only.
 It does not mount the docker socket. Stop it with
 `docker compose -p odoo-orchestrator stop webui`.
 
+## Orchestrator helper
+
+`plugins/odoo-orchestrator/scripts/orchestrator.sh` runs `orchestrator.py` in the
+`orchestrator` service (`docker compose run --rm -T`, standard input passes
+through). The service reuses the `dispatcher` image target, runs as the host
+UID:GID and has no docker socket. It mounts three paths at identical paths: the
+orchestrator home, the scripts dir of the plugin copy that holds the wrapper
+(read-only, set as `ODOO_ORCHESTRATOR_SCRIPTS_DIR`) and the artifacts dir
+(read-only). Without `ODOO_ORCHESTRATOR_SCRIPTS_DIR` the scripts dir of
+`ODOO_ORCHESTRATOR_CHECKOUT` is used.
+
 ## Notes
 
 - The container has no memory limit. The admission gate reads `/proc/meminfo`,

@@ -33,7 +33,7 @@ for script in "$ROOT"/scripts/*.sh; do
 done
 
 gate "the command names only helpers the plugin ships"
-for helper in dispatch.sh orchestrator.py; do
+for helper in dispatch.sh orchestrator.sh; do
     if [ -x "$ROOT/scripts/$helper" ] && grep -q "scripts/$helper" "$ROOT/commands/run.md"; then
         ok "$helper is executable and named in run.md"
     else
@@ -41,11 +41,13 @@ for helper in dispatch.sh orchestrator.py; do
     fi
 done
 
-gate "run.md lists every exit code dispatch.sh returns"
-# The literal exits of dispatch.sh, plus the dispatcher's own codes it passes through.
+if [ -x "$ROOT/scripts/orchestrator.py" ]; then ok "orchestrator.py is executable"; else bad "orchestrator.py is not executable"; fi
+
+gate "run.md lists every exit code dispatch.sh and orchestrator.sh return"
+# The literal exits of both wrappers, plus the dispatcher's own codes they pass through.
 codes=$(
     {
-        grep -oE 'exit [0-9]+' "$ROOT/scripts/dispatch.sh" | cut -d' ' -f2
+        grep -ohE 'exit [0-9]+' "$ROOT/scripts/dispatch.sh" "$ROOT/scripts/orchestrator.sh" | cut -d' ' -f2
         printf '%s\n' 0 1 2 3
     } | sort -un
 )

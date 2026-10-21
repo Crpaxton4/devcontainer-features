@@ -204,11 +204,46 @@ class Reports(Base):
         self.assertEqual(len(rows), 3)
         self.assertIn("| 7 | r | 1 | DONE |", rows[2])
 
+    def test_report_without_bundle_has_no_friction_and_blank_figures(self):
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.tmp.name)  # a stray envelope.json in the cwd must not be read
+        Path("envelope.json").write_text(json.dumps({"num_turns": 99}))
+        job = {"task": "7", "repo": "r", "round": 1, "state": "DONE", "job_id": "j9"}
+        self.assertEqual(orch.friction({"jobs": [job]}), 0)
+        row = orch.records({"jobs": [job]}).splitlines()[2]
+        self.assertIn("|  |  |  |  |", row)
+        self.assertNotIn("99", row)
+
     def test_report_is_read_from_a_file(self):
         path = Path(self.tmp.name) / "run.json"
         path.write_text(json.dumps(self.report()))
         self.assertEqual(orch.main(["records", str(path)]), 0)
         self.assertEqual(orch.main(["records", str(path) + ".missing"]), 2)
+
+
+class Batches(Base):
+    A, B = "a" * 32, "b" * 32
+
+    def test_batch_stays_listed_until_done_in_submit_order(self):
+        self.assertEqual(orch.batches(), [])
+        orch.batch_add(self.A)
+        orch.batch_add(self.B)
+        orch.batch_add(self.A)
+        self.assertEqual(orch.batches(), [self.A, self.B])
+        orch.batch_done(self.A)
+        self.assertEqual(orch.batches(), [self.B])
+
+    def test_bad_batch_id_is_a_clean_error(self):
+        self.assertEqual(orch.main(["batch-add", "../x"]), 2)
+        self.assertEqual(orch.main(["batch-done", "short"]), 2)
+        self.assertFalse((Path(self.tmp.name) / "batches.txt").exists())
+
+    def test_cli_round_trip(self):
+        self.assertEqual(orch.main(["batch-add", self.A]), 0)
+        self.assertEqual(orch.main(["batches"]), 0)
+        self.assertEqual(orch.main(["batch-done", self.A]), 0)
+        self.assertEqual(orch.batches(), [])
+        self.assertEqual(orch.main(["batches", "x"]), 2)
 
 
 if __name__ == "__main__":
