@@ -228,7 +228,7 @@ import json, sys
 record = {
     "module": "acme", "purpose": "Extra fields on the sale order",
     "third_party": "No", "third_party_link": "", "complexity": "Low",
-    "upgrade_action": "keep", "functional_area": "Sales",
+    "upgrade_action": "merge-into-standard", "functional_area": "Sales",
     "native": "yes/partial",
     "native_notes": "sale.order has carried the same field since 17.0",
     "native_evidence": "odoo/addons/sale/models/sale_order.py",
@@ -271,6 +271,60 @@ expect "notes come from the same record" \
 expect "evidence comes from the same record" \
   "$(csv_cell "$dir/out_evidence.csv" acme 'native? evidence')" \
   "odoo/addons/sale/models/sale_order.py"
+
+# --- #1146: the Upgrade action is proposed from native x OCA x 3rd party -----
+# One case per row of the table in propose_action's docstring. An empty
+# upgrade_action takes the proposal; `review` is a problem line.
+action_case() {  # <name> <expected> <record-overrides-json> [problems-text]
+  local d
+  d="$(wb_case "act_$1")"
+  wb_record "$d" "$3"
+  wb_run "$d"
+  expect "action $1: proposes $2" \
+    "$(csv_cell "$d/out_inventory.csv" acme 'Upgrade action')" "$2"
+  if [ -n "${4:-}" ]; then
+    contains "action $1: problem line" "$wb_out" "$4"
+  else
+    contains "action $1: no problems" "$wb_out" "problems: 0"
+  fi
+}
+RV='"upgrade_action": "", "upgrade_action_rationale": ""'
+action_case yes merge-into-standard "{$RV, \"native\": \"yes\"}"
+action_case yespartial merge-into-standard "{$RV, \"native\": \"yes/partial\"}"
+action_case full replace "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
+action_case already replace "{$RV, \"native\": \"no\", \"oca_alt\": \"already OCA: sale/acme\"}"
+action_case partialalt review "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (partial)\"}" \
+  "acme: Upgrade action is review — decide keep/replace/merge-into-standard"
+action_case inhouse keep "{$RV, \"native\": \"no\"}"
+action_case vendor review "{$RV, \"native\": \"no\", \"third_party\": \"Yes\"}" \
+  "acme: Upgrade action is review"
+action_case partialnative review "{$RV, \"native\": \"partial\"}" \
+  "acme: Upgrade action is review"
+action_case sentinelnative review "{$RV, \"native\": \"TODO-AI\"}" \
+  "acme: Upgrade action is review"
+
+dir="$(wb_case override)"
+wb_record "$dir" '{"native": "no", "upgrade_action": "replace"}'
+wb_run "$dir"
+contains "an override without a rationale is a problem" "$wb_out" \
+  "acme: Upgrade action 'replace' overrides the proposed 'keep' without upgrade_action_rationale"
+expect "an override without a rationale exits non-zero" \
+  "$([ "$wb_status" -ne 0 ] && echo yes)" "yes"
+
+dir="$(wb_case overrideok)"
+wb_record "$dir" '{"native": "no", "upgrade_action": "replace", "upgrade_action_rationale": "vendor ships 19.0"}'
+wb_run "$dir"
+contains "an override with a rationale is accepted" "$wb_out" "problems: 0"
+expect "the override is the delivered action" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'Upgrade action')" "replace"
+
+dir="$(wb_case seeddrop)"
+printf '%s\n%s\n' "$SEED_HEADER" "${SEED_ROW/,keep,/,drop?,}" > "$dir/inventory.csv"
+wb_record "$dir" "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
+wb_run "$dir"
+expect "the seed drop? wins over the proposal" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'Upgrade action')" "drop?"
+contains "the seed drop? is not a problem" "$wb_out" "problems: 0"
 
 # --- #1158: oca_alt is read from the enrich record ---------------------------
 dir="$(wb_case ocaalt)"
@@ -389,10 +443,8 @@ SKILLS_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OCA_CHECK="$SKILLS_DIR/odoo-prior-art/scripts/oca_check.py"
 INVENTORY_MD="$SKILLS_DIR/odoo-upgrade/references/inventory.md"
 METHOD_MD="$SKILLS_DIR/odoo-prior-art/references/method.md"
-REVIEW_MD="$SKILLS_DIR/odoo-upgrade/references/oca-base-review.md"
 
-for f in "$SUT" "$WORKBOOK" "$OCA_CHECK" "$INVENTORY_MD" "$METHOD_MD" \
-         "$REVIEW_MD"; do
+for f in "$SUT" "$WORKBOOK" "$OCA_CHECK" "$INVENTORY_MD" "$METHOD_MD"; do
   expect "contract file exists: ${f##*/}" "$([ -f "$f" ] && echo yes)" "yes"
 done
 
@@ -440,13 +492,17 @@ expect "inventory.md documents the prefix both sides use" \
 # The #963 defect: a verdict literal named in a reference and defined nowhere.
 expect "no 'self:' verdict literal in the prior-art method" \
   "$(grep -c 'self:' "$METHOD_MD")" "0"
-expect "no 'self:' verdict literal in the OCA base review" \
-  "$(grep -c 'self:' "$REVIEW_MD")" "0"
+expect "no 'self:' verdict literal in the inventory reference" \
+  "$(grep -c 'self:' "$INVENTORY_MD")" "0"
 
-# ...and the row that carried it now puts the value in the column that takes
-# it: `already OCA:` is an `OCA <major> alternative` value, not a `native?` one.
-contains "the OCA base review row names the literal in the OCA column" \
-  "$(cat "$REVIEW_MD")" '| `no` | `already OCA: <repo>/<module>` |'
+# ...and the action table (the docstring of propose_action) puts the value in
+# the column that takes it: `already OCA:` is an `OCA <major> alternative`
+# value, not a `native?` one.
+contains "the action table names the literal in the OCA column" \
+  "$(cat "$WORKBOOK")" '| no            | `already OCA: ...`'
+expect "the deleted oca-base-review.md has no link left" \
+  "$(grep -rl --include='*.md' --include='*.py' 'oca-base-review' \
+    "$SKILLS_DIR/odoo-upgrade" | wc -l | tr -d ' ')" "0"
 contains "the prior-art decision table names it in the oca column" \
   "$(cat "$METHOD_MD")" '| `no` | `already OCA: <repo>/<module>` |'
 contains "the prior-art verdict list names the literal" \

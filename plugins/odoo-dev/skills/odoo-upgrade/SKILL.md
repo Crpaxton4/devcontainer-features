@@ -18,7 +18,6 @@ Load references as needed, never all at once.
 | ----------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | Upgrade project SOP | Anything past the code port: planning, staging DB upgrade, cutover, tickets, functional requirements | the `odoo-dev:odoo-upgrade-project` skill |
 | Module Inventory  | Start of an upgrade project; estimate or plan effort; build the inventory workbook | [inventory.md](./references/inventory.md)                               |
-| Prior Art (OCA + base) | Decide what not to port; inventory-column mapping | [oca-base-review.md](./references/oca-base-review.md) |
 | Porting Checklist | Port any module: workflow order and the verification loop   | [porting-checklist.md](./references/porting-checklist.md)               |
 | Migration Scripts | A ported module renamed its own field, model or xmlid        | [migrations.md](./references/migrations.md)                             |
 | upgrade_code Tool | Run or explain odoo-bin upgrade_code (target 18.0 or later)  | [upgrade-code-tool.md](./references/upgrade-code-tool.md)               |

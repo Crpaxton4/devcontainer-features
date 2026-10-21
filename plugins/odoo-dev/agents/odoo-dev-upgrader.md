@@ -46,7 +46,8 @@ are the lines of your prompt.
 3. Inventory under `<ARTIFACTS>/inventory/`, in one call: `inventory.sh --artifacts <ARTIFACTS>
    --worktree <worktree> --series <target> [--ssh <host>]` (the script of the `odoo-upgrade`
    skill). Exit 10 is a stop; relay its failure lines verbatim.
-4. Prior art per module → `keep`, `replace` or `merge-into-standard`. The verdict and
+4. Prior art per module → the workbook proposes `keep`, `replace` or `merge-into-standard`
+   from the verdict; override only with a rationale in the record. The verdict and
    `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
 5. Per module in topological order: `references/porting-checklist.md` with
