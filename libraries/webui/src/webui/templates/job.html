@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.job_id }}{% endblock %}
+{% block content %}
+<h1>Job {{ job.job_id }}</h1>
+<table>
+  {% for key, value in job.items() if key != 'brief' %}
+  <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+  {% endfor %}
+</table>
+<h2>Brief</h2>
+<pre>{{ job.brief }}</pre>
+
+<h2>Run</h2>
+{% if runs %}
+<table>
+  <tr><th>session_id</th><th>task_id</th><th>repo</th><th>branch</th><th>pr_num</th><th>started</th><th>ended</th><th>outcome</th><th>tool_version</th></tr>
+  {% for r in runs %}
+  <tr>
+    <td>{{ r.session_id }}</td><td>{{ r.task_id }}</td><td>{{ r.repo }}</td><td>{{ r.branch }}</td>
+    <td>{{ r.pr_num }}</td><td>{{ format_us(r.started_us) }}</td><td>{{ format_us(r.ended_us) }}</td>
+    <td>{{ r.outcome }}</td><td>{{ r.tool_version }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No run is recorded for this job.</p>
+{% endif %}
+
+<h2>Tokens and cost</h2>
+{% for e in envelopes %}
+<table>
+  <tr><th colspan="2">session {{ e.session_id }}</th></tr>
+  {% for key in usage_keys %}<tr><th>{{ key }}</th><td>{{ e.figures.get(key) }}</td></tr>{% endfor %}
+  <tr><th>total_cost_usd</th><td>{{ e.figures.get('total_cost_usd') }}</td></tr>
+  <tr><th>num_turns</th><td>{{ e.figures.get('num_turns') }}</td></tr>
+  <tr><th>duration_ms</th><td>{{ e.figures.get('duration_ms') }}</td></tr>
+</table>
+{% else %}
+<p class="empty">No result envelope is stored for this job.</p>
+{% endfor %}
+
+<h2>Stored artifacts</h2>
+{% if stored %}
+<table>
+  <tr><th>dir</th><th>has_task_json</th><th>has_session</th><th>has_envelope</th><th>bytes</th><th>harvested</th><th>missing</th></tr>
+  {% for a in stored %}
+  <tr><td>{{ a.dir }}</td><td>{{ a.has_task_json }}</td><td>{{ a.has_session }}</td><td>{{ a.has_envelope }}</td><td>{{ a.bytes }}</td><td>{{ format_us(a.harvested_us) }}</td><td>{{ a.missing }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No artifact record.</p>
+{% endif %}
+
+<h2>Files</h2>
+{% if files %}
+<ul>
+  {% for f in files %}
+  <li><a href="{{ url_for('jobs.artifact', job_id=job.job_id, name=f) }}">{{ f }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No files under the artifact directory of this job.</p>
+{% endif %}
+{% endblock %}

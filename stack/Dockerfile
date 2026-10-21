@@ -4,6 +4,8 @@
 #   dispatcher the dispatcher plus the tools it runs: devcontainer CLI, docker
 #              CLI with the compose plugin, git and gh. It has no ENTRYPOINT,
 #              so a service chooses its own command.
+#   webui      the read-only web interface. Flask only: no Node, docker or
+#              devcontainer CLI.
 
 ARG PYTHON_VERSION=3.12
 ARG NODE_VERSION=22
@@ -54,3 +56,11 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # --prerelease=allow mirrors [tool.uv] in the dispatcher pyproject (toon-format).
 COPY libraries /src/libraries
 RUN uv pip install --system --no-cache --prerelease=allow /src/libraries/dispatcher
+
+# Only libraries/webui is copied, so a dispatcher change does not rebuild this layer.
+# The container user is set by compose (a numeric uid), so no USER line here.
+FROM base AS webui
+COPY libraries/webui /src/libraries/webui
+RUN uv pip install --system --no-cache /src/libraries/webui
+EXPOSE 8765
+CMD ["python", "-m", "webui"]

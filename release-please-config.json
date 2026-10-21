@@ -13,6 +13,7 @@
                 "plugins/odoo-dev",
                 "plugins/odoo-orchestrator",
                 "libraries/dispatcher",
+                "libraries/webui",
                 "stack"
             ],
             "extra-files": [

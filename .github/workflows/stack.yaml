@@ -48,3 +48,6 @@ jobs:
 
       - name: Build the dispatcher image
         run: docker compose -f stack/compose.yaml build dispatcher
+
+      - name: Build the webui image
+        run: docker compose -f stack/compose.yaml build webui
