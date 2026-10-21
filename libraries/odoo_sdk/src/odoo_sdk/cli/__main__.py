@@ -26,6 +26,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from datetime import date, datetime
 from typing import Any, Callable, NamedTuple, NoReturn, Optional
 
@@ -57,6 +58,7 @@ from odoo_sdk.commands.log_event import (
 # concrete OdooClient / LocalConfig / LocalStateClient constructors are
 # obtained from it rather than from the data layer, and every registry is
 # wired through ``bootstrap`` (via ``_build_registry`` below).
+from odoo_sdk._utils import declare_usage, record_usage
 from odoo_sdk.bootstrap import LocalConfig, OdooClient, bootstrap
 from odoo_sdk.bootstrap import LocalStateClient as TaskStateDB
 from odoo_sdk.commands import Command, LogEventCommand, Registry
@@ -863,6 +865,18 @@ def _emit_cmd_event(
         pass
 
 
+def _log_cmd_usage(name: str, started: float, ok: bool) -> None:
+    """Write one ``sdk_command`` usage line (#1204): names and outcome only."""
+    record_usage(
+        "sdk_command",
+        name,
+        source="odoo_sdk",
+        via="cli",
+        ok=ok,
+        ms=int((time.monotonic() - started) * 1000),
+    )
+
+
 def cmd_cmd(args: argparse.Namespace) -> None:
     """Generic dispatcher: run any registry command, stdout one JSON document.
 
@@ -889,12 +903,16 @@ def cmd_cmd(args: argparse.Namespace) -> None:
         _cmd_fail(ValueError("a command name (or --list) is required"), 2)
     kwargs = _parse_cmd_kwargs(args.cmd_args)
     command = _resolve_cmd(registry, args.name)
+    started = time.monotonic()
     try:
         result = command.execute(**kwargs)
     except TypeError as exc:
+        _log_cmd_usage(args.name, started, False)
         _cmd_fail(exc, 2)
     except _BOUNDARY_ERRORS as exc:
+        _log_cmd_usage(args.name, started, False)
         _cmd_fail(exc, 1)
+    _log_cmd_usage(args.name, started, True)
     _emit_cmd_event(registry, args.name, kwargs, result)
     print(json.dumps(result, default=str))
 
@@ -1171,6 +1189,27 @@ _COMMANDS: dict[str, tuple[Callable[[_Ctx], None], bool]] = {
 _LOCAL_ONLY = {name for name, (_, needs_odoo) in _COMMANDS.items() if not needs_odoo}
 
 
+# Subcommands the usage log skips (#1204). ``log-event`` is plumbing: every hook
+# shim shells out to it, so recording it would log each hook firing a second time
+# and spend an interpreter start per tool call for a command no agent chose. The
+# hook scripts record their own run instead. ``cmd`` is logged per registry
+# command (kind ``sdk_command``), which is the name a reader can match.
+_USAGE_SKIPPED = {"log-event", "cmd"}
+
+
+def _log_cli_usage(command: str, started: float, ok: bool) -> None:
+    """Write one ``cli_command`` usage line for a finished subcommand."""
+    if command in _USAGE_SKIPPED:
+        return
+    record_usage(
+        "cli_command",
+        command,
+        source="odoo_sdk",
+        ok=ok,
+        ms=int((time.monotonic() - started) * 1000),
+    )
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -1180,6 +1219,28 @@ def main() -> None:
     if entry is None:
         parser.print_help()
         sys.exit(1)
+    started = time.monotonic()
+    ok = False
+    if args.command not in _USAGE_SKIPPED:
+        # Keeps the declaration of every subcommand current without a producer
+        # of its own; skipped for the hook-hot ``log-event`` path.
+        declare_usage(
+            [
+                {"kind": "cli_command", "name": n, "context": {"source": "odoo_sdk"}}
+                for n in _COMMANDS
+                if n not in _USAGE_SKIPPED
+            ]
+        )
+    try:
+        _run_command(entry, args)
+        ok = True
+    finally:
+        _log_cli_usage(args.command, started, ok)
+
+
+def _run_command(
+    entry: tuple[Callable[..., Any], bool], args: argparse.Namespace
+) -> None:
     handler, needs_odoo = entry
     try:
         if not needs_odoo:

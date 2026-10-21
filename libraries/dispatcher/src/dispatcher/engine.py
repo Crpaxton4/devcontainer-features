@@ -21,6 +21,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 
+import usage_log
 from odoo_sdk.state.artifacts import ensure_bundle_dir
 from odoo_sdk.state.dispatch_state import now_us, resolve_now_us
 from odoo_sdk.state.jobs import (
@@ -52,6 +53,33 @@ from .lifecycle import (
 from .queue import pending_jobs
 from .reap import ReapResult, reap
 from .settings import Settings
+
+#: ``result``-event keys copied verbatim into the job usage line, and the keys of
+#: its ``usage`` object (Claude Code's ``claude -p --output-format stream-json``).
+_ENVELOPE_USAGE_KEYS = ("total_cost_usd", "num_turns", "duration_ms")
+_ENVELOPE_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def job_usage_context(job, parser: StreamParser, ok: bool) -> dict:
+    """The context of a job's usage line: ids plus the envelope's own figures."""
+    envelope = parser.envelope or {}
+    context = {
+        "job_id": job.job_id,
+        "session_id": parser.session_id or job.session_id,
+        "source": "dispatcher",
+        "ok": ok,
+    }
+    usage = envelope.get("usage")
+    if isinstance(usage, dict):
+        context.update({k: usage[k] for k in _ENVELOPE_TOKEN_KEYS if k in usage})
+    context.update({k: envelope[k] for k in _ENVELOPE_USAGE_KEYS if k in envelope})
+    return context
+
 
 STDERR_TAIL_LINES = 40
 #: A failed read of the memory figure is retried this many times in a row (one
@@ -338,9 +366,27 @@ class JobRun:
         )
         self._reap(record)
         self._transition(write, ended)
+        self._record_usage()
         engine.note(job.job_id, self.reap_result, write)
         if write.record_error is not None:
             raise write.record_error
+
+    def _record_usage(self) -> None:
+        """Write the one ``job`` usage line for this finished job (#1204).
+
+        The token and cost figures are copied from the ``result`` envelope the
+        parser kept, never calculated. Best effort: a failing usage log must not
+        fail the job, so every error is swallowed here (``usage_log`` already
+        drops a failed write itself).
+        """
+        try:
+            usage_log.record(
+                "job",
+                self.settings.entry,
+                **job_usage_context(self.job, self.parser, self.cause is None),
+            )
+        except Exception as exc:
+            self.engine.log(f"usage line for {self.job.job_id} failed: {exc}")
 
     def _reap(self, record: dict) -> None:
         engine = self.engine

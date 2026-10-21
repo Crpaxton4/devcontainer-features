@@ -51,6 +51,12 @@ if [ ! -t 0 ]; then
     STDIN_JSON="$(timeout 5 cat 2>/dev/null || true)"
 fi
 
+# Usage log (#1204): record this hook's own run before any early exit. Silent,
+# never fails the hook, a no-op on the host (USAGE_LOG_DIR unset there).
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+    usage-log record hook claude-event-hook source=personal-features "event=$HOOK_NAME" </dev/null >/dev/null 2>&1 || true
+fi
+
 # Nothing to do if the SDK CLI isn't on PATH (e.g. a build with no bundled SDK
 # wheel - since #674 the base image's Python version is irrelevant). Silent,
 # successful no-op.

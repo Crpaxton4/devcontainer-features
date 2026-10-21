@@ -46,6 +46,11 @@ if [ ! -t 0 ]; then
     STDIN_JSON="$(timeout 5 cat 2>/dev/null || true)"
 fi
 
+# Usage log (#1204): record this hook's own run. Silent, never fails the hook.
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+    usage-log record hook worktree-context-hook source=personal-features </dev/null >/dev/null 2>&1 || true
+fi
+
 # `cwd` is a documented SessionStart field. jq is the only safe way to read it;
 # with no jq, fall back to the process cwd, which Claude Code sets to the
 # project directory — good enough to answer "am I in a worktree?".

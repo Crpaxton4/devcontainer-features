@@ -9,6 +9,7 @@ description = "Host-side task dispatcher: one Odoo task per devcontainer session
 requires-python = ">=3.11"
 dependencies = [
     "odoo_sdk",
+    "usage_log",
 ]
 
 [dependency-groups]
@@ -33,7 +34,7 @@ addopts = "--import-mode=importlib"
 # Prepend *this* checkout's sources, ahead of any editable install in a shared
 # .venv whose .pth file names one absolute path into another checkout (#860).
 # The second entry is the SDK this package is stacked on.
-pythonpath = ["src", "../odoo_sdk/src", "tests"]
+pythonpath = ["src", "../odoo_sdk/src", "../usage_log/src", "tests"]
 
 [tool.black]
 target-version = ["py311"]
@@ -66,3 +67,5 @@ prerelease = "allow"
 [tool.uv.sources]
 # One direction only: the dispatcher depends on the SDK, never the reverse.
 odoo_sdk = { path = "../odoo_sdk" }
+# The usage log writer (#1204): the dispatcher calls it, it knows nothing of us.
+usage_log = { path = "../usage_log" }

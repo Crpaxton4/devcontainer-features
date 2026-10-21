@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usage_log"
+version = "0.1.0"
+description = "Standalone, stdlib-only usage log: one SQLite line per use of a feature this repo owns."
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+test = [
+    "pytest>=9.1.1",
+]
+static-analysis = [
+    "black>=26.5.1",
+    "complexipy>=6.0.1",
+]
+
+[project.scripts]
+usage-log = "usage_log.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+pythonpath = ["src"]
+
+[tool.black]
+target-version = ["py310"]
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15

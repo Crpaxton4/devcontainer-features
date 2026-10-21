@@ -226,6 +226,16 @@ check "odoo-dev state dir exists" bash -c "test -d /usr/local/share/odoo-dev"
 check "ODOO_DEV_STATE_DIR points at the bind mount (#884)" bash -c \
   "[ \"\$ODOO_DEV_STATE_DIR\" = '/usr/local/share/odoo-dev' ]"
 
+# #1204: the usage-log stores live in a bind mount, and USAGE_LOG_DIR (set only
+# here, in containerEnv) is what switches logging on; host sessions never set it.
+check "usage-log dir exists" bash -c "test -d /usr/local/share/usage-log"
+check "USAGE_LOG_DIR points at the bind mount (#1204)" bash -c \
+  "[ \"\$USAGE_LOG_DIR\" = '/usr/local/share/usage-log' ]"
+check "usage-log dir is 0777 (writers in several containers, #1204)" bash -c \
+  "[ \"\$(stat -c '%a' /usr/local/share/usage-log)\" = '777' ]"
+check "usage-log CLI is on PATH when the wheel is bundled (#1204)" bash -c \
+  "! ls /usr/local/share/uv/tools/odoo-sdk/lib/python*/site-packages/usage_log >/dev/null 2>&1 || command -v usage-log"
+
 # #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
 # mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
 # lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
@@ -1200,6 +1210,18 @@ check "sync-claude-hooks publishes the drift check into the shared config dir (#
 check "settings.json registers the drift check on SessionStart with a 5s timeout, on a both-sides command (#1052)" bash -c \
   "jq -e '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"odoo-dev-plugin-drift-check.sh\")) | .hooks[] | select(.timeout == 5 and (.command | startswith(\"\\\"\${CLAUDE_CONFIG_DIR:-\")))] | length == 1' \"$HK_A/settings.json\" >/dev/null"
 
+# (a5) #1204: the usage-log hook is staged, published, and registered for SessionStart
+# (declarations), PreToolUse with matcher Skill, UserPromptExpansion and SubagentStart.
+USAGE_HOOK=/usr/local/share/personal-features/hooks/usage-log-hook.sh
+check "usage-log-hook is staged, executable and passes shell syntax check (#1204)" bash -c \
+  "test -x $USAGE_HOOK && bash -n $USAGE_HOOK"
+check "sync-claude-hooks publishes the usage-log hook into the shared config dir (#1204)" bash -c \
+  "test -x \"$HK_A/hooks/usage-log-hook.sh\" && cmp -s $USAGE_HOOK \"$HK_A/hooks/usage-log-hook.sh\""
+check "settings.json registers the usage-log hook once per event, PreToolUse only for Skill (#1204)" bash -c \
+  "for ev in SessionStart UserPromptExpansion SubagentStart PreToolUse; do [ \"\$(jq --arg e \"\$ev\" '[.hooks[\$e][] | select(.hooks[].command | contains(\"usage-log-hook.sh\"))] | length' \"$HK_A/settings.json\")\" = '1' ] || exit 1; done; jq -e '.hooks.PreToolUse[] | select(.hooks[].command | contains(\"usage-log-hook.sh\")) | select(.matcher == \"Skill\")' \"$HK_A/settings.json\" >/dev/null"
+check "usage-log-hook is silent and exits 0 with USAGE_LOG_DIR unset (#1204)" bash -c \
+  "out=\"\$(echo '{\"hook_event_name\":\"SubagentStart\",\"agent_type\":\"odoo-dev-builder\"}' | env -u USAGE_LOG_DIR $USAGE_HOOK)\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+
 # Fake $CLAUDE_CONFIG_DIR trees: <dir> <installed> <marketplace> then the cache
 # version directories. An "orphan:<v>" argument is a directory Claude Code has
 # marked superseded with .orphaned_at - the normal state right after an update.
@@ -1247,9 +1269,9 @@ check "sync-claude-hooks is idempotent (no duplicate PreToolUse groups on re-run
 # would survive the strip and be re-appended, accumulating one duplicate per
 # container create - re-run twice more and pin the count at exactly one. The
 # SessionStart group count is FOUR since #1052: event shim, worktree context,
-# palace recall, odoo-dev plugin drift check.
+# palace recall, odoo-dev plugin drift check. It is FIVE since #1204: usage-log hook.
 check "sync-claude-hooks is idempotent for the worktree-context hook too (#809)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"odoo-dev-plugin-drift-check.sh\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
+  "CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && CLAUDE_CONFIG_DIR=\"$HK_A\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"worktree-context-hook\"))] | length' \"$HK_A/settings.json\")\" = '1' ] && [ \"\$(jq '.hooks.SessionStart | length' \"$HK_A/settings.json\")\" = '5' ] && [ \"\$(jq '[.hooks.SessionStart[] | select(.hooks[].command | contains(\"odoo-dev-plugin-drift-check.sh\"))] | length' \"$HK_A/settings.json\")\" = '1' ]"
 
 # --- #811/#812/#813/#907/#832: the shared security policy rides the same merge --
 # The Feature used to ship the MECHANISMS that read this machine's config and
@@ -1367,10 +1389,10 @@ check "a pre-seeded user setting survives the merge" bash -c \
   "[ \"\$(jq -r '.model' \"$HK_B/settings.json\")\" = 'opus' ] && [ \"\$(jq -r '.env.FOO' \"$HK_B/settings.json\")\" = 'bar' ]"
 check "a user-authored hook survives the merge" bash -c \
   "jq -e '.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")' \"$HK_B/settings.json\" >/dev/null"
-# Four PreToolUse groups since #811: the user's, the match-all event group, and
-# one Bash-matched group per security guard.
-check "the feature hooks are added alongside the user's (four PreToolUse groups)" bash -c \
-  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '4' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
+# Five PreToolUse groups since #1204: the user's, the match-all event group, one
+# Bash-matched group per security guard (#811), and the Skill-matched usage group.
+check "the feature hooks are added alongside the user's (five PreToolUse groups)" bash -c \
+  "[ \"\$(jq '.hooks.PreToolUse | length' \"$HK_B/settings.json\")\" = '5' ] && [ \"\$(jq '[.hooks.PreToolUse[] | select(.hooks[].command == \"/home/me/my-own-hook.sh\")] | length' \"$HK_B/settings.json\")\" = '1' ]"
 
 # (c2) #803 migration: the stale container-absolute entries an earlier container
 # wrote into the user's real settings.json are stripped and REPLACED, not left to
@@ -1382,11 +1404,11 @@ cat > "$HK_D/settings.json" <<'JSON'
     "PreToolUse": [ {"matcher": "*", "hooks": [{"type":"command","command":"/usr/local/bin/claude-event-hook PreToolUse"}]} ]
   } }
 JSON
-# Three PreToolUse groups afterwards: the replacement match-all event group plus
-# the two security guards (#811). What this pins is that NONE of them carries a
+# Four PreToolUse groups afterwards: the replacement match-all event group plus
+# the two security guards (#811) and the Skill-matched usage group (#1204). What this pins is that NONE of them carries a
 # container-absolute command and the stale one is gone rather than beside them.
 check "sync-claude-hooks replaces a stale absolute-path entry (#803 migration)" bash -c \
-  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '3' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
+  "CLAUDE_CONFIG_DIR=\"$HK_D\" /usr/local/bin/sync-claude-hooks && [ \"\$(jq '.hooks.PreToolUse | length' \"$HK_D/settings.json\")\" = '4' ] && ! jq -r '.hooks.PreToolUse[].hooks[].command' \"$HK_D/settings.json\" | grep -q '^/usr/local/'"
 
 # (c2b) #811 migration, the same shape: the guards and the recall hook were named
 # from settings.json by their /usr/local/share/claude-home absolute paths while the
@@ -1640,7 +1662,7 @@ check "the staleness report survives a create that writes no hook entries" bash 
 # failure this check is a sibling of. The event shim's seven entries differ by
 # their event-name argument, so every one of the commands is distinct.
 check "the heartbeat mechanism adds no hook entry of its own" bash -c \
-  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh|odoo-dev-plugin-drift-check[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh odoo-dev-plugin-drift-check.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | wc -l)\" = \"\$(printf '%s\n' \"\$cmds\" | sort -u | wc -l)\" ]"
+  "cmds=\"\$(jq -r '[.hooks[][].hooks[].command] | .[]' \"$HK_I/settings.json\")\"; printf '%s\n' \"\$cmds\" | grep -qvE 'claude-event-hook|worktree-context-hook|odoo-api-guard[.]sh|force-push-guard[.]sh|mempalace-recall[.]sh|odoo-dev-plugin-drift-check[.]sh|usage-log-hook[.]sh' && exit 1; for p in claude-event-hook worktree-context-hook odoo-api-guard.sh force-push-guard.sh mempalace-recall.sh odoo-dev-plugin-drift-check.sh usage-log-hook.sh; do printf '%s\n' \"\$cmds\" | grep -qF \"\$p\" || exit 1; done; [ \"\$(printf '%s\n' \"\$cmds\" | grep -cF usage-log-hook.sh)\" = '4' ] || exit 1; others=\"\$(printf '%s\n' \"\$cmds\" | grep -vF usage-log-hook.sh)\"; [ \"\$(printf '%s\n' \"\$others\" | wc -l)\" = \"\$(printf '%s\n' \"\$others\" | sort -u | wc -l)\" ]"
 
 rm -rf "$HOOKS_TEST_ROOT"
 

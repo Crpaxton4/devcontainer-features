@@ -58,6 +58,7 @@ jobs:
             devcontainer-features/src/personal-features/hooks/force-push-guard.sh \
             devcontainer-features/src/personal-features/hooks/mempalace-recall.sh \
             devcontainer-features/src/personal-features/hooks/odoo-dev-plugin-drift-check.sh \
+            devcontainer-features/src/personal-features/hooks/usage-log-hook.sh \
             devcontainer-features/src/personal-features/hooks/tests/odoo-api-guard.test.sh \
             devcontainer-features/src/personal-features/publish-claude-wrapper \
             devcontainer-features/src/second-brain/install.sh \

@@ -47,6 +47,11 @@
 set -u
 
 IN=$(cat 2>/dev/null || true)
+# Usage log (#1204): record this hook's own run before any early exit. Silent
+# (stdout carries the permission JSON), never fails the hook.
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+    usage-log record hook force-push-guard.sh source=personal-features </dev/null >/dev/null 2>&1 || true
+fi
 [ -n "$IN" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 

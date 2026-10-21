@@ -11,6 +11,7 @@ on:
       - 'libraries/dispatcher/uv.lock'
       - 'libraries/dispatcher/Makefile'
       - 'libraries/odoo_sdk/src/odoo_sdk/state/**'
+      - 'libraries/usage_log/**'
       - '.github/workflows/dispatcher.yaml'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - 'libraries/dispatcher/uv.lock'
       - 'libraries/dispatcher/Makefile'
       - 'libraries/odoo_sdk/src/odoo_sdk/state/**'
+      - 'libraries/usage_log/**'
       - '.github/workflows/dispatcher.yaml'
   workflow_dispatch:
 

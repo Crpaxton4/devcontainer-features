@@ -77,6 +77,8 @@ jobs:
         run: |
           uv build --directory libraries/odoo_sdk
           cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
+          uv build --directory libraries/usage_log
+          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount
@@ -141,6 +143,8 @@ jobs:
         run: |
           uv build --directory libraries/odoo_sdk
           cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
+          uv build --directory libraries/usage_log
+          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount
@@ -188,6 +192,8 @@ jobs:
         run: |
           uv build --directory libraries/odoo_sdk
           cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
+          uv build --directory libraries/usage_log
+          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount

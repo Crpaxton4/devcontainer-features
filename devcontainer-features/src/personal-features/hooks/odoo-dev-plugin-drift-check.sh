@@ -37,6 +37,12 @@
 # degrade to "no warning", never to a nonzero exit.
 set -u
 
+# Usage log (#1204): record this hook's own run before any early exit. Silent
+# (stdout carries the warning line), never fails the hook.
+if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+    usage-log record hook odoo-dev-plugin-drift-check.sh source=personal-features </dev/null >/dev/null 2>&1 || true
+fi
+
 CFG="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}"
 REGISTRY="$CFG/plugins/installed_plugins.json"
 MANIFEST="$CFG/plugins/marketplaces/devcontainer-features/plugins/odoo-dev/.claude-plugin/plugin.json"
