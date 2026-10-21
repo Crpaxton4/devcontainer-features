@@ -70,6 +70,14 @@
 # unless --force. A template rebuild drops every other odoo_tpl_* with a
 # different key and lists them in template.dropped[].
 #
+# Progress (#1140): --previous <summary.json> compares this run with the last
+# one, per tree (keyed by the sorted modules list) and for the full install, on
+# the failing module and the decisive error line. summary.progress is true when
+# a failing tree now passes or fails on another module or line, false when every
+# failing tree fails on the same module and line, null when the previous run had
+# no failure. The line "install_all.sh: progress: <value>" goes to stderr. An
+# unreadable or non-JSON --previous is exit 2.
+#
 # Output: the last stdout line is a JSON summary — {status, db, session_id,
 # addons_path, addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
 # template:{db,key,reused,dropped,core_modules,key_parts:{version_info,odoo_version,
@@ -144,6 +152,10 @@ Options:
   --per-tree             install each independent custom dependency tree into
                          its own throwaway database first, then the full install
   --summary <file>       write the JSON summary here as well as to stdout
+  --previous <file>      the summary of the last run. Sets summary.progress:
+                         true (a failing tree now passes or fails elsewhere),
+                         false (same module and line again), null (no failure
+                         before). Prints "progress: <value>" on stderr.
   --expect <file>        JSON array of module names (or an object with a
                          "modules" array) the port must install. One that is
                          skipped is listed in expected_but_skipped[] and the
@@ -174,7 +186,7 @@ db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
 summary_file=""; enterprise=""; expect_file=""; series=""; skipped_tsv=""; expected_skipped=""
 summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
-records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""; warn_new=""; warn_acc=""
+previous_file=""; previous_arg=""; records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""; warn_new=""; warn_acc=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -187,6 +199,7 @@ while [ $# -gt 0 ]; do
     --conf)        need_value --conf $#;       conf="$2"; conf_explicit=true; shift 2 ;;
     --summary)     need_value --summary $#;     summary_file="$2"; shift 2 ;;
     --expect)      need_value --expect $#;      expect_file="$2"; shift 2 ;;
+    --previous)    need_value --previous $#;    previous_arg="$2"; shift 2 ;;
     --no-conf)   no_conf=true; shift ;;
     --template)  use_template=true; shift ;;
     --per-tree)  per_tree=true; shift ;;
@@ -234,6 +247,13 @@ fi
 if [ -n "$expect_file" ]; then
   [ -r "$expect_file" ] || die "cannot read the --expect file: $expect_file"
   expect_file="$(cd "$(dirname "$expect_file")" && pwd)/$(basename "$expect_file")"
+fi
+
+if [ -n "$previous_arg" ]; then
+  [ -r "$previous_arg" ] || die "cannot read the --previous file: $previous_arg"
+  python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$previous_arg" 2>/dev/null \
+    || die "the --previous file is not JSON: $previous_arg"
+  previous_file="$previous_arg"
 fi
 
 [ -n "$artifacts" ] || die "--artifacts is required.
@@ -733,7 +753,7 @@ write_summary() {
     "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
     "$series" "$skipped_tsv" "$expected_skipped" \
     "$version_info" "$odoo_version" "$enterprise_head" "$tpl_dropped" "$session_id" \
-    "${warn_new:-}" "${warn_acc:-}" <<'PY'
+    "${warn_new:-}" "${warn_acc:-}" "$previous_file" <<'PY'
 import json, os, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
@@ -741,7 +761,7 @@ import json, os, sys
  addons_arg, status, enterprise, env_decisive, env_log,
  series, skipped_tsv, expected_skipped,
  version_info, odoo_version, enterprise_head, tpl_dropped, session_id,
- warn_new_file, warn_acc_file) = sys.argv[1:28]
+ warn_new_file, warn_acc_file, previous_file) = sys.argv[1:29]
 
 
 def unique_lines(path):
@@ -783,7 +803,38 @@ if os.path.exists(records):
                 full = entry
 
 statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
+
+
+def failures_of(trees_list, full_entry):
+    # key -> (module, decisive line) for every entry that did not pass
+    found = {}
+    for entry in trees_list:
+        if entry.get("status") != "pass":
+            found[("tree",) + tuple(sorted(entry.get("modules") or []))] = entry
+    if full_entry and full_entry.get("status") != "pass":
+        found[("full",)] = full_entry
+    return found
+
+
+progress = None
+if previous_file:
+    old = json.load(open(previous_file, encoding="utf-8"))
+    old_fail = failures_of(old.get("trees") or [], old.get("full"))
+    new_fail = failures_of(trees, full)
+    if old_fail:
+        progress = False
+        for key, was in old_fail.items():
+            now = new_fail.get(key)
+            if now is None:
+                if key == ("full",) and full is None:
+                    continue
+                progress = True
+            elif (now.get("module"), now.get("error")) != (was.get("module"), was.get("error")):
+                progress = True
+    if status != "usage":
+        print("install_all.sh: progress: %s" % json.dumps(progress), file=sys.stderr)
 summary = {
+    "progress": progress,
     "status": status,
     "db": db, "session_id": session_id, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
     "enterprise_path": enterprise or None,
