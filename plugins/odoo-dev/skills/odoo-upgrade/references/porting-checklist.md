@@ -44,8 +44,8 @@ saying so.
 
 ## 2. Automated rewrite (target ≥ 18.0 only)
 
-- Run TARGET version's `odoo-bin upgrade_code` (`--dry-run` first) — see [upgrade-code-tool.md](./upgrade-code-tool.md); [upgrade-code-scripts.md](./upgrade-code-scripts.md) lists what each script fix, by the series that ships it.
-- Review diff hunk by hunk. Commit mechanical rewrite separate from manual fixes.
+- Run `scripts/port-module.sh <module> --to T --worktree W` — it runs the TARGET version's `odoo-bin upgrade_code` (see [upgrade-code-tool.md](./upgrade-code-tool.md); [upgrade-code-scripts.md](./upgrade-code-scripts.md) lists what each script fix, by the series that ships it), restores every path outside the module, then runs `odoo-module-migrate`.
+- Review diff hunk by hunk. The mechanical commit is separate from manual fixes (#1168).
 - Target 17.0: no core tool — OCA `odoo-module-migrator` offer partial automation (see 17.0/changes.md).
 
 ## 3. Detection greps
