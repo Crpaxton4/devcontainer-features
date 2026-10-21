@@ -71,7 +71,7 @@ Both base and OCA satisfy ⇒ choose `base <major>` (one less dependency across 
 
 Read-only agents, ~10-12 modules each, grouped by functional area so overlapping behaviours land in one agent and get merged instead of duplicated. Group assignment written once to `fr_groups.json` in the work dir (also the record of who did what).
 
-Inputs per agent: module source; inventory CSV + `enrich_*.json` + `oca_alt_*.json` filtered to its modules (prior analysis — reuse it, but requirements come from the CODE); target community + enterprise trees; OCA catalog CSV. Grep the prior JSON by module name rather than loading whole files.
+Inputs per agent: module source; inventory CSV + `enrich_*.json` filtered to its modules (prior analysis — reuse it, but requirements come from the CODE); target community + enterprise trees; OCA catalog CSV. Grep the prior JSON by module name rather than loading whole files.
 
 Each write ONE `fr_<GROUP>.json` array. Keys, exactly: `tmp_id`, `requirement`, `type`, `functional_area`, `actor`, `sources`, `evidence`, `status_source`, `status_note`, `handled`, `handled_by`, `handled_notes`, `verification`, `notes`.
 

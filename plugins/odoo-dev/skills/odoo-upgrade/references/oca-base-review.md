@@ -24,8 +24,7 @@ Cell formats for the three inventory columns (`native?` = one of `yes`,
 `yes/partial`, `partial`, `no`; `native notes` ≤ 300 chars; `OCA alternative`
 ≤ 80 chars, ≤ 3 candidates) are in [inventory.md](./inventory.md) columns 14–16.
 
-Phase-2 fan-out for a whole-codebase inventory — one read-only agent per ~10-12
-modules, each writing `oca_alt_g<N>.json` with keys `module`, `oca_alt`,
-`oca_alt_evidence`, `coverage_gap`, `notes` — stays an inventory concern and is
-described in [inventory.md](./inventory.md). `odoo-dev:odoo-prior-art` answers one
+For a whole-codebase inventory the OCA alternative is the `oca_alt` and
+`oca_alt_evidence` keys of the same `enrich_<module>.json` record — one pass, one
+writer per cell — described in [inventory.md](./inventory.md). `odoo-dev:odoo-prior-art` answers one
 capability at a time; the inventory fan-out answers a whole codebase.

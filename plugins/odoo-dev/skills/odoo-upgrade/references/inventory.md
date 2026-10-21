@@ -10,12 +10,9 @@ Standard deliverable = ONE xlsx, the sheets of the table below, no legend/README
 | Inventory Evidence | 1/module | this file — paths/greps behind every verdict |
 | Studio Inventory | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed; adds `populated` (stored Studio field holds data: `populated`/`empty`/`n/a`) and `view-inline-edit` rows (module view whose arch was edited in the database) |
 
-Two phases, each a fan-out of read-only agents writing JSON, then one merge script:
+One enrichment pass writes one `enrich_<module>.json` per module, then one merge-free build script reads them. Under about 40 modules there is no fan-out: one agent writes every record. Above that, see [Enrichment: the fan-out rule](#phase-1--enrichment-fan-out).
 
-1. **Enrich** (this file) — per module: purpose, area, complexity, 3rd-party, action, `<major> native?`
-2. **OCA/base review** ([oca-base-review.md](./oca-base-review.md)) — per module: `OCA <major> alternative`
-
-Phase 2 read phase 1 output. Never reorder.
+The record holds, per module: purpose, area, complexity, 3rd-party, action, `<major> native?` and the OCA alternative ([oca-base-review.md](./oca-base-review.md)) — one pass, one writer per cell.
 
 ## Generate seed
 
@@ -88,7 +85,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | 13 | Functional area | AI | ONE bucket from a closed 11-value list (`AREA_ORDER` in `build_workbook.py`): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: one bucket per module — the area its primary user sit in. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
 | 14 | `<major> native?` | AI (phase 1) | The **verdict** and nothing else: exactly one of `yes`, `yes/partial`, `partial`, `no`. Does target-version standard (community **or** enterprise) do some/all of this? A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
 | 15 | `<major> native notes` | AI (phase 1) | How and where the target covers it — the sentence that used to be crammed into column 14. ≤ 300 chars. Empty is allowed when the verdict is `no` and there is nothing to add; the receipt (paths grepped) still go to the Evidence sheet |
-| 16 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
+| 16 | `OCA <major> alternative` | AI (`oca_alt` in the same enrich record) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
 
 Header text carry target major: Odoo 19 project ⇒ `19 native?`, `19 native notes`, `OCA 19 alternative`. Build script derive both from `--target-version`.
 
@@ -100,11 +97,11 @@ Verdict columns are short by design, so every one of them need a receipt. One ro
 |--------|------|---------|
 | Module | — | technical name |
 | native? evidence | phase 1 | ≤ 300 chars, enforced by `build_workbook.py`. Path(s) in target tree, or `none found after grepping X, Y`. MUST cite ≥ 1 path or the grep terms tried |
-| OCA alternative evidence | phase 2 | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
+| OCA alternative evidence | phase 1 (`oca_alt_evidence`) | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
 | Vendor release | phase 1 | `yes` / `no` / `unknown` / `n/a` (n/a = in-house) — is there a target-series build of the vendor app? |
 | Complexity rationale | phase 1 | ≤ 120 chars |
 | Upgrade action rationale | phase 1 | ≤ 160 chars |
-| Notes | phases 1+2 | port hazards, dead code, overlaps, hard-coded IDs, coverage gaps — `\|`-joined |
+| Notes | phase 1 | port hazards, dead code, overlaps, hard-coded IDs, coverage gaps |
 
 Evidence sheet = what makes verdicts reviewable. No evidence ⇒ verdict is a guess; re-run that module.
 
@@ -130,9 +127,9 @@ Read `MISMATCH` lines it prints:
 
 ## Phase 1 — enrichment fan-out
 
-Read-only agents, ~10-12 modules each, grouped by functional area (same-area modules share target-version greps). Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents. Each write ONE JSON array to its own path in the work dir: `enrich_<module>.json`, one record per module.
+Fan-out rule. Under about 40 modules there is no fan-out: one agent writes every `enrich_<module>.json`, so the grepped target-series evidence stays in one context and one module gets one verdict. Above that, workers do read-only research only, on disjoint module sets, and write one file per module per worker. Overlap — two workers on one module — is an error, not a merge. Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents.
 
-Records may be partial. `build_workbook.py` merge every `enrich_*.json` — and every `oca_alt_*.json` — **field by field** per module: a key set by exactly one file win, and the same value in several files is fine. A re-run overwrites the module's own `enrich_<module>.json`, so it can write only the keys it re-derived. Empty value never overwrite a filled one.
+Each record is ONE JSON object (not an array) at `enrich_<module>.json` in the work dir. `build_workbook.py` reads exactly that file per seeded module and does not merge. The OCA alternative (`oca_alt`, `oca_alt_evidence`) is part of the same record.
 
 Give every agent: module dir, seed CSV path, and the source trees —
 
@@ -145,7 +142,7 @@ Give every agent: module dir, seed CSV path, and the source trees —
 
 Confirm paths exist before briefing — `odoo-dev:odoo-devcontainer` skill list what's checked out.
 
-JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`. Semantics = columns 3/8/9/11/12/13/14/15 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation.
+JSON keys, exactly (`ENRICH_KEYS` in `build_workbook.py`; none optional, `""` is a legal value): `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`, `oca_alt`, `oca_alt_evidence`. Semantics = columns 3/8/9/11/12/13/14/15/16 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation; `oca_alt` is `none` when nothing fits.
 
 Method each agent follow (order matters — verdict come from greps, not memory):
 
@@ -157,9 +154,9 @@ Method each agent follow (order matters — verdict come from greps, not memory)
 
 `native` / `native_notes` pairs: `yes/partial` + `mail composer has cc/bcc fields`; `yes/partial` + `stock.picking has carried date_done since 17.0`; `no` + `19 dropped the payment provider this module extends`.
 
-A `native` cell still carrying the old one-string shape (`yes/partial: <text>`) is accepted: the build split it on the first `: ` and print a non-blocking review line. Fix the brief that produced it — the data is already merged.
+A `native` cell carrying the old one-string shape (`yes/partial: <text>`) is a problem line, not split. Fix the record.
 
-Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a group that skipped the greps without reading its JSON.
+Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a worker that skipped the greps without reading its JSON.
 
 ## Build
 
@@ -168,9 +165,9 @@ python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/invento
         -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx
 ```
 
-Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` into the workbook (+ CSV siblings): Module Inventory and Inventory Evidence, plus Studio Inventory when `studio.csv` is present.
+Combine seed CSV + one `enrich_<module>.json` per module into the workbook (+ CSV siblings): Module Inventory and Inventory Evidence, plus Studio Inventory when `studio.csv` is present.
 
-Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, two enrichment files disagreeing on one key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells (a legacy `yes/partial: <text>` cell is a `native?` verdict outside its four literals, not split). Read it and re-run the offending agents — it is the only check that the fan-out followed the brief.
+Script print a validation report and exit 1 when non-empty: a module with no `enrich_<module>.json`, a record that is not one object, names another module, or has a missing or extra key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells (a legacy `yes/partial: <text>` cell is a `native?` verdict outside its four literals, not split). The loader rejects a malformed record; fix the record.
 
 ## Interpretation for estimating
 
