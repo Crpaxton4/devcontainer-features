@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # port-module.sh — the mechanical part of a module port as one script (#1154).
 #
-# Usage: port-module.sh <module> --to T --worktree W [--from S]
+# Usage: port-module.sh <module> --to T --worktree W [--from S] [--no-commit]
 #
 # S defaults to the series prefix of W/<module>/__manifest__.py, else the major
 # of $ODOO_VERSION.
@@ -25,21 +25,25 @@
 #         pin: 0.5.0, uploaded 2025-08-21 and the newest release on PyPI on
 #         2026-09-20, the date of the upstream merge named in #1154.
 #
-# Nothing is committed. The commit is a later change (#1168): add it after the
-# JSON line is built, in the "commit" marker below.
+# Step 3  When both tools succeeded and either changed a file, the rewrite is
+#         committed on its own as `chore(<module>): upgrade_code <to>` (#1168), so
+#         the manual port that follows reviews as a separate diff. The commit
+#         hook exempts that subject from the manifest bump for <module>.
+#         `--no-commit` keeps the old behaviour: nothing is committed.
 #
 # Output: one JSON line on stdout:
 #   {module, from, to, upgrade_code:{rc, files_changed[]},
-#    migrator:{ran, rc, files_changed[]}, ok}
-# File paths are relative to W.
+#    migrator:{ran, rc, files_changed[]}, commit:{sha, diffstat}|null, ok}
+# File paths are relative to W. commit is null when nothing was committed.
 # Exit: 0 ok · 1 a tool failed · 2 usage or the migrator is missing
 set -uo pipefail
 
-usage() { echo "usage: port-module.sh <module> --to T --worktree W [--from S]" >&2; exit 2; }
+usage() { echo "usage: port-module.sh <module> --to T --worktree W [--from S] [--no-commit]" >&2; exit 2; }
 
-module=""; to=""; wt=""; from=""
+module=""; to=""; wt=""; from=""; do_commit=true
 while [ $# -gt 0 ]; do
   case "$1" in
+    --no-commit) do_commit=false; shift ;;
     --to) to="${2:-}"; shift 2 || usage ;;
     --worktree) wt="${2:-}"; shift 2 || usage ;;
     --from) from="${2:-}"; shift 2 || usage ;;
@@ -117,16 +121,33 @@ fi
 ok=false
 if [ "$uc_rc" -le 1 ] && [ "$missing" = false ] && [ "$mg_rc" -eq 0 ]; then ok=true; fi
 
+# The commit (#1168): only when both tools succeeded and one of them changed a file.
+# It is a plain `git commit`, so the repository's hooks run on it.
+c_sha=""; c_stat=""
+if [ "$ok" = true ] && [ "$do_commit" = true ] && { [ -n "$uc_files" ] || [ -n "$mg_files" ]; }; then
+  count() { printf '%s' "$1" | grep -c . || true; }
+  git -C "$wt" add -A -- "$module"
+  if git -C "$wt" commit -q -m "chore($module): upgrade_code $to" \
+    -m "upgrade_code rc=$uc_rc, $(count "$uc_files") files
+odoo-module-migrate rc=$mg_rc, $(count "$mg_files") files"; then
+    c_sha="$(git -C "$wt" rev-parse HEAD)"
+    c_stat="$(git -C "$wt" diff --stat HEAD~1 HEAD -- "$module")"
+  else
+    echo "port-module.sh: git commit failed; the rewrites stay staged in the tree" >&2
+    ok=false
+  fi
+fi
+
 python3 -I -c '
 import json, sys
-m, f, t, rc, ucf, ran, mrc, mf, ok = sys.argv[1:10]
+m, f, t, rc, ucf, ran, mrc, mf, ok, sha, stat = sys.argv[1:12]
 lines = lambda s: [x for x in s.split("\n") if x]
 print(json.dumps({"module": m, "from": f, "to": t,
   "upgrade_code": {"rc": int(rc), "files_changed": lines(ucf)},
   "migrator": {"ran": ran == "true", "rc": int(mrc), "files_changed": lines(mf)},
-  "ok": ok == "true"}))' "$module" "$from" "$to" "$uc_rc" "$uc_files" "$mg_ran" "$mg_rc" "$mg_files" "$ok"
+  "commit": {"sha": sha, "diffstat": stat} if sha else None,
+  "ok": ok == "true"}))' "$module" "$from" "$to" "$uc_rc" "$uc_files" "$mg_ran" "$mg_rc" "$mg_files" "$ok" "$c_sha" "$c_stat"
 
-# commit: #1168 adds `chore(<module>): upgrade_code <series>` here, before exit.
 [ "$missing" = true ] && exit 2
 [ "$ok" = true ] && exit 0
 exit 1

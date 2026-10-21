@@ -48,7 +48,9 @@ are the lines of your prompt.
    the same name. The script writes the `test` entry for the module itself. A series that differs from the
    container's selects the container's side core (`odooNN-bin`) by itself when it exists;
    `--odoo-bin` and `--odoo-conf` name one by hand.
-3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD`: one
+3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD` minus the `upgrade_code` commits
+   (`git log --format=%H --grep='^chore(.*): upgrade_code ' <default_branch>..HEAD` lists them; review the manual
+   commits with `git diff <that commit>..HEAD` per module): one
    `criteria_results[]` entry per acceptance criterion, with its evidence and a
    verdict; `findings` with file, line and severity. Then
    `<ARTIFACT> set <ARTIFACTS> review --json '<one line>'`.

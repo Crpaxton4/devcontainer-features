@@ -277,6 +277,29 @@ denied "$COMMITHOOK" "commit: the deny names the module and its stuck version" \
   "stockflow_sync (still 17.0.1.0.0)" \
   odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
 
+# (1b) The mechanical rewrite of a port (#1168): the subject `chore(<module>):
+# upgrade_code <NN>.0` exempts that one module from the bump.
+allowed "$COMMITHOOK" "commit: upgrade_code subject needs no bump for its module" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
+allowed "$COMMITHOOK" "commit: upgrade_code subject with a second -m body" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0" -m "upgrade_code rc=0, 1 files"' "$MOD"
+printf 'chore(stockflow_sync): upgrade_code 19.0\n\nbody\n' > "$WT/uc-msg.txt"
+allowed "$COMMITHOOK" "commit: upgrade_code subject read from the -F file" \
+  odoo-dev-builder "git commit -F $WT/uc-msg.txt" "$MOD"
+denied "$COMMITHOOK" "commit: upgrade_code subject naming another module" \
+  "stockflow_sync (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(nested_mod): upgrade_code 19.0"' "$MOD"
+denied "$COMMITHOOK" "commit: a plain chore subject needs a bump" \
+  "stockflow_sync (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): tidy"' "$MOD"
+printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
+gitq add addons/nested_mod/api.py
+denied "$COMMITHOOK" "commit: upgrade_code subject still checks a second module" \
+  "addons/nested_mod (still 17.0.2.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
+gitq reset -q HEAD -- addons/nested_mod/api.py
+git -C "$MOD" checkout -q -- addons/nested_mod/api.py
+
 # The repository is the payload cwd unless `-C` moves it, and the same commit
 # denies from an unrelated cwd when it does.
 denied "$COMMITHOOK" "commit: git -C into the module repo from elsewhere" \
