@@ -564,8 +564,33 @@ tours_run="$( { grep -oE '\.browser: \[[0-9]+/[0-9]+\] Tour [A-Za-z0-9_.]+ ' "$l
 tours_passed="$(grep -cE '\.browser: tour succeeded[[:space:]]*$' "$log" || true)"
 tours_passed="${tours_passed:-0}"
 
+# Odoo 17 logs neither of the lines above. It logs only
+# `odoo.addons.<mod>.tests.<file>.<Class>.browser: test successful`, once per
+# browser test, and a QUnit `browser_js` suite logs the same line. So the 17
+# count is restricted to the classes whose source calls start_tour(), taken
+# from module_src/tests, and counts distinct loggers (the line carries the
+# class, not the method, so a class that runs several tours counts once).
+# Added to the 18+ counts, so a log in either format is counted.
+if [ -n "$module_src" ] && [ -d "$module_src/tests" ]; then
+  tour_classes="$( { grep -rl "start_tour(" "$module_src/tests" --include='*.py' 2>/dev/null || true; } \
+    | while IFS= read -r f; do
+        awk '/^[[:space:]]*class[[:space:]]+[A-Za-z0-9_]+[[:space:]]*\(/ {
+               s = $0; sub(/^[[:space:]]*class[[:space:]]+/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); cls = s }
+             /start_tour\(/ && cls != "" { print cls }' "$f"
+      done | sort -u)"
+  for cls in $tour_classes; do
+    n17="$( { grep -oE "odoo\.addons\.[A-Za-z0-9_.]+\.${cls}\.browser: test successful" "$log" || true; } | sort -u | wc -l | tr -d ' ')"
+    tours_run=$((tours_run + n17))
+    tours_passed=$((tours_passed + n17))
+  done
+fi
+
 passed=false
 [ "$rc" -eq 0 ] && [ "$fail_count" -eq 0 ] && [ "$tests_run" -gt 0 ] && passed=true
+
+# A tour that failed at a step is a failure on every series, whatever the
+# summary line and exit code say.
+if grep -qE 'Tour [A-Za-z0-9_.]+ failed at step' "$log"; then passed=false; fi
 
 # The silent-skip guard. A module that declares tours and ran none did not pass;
 # it did not test. This is the whole reason --with-tours exists.
@@ -619,6 +644,16 @@ result_json="$(node -e '
     const named = block.filter((line) => EXCEPTION.test(line));
     const message = named.length ? named[named.length - 1] : (block[block.length - 1] || "");
     failures.push({ test: m[1].trim().slice(0, 200), error: message.slice(0, 300) });
+  }
+  // "Tour <name> failed at step" is logged on every series; add it unless a
+  // FAIL:/ERROR: entry above already names that tour.
+  const seenTours = new Set();
+  for (const l of lines) {
+    const t = l.match(/Tour ([A-Za-z0-9_.]+) failed at step[^\n]*/);
+    if (!t || seenTours.has(t[1])) continue;
+    seenTours.add(t[1]);
+    if (failures.some((f) => f.test.includes(t[1]) || f.error.includes(t[1]))) continue;
+    failures.push({ test: module_ + ": tour " + t[1] + " failed", error: t[0].trim().slice(0, 300) });
   }
   if (tourGap === "true") {
     failures.unshift({

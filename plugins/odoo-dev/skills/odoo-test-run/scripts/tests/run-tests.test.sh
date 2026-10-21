@@ -507,6 +507,48 @@ expect "tour counted"        "$(field "$out" tours_run)" "1"
 expect "tour success counted" "$(field "$out" tours_passed)" "1"
 expect "toured run passes"   "$(field "$out" passed)" "true"
 
+# Odoo 17: no per-step lines, only "<Class>.browser: test successful". A QUnit
+# class (browser_js, no start_tour) logs the same line and must not be counted.
+rm -f "$work/addons/.worktrees/task-4242/mymodule/test_tour.py"
+mkdir -p "$work/addons/.worktrees/task-4242/mymodule/tests"
+cat > "$work/addons/.worktrees/task-4242/mymodule/tests/test_tours.py" <<'PY'
+class TestTourA(HttpCase):
+    def test_a(self):
+        self.start_tour("/odoo", "my_tour", login="admin")
+
+class TestQunit(HttpCase):
+    def test_q(self):
+        self.browser_js("/web/tests", "", "", login="admin")
+PY
+t17="$work/tour17.log"
+cat > "$t17" <<'LOG'
+2026-09-04 16:48:21,163 1 INFO db odoo.addons.mymodule.tests.test_tours: Starting TestTourA.test_a ...
+2026-09-04 16:48:25,000 1 INFO db odoo.addons.mymodule.tests.test_tours.TestTourA.browser: test successful
+2026-09-04 16:48:27,000 1 INFO db odoo.addons.mymodule.tests.test_tours.TestQunit.browser: test successful
+2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 2 tests when loading database 'db'
+LOG
+out="$(run "$t17" 0)"
+expect "17: tours declared"          "$(field "$out" tours_declared)" "1"
+expect "17: only start_tour classes" "$(field "$out" tours_run)" "1"
+expect "17: tour success counted"    "$(field "$out" tours_passed)" "1"
+expect "17: no tour gap, no failure" "$(nfail "$out")" "0"
+expect "17: run passes"              "$(field "$out" passed)" "true"
+
+t17f="$work/tour17-fail.log"
+cat > "$t17f" <<'LOG'
+2026-09-04 16:48:21,163 1 INFO db odoo.addons.mymodule.tests.test_tours: Starting TestTourA.test_a ...
+2026-09-04 16:48:25,000 1 ERROR db odoo.addons.mymodule.tests.test_tours.TestTourA.browser: Tour my_tour failed at step click (trigger: .y)
+2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'db'
+LOG
+out="$(run "$t17f" 0)"
+expect "17: failed tour is a failure entry" "$(node -e 'console.log(JSON.parse(process.argv[1]).failures.filter(f=>/Tour my_tour failed at step/.test(f.error)).length)' "$out")" "1"
+expect "17: failed tour is not a pass"      "$(field "$out" passed)" "false"
+rm -rf "$work/addons/.worktrees/task-4242/mymodule/tests"
+cat > "$work/addons/.worktrees/task-4242/mymodule/test_tour.py" <<'PY'
+def test(self):
+    self.start_tour("/odoo", "my_tour", login="admin")
+PY
+
 # --with-tours must refuse rather than run blind when no browser is available.
 #
 # "No browser available" is MANUFACTURED here rather than assumed: every
