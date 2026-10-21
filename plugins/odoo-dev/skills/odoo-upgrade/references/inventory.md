@@ -2,31 +2,24 @@
 
 Inventory = first artifact of every upgrade project. Drives effort estimate, upgrade plan, per-department end-user test plan.
 
-Standard deliverable = ONE xlsx, 4 sheets, no legend/README sheets (column meanings live here, in skill):
+Standard deliverable = ONE xlsx, the sheets of the table below, no legend/README sheets (column meanings live here, in skill):
 
 | Sheet | Rows | Built by |
 |-------|------|----------|
 | Module Inventory | 1/module | this file |
-| Functional Requirements | 1/requirement | [functional-requirements.md](./functional-requirements.md) |
-| Traceability | 1/module | derived — module → requirement IDs + counts + inventory verdicts |
 | Inventory Evidence | 1/module | this file — paths/greps behind every verdict |
 | Studio Inventory | 1/artifact | `studio_inventory.py` — optional, present only when studio.csv passed; adds `populated` (stored Studio field holds data: `populated`/`empty`/`n/a`) and `view-inline-edit` rows (module view whose arch was edited in the database) |
-| Tickets | 1/ticket | `tickets.csv` — optional, see [support-tickets.md](./support-tickets.md) |
 
-Three phases, each a fan-out of read-only agents writing JSON, then one merge script:
+One enrichment pass writes one `enrich_<module>.json` per module, then one merge-free build script reads them. Under about 40 modules there is no fan-out: one agent writes every record. Above that, see [Enrichment: the fan-out rule](#phase-1--enrichment-fan-out).
 
-1. **Enrich** (this file) — per module: purpose, area, complexity, 3rd-party, action, `<major> native?`
-2. **OCA/base review** ([oca-base-review.md](./oca-base-review.md)) — per module: `OCA <major> alternative`
-3. **Requirements** ([functional-requirements.md](./functional-requirements.md)) — FR rows + Handled? verdict
-
-Phase 2 read phase 1 output; phase 3 read both. Never reorder.
+The record holds, per module: purpose, area, complexity, 3rd-party, action, `<major> native?` and the OCA alternative (method: the `odoo-dev:odoo-prior-art` skill) — one pass, one writer per cell.
 
 ## Generate seed
 
 ```bash
 python3 <base directory>/scripts/module_inventory.py [ADDONS_PATH ...] [--target-version 19.0] -o <ARTIFACTS>/inventory/inventory.csv
 python3 <plugin root>/skills/odoo-prior-art/scripts/oca_check.py [ADDONS_PATH ...] --series 16.0,17.0,18.0,19.0 --csv <ARTIFACTS>/inventory/inventory.csv
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv
 ```
 
 Two directories are referenced above. `<base directory>` is the absolute path on the
@@ -45,16 +38,18 @@ plugin root in the same place.
 - Stdlib only, no installs. Manifests parsed with `ast.literal_eval`, never imported.
 - Unparseable manifest ⇒ row still emitted (LoC counted, purpose flagged `TODO-AI (manifest unparseable…)`) — fix manifest; never let module drop out of estimate silently.
 - `--target-version` only affects generated apps.odoo.com fallback links.
-- One work dir per project — the task artifacts dir, `<ARTIFACTS>/inventory/`, never `/tmp` and never the session scratchpad (session-scoped, destroyed at the session boundary with no error) — hold seed CSV + all agent JSON + catalog + `studio.csv` + `tickets.csv`. Everything downstream read from there. `<ARTIFACTS>` is the absolute artifacts dir handed to the agent; `--artifacts <ARTIFACTS>` make `studio_inventory.py` default its own outputs there.
+- One work dir per project — the task artifacts dir, `<ARTIFACTS>/inventory/`, never `/tmp` and never the session scratchpad (session-scoped, destroyed at the session boundary with no error) — hold seed CSV + all agent JSON + catalog + `studio.csv`. Everything downstream read from there. `<ARTIFACTS>` is the absolute artifacts dir handed to the agent; `--artifacts <ARTIFACTS>` make `studio_inventory.py` default its own outputs there.
 
 ## Studio inventory
 
 Code inventory see only what is in git. Studio and other UI-built customization — `x_studio_*` fields, manual models, studio views, base automations, UI server actions and crons, UI reports — live in database rows, so a repo-only inventory silently reports zero. On a Studio-heavy customer that is the larger half of the scope.
 
 ```bash
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
-python3 <base directory>/scripts/studio_inventory.py --db <source-copy> --ssh <user@host> --artifacts <ARTIFACTS>
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv <ARTIFACTS>/inventory/studio.csv
+python3 <base directory>/scripts/studio_inventory.py --ssh <user@host> --artifacts <ARTIFACTS>
 ```
+
+With `--ssh` and no `--db`, the database is the remote host's default (`current_database()`), and the local `PGDATABASE` is never read. Pass `--db` to name another one.
 
 Read-only (the connection itself is opened read-only), so it is safe against a restored copy. Run it against a COPY, never production.
 
@@ -75,7 +70,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 
 | # | Column | Filled by | Semantics |
 |---|--------|-----------|-----------|
-| 1 | Module Name | script | Technical name — the module directory name, and nothing else. No display name, no parentheses. Every other artifact join on this cell: enrichment `module` key, requirement `sources`, Traceability, Evidence. Consumers read it whole, never split it |
+| 1 | Module Name | script | Technical name — the module directory name, and nothing else. No display name, no parentheses. Every other artifact join on this cell: enrichment `module` key, Evidence. Consumers read it whole, never split it |
 | 2 | Display Name | script | manifest `name` verbatim, empty when the manifest carry none. Human label for reading; never join on it |
 | 3 | Module Purpose | script → AI | manifest `summary`, else first `description` line, else `TODO-AI`. AI refine vague ones from module code |
 | 4 | Source version | script | manifest `version` verbatim. Series prefix hint hop count to target, but manifests go stale (never bumped since older series) — treat as hint, confirm against `$ODOO_VERSION`. No series prefix (`1.0`, `1.0.1`) reveal nothing: assume `$ODOO_VERSION` |
@@ -86,11 +81,11 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | 9 | 3rd party app link | script → AI | manifest `website`; priced modules fall back to `https://apps.odoo.com/apps/modules/{target}/{name}`. AI verify link point at actual app; if generic (bare domain, repo root) or network unavailable, keep manifest value as-is, flag in planning review |
 | 10 | OCA repo | script → `oca_check.py` | Exactly one of: `none` (no OCA repo ships it — the ONLY negative value), or the **verified** org location `OCA/<repo> (series,…)`, `; `-joined when several repos ship the name. Script seed `claimed — run oca_check.py` when manifest author contain `Odoo Community Association (OCA)` — claim, not proof (see below) — and `none` otherwise. Never write the scan that proved `none` into the cell: that provenance go to the Evidence sheet's OCA alternative evidence column. `build_workbook.py` reject anything else |
 | 11 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
-| 12 | Upgrade action | script seeds → AI proposes → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop). One of: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), `drop` (dead/unused/superseded). Blank when genuinely unsure. Final call = human planning review |
-| 13 | Functional area | AI | ONE bucket from the SAME closed 11-value list the requirements use (`AREA_ORDER` in `build_workbook.py`, validated in both places so the two cannot drift): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: the bucket is assigned **per requirement**, not per module — a module that produce requirements in two areas get one bucket here (the area its primary user sit in) and each requirement get its own. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
+| 12 | Upgrade action | script seeds → `build_workbook.py` proposes → AI overrides with a rationale → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop); the seed wins over the proposal. Otherwise computed by `build_workbook.py` (`propose_action`, table in its docstring) from native × OCA × 3rd party: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), or `review` when the evidence cannot decide. An empty `upgrade_action` in the record takes the proposal. A different value is an override and needs a non-empty `upgrade_action_rationale`. `review` in the output is a problem line, so `problems: 0` means decided. `drop` (dead/unused/superseded) is always an override. Final call = human planning review |
+| 13 | Functional area | AI | ONE bucket from a closed 11-value list (`AREA_ORDER` in `build_workbook.py`): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: one bucket per module — the area its primary user sit in. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
 | 14 | `<major> native?` | AI (phase 1) | The **verdict** and nothing else: exactly one of `yes`, `yes/partial`, `partial`, `no`. Does target-version standard (community **or** enterprise) do some/all of this? A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
 | 15 | `<major> native notes` | AI (phase 1) | How and where the target covers it — the sentence that used to be crammed into column 14. ≤ 300 chars. Empty is allowed when the verdict is `no` and there is nothing to add; the receipt (paths grepped) still go to the Evidence sheet |
-| 16 | `OCA <major> alternative` | AI (phase 2) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. See [oca-base-review.md](./oca-base-review.md) |
+| 16 | `OCA <major> alternative` | AI (`oca_alt` in the same enrich record) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. Source rule: when `<workdir>/oca_index.json` lists the module, the index literal wins over the record's `oca_alt` and the evidence cell reads `oca_check.py <series> index`; otherwise the record supplies the cell. Method: the `odoo-dev:odoo-prior-art` skill |
 
 Header text carry target major: Odoo 19 project ⇒ `19 native?`, `19 native notes`, `OCA 19 alternative`. Build script derive both from `--target-version`.
 
@@ -102,11 +97,11 @@ Verdict columns are short by design, so every one of them need a receipt. One ro
 |--------|------|---------|
 | Module | — | technical name |
 | native? evidence | phase 1 | ≤ 300 chars, enforced by `build_workbook.py`. Path(s) in target tree, or `none found after grepping X, Y`. MUST cite ≥ 1 path or the grep terms tried |
-| OCA alternative evidence | phase 2 | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
+| OCA alternative evidence | phase 1 (`oca_alt_evidence`) | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
 | Vendor release | phase 1 | `yes` / `no` / `unknown` / `n/a` (n/a = in-house) — is there a target-series build of the vendor app? |
 | Complexity rationale | phase 1 | ≤ 120 chars |
 | Upgrade action rationale | phase 1 | ≤ 160 chars |
-| Notes | phases 1+2 | port hazards, dead code, overlaps, hard-coded IDs, coverage gaps — `\|`-joined |
+| Notes | phase 1 | port hazards, dead code, overlaps, hard-coded IDs, coverage gaps |
 
 Evidence sheet = what makes verdicts reviewable. No evidence ⇒ verdict is a guess; re-run that module.
 
@@ -119,7 +114,7 @@ python3 <plugin root>/skills/odoo-prior-art/scripts/oca_check.py [ADDONS_PATH ..
 
 Ground truth = module technical name exists as top-level dir with `__manifest__.py` on requested series branch of OCA addon repo (addon repo = org repo whose default branch is series number like `18.0`; master/main defaults = tooling; full forks `OCB`/`OpenUpgrade` excluded). Author string = corroboration only: modules hosted outside org carry it too, forks keep it after diverging. Org facts checker rely on: module name map to exactly ONE repo per series (verified org-wide), repo can differ between series; series branches pre-created as module-free skeletons, so branch existence ≠ module availability — only manifest check count.
 
-Need authenticated `gh` + git: enumerate org repos via `gh api` (~3 requests), read branch contents from shallow blobless clones (no rate limits), cache listings by branch-tip SHA (re-runs near-instant). `--csv` fill `OCA repo` column in place. Full-org scan take minutes. On network trouble (nothing indexed, or >10% of repos failing) print `PARTIAL SCAN`, leave CSV untouched, exit 2 — absence only proven by full healthy scan.
+Need authenticated `gh` + git: enumerate org repos via `gh api` (~3 requests), read branch contents from shallow blobless clones (no rate limits), cache listings by branch-tip SHA (re-runs near-instant). `--csv` fill `OCA repo` column in place. Full-org scan take minutes. On network trouble (nothing indexed, or >10% of repos failing) print `PARTIAL SCAN`, leave CSV untouched, exit 2 — absence only proven by full healthy scan. Exit 2 also mean bad `--csv` (absent, empty, or without `Module Name` header), reported before any scan with stderr line `oca_check.py: --csv <path>: <reason>`; two cases differ by stderr and by whether scan ran.
 
 Run it with ALL series in one pass (`--series 16.0,17.0,18.0,19.0`): same cost, and the branch listings it caches are the input of `oca_catalog.py` in phase 2.
 
@@ -132,9 +127,9 @@ Read `MISMATCH` lines it prints:
 
 ## Phase 1 — enrichment fan-out
 
-Read-only agents, ~10-12 modules each, grouped by functional area (same-area modules share target-version greps). Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents. Each write ONE JSON array to its own path in the work dir: `enrich_g<N>.json`.
+Fan-out rule. Under about 40 modules there is no fan-out: one agent writes every `enrich_<module>.json`, so the grepped target-series evidence stays in one context and one module gets one verdict. Above that, workers do read-only research only, on disjoint module sets, and write one file per module per worker. Overlap — two workers on one module — is an error, not a merge. Agents never edit addons, never run Odoo, never write memory, never spawn sub-agents.
 
-Records may be partial, and two groups may cover the same module. `build_workbook.py` merge every `enrich_*.json` — and every `oca_alt_*.json` — **field by field** per module: a key set by exactly one file win, the same value in several files is fine, and two files setting one key to different non-empty values is a problem line naming the module, the key and BOTH files (`acme: enrich_g1.json and enrich_g3.json disagree on native`) with the first file read keeping the cell. So a re-run can write only the keys it re-derived, and nothing an earlier group established is destroyed by a later file that simply omit it. Empty value never overwrite a filled one.
+Each record is ONE JSON object (not an array) at `enrich_<module>.json` in the work dir. `build_workbook.py` reads exactly that file per seeded module and does not merge. The OCA alternative (`oca_alt`, `oca_alt_evidence`) is part of the same record.
 
 Give every agent: module dir, seed CSV path, and the source trees —
 
@@ -147,7 +142,7 @@ Give every agent: module dir, seed CSV path, and the source trees —
 
 Confirm paths exist before briefing — `odoo-dev:odoo-devcontainer` skill list what's checked out.
 
-JSON keys, exactly: `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`. Semantics = columns 3/8/9/11/12/13/14/15 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation.
+JSON keys, exactly (`ENRICH_KEYS` in `build_workbook.py`; none optional, `""` is a legal value): `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`, `oca_alt`, `oca_alt_evidence`. Semantics = columns 3/8/9/11/12/13/14/15/16 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation; `oca_alt` is `none` when nothing fits.
 
 Method each agent follow (order matters — verdict come from greps, not memory):
 
@@ -159,26 +154,26 @@ Method each agent follow (order matters — verdict come from greps, not memory)
 
 `native` / `native_notes` pairs: `yes/partial` + `mail composer has cc/bcc fields`; `yes/partial` + `stock.picking has carried date_done since 17.0`; `no` + `19 dropped the payment provider this module extends`.
 
-A `native` cell still carrying the old one-string shape (`yes/partial: <text>`) is accepted: the build split it on the first `: ` and print a non-blocking review line. Fix the brief that produced it — the data is already merged.
+A `native` cell carrying the old one-string shape (`yes/partial: <text>`) is a problem line, not split. Fix the record.
 
-Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a group that skipped the greps without reading its JSON.
+Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a worker that skipped the greps without reading its JSON.
 
 ## Build
 
 ```bash
 python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/inventory --target-version 19.0 \
-        -o /mnt/extra-addons/<client>_upgrade_16_to_19_workbook.xlsx
+        -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx
 ```
 
-Merge seed CSV + `enrich_*.json` + `oca_alt_*.json` + `fr_*.json` into the 4-sheet workbook (+ CSV siblings). Requirements JSON optional — absent ⇒ 2 sheets.
+Combine seed CSV + one `enrich_<module>.json` per module into the workbook (+ CSV siblings): Module Inventory and Inventory Evidence, plus Studio Inventory when `studio.csv` is present. `scripts/inventory.sh` writes `inventory.csv`, `oca_index.json` and `studio.csv` into `<ARTIFACTS>/inventory/`. When `oca_index.json` is in the work dir, the build reads `OCA <major> alternative` from it for each module it lists (see column 16); `oca_alt` and `oca_alt_evidence` stay required in the record, `""` is legal.
 
-Script print a validation report and exit 1 when non-empty: modules missing enrichment or OCA rows, two enrichment files disagreeing on one key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells, requirements without `shall` or carrying weak words, unknown source modules, modules with no requirement. Near-duplicate requirements print separately as a non-blocking review list. Read both and re-run the offending agents — it is the only check that the fan-out followed the brief.
+Script print a validation report and exit 1 when non-empty: a module with no `enrich_<module>.json`, a record that is not one object, names another module, or has a missing or extra key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells (a legacy `yes/partial: <text>` cell is a `native?` verdict outside its four literals, not split). The loader rejects a malformed record; fix the record.
 
 ## Interpretation for estimating
 
 - Port effort per module ≈ LoC band × hop count (Source version → target), weighted by Complexity. JS-heavy and report-heavy modules dominate.
-- Dependency depth matter: modules depended on by others port FIRST; broken base module block chain. Sort plan by topological order of Dependencies column.
+- Dependency depth matter: modules depended on by others port FIRST; broken base module block chain. The topological order is the `order` of `plan.json` from `scripts/port-plan.py`.
 - `3rd party app? = Yes` rows = separate workstream: **download target-version release** from vendor/store, don't port code. Effort = re-purchase/licence check + config re-validation + regression test. No target-version release ⇒ escalate to `Upgrade action` decision (port anyway / replace / drop).
 - **OCA modules = `3rd party app? = No` but follow same replace-if-released logic** — externally maintained, never in-house code. Their `OCA <major> alternative` cell read `already OCA: <repo>/<module>`, never `none` and never the bare upstream name: the module IS the OCA module, so nothing is being offered as an alternative to it. Target series listed in `OCA repo` ⇒ `replace`; not listed ⇒ `keep` (port it, consider contributing upstream). Before setting `replace`, diff local copy against upstream series branch — local patches common; if diverged, port delta onto new release or upstream it (`oca-port` automate much of this).
-- Rows where `<major> native?` is `yes`, `yes/partial` or `partial`, or `OCA <major> alternative` is not `none` = candidates to NOT port at all. Biggest lever on total cost, especially on fresh-database projects — see [oca-base-review.md](./oca-base-review.md).
+- Rows where `<major> native?` is `yes`, `yes/partial` or `partial`, or `OCA <major> alternative` is not `none` = candidates to NOT port at all. Biggest lever on total cost, especially on fresh-database projects. The `Upgrade action` column already proposes this (row 12).
 - Functional area column ⇒ group rows per department for end-user test plan; each `keep`/`replace` row need at least one user acceptance scenario in its area.

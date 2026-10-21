@@ -24,7 +24,8 @@ path, a catalog row, or a README that was read. `no` and `none` are respectable 
    A non-empty `missing` is a stop. Stop; report the missing tree and the path expected.
    A `no` from a tree that is not checked out is worthless.
 3. Split the request into 2 to 5 concrete capabilities, in the user's own words. Prior
-   art is answered per capability, never per module.
+   art is answered per capability, never per module, except for an upgrade inventory,
+   where the verdict is per module (the upgrader brief).
 4. Native review, then OCA review, per `references/method.md`. Read it before either:
    it carries the grep discipline, the synonym rule, the neighbour-module list and the
    verdict formats.
@@ -55,7 +56,8 @@ with `module_inventory.py`, or drop `--csv`. This is not PARTIAL SCAN: no scan r
 
 ```
 Capability: <one line, in the user's words>
-  native: no | yes/partial: <where in target>
+  native: yes | yes/partial | partial | no
+    native notes: <where in target, when not no>
     evidence: <path(s) grepped, or the terms tried>
   oca: none | <repo>/<module> (full|partial)
     evidence: <catalog rows, READMEs fetched, or keywords tried>

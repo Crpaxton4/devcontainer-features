@@ -14,6 +14,16 @@
 # subset this hook does not try to reconstruct. That last one is the deliberate
 # bypass: silence about work we cannot attribute beats denying it.
 #
+# The bump rule has one exemption (#1168): a commit whose message subject is
+# `chore(<module>): upgrade_code <NN>.0` is the mechanical rewrite and needs no bump
+# for <module>. The subject is the first `-m` value or the first line of the `-F`
+# file. Other modules in the same commit are still checked.
+#
+# One more rule rides on the same change set: a commit that deletes every file of a
+# module is DENIED when the task's `upgrade` state (task.json) does not mark that
+# module `dropped`. `upgrade-state.sh drop` records first and then removes, so its own
+# commit passes. A repository with no upgrade section is not policed.
+#
 # THERE IS NO PR GATE HERE ANY MORE. This hook used to hold `pr-open.sh`,
 # `release-pr.sh` and `gh pr create` against `gate.sh`, which read the chain's
 # artifacts and refused the call when they were missing. #904 records what that
@@ -66,6 +76,7 @@ process.stdout.write(JSON.stringify({
 # node because the command is a JSON string and the quoting rules are its own.
 if ! fields="$(printf '%s' "$payload" | node -e '
 const SQ = "\x27";
+const fs = require("fs");
 const unquote = (t) => t.replace(/^["\x27]+/, "").replace(/["\x27]+$/, "");
 const base = (t) => { const u = unquote(t); const i = u.lastIndexOf("/"); return i < 0 ? u : u.slice(i + 1); };
 // join(dir, arg) — `git -C <arg>` resolved against the directory it runs in. An
@@ -223,8 +234,8 @@ process.stdin.on("end", () => {
   let p = null;
   try { p = JSON.parse(raw); } catch { p = null; }
   const clean = (s) => (s || "").replace(/[\r\n]+/g, " ");
-  const emit = (mode, wt, note) =>
-    process.stdout.write(mode + "\n" + clean(wt) + "\n" + clean(note) + "\n");
+  const emit = (mode, wt, note, subject) =>
+    process.stdout.write(mode + "\n" + clean(wt) + "\n" + clean(note) + "\n" + clean(subject) + "\n");
 
   // A payload we cannot read names no commit either, so there is nothing to judge.
   // The allowlist hook is the one that fails closed on an unreadable payload.
@@ -264,25 +275,48 @@ process.stdin.on("end", () => {
     if (opaque || !repo) return emit("none", "", "");
     const flags = [];
     let pathspec = false;
+    // The message subject: the first `-m` value, else the first line of the `-F`
+    // file (read from the payload cwd, or the repository). Only the upgrade_code
+    // exemption reads it; an unreadable subject is an empty one.
+    let subject = null;
+    const fromFile = (f) => {
+      for (const base0 of [cwd, repo]) {
+        try { return fs.readFileSync(join(base0, f), "utf8").split("\n")[0]; } catch {}
+      }
+      return "";
+    };
+    const take = (flag, v) => {
+      if (subject !== null || v === undefined) return;
+      subject = (flag === "-m" || flag === "--message") ? v : fromFile(v);
+    };
     for (let j = i + 1; j < call.length; j += 1) {
       const a = call[j];
       if (a === "--") { pathspec = j + 1 < call.length; break; }
       if (!a.startsWith("-")) { pathspec = true; break; }
       if (a === "--amend") { flags.push("amend"); continue; }
       if (a === "--all") { flags.push("all"); continue; }
-      if (VALUED.indexOf(a) >= 0) { j += 1; continue; }
+      if (VALUED.indexOf(a) >= 0) {
+        if (a === "-m" || a === "--message" || a === "-F" || a === "--file") take(a, call[j + 1]);
+        j += 1; continue;
+      }
       if (!CLUSTER.test(a)) continue;
       // A short cluster is boolean flags until one that takes a value, and that
       // one swallows the rest of its own token or, if it ends it, the next one.
       // `-ma` is therefore `-m a` and carries no `-a`, which is why the letters
       // are read in order rather than searched for.
       for (let k = 1; k < a.length; k += 1) {
-        if (TAKES.indexOf(a[k]) >= 0) { if (k === a.length - 1) j += 1; break; }
+        if (TAKES.indexOf(a[k]) >= 0) {
+          if (k === a.length - 1) {
+            if (a[k] === "m" || a[k] === "F") take(a[k] === "m" ? "-m" : "-F", call[j + 1]);
+            j += 1;
+          }
+          break;
+        }
         if (a[k] === "a") flags.push("all");
       }
     }
     if (pathspec) return emit("none", "", "");
-    return emit("commit", repo, flags.join(" "));
+    return emit("commit", repo, flags.join(" "), subject || "");
   }
   return emit("none", "", "");
 });
@@ -297,6 +331,7 @@ fi
 mode="$(printf '%s\n' "$fields" | sed -n 1p)"
 worktree="$(printf '%s\n' "$fields" | sed -n 2p)"
 note="$(printf '%s\n' "$fields" | sed -n 3p)"
+subject="$(printf '%s\n' "$fields" | sed -n 4p)"
 
 [ "$mode" = "commit" ] || exit 0
 
@@ -378,6 +413,64 @@ EOF
 modules="$(printf '%s' "$modules" | sed '/^$/d' | sort -u)"
 [ -n "$modules" ] || exit 0
 
+# A module deleted whole must be a dropped module in the upgrade state. The state is
+# found through $ODOO_DEV_TASK_ARTIFACTS, else the first task.json under the state
+# dir whose upgrade.inputs.worktree is this repository. No upgrade section anywhere:
+# the rule does not apply, and an ordinary repository stays unpoliced.
+repo_real="$(cd "$repo" 2>/dev/null && pwd -P)"
+while IFS= read -r mod; do
+  [ -n "$mod" ] || continue
+  [ -z "$(git -C "$repo" ls-files --cached -- "$mod" 2>/dev/null)" ] || continue
+  git -C "$repo" cat-file -e "$base_rev:$mod/__manifest__.py" 2>/dev/null || continue
+  status="$(REPO="$repo_real" MOD="$mod" node -e '
+const fs = require("fs"), path = require("path");
+const dir = process.env.ODOO_DEV_TASK_ARTIFACTS;
+const state = process.env.ODOO_DEV_STATE_DIR || path.join(process.env.HOME || "", ".local/share/odoo-dev");
+const files = [];
+if (dir) files.push(path.join(dir, "task.json"));
+else {
+  const root = path.join(state, "tasks");
+  try { for (const d of fs.readdirSync(root)) files.push(path.join(root, d, "task.json")); } catch {}
+}
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+for (const f of files) {
+  let up;
+  try { up = JSON.parse(fs.readFileSync(f, "utf8")).upgrade; } catch { continue; }
+  if (!up || !up.inputs) continue;
+  if (!dir && real(up.inputs.worktree || "") !== process.env.REPO) continue;
+  const rec = up.modules && up.modules[process.env.MOD];
+  process.stdout.write(rec ? String(rec.status) : "unknown");
+  break;
+}
+' 2>/dev/null)"
+  if [ -n "$status" ] && [ "$status" != dropped ]; then
+    deny "Refused: $mod is deleted without a dropped entry in the upgrade state; run upgrade-state.sh <artifacts> drop $mod --config-step TEXT --prod-uninstall --assumption ID. The command records the configuration step, the production uninstall and the assumption, then removes the module and commits."
+  fi
+done <<EOF
+$modules
+EOF
+
+# series_prefix — the `<NN>.0` series of a `<series>.A.B[.C]` version, or nothing
+# for a version that carries none.
+series_prefix() {
+  printf '%s' "$1" | awk -F. 'NF >= 4 && $1 ~ /^[0-9]+$/ && $2 == "0" { print $1 "." $2 }'
+}
+
+# A port moves the series prefix once, on the branch's first commit. The merge-base
+# with the upstream (or the default branch) is where the branch left the line it
+# will merge into, so a prefix that differs from the staged one there means the
+# module is already bumped on this branch. No merge-base, no such exemption.
+mergebase="$(git -C "$repo" merge-base HEAD '@{upstream}' 2>/dev/null \
+  || git -C "$repo" merge-base HEAD origin/HEAD 2>/dev/null)"
+
+# port-module.sh commits the mechanical rewrite as `chore(<module>): upgrade_code
+# <series>` (#1168) before the manual port moves the version. That one module, named
+# in the subject, is exempt from the bump; any other module in the commit is not.
+uc_module=""
+if [[ "$subject" =~ ^chore\(([a-z0-9_]+)\):\ upgrade_code\ [0-9]+\.0$ ]]; then
+  uc_module="${BASH_REMATCH[1]}"
+fi
+
 stale=""
 while IFS= read -r mod; do
   [ -n "$mod" ] || continue
@@ -394,6 +487,13 @@ while IFS= read -r mod; do
   newv="$(printf '%s' "$new" | manifest_version)"
   [ -n "$oldv" ] && [ -n "$newv" ] || continue
   [ "$oldv" != "$newv" ] && continue
+  [ "$mod" = "$uc_module" ] && continue
+  if [ -n "$mergebase" ]; then
+    mbv="$(git -C "$repo" show "$mergebase:$mod/__manifest__.py" 2>/dev/null | manifest_version)"
+    mbp="$(series_prefix "$mbv")"
+    newp="$(series_prefix "$newv")"
+    [ -n "$mbp" ] && [ -n "$newp" ] && [ "$mbp" != "$newp" ] && continue
+  fi
   stale="$stale, $mod (still $oldv)"
 done <<EOF
 $modules

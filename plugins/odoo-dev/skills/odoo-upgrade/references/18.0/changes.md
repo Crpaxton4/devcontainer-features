@@ -1,7 +1,7 @@
 # Breaking changes arriving in Odoo 18.0
 Verified against sources 2026-07.
 
-Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgrade_code --from 17.0 --to 18.0` first (see ../upgrade-code-tool.md and ./upgrade-code-scripts.md), then work list manually.
+Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgrade_code --from 17.0 --to 18.0` first (see ../upgrade-code-tool.md and ../upgrade-code-scripts.md), then work list manually.
 
 ## TL;DR
 | Change | Old (17.0) | New (18.0) |
@@ -43,7 +43,7 @@ Port direction: 17.0 -> 18.0. Automated tool exists: run Odoo 18 `odoo-bin upgra
 - `_flush_search()` deprecated (odoo/odoo#144747); flushing derived from SQL metadata in `execute_query()`.
 
 ## Views / XML
-- `<tree>` -> `<list>` everywhere. Covers: arch root tag `<tree>`/`</tree>` (attributes like `editable="bottom"` unchanged), xpath `expr="//tree"` / `expr="//tree/field[...]"`, `view_mode`/`binding_view_types` field values, `mode="tree"` on inherited views, context key `tree_view_ref` -> `list_view_ref`, `"views"` maps in Python/JS. Core script `17.5-01-tree-to-list.py` does most mechanically (see ./upgrade-code-scripts.md). Do **not** rename XML record ids containing `tree` — dependent modules may reference them.
+- `<tree>` -> `<list>` everywhere. Covers: arch root tag `<tree>`/`</tree>` (attributes like `editable="bottom"` unchanged), xpath `expr="//tree"` / `expr="//tree/field[...]"`, `view_mode`/`binding_view_types` field values, `mode="tree"` on inherited views, context key `tree_view_ref` -> `list_view_ref`, `"views"` maps in Python/JS. Core script `17.5-01-tree-to-list.py` does most mechanically (see ../upgrade-code-scripts.md). Do **not** rename XML record ids containing `tree` — dependent modules may reference them.
 - Chatter: replace whole block
   `<div class="oe_chatter"><field name="message_follower_ids"/><field name="activity_ids"/><field name="message_ids"/></div>`
   with single `<chatter/>` tag (optional attrs exist, e.g. `<chatter reload_on_post="True"/>` as in core views).
@@ -63,17 +63,7 @@ Website/portal/QWeb-frontend changes NOT enumerated here — research per-case w
 - Data migrations for renamed/removed **core** fields: check OpenUpgrade 18.0 per-module analysis (see Sources) before hand-writing migration scripts.
 
 ## Detection greps
-```bash
-grep -rn "<tree\|</tree>\|//tree" --include="*.xml" .
-grep -rn "view_mode.*tree\|tree_view_ref\|mode=\"tree\"" .
-grep -rn "oe_chatter" --include="*.xml" .
-grep -rn "kanban-box\|kanban-tooltip\|oe_kanban_colorpicker" --include="*.xml" .
-grep -rn "user_has_groups\|name_get(\|_name_search\|_check_recursion\|_check_m2m_recursion" --include="*.py" .
-grep -rn "check_access_rights\|check_access_rule\|_filter_access_rules" --include="*.py" .
-grep -rn "group_operator" --include="*.py" .
-grep -rn "from odoo import registry\|inselect\|_flush_search" --include="*.py" .
-grep -rn "@odoo-module\|extra_trigger\|test: true" --include="*.js" .
-```
+The 18.0 patterns are the `18.0` rows of [detection-patterns.tsv](../detection-patterns.tsv). `scripts/port-plan.py` runs them per module and writes the hits to `plan.json`.
 
 ## Sources
 - https://github.com/OCA/maintainer-tools/wiki/Migration-to-version-18.0

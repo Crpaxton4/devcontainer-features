@@ -111,7 +111,7 @@ PYTHONPATH="$work/pythonpath" ODOO_VERSION="" \
 expect "exits 0" "$?" "0"
 
 # Every CSV in this pipeline keys on its first column — Module Name in the
-# inventory, Module in the Evidence and Traceability siblings — so one reader
+# inventory, Module in the Evidence sibling — so one reader
 # serves all of them.
 csv_cell() {  # <csv> <first-column value> <column>
   python3 - "$1" "$2" "$3" <<'PY'
@@ -197,10 +197,10 @@ case "$(cell broken_module 'Module Purpose')" in
 esac
 
 # =============================================================================
-# build_workbook.py — merging the fan-out, and what the report refuses to pass
+# build_workbook.py — one strict record per module, and what the report refuses
 # =============================================================================
-# The workbook build is where per-agent JSON becomes the client-facing sheet.
-# Everything asserted below is a contract the fan-out briefs promise and only
+# The workbook build is where per-module JSON becomes the client-facing sheet.
+# Everything asserted below is a contract the enrichment brief promises and only
 # this script enforces, so each case plants exactly one deviation and reads the
 # report line it must produce.
 #
@@ -211,17 +211,38 @@ esac
 SEED_HEADER="Module Name,Display Name,Module Purpose,Source version,LoC,Dependencies,Dependency origin,3rd party app?,3rd party app link,OCA repo,Complexity/risk,Upgrade action,Functional area"
 SEED_ROW="acme,Acme,Extra fields on the sale order,16.0.1.0.0,120,base,core,No,,none,Low,keep,Sales"
 
-# A work dir whose seed CSV and phase-2 file are complete and valid, so the
-# only thing any case is measuring is what it writes into enrich_*.json.
+# A work dir holding only the seed CSV; a case adds enrich_acme.json itself.
 wb_case() {  # <name> -> echoes the dir
   local dir="$work/wb/$1"
   mkdir -p "$dir"
   printf '%s\n%s\n' "$SEED_HEADER" "$SEED_ROW" > "$dir/inventory.csv"
-  cat > "$dir/oca_alt_g1.json" <<'JSON'
-[{"module": "acme", "oca_alt": "none",
-  "oca_alt_evidence": "grepped acme, sale_acme across the OCA catalog"}]
-JSON
   printf '%s' "$dir"
+}
+
+# Write a complete, valid enrich_acme.json, then apply the case's deviation:
+# <overrides-json> sets keys, <drop,keys> removes them.
+wb_record() {  # <dir> [overrides-json] [comma-separated keys to drop]
+  local overrides='{}'
+  python3 - "$1/enrich_acme.json" "${2:-$overrides}" "${3:-}" <<'PY'
+import json, sys
+record = {
+    "module": "acme", "purpose": "Extra fields on the sale order",
+    "third_party": "No", "third_party_link": "", "complexity": "Low",
+    "upgrade_action": "merge-into-standard", "functional_area": "Sales",
+    "native": "yes/partial",
+    "native_notes": "sale.order has carried the same field since 17.0",
+    "native_evidence": "odoo/addons/sale/models/sale_order.py",
+    "vendor_release": "n/a", "complexity_rationale": "",
+    "upgrade_action_rationale": "", "notes": "",
+    "oca_alt": "none",
+    "oca_alt_evidence": "grepped acme, sale_acme across the OCA catalog",
+}
+record.update(json.loads(sys.argv[2]))
+for key in filter(None, sys.argv[3].split(",")):
+    del record[key]
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(record, fh)
+PY
 }
 
 wb_run() {  # <dir> -> sets wb_out (stdout+stderr) and wb_status
@@ -230,17 +251,9 @@ wb_run() {  # <dir> -> sets wb_out (stdout+stderr) and wb_status
   wb_status=$?
 }
 
-# --- #908: two files, disjoint keys, one merged record -----------------------
+# --- #1158: one record per module, nothing merged ----------------------------
 dir="$(wb_case merge)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "yes/partial"}]
-JSON
-cat > "$dir/enrich_g3.json" <<'JSON'
-[{"module": "acme",
-  "native_notes": "sale.order has carried the same field since 17.0",
-  "native_evidence": "odoo/addons/sale/models/sale_order.py",
-  "vendor_release": "n/a"}]
-JSON
+wb_record "$dir"
 wb_run "$dir"
 expect "a complete build exits 0" "$wb_status" "0"
 contains "a complete build reports no problems" "$wb_out" "problems: 0"
@@ -250,54 +263,151 @@ contains "a complete build reports no sentinels" "$wb_out" "sentinels: {}"
 expect "16 columns, verdict and notes beside each other" \
   "$(csv_header "$dir/out_inventory.csv")" \
   "Module Name|Display Name|Module Purpose|Source version|LoC|Dependencies|Dependency origin|3rd party app?|3rd party app link|OCA repo|Complexity/risk|Upgrade action|Functional area|19 native?|19 native notes|OCA 19 alternative"
-expect "verdict comes from the file that set it" \
+expect "verdict comes from the record" \
   "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
-expect "notes come from the other file" \
+expect "notes come from the same record" \
   "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
   "sale.order has carried the same field since 17.0"
-expect "an evidence key set by one file alone survives the merge" \
+expect "evidence comes from the same record" \
   "$(csv_cell "$dir/out_evidence.csv" acme 'native? evidence')" \
   "odoo/addons/sale/models/sale_order.py"
 
-# --- #908: the same key, two values, both files named ------------------------
-dir="$(wb_case conflict)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "yes/partial"}]
-JSON
-cat > "$dir/enrich_g3.json" <<'JSON'
-[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it"}]
-JSON
-wb_run "$dir"
-contains "a conflict names the module, the key and both files" "$wb_out" \
-  "acme: enrich_g1.json and enrich_g3.json disagree on native"
-expect "a conflict keeps the first file's value" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
-expect "a key only the loser set is still merged in" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
-  "nothing in 19 covers it"
-expect "a conflict exits non-zero" "$wb_status" "1"
+# --- #1146: the Upgrade action is proposed from native x OCA x 3rd party -----
+# One case per row of the table in propose_action's docstring. An empty
+# upgrade_action takes the proposal; `review` is a problem line.
+action_case() {  # <name> <expected> <record-overrides-json> [problems-text]
+  local d
+  d="$(wb_case "act_$1")"
+  wb_record "$d" "$3"
+  wb_run "$d"
+  expect "action $1: proposes $2" \
+    "$(csv_cell "$d/out_inventory.csv" acme 'Upgrade action')" "$2"
+  if [ -n "${4:-}" ]; then
+    contains "action $1: problem line" "$wb_out" "$4"
+  else
+    contains "action $1: no problems" "$wb_out" "problems: 0"
+  fi
+}
+RV='"upgrade_action": "", "upgrade_action_rationale": ""'
+action_case yes merge-into-standard "{$RV, \"native\": \"yes\"}"
+action_case yespartial merge-into-standard "{$RV, \"native\": \"yes/partial\"}"
+action_case full replace "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
+action_case already replace "{$RV, \"native\": \"no\", \"oca_alt\": \"already OCA: sale/acme\"}"
+action_case partialalt review "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (partial)\"}" \
+  "acme: Upgrade action is review — decide keep/replace/merge-into-standard"
+action_case inhouse keep "{$RV, \"native\": \"no\"}"
+action_case vendor review "{$RV, \"native\": \"no\", \"third_party\": \"Yes\"}" \
+  "acme: Upgrade action is review"
+action_case partialnative review "{$RV, \"native\": \"partial\"}" \
+  "acme: Upgrade action is review"
+action_case sentinelnative review "{$RV, \"native\": \"TODO-AI\"}" \
+  "acme: Upgrade action is review"
 
-# --- #925: the legacy single-string cell is split, not rejected --------------
-dir="$(wb_case legacy)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "yes/partial: mail composer has cc/bcc fields",
-  "native_evidence": "addons/mail/wizard/mail_compose_message.py"}]
-JSON
+dir="$(wb_case override)"
+wb_record "$dir" '{"native": "no", "upgrade_action": "replace"}'
 wb_run "$dir"
-expect "legacy cell yields the verdict" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
-expect "legacy cell yields the description" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
-  "mail composer has cc/bcc fields"
-contains "legacy cell is flagged for review" "$wb_out" "carried the legacy"
-contains "legacy cell does not block the build" "$wb_out" "problems: 0"
-expect "legacy cell exits 0" "$wb_status" "0"
+contains "an override without a rationale is a problem" "$wb_out" \
+  "acme: Upgrade action 'replace' overrides the proposed 'keep' without upgrade_action_rationale"
+expect "an override without a rationale exits non-zero" \
+  "$([ "$wb_status" -ne 0 ] && echo yes)" "yes"
+
+dir="$(wb_case overrideok)"
+wb_record "$dir" '{"native": "no", "upgrade_action": "replace", "upgrade_action_rationale": "vendor ships 19.0"}'
+wb_run "$dir"
+contains "an override with a rationale is accepted" "$wb_out" "problems: 0"
+expect "the override is the delivered action" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'Upgrade action')" "replace"
+
+dir="$(wb_case seeddrop)"
+printf '%s\n%s\n' "$SEED_HEADER" "${SEED_ROW/,keep,/,drop?,}" > "$dir/inventory.csv"
+wb_record "$dir" "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
+wb_run "$dir"
+expect "the seed drop? wins over the proposal" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'Upgrade action')" "drop?"
+contains "the seed drop? is not a problem" "$wb_out" "problems: 0"
+
+# --- #1158: oca_alt is read from the enrich record ---------------------------
+dir="$(wb_case ocaalt)"
+wb_record "$dir" '{"oca_alt": "sale/sale_acme (full)", "oca_alt_evidence": "found in OCA/sale"}'
+wb_run "$dir"
+expect "oca_alt comes from the enrich record" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'OCA 19 alternative')" \
+  "sale/sale_acme (full)"
+expect "oca_alt_evidence comes from the enrich record" \
+  "$(csv_cell "$dir/out_evidence.csv" acme 'OCA alternative evidence')" \
+  "found in OCA/sale"
+expect "an oca_alt_*.json file is not read" \
+  "$(printf '[{"module":"acme","oca_alt":"x/y (full)"}]' > "$dir/oca_alt_g1.json"
+     wb_run "$dir"; csv_cell "$dir/out_inventory.csv" acme 'OCA 19 alternative')" \
+  "sale/sale_acme (full)"
+
+# --- #1143: oca_index.json in the workdir wins over the record's oca_alt -----
+dir="$(wb_case ocaindex)"
+wb_record "$dir" '{"oca_alt": "sale/sale_acme (full)", "oca_alt_evidence": "found in OCA/sale"}'
+printf '{"series": ["19.0"], "modules": {"acme": ["sale"]}, "oca_alt": {"acme": "already OCA: sale/acme"}, "mismatches": []}' > "$dir/oca_index.json"
+wb_run "$dir"
+expect "the index literal overrides the record oca_alt" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'OCA 19 alternative')" \
+  "already OCA: sale/acme"
+expect "the evidence names the index" \
+  "$(csv_cell "$dir/out_evidence.csv" acme 'OCA alternative evidence')" \
+  "oca_check.py 19.0 index"
+
+# --- #1158: a missing file, an array file, a missing or extra key ------------
+dir="$(wb_case nofile)"
+wb_run "$dir"
+contains "a missing record is a problem line" "$wb_out" \
+  "acme: enrich_acme.json is missing"
+expect "a missing record exits non-zero" "$wb_status" "1"
+
+dir="$(wb_case array)"
+printf '[{"module": "acme", "native": "no"}]' > "$dir/enrich_acme.json"
+wb_run "$dir"
+contains "an array file is a problem line" "$wb_out" \
+  "acme: enrich_acme.json is not one JSON object"
+expect "an array file exits non-zero" "$wb_status" "1"
+
+dir="$(wb_case twofiles)"
+wb_record "$dir" '{"module": "other"}'
+wb_run "$dir"
+contains "a record naming another module is a problem line" "$wb_out" \
+  "acme: enrich_acme.json claims module 'other'"
+expect "a record naming another module exits non-zero" "$wb_status" "1"
+
+dir="$(wb_case missingkey)"
+wb_record "$dir" '{}' "vendor_release"
+wb_run "$dir"
+contains "a missing key is a problem line" "$wb_out" \
+  "acme: enrich_acme.json is missing key(s) vendor_release"
+expect "a missing key exits non-zero" "$wb_status" "1"
+
+dir="$(wb_case extrakey)"
+wb_record "$dir" '{"coverage_gap": "none"}'
+wb_run "$dir"
+contains "an extra key is a problem line" "$wb_out" \
+  "acme: enrich_acme.json has extra key(s) coverage_gap"
+expect "an extra key exits non-zero" "$wb_status" "1"
+
+dir="$(wb_case sentinelkey)"
+wb_record "$dir" '{"vendor_release": "TODO-AI"}'
+wb_run "$dir"
+contains "a sentinel in an evidence key is a problem line" "$wb_out" \
+  "acme: enrich_acme.json key vendor_release is TODO-AI"
+expect "a sentinel in an evidence key exits non-zero" "$wb_status" "1"
+
+# --- #1144: the legacy single-string cell is a problem, not split ------------
+dir="$(wb_case legacy)"
+wb_record "$dir" '{"native": "yes/partial: mail composer has cc/bcc fields", "native_notes": "", "native_evidence": "addons/mail/wizard/mail_compose_message.py"}'
+wb_run "$dir"
+contains "a legacy '<verdict>: <text>' cell is a problem line" "$wb_out" \
+  "acme: 19 native? is 'yes/partial: mail composer has cc/bcc fields' — expected exactly one of yes, yes/partial, partial, no"
+expect "legacy cell is not split into a notes cell" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" ""
+expect "legacy cell exits non-zero" "$wb_status" "1"
 
 # --- #925: anything outside the four verdicts is a problem -------------------
 dir="$(wb_case verdict)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "maybe", "native_notes": "half of it"}]
-JSON
+wb_record "$dir" '{"native": "maybe", "native_notes": "half of it"}'
 wb_run "$dir"
 contains "a verdict outside the vocabulary is rejected" "$wb_out" \
   "acme: 19 native? is 'maybe' — expected exactly one of yes, yes/partial, partial, no"
@@ -305,13 +415,7 @@ expect "a bad verdict exits non-zero" "$wb_status" "1"
 
 # --- #919: the documented 300-char evidence cap is enforced ------------------
 dir="$(wb_case evidence)"
-python3 - "$dir/enrich_g1.json" <<'PY'
-import json, sys
-with open(sys.argv[1], "w", encoding="utf-8") as fh:
-    json.dump([{"module": "acme", "native": "no",
-                "native_notes": "nothing in 19 covers it",
-                "native_evidence": "x" * 301}], fh)
-PY
+wb_record "$dir" "{\"native\": \"no\", \"native_notes\": \"nothing in 19 covers it\", \"native_evidence\": \"$(printf 'x%.0s' $(seq 301))\"}"
 wb_run "$dir"
 contains "301 chars of native evidence is one char too many" "$wb_out" \
   "acme: native? evidence is 301 chars (max 300)"
@@ -319,227 +423,13 @@ expect "over-long evidence exits non-zero" "$wb_status" "1"
 
 # --- #909: a sentinel in a delivered column is unanswered, not valid ---------
 dir="$(wb_case sentinel)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "purpose": "Extra fields on the sale order"}]
-JSON
+wb_record "$dir" '{"native": "TODO-AI"}'
 wb_run "$dir"
 contains "a sentinel verdict is a problem line" "$wb_out" \
   "acme: 19 native? is TODO-AI"
 contains "sentinels are counted per column" "$wb_out" \
   "sentinels: {'19 native?': 1}"
 expect "a sentinel exits non-zero" "$wb_status" "1"
-
-# --- #911: a headers-only register is staged, not absent ---------------------
-dir="$(wb_case tickets)"
-cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it"}]
-JSON
-printf '%s\n' \
-  "id,date,subject,token,status,blocking_module,resolution,link" \
-  > "$dir/tickets.csv"
-wb_run "$dir"
-contains "a staged register counts itself" "$wb_out" \
-  "tickets: 0 total, 0 still blocking"
-contains "a staged register gets its sheet" "$wb_out" "('Tickets', 0)"
-expect "a staged register gets its CSV sibling, headers intact" \
-  "$(csv_header "$dir/out_tickets.csv")" \
-  "id|date|subject|token|status|blocking_module|resolution|link"
-expect "a staged register is not a problem" "$wb_status" "0"
-
-# =============================================================================
-# build_workbook.py — the functional-requirements validator
-# =============================================================================
-# Phase 3 is a fan-out of one agent per group, each writing one fr_<GROUP>.json,
-# and this report is the only thing that reads all of them: it is what proves
-# the agents followed their briefs. So each case plants exactly one defect and
-# reads the line it must produce — and where the point is that a rule must NOT
-# fire, it reads the exact problem count instead, since a count is the only
-# assertion a stray extra line can fail.
-
-# The inventory half kept complete and valid, so every problem a requirements
-# case sees is one it wrote into its own fr_*.json.
-fr_case() {  # <name> -> echoes the dir
-  local dir
-  dir="$(wb_case "$1")"
-  cat > "$dir/enrich_g1.json" <<'JSON'
-[{"module": "acme", "native": "no", "native_notes": "nothing in 19 covers it",
-  "native_evidence": "grepped sale.order across the 19.0 tree",
-  "vendor_release": "n/a"}]
-JSON
-  printf '%s' "$dir"
-}
-
-# --- #910: a missing key is a problem line, not a KeyError -------------------
-# The entry is short two keys; the run must still reach the report, the
-# counters and the CSV sibling, because one malformed entry anywhere would
-# otherwise suppress the feedback for every other agent in the fan-out.
-dir="$(fr_case fr_missing_key)"
-cat > "$dir/fr_A.json" <<'JSON'
-[{"tmp_id": "A-01",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the date on it",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "a missing key names every key that differs" "$wb_out" \
-  "A-01: key mismatch ['evidence', 'sources']"
-contains "a missing key does not stop the report" "$wb_out" "handled: {'no': 1}"
-expect "a missing key exits non-zero" "$wb_status" "1"
-expect "the entry still reaches the requirements CSV" \
-  "$(csv_cell "$dir/out_requirements.csv" FR-001 'Requirement')" \
-  "When a sales user confirms a sales order, the system shall record the confirmation date."
-expect "the missing key is an empty cell, not a crash" \
-  "$(csv_cell "$dir/out_requirements.csv" FR-001 'Evidence')" ""
-
-# --- #912: a bare string in sources is one line, not one per letter ----------
-dir="$(fr_case fr_sources_string)"
-cat > "$dir/fr_A.json" <<'JSON'
-[{"tmp_id": "A-01",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": "acme", "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the date on it",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "a mistyped sources names the type it got" "$wb_out" \
-  "A-01: sources must be a list of module names, got str"
-# 2 = the type line + the module nothing now covers. Four letters of "acme"
-# would have been four more.
-contains "the string is not iterated letter by letter" "$wb_out" "problems: 2"
-expect "a mistyped sources exits non-zero" "$wb_status" "1"
-
-# --- #917: the shall check is case-insensitive, and says so ------------------
-dir="$(fr_case fr_shall_case)"
-cat > "$dir/fr_A.json" <<'JSON'
-[{"tmp_id": "A-01",
-  "requirement": "When a sales user confirms a sales order, the system Shall record the confirmation date.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the date on it",
-  "notes": ""},
- {"tmp_id": "A-02",
-  "requirement": "The system records the confirmation date on a sales order.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the date on it",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "the no-shall line states the case rule" "$wb_out" \
-  "A-02: no \"shall\" (case-insensitive) in:"
-# 1 = A-02 alone: a capitalised Shall is the keyword, not a missing one.
-contains "a capitalised Shall passes" "$wb_out" "problems: 1"
-expect "a requirement with no shall exits non-zero" "$wb_status" "1"
-
-# --- #918: weak wording is a labelled rule, not a substring grep -------------
-dir="$(fr_case fr_weak_wording)"
-cat > "$dir/fr_A.json" <<'JSON'
-[{"tmp_id": "A-01",
-  "requirement": "The system shall be able to support all applicable discounts where appropriate.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Apply a discount and read the total",
-  "notes": ""},
- {"tmp_id": "A-02",
-  "requirement": "When a sales user selects the `normal` delivery type, the system shall reserve the stock.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Select the delivery type and read the reservation",
-  "notes": ""},
- {"tmp_id": "A-03",
-  "requirement": "The system shall render the vendor report faster than the 16.0 report and may notify the buyer.",
-  "type": "Reporting/Notification", "functional_area": "Sales",
-  "actor": "Sales user",
-  "sources": ["acme"], "evidence": "report/sale_report.xml",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Print the report and time it",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "a capability is not a behaviour" "$wb_out" \
-  "A-01: weak wording [superfluous infinitive] 'shall be able to':"
-contains "an absolute names no set" "$wb_out" "A-01: weak wording [absolute] 'all':"
-contains "the original adjectives still fire" "$wb_out" \
-  "A-01: weak wording [vague adjective] 'appropriate':"
-contains "a modal is caught by the verb after it" "$wb_out" \
-  "A-03: weak wording [modal verb] 'may':"
-# 4 = three on A-01 and one on A-03. A-02's weak word is inside backticks, so
-# it is the client's own term for a delivery type, and A-03's comparative
-# names its baseline with `than`: neither is a defect and neither adds a line.
-contains "a quoted literal and a referenced comparative are not weak" \
-  "$wb_out" "problems: 4"
-expect "weak wording exits non-zero" "$wb_status" "1"
-
-# --- #916: groups are compared whole, not by first character -----------------
-# A1 and A2 share a first character, which is what used to make every pair look
-# intra-group and silently switch duplicate review off.
-dir="$(fr_case fr_groups_differ)"
-cat > "$dir/fr_A1.json" <<'JSON'
-[{"tmp_id": "A1-01",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the delivery.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the delivery",
-  "notes": ""}]
-JSON
-cat > "$dir/fr_A2.json" <<'JSON'
-[{"tmp_id": "A2-01",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the invoice.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the invoice",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "two groups sharing a first character are still two groups" "$wb_out" \
-  "near-duplicate"
-contains "the pair is listed once, for review" "$wb_out" \
-  "to review (not blocking): 1"
-expect "a near-duplicate is not blocking" "$wb_status" "0"
-
-# --- #916: one agent's own file is still its own business --------------------
-dir="$(fr_case fr_groups_same)"
-cat > "$dir/fr_A1.json" <<'JSON'
-[{"tmp_id": "A1-01",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the delivery.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the delivery",
-  "notes": ""},
- {"tmp_id": "A1-02",
-  "requirement": "When a sales user confirms a sales order, the system shall record the confirmation date on the invoice.",
-  "type": "Business rule", "functional_area": "Sales", "actor": "Sales user",
-  "sources": ["acme"], "evidence": "models/sale_order.py",
-  "status_source": "active", "status_note": "", "handled": "no",
-  "handled_by": "custom code", "handled_notes": "",
-  "verification": "Confirm a sales order and read the invoice",
-  "notes": ""}]
-JSON
-wb_run "$dir"
-contains "a pair inside one group is not reviewed" "$wb_out" \
-  "to review (not blocking): 0"
-expect "an intra-group pair is clean" "$wb_status" "0"
 
 # --- #963: the OCA literal contract — one owner, asserted by grep ------------
 # Three literals cross skill trees: `none`, `claimed — run oca_check.py`, and
@@ -553,10 +443,8 @@ SKILLS_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OCA_CHECK="$SKILLS_DIR/odoo-prior-art/scripts/oca_check.py"
 INVENTORY_MD="$SKILLS_DIR/odoo-upgrade/references/inventory.md"
 METHOD_MD="$SKILLS_DIR/odoo-prior-art/references/method.md"
-REVIEW_MD="$SKILLS_DIR/odoo-upgrade/references/oca-base-review.md"
 
-for f in "$SUT" "$WORKBOOK" "$OCA_CHECK" "$INVENTORY_MD" "$METHOD_MD" \
-         "$REVIEW_MD"; do
+for f in "$SUT" "$WORKBOOK" "$OCA_CHECK" "$INVENTORY_MD" "$METHOD_MD"; do
   expect "contract file exists: ${f##*/}" "$([ -f "$f" ] && echo yes)" "yes"
 done
 
@@ -604,13 +492,17 @@ expect "inventory.md documents the prefix both sides use" \
 # The #963 defect: a verdict literal named in a reference and defined nowhere.
 expect "no 'self:' verdict literal in the prior-art method" \
   "$(grep -c 'self:' "$METHOD_MD")" "0"
-expect "no 'self:' verdict literal in the OCA base review" \
-  "$(grep -c 'self:' "$REVIEW_MD")" "0"
+expect "no 'self:' verdict literal in the inventory reference" \
+  "$(grep -c 'self:' "$INVENTORY_MD")" "0"
 
-# ...and the row that carried it now puts the value in the column that takes
-# it: `already OCA:` is an `OCA <major> alternative` value, not a `native?` one.
-contains "the OCA base review row names the literal in the OCA column" \
-  "$(cat "$REVIEW_MD")" '| `no` | `already OCA: <repo>/<module>` |'
+# ...and the action table (the docstring of propose_action) puts the value in
+# the column that takes it: `already OCA:` is an `OCA <major> alternative`
+# value, not a `native?` one.
+contains "the action table names the literal in the OCA column" \
+  "$(cat "$WORKBOOK")" '| no            | `already OCA: ...`'
+expect "the deleted oca-base-review.md has no link left" \
+  "$(grep -rl --include='*.md' --include='*.py' 'oca-base-review' \
+    "$SKILLS_DIR/odoo-upgrade" | wc -l | tr -d ' ')" "0"
 contains "the prior-art decision table names it in the oca column" \
   "$(cat "$METHOD_MD")" '| `no` | `already OCA: <repo>/<module>` |'
 contains "the prior-art verdict list names the literal" \

@@ -77,6 +77,9 @@ chmod +x "$bin"/*
 conf="$work/odoo.conf"
 printf '[options]\naddons_path = %s/poison-from-conf\n' "$work" > "$conf"
 mkdir -p "$work/addons" "$work/poison-from-conf"
+# The task worktree must exist for run() to pick it (#1171); a missing one falls
+# through to --repo-path and the addons base, which the cases below exercise.
+mkdir -p "$work/addons/.worktrees/task-4242"
 
 run() { # run <log-fixture> <rc> [extra args...]
   local log="$1" rc="$2"; shift 2
@@ -199,6 +202,54 @@ expect "--addons-path override is honoured verbatim" \
 expect "override does not smuggle the conf path back in" \
   "$(argv_grep "$work/poison-from-conf")" "no"
 expect "override run still passes" "$(field "$out" passed)" "true"
+expect "override reports its root as override" "$(field "$out" addons_root)" "override"
+
+# ---------- custom addons root resolution and enterprise (#1171) ---------------
+# run9 uses task 9999, whose worktree never exists, and its own addons base.
+run9() { # run9 <base> [extra args...]; env ENT_* passed through the caller
+  local base="$1"; shift
+  PATH="$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_RC=0 \
+    ODOO_FAKE_ARGS="$work/args" ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" \
+    WORKTREE_ADDONS_BASE="$base" \
+    bash "$SUT" myrepo 9999 mymodule "$@" 2>"$work/run9.err" | tail -1
+}
+out="$(run "$green" 0)"
+expect "worktree wins and is the reported root" "$(field "$out" addons_root)" "$work/addons/.worktrees/task-4242"
+expect "no enterprise by default" "$(field "$out" enterprise_addons)" "null"
+
+mkdir -p "$work/repo/mymodule" "$work/emptybase"
+out="$(run9 "$work/emptybase" --repo-path "$work/repo")"
+expect "no worktree: --repo-path holding the module is the root" "$(field "$out" addons_root)" "$work/repo"
+expect "no worktree: --repo-path leads the addons path" \
+  "$(argv_has "--addons-path=$work/repo,$work/core-addons")" "yes"
+
+mkdir -p "$work/base2/mymodule"
+out="$(run9 "$work/base2")"
+expect "no worktree, no repo-path: the addons base holding the module" "$(field "$out" addons_root)" "$work/base2"
+
+rc=0
+PATH="$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_ARGS="$work/args" \
+  ODOO_TEST_ARTIFACTS_DIR="$work/artifacts" WORKTREE_ADDONS_BASE="$work/emptybase" \
+  bash "$SUT" myrepo 9999 mymodule >/dev/null 2>"$work/run9.err" || rc=$?
+expect "nothing found: exit 2" "$rc" "2"
+expect "nothing found: the message names the places looked at" \
+  "$(grep -c 'Looked at' "$work/run9.err")" "1"
+
+mkdir -p "$work/datadir/addons/18.0/web_enterprise"
+out="$(ODOO_DEFAULT_DATA_DIR="$work/datadir" run "$green" 0)"
+expect "enterprise is detected and recorded" "$(field "$out" enterprise_addons)" "$work/datadir/addons/18.0"
+expect "enterprise is appended last" \
+  "$(argv_has "--addons-path=$work/addons/.worktrees/task-4242,$work/core-addons,$work/datadir/addons/18.0")" "yes"
+
+# An unmet dependency is named instead of surfacing as a generic install error.
+depmiss="$work/depmiss.log"
+cat > "$depmiss" <<'LOG'
+2026-09-04 16:48:21,163 1 WARNING db odoo.modules.graph: module mymodule: Unmet dependencies: sale_management
+2026-09-04 16:48:22,000 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'db'
+LOG
+out="$(run "$depmiss" 1)"
+expect "unmet dependency is named in failures" "$(firsterr "$out")" \
+  "2026-09-04 16:48:21,163 1 WARNING db odoo.modules.graph: module mymodule: Unmet dependencies: sale_management"
 
 out="$(run "$green" 0 --data-dir "$work/own-data")"
 expect "--data-dir override is honoured" "$(argv_has "--data-dir=$work/own-data")" "yes"
@@ -455,6 +506,48 @@ out="$(run "$toured" 0)"
 expect "tour counted"        "$(field "$out" tours_run)" "1"
 expect "tour success counted" "$(field "$out" tours_passed)" "1"
 expect "toured run passes"   "$(field "$out" passed)" "true"
+
+# Odoo 17: no per-step lines, only "<Class>.browser: test successful". A QUnit
+# class (browser_js, no start_tour) logs the same line and must not be counted.
+rm -f "$work/addons/.worktrees/task-4242/mymodule/test_tour.py"
+mkdir -p "$work/addons/.worktrees/task-4242/mymodule/tests"
+cat > "$work/addons/.worktrees/task-4242/mymodule/tests/test_tours.py" <<'PY'
+class TestTourA(HttpCase):
+    def test_a(self):
+        self.start_tour("/odoo", "my_tour", login="admin")
+
+class TestQunit(HttpCase):
+    def test_q(self):
+        self.browser_js("/web/tests", "", "", login="admin")
+PY
+t17="$work/tour17.log"
+cat > "$t17" <<'LOG'
+2026-09-04 16:48:21,163 1 INFO db odoo.addons.mymodule.tests.test_tours: Starting TestTourA.test_a ...
+2026-09-04 16:48:25,000 1 INFO db odoo.addons.mymodule.tests.test_tours.TestTourA.browser: test successful
+2026-09-04 16:48:27,000 1 INFO db odoo.addons.mymodule.tests.test_tours.TestQunit.browser: test successful
+2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 2 tests when loading database 'db'
+LOG
+out="$(run "$t17" 0)"
+expect "17: tours declared"          "$(field "$out" tours_declared)" "1"
+expect "17: only start_tour classes" "$(field "$out" tours_run)" "1"
+expect "17: tour success counted"    "$(field "$out" tours_passed)" "1"
+expect "17: no tour gap, no failure" "$(nfail "$out")" "0"
+expect "17: run passes"              "$(field "$out" passed)" "true"
+
+t17f="$work/tour17-fail.log"
+cat > "$t17f" <<'LOG'
+2026-09-04 16:48:21,163 1 INFO db odoo.addons.mymodule.tests.test_tours: Starting TestTourA.test_a ...
+2026-09-04 16:48:25,000 1 ERROR db odoo.addons.mymodule.tests.test_tours.TestTourA.browser: Tour my_tour failed at step click (trigger: .y)
+2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'db'
+LOG
+out="$(run "$t17f" 0)"
+expect "17: failed tour is a failure entry" "$(node -e 'console.log(JSON.parse(process.argv[1]).failures.filter(f=>/Tour my_tour failed at step/.test(f.error)).length)' "$out")" "1"
+expect "17: failed tour is not a pass"      "$(field "$out" passed)" "false"
+rm -rf "$work/addons/.worktrees/task-4242/mymodule/tests"
+cat > "$work/addons/.worktrees/task-4242/mymodule/test_tour.py" <<'PY'
+def test(self):
+    self.start_tour("/odoo", "my_tour", login="admin")
+PY
 
 # --with-tours must refuse rather than run blind when no browser is available.
 #

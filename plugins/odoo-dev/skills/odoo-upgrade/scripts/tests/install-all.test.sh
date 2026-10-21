@@ -32,7 +32,7 @@ cat > "$bin/psql" <<'STUB'
 # Emulates only the queries install_all.sh issues. State lives in flat files:
 #   dbs             existing database names
 #   installed.<db>  rows of ir_module_module that are 'installed'
-#   owned.<db>      the install_all_owned stamp
+#   owned.<db>      the install_all_owned stamp (holds the session id)
 #   tplkey.<db>     the stored template key
 sql=""; db=""; prev=""
 for arg in "$@"; do
@@ -44,6 +44,10 @@ for arg in "$@"; do
 done
 printf '%s\n' "$*" >> "$STUB_STATE/psql.argv"
 case "$sql" in
+  *"datname LIKE 'odoo_tpl_%'"*)
+    grep '^odoo_tpl_' "$STUB_STATE/dbs" 2>/dev/null ;;
+  *"SELECT session_id FROM install_all_owned"*)
+    cat "$STUB_STATE/owned.$db" 2>/dev/null ;;
   *"FROM pg_database"*)
     name="${sql##*datname = \'}"; name="${name%%\'*}"
     grep -qxF "$name" "$STUB_STATE/dbs" 2>/dev/null && echo 1 ;;
@@ -64,7 +68,8 @@ case "$sql" in
   *"SELECT key FROM install_all_template"*)
     cat "$STUB_STATE/tplkey.$db" 2>/dev/null ;;
   *"CREATE TABLE IF NOT EXISTS install_all_owned"*)
-    : > "$STUB_STATE/owned.$db" ;;
+    sid="${sql##*VALUES (\'}"; sid="${sid%%\'*}"
+    printf '%s\n' "$sid" > "$STUB_STATE/owned.$db" ;;
 esac
 exit 0
 STUB
@@ -102,22 +107,39 @@ STUB
 
 cat > "$bin/odoo" <<'STUB'
 #!/usr/bin/env bash
-case "${1:-}" in --version) echo "Odoo Server 19.0-20260901"; exit 0 ;; esac
+case "${1:-}" in --version) echo "Odoo Server 19.0-${ODOO_STUB_DATE:-20260901}"; exit 0 ;; esac
 printf '%s\n' "$*" >> "$STUB_STATE/odoo.argv"
-db=""; mods=""; prev=""
+db=""; mods=""; prev=""; treeroot=""
 for arg in "$@"; do
   case "$prev" in -d) db="$arg" ;; -i) mods="$arg" ;; esac
+  case "$arg" in --addons-path=*) treeroot="${arg#--addons-path=}"; treeroot="${treeroot%%,*}" ;; esac
   prev="$arg"
 done
+if [ -n "${ODOO_WARN_PRE:-}" ]; then
+  echo "2026-09-25 09:59:59,000 1 WARNING $db odoo.tools.view_validation: startup noise before loading"
+fi
 echo "2026-09-25 10:00:00,000 1 INFO $db odoo.modules.loading: loading 1 modules..."
+if [ -n "${ODOO_WARN:-}" ]; then
+  echo "2026-09-25 10:00:00,500 1 WARNING $db odoo.modules.module: Missing \`author\` key in manifest for 'alpha', defaulting to 'False'"
+  echo "2026-09-25 10:00:00,600 1 WARNING $db odoo.tools.view_validation: attribute 'group'  is not valid.  Did you mean 'groups'?"
+fi
 IFS=, read -r -a wanted <<< "$mods"
 for module in "${wanted[@]}"; do
   echo "2026-09-25 10:00:01,000 1 INFO $db odoo.modules.loading: Loading module $module (1/1)"
+  case ",${ODOO_INCOMPAT:-}," in
+    *",$module,"*)
+      echo "2026-09-25 10:00:01,100 1 WARNING $db odoo.modules.module: module $module: incompatible version, setting installable=False"
+      echo "2026-09-25 10:00:01,200 1 CRITICAL $db odoo.modules.loading: Some modules are not loaded, some dependencies or manifest may be missing: ['$module']"
+      exit 1 ;;
+  esac
   case ",${ODOO_FAIL_ON:-}," in
     *",$module,"*)
       echo "2026-09-25 10:00:01,500 1 ERROR $db odoo.tools.convert: while parsing /mnt/extra-addons/$module/views/${module}_views.xml:12"
       echo "Traceback (most recent call last):"
-      echo '  File "/opt/odoo/odoo/tools/convert.py", line 1, in _tag_record'
+      # The decisive frame sits in the tree under test, or (ODOO_FRAME_ENV) in core.
+      frame="$treeroot/$module/models/${module}.py"
+      if [ -n "${ODOO_FRAME_ENV:-}" ]; then frame="/usr/lib/python3/dist-packages/odoo/addons/account/models/account_move.py"; fi
+      echo "  File \"$frame\", line 1, in _tag_record"
       echo "odoo.tools.convert.ParseError: Element '<xpath expr=\"//field[@name=\\'gone\\']\">' cannot be located in parent view"
       exit 1 ;;
   esac
@@ -145,8 +167,8 @@ art() { echo "$work/art"; }
 
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
-  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" \
-    bash "$SUT" --artifacts "$work/art-$suffix" "$@" 2>"$state/err"
+  PATH="$bin:$PATH" PYTHONPATH="${PYSTUB:-}" ODOO_STUB_DATE="${STUB_DATE:-20260901}" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" ODOO_WARN="${STUB_WARN:-}" ODOO_WARN_PRE="${STUB_WARN_PRE:-}" \
+    bash "$SUT" --artifacts "$work/art-$suffix" --session-id "${SID:-sess-a}" "$@" 2>"$state/err"
 }
 
 field() { python3 -c "
@@ -162,6 +184,14 @@ out="$(run req --no-conf "$tree")"; rc=$?
 expect "no --db exits 2" "$rc" "2"
 contains "no --db names the flag" "$(cat "$state/err")" "--db <name> is required"
 expect "no --db runs no odoo" "$( [ -f "$state/odoo.argv" ] && echo yes || echo no )" "no"
+
+# The retired flags go through the unknown-option path.
+out="$(run gone --db verify --no-conf --keep "$tree")"; rc=$?
+expect "removed --keep exits 2" "$rc" "2"
+contains "removed --keep is unknown" "$(cat "$state/err")" "unknown option"
+out="$(run gone2 --db verify --no-conf --template-db x "$tree")"; rc=$?
+expect "removed --template-db exits 2" "$rc" "2"
+contains "removed --template-db is unknown" "$(cat "$state/err")" "unknown option"
 
 # ---------- 2. a config that names a database is refused (#880) -----------------
 reset
@@ -210,9 +240,46 @@ contains "--force drops the target" "$(cat "$state/dropdb.argv")" "verify"
 reset
 printf '%s\n' verify >> "$state/dbs"
 printf 'alpha\nbeta\n' > "$state/installed.verify"
-: > "$state/owned.verify"
+printf 'sess-a\n' > "$state/owned.verify"
 out="$(run owned --db verify --no-conf "$tree")"; rc=$?
-expect "a stamped target is reused, not refused" "$rc" "0"
+expect "a target stamped by this session is reused, not refused" "$rc" "0"
+
+# ---------- 3b. session stamp, required flags (#1141) ----------------------------
+reset
+printf '%s\n' verify >> "$state/dbs"
+printf 'alpha\nbeta\n' > "$state/installed.verify"
+printf 'sess-b\n' > "$state/owned.verify"
+out="$(run other --db verify --no-conf "$tree")"; rc=$?
+expect "a target stamped by another session exits 2" "$rc" "2"
+contains "and names both sessions" "$(cat "$state/err")" "belongs to session 'sess-b', this run is 'sess-a'"
+expect "and drops nothing" "$( [ -f "$state/dropdb.argv" ] && echo yes || echo no )" "no"
+out="$(run otherforce --db verify --no-conf --force "$tree")"; rc=$?
+expect "--force overrides the session stamp" "$rc" "0"
+
+# A stamp from before the session column existed counts as foreign.
+reset
+printf '%s\n' verify >> "$state/dbs"
+printf 'alpha\n' > "$state/installed.verify"
+: > "$state/owned.verify"
+out="$(run oldstamp --db verify --no-conf "$tree")"; rc=$?
+expect "a stamp with no session id is foreign" "$rc" "2"
+
+reset
+out="$(run stamp --db verify --no-conf "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the summary carries the session id" "$(field "$summary" session_id)" "sess-a"
+expect "the stamp is written with the session id" "$(cat "$state/owned.verify")" "sess-a"
+
+reset
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" bash "$SUT" --db verify --no-conf --session-id s "$tree" 2>"$state/err")"; rc=$?
+expect "no --artifacts exits 2" "$rc" "2"
+contains "and names the flag" "$(cat "$state/err")" "pass --artifacts <ARTIFACTS>/install"
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" env -u SESSION_DB_ID bash "$SUT" --artifacts "$work/art-nosid" --db verify --no-conf "$tree" 2>"$state/err")"; rc=$?
+expect "no session id exits 2" "$rc" "2"
+contains "and names the flag" "$(cat "$state/err")" "pass --session-id or set SESSION_DB_ID"
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" SESSION_DB_ID=fromenv bash "$SUT" --artifacts "$work/art-env" --db verify --no-conf "$tree" 2>"$state/err")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "SESSION_DB_ID is the fallback" "$(field "$summary" session_id)" "fromenv"
 
 # ---------- 4. the plain full install still works -------------------------------
 reset
@@ -234,6 +301,23 @@ expect "no template without --template" "$(field "$summary" template)" "null"
 contains "data dir is moved off Odoo's default" "$(cat "$state/odoo.argv")" "--data-dir $work/art-plain/data"
 expect "and is never /var/lib/odoo" "$(grep -c '/var/lib/odoo' "$state/odoo.argv")" "0"
 contains "the tree under test leads the addons path" "$(cat "$state/odoo.argv")" "--addons-path=$work/addons"
+
+expect "the effective addons path is the tree alone" \
+  "$(field "$(printf '%s\n' "$out" | tail -1)" addons_path_effective)" "$work/addons"
+
+# ---------- 5b. --addons-path is required and the conf addons_path is ignored (#1167)
+reset
+out="$(run noaddons --db verify --no-conf)"; rc=$?
+expect "no addons tree exits 2" "$rc" "2"
+contains "and the message names --addons-path" "$(cat "$state/err")" "pass --addons-path <worktree>"
+expect "and runs no odoo" "$( [ -f "$state/odoo.argv" ] && echo yes || echo no )" "no"
+printf '[options]\naddons_path = /poison\n' > "$work/leaky.conf"
+reset
+out="$(run poison --db verify --conf "$work/leaky.conf" --addons-path "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a conf with an addons_path still installs" "$rc" "0"
+expect "the conf addons_path never reaches Odoo" "$(grep -c '/poison' "$state/odoo.argv")" "0"
+expect "the summary reports the effective path" "$(field "$summary" addons_path_effective)" "$work/addons"
 
 # ---------- 6. per-tree partition and summary shape (#878) ----------------------
 reset
@@ -271,20 +355,57 @@ contains "and quotes the decisive line" "$(field "$summary" trees.1.error)" "can
 expect "the full install is skipped" "$(field "$summary" full.status)" "skipped"
 expect "summary says not passed" "$(field "$summary" passed)" "false"
 expect "the addons path is reported" "$(field "$summary" addons_path)" "$work/addons"
+expect "a frame in the tree is a port defect" "$(field "$summary" trees.1.class)" "port"
+expect "summary status is failed" "$(field "$summary" status)" "failed"
+
+# A frame outside the tree under test is the environment, not the port: exit 10.
+reset
+out="$(FAIL_ON=beta FRAME_ENV=1 run envtree --db verify --no-conf --per-tree "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a frame outside the tree exits 10" "$rc" "10"
+expect "and the tree is class env" "$(field "$summary" trees.1.class)" "env"
+expect "and the status is env_failure" "$(field "$summary" status)" "env_failure"
+expect "a green tree has no class" "$(field "$summary" trees.0.class)" "null"
+
+# ---------- 7b. --enterprise reaches Odoo and the summary (#1137) ---------------
+reset
+ent="$work/enterprise"; mkdir -p "$ent"
+out="$(run ent --db verify --no-conf --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "--enterprise run exits 0" "$rc" "0"
+contains "the enterprise tree is on the addons path" "$(cat "$state/odoo.argv")" "--addons-path=$work/addons,$ent "
+expect "the effective path lists it" "$(field "$summary" addons_path_effective)" "$work/addons,$ent"
+expect "the summary reports it" "$(field "$summary" enterprise_path)" "$ent"
+expect "no --enterprise reports null" "$(field "$(run noent --db verify2 --no-conf "$tree" | tail -1)" enterprise_path)" "null"
+reset
+out="$(run entbad --db verify --no-conf --enterprise "$work/nope" "$tree")"; rc=$?
+expect "a missing enterprise dir exits 2" "$rc" "2"
+
+# ---------- 7c. a template build failure still writes the summary, exit 10 ------
+reset
+out="$(FAIL_ON=base run tplfail --db verify --no-conf --template --summary "$work/tplfail.json" "$tree")"; rc=$?
+expect "a template build failure exits 10" "$rc" "10"
+expect "the summary file exists" "$( [ -s "$work/tplfail.json" ] && echo yes || echo no )" "yes"
+summary="$(cat "$work/tplfail.json")"
+expect "status is env_failure" "$(field "$summary" status)" "env_failure"
+contains "the decisive line is recorded" "$(field "$summary" env_failure.decisive)" "ParseError"
+expect "and the summary was written once" "$(printf '%s\n' "$out" | grep -c '"status"')" "1"
 
 # ---------- 8. template build, reuse, and rebuild on a key change (#879) --------
 reset
-out="$(run tpl1 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl1 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 key1="$(field "$summary" template.key)"
+tpl="$(field "$summary" template.db)"
+expect "the template name is derived from the key" "$tpl" "odoo_tpl_${key1:0:12}"
 expect "the first run builds the template" "$(field "$summary" template.reused)" "false"
 expect "the template holds the core closure only" \
   "$(field "$summary" template.core_modules)" '["base", "mail"]'
-contains "core modules are installed into it" "$(head -1 "$state/odoo.argv")" "-d fixedtpl -i base,mail"
-contains "and working dbs come from it" "$(cat "$state/createdb.argv")" "-T fixedtpl verify_t1"
+contains "core modules are installed into it" "$(head -1 "$state/odoo.argv")" "-d $tpl -i base,mail"
+contains "and working dbs come from it" "$(cat "$state/createdb.argv")" "-T $tpl verify_t1"
 
 before="$(wc -l < "$state/odoo.argv")"
-out="$(run tpl2 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl2 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 expect "a matching key is reused" "$(field "$summary" template.reused)" "true"
 expect "the key is stable" "$(field "$summary" template.key)" "$key1"
@@ -294,15 +415,174 @@ expect "and the core closure is not reinstalled" \
 # Change the core dependency set: the key changes, so the template is rebuilt
 # rather than silently reused.
 manifest beta "'base', 'mail', 'stock'"
-out="$(run tpl3 --db verify --no-conf --template-db fixedtpl --per-tree "$tree")"; rc=$?
+out="$(run tpl3 --db verify --no-conf --template --per-tree "$tree")"; rc=$?
 summary="$(printf '%s\n' "$out" | tail -1)"
 expect "a changed dependency set changes the key" \
   "$( [ "$(field "$summary" template.key)" = "$key1" ] && echo same || echo different )" "different"
 expect "and the template is rebuilt" "$(field "$summary" template.reused)" "false"
-contains "the stale template is dropped first" "$(cat "$state/dropdb.argv")" "fixedtpl"
+expect "the new key builds under a new template name" \
+  "$( [ "$(field "$summary" template.db)" = "$tpl" ] && echo same || echo different )" "different"
 expect "the new closure includes the new dependency" \
   "$(field "$summary" template.core_modules)" '["base", "mail", "stock"]'
+expect "the stale template of the old key is dropped and listed" \
+  "$(field "$summary" template.dropped)" "[\"$tpl\"]"
+expect "and is gone from the database list" "$(grep -c "^$tpl\$" "$state/dbs")" "0"
 manifest beta "'base', 'mail'"
+
+# ---------- 8b. the key covers the dated build and the enterprise commit (#1138) --
+# A real odoo.release on the python path, so version_info is what the key sees.
+# It is identical for the whole series: only the dated --version line and the
+# enterprise HEAD can tell two builds apart.
+export PYSTUB="$work/pystub"
+mkdir -p "$PYSTUB/odoo"
+: > "$PYSTUB/odoo/__init__.py"
+printf 'version_info = (19, 0, 0, "final", 0, "")\n' > "$PYSTUB/odoo/release.py"
+ent="$work/enterprise"; mkdir -p "$ent"
+gitent() { git -C "$ent" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=t -c user.email=t@example.invalid "$@"; }
+gitent init -q
+gitent commit -q --allow-empty -m one
+reset
+out="$(run k1 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+tplk1="$(field "$summary" template.db)"
+expect "key parts carry version_info" "$(field "$summary" template.key_parts.version_info)" "19.0.0.final.0."
+expect "key parts carry the dated odoo --version line" \
+  "$(field "$summary" template.key_parts.odoo_version)" "Odoo Server 19.0-20260901"
+expect "key parts carry the enterprise HEAD" \
+  "$(field "$summary" template.key_parts.enterprise_head)" "$(gitent rev-parse HEAD)"
+expect "key parts carry the core modules" \
+  "$(field "$summary" template.key_parts.core_modules)" '["base", "mail"]'
+expect "odoo_build is the dated line" "$(field "$summary" odoo_build)" "Odoo Server 19.0-20260901"
+expect "the first run builds the template" "$(field "$summary" template.reused)" "false"
+
+out="$(run k2 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the same build and commit reuse the template" "$(field "$summary" template.reused)" "true"
+expect "and keep the template name" "$(field "$summary" template.db)" "$tplk1"
+
+out="$(STUB_DATE=20261001 run k3 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new --version date rebuilds" "$(field "$summary" template.reused)" "false"
+expect "under a new template name" \
+  "$( [ "$(field "$summary" template.db)" = "$tplk1" ] && echo same || echo different )" "different"
+
+gitent commit -q --allow-empty -m two
+out="$(run k4 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new enterprise HEAD rebuilds" "$(field "$summary" template.reused)" "false"
+expect "under a new template name again" \
+  "$( [ "$(field "$summary" template.db)" = "$tplk1" ] && echo same || echo different )" "different"
+unset PYSTUB
+
+# ---------- 9. skipped modules: version prefix, installable, dependents (#1134, #1166)
+sk="$work/skaddons"; mkdir -p "$sk"
+skm() { mkdir -p "$sk/$1"; printf '{"name": "%s", "version": "%s", "depends": [%s]%s}\n' "$1" "$2" "$3" "${4:-}" > "$sk/$1/__manifest__.py"; }
+skm good      "19.0.1.0.0" "'base'"
+skm old17     "17.0.1.0.0" "'base'"
+skm bare      "19.0"       "'base'"
+skm noseries  "1.0"        "'base'"
+skm onlyold   "19.0.2.0.0" "'old17'"
+skm dead      "19.0.1.0.0" "'base'" ', "installable": False'
+skm chain     "19.0.1.0.0" "'onlyold'"
+reset
+out="$(run skip --db verify --no-conf --per-tree "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "skips alone do not fail the run" "$rc" "0"
+expect "the series comes from the odoo build" "$(field "$summary" series)" "19.0"
+contains "a 17.0 manifest prints a SKIP line" "$(cat "$state/err")" "SKIP old17: manifest version 17.0.1.0.0 is not 19.0"
+contains "a bare 19.0 prints a SKIP line" "$(cat "$state/err")" "SKIP bare: manifest version 19.0 is not 19.0.x.y.z"
+contains "a dependent prints a SKIP line" "$(cat "$state/err")" "SKIP onlyold: depends on skipped old17"
+contains "and so does the dependent of a dependent" "$(cat "$state/err")" "SKIP chain: depends on skipped onlyold"
+contains "installable False has its own reason" "$(cat "$state/err")" "SKIP dead: installable: False"
+expect "skipped[] lists the reason" "$(field "$summary" skipped.0)" '{"module": "bare", "reason": "manifest version 19.0 is not 19.0.x.y.z"}'
+expect "five modules are skipped" "$(field "$summary" skipped | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" "5"
+expect "a series-less version is installed" "$(field "$summary" custom_modules)" '["good", "noseries"]'
+contains "a skipped module never reaches -i" "$(cat "$state/odoo.argv")" "-i good,noseries"
+expect "nothing expected, nothing flagged" "$(field "$summary" expected_but_skipped)" "[]"
+
+# --expect: a skipped module the port must install fails the run.
+printf '["good", "old17"]\n' > "$work/expect.json"
+reset
+out="$(run expect --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an expected module that is skipped exits 1" "$rc" "1"
+expect "and is listed" "$(field "$summary" expected_but_skipped)" '["old17"]'
+expect "the status is failed" "$(field "$summary" status)" "failed"
+expect "and passed is false though the tree installed" "$(field "$summary" passed)" "false"
+printf '{"modules": ["good"]}\n' > "$work/expect.json"
+reset
+out="$(run expect2 --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+expect "the object form with an installed module passes" "$rc" "0"
+printf '{"nope": 1}\n' > "$work/expect.json"
+reset
+out="$(run expect3 --db verify --no-conf --expect "$work/expect.json" "$sk")"; rc=$?
+expect "a malformed --expect file is a usage error" "$rc" "2"
+
+# The check_version warning is the decisive line, and the module it names.
+reset
+out="$(INCOMPAT=good run incompat --db verify --no-conf --per-tree "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an incompatible-version log fails the tree" "$rc" "1"
+expect "the named module is lifted" "$(field "$summary" trees.0.module)" "good"
+contains "the warning is the decisive line" "$(field "$summary" trees.0.error)" "incompatible version, setting installable=False"
+expect "and it is a port defect" "$(field "$summary" trees.0.class)" "port"
+
+# The warning gate (#1139): a WARNING that no accepted list covers fails a green install.
+reset
+out="$(STUB_WARN=1 run warn --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new WARNING line exits 1" "$rc" "1"
+expect "the status is failed" "$(field "$summary" status)" "failed"
+expect "warnings_new holds the normalised line" "$(field "$summary" warnings_new)" "[\"odoo.tools.view_validation: attribute 'group' is not valid. Did you mean 'groups'?\"]"
+expect "the default list accepts the missing-author line" "$(field "$summary" warnings_accepted)" "1"
+contains "stderr counts the new lines" "$(cat "$state/err")" "1 new WARNING line(s); accept them in"
+
+# The project list accepts the line; the run is green and warnings_new is empty.
+printf '# project\n^odoo\\.tools\\.view_validation: attribute .group. is not valid\n' > "$work/accepted.txt"
+mkdir -p "$work/art-warn2"; cp "$work/accepted.txt" "$work/art-warn2/accepted_warnings.txt"
+reset
+out="$(STUB_WARN=1 run warn2 --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an accepted WARNING exits 0" "$rc" "0"
+expect "warnings_new is empty" "$(field "$summary" warnings_new)" "[]"
+expect "both lines count as accepted" "$(field "$summary" warnings_accepted)" "2"
+
+# A warning before the first "loading" line is startup noise.
+reset
+out="$(STUB_WARN_PRE=1 run warn3 --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a warning before loading starts is ignored" "$rc" "0"
+expect "and is not listed" "$(field "$summary" warnings_new)" "[]"
+
+# --previous (#1140): progress against the last summary.
+reset
+out="$(FAIL_ON=alpha run prog1 --db verify --no-conf --per-tree --summary "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "without --previous progress is null" "$(field "$summary" progress)" "null"
+expect "no progress line without --previous" "$(grep -c 'progress:' "$state/err" || true)" "0"
+
+reset
+out="$(FAIL_ON=alpha run prog2 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the same failure again is progress false" "$(field "$summary" progress)" "false"
+contains "stderr names progress false" "$(cat "$state/err")" "install_all.sh: progress: false"
+
+reset
+out="$(FAIL_ON=alpha_ext run prog3 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a failure on another module is progress true" "$(field "$summary" progress)" "true"
+contains "stderr names progress true" "$(cat "$state/err")" "install_all.sh: progress: true"
+
+reset
+out="$(run prog4 --db verify --no-conf --per-tree --previous "$work/prog1.json" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a green run after a failure is progress true" "$(field "$summary" progress)" "true"
+
+printf 'not json\n' > "$work/bad.json"
+reset
+out="$(run prog5 --db verify --no-conf --previous "$work/bad.json" "$tree")"; rc=$?
+expect "a non-JSON --previous exits 2" "$rc" "2"
+contains "and says so" "$(cat "$state/err")" "is not JSON"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

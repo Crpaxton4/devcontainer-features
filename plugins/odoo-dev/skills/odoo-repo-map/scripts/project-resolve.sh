@@ -2,7 +2,11 @@
 # project-resolve.sh — one Odoo project (or repo folder) -> everything the rest
 # of the delivery suite needs to act on it.
 #
-# Usage: project-resolve.sh "<project name>|<repo folder>" [--next-after <branch>]
+# Usage: project-resolve.sh "<project name>|<repo folder>" [--next-after <branch>] [--series NN.0]
+#
+# --series NN.0 fills upgrade_branch: the entry's upgrade_branch[NN.0] when set,
+# else default_branch. Without --series the key is null. A value that is not
+# NN.0 exits 2.
 #
 # Accepting a repo folder as well as a project name is deliberate: half the
 # callers start from an Odoo task (project name) and half from a checkout the
@@ -61,12 +65,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAP="${REPO_MAP_FILE:-${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/repo-map.json}"
 
-[ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>] [--series NN.0]" >&2; exit 2; }
 key="$1"; shift
-next_after=""
+next_after=""; series=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --next-after) next_after="${2:?}"; shift 2 ;;
+    --series)
+      series="${2:?}"; shift 2
+      case "$series" in
+        [0-9]*.0) ;;
+        *) echo "--series must be an Odoo series like 19.0, got: $series" >&2; exit 2 ;;
+      esac
+      case "${series%.0}" in *[!0-9]*) echo "--series must be an Odoo series like 19.0, got: $series" >&2; exit 2 ;; esac ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -82,12 +93,18 @@ entry_json="$(node --input-type=module -e '
   const [file, key] = process.argv.slice(1);
   const data = JSON.parse(readFileSync(file, "utf8"));
   const projects = data.projects;
-  if (projects[key]) { console.log(JSON.stringify({ project: key, ...projects[key] })); process.exit(0); }
+  if (projects[key]) { console.log(JSON.stringify({ project: key, alias_of: null, ...projects[key] })); process.exit(0); }
   const lower = key.toLowerCase();
+  // An alias is a name for an entry, not an entry: it answers as that entry with
+  // `project` as typed. It is tried before the repo-folder match, and because
+  // aliases are not entries the exit-6 ambiguity below is untouched by them.
+  const byAlias = (match) => Object.entries(projects).find(([, e]) => (e.aliases || []).some(match));
+  const hit = byAlias((a) => a === key) || byAlias((a) => a.toLowerCase() === lower);
+  if (hit) { console.log(JSON.stringify({ ...hit[1], project: key, alias_of: hit[0] })); process.exit(0); }
   const byRepo = Object.entries(projects).filter(([, e]) => (e.repo || "").toLowerCase() === lower);
   if (byRepo.length === 1) {
     const [name, entry] = byRepo[0];
-    console.log(JSON.stringify({ project: name, ...entry }));
+    console.log(JSON.stringify({ project: name, alias_of: null, ...entry }));
     process.exit(0);
   }
   if (byRepo.length > 1) {
@@ -111,7 +128,7 @@ entry_json="$(node --input-type=module -e '
 node --input-type=module -e '
   import { existsSync } from "fs";
   import { execFileSync } from "child_process";
-  const [entryRaw, reposDir, nextAfter] = process.argv.slice(1);
+  const [entryRaw, reposDir, nextAfter, series] = process.argv.slice(1);
   const entry = JSON.parse(entryRaw);
   // branch_flow index 0 when task work starts from a per-task branch. Spelled
   // with a colon, which git forbids in a ref name, so it can never be a branch.
@@ -123,23 +140,38 @@ node --input-type=module -e '
   // over the $REPOS_DIR/$repo convention — including on machines where no repos
   // tree resolves at all and reposDir is empty.
   const repoPath = entry.repo_path || (reposDir ? `${reposDir}/${entry.repo}` : null);
-  const repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
+  let repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
+
+  // The origin of the checkout as owner/repo. stderr is ignored rather than inherited:
+  // a checkout with no origin — or a repo_path that is not a git repo at all —
+  // means a null origin, not a line of git noise beside the JSON this script prints.
+  let origin = null;
+  if (repoPresent) {
+    try {
+      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
+      if (m) origin = m[1];
+    } catch { /* no origin — stays null */ }
+  }
+
+  // A pinned repo_path may be a shared mount holding the checkout of another repo.
+  // It counts only when the checkout is the repo of this entry: origin equals
+  // the remote of the entry, or (no remote recorded) the origin repo name equals the repo field.
+  // A checkout with no origin cannot be told apart, so it is trusted as before.
+  if (repoPresent && entry.repo_path && origin) {
+    const expected = entry.remote || entry.repo;
+    const matches = entry.remote ? origin === entry.remote : origin.split("/")[1] === entry.repo;
+    if (!matches) {
+      console.error(`project-resolve.sh: ${entry.project}: ${repoPath} is checked out from ${origin}, not ${expected} — repo_path ignored`);
+      repoPresent = false;
+    }
+  }
 
   // Map first, git second: the map is what a human vouched for, and a checkout
   // can sit on a fork or a stale remote. Gated on repoPresent, so pinning
   // repo_path is what makes this fire where no tree resolves.
-  let remote = entry.remote || null;
-  if (!remote && repoPresent) {
-    try {
-      // stderr is ignored rather than inherited: a checkout with no origin — or a
-      // repo_path that is not a git repo at all — means a null remote, not a line
-      // of git noise beside the JSON this script prints.
-      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
-      if (m) remote = m[1];
-    } catch { /* no origin — remote stays null */ }
-  }
+  const remote = entry.remote || (repoPresent ? origin : null);
 
   let nextEnv = null;
   let atProduction = null;
@@ -172,9 +204,13 @@ node --input-type=module -e '
 
   console.log(JSON.stringify({
     project: entry.project,
+    alias_of: entry.alias_of ?? null,
     repo: entry.repo,
     repo_path: repoPresent ? repoPath : null,
     default_branch: entry.default_branch ?? null,
+    // The base an upgrade to --series is cut from and its PR targets: the recorded
+    // branch for that series, else default_branch so a caller always has a base.
+    upgrade_branch: series ? (entry.upgrade_branch?.[series] ?? entry.default_branch ?? null) : null,
     odoo_version: entry.odoo_version ?? null,
     branch_flow: flow,
     flow_confirmed: confirmed,
@@ -184,4 +220,4 @@ node --input-type=module -e '
     release_assignee: entry.release_assignee ?? null,
     release_reviewer: entry.release_reviewer ?? null,
   }));
-' -- "$entry_json" "$repos_dir" "$next_after"
+' -- "$entry_json" "$repos_dir" "$next_after" "$series"

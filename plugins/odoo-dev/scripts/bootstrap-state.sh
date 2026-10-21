@@ -44,10 +44,8 @@ mkdir_once() {
 
 mkdir -p "$STATE"
 mkdir_once tasks
-mkdir_once upgrade-lessons
 
 seed repo-map.json "$PLUGIN_ROOT/skills/odoo-repo-map/repo-map.json.seed"
-seed upgrade-lessons/README.md "$PLUGIN_ROOT/skills/odoo-upgrade/upgrade-lessons-README.md.seed"
 
 as_json_array() {
   [ "$#" -eq 0 ] && { echo '[]'; return; }

@@ -277,6 +277,29 @@ denied "$COMMITHOOK" "commit: the deny names the module and its stuck version" \
   "stockflow_sync (still 17.0.1.0.0)" \
   odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
 
+# (1b) The mechanical rewrite of a port (#1168): the subject `chore(<module>):
+# upgrade_code <NN>.0` exempts that one module from the bump.
+allowed "$COMMITHOOK" "commit: upgrade_code subject needs no bump for its module" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
+allowed "$COMMITHOOK" "commit: upgrade_code subject with a second -m body" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0" -m "upgrade_code rc=0, 1 files"' "$MOD"
+printf 'chore(stockflow_sync): upgrade_code 19.0\n\nbody\n' > "$WT/uc-msg.txt"
+allowed "$COMMITHOOK" "commit: upgrade_code subject read from the -F file" \
+  odoo-dev-builder "git commit -F $WT/uc-msg.txt" "$MOD"
+denied "$COMMITHOOK" "commit: upgrade_code subject naming another module" \
+  "stockflow_sync (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(nested_mod): upgrade_code 19.0"' "$MOD"
+denied "$COMMITHOOK" "commit: a plain chore subject needs a bump" \
+  "stockflow_sync (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): tidy"' "$MOD"
+printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
+gitq add addons/nested_mod/api.py
+denied "$COMMITHOOK" "commit: upgrade_code subject still checks a second module" \
+  "addons/nested_mod (still 17.0.2.0.0)" \
+  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
+gitq reset -q HEAD -- addons/nested_mod/api.py
+git -C "$MOD" checkout -q -- addons/nested_mod/api.py
+
 # The repository is the payload cwd unless `-C` moves it, and the same commit
 # denies from an unrelated cwd when it does.
 denied "$COMMITHOOK" "commit: git -C into the module repo from elsewhere" \
@@ -332,6 +355,25 @@ gitq rm -r -q brand_new
 allowed "$COMMITHOOK" "commit: removing a module" \
   odoo-dev-builder 'git commit -m "chore: drop brand_new"' "$MOD"
 gitq commit -q --no-verify -m "chore: drop brand_new"
+
+# (6b) With an upgrade section for this repository, a whole-module deletion needs a
+# dropped entry. No upgrade section: nothing is policed (case 6 above).
+UPST="$WT/upstate"; mkdir -p "$UPST/tasks/9"
+mkdir -p "$MOD/gone_mod"; manifest "$MOD/gone_mod/__manifest__.py" 17.0.1.0.0
+gitq add gone_mod; gitq commit -q --no-verify -m "feat: gone_mod"
+gitq rm -r -q gone_mod
+printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"ported"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
+export ODOO_DEV_STATE_DIR="$UPST"
+denied "$COMMITHOOK" "commit: deleting a module not marked dropped" "deleted without a dropped entry" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"dropped"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
+allowed "$COMMITHOOK" "commit: deleting a module marked dropped" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+printf '{"title":"x"}\n' > "$UPST/tasks/9/task.json"
+allowed "$COMMITHOOK" "commit: deleting a module, no upgrade section" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+unset ODOO_DEV_STATE_DIR
+gitq commit -q --no-verify -m "chore: drop gone_mod"
 
 # (7) -a widens the commit to tracked work-tree changes, and the two forms must
 # disagree on the same state: nothing is staged, so a plain commit carries no
@@ -399,6 +441,37 @@ allowed "$COMMITHOOK" "commit: git commit named inside a heredoc body" \
 allowed "$COMMITHOOK" "commit: grep for the word" \
   odoo-dev-builder 'grep -rn "git commit" docs/' "$MOD"
 gitq reset -q --hard HEAD
+
+# (11) A port moves the series prefix once. With a default branch to compare with,
+# a prefix that differs from the merge-base counts as bumped on this branch, so a
+# second commit on the module needs no further bump. An unchanged prefix denies.
+PORT="$WT/portrepo"
+mkdir -p "$PORT/ported_mod" "$PORT/other_mod"
+git init -q -b main "$PORT" 2>/dev/null \
+  || { git init -q "$PORT"; git -C "$PORT" symbolic-ref HEAD refs/heads/main; }
+portq() { git -C "$PORT" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
+manifest "$PORT/ported_mod/__manifest__.py" 17.0.1.0.0
+manifest "$PORT/other_mod/__manifest__.py" 17.0.1.0.0
+printf '# base\n' > "$PORT/ported_mod/a.py"
+printf '# base\n' > "$PORT/other_mod/a.py"
+portq add -A
+portq commit -q --no-verify -m "chore: fixture"
+portq update-ref refs/remotes/origin/main HEAD
+portq symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+portq checkout -q -b port-19
+manifest "$PORT/ported_mod/__manifest__.py" 19.0.1.0.0
+printf '# ported\n' >> "$PORT/ported_mod/a.py"
+portq add -A
+portq commit -q --no-verify -m "feat: port ported_mod"
+printf '# more\n' >> "$PORT/ported_mod/a.py"
+portq add ported_mod/a.py
+allowed "$COMMITHOOK" "commit: a second commit on a module whose prefix moved on the branch" \
+  odoo-dev-builder 'git commit -m "fix: more port work"' "$PORT"
+printf '# changed\n' >> "$PORT/other_mod/a.py"
+portq add other_mod/a.py
+denied "$COMMITHOOK" "commit: a module whose prefix is unchanged still needs a bump" \
+  "other_mod (still 17.0.1.0.0)" \
+  odoo-dev-builder 'git commit -m "fix: other"' "$PORT"
 
 rm -rf "$WT"
 

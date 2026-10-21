@@ -84,8 +84,8 @@ fi
 # --- artifact.sh: one file, four sections -----------------------------------------
 A="$STATE/tasks/30413"
 
-if [ "$(bash "$ART" sections | paste -sd, -)" = "plan,build,test,review" ]; then
-  ok "artifact.sh: sections are exactly plan, build, test, review"
+if [ "$(bash "$ART" sections | paste -sd, -)" = "plan,build,test,review,upgrade" ]; then
+  ok "artifact.sh: sections are exactly plan, build, test, review, upgrade"
 else
   bad "artifact.sh: sections printed $(bash "$ART" sections | paste -sd, -)"
 fi

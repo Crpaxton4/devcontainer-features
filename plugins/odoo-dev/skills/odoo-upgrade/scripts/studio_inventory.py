@@ -11,14 +11,17 @@ This script answers "what did they build in the UI, and what has to happen to
 each of it before the upgrade". Read-only: it issues SELECTs and nothing else.
 
     python3 studio_inventory.py [--db NAME] [--ssh USER@HOST] [--artifacts DIR]
-                                [-o studio.json] [--csv studio.csv]
+                                [--csv studio.csv]
 
 Two transports, one set of queries:
 
   local   psycopg2 against a database this machine can reach. Connection comes
           from the libpq environment (PGHOST/PGUSER/PGPASSWORD/PGDATABASE);
-          --db overrides PGDATABASE.
-  --ssh   the same SQL, run through `psql` on the remote host over ssh. The
+          --db overrides PGDATABASE. One of the two is required.
+  --ssh   the same SQL, run through `psql` on the remote host over ssh. Without
+          --db the remote `psql` runs with no `-d`, so the remote default
+          database applies, and its `current_database()` is the name used and
+          reported; the local PGDATABASE is never read. The
           source database of an upgrade normally lives on a staging or odoo.sh
           build and is reachable from nowhere else, and this path needs no
           psycopg2 — on either side. Every statement is preceded by
@@ -30,9 +33,9 @@ to the remote host either; if a later change ever needs to, use `scp -O` — the
 hosts this runs against have no sftp subsystem.
 
 --artifacts DIR is the task artifacts directory. Given it, the outputs default to
-DIR/inventory/studio.json and DIR/inventory/studio.csv (the directory is created),
-because an inventory written to /tmp or to a session scratchpad is a deliverable
-nobody will find later. An explicit -o or --csv still wins.
+DIR/inventory/studio.csv (the directory is created), because an inventory written
+to /tmp or to a session scratchpad is a deliverable nobody will find later. An
+explicit --csv still wins.
 
 Classification, per row:
 
@@ -54,7 +57,7 @@ replace one.
 field, no table, no column of its own). It is blank for every other kind.
 
 Output JSON: {"db", "ssh": host|null, "odoo_version", "counts": {...},
-              "rows": [...], "csv": path|null, "json": path|null}
+              "rows": [...], "csv": path|null}
 Last stdout line is that JSON, per the house script contract.
 
 Exit codes: 0 ok | 2 usage/connection | 3 not an Odoo database
@@ -159,15 +162,17 @@ class SshCursor:
 
     READ_ONLY = "SET default_transaction_read_only = on;\n"
 
-    def __init__(self, host, dbname):
+    def __init__(self, host, dbname=None):
         self.host = host
         self.dbname = dbname
         self._rows = []
 
     def _run(self, script):
+        # No dbname: leave -d off, so the remote default database applies.
+        target = ("-d", self.dbname) if self.dbname else ()
         remote = " ".join(shlex.quote(a) for a in (
             "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
-            "-d", self.dbname, "-f", "-",
+            *target, "-f", "-",
         ))
         proc = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", self.host, remote],
@@ -624,23 +629,24 @@ def collect_reports(cr):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--db", help="database name (default: $PGDATABASE)")
+    ap.add_argument("--db", help="database name (default: $PGDATABASE; with --ssh, "
+                                 "the remote host's default database)")
     ap.add_argument("--ssh", metavar="USER@HOST",
                     help="read the database through psql on this host over ssh, "
                          "read-only; needs no psycopg2 on either side")
     ap.add_argument("--artifacts", metavar="DIR",
-                    help="task artifacts directory; -o and --csv then default to "
-                         "DIR/inventory/studio.json and DIR/inventory/studio.csv")
-    ap.add_argument("-o", "--json", dest="json_out", help="write the full JSON here")
+                    help="task artifacts directory; --csv then defaults to "
+                         "DIR/inventory/studio.csv")
     ap.add_argument("--csv", dest="csv_out", help="write the rows as CSV here")
     args = ap.parse_args()
 
-    dbname = args.db or os.environ.get("PGDATABASE")
-    if not dbname:
+    # With --ssh the database is the remote one: never the local PGDATABASE.
+    dbname = args.db if args.ssh else (args.db or os.environ.get("PGDATABASE"))
+    if not dbname and not args.ssh:
         print("no database: pass --db or set PGDATABASE", file=sys.stderr)
         raise SystemExit(2)
 
-    json_out, csv_out = args.json_out, args.csv_out
+    csv_out = args.csv_out
     if args.artifacts:
         # The inventory is a deliverable; a scratch directory is the wrong
         # durability class for one. Default it beside the task's other artifacts.
@@ -650,7 +656,6 @@ def main():
         except OSError as exc:
             print(f"could not create {workdir}: {exc}", file=sys.stderr)
             raise SystemExit(2)
-        json_out = json_out or os.path.join(workdir, "studio.json")
         csv_out = csv_out or os.path.join(workdir, "studio.csv")
 
     if args.ssh:
@@ -661,8 +666,14 @@ def main():
             # surviving it silently is how a Studio inventory goes missing.
             cr.execute("SELECT current_database() AS db")
         except SshQueryError as exc:
-            print(f"could not read {dbname} on {args.ssh}: {exc}", file=sys.stderr)
+            print(f"could not read {dbname or '(default database)'} on "
+                  f"{args.ssh}: {exc}", file=sys.stderr)
             raise SystemExit(2)
+        row = cr.fetchone()
+        if not row or not row.get("db"):
+            print(f"{args.ssh} did not name its database", file=sys.stderr)
+            raise SystemExit(2)
+        dbname = cr.dbname = row["db"]
     else:
         cr = connect_local(dbname)
 
@@ -701,11 +712,8 @@ def main():
 
     payload = {
         "db": dbname, "ssh": args.ssh, "odoo_version": version, "counts": counts,
-        "rows": rows, "csv": csv_out, "json": json_out,
+        "rows": rows, "csv": csv_out,
     }
-    if json_out:
-        with open(json_out, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
 
     # Rows are in the file, not on stdout: a 400-row array is not a summary.
     summary = dict(payload)

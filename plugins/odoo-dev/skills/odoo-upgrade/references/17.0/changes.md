@@ -94,32 +94,7 @@ Website/portal/QWeb-frontend changes are NOT enumerated here — research per-ca
 - Renamed/removed **core model fields** (base, sale, stock, account, mrp, ...) are module-specific — check every core field your modules reference (see Sources for OpenUpgrade analysis files).
 
 ## Detection greps
-```bash
-# Views: attrs/states (the big one) + inheritance overrides of them
-grep -rn 'attrs=' --include='*.xml' .
-grep -rnE 'states="[^"]*"' --include='*.xml' .
-grep -rn '<attribute name="\(attrs\|states\)"' --include='*.xml' .
-# Tree-view column hiding to re-check per column_invisible semantics
-grep -rn 'column_invisible\|<tree' --include='*.xml' . | grep 'invisible='
-# Python field states param
-grep -rn 'states={' --include='*.py' .
-# ORM overrides needing new signatures / replacements
-grep -rn 'def name_get\|def _name_search\|_read_group(' --include='*.py' .
-# Hooks
-grep -rnE 'def (pre_init_hook|post_init_hook|uninstall_hook)' --include='*.py' .
-# Deprecated helpers and imports
-grep -rn 'get_resource_path\|get_module_resource' --include='*.py' .
-grep -rn 'tests.common import.*Form\|tests\.common\.Form' --include='*.py' .
-# Raw SQL: candidates for odoo.tools.SQL
-grep -rn '\.execute(' --include='*.py' .
-# JS/templates
-grep -rn 'owl="1"' --include='*.xml' .
-grep -rn 'related_start_date\|related_end_date' --include='*.xml' .
-# Settings views
-grep -rn 'app_settings_block\|o_settings_container\|o_setting_box' --include='*.xml' .
-# Deprecated context vars in view attributes (review hits manually)
-grep -rn 'active_id\|active_model' --include='*.xml' .
-```
+The 17.0 patterns are the `17.0` rows of [detection-patterns.tsv](../detection-patterns.tsv). `scripts/port-plan.py` runs them per module and writes the hits to `plan.json`.
 
 ## Sources
 - https://github.com/OCA/maintainer-tools/wiki/Migration-to-version-17.0

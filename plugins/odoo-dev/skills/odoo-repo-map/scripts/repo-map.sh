@@ -124,7 +124,17 @@ if [ ! -f "$MAP" ]; then
 fi
 
 # node does all JSON work; bash never parses or emits JSON by hand.
-run_node() { node --input-type=module -e "$1" -- "$MAP" "${@:2}"; }
+# NOT_ENTRY_JS is prepended to every script: a mutator given an alias must say so
+# (exit 3) rather than report it unmapped, so an alias never becomes an entry.
+NOT_ENTRY_JS='
+function notEntry(data, name) {
+  const owner = Object.entries(data.projects).find(([, e]) => (e.aliases || []).includes(name));
+  if (owner) console.error("\"" + name + "\" is an alias of \"" + owner[0] + "\"; use the entry name");
+  else console.error("unmapped project: " + name);
+  process.exit(3);
+}
+'
+run_node() { node --input-type=module -e "$NOT_ENTRY_JS$1" -- "$MAP" "${@:2}"; }
 
 VALIDATE_JS='
 import { readFileSync } from "fs";
@@ -132,7 +142,7 @@ const file = process.argv[1];
 let data;
 try { data = JSON.parse(readFileSync(file, "utf8")); }
 catch (e) { console.error(file + ": invalid JSON: " + e.message); process.exit(4); }
-const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer"];
+const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer", "aliases", "upgrade_branch"];
 // The reserved first element of branch_flow, standing for the per-task branch.
 // A colon cannot appear anywhere in a git ref name, so no branch can ever be
 // spelled this way and the token needs no escaping rule to stay distinguishable.
@@ -151,6 +161,7 @@ const errs = [];
 // Findings that do not invalidate the map but describe a claim nothing can
 // honour. They ride on the success object rather than on the exit code.
 const warns = [];
+const aliasOwner = new Map();
 if (typeof data !== "object" || data === null || Array.isArray(data)) errs.push("root must be an object");
 else {
   if (typeof data._doc !== "string") errs.push("_doc must be a string");
@@ -213,6 +224,29 @@ else {
           warns.push(`${name}: branch_flow starts with "${flow[0]}", which is neither the "${TASK_BRANCH}" placeholder nor default_branch "${entry.default_branch}" — if it stands for the per-task branch rather than a branch on the remote, record it as the placeholder: repo-map.sh set-flow "${name}" "${[TASK_BRANCH, ...flow.slice(1)].join(",")}"`);
       }
     }
+    // A second Odoo project on the same repo and chain is an alias of the entry,
+    // not an entry. An alias is looked up like a name, so it may be neither the
+    // name of an entry nor claimed by two entries.
+    if ("aliases" in entry) {
+      if (!Array.isArray(entry.aliases)) errs.push(`${name}: aliases must be an array of project names`);
+      else for (const a of entry.aliases) {
+        if (typeof a !== "string" || !a.trim()) { errs.push(`${name}: aliases entries must be non-empty strings`); continue; }
+        if (a in data.projects) errs.push(`${name}: alias "${a}" is also the name of an entry`);
+        if (aliasOwner.has(a)) errs.push(`${name}: alias "${a}" is already an alias of "${aliasOwner.get(a)}" (an alias appears once across the map)`);
+        else aliasOwner.set(a, name);
+      }
+    }
+    // The branch an upgrade to a series is based on and its PR targets, keyed by
+    // target series. A series with no key falls back to default_branch.
+    if ("upgrade_branch" in entry) {
+      const ub = entry.upgrade_branch;
+      if (typeof ub !== "object" || ub === null || Array.isArray(ub)) errs.push(`${name}: upgrade_branch must be an object of series to branch name, e.g. {"19.0": "19-upgrade"}`);
+      else for (const [series, b] of Object.entries(ub)) {
+        if (!/^\d+\.0$/.test(series)) errs.push(`${name}: upgrade_branch key "${series}" must be a series like 19.0`);
+        if (typeof b !== "string" || !b.trim()) errs.push(`${name}: upgrade_branch["${series}"] must be a non-empty branch name`);
+        else if (b === TASK_BRANCH || refErr(b)) errs.push(`${name}: upgrade_branch["${series}"] "${b}" is not a legal git branch name`);
+      }
+    }
     if (entry.flow_confirmed === true && !(Array.isArray(entry.branch_flow) && entry.branch_flow.length))
       errs.push(`${name}: flow_confirmed is true but branch_flow is empty`);
     for (const k of Object.keys(entry))
@@ -257,7 +291,12 @@ commit_tmp() {
   # Warnings do not stop the write, but a chain whose first element resolves to
   # nothing should say so at the moment someone records it, not only on demand.
   [ -z "$warns" ] || echo "$warns" >&2
-  cp "$MAP" "$MAP.bak"
+  # The backup goes through its own private temp file and an atomic rename. A
+  # fixed "$MAP.bak" is shared by every concurrent writer, and a plain cp onto it
+  # can fail mid-write ("Text file busy", a short read) and abort this writer.
+  local bak_tmp
+  bak_tmp="$(mktemp "$MAP.bak.XXXXXX")"
+  { cat "$MAP" > "$bak_tmp" && mv -f "$bak_tmp" "$MAP.bak"; } || { rm -f "$bak_tmp"; return 1; }
   mv "$tmp" "$MAP"
 }
 
@@ -297,9 +336,10 @@ case "$cmd" in
     run_node '
       import { readFileSync } from "fs";
       const data = JSON.parse(readFileSync(process.argv[1], "utf8"));
-      const entry = data.projects[process.argv[2]];
-      if (!entry) { console.error("unmapped project: " + process.argv[2]); process.exit(3); }
-      console.log(JSON.stringify({ project: process.argv[2], ...entry }));
+      const key = process.argv[2];
+      const entry = data.projects[key] ?? Object.values(data.projects).find((e) => (e.aliases || []).includes(key));
+      if (!entry) { console.error("unmapped project: " + key); process.exit(3); }
+      console.log(JSON.stringify({ project: key, ...entry }));
     ' "$1"
     ;;
 
@@ -316,9 +356,12 @@ case "$cmd" in
     [ $# -ge 2 ] || die "usage: repo-map.sh add \"<project name>\" <repo> [options]"
     project="$1"; repo="$2"; shift 2
     branch=""; version=""; notes=""; flow=""; remote=""; confirmed=false; repo_check=1
-    rel_assignee=""; rel_reviewer=""; repo_path=""
+    rel_assignee=""; rel_reviewer=""; repo_path=""; aliases=""; upgrade_branches=""
     while [ $# -gt 0 ]; do
       case "$1" in
+        --aliases)          aliases="${2:?}"; shift 2 ;;
+        --upgrade-branch)   case "${2:?}" in *=*) ;; *) die "--upgrade-branch takes SERIES=BRANCH, e.g. 19.0=19-upgrade" ;; esac
+                            upgrade_branches="$upgrade_branches${upgrade_branches:+$'\n'}$2"; shift 2 ;;
         --default-branch)   branch="${2:?}"; shift 2 ;;
         --odoo-version)     version="${2:?}"; shift 2 ;;
         --branch-flow)      flow="${2:?}"; shift 2 ;;
@@ -344,7 +387,7 @@ case "$cmd" in
     trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
-      const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, tmp] = process.argv.slice(1);
+      const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, aliases, upgradeBranches, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       if (data.projects[project]) { console.error("duplicate project: " + project); process.exit(2); }
       // Two entries holding the SAME repo_path is a defect nothing downstream can
@@ -357,7 +400,9 @@ case "$cmd" in
       // the delivery-project/upgrade-project case, and project-resolve.sh reports
       // it as ambiguous so a human names one.
       if (repoPath) {
-        const clash = Object.entries(data.projects).find(([, e]) => e.repo_path === repoPath);
+        // Same path AND same remote: a shared bind mount may hold one checkout per repo.
+        const mine = remote || repo;
+        const clash = Object.entries(data.projects).find(([, e]) => e.repo_path === repoPath && (e.remote || e.repo) === mine);
         if (clash) {
           console.error("--repo-path " + repoPath + " is already the repo_path of project: " + clash[0] +
             "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +
@@ -375,9 +420,18 @@ case "$cmd" in
       if (notes) entry.notes = notes;
       if (relAssignee) entry.release_assignee = relAssignee;
       if (relReviewer) entry.release_reviewer = relReviewer;
+      if (aliases) entry.aliases = aliases.split(",").map((a) => a.trim()).filter(Boolean);
+      if (upgradeBranches) {
+        entry.upgrade_branch = {};
+        for (const pair of upgradeBranches.split("\n")) {
+          const at = pair.indexOf("=");
+          if (pair.slice(at + 1)) entry.upgrade_branch[pair.slice(0, at)] = pair.slice(at + 1);
+        }
+        if (!Object.keys(entry.upgrade_branch).length) delete entry.upgrade_branch;
+      }
       data.projects[project] = entry;
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
-    ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$tmp"
+    ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$aliases" "$upgrade_branches" "$tmp"
     commit_tmp "$tmp"
     echo "{\"ok\": true, \"added\": $(node -e 'console.log(JSON.stringify(process.argv[1]))' "$project")}"
     ;;
@@ -386,18 +440,22 @@ case "$cmd" in
     # Merges into the existing entry. `add` only creates, so before this the only
     # way to change a field was remove + full re-add: lossy for every field left
     # off, and non-atomic because the remove committed first.
-    [ $# -ge 1 ] || die "usage: repo-map.sh set \"<project name>\" [--default-branch B] [--odoo-version V] [--remote owner/repo] [--notes \"...\"] [--repo-path /abs/path] [--no-repo-check]"
+    [ $# -ge 1 ] || die "usage: repo-map.sh set \"<project name>\" [--default-branch B] [--odoo-version V] [--remote owner/repo] [--notes \"...\"] [--aliases \"A,B\"] [--upgrade-branch 19.0=19-upgrade]... [--repo-path /abs/path] [--no-repo-check]"
     project="$1"; shift
     # Alternating key/value pairs, applied in order by node — so a repeated flag
     # simply lets the last one win, and an unnamed field is never written at all.
     updates=(); repo_path=""; repo_check=1
     while [ $# -gt 0 ]; do
       case "$1" in
-        --default-branch|--odoo-version|--remote|--notes|--repo-path)
+        --default-branch|--odoo-version|--remote|--notes|--repo-path|--aliases)
           [ $# -ge 2 ] || die "$1 needs a value (pass \"\" to unset the field)"
           key="${1#--}"; key="${key//-/_}"
           if [ "$key" = repo_path ]; then repo_path="$2"; fi
           updates+=("$key" "$2"); shift 2 ;;
+        --upgrade-branch)
+          [ $# -ge 2 ] || die "$1 needs a value: SERIES=BRANCH (SERIES= removes that series)"
+          case "$2" in *=*) ;; *) die "--upgrade-branch takes SERIES=BRANCH, e.g. 19.0=19-upgrade (19.0= removes it)" ;; esac
+          updates+=("upgrade_branch" "$2"); shift 2 ;;
         --branch-flow)
           die "branch_flow is set by: repo-map.sh set-flow \"$project\" \":task,UAT,main\" [--flow-confirmed]" ;;
         --release-assignee|--release-reviewer)
@@ -406,7 +464,7 @@ case "$cmd" in
         *) die "unknown option: $1" ;;
       esac
     done
-    [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes or --repo-path"
+    [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes, --aliases, --upgrade-branch or --repo-path"
     check_repo_path "$repo_path" "$repo_check"
     validate_file "$MAP"
     tmp="$(mktemp "$MAP.tmp.XXXXXX")"
@@ -416,14 +474,17 @@ case "$cmd" in
       const [file, project, tmp, ...updates] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       const entry = data.projects[project];
-      if (!entry) { console.error("unmapped project: " + project); process.exit(3); }
+      if (!entry) { notEntry(data, project); }
       for (let i = 0; i < updates.length; i += 2) {
         const [key, value] = [updates[i], updates[i + 1]];
         // Same one-checkout-one-entry rule `add` enforces, checked here too
         // because `set --repo-path` is the other way a collision can be written.
         // "" is the unset, which can never collide.
         if (key === "repo_path" && value !== "") {
-          const clash = Object.entries(data.projects).find(([n, e]) => n !== project && e.repo_path === value);
+          // Same path AND same remote (a --remote in this call counts), as in `add`.
+          let mine = entry.remote || entry.repo;
+          for (let j = 0; j < updates.length; j += 2) if (updates[j] === "remote") mine = updates[j + 1] || entry.repo;
+          const clash = Object.entries(data.projects).find(([n, e]) => n !== project && e.repo_path === value && (e.remote || e.repo) === mine);
           if (clash) {
             console.error("--repo-path " + value + " is already the repo_path of project: " + clash[0] +
               "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +
@@ -433,7 +494,16 @@ case "$cmd" in
         }
         // "" is the only way a merge can say "remove this key". An empty string
         // left in place would validate but read as an answer nobody gave.
-        if (value === "") delete entry[key]; else entry[key] = value;
+        if (key === "aliases") {
+          const list = value.split(",").map((a) => a.trim()).filter(Boolean);
+          if (list.length) entry.aliases = list; else delete entry.aliases;
+        } else if (key === "upgrade_branch") {
+          const at = value.indexOf("=");
+          const [series, b] = [value.slice(0, at), value.slice(at + 1)];
+          const ub = (typeof entry.upgrade_branch === "object" && entry.upgrade_branch !== null && !Array.isArray(entry.upgrade_branch)) ? entry.upgrade_branch : {};
+          if (b) ub[series] = b; else delete ub[series];
+          if (Object.keys(ub).length) entry.upgrade_branch = ub; else delete entry.upgrade_branch;
+        } else if (value === "") delete entry[key]; else entry[key] = value;
       }
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
     ' "$project" "$tmp" "${updates[@]}"
@@ -459,7 +529,7 @@ case "$cmd" in
       const [file, project, flow, confirmed, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       const entry = data.projects[project];
-      if (!entry) { console.error("unmapped project: " + project); process.exit(3); }
+      if (!entry) { notEntry(data, project); }
       entry.branch_flow = flow.split(",").map((b) => b.trim()).filter(Boolean);
       if (confirmed === "true") entry.flow_confirmed = true; else delete entry.flow_confirmed;
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
@@ -481,7 +551,7 @@ case "$cmd" in
       const [file, project, assignee, reviewer, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       const entry = data.projects[project];
-      if (!entry) { console.error("unmapped project: " + project); process.exit(3); }
+      if (!entry) { notEntry(data, project); }
       entry.release_assignee = assignee;
       entry.release_reviewer = reviewer;
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
@@ -514,7 +584,7 @@ case "$cmd" in
           typeof data.projects !== "object" || data.projects === null || Array.isArray(data.projects)) {
         console.error(file + ": no projects object to remove from"); process.exit(4);
       }
-      if (!data.projects[project]) { console.error("unmapped project: " + project); process.exit(3); }
+      if (!data.projects[project]) { notEntry(data, project); }
       delete data.projects[project];
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
     ' "$1" "$tmp"

@@ -253,5 +253,38 @@ expect "docker without odoo is the host" "$(field "$out" context)" "host"
 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft >/dev/null 2>&1
 expect_exit "--soft exits 0 anyway" 0 $?
 
+# --target-series compares ODOO_VERSION in the container branch only.
+out="$(ODOO_VERSION=19.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("series:"))?1:0)' "$out"
+expect_exit "a matching target series raises no series failure" 0 $?
+out="$(ODOO_VERSION=17.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("series:")&&x.includes("17.0")&&x.includes("19.0"))?0:1)' "$out"
+expect_exit "a mismatched target series names both values" 0 $?
+ODOO_VERSION=17.0 PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --target-series 19.0 >/dev/null 2>&1
+expect_exit "a mismatched target series exits 1 without --soft" 1 $?
+
+# --custom-tree imports the enterprise closure. The python3 stub answers the
+# odoo.__file__ probe, fails the import of account_accountant and passes the rest;
+# a bare "-" run is the manifest parser and goes to the real python3.
+mkdir -p "$work/pfcl"
+for b in bash dirname node free awk ls wc tail; do ln -sf "$(command -v $b)" "$work/pfcl/$b"; done
+cp "$work/dockbin/odoo" "$work/dockbin/pg_isready" "$work/pfcl/"
+printf '#!/usr/bin/env bash\n[ "$1" = - ] && exec "%s" "$@"\ncase "$*" in\n  *odoo.__file__*) echo "%s/core/odoo/__init__.py" ;;\n  *odoo.addons.account_accountant*) echo "ImportError: cannot import name x" >&2; exit 1 ;;\n  *) exit 0 ;;\nesac\n' "$(command -v python3)" "$work" > "$work/pfcl/python3"
+chmod +x "$work/pfcl/python3"
+mkdir -p "$work/ent/19.0/account_accountant" "$work/ent/19.0/web_studio" "$work/core/odoo/addons/account" "$work/tree/my_mod" "$work/tree2/my_ok"
+printf "{'name': 'a', 'depends': ['account']}\n" > "$work/ent/19.0/account_accountant/__manifest__.py"
+printf "{'name': 'w', 'depends': ['account']}\n" > "$work/ent/19.0/web_studio/__manifest__.py"
+printf "{'name': 'c', 'depends': []}\n" > "$work/core/odoo/addons/account/__manifest__.py"
+printf "{'name': 'm', 'depends': ['account_accountant', 'nowhere']}\n" > "$work/tree/my_mod/__manifest__.py"
+printf "{'name': 'm', 'depends': ['web_studio']}\n" > "$work/tree2/my_ok/__manifest__.py"
+out="$(ODOO_ENTERPRISE_ROOT="$work/ent" PATH="$work/pfcl" "$work/pfcl/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 --custom-tree "$work/tree" 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("import account_accountant: ImportError"))?0:1)' "$out"
+expect_exit "a failing enterprise import is named in failures" 0 $?
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("closure: unknown module nowhere")?0:1)' "$out"
+expect_exit "an unknown dependency is named in failures" 0 $?
+out="$(ODOO_ENTERPRISE_ROOT="$work/ent" PATH="$work/pfcl" "$work/pfcl/bash" "$SCRIPTS/preflight.sh" --soft --target-series 19.0 --custom-tree "$work/tree2" 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("import ")||x.startsWith("closure:"))?1:0)' "$out"
+expect_exit "an importable enterprise closure raises no failure" 0 $?
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

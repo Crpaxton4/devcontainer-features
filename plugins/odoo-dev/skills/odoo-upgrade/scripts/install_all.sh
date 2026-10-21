@@ -2,7 +2,11 @@
 # install_all.sh — install the custom modules of an addons tree onto throwaway
 # databases and report, per independent dependency tree, exactly what broke.
 #
-# Usage: install_all.sh --db <name> [options] [ADDONS_PATH]
+# Usage: install_all.sh --db <name> --addons-path <dir> [options]
+#
+# --addons-path is required (#1167): the tree under test is never inferred, and
+# the conf's addons_path is never appended, so nothing outside the tree under
+# test (plus what Odoo adds itself) can resolve a module.
 #        install_all.sh --help
 #
 # The old shape took its target from `odoo.conf`'s `db_name`, which in a project
@@ -33,12 +37,17 @@
 #                Odoo and assumed correct, yet every iteration reinstalls it
 #                (~125 modules before the first line of custom code, #879). It
 #                is installed ONCE into a template database keyed by a hash of
-#                (Odoo build id, sorted core dependency set); each working
-#                database is then `CREATE DATABASE ... TEMPLATE ...` (what
-#                `createdb -T` issues) and installs only the custom modules.
-#                A key mismatch — new container build, changed dependencies —
-#                rebuilds the template, so a stale one cannot mask a real
-#                incompatibility.
+#                (odoo.release.version_info, the dated `odoo --version` line,
+#                the --enterprise git HEAD or "-", sorted core dependency set);
+#                each working database is then `CREATE DATABASE ... TEMPLATE
+#                ...` (what `createdb -T` issues) and installs only the custom
+#                modules. version_info alone is the same for a whole series, so
+#                the dated build line and the enterprise commit carry the
+#                rebuild signal. A key mismatch — new community build, new
+#                enterprise commit, changed dependencies — rebuilds the
+#                template, so a stale one cannot mask a real incompatibility.
+#                An enterprise tree that is not a git tree adds nothing: a
+#                change inside it does not change the key.
 #
 #   --per-tree   The loader aborts the whole registry on the first ParseError,
 #                so one serial full-tree install returns one defect per run no
@@ -55,36 +64,83 @@
 # With no mode flags this is the plain full install the SOP has always called
 # for: one database, every module, one log.
 #
-# Output: the last stdout line is a JSON summary — {db, addons_path, data_dir,
-# odoo_build, mode, template:{db,key,reused,core_modules}, custom_modules,
-# trees:[{modules,db,status,error,module,log}], full:{...}, passed}. Same
-# document to --summary <file>. Odoo's own output goes to a log file per
-# database, never to stdout: the log volume is the cost these modes exist to
-# cut, so the paths are reported and the decisive lines are lifted out.
+# Sessions (#1141): --artifacts and --session-id are required. Every database
+# this script makes carries install_all_owned(created_at, session_id); a target
+# stamped by another session (or by an older run with no session_id) is refused
+# unless --force. A template rebuild drops every other odoo_tpl_* with a
+# different key and lists them in template.dropped[].
 #
-# Exit: 0 everything installed | 1 an install failed (a RESULT, reported in the
-# summary) | 2 usage, safety refusal, or a broken environment.
+# Progress (#1140): --previous <summary.json> compares this run with the last
+# one, per tree (keyed by the sorted modules list) and for the full install, on
+# the failing module and the decisive error line. summary.progress is true when
+# a failing tree now passes or fails on another module or line, false when every
+# failing tree fails on the same module and line, null when the previous run had
+# no failure. The line "install_all.sh: progress: <value>" goes to stderr. An
+# unreadable or non-JSON --previous is exit 2.
+#
+# Output: the last stdout line is a JSON summary — {status, db, session_id,
+# addons_path, addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
+# template:{db,key,reused,dropped,core_modules,key_parts:{version_info,odoo_version,
+# enterprise_head,core_modules}}, custom_modules,
+# trees:[{modules,db,status,error,module,log,class}], full:{...},
+# env_failure:{decisive,log}|null, series, skipped:[{module,reason}],
+# expected_but_skipped:[module], passed}. status is pass | failed |
+# env_failure | usage. Same document to --summary <file>, written on every exit
+# path once the environment checks have passed. Odoo's own output goes to a log
+# file per database, never to stdout: the log volume is the cost these modes
+# exist to cut, so the paths are reported and the decisive lines are lifted out.
+#
+# Exit: 0 green | 1 a port defect (a RESULT, reported in the summary) | 2 usage
+# or safety refusal | 10 environment (a template build failure, or a failure
+# whose decisive frame is outside the tree under test, or a missing core or
+# enterprise dependency). The caller relays the code and never reads the log to
+# classify.
+#
+# Warning gate (#1139): a green install can still log a real defect as a WARNING
+# (an invalid view attribute, a rule with no group). After each install that
+# exits 0, the odoo.* WARNING lines after the first "loading" line are
+# normalised to "<logger>: <message>" and checked against
+# scripts/accepted_warnings.default.txt and the optional
+# <artifacts>/accepted_warnings.txt. An entry is a normalised line or a regex.
+# Any line no entry covers is new: summary.warnings_new[] (capped at 200) lists
+# it, summary.warnings_accepted counts the accepted ones, and the run is status
+# failed, exit 1. An environment failure (exit 10) keeps precedence.
+#
+# Skipped modules (#1134, #1166): a module Odoo would refuse never reaches `-i`.
+# That is `installable: False`, a manifest version whose series prefix is not the
+# target series (Odoo's check_version turns it into installable=False and logs
+# one warning), and any module that depends on a skipped one. Each is printed as
+# `SKIP <module>: <reason>` on stderr and listed in summary.skipped[]. A version
+# with no series prefix is accepted: Odoo prepends the series. --expect names the
+# modules the port must install; one that is skipped goes to
+# summary.expected_but_skipped[] and the run exits 1.
 set -euo pipefail
 
 usage() {
   cat <<'USAGE'
 install_all.sh — verify an upgrade pass by installing custom modules on throwaway DBs
 
-Usage: install_all.sh --db <name> [options] [ADDONS_PATH]
+Usage: install_all.sh --db <name> --addons-path <dir> --artifacts <dir> --session-id <id> [options]
 
 Required:
   --db <name>            target database. No default: this script drops and
                          recreates its target, so it never guesses one.
 
 Options:
-  --addons-path <dir>    addons tree under test (also accepted positionally;
-                         default /mnt/extra-addons)
+  --addons-path <dir>    addons tree under test. Required, no default: the tree
+                         under test is never inferred. Also accepted
+                         positionally. The conf addons_path is ignored.
+  --enterprise <dir>     enterprise addons tree, appended to the addons path.
+                         Odoo does not find it through the moved data_dir.
   --data-dir <dir>       Odoo data_dir for every run — filestore, sessions, and
                          the auto-appended <data_dir>/addons/<series> tree.
                          Default <artifacts>/data; never Odoo's own default.
-  --artifacts <dir>      scratch root for logs, data dir and summary (default
-                         $INSTALL_ALL_ARTIFACTS_DIR, else
-                         ${TMPDIR:-/tmp}/odoo-install-all)
+  --artifacts <dir>      scratch root for logs, data dir and summary. Required,
+                         no default: pass <ARTIFACTS>/install, never a shared
+                         /tmp path.
+  --session-id <id>      the session that owns the databases this run makes.
+                         Default $SESSION_DB_ID; required. A target stamped by
+                         another session is refused (--force overrides).
   --conf <file>          odoo.conf to pass to Odoo verbatim. Refused when it
                          sets db_name — hand over a copy without it, or drop
                          the flag and let the auto-detected config be sanitized
@@ -93,20 +149,33 @@ Options:
   --template             build (or reuse) a template database holding the core
                          dependency closure, and create each working database
                          from it
-  --template-db <name>   name the template explicitly (implies --template;
-                         default odoo_tpl_<key12>)
   --per-tree             install each independent custom dependency tree into
                          its own throwaway database first, then the full install
   --summary <file>       write the JSON summary here as well as to stdout
-  --force                proceed even though the target already has modules
+  --previous <file>      the summary of the last run. Sets summary.progress:
+                         true (a failing tree now passes or fails elsewhere),
+                         false (same module and line again), null (no failure
+                         before). Prints "progress: <value>" on stderr.
+  --expect <file>        JSON array of module names (or an object with a
+                         "modules" array) the port must install. One that is
+                         skipped is listed in expected_but_skipped[] and the
+                         run exits 1 even when every installed tree passed.
+  --force               proceed even though the target already has modules
                          installed. The target is still dropped first.
-  --keep                 keep the per-tree throwaway databases
   -h, --help             this text
 
+Warning gate (#1139): after each install that exits 0, every odoo.* WARNING line
+after the first "loading" line is normalised to "<logger>: <message>". A line
+that matches no entry of scripts/accepted_warnings.default.txt or of
+<artifacts>/accepted_warnings.txt (one line or regex per entry, # comments) is
+new: it goes to summary.warnings_new[] and the run exits 1 (status failed).
+
 Examples:
-  install_all.sh --db upgrade_check /mnt/extra-addons
-  install_all.sh --db upgrade_check --template --per-tree \
-                 --summary /tmp/install.json /mnt/extra-addons
+  install_all.sh --db upgrade_check --session-id job1 \
+                 --artifacts /path/to/artifacts/install --addons-path /path/to/worktree
+  install_all.sh --db upgrade_check --session-id job1 --template --per-tree \
+                 --artifacts /path/to/artifacts/install \
+                 --summary /path/to/artifacts/install.json --addons-path /path/to/worktree
 USAGE
 }
 
@@ -115,22 +184,26 @@ need_value() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
-summary_file=""; keep=false
+summary_file=""; enterprise=""; expect_file=""; series=""; skipped_tsv=""; expected_skipped=""
+summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
+previous_file=""; previous_arg=""; records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""; warn_new=""; warn_acc=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --db)          need_value --db $#;          db="$2"; shift 2 ;;
     --addons-path) need_value --addons-path $#; addons="$2"; shift 2 ;;
+    --enterprise)  need_value --enterprise $#;  enterprise="$2"; shift 2 ;;
     --data-dir)    need_value --data-dir $#;    data_dir="$2"; shift 2 ;;
     --artifacts)   need_value --artifacts $#;   artifacts="$2"; shift 2 ;;
-    --conf)        need_value --conf $#;        conf="$2"; conf_explicit=true; shift 2 ;;
+    --session-id)  need_value --session-id $#;  session_id="$2"; shift 2 ;;
+    --conf)        need_value --conf $#;       conf="$2"; conf_explicit=true; shift 2 ;;
     --summary)     need_value --summary $#;     summary_file="$2"; shift 2 ;;
-    --template-db) need_value --template-db $#; template_db="$2"; use_template=true; shift 2 ;;
+    --expect)      need_value --expect $#;      expect_file="$2"; shift 2 ;;
+    --previous)    need_value --previous $#;    previous_arg="$2"; shift 2 ;;
     --no-conf)   no_conf=true; shift ;;
     --template)  use_template=true; shift ;;
     --per-tree)  per_tree=true; shift ;;
     --force)     force=true; shift ;;
-    --keep)      keep=true; shift ;;
     -h|--help)   usage; exit 0 ;;
     --)          shift; break ;;
     -*)          die "unknown option: $1 (--help for the list)" ;;
@@ -149,7 +222,7 @@ fi
   This script DROPS and recreates its target, and it will not guess which
   database you are willing to lose. It used to take the name from odoo.conf's
   db_name, which in a devcontainer is the live project database.
-  Pass a throwaway name:  install_all.sh --db upgrade_check ${addons:-/mnt/extra-addons}"
+  Pass a throwaway name:  install_all.sh --db upgrade_check --addons-path ${addons:-<worktree>}"
 
 valid_dbname() {
   case "$1" in
@@ -163,11 +236,33 @@ valid_dbname() {
 }
 valid_dbname "$db" || die "not a usable database name: '$db' (letters, digits, _ and - only, not starting with a digit)"
 
-addons="${addons:-/mnt/extra-addons}"
+[ -n "$addons" ] || die "--addons-path is required.
+  pass --addons-path <worktree>: the tree under test is never inferred"
 [ -d "$addons" ] || die "addons path is not a directory: $addons"
 addons="$(cd "$addons" && pwd)"
+if [ -n "$enterprise" ]; then
+  [ -d "$enterprise" ] || die "enterprise path is not a directory: $enterprise"
+  enterprise="$(cd "$enterprise" && pwd)"
+fi
+if [ -n "$expect_file" ]; then
+  [ -r "$expect_file" ] || die "cannot read the --expect file: $expect_file"
+  expect_file="$(cd "$(dirname "$expect_file")" && pwd)/$(basename "$expect_file")"
+fi
 
-artifacts="${artifacts:-${INSTALL_ALL_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/odoo-install-all}}"
+if [ -n "$previous_arg" ]; then
+  [ -r "$previous_arg" ] || die "cannot read the --previous file: $previous_arg"
+  python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$previous_arg" 2>/dev/null \
+    || die "the --previous file is not JSON: $previous_arg"
+  previous_file="$previous_arg"
+fi
+
+[ -n "$artifacts" ] || die "--artifacts is required.
+  pass --artifacts <ARTIFACTS>/install: there is no shared /tmp default"
+[ -n "$session_id" ] || die "no session id.
+  pass --session-id or set SESSION_DB_ID: the stamp on every database names its session"
+case "$session_id" in
+  *[!A-Za-z0-9_.-]*) die "not a usable session id: '$session_id' (letters, digits, _ . and - only)" ;;
+esac
 mkdir -p "$artifacts" || die "cannot create the artifacts dir: $artifacts"
 artifacts="$(cd "$artifacts" && pwd)"
 
@@ -176,6 +271,7 @@ artifacts="$(cd "$artifacts" && pwd)"
 # --addons-path on its own does not exclude.
 data_dir="${data_dir:-$artifacts/data}"
 mkdir -p "$data_dir" || die "cannot create the data dir: $data_dir"
+records="$artifacts/records.tsv"
 
 # ---- config file ---------------------------------------------------------------
 if [ "$no_conf" = true ]; then
@@ -193,12 +289,11 @@ conf_value() { # conf_value <file> <key>
     | tail -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//'
 }
 
-conf_db_name=""; conf_addons=""
+conf_db_name=""
 if [ -n "$conf" ]; then
   [ -r "$conf" ] || die "cannot read the config file: $conf"
   conf_db_name="$(conf_value "$conf" db_name)"
   case "$conf_db_name" in False|false|None|none|"") conf_db_name="" ;; esac
-  conf_addons="$(conf_value "$conf" addons_path)"
 fi
 
 # The target must never be the database the config calls the project database.
@@ -236,21 +331,64 @@ for tool in psql createdb dropdb; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
 done
 
-# Build id for the template key. odoo.release.version_info is the precise
-# answer; --version is the one that survives not being able to import odoo.
-build_id="$(python3 -c 'import odoo.release as r; print(".".join(str(p) for p in r.version_info))' 2>/dev/null || true)"
-if [ -z "$build_id" ]; then
-  build_id="$("$ODOO" --version 2>/dev/null | tail -1 | tr -d '\r' || true)"
+# Build id for the template key, three parts. version_info is identical for a
+# whole series, so the dated `odoo --version` line (always read, not only a
+# fallback) and the enterprise git HEAD ("-" when there is none) join it.
+version_info="$(python3 -c 'import odoo.release as r; print(".".join(str(p) for p in r.version_info))' 2>/dev/null || true)"
+odoo_version="$("$ODOO" --version 2>/dev/null | tail -1 | tr -d '\r' || true)"
+enterprise_head="-"
+if [ -n "$enterprise" ]; then
+  enterprise_head="$(git -C "$enterprise" rev-parse HEAD 2>/dev/null || true)"
+  enterprise_head="${enterprise_head:--}"
 fi
-build_id="${build_id:-unknown}"
+build_id="version_info=${version_info:--}
+odoo_version=${odoo_version:--}
+enterprise_head=$enterprise_head"
+odoo_build="${odoo_version:-${version_info:-unknown}}"
+
+# Target series ("19.0"): the first two parts of odoo.release.version_info, else
+# the first NN.0 in `odoo --version`. Empty when neither says, which disables the
+# version-prefix check rather than guessing.
+series="$(python3 -c 'import odoo.release as r; print("%s.%s" % tuple(r.version_info[:2]))' 2>/dev/null || true)"
+if [ -z "$series" ]; then
+  series="$("$ODOO" --version 2>/dev/null | tr -d '\r' | python3 -c 'import re,sys; m = re.search(r"(?<![\d.])(\d+\.0)(?![\d.])", sys.stdin.read()); print(m.group(1) if m else "")' || true)"
+fi
 
 # ---- the addons tree: modules, core dependencies, independent trees -------------
-graph=""
-if ! graph="$(python3 - "$addons" <<'PY'
-import ast, os, sys
+graph=""; graph_rc=0
+graph="$(python3 - "$addons" "$series" "$expect_file" <<'PY'
+import ast, json, os, re, sys
 
-root = sys.argv[1]
+root, series, expect_file = sys.argv[1:4]
+expected = []
+if expect_file:
+    try:
+        with open(expect_file, encoding="utf-8") as handle:
+            expected = json.load(handle)
+        if isinstance(expected, dict):
+            expected = expected.get("modules")
+        if not isinstance(expected, list) or not all(isinstance(n, str) for n in expected):
+            raise ValueError("want a JSON array of module names, or an object with a modules array")
+    except Exception as exc:
+        print("install_all.sh: bad --expect file %s: %s" % (expect_file, exc), file=sys.stderr)
+        sys.exit(4)
+
+
+def version_problem(version):
+    # Odoo's check_version: a series prefix other than the target's is refused; a
+    # version with no series prefix gets the series prepended.
+    if not series or not isinstance(version, str):
+        return ""
+    parts = version.split(".")
+    if len(parts) == 2 and parts == series.split("."):
+        return "manifest version %s is not %s.x.y.z" % (version, series)
+    if len(parts) >= 2 and re.fullmatch(r"\d{2}\.0",".".join(parts[:2])) and ".".join(parts[:2]) != series:
+        return "manifest version %s is not %s" % (version, series)
+    return ""
+
+
 mods = {}
+skipped = {}
 for entry in sorted(os.listdir(root)):
     path = os.path.join(root, entry)
     manifest = os.path.join(path, "__manifest__.py")
@@ -262,10 +400,34 @@ for entry in sorted(os.listdir(root)):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    # An uninstallable module is not a verification target; Odoo refuses -i on it.
+    # A module Odoo would refuse is not a verification target; it is reported.
     if data.get("installable") is False:
+        skipped[entry] = "installable: False"
+        continue
+    problem = version_problem(data.get("version"))
+    if problem:
+        skipped[entry] = problem
         continue
     mods[entry] = sorted({str(d) for d in (data.get("depends") or [])})
+
+# A module that depends on a skipped one cannot install either; repeat until
+# no more fall out.
+changed = True
+while changed:
+    changed = False
+    for name in sorted(mods):
+        bad = [d for d in mods[name] if d in skipped]
+        if bad:
+            skipped[name] = "depends on skipped %s" % bad[0]
+            del mods[name]
+            changed = True
+
+for name in sorted(skipped):
+    print("SKIP %s: %s" % (name, skipped[name]), file=sys.stderr)
+    print("SKIPPED\t%s\t%s" % (name, skipped[name]))
+for name in expected:
+    if name in skipped:
+        print("EXPECTED_SKIPPED\t" + name)
 
 if not mods:
     sys.exit(3)
@@ -305,13 +467,18 @@ print("CORE\t" + ",".join(core))
 for tree in trees:
     print("TREE\t" + ",".join(tree))
 PY
-)"; then
+)" || graph_rc=$?
+if [ "$graph_rc" -eq 4 ]; then
+  exit 2
+elif [ "$graph_rc" -ne 0 ]; then
   die "no installable modules with a __manifest__.py under $addons"
 fi
 
 modules_csv=""; core_csv=""; trees=()
-while IFS=$'\t' read -r kind value; do
+while IFS=$'\t' read -r kind value reason; do
   case "$kind" in
+    SKIPPED) skipped_tsv="${skipped_tsv}${value}"$'\t'"${reason}"$'\n' ;;
+    EXPECTED_SKIPPED) expected_skipped="${expected_skipped:+$expected_skipped,}$value" ;;
     MODULES) modules_csv="$value" ;;
     CORE)    core_csv="$value" ;;
     TREE)    trees+=("$value") ;;
@@ -333,9 +500,21 @@ db_exists() {
 # one, which by then holds every custom module. Ownership is recorded in the
 # database itself (install_all_owned) rather than inferred from the name.
 guard_target() {
-  local target="$1" registry extra
+  local target="$1" registry extra owner
   if [ -n "$(psql -Atqc "SELECT to_regclass('public.install_all_owned')" -d "$target" 2>/dev/null || true)" ]; then
-    return 0
+    # Ours only when the stamp names this session. A stamp from another session,
+    # or an older one without the column, is a stranger's (#1141).
+    owner="$(psql -Atqc "SELECT session_id FROM install_all_owned LIMIT 1" -d "$target" 2>/dev/null || true)"
+    [ "$owner" != "$session_id" ] || return 0
+    if [ "$force" = true ]; then
+      echo "install_all.sh: --force: $target is stamped by session '${owner:-(none)}', dropping it anyway" >&2
+      return 0
+    fi
+    {
+      echo "install_all.sh: refusing to install into '$target' — it belongs to session '${owner:-(none)}', this run is '$session_id'."
+      echo "  Use a database name made for this session, or pass --force if you really mean this one."
+    } >&2
+    exit 2
   fi
   registry="$(psql -Atqc "SELECT to_regclass('public.ir_module_module')" -d "$target" 2>/dev/null || true)"
   [ -n "$registry" ] || return 0
@@ -357,7 +536,6 @@ guard_target() {
 created_dbs=()
 cleanup() {
   local target
-  if [ "$keep" = true ]; then return 0; fi
   for target in ${created_dbs+"${created_dbs[@]}"}; do
     dropdb --if-exists "$target" >/dev/null 2>&1 || true
   done
@@ -377,29 +555,96 @@ ensure_fresh_db() { # ensure_fresh_db <db> [template]
   fi
   # Stamp it as ours, before anything is installed, so the next iteration of the
   # fix loop may drop it and a stranger's database still may not.
-  psql -q -d "$target" -c "CREATE TABLE IF NOT EXISTS install_all_owned (created_at timestamptz DEFAULT now())" >/dev/null
+  psql -q -d "$target" -c "CREATE TABLE IF NOT EXISTS install_all_owned (created_at timestamptz DEFAULT now(), session_id text); INSERT INTO install_all_owned (session_id) VALUES ('$session_id')" >/dev/null
 }
 
 odoo_args=()
 if [ -n "$conf" ]; then odoo_args+=(-c "$conf"); fi
+# The path Odoo sees is the tree under test plus what Odoo adds itself. The
+# conf's addons_path is never appended: it let dropped modules leak in (#1167).
 addons_arg="$addons"
-if [ -n "$conf_addons" ]; then addons_arg="$addons,$conf_addons"; fi
+# --enterprise adds the enterprise tree explicitly, so the moved data_dir cannot
+# hide it (#1137).
+if [ -n "$enterprise" ]; then addons_arg="$addons,$enterprise"; fi
 odoo_args+=(--addons-path="$addons_arg" --data-dir "$data_dir" --max-cron-threads=0 --stop-after-init)
 
 run_install() { # run_install <db> <modules-csv> <log>
   "$ODOO" -d "$1" -i "$2" "${odoo_args[@]}" > "$3" 2>&1
 }
 
+# The warning gate (#1139). scan_warnings <log> runs after every install that
+# exited 0. It lifts the WARNING lines of the odoo.* loggers that come after the
+# first "odoo.modules.loading: loading" line, normalises each to
+# "<logger>: <message>" and sorts it into the accepted file or the new file.
+# An entry of an accepted list is a normalised line or a regex searched in it.
+warn_new="$artifacts/warnings.new.txt"; warn_acc="$artifacts/warnings.accepted.txt"
+warn_default="$(dirname "${BASH_SOURCE[0]}")/accepted_warnings.default.txt"
+warn_project="$artifacts/accepted_warnings.txt"
+: > "$warn_new"; : > "$warn_acc"
+scan_warnings() { # scan_warnings <log>
+  python3 - "$1" "$warn_default" "$warn_project" "$warn_new" "$warn_acc" <<'PY'
+import re, sys
+
+log, default_list, project_list, new_out, acc_out = sys.argv[1:6]
+WARNING = re.compile(r"^\S+ \S+ \d+ WARNING \S+ (odoo\.[^\s:]+): (.*)$")
+
+
+def entries(path):
+    try:
+        text = open(path, errors="replace").read()
+    except OSError:
+        return []
+    return [e.strip() for e in text.splitlines() if e.strip() and not e.lstrip().startswith("#")]
+
+
+def accepted(line, patterns):
+    for entry in patterns:
+        if entry == line:
+            return True
+        try:
+            if re.search(entry, line):
+                return True
+        except re.error:
+            pass
+    return False
+
+
+patterns = entries(default_list) + entries(project_list)
+try:
+    lines = open(log, errors="replace").read().splitlines()
+except OSError:
+    lines = []
+started, seen, new, acc = False, set(), [], []
+for line in lines:
+    if "odoo.modules.loading: loading" in line:
+        started = True
+    if not started:
+        continue
+    found = WARNING.match(line)
+    if not found:
+        continue
+    norm = re.sub(r"\s+", " ", "%s: %s" % found.groups()).strip()
+    if norm in seen:
+        continue
+    seen.add(norm)
+    (acc if accepted(norm, patterns) else new).append(norm)
+for path, rows in ((new_out, new), (acc_out, acc)):
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.writelines(row + "\n" for row in rows)
+PY
+}
+
 # The failing module and the one line that decides why, lifted out of a log the
 # caller should not have to read. Everything else in that file is core loading.
-extract_failure() { # extract_failure <log> -> "<module>\t<line>"
-  python3 - "$1" <<'PY'
+extract_failure() { # extract_failure <log> <tree> -> "<module>\t<line>\t<env|port>"
+  python3 - "$1" "${2:-}" <<'PY'
 import re, sys
 
 try:
     lines = open(sys.argv[1], errors="replace").read().splitlines()
 except OSError:
     lines = []
+tree = sys.argv[2].rstrip("/") + "/" if sys.argv[2] else ""
 
 module = ""
 LOADING = (
@@ -413,12 +658,23 @@ for line in lines:
         if found:
             module = found.group(1)
 
+INCOMPATIBLE = re.compile(r"module ([a-z0-9_]+): .*incompatible version, setting installable=False")
+# Odoo's check_version only logs this and drops the module, so the failure that
+# follows is a symptom. The line is the decisive one and it names the module.
+for line in lines:
+    refused = INCOMPATIBLE.search(line)
+    if refused:
+        print("%s\t%s\tport" % (refused.group(1), line.strip().replace("\t", " ")[:400]))
+        sys.exit(0)
+
 EXCEPTION = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure|Exit):")
 decisive = ""
-for line in lines:
+decisive_at = -1
+for index, line in enumerate(lines):
     stripped = line.strip()
     if EXCEPTION.match(stripped):
         decisive = stripped
+        decisive_at = index
 if not decisive:
     for line in lines:
         if " ERROR " in line or " CRITICAL " in line:
@@ -439,15 +695,197 @@ path = re.search(
 if path:
     module = path.group(1)
 
-print("%s\t%s" % (module, decisive.replace("\t", " ")[:400]))
+# Class: env when the failure is not the tree's own code. The decisive frame is
+# the last File "..." line before the exception; outside the tree under test it
+# is core or enterprise code. A decisive line that names a path inside the tree
+# (a ParseError on a custom view) is the tree's own defect even though the last
+# frame is the loader.
+klass = "port"
+frame = ""
+if decisive_at >= 0:
+    for line in reversed(lines[:decisive_at]):
+        found = re.search(r'File "([^"]+)"', line)
+        if found:
+            frame = found.group(1)
+            break
+names_tree = bool(tree) and tree in decisive
+if frame and tree and not frame.startswith(tree) and not names_tree:
+    klass = "env"
+if re.search(r"Unmet dependencies|[Mm]odule\W.*not found", decisive) and not names_tree:
+    klass = "env"
+if "ImportError" in decisive and "odoo.addons." in decisive and not names_tree:
+    klass = "env"
+
+print("%s\t%s\t%s" % (module, decisive.replace("\t", " ")[:400], klass))
 PY
 }
 
-records="$artifacts/records.tsv"
 : > "$records"
-record() { # record <kind> <db> <modules> <status> <module> <error> <log>
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$records"
+record() { # record <kind> <db> <modules> <status> <module> <error> <log> [class]
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${8:-}" >> "$records"
 }
+
+# extract_failure prints "<module>\t<line>\t<class>"; split it into f_module,
+# f_error and f_class. count_failure then counts it by class.
+split_failure() {
+  local rest
+  f_module="${1%%$'\t'*}"
+  rest="${1#*$'\t'}"
+  f_error="${rest%$'\t'*}"
+  f_class="${rest##*$'\t'}"
+}
+count_failure() {
+  failures=$((failures + 1))
+  if [ "$f_class" = env ]; then env_failures=$((env_failures + 1)); fi
+}
+
+# write_summary <status>: status is pass | failed | env_failure | usage. Prints the
+# JSON summary on stdout and writes it to --summary. Writes once per run: the
+# normal end calls it, and the EXIT trap calls it for any other way out.
+write_summary() {
+  [ "$summary_written" = false ] || return 0
+  summary_written=true
+  local mode=full summary
+  if [ "$per_tree" = true ]; then mode=per-tree; fi
+  if [ "$use_template" = true ]; then mode="$mode+template"; fi
+  summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$odoo_build" "$mode" \
+    "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
+    "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
+    "$series" "$skipped_tsv" "$expected_skipped" \
+    "$version_info" "$odoo_version" "$enterprise_head" "$tpl_dropped" "$session_id" \
+    "${warn_new:-}" "${warn_acc:-}" "$previous_file" <<'PY'
+import json, os, sys
+
+(records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
+ template_db, template_key, template_reused, use_template,
+ addons_arg, status, enterprise, env_decisive, env_log,
+ series, skipped_tsv, expected_skipped,
+ version_info, odoo_version, enterprise_head, tpl_dropped, session_id,
+ warn_new_file, warn_acc_file, previous_file) = sys.argv[1:29]
+
+
+def unique_lines(path):
+    try:
+        text = open(path, encoding="utf-8").read() if path else ""
+    except OSError:
+        return []
+    return list(dict.fromkeys(row for row in text.splitlines() if row))
+
+
+warnings_new = unique_lines(warn_new_file)
+warnings_accepted = len(unique_lines(warn_acc_file))
+skipped = [
+    {"module": row.split("\t")[0], "reason": row.split("\t", 1)[1]}
+    for row in skipped_tsv.splitlines() if "\t" in row
+]
+
+
+def split(value):
+    return [part for part in value.split(",") if part]
+
+
+trees, full = [], None
+if os.path.exists(records):
+    with open(records, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            kind, target, mods, rstatus, module, error, log, klass = (
+                line.rstrip("\n").split("\t") + [""] * 8)[:8]
+            entry = {
+                "modules": split(mods), "db": target, "status": rstatus,
+                "error": error or None, "module": module or None, "log": log or None,
+                "class": klass or None,
+            }
+            if kind == "tree":
+                trees.append(entry)
+            else:
+                full = entry
+
+statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
+
+
+def failures_of(trees_list, full_entry):
+    # key -> (module, decisive line) for every entry that did not pass
+    found = {}
+    for entry in trees_list:
+        if entry.get("status") != "pass":
+            found[("tree",) + tuple(sorted(entry.get("modules") or []))] = entry
+    if full_entry and full_entry.get("status") != "pass":
+        found[("full",)] = full_entry
+    return found
+
+
+progress = None
+if previous_file:
+    old = json.load(open(previous_file, encoding="utf-8"))
+    old_fail = failures_of(old.get("trees") or [], old.get("full"))
+    new_fail = failures_of(trees, full)
+    if old_fail:
+        progress = False
+        for key, was in old_fail.items():
+            now = new_fail.get(key)
+            if now is None:
+                if key == ("full",) and full is None:
+                    continue
+                progress = True
+            elif (now.get("module"), now.get("error")) != (was.get("module"), was.get("error")):
+                progress = True
+    if status != "usage":
+        print("install_all.sh: progress: %s" % json.dumps(progress), file=sys.stderr)
+summary = {
+    "progress": progress,
+    "status": status,
+    "db": db, "session_id": session_id, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
+    "enterprise_path": enterprise or None,
+    "odoo_build": build_id, "series": series or None, "mode": mode,
+    "custom_modules": split(modules_csv),
+    "skipped": skipped,
+    "expected_but_skipped": split(expected_skipped),
+    "template": {
+        "db": template_db or None, "key": template_key,
+        "reused": template_reused == "true", "core_modules": split(core_csv),
+        "dropped": tpl_dropped.split(),
+        "key_parts": {
+            "version_info": version_info or None, "odoo_version": odoo_version or None,
+            "enterprise_head": enterprise_head if enterprise_head != "-" else None,
+            "core_modules": split(core_csv),
+        },
+    } if use_template == "true" else None,
+    "trees": trees,
+    "full": full,
+    "warnings_new": warnings_new[:200],
+    "warnings_accepted": warnings_accepted,
+    "env_failure": {"decisive": env_decisive, "log": env_log or None} if env_decisive else None,
+    "passed": status == "pass" and bool(statuses) and all(s == "pass" for s in statuses)
+              and not expected_skipped and not warnings_new,
+}
+print(json.dumps(summary))
+PY
+)"
+  if [ -n "$summary_file" ]; then
+    mkdir -p "$(dirname "$summary_file")"
+    printf '%s\n' "$summary" > "$summary_file"
+  fi
+  printf '%s\n' "$summary"
+}
+
+# The EXIT trap: write the summary if the run is leaving before its normal end
+# (a refusal, a signal, an unexpected error), then drop the databases.
+on_exit() {
+  local rc=$?
+  if [ "$summary_written" = false ]; then
+    case "$rc" in
+      0)  write_summary pass || true ;;
+      2)  write_summary usage || true ;;
+      10) write_summary env_failure || true ;;
+      *)  write_summary failed || true ;;
+    esac
+  fi
+  cleanup
+  return "$rc"
+}
+trap on_exit EXIT
 
 # ---- template database ---------------------------------------------------------
 template_key="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$build_id
@@ -455,8 +893,7 @@ $core_csv")"
 template_reused=false
 template_from=""
 if [ "$use_template" = true ]; then
-  template_db="${template_db:-odoo_tpl_${template_key:0:12}}"
-  valid_dbname "$template_db" || die "not a usable template database name: '$template_db'"
+  template_db="odoo_tpl_${template_key:0:12}"
   stored=""
   if db_exists "$template_db"; then
     if [ -n "$(psql -Atqc "SELECT to_regclass('public.install_all_template')" -d "$template_db" 2>/dev/null || true)" ]; then
@@ -470,14 +907,32 @@ if [ "$use_template" = true ]; then
     fi
   fi
   if [ "$template_reused" = false ]; then
+    # The key changed, so every other odoo_tpl_* with a different key is stale
+    # and would otherwise pile up (#1141). A busy one is kept, with a warning.
+    for stale in $(psql -Atqc "SELECT datname FROM pg_database WHERE datname LIKE 'odoo_tpl_%'" -d postgres 2>/dev/null || true); do
+      [ "$stale" != "$template_db" ] || continue
+      stale_key="$(psql -Atqc "SELECT key FROM install_all_template LIMIT 1" -d "$stale" 2>/dev/null || true)"
+      [ "$stale_key" != "$template_key" ] || continue
+      if dropdb --if-exists "$stale" >/dev/null 2>&1; then
+        tpl_dropped="$tpl_dropped$stale
+"
+        echo "install_all.sh: dropped stale template $stale" >&2
+      else
+        echo "install_all.sh: warning: cannot drop stale template $stale (busy?), left in place" >&2
+      fi
+    done
     createdb "$template_db" >/dev/null
     template_log="$artifacts/$template_db.log"
-    if ! run_install "$template_db" "${core_csv:-base}" "$template_log"; then
-      failure="$(extract_failure "$template_log")"
-      echo "install_all.sh: building the template database failed — ${failure#*$'\t'}" >&2
+    if run_install "$template_db" "${core_csv:-base}" "$template_log"; then
+      scan_warnings "$template_log"
+    else
+      split_failure "$(extract_failure "$template_log" "$addons")"
+      echo "install_all.sh: building the template database failed — $f_error" >&2
       echo "  log: $template_log" >&2
       dropdb --if-exists "$template_db" >/dev/null 2>&1 || true
-      exit 1
+      env_decisive="$f_error"; env_log="$template_log"
+      write_summary env_failure
+      exit 10
     fi
     # Keyed inside the database, so a build or dependency change invalidates it
     # rather than silently masking an incompatibility.
@@ -499,16 +954,17 @@ if [ "$per_tree" = true ]; then
     ensure_fresh_db "$tree_db" "$template_from"
     created_dbs+=("$tree_db")
     if run_install "$tree_db" "$tree" "$tree_log"; then
+      scan_warnings "$tree_log"
       record tree "$tree_db" "$tree" pass "" "" "$tree_log"
       echo "install_all.sh: tree $index/${#trees[@]} PASS ($tree)" >&2
     else
-      failure="$(extract_failure "$tree_log")"
-      failures=$((failures + 1))
-      record tree "$tree_db" "$tree" fail "${failure%%$'\t'*}" "${failure#*$'\t'}" "$tree_log"
-      echo "install_all.sh: tree $index/${#trees[@]} FAIL ($tree) at ${failure%%$'\t'*}: ${failure#*$'\t'}" >&2
+      split_failure "$(extract_failure "$tree_log" "$addons")"
+      count_failure
+      record tree "$tree_db" "$tree" fail "$f_module" "$f_error" "$tree_log" "$f_class"
+      echo "install_all.sh: tree $index/${#trees[@]} FAIL ($tree) at $f_module [$f_class]: $f_error" >&2
       echo "  log: $tree_log" >&2
     fi
-    if [ "$keep" != true ]; then dropdb --if-exists "$tree_db" >/dev/null 2>&1 || true; fi
+    dropdb --if-exists "$tree_db" >/dev/null 2>&1 || true
   done
 fi
 
@@ -522,71 +978,33 @@ if [ "$per_tree" = true ] && [ "$failures" -gt 0 ]; then
 else
   ensure_fresh_db "$db" "$template_from"
   if run_install "$db" "$modules_csv" "$full_log"; then
+    scan_warnings "$full_log"
     record full "$db" "$modules_csv" pass "" "" "$full_log"
   else
-    failure="$(extract_failure "$full_log")"
-    failures=$((failures + 1))
-    record full "$db" "$modules_csv" fail "${failure%%$'\t'*}" "${failure#*$'\t'}" "$full_log"
-    echo "install_all.sh: full install FAILED at ${failure%%$'\t'*}: ${failure#*$'\t'}" >&2
+    split_failure "$(extract_failure "$full_log" "$addons")"
+    count_failure
+    record full "$db" "$modules_csv" fail "$f_module" "$f_error" "$full_log" "$f_class"
+    echo "install_all.sh: full install FAILED at $f_module [$f_class]: $f_error" >&2
     echo "  log: $full_log" >&2
   fi
 fi
 
 # ---- summary -------------------------------------------------------------------
-mode=full
-if [ "$per_tree" = true ]; then mode=per-tree; fi
-if [ "$use_template" = true ]; then mode="$mode+template"; fi
-
-summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
-  "$modules_csv" "$core_csv" "${template_db:-}" "$template_key" "$template_reused" \
-  "$use_template" <<'PY'
-import json, sys
-
-(records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
- template_db, template_key, template_reused, use_template) = sys.argv[1:13]
-
-
-def split(value):
-    return [part for part in value.split(",") if part]
-
-
-trees, full = [], None
-with open(records, encoding="utf-8") as handle:
-    for line in handle:
-        if not line.strip():
-            continue
-        kind, target, mods, status, module, error, log = (
-            line.rstrip("\n").split("\t") + [""] * 7)[:7]
-        entry = {
-            "modules": split(mods), "db": target, "status": status,
-            "error": error or None, "module": module or None, "log": log or None,
-        }
-        if kind == "tree":
-            trees.append(entry)
-        else:
-            full = entry
-
-statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
-summary = {
-    "db": db, "addons_path": addons, "data_dir": data_dir,
-    "odoo_build": build_id, "mode": mode,
-    "custom_modules": split(modules_csv),
-    "template": {
-        "db": template_db or None, "key": template_key,
-        "reused": template_reused == "true", "core_modules": split(core_csv),
-    } if use_template == "true" else None,
-    "trees": trees,
-    "full": full,
-    "passed": bool(statuses) and all(status == "pass" for status in statuses),
-}
-print(json.dumps(summary))
-PY
-)"
-
-if [ -n "$summary_file" ]; then
-  mkdir -p "$(dirname "$summary_file")"
-  printf '%s\n' "$summary" > "$summary_file"
+if [ "$env_failures" -gt 0 ]; then
+  write_summary env_failure
+  exit 10
+elif [ "$failures" -gt 0 ]; then
+  write_summary failed
+  exit 1
+elif [ -n "$expected_skipped" ]; then
+  echo "install_all.sh: expected modules were skipped: $expected_skipped" >&2
+  write_summary failed
+  exit 1
 fi
-printf '%s\n' "$summary"
-
-[ "$failures" -eq 0 ] || exit 1
+new_warnings="$(sort -u "$warn_new" | grep -c . || true)"
+if [ "$new_warnings" -gt 0 ]; then
+  echo "install_all.sh: $new_warnings new WARNING line(s); accept them in $warn_project or fix them" >&2
+  write_summary failed
+  exit 1
+fi
+write_summary pass

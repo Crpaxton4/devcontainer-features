@@ -6,7 +6,6 @@ Workflow: upgrade pass over ALL modules (steps 1–6 per module, dependency/topo
 
 - Inventory CSV exist; module's `Upgrade action` = `keep`. (`replace` ⇒ download vendor/OCA release instead, under [Replace](#replace-obtaining-the-target-series-build) below; `merge-into-standard`/`drop` ⇒ remove from addons, note data implications for human-run DB upgrade.)
 - Clean git tree, branch for target series.
-- `$ODOO_VERSION` must equal TARGET series for step 7. If not: do upgrade pass anyway, mark every module **untested**, escalate — install loop need target-series devcontainer.
 - Multi-hop (e.g. 16→18): upgrade_code may run ONCE across hops (target odoo-bin carry all scripts); manual work (steps 3–4) done per hop, in sequence, never skip major.
 - 100+ row inventories: batch AI enrichment and porting passes in dependency-ordered chunks (context budget).
 
@@ -39,19 +38,19 @@ saying so.
 
 ## 1. Manifest
 
-- Bump `version` prefix to target series: `19.0.x.y.z`. Keep module's own `x.y.z` tail.
+- Bump `version` prefix to target series with `bump_manifest_version.py --series <target> <module dir>` (`skills/odoo-devcontainer/scripts/`). It keeps the module's own `x.y.z` tail, then applies the usual bump.
 - Check `depends`: renamed/merged/removed in target? Core module renames/merges live in OpenUpgrade's `openupgrade_scripts/apriori.py` (branch = target series) — check before hand-researching.
 - Check `external_dependencies` still importable on target's Python floor.
 
 ## 2. Automated rewrite (target ≥ 18.0 only)
 
-- Run TARGET version's `odoo-bin upgrade_code` (`--dry-run` first) — see [upgrade-code-tool.md](./upgrade-code-tool.md); target's `XX.0/upgrade-code-scripts.md` list what it fix.
-- Review diff hunk by hunk. Commit mechanical rewrite separate from manual fixes.
+- Run `scripts/port-module.sh <module> --to T --worktree W` — it runs the TARGET version's `odoo-bin upgrade_code` (see [upgrade-code-tool.md](./upgrade-code-tool.md); [upgrade-code-scripts.md](./upgrade-code-scripts.md) lists what each script fix, by the series that ships it), restores every path outside the module, then runs `odoo-module-migrate`.
+- Review diff hunk by hunk. The mechanical commit is separate from manual fixes (#1168).
 - Target 17.0: no core tool — OCA `odoo-module-migrator` offer partial automation (see 17.0/changes.md).
 
 ## 3. Detection greps
 
-- Run `Detection greps` block from target's `changes.md` in module dir. Every hit = work item. Empty grep output ≠ done — greps catch renames, not semantic changes.
+- Read the hits of the module in `plan.json` (`scripts/port-plan.py`, patterns in `references/detection-patterns.tsv`). Every hit = work item. Empty grep output ≠ done — greps catch renames, not semantic changes.
 
 ## 4. Manual fixes
 
@@ -59,6 +58,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 - Core-field renames not in `changes.md`: check OpenUpgrade analysis file for each model module touch (path pattern in changes file's Sources).
 - Views inheriting core views: verify every xpath against target version's actual view arch, not memory.
+- Run a static xpath check of every custom view inherit against the target arches before the first install run (`scripts/xpath-check.py`). It finds all ParseErrors at once. The install loop finds one per tree per run. For QWeb the spec root must be `<data>`, not `<t>`.
 - Renamed module's OWN fields/models/xmlids during port? Existing DBs need `migrations/` script — see [migrations.md](./migrations.md).
 - Grep OTHER custom modules for `inherit_id` references to this module's views — xpath breakage cascade to siblings.
 
@@ -73,7 +73,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 ## 7. Verification loop (all modules, target devcontainer)
 
-- `install_all.sh --db <throwaway>` — install EVERY custom module on a fresh throwaway DB (never the project's own: `--db` is required and the script refuses a database that already holds modules). Must exit clean: no tracebacks, no "invalid view" warnings.
+- `install_all.sh --db <throwaway> --session-id <id> --artifacts <ARTIFACTS>/install --addons-path <worktree>` — install EVERY custom module on a fresh throwaway DB (never the project's own: `--db` is required and the script refuses a database that already holds modules). Must exit clean: no tracebacks, no "invalid view" warnings.
 - Fix what break (minimal diffs, commit per module), rerun. Repeat until green.
-- Then: run test suites with target odoo-bin (`odoo-bin test`), smoke-test main views (form/list/kanban) + report rendering — green install alone prove little; views can install yet render broken.
+- Tests run through `upgrade_tests.sh` (generated smoke module, module tests, dependency tests): see the agent brief.
 - Upgrade path: `-u <module>` on DB where previous version was installed, when available.

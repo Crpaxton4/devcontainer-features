@@ -520,13 +520,13 @@ check_contains "unset-repo-path-falls-back" "\"repo_path\":\"$TMP/tree/iota\"" "
 seed
 map add "Upsilon" upsilon --repo-path "$TMP/mount/extra-addons" >/dev/null
 check "collide-first-add-ok" 0 $?
-out="$(map add "Phi" phi --repo-path "$TMP/mount/extra-addons" 2>&1)"
+out="$(map add "Phi" upsilon --repo-path "$TMP/mount/extra-addons" 2>&1)"
 check "add-rejects-colliding-repo-path" 2 $?
 check_contains "add-collision-names-flag" "--repo-path" "$out"
 check_contains "add-collision-names-holder" "Upsilon" "$out"
 
 # `set --repo-path` is the other way one could be written.
-map add "Chi" chi --no-repo-check >/dev/null
+map add "Chi" upsilon --no-repo-check >/dev/null
 out="$(map set "Chi" --repo-path "$TMP/mount/extra-addons" 2>&1)"
 check "set-rejects-colliding-repo-path" 2 $?
 check_contains "set-collision-names-holder" "Upsilon" "$out"
@@ -587,7 +587,7 @@ if command -v git >/dev/null 2>&1; then
   git init -q "$TMP/gitmount" >/dev/null 2>&1
   git -C "$TMP/gitmount" remote add origin git@github.com:acme/pinned-addons.git
   seed
-  map add "Omicron" omicron --repo-path "$TMP/gitmount" >/dev/null
+  map add "Omicron" pinned-addons --repo-path "$TMP/gitmount" >/dev/null
   out="$(resolve_in "$NO_TREE" Omicron)"; check "resolve-sniffs-origin-at-repo-path" 0 $?
   check_contains "repo-path-drives-origin-sniff" '"remote":"acme/pinned-addons"' "$out"
 
@@ -686,7 +686,7 @@ fi
 # Two things about that file were once wrong and are asserted here: it must never
 # survive the run, and its path must not be the one fixed name every concurrent
 # writer would also be holding.
-no_scratch() { [ -z "$(find "$TMP" -maxdepth 1 -name 'map.json.tmp*')" ]; }
+no_scratch() { [ -z "$(find "$TMP" -maxdepth 1 \( -name 'map.json.tmp*' -o -name 'map.json.bak.*' \))" ]; }
 
 seed
 map set-flow Beta ":task,staging,prod" >/dev/null; check "scratch-write-ok" 0 $?
@@ -731,6 +731,95 @@ for p in $pids; do wait "$p" || racers=$((racers+1)); done
 check "concurrent-writers-all-exit-0" 0 "$racers"
 map validate >/dev/null 2>&1; check "concurrent-map-still-validates" 0 $?
 no_scratch; check "concurrent-no-scratch-left" 0 $?
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' "$TMP/map.json.bak" >/dev/null 2>&1; check "concurrent-bak-is-valid-json" 0 $?
+
+# --- one mount, one entry per remote (#1127) -------------------------------------
+# /mnt/extra-addons is a fixed bind-mount name, so two repos can legitimately
+# claim it on different sessions. Same path + same remote is still a collision.
+seed
+map add "Rho" rho --no-repo-check --repo-path /mnt/x --remote acme/rho --default-branch main >/dev/null
+map add "Sigma" sigma --no-repo-check --repo-path /mnt/x --remote acme/sigma --default-branch main >/dev/null 2>&1
+check "same-path-different-remote-add" 0 $?
+map add "Rho2" rho2 --no-repo-check --repo-path /mnt/x --remote acme/rho --default-branch main >/dev/null 2>&1
+check "same-path-same-remote-add-rejected" 2 $?
+map set Sigma --no-repo-check --repo-path /mnt/y >/dev/null 2>&1
+map set Sigma --no-repo-check --repo-path /mnt/x >/dev/null 2>&1; check "same-path-different-remote-set" 0 $?
+map add "Tau" tau --no-repo-check --default-branch main >/dev/null 2>&1
+map set Tau --no-repo-check --remote acme/rho --repo-path /mnt/x >/dev/null 2>&1; check "same-path-same-remote-set-rejected" 2 $?
+
+# A repo_path counts only when the checkout's origin is this entry's repo.
+mkdir -p "$TMP/mnt-a" "$TMP/mnt-b"
+git init -q "$TMP/mnt-a"; git -C "$TMP/mnt-a" remote add origin https://github.com/acme/other.git
+git init -q "$TMP/mnt-b"; git -C "$TMP/mnt-b" remote add origin https://github.com/acme/rho.git
+seed
+map add "Rho" rho --no-repo-check --repo-path "$TMP/mnt-a" --remote acme/rho --default-branch main >/dev/null
+map add "Rho3" rho --no-repo-check --repo-path "$TMP/mnt-b" --default-branch main >/dev/null
+map add "Rho4" rho --no-repo-check --repo-path "$TMP/mnt-a" --default-branch main >/dev/null
+err="$(resolve Rho 2>&1 >/dev/null)"; out="$(resolve Rho 2>/dev/null)"
+check_contains "resolve-foreign-origin-null" '"repo_path":null' "$out"
+check_contains "resolve-foreign-origin-warns" "is checked out from acme/other, not acme/rho — repo_path ignored" "$err"
+out="$(resolve Rho3 2>/dev/null)"
+check_contains "resolve-matching-origin-resolves" "\"repo_path\":\"$TMP/mnt-b\"" "$out"
+out="$(resolve Rho4 2>/dev/null)"
+check_contains "resolve-name-mismatch-null" '"repo_path":null' "$out"
+
+# project-bootstrap.sh: a foreign-remote entry holding the path does not own the checkout.
+seed
+map add "Other" other --no-repo-check --repo-path "$TMP/mnt-b" --remote acme/other --default-branch main >/dev/null
+REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-bootstrap.sh" "$TMP/mnt-b" --project Rho5 >/dev/null 2>&1
+check "bootstrap-foreign-remote-entry-proceeds" 0 $?
+REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-bootstrap.sh" "$TMP/mnt-b" --project Rho6 >/dev/null 2>&1
+check "bootstrap-same-remote-entry-exits-3" 3 $?
+
+# --- aliases: a second project on the same repo is a name, not an entry (#1126) ---
+seed
+map add "Deliv" deliv --no-repo-check --default-branch main --aliases "Support, Care" >/dev/null
+map add "Other" other --no-repo-check --default-branch main >/dev/null
+out="$(resolve Support 2>/dev/null)"
+check_contains "alias-resolves-project-is-alias" '"project":"Support"' "$out"
+check_contains "alias-resolves-alias-of-entry" '"alias_of":"Deliv"' "$out"
+check_contains "alias-resolves-entry-repo" '"repo":"deliv"' "$out"
+out="$(resolve care 2>/dev/null)"
+check_contains "alias-case-insensitive" '"alias_of":"Deliv"' "$out"
+out="$(resolve Deliv 2>/dev/null)"
+check_contains "direct-hit-alias-of-null" '"alias_of":null' "$out"
+out="$(resolve deliv 2>/dev/null)"
+check_contains "repo-folder-route-unchanged" '"project":"Deliv"' "$out"
+out="$(map get Support 2>/dev/null)"; check "get-by-alias" 0 $?
+check_contains "get-by-alias-prints-entry" '"repo":"deliv"' "$out"
+map set Other --aliases "X,Y" >/dev/null 2>&1; check "set-aliases" 0 $?
+check_contains "set-aliases-written" '"aliases": [' "$(map list)"
+map set Other --aliases "" >/dev/null 2>&1; check "set-aliases-empty-removes" 0 $?
+check_contains "set-aliases-removed" '"project":"Other"' "$(map get Other)"
+[ "$(map get Other | grep -c aliases)" -eq 0 ]; check "set-aliases-key-gone" 0 $?
+map set Other --aliases "Deliv" >/dev/null 2>&1; check "alias-equal-to-entry-rejected" 4 $?
+map set Other --aliases "Support" >/dev/null 2>&1; check "alias-duplicate-across-entries-rejected" 4 $?
+map add "Support" support --no-repo-check --default-branch main >/dev/null 2>&1; check "add-entry-named-as-alias-rejected" 4 $?
+err="$(map set Support --notes x 2>&1 >/dev/null)"; rc=$?
+check "set-on-alias-exit-3" 3 $rc
+check_contains "set-on-alias-message" '"Support" is an alias of "Deliv"; use the entry name' "$err"
+map set-flow Support ":task,main" >/dev/null 2>&1; check "set-flow-on-alias-exit-3" 3 $?
+map set-release-owners Support a b >/dev/null 2>&1; check "set-release-owners-on-alias-exit-3" 3 $?
+map remove Support >/dev/null 2>&1; check "remove-on-alias-exit-3" 3 $?
+
+# --- upgrade_branch: a per-series base for an upgrade (#1128) ---
+seed
+map add "Up" up --no-repo-check --default-branch main >/dev/null
+map set Up --upgrade-branch 19.0=19-upgrade >/dev/null 2>&1; check "set-upgrade-branch" 0 $?
+check_contains "set-upgrade-branch-get" '"upgrade_branch":{"19.0":"19-upgrade"}' "$(map get Up)"
+out="$(resolve Up --series 19.0 2>/dev/null)"
+check_contains "resolve-series-upgrade-branch" '"upgrade_branch":"19-upgrade"' "$out"
+out="$(resolve Up --series 18.0 2>/dev/null)"
+check_contains "resolve-series-unset-falls-back" '"upgrade_branch":"main"' "$out"
+out="$(resolve Up 2>/dev/null)"
+check_contains "resolve-no-series-null" '"upgrade_branch":null' "$out"
+resolve Up --series 19 >/dev/null 2>&1; check "resolve-bad-series-exit-2" 2 $?
+map set Up --upgrade-branch 19=x >/dev/null 2>&1; check "upgrade-branch-bad-series-rejected" 4 $?
+map set Up --upgrade-branch nonsense >/dev/null 2>&1; check "upgrade-branch-needs-equals" 2 $?
+map set Up --upgrade-branch 19.0= >/dev/null 2>&1; check "upgrade-branch-remove" 0 $?
+check_absent "upgrade-branch-removed" 'upgrade_branch' "$(map get Up)"
+map add "Up2" up2 --no-repo-check --default-branch main --upgrade-branch 18.0=18-up --upgrade-branch 19.0=19-up >/dev/null 2>&1; check "add-upgrade-branch" 0 $?
+check_contains "add-upgrade-branch-written" '"18.0":"18-up","19.0":"19-up"' "$(map get Up2)"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
