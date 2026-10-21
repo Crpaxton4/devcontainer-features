@@ -2252,8 +2252,8 @@ check "the odoo-ls server binary is installed" bash -c \
   "test -x /usr/local/share/odoo-ls/odoo_ls_server"
 # Bump this string whenever ODOO_LS_VERSION moves - same contract as the pinned
 # Claude Code version above.
-check "odoo-ls is pinned to 1.6.0" bash -c \
-  "/usr/local/share/odoo-ls/odoo_ls_server --version | grep -qF '1.6.0'"
+check "odoo-ls is pinned to 1.6.1" bash -c \
+  "/usr/local/share/odoo-ls/odoo_ls_server --version | grep -qF '1.6.1'"
 
 # The server resolves its stdlib/stub roots relative to its OWN binary before
 # falling back to the cwd, and without stdlib stubs it resolves nothing while
@@ -2321,7 +2321,7 @@ check "a project's own odools.toml suppresses the generated one" bash -c \
 # launcher to exec anything at all (see below), and postCreateCommand does not
 # run under `devcontainer features test`, so point it at a throwaway one.
 check "the launcher passes the caller's own arguments through, last" bash -c \
-  "$_OLS_FAKE ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" odoo-ls-server --version | grep -qF '1.6.0'"
+  "$_OLS_FAKE ODOO_LS_CONFIG=\"\$d/gen.toml\" CLAUDE_PROJECT_DIR=\"\$d/proj\" odoo-ls-server --version | grep -qF '1.6.1'"
 # The plugin registers .py for every project, not only Odoo ones. With no config
 # anywhere the server would index a whole tree to answer nothing, because
 # without odoo_path it resolves no model, no field and no xmlid - so start
