@@ -58,6 +58,7 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 - Core-field renames not in `changes.md`: check OpenUpgrade analysis file for each model module touch (path pattern in changes file's Sources).
 - Views inheriting core views: verify every xpath against target version's actual view arch, not memory.
+- Run a static xpath check of every custom view inherit against the target arches before the first install run. It finds all ParseErrors at once. The install loop finds one per tree per run. For QWeb the spec root must be `<data>`, not `<t>`.
 - Renamed module's OWN fields/models/xmlids during port? Existing DBs need `migrations/` script — see [migrations.md](./migrations.md).
 - Grep OTHER custom modules for `inherit_id` references to this module's views — xpath breakage cascade to siblings.
 

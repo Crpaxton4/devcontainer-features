@@ -59,6 +59,8 @@ Port direction: 18.0 -> 19.0. Automated tool exists: run Odoo 19 `odoo-bin upgra
 - New `self.env.tz` timezone property (odoo/odoo#221541): replaces manual `pytz.timezone(self.env.context.get('tz')...)` handling.
 - `@api.private` added (18.2, odoo/odoo#195402): public (non-underscore) model methods are RPC-callable unless decorated — mark internal helpers.
 - `odoo.tools.urls.urljoin` helper added — use instead of `urllib.parse.urljoin` for Odoo URLs (OCA wiki, odoo/odoo@977e62d91f3e).
+- `procurement.group` removed, replaced by `stock.reference`. Rewrite `picking.group_id.mrp_production_ids` -> `picking.move_ids.reference_ids.production_ids`; `group.sale_id` -> `references.sale_ids[:1]`; `production.procurement_group_id` -> `production.reference_ids`. `_prepare_procurement_group_vals` and the pbm_sam group branch of `_run_pull` have no successor. Picking `move_type` comes from `stock.picking.type.move_type`.
+- `check_version`: a manifest with a non-target series prefix is silently `installable=False`. Read `skipped[]` in the `install_all.sh` output.
 - Dynamic dates in domains (odoo/odoo#216665): domain values may be literals like `'now'`, `'today'`, `'-3d'`, `'today -1m'`, `'=1d'`, `'=monday'`.
 
 ## Views / XML
@@ -68,6 +70,10 @@ Port direction: 18.0 -> 19.0. Automated tool exists: run Odoo 19 `odoo-bin upgra
   - `users` renamed `user_ids`; computed `all_user_ids` = users incl. implied membership.
   - `implied_ids` kept; new inverse `implied_by_ids`, computed `all_implied_ids`/`all_implied_by_ids`; new `sequence`; `color` removed.
   - Name uniqueness is now `UNIQUE (privilege_id, name)` (was `unique(category_id,name)`).
+  - The category xmlid `base.module_category_usability` is gone. A group without its own app section gets no privilege. Python `group.users` -> `user_ids` / `all_user_ids`.
+- Search view `<group expand="0" string="Group By">` fails RELAXNG (`RELAXNG_ERR_EXTRACONTENT`, `base/rng/common.rng`). Write `<group>`.
+- Report anchors moved: titles are in `<t t-set="layout_document_title">` inside `div.page`. `stock.report_picking` has `h3` + `h2 t-field="o.name"`. The sale info row is `div#informations.row.mb-4`. `l10n_us_check_printing.ckus_stub` delegates to `ckus_stub_body`. The `web.external_layout_*` logo `img` is three divs deep. Re-anchor custom xpaths.
+- QWeb inherit specs need a `<data>` root (not `<t>`) for `apply_inheritance_specs` to check anything.
 - `res.users`: `groups_id` -> `group_ids` (explicitly assigned groups) + computed `all_group_ids` (incl. implied). Membership checks: keep `user.has_group('module.group_x')`, or search on `all_group_ids`. New computed `role` selection (`group_user`/`group_system`).
 - xmlid changes in `base`: `base.default_user` (template res.users) deleted; new `base.default_user_group` (res.groups) — XML/code referencing `base.default_user` breaks.
 - `ir.filters`: `user_id` (m2o) -> `user_ids` (m2m).
@@ -79,6 +85,7 @@ Website/portal/QWeb-frontend changes are NOT enumerated here — research per-ca
 - Owl version unchanged: 2.8.4 on both 18.0 and 19.0 branches — no component-framework migration for this hop (blog claims of "Owl 3" are wrong).
 - Asset bundle names unchanged (`web.assets_backend`, `web.assets_frontend`, ...). Only `web.qunit_mobile_suite_tests` was dropped from `web/__manifest__.py`; `web.qunit_suite_tests` still exists but new JS tests belong in Hoot (`web.assets_unit_tests`).
 - The json->jsonrpc route rename is server-side only: "they are called the same, only the `type` in the python files changed" (ORM changelog 18.1) — no JS caller changes.
+- Shop floor and product configurator template renames break `t-inherit` xpaths in the browser only, never at install. Grep each custom Owl xpath target.
 
 ## Hooks & misc
 - Hook signatures unchanged from 18.0: `pre_init_hook(env)`, `post_init_hook(env)`, `uninstall_hook(env)` (verified in 19.0 `odoo/modules/loading.py`).
@@ -104,6 +111,10 @@ grep -rn "base\.default_user\b" . | grep -v default_user_group
 grep -rn "name=\"mobile\"\|'mobile'\|\"mobile\"" .                    # removed partner/company field
 grep -rn "res\.partner\.title\|name=\"title\"" --include="*.xml" .
 grep -rn "context_today\|relativedelta" --include="*.xml" .           # rewritable to dynamic dates
+grep -rn "<group expand" --include="*.xml" .                          # search view fails RELAXNG
+grep -rn "procurement\.group\|procurement_group_id\|_prepare_procurement_group_vals" --include="*.py" --include="*.xml" .
+grep -rn "module_category_usability" .
+grep -rn "t-inherit=" --include="*.xml" static/                       # Owl xpath targets, browser-only breakage
 ```
 
 ## Sources
