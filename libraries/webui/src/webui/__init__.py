@@ -7,13 +7,14 @@ builds the navigation of ``base.html``.
 
 from flask import Flask, redirect, url_for
 
-from webui import friction, jobs, queue
+from webui import friction, jobs, queue, usage
 
 #: (blueprint, nav label, endpoint the nav link points to)
 PAGES = (
     (jobs.bp, "Jobs", "jobs.index"),
     (queue.bp, "Queue", "queue.index"),
     (friction.bp, "Friction", "friction.index"),
+    (usage.bp, "Usage", "usage.index"),
 )
 
 
