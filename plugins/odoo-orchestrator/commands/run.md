@@ -181,8 +181,9 @@ Exit codes:
   Mark nothing handled.
 - 74: the script could not create the orchestrator home. Show the stderr text.
   Mark nothing handled.
-- 127: no dispatcher was found. Tell the user to put `dispatch` on PATH or set
-  `ODOO_ORCHESTRATOR_DISPATCHER_DIR`. Mark nothing handled.
+- 127: the compose stack file was not found. Tell the user to set
+  `ODOO_ORCHESTRATOR_CHECKOUT` to the checkout that holds `stack/compose.yaml`.
+  Mark nothing handled.
 
 After exit 0 or 1, run `orchestrator.py handled <job_id> ...` for the old dead
 letter `job_id`s whose tasks were in the array you just submitted.

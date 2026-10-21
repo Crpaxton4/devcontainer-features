@@ -1,0 +1,13 @@
+*
+!libraries
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.coverage
+**/reports
+**/node_modules
+**/*.egg-info
+**/build
+**/dist
