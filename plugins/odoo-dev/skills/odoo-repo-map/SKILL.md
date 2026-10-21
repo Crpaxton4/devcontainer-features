@@ -30,6 +30,7 @@ One entry per exact Odoo `project.project` name:
 | `release_assignee` | GitHub login a release PR is assigned to |
 | `release_reviewer` | GitHub login the release PR requests review from, or `none` |
 | `aliases` | Optional array of other `project.project` names that resolve to this entry. Never an entry name. Each alias appears once in the map |
+| `upgrade_branch` | Optional object of target series to branch, e.g. `{"19.0":"19-upgrade"}`. The branch an upgrade to that series is based on and its PR targets. A series with no key uses `default_branch` |
 
 Five facts:
 
@@ -50,7 +51,7 @@ Every script prints one JSON object as its last stdout line. Write every path in
 |---|---|---|
 | `repos-dir.sh [--raw]` | `{"repos_dir"}` from `$REPOS_DIR`, then the marker, then the sweep | 0 · 1 no tree (entries with `repo_path` skip it) |
 | `repo-map.sh get\|list\|add\|set\|set-flow\|set-release-owners\|remove\|validate` | the only sanctioned way to read or edit the map | 0 · 2 usage · 3 unmapped · 4 map invalid |
-| `project-resolve.sh "<project\|repo>" [--next-after <branch>]` | `{"project","repo","repo_path","default_branch","odoo_version","branch_flow","flow_confirmed","remote","next_env","at_production","release_assignee","release_reviewer","alias_of"}` (`alias_of` is the entry name when the key was an alias, else `null`; `project` is the key as typed) | 0 · 2 usage · 3 unmapped · 4 chain cannot answer · 6 ambiguous |
+| `project-resolve.sh "<project\|repo>" [--next-after <branch>] [--series NN.0]` | `{"project","repo","repo_path","default_branch","upgrade_branch","odoo_version","branch_flow","flow_confirmed","remote","next_env","at_production","release_assignee","release_reviewer","alias_of"}` (`alias_of` is the entry name when the key was an alias, else `null`; `project` is the key as typed; `upgrade_branch` is the entry's branch for `--series`, else `default_branch`, and `null` without `--series`) | 0 · 2 usage or a `--series` that is not `NN.0` · 3 unmapped · 4 chain cannot answer · 6 ambiguous |
 | `project-bootstrap.sh "<checkout path>" [--project NAME]` | the entry it wrote: `repo`, `repo_path`, `remote`, `odoo_version`, `default_branch`; never `branch_flow` | 0 · 2 not a git checkout · 3 already pinned (entry printed) |
 
 ### Resolve
@@ -94,6 +95,7 @@ It records the mechanically derivable half of an entry and leaves `branch_flow` 
 <base directory>/scripts/repo-map.sh set "New Client - Phase 1" \
   --remote acme-eng/newclient --notes "release goes out Thursdays" --repo-path /mnt/extra-addons
 <base directory>/scripts/repo-map.sh set "New Client - Phase 1" --aliases "New Client - Support,New Client - Care"   # "" removes them
+<base directory>/scripts/repo-map.sh set "New Client - Phase 1" --upgrade-branch 19.0=19-upgrade   # repeatable; 19.0= removes that series
 <base directory>/scripts/repo-map.sh set-flow "New Client - Phase 1" ":task,UAT,main" --flow-confirmed
 <base directory>/scripts/repo-map.sh set-release-owners "New Client - Phase 1" alice bob
 <base directory>/scripts/repo-map.sh add "Client - Support" clientrepo \
@@ -105,7 +107,7 @@ It records the mechanically derivable half of an entry and leaves `branch_flow` 
 - An empty value deletes a key: `set "<project>" --repo-path ""`.
 - `--repo-path` must be absolute and must exist, unless `--no-repo-check`.
 - One entry per customer repo. A second Odoo project on the same repo and chain is an
-  alias, not an entry. `add` also takes `--aliases "A,B"`. `set`, `set-flow`,
+  alias, not an entry. `add` also takes `--aliases "A,B"` and `--upgrade-branch SERIES=BRANCH`. `set`, `set-flow`,
   `set-release-owners` and `remove` given an alias exit 3: use the entry name.
 - Writes are atomic: temp file → validate → `.bak` → rename.
 

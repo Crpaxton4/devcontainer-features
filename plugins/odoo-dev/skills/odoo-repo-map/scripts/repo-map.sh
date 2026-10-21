@@ -142,7 +142,7 @@ const file = process.argv[1];
 let data;
 try { data = JSON.parse(readFileSync(file, "utf8")); }
 catch (e) { console.error(file + ": invalid JSON: " + e.message); process.exit(4); }
-const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer", "aliases"];
+const KNOWN = ["repo", "repo_path", "default_branch", "odoo_version", "branch_flow", "flow_confirmed", "remote", "notes", "release_assignee", "release_reviewer", "aliases", "upgrade_branch"];
 // The reserved first element of branch_flow, standing for the per-task branch.
 // A colon cannot appear anywhere in a git ref name, so no branch can ever be
 // spelled this way and the token needs no escaping rule to stay distinguishable.
@@ -234,6 +234,17 @@ else {
         if (a in data.projects) errs.push(`${name}: alias "${a}" is also the name of an entry`);
         if (aliasOwner.has(a)) errs.push(`${name}: alias "${a}" is already an alias of "${aliasOwner.get(a)}" (an alias appears once across the map)`);
         else aliasOwner.set(a, name);
+      }
+    }
+    // The branch an upgrade to a series is based on and its PR targets, keyed by
+    // target series. A series with no key falls back to default_branch.
+    if ("upgrade_branch" in entry) {
+      const ub = entry.upgrade_branch;
+      if (typeof ub !== "object" || ub === null || Array.isArray(ub)) errs.push(`${name}: upgrade_branch must be an object of series to branch name, e.g. {"19.0": "19-upgrade"}`);
+      else for (const [series, b] of Object.entries(ub)) {
+        if (!/^\d+\.0$/.test(series)) errs.push(`${name}: upgrade_branch key "${series}" must be a series like 19.0`);
+        if (typeof b !== "string" || !b.trim()) errs.push(`${name}: upgrade_branch["${series}"] must be a non-empty branch name`);
+        else if (b === TASK_BRANCH || refErr(b)) errs.push(`${name}: upgrade_branch["${series}"] "${b}" is not a legal git branch name`);
       }
     }
     if (entry.flow_confirmed === true && !(Array.isArray(entry.branch_flow) && entry.branch_flow.length))
@@ -345,10 +356,12 @@ case "$cmd" in
     [ $# -ge 2 ] || die "usage: repo-map.sh add \"<project name>\" <repo> [options]"
     project="$1"; repo="$2"; shift 2
     branch=""; version=""; notes=""; flow=""; remote=""; confirmed=false; repo_check=1
-    rel_assignee=""; rel_reviewer=""; repo_path=""; aliases=""
+    rel_assignee=""; rel_reviewer=""; repo_path=""; aliases=""; upgrade_branches=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --aliases)          aliases="${2:?}"; shift 2 ;;
+        --upgrade-branch)   case "${2:?}" in *=*) ;; *) die "--upgrade-branch takes SERIES=BRANCH, e.g. 19.0=19-upgrade" ;; esac
+                            upgrade_branches="$upgrade_branches${upgrade_branches:+$'\n'}$2"; shift 2 ;;
         --default-branch)   branch="${2:?}"; shift 2 ;;
         --odoo-version)     version="${2:?}"; shift 2 ;;
         --branch-flow)      flow="${2:?}"; shift 2 ;;
@@ -374,7 +387,7 @@ case "$cmd" in
     trap 'rm -f "$tmp"' EXIT
     run_node '
       import { readFileSync, writeFileSync } from "fs";
-      const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, aliases, tmp] = process.argv.slice(1);
+      const [file, project, repo, repoPath, branch, version, flow, remote, notes, confirmed, relAssignee, relReviewer, aliases, upgradeBranches, tmp] = process.argv.slice(1);
       const data = JSON.parse(readFileSync(file, "utf8"));
       if (data.projects[project]) { console.error("duplicate project: " + project); process.exit(2); }
       // Two entries holding the SAME repo_path is a defect nothing downstream can
@@ -408,9 +421,17 @@ case "$cmd" in
       if (relAssignee) entry.release_assignee = relAssignee;
       if (relReviewer) entry.release_reviewer = relReviewer;
       if (aliases) entry.aliases = aliases.split(",").map((a) => a.trim()).filter(Boolean);
+      if (upgradeBranches) {
+        entry.upgrade_branch = {};
+        for (const pair of upgradeBranches.split("\n")) {
+          const at = pair.indexOf("=");
+          if (pair.slice(at + 1)) entry.upgrade_branch[pair.slice(0, at)] = pair.slice(at + 1);
+        }
+        if (!Object.keys(entry.upgrade_branch).length) delete entry.upgrade_branch;
+      }
       data.projects[project] = entry;
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
-    ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$aliases" "$tmp"
+    ' "$project" "$repo" "$repo_path" "$branch" "$version" "$flow" "$remote" "$notes" "$confirmed" "$rel_assignee" "$rel_reviewer" "$aliases" "$upgrade_branches" "$tmp"
     commit_tmp "$tmp"
     echo "{\"ok\": true, \"added\": $(node -e 'console.log(JSON.stringify(process.argv[1]))' "$project")}"
     ;;
@@ -419,7 +440,7 @@ case "$cmd" in
     # Merges into the existing entry. `add` only creates, so before this the only
     # way to change a field was remove + full re-add: lossy for every field left
     # off, and non-atomic because the remove committed first.
-    [ $# -ge 1 ] || die "usage: repo-map.sh set \"<project name>\" [--default-branch B] [--odoo-version V] [--remote owner/repo] [--notes \"...\"] [--aliases \"A,B\"] [--repo-path /abs/path] [--no-repo-check]"
+    [ $# -ge 1 ] || die "usage: repo-map.sh set \"<project name>\" [--default-branch B] [--odoo-version V] [--remote owner/repo] [--notes \"...\"] [--aliases \"A,B\"] [--upgrade-branch 19.0=19-upgrade]... [--repo-path /abs/path] [--no-repo-check]"
     project="$1"; shift
     # Alternating key/value pairs, applied in order by node — so a repeated flag
     # simply lets the last one win, and an unnamed field is never written at all.
@@ -431,6 +452,10 @@ case "$cmd" in
           key="${1#--}"; key="${key//-/_}"
           if [ "$key" = repo_path ]; then repo_path="$2"; fi
           updates+=("$key" "$2"); shift 2 ;;
+        --upgrade-branch)
+          [ $# -ge 2 ] || die "$1 needs a value: SERIES=BRANCH (SERIES= removes that series)"
+          case "$2" in *=*) ;; *) die "--upgrade-branch takes SERIES=BRANCH, e.g. 19.0=19-upgrade (19.0= removes it)" ;; esac
+          updates+=("upgrade_branch" "$2"); shift 2 ;;
         --branch-flow)
           die "branch_flow is set by: repo-map.sh set-flow \"$project\" \":task,UAT,main\" [--flow-confirmed]" ;;
         --release-assignee|--release-reviewer)
@@ -439,7 +464,7 @@ case "$cmd" in
         *) die "unknown option: $1" ;;
       esac
     done
-    [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes, --aliases or --repo-path"
+    [ ${#updates[@]} -gt 0 ] || die "set needs at least one field: --default-branch, --odoo-version, --remote, --notes, --aliases, --upgrade-branch or --repo-path"
     check_repo_path "$repo_path" "$repo_check"
     validate_file "$MAP"
     tmp="$(mktemp "$MAP.tmp.XXXXXX")"
@@ -472,6 +497,12 @@ case "$cmd" in
         if (key === "aliases") {
           const list = value.split(",").map((a) => a.trim()).filter(Boolean);
           if (list.length) entry.aliases = list; else delete entry.aliases;
+        } else if (key === "upgrade_branch") {
+          const at = value.indexOf("=");
+          const [series, b] = [value.slice(0, at), value.slice(at + 1)];
+          const ub = (typeof entry.upgrade_branch === "object" && entry.upgrade_branch !== null && !Array.isArray(entry.upgrade_branch)) ? entry.upgrade_branch : {};
+          if (b) ub[series] = b; else delete ub[series];
+          if (Object.keys(ub).length) entry.upgrade_branch = ub; else delete entry.upgrade_branch;
         } else if (value === "") delete entry[key]; else entry[key] = value;
       }
       writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");

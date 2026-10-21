@@ -802,5 +802,24 @@ map set-flow Support ":task,main" >/dev/null 2>&1; check "set-flow-on-alias-exit
 map set-release-owners Support a b >/dev/null 2>&1; check "set-release-owners-on-alias-exit-3" 3 $?
 map remove Support >/dev/null 2>&1; check "remove-on-alias-exit-3" 3 $?
 
+# --- upgrade_branch: a per-series base for an upgrade (#1128) ---
+seed
+map add "Up" up --no-repo-check --default-branch main >/dev/null
+map set Up --upgrade-branch 19.0=19-upgrade >/dev/null 2>&1; check "set-upgrade-branch" 0 $?
+check_contains "set-upgrade-branch-get" '"upgrade_branch":{"19.0":"19-upgrade"}' "$(map get Up)"
+out="$(resolve Up --series 19.0 2>/dev/null)"
+check_contains "resolve-series-upgrade-branch" '"upgrade_branch":"19-upgrade"' "$out"
+out="$(resolve Up --series 18.0 2>/dev/null)"
+check_contains "resolve-series-unset-falls-back" '"upgrade_branch":"main"' "$out"
+out="$(resolve Up 2>/dev/null)"
+check_contains "resolve-no-series-null" '"upgrade_branch":null' "$out"
+resolve Up --series 19 >/dev/null 2>&1; check "resolve-bad-series-exit-2" 2 $?
+map set Up --upgrade-branch 19=x >/dev/null 2>&1; check "upgrade-branch-bad-series-rejected" 4 $?
+map set Up --upgrade-branch nonsense >/dev/null 2>&1; check "upgrade-branch-needs-equals" 2 $?
+map set Up --upgrade-branch 19.0= >/dev/null 2>&1; check "upgrade-branch-remove" 0 $?
+check_absent "upgrade-branch-removed" 'upgrade_branch' "$(map get Up)"
+map add "Up2" up2 --no-repo-check --default-branch main --upgrade-branch 18.0=18-up --upgrade-branch 19.0=19-up >/dev/null 2>&1; check "add-upgrade-branch" 0 $?
+check_contains "add-upgrade-branch-written" '"18.0":"18-up","19.0":"19-up"' "$(map get Up2)"
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
