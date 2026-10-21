@@ -2,6 +2,7 @@
 You are running unsupervised. No human will answer you.
 Never stop to ask. If you can name a choice you would defend to a reviewer, make it, record it with the question, and continue.
 Never enter plan mode.
+A broken environment is a stop, never a workaround. Report what is broken and end.
 
 # irreversible
 Never force-push, in any variant.

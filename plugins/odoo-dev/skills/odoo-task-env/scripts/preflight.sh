@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # preflight.sh — one-shot environment gate for the delivery suite.
 #
-# Usage: preflight.sh [--soft] [--target-series V]
+# Usage: preflight.sh [--soft] [--target-series V] [--custom-tree DIR]
 #   --soft:          report failures but exit 0.
 #   --target-series: the Odoo series the work targets, compared against
 #                    ODOO_VERSION. Also read from $TARGET_SERIES. Unset means
 #                    there is nothing to compare, and the check passes.
+#   --custom-tree:   in a devcontainer, import every enterprise module in the
+#                    dependency closure of the modules under DIR (plus enterprise
+#                    auto_install modules whose depends the closure meets). A
+#                    failed import is "import <name>: <error>"; a name found in no
+#                    tree is "closure: unknown module <name>".
 #
 # Runs ALL checks rather than stopping at the first, because the useful answer is
 # "these three things are wrong", not "the first thing is wrong" three times in a
@@ -34,11 +39,14 @@ set -uo pipefail
 
 SOFT=0
 TARGET_SERIES="${TARGET_SERIES:-}"
+CUSTOM_TREE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --soft) SOFT=1 ;;
     --target-series) TARGET_SERIES="${2:-}"; shift ;;
     --target-series=*) TARGET_SERIES="${1#*=}" ;;
+    --custom-tree) CUSTOM_TREE="${2:-}"; shift ;;
+    --custom-tree=*) CUSTOM_TREE="${1#*=}" ;;
     *) ;;  # unknown arguments are ignored, as they always were
   esac
   shift
@@ -103,6 +111,94 @@ else
         echo "FAIL series: ODOO_VERSION=${ODOO_VERSION:-unset}, target $TARGET_SERIES" >&2
         failures+=("series: ODOO_VERSION=${ODOO_VERSION:-unset}, target $TARGET_SERIES") ;;
     esac
+  fi
+
+  # The enterprise closure of a custom tree must import. A broken enterprise
+  # tree otherwise shows up as a traceback in the middle of a port, and the
+  # agent patches around it (#1130). Unknown modules fail by name.
+  if [ -n "$CUSTOM_TREE" ]; then
+    ent_root="${ODOO_ENTERPRISE_ROOT:-/var/lib/odoo/addons}/${TARGET_SERIES:-${ODOO_VERSION:-}}"
+    odoo_file="$(python3 -c 'import odoo; print(odoo.__file__)' 2>/dev/null | tail -1)"
+    if [ -n "$odoo_file" ]; then
+      comm_root="$(dirname "$odoo_file")/addons"
+    else
+      comm_root=/usr/lib/python3/dist-packages/odoo/addons
+    fi
+    closure="$(python3 - "$CUSTOM_TREE" "$ent_root" "$comm_root" <<'PY'
+import ast, os, sys
+
+custom, ent, comm = sys.argv[1:4]
+
+
+def manifest(root, name):
+    path = os.path.join(root, name, "__manifest__.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = ast.literal_eval(fh.read())
+    except (OSError, ValueError, SyntaxError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+enterprise, unknown, seen = set(), set(), set()
+
+
+def visit(name):
+    if name in seen:
+        return
+    seen.add(name)
+    for root, bucket in ((custom, None), (ent, enterprise), (comm, None)):
+        data = manifest(root, name)
+        if data is None:
+            continue
+        if bucket is not None:
+            bucket.add(name)
+        for dep in data.get("depends", []) or []:
+            visit(dep)
+        return
+    unknown.add(name)
+
+
+for entry in sorted(os.listdir(custom)) if os.path.isdir(custom) else []:
+    if manifest(custom, entry) is not None:
+        visit(entry)
+
+# Enterprise glue modules that install themselves once their depends are present.
+done = False
+while not done:
+    done = True
+    have = seen
+    for entry in sorted(os.listdir(ent)) if os.path.isdir(ent) else []:
+        data = manifest(ent, entry)
+        if data and data.get("auto_install") and entry not in seen:
+            deps = data.get("depends", []) or []
+            if deps and all(d in have for d in deps):
+                visit(entry)
+                done = False
+
+for name in sorted(enterprise):
+    print("E " + name)
+for name in sorted(unknown):
+    print("U " + name)
+PY
+)"
+    while read -r kind name; do
+      case "$kind" in
+        E)
+          if err="$(python3 -c "import odoo.addons.$name" 2>&1 >/dev/null)"; then
+            echo "PASS import $name" >&2
+          else
+            err="$(printf '%s\n' "$err" | tail -1)"
+            echo "FAIL import $name: $err" >&2
+            failures+=("import $name: $err")
+          fi ;;
+        U)
+          echo "FAIL closure: unknown module $name" >&2
+          failures+=("closure: unknown module $name") ;;
+      esac
+    done <<< "$closure"
   fi
 fi
 
