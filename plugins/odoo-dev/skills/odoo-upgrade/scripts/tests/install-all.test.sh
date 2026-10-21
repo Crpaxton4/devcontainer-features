@@ -32,7 +32,7 @@ cat > "$bin/psql" <<'STUB'
 # Emulates only the queries install_all.sh issues. State lives in flat files:
 #   dbs             existing database names
 #   installed.<db>  rows of ir_module_module that are 'installed'
-#   owned.<db>      the install_all_owned stamp
+#   owned.<db>      the install_all_owned stamp (holds the session id)
 #   tplkey.<db>     the stored template key
 sql=""; db=""; prev=""
 for arg in "$@"; do
@@ -44,6 +44,10 @@ for arg in "$@"; do
 done
 printf '%s\n' "$*" >> "$STUB_STATE/psql.argv"
 case "$sql" in
+  *"datname LIKE 'odoo_tpl_%'"*)
+    grep '^odoo_tpl_' "$STUB_STATE/dbs" 2>/dev/null ;;
+  *"SELECT session_id FROM install_all_owned"*)
+    cat "$STUB_STATE/owned.$db" 2>/dev/null ;;
   *"FROM pg_database"*)
     name="${sql##*datname = \'}"; name="${name%%\'*}"
     grep -qxF "$name" "$STUB_STATE/dbs" 2>/dev/null && echo 1 ;;
@@ -64,7 +68,8 @@ case "$sql" in
   *"SELECT key FROM install_all_template"*)
     cat "$STUB_STATE/tplkey.$db" 2>/dev/null ;;
   *"CREATE TABLE IF NOT EXISTS install_all_owned"*)
-    : > "$STUB_STATE/owned.$db" ;;
+    sid="${sql##*VALUES (\'}"; sid="${sid%%\'*}"
+    printf '%s\n' "$sid" > "$STUB_STATE/owned.$db" ;;
 esac
 exit 0
 STUB
@@ -156,7 +161,7 @@ art() { echo "$work/art"; }
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
   PATH="$bin:$PATH" PYTHONPATH="${PYSTUB:-}" ODOO_STUB_DATE="${STUB_DATE:-20260901}" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
-    bash "$SUT" --artifacts "$work/art-$suffix" "$@" 2>"$state/err"
+    bash "$SUT" --artifacts "$work/art-$suffix" --session-id "${SID:-sess-a}" "$@" 2>"$state/err"
 }
 
 field() { python3 -c "
@@ -228,9 +233,46 @@ contains "--force drops the target" "$(cat "$state/dropdb.argv")" "verify"
 reset
 printf '%s\n' verify >> "$state/dbs"
 printf 'alpha\nbeta\n' > "$state/installed.verify"
-: > "$state/owned.verify"
+printf 'sess-a\n' > "$state/owned.verify"
 out="$(run owned --db verify --no-conf "$tree")"; rc=$?
-expect "a stamped target is reused, not refused" "$rc" "0"
+expect "a target stamped by this session is reused, not refused" "$rc" "0"
+
+# ---------- 3b. session stamp, required flags (#1141) ----------------------------
+reset
+printf '%s\n' verify >> "$state/dbs"
+printf 'alpha\nbeta\n' > "$state/installed.verify"
+printf 'sess-b\n' > "$state/owned.verify"
+out="$(run other --db verify --no-conf "$tree")"; rc=$?
+expect "a target stamped by another session exits 2" "$rc" "2"
+contains "and names both sessions" "$(cat "$state/err")" "belongs to session 'sess-b', this run is 'sess-a'"
+expect "and drops nothing" "$( [ -f "$state/dropdb.argv" ] && echo yes || echo no )" "no"
+out="$(run otherforce --db verify --no-conf --force "$tree")"; rc=$?
+expect "--force overrides the session stamp" "$rc" "0"
+
+# A stamp from before the session column existed counts as foreign.
+reset
+printf '%s\n' verify >> "$state/dbs"
+printf 'alpha\n' > "$state/installed.verify"
+: > "$state/owned.verify"
+out="$(run oldstamp --db verify --no-conf "$tree")"; rc=$?
+expect "a stamp with no session id is foreign" "$rc" "2"
+
+reset
+out="$(run stamp --db verify --no-conf "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the summary carries the session id" "$(field "$summary" session_id)" "sess-a"
+expect "the stamp is written with the session id" "$(cat "$state/owned.verify")" "sess-a"
+
+reset
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" bash "$SUT" --db verify --no-conf --session-id s "$tree" 2>"$state/err")"; rc=$?
+expect "no --artifacts exits 2" "$rc" "2"
+contains "and names the flag" "$(cat "$state/err")" "pass --artifacts <ARTIFACTS>/install"
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" env -u SESSION_DB_ID bash "$SUT" --artifacts "$work/art-nosid" --db verify --no-conf "$tree" 2>"$state/err")"; rc=$?
+expect "no session id exits 2" "$rc" "2"
+contains "and names the flag" "$(cat "$state/err")" "pass --session-id or set SESSION_DB_ID"
+out="$(PATH="$bin:$PATH" STUB_STATE="$state" SESSION_DB_ID=fromenv bash "$SUT" --artifacts "$work/art-env" --db verify --no-conf "$tree" 2>"$state/err")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "SESSION_DB_ID is the fallback" "$(field "$summary" session_id)" "fromenv"
 
 # ---------- 4. the plain full install still works -------------------------------
 reset
@@ -375,6 +417,9 @@ expect "the new key builds under a new template name" \
   "$( [ "$(field "$summary" template.db)" = "$tpl" ] && echo same || echo different )" "different"
 expect "the new closure includes the new dependency" \
   "$(field "$summary" template.core_modules)" '["base", "mail", "stock"]'
+expect "the stale template of the old key is dropped and listed" \
+  "$(field "$summary" template.dropped)" "[\"$tpl\"]"
+expect "and is gone from the database list" "$(grep -c "^$tpl\$" "$state/dbs")" "0"
 manifest beta "'base', 'mail'"
 
 # ---------- 8b. the key covers the dated build and the enterprise commit (#1138) --

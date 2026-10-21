@@ -64,9 +64,15 @@
 # With no mode flags this is the plain full install the SOP has always called
 # for: one database, every module, one log.
 #
-# Output: the last stdout line is a JSON summary — {status, db, addons_path,
-# addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
-# template:{db,key,reused,core_modules,key_parts:{version_info,odoo_version,
+# Sessions (#1141): --artifacts and --session-id are required. Every database
+# this script makes carries install_all_owned(created_at, session_id); a target
+# stamped by another session (or by an older run with no session_id) is refused
+# unless --force. A template rebuild drops every other odoo_tpl_* with a
+# different key and lists them in template.dropped[].
+#
+# Output: the last stdout line is a JSON summary — {status, db, session_id,
+# addons_path, addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
+# template:{db,key,reused,dropped,core_modules,key_parts:{version_info,odoo_version,
 # enterprise_head,core_modules}}, custom_modules,
 # trees:[{modules,db,status,error,module,log,class}], full:{...},
 # env_failure:{decisive,log}|null, series, skipped:[{module,reason}],
@@ -96,7 +102,7 @@ usage() {
   cat <<'USAGE'
 install_all.sh — verify an upgrade pass by installing custom modules on throwaway DBs
 
-Usage: install_all.sh --db <name> --addons-path <dir> [options]
+Usage: install_all.sh --db <name> --addons-path <dir> --artifacts <dir> --session-id <id> [options]
 
 Required:
   --db <name>            target database. No default: this script drops and
@@ -111,9 +117,12 @@ Options:
   --data-dir <dir>       Odoo data_dir for every run — filestore, sessions, and
                          the auto-appended <data_dir>/addons/<series> tree.
                          Default <artifacts>/data; never Odoo's own default.
-  --artifacts <dir>      scratch root for logs, data dir and summary (default
-                         $INSTALL_ALL_ARTIFACTS_DIR, else
-                         ${TMPDIR:-/tmp}/odoo-install-all)
+  --artifacts <dir>      scratch root for logs, data dir and summary. Required,
+                         no default: pass <ARTIFACTS>/install, never a shared
+                         /tmp path.
+  --session-id <id>      the session that owns the databases this run makes.
+                         Default $SESSION_DB_ID; required. A target stamped by
+                         another session is refused (--force overrides).
   --conf <file>          odoo.conf to pass to Odoo verbatim. Refused when it
                          sets db_name — hand over a copy without it, or drop
                          the flag and let the auto-detected config be sanitized
@@ -134,9 +143,11 @@ Options:
   -h, --help             this text
 
 Examples:
-  install_all.sh --db upgrade_check --addons-path /path/to/worktree
-  install_all.sh --db upgrade_check --template --per-tree \
-                 --summary /tmp/install.json --addons-path /path/to/worktree
+  install_all.sh --db upgrade_check --session-id job1 \
+                 --artifacts /path/to/artifacts/install --addons-path /path/to/worktree
+  install_all.sh --db upgrade_check --session-id job1 --template --per-tree \
+                 --artifacts /path/to/artifacts/install \
+                 --summary /path/to/artifacts/install.json --addons-path /path/to/worktree
 USAGE
 }
 
@@ -147,7 +158,7 @@ db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
 summary_file=""; enterprise=""; expect_file=""; series=""; skipped_tsv=""; expected_skipped=""
 summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
-records=""
+records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -156,7 +167,8 @@ while [ $# -gt 0 ]; do
     --enterprise)  need_value --enterprise $#;  enterprise="$2"; shift 2 ;;
     --data-dir)    need_value --data-dir $#;    data_dir="$2"; shift 2 ;;
     --artifacts)   need_value --artifacts $#;   artifacts="$2"; shift 2 ;;
-    --conf)        need_value --conf $#;        conf="$2"; conf_explicit=true; shift 2 ;;
+    --session-id)  need_value --session-id $#;  session_id="$2"; shift 2 ;;
+    --conf)        need_value --conf $#;       conf="$2"; conf_explicit=true; shift 2 ;;
     --summary)     need_value --summary $#;     summary_file="$2"; shift 2 ;;
     --expect)      need_value --expect $#;      expect_file="$2"; shift 2 ;;
     --no-conf)   no_conf=true; shift ;;
@@ -208,7 +220,13 @@ if [ -n "$expect_file" ]; then
   expect_file="$(cd "$(dirname "$expect_file")" && pwd)/$(basename "$expect_file")"
 fi
 
-artifacts="${artifacts:-${INSTALL_ALL_ARTIFACTS_DIR:-${TMPDIR:-/tmp}/odoo-install-all}}"
+[ -n "$artifacts" ] || die "--artifacts is required.
+  pass --artifacts <ARTIFACTS>/install: there is no shared /tmp default"
+[ -n "$session_id" ] || die "no session id.
+  pass --session-id or set SESSION_DB_ID: the stamp on every database names its session"
+case "$session_id" in
+  *[!A-Za-z0-9_.-]*) die "not a usable session id: '$session_id' (letters, digits, _ . and - only)" ;;
+esac
 mkdir -p "$artifacts" || die "cannot create the artifacts dir: $artifacts"
 artifacts="$(cd "$artifacts" && pwd)"
 
@@ -446,9 +464,21 @@ db_exists() {
 # one, which by then holds every custom module. Ownership is recorded in the
 # database itself (install_all_owned) rather than inferred from the name.
 guard_target() {
-  local target="$1" registry extra
+  local target="$1" registry extra owner
   if [ -n "$(psql -Atqc "SELECT to_regclass('public.install_all_owned')" -d "$target" 2>/dev/null || true)" ]; then
-    return 0
+    # Ours only when the stamp names this session. A stamp from another session,
+    # or an older one without the column, is a stranger's (#1141).
+    owner="$(psql -Atqc "SELECT session_id FROM install_all_owned LIMIT 1" -d "$target" 2>/dev/null || true)"
+    [ "$owner" != "$session_id" ] || return 0
+    if [ "$force" = true ]; then
+      echo "install_all.sh: --force: $target is stamped by session '${owner:-(none)}', dropping it anyway" >&2
+      return 0
+    fi
+    {
+      echo "install_all.sh: refusing to install into '$target' — it belongs to session '${owner:-(none)}', this run is '$session_id'."
+      echo "  Use a database name made for this session, or pass --force if you really mean this one."
+    } >&2
+    exit 2
   fi
   registry="$(psql -Atqc "SELECT to_regclass('public.ir_module_module')" -d "$target" 2>/dev/null || true)"
   [ -n "$registry" ] || return 0
@@ -489,7 +519,7 @@ ensure_fresh_db() { # ensure_fresh_db <db> [template]
   fi
   # Stamp it as ours, before anything is installed, so the next iteration of the
   # fix loop may drop it and a stranger's database still may not.
-  psql -q -d "$target" -c "CREATE TABLE IF NOT EXISTS install_all_owned (created_at timestamptz DEFAULT now())" >/dev/null
+  psql -q -d "$target" -c "CREATE TABLE IF NOT EXISTS install_all_owned (created_at timestamptz DEFAULT now(), session_id text); INSERT INTO install_all_owned (session_id) VALUES ('$session_id')" >/dev/null
 }
 
 odoo_args=()
@@ -624,14 +654,14 @@ write_summary() {
     "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
     "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
     "$series" "$skipped_tsv" "$expected_skipped" \
-    "$version_info" "$odoo_version" "$enterprise_head" <<'PY'
+    "$version_info" "$odoo_version" "$enterprise_head" "$tpl_dropped" "$session_id" <<'PY'
 import json, os, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
  template_db, template_key, template_reused, use_template,
  addons_arg, status, enterprise, env_decisive, env_log,
  series, skipped_tsv, expected_skipped,
- version_info, odoo_version, enterprise_head) = sys.argv[1:24]
+ version_info, odoo_version, enterprise_head, tpl_dropped, session_id) = sys.argv[1:26]
 skipped = [
     {"module": row.split("\t")[0], "reason": row.split("\t", 1)[1]}
     for row in skipped_tsv.splitlines() if "\t" in row
@@ -663,7 +693,7 @@ if os.path.exists(records):
 statuses = [entry["status"] for entry in trees] + ([full["status"]] if full else [])
 summary = {
     "status": status,
-    "db": db, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
+    "db": db, "session_id": session_id, "addons_path": addons, "addons_path_effective": addons_arg, "data_dir": data_dir,
     "enterprise_path": enterprise or None,
     "odoo_build": build_id, "series": series or None, "mode": mode,
     "custom_modules": split(modules_csv),
@@ -672,6 +702,7 @@ summary = {
     "template": {
         "db": template_db or None, "key": template_key,
         "reused": template_reused == "true", "core_modules": split(core_csv),
+        "dropped": tpl_dropped.split(),
         "key_parts": {
             "version_info": version_info or None, "odoo_version": odoo_version or None,
             "enterprise_head": enterprise_head if enterprise_head != "-" else None,
@@ -731,6 +762,20 @@ if [ "$use_template" = true ]; then
     fi
   fi
   if [ "$template_reused" = false ]; then
+    # The key changed, so every other odoo_tpl_* with a different key is stale
+    # and would otherwise pile up (#1141). A busy one is kept, with a warning.
+    for stale in $(psql -Atqc "SELECT datname FROM pg_database WHERE datname LIKE 'odoo_tpl_%'" -d postgres 2>/dev/null || true); do
+      [ "$stale" != "$template_db" ] || continue
+      stale_key="$(psql -Atqc "SELECT key FROM install_all_template LIMIT 1" -d "$stale" 2>/dev/null || true)"
+      [ "$stale_key" != "$template_key" ] || continue
+      if dropdb --if-exists "$stale" >/dev/null 2>&1; then
+        tpl_dropped="$tpl_dropped$stale
+"
+        echo "install_all.sh: dropped stale template $stale" >&2
+      else
+        echo "install_all.sh: warning: cannot drop stale template $stale (busy?), left in place" >&2
+      fi
+    done
     createdb "$template_db" >/dev/null
     template_log="$artifacts/$template_db.log"
     if ! run_install "$template_db" "${core_csv:-base}" "$template_log"; then
