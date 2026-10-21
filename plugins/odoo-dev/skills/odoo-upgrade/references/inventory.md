@@ -26,7 +26,7 @@ Phase 2 read phase 1 output; phase 3 read both. Never reorder.
 ```bash
 python3 <base directory>/scripts/module_inventory.py [ADDONS_PATH ...] [--target-version 19.0] -o <ARTIFACTS>/inventory/inventory.csv
 python3 <plugin root>/skills/odoo-prior-art/scripts/oca_check.py [ADDONS_PATH ...] --series 16.0,17.0,18.0,19.0 --csv <ARTIFACTS>/inventory/inventory.csv
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> [--ssh <user@host>] --csv <ARTIFACTS>/inventory/studio.csv
 ```
 
 Two directories are referenced above. `<base directory>` is the absolute path on the
@@ -52,9 +52,11 @@ plugin root in the same place.
 Code inventory see only what is in git. Studio and other UI-built customization — `x_studio_*` fields, manual models, studio views, base automations, UI server actions and crons, UI reports — live in database rows, so a repo-only inventory silently reports zero. On a Studio-heavy customer that is the larger half of the scope.
 
 ```bash
-python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv <ARTIFACTS>/inventory/studio.csv -o <ARTIFACTS>/inventory/studio.json
-python3 <base directory>/scripts/studio_inventory.py --db <source-copy> --ssh <user@host> --artifacts <ARTIFACTS>
+python3 <base directory>/scripts/studio_inventory.py --db <production-copy> --csv <ARTIFACTS>/inventory/studio.csv
+python3 <base directory>/scripts/studio_inventory.py --ssh <user@host> --artifacts <ARTIFACTS>
 ```
+
+With `--ssh` and no `--db`, the database is the remote host's default (`current_database()`), and the local `PGDATABASE` is never read. Pass `--db` to name another one.
 
 Read-only (the connection itself is opened read-only), so it is safe against a restored copy. Run it against a COPY, never production.
 
