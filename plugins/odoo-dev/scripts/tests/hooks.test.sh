@@ -333,6 +333,25 @@ allowed "$COMMITHOOK" "commit: removing a module" \
   odoo-dev-builder 'git commit -m "chore: drop brand_new"' "$MOD"
 gitq commit -q --no-verify -m "chore: drop brand_new"
 
+# (6b) With an upgrade section for this repository, a whole-module deletion needs a
+# dropped entry. No upgrade section: nothing is policed (case 6 above).
+UPST="$WT/upstate"; mkdir -p "$UPST/tasks/9"
+mkdir -p "$MOD/gone_mod"; manifest "$MOD/gone_mod/__manifest__.py" 17.0.1.0.0
+gitq add gone_mod; gitq commit -q --no-verify -m "feat: gone_mod"
+gitq rm -r -q gone_mod
+printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"ported"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
+export ODOO_DEV_STATE_DIR="$UPST"
+denied "$COMMITHOOK" "commit: deleting a module not marked dropped" "deleted without a dropped entry" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"dropped"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
+allowed "$COMMITHOOK" "commit: deleting a module marked dropped" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+printf '{"title":"x"}\n' > "$UPST/tasks/9/task.json"
+allowed "$COMMITHOOK" "commit: deleting a module, no upgrade section" \
+  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
+unset ODOO_DEV_STATE_DIR
+gitq commit -q --no-verify -m "chore: drop gone_mod"
+
 # (7) -a widens the commit to tracked work-tree changes, and the two forms must
 # disagree on the same state: nothing is staged, so a plain commit carries no
 # module and passes, while -a carries the module and is denied.

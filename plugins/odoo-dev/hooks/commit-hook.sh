@@ -14,6 +14,11 @@
 # subset this hook does not try to reconstruct. That last one is the deliberate
 # bypass: silence about work we cannot attribute beats denying it.
 #
+# One more rule rides on the same change set: a commit that deletes every file of a
+# module is DENIED when the task's `upgrade` state (task.json) does not mark that
+# module `dropped`. `upgrade-state.sh drop` records first and then removes, so its own
+# commit passes. A repository with no upgrade section is not policed.
+#
 # THERE IS NO PR GATE HERE ANY MORE. This hook used to hold `pr-open.sh`,
 # `release-pr.sh` and `gh pr create` against `gate.sh`, which read the chain's
 # artifacts and refused the call when they were missing. #904 records what that
@@ -377,6 +382,43 @@ $changed
 EOF
 modules="$(printf '%s' "$modules" | sed '/^$/d' | sort -u)"
 [ -n "$modules" ] || exit 0
+
+# A module deleted whole must be a dropped module in the upgrade state. The state is
+# found through $ODOO_DEV_TASK_ARTIFACTS, else the first task.json under the state
+# dir whose upgrade.inputs.worktree is this repository. No upgrade section anywhere:
+# the rule does not apply, and an ordinary repository stays unpoliced.
+repo_real="$(cd "$repo" 2>/dev/null && pwd -P)"
+while IFS= read -r mod; do
+  [ -n "$mod" ] || continue
+  [ -z "$(git -C "$repo" ls-files --cached -- "$mod" 2>/dev/null)" ] || continue
+  git -C "$repo" cat-file -e "$base_rev:$mod/__manifest__.py" 2>/dev/null || continue
+  status="$(REPO="$repo_real" MOD="$mod" node -e '
+const fs = require("fs"), path = require("path");
+const dir = process.env.ODOO_DEV_TASK_ARTIFACTS;
+const state = process.env.ODOO_DEV_STATE_DIR || path.join(process.env.HOME || "", ".local/share/odoo-dev");
+const files = [];
+if (dir) files.push(path.join(dir, "task.json"));
+else {
+  const root = path.join(state, "tasks");
+  try { for (const d of fs.readdirSync(root)) files.push(path.join(root, d, "task.json")); } catch {}
+}
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+for (const f of files) {
+  let up;
+  try { up = JSON.parse(fs.readFileSync(f, "utf8")).upgrade; } catch { continue; }
+  if (!up || !up.inputs) continue;
+  if (!dir && real(up.inputs.worktree || "") !== process.env.REPO) continue;
+  const rec = up.modules && up.modules[process.env.MOD];
+  process.stdout.write(rec ? String(rec.status) : "unknown");
+  break;
+}
+' 2>/dev/null)"
+  if [ -n "$status" ] && [ "$status" != dropped ]; then
+    deny "Refused: $mod is deleted without a dropped entry in the upgrade state; run upgrade-state.sh <artifacts> drop $mod --config-step TEXT --prod-uninstall --assumption ID. The command records the configuration step, the production uninstall and the assumption, then removes the module and commits."
+  fi
+done <<EOF
+$modules
+EOF
 
 # series_prefix — the `<NN>.0` series of a `<series>.A.B[.C]` version, or nothing
 # for a version that carries none.
