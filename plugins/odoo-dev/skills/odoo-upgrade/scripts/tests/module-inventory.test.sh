@@ -287,6 +287,18 @@ expect "an oca_alt_*.json file is not read" \
      wb_run "$dir"; csv_cell "$dir/out_inventory.csv" acme 'OCA 19 alternative')" \
   "sale/sale_acme (full)"
 
+# --- #1143: oca_index.json in the workdir wins over the record's oca_alt -----
+dir="$(wb_case ocaindex)"
+wb_record "$dir" '{"oca_alt": "sale/sale_acme (full)", "oca_alt_evidence": "found in OCA/sale"}'
+printf '{"series": ["19.0"], "modules": {"acme": ["sale"]}, "oca_alt": {"acme": "already OCA: sale/acme"}, "mismatches": []}' > "$dir/oca_index.json"
+wb_run "$dir"
+expect "the index literal overrides the record oca_alt" \
+  "$(csv_cell "$dir/out_inventory.csv" acme 'OCA 19 alternative')" \
+  "already OCA: sale/acme"
+expect "the evidence names the index" \
+  "$(csv_cell "$dir/out_evidence.csv" acme 'OCA alternative evidence')" \
+  "oca_check.py 19.0 index"
+
 # --- #1158: a missing file, an array file, a missing or extra key ------------
 dir="$(wb_case nofile)"
 wb_run "$dir"

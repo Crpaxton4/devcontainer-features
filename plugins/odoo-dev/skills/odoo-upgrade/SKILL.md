@@ -42,6 +42,7 @@ Write every path in full: `<base directory>/scripts/<script>`.
 | Script and arguments | Prints | Exit |
 | --- | --- | --- |
 | `upgrade-preflight.sh --target V --project "<name>" [--ssh H] [--repo-path DIR]` | one `PASS`/`FAIL` line per check on stderr, then one JSON line: `ok`, `failures[]`, `source_db`, `enterprise_path`, `repo`, `repo_path`, `default_branch`, `env_fingerprint` | 0 ok · 10 a check failed · 2 usage |
+| `inventory.sh --artifacts DIR --worktree W --series S [--ssh H]` | runs `module_inventory.py`, `oca_check.py` and, with `--ssh`, `studio_inventory.py`, with absolute outputs under `DIR/inventory/` (`inventory.csv`, `oca_index.json`, `studio.csv`); one `PASS`/`FAIL` line per step on stderr, then one JSON line: `ok`, `inventory_csv`, `oca_index`, `studio_csv` (null without `--ssh`), `failures[]` | 0 ok · 10 a step failed · 2 usage |
 | `module_inventory.py [PATH ...] [-o FILE]` | writes the inventory CSV to `-o` (default `./inventory.csv`; default tree `/mnt/extra-addons`) | 0 · 1 no module found · 2 usage |
 | `studio_inventory.py [--db NAME (optional with --ssh)] [--ssh user@host] [--artifacts DIR] [--csv studio.csv]` | the Studio and UI-built artifacts, read-only SELECTs, through `psql` on the host with `--ssh`; outputs under `DIR/inventory/` | 0 · 2 usage or no connection |
 | `build_workbook.py --workdir DIR -o out.xlsx` | the 4-sheet workbook from the seed CSV and the `enrich_<module>.json` records; the last line carries `problems: N` | 0 · 1 problems found |
