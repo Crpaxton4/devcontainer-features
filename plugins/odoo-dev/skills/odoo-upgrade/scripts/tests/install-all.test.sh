@@ -104,9 +104,10 @@ cat > "$bin/odoo" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in --version) echo "Odoo Server 19.0-20260901"; exit 0 ;; esac
 printf '%s\n' "$*" >> "$STUB_STATE/odoo.argv"
-db=""; mods=""; prev=""
+db=""; mods=""; prev=""; treeroot=""
 for arg in "$@"; do
   case "$prev" in -d) db="$arg" ;; -i) mods="$arg" ;; esac
+  case "$arg" in --addons-path=*) treeroot="${arg#--addons-path=}"; treeroot="${treeroot%%,*}" ;; esac
   prev="$arg"
 done
 echo "2026-09-25 10:00:00,000 1 INFO $db odoo.modules.loading: loading 1 modules..."
@@ -117,7 +118,10 @@ for module in "${wanted[@]}"; do
     *",$module,"*)
       echo "2026-09-25 10:00:01,500 1 ERROR $db odoo.tools.convert: while parsing /mnt/extra-addons/$module/views/${module}_views.xml:12"
       echo "Traceback (most recent call last):"
-      echo '  File "/opt/odoo/odoo/tools/convert.py", line 1, in _tag_record'
+      # The decisive frame sits in the tree under test, or (ODOO_FRAME_ENV) in core.
+      frame="$treeroot/$module/models/${module}.py"
+      if [ -n "${ODOO_FRAME_ENV:-}" ]; then frame="/usr/lib/python3/dist-packages/odoo/addons/account/models/account_move.py"; fi
+      echo "  File \"$frame\", line 1, in _tag_record"
       echo "odoo.tools.convert.ParseError: Element '<xpath expr=\"//field[@name=\\'gone\\']\">' cannot be located in parent view"
       exit 1 ;;
   esac
@@ -145,7 +149,7 @@ art() { echo "$work/art"; }
 
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
-  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" \
+  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
     bash "$SUT" --artifacts "$work/art-$suffix" "$@" 2>"$state/err"
 }
 
@@ -296,6 +300,41 @@ contains "and quotes the decisive line" "$(field "$summary" trees.1.error)" "can
 expect "the full install is skipped" "$(field "$summary" full.status)" "skipped"
 expect "summary says not passed" "$(field "$summary" passed)" "false"
 expect "the addons path is reported" "$(field "$summary" addons_path)" "$work/addons"
+expect "a frame in the tree is a port defect" "$(field "$summary" trees.1.class)" "port"
+expect "summary status is failed" "$(field "$summary" status)" "failed"
+
+# A frame outside the tree under test is the environment, not the port: exit 10.
+reset
+out="$(FAIL_ON=beta FRAME_ENV=1 run envtree --db verify --no-conf --per-tree "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a frame outside the tree exits 10" "$rc" "10"
+expect "and the tree is class env" "$(field "$summary" trees.1.class)" "env"
+expect "and the status is env_failure" "$(field "$summary" status)" "env_failure"
+expect "a green tree has no class" "$(field "$summary" trees.0.class)" "null"
+
+# ---------- 7b. --enterprise reaches Odoo and the summary (#1137) ---------------
+reset
+ent="$work/enterprise"; mkdir -p "$ent"
+out="$(run ent --db verify --no-conf --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "--enterprise run exits 0" "$rc" "0"
+contains "the enterprise tree is on the addons path" "$(cat "$state/odoo.argv")" "--addons-path=$work/addons,$ent "
+expect "the effective path lists it" "$(field "$summary" addons_path_effective)" "$work/addons,$ent"
+expect "the summary reports it" "$(field "$summary" enterprise_path)" "$ent"
+expect "no --enterprise reports null" "$(field "$(run noent --db verify2 --no-conf "$tree" | tail -1)" enterprise_path)" "null"
+reset
+out="$(run entbad --db verify --no-conf --enterprise "$work/nope" "$tree")"; rc=$?
+expect "a missing enterprise dir exits 2" "$rc" "2"
+
+# ---------- 7c. a template build failure still writes the summary, exit 10 ------
+reset
+out="$(FAIL_ON=base run tplfail --db verify --no-conf --template --summary "$work/tplfail.json" "$tree")"; rc=$?
+expect "a template build failure exits 10" "$rc" "10"
+expect "the summary file exists" "$( [ -s "$work/tplfail.json" ] && echo yes || echo no )" "yes"
+summary="$(cat "$work/tplfail.json")"
+expect "status is env_failure" "$(field "$summary" status)" "env_failure"
+contains "the decisive line is recorded" "$(field "$summary" env_failure.decisive)" "ParseError"
+expect "and the summary was written once" "$(printf '%s\n' "$out" | grep -c '"status"')" "1"
 
 # ---------- 8. template build, reuse, and rebuild on a key change (#879) --------
 reset
