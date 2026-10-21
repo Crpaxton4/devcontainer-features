@@ -16,6 +16,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from mcp.types import InputRequiredResult
 
+from odoo_sdk._utils import declare_usage, record_usage
 from odoo_sdk.commands import Registry
 from odoo_sdk.mcp.tools import GATED_TOOL_NAMES, GATED_TOOL_TAG, gated_opt_in
 
@@ -265,6 +266,75 @@ def _event_emitting(
     return _wrap_tool(tool_fn, on_success=emit)
 
 
+def _usage_logged(tool_fn: Callable[..., Any], name: str) -> Callable[..., Any]:
+    """Wrap a tool callable so every dispatch writes one usage-log line (#1204).
+
+    Applied innermost of all, so it sees the tool's own exception (``ok=False``)
+    before :func:`_error_boundary` turns it into a payload; the exception is
+    re-raised untouched. Names and outcome only: no arguments, no results.
+    ``record_usage`` never raises, so logging cannot fail a tool call.
+    """
+
+    def log(started: float, ok: bool) -> None:
+        record_usage(
+            "mcp_tool",
+            name,
+            source="odoo_sdk",
+            ok=ok,
+            ms=int((time.monotonic() - started) * 1000),
+        )
+
+    if asyncio.iscoroutinefunction(tool_fn):
+
+        @functools.wraps(tool_fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = await tool_fn(*args, **kwargs)
+            except BaseException:
+                log(started, False)
+                raise
+            log(started, True)
+            return result
+
+    else:
+
+        @functools.wraps(tool_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            started = time.monotonic()
+            try:
+                result = tool_fn(*args, **kwargs)
+            except BaseException:
+                log(started, False)
+                raise
+            log(started, True)
+            return result
+
+    return wrapper
+
+
+def _usage_declarations(
+    tool_names: list[str], registry: Registry, gated: frozenset[str]
+) -> list[dict[str, Any]]:
+    """Return the usage-log declarations for the tools and registry commands."""
+    items = [
+        {
+            "kind": "mcp_tool",
+            "name": tool,
+            "context": {"source": "odoo_sdk", "gated": tool in gated},
+        }
+        for tool in tool_names
+    ]
+    try:
+        items += [
+            {"kind": "sdk_command", "name": command, "context": {"source": "odoo_sdk"}}
+            for command, _ in registry.items()
+        ]
+    except Exception:
+        pass
+    return items
+
+
 class OdooMCPServer:
     """Expose a set of explicit MCP tools built from a command :class:`Registry`.
 
@@ -344,6 +414,7 @@ class OdooMCPServer:
         any_gated = False
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
+            tool_fn = _usage_logged(tool_fn, name)
             tool_fn = _event_emitting(tool_fn, name, self.registry)
             tool_fn = _error_boundary(tool_fn)
             tool_fn = _toon_encoded(tool_fn)
@@ -361,6 +432,14 @@ class OdooMCPServer:
             )
         if any_gated and not gated_opt_in():
             self.mcp.disable(tags={GATED_TOOL_TAG})
+        if os.environ.get("USAGE_LOG_DIR", "").strip():
+            declare_usage(
+                _usage_declarations(
+                    list(self._explicit_tools),
+                    self.registry,
+                    frozenset(GATED_TOOL_NAMES),
+                )
+            )
 
     @staticmethod
     def _unpack_spec(spec: ToolSpec) -> Tuple[Callable[..., Any], str]:
