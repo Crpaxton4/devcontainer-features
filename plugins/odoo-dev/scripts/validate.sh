@@ -238,6 +238,13 @@ for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort())
       console.log(`  FAIL ${f}: skills: names "${s}", which is not a bundled skill`); bad++;
     }
   }
+  // An agent that runs the suite must also own its database name (#1173).
+  if (sm) {
+    const list = sm[1].split("\n").map(l => l.replace(/^\s*-\s*/, "").trim());
+    if (list.includes("odoo-test-run") && !list.includes("odoo-session-db")) {
+      console.log(`  FAIL ${f}: skills: lists odoo-test-run without odoo-session-db (#1173: the tester fell back to a hand-picked --db-suffix)`); bad++;
+    }
+  }
   // Unsupported for plugin agents, and silently ignored rather than rejected.
   for (const k of ["hooks", "mcpServers"]) {
     if (new RegExp(`^${k}:`, "m").test(fm)) { console.log(`  FAIL ${f}: ${k}: is not supported for plugin agents`); bad++; }
@@ -246,7 +253,7 @@ for (const f of fs.readdirSync(agentsDir).filter(f => f.endsWith(".md")).sort())
     console.log(`  FAIL ${f}: isolation: worktree — worktree-ensure.sh owns the worktree, and the stack addons path points at that one`); bad++;
   }
 }
-if (bad === 0) console.log("  PASS every agent: named odoo-dev-*, skills resolve, no unsupported keys");
+if (bad === 0) console.log("  PASS every agent: named odoo-dev-*, skills resolve, odoo-test-run comes with odoo-session-db, no unsupported keys");
 process.exit(bad === 0 ? 0 : 1);
 ' "$AGENTS" "$SKILLS" || fails=$((fails + 1))
 
