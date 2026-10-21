@@ -102,7 +102,7 @@ STUB
 
 cat > "$bin/odoo" <<'STUB'
 #!/usr/bin/env bash
-case "${1:-}" in --version) echo "Odoo Server 19.0-20260901"; exit 0 ;; esac
+case "${1:-}" in --version) echo "Odoo Server 19.0-${ODOO_STUB_DATE:-20260901}"; exit 0 ;; esac
 printf '%s\n' "$*" >> "$STUB_STATE/odoo.argv"
 db=""; mods=""; prev=""; treeroot=""
 for arg in "$@"; do
@@ -155,7 +155,7 @@ art() { echo "$work/art"; }
 
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
-  PATH="$bin:$PATH" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
+  PATH="$bin:$PATH" PYTHONPATH="${PYSTUB:-}" ODOO_STUB_DATE="${STUB_DATE:-20260901}" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
     bash "$SUT" --artifacts "$work/art-$suffix" "$@" 2>"$state/err"
 }
 
@@ -376,6 +376,51 @@ expect "the new key builds under a new template name" \
 expect "the new closure includes the new dependency" \
   "$(field "$summary" template.core_modules)" '["base", "mail", "stock"]'
 manifest beta "'base', 'mail'"
+
+# ---------- 8b. the key covers the dated build and the enterprise commit (#1138) --
+# A real odoo.release on the python path, so version_info is what the key sees.
+# It is identical for the whole series: only the dated --version line and the
+# enterprise HEAD can tell two builds apart.
+export PYSTUB="$work/pystub"
+mkdir -p "$PYSTUB/odoo"
+: > "$PYSTUB/odoo/__init__.py"
+printf 'version_info = (19, 0, 0, "final", 0, "")\n' > "$PYSTUB/odoo/release.py"
+ent="$work/enterprise"; mkdir -p "$ent"
+gitent() { git -C "$ent" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=t -c user.email=t@example.invalid "$@"; }
+gitent init -q
+gitent commit -q --allow-empty -m one
+reset
+out="$(run k1 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+tplk1="$(field "$summary" template.db)"
+expect "key parts carry version_info" "$(field "$summary" template.key_parts.version_info)" "19.0.0.final.0."
+expect "key parts carry the dated odoo --version line" \
+  "$(field "$summary" template.key_parts.odoo_version)" "Odoo Server 19.0-20260901"
+expect "key parts carry the enterprise HEAD" \
+  "$(field "$summary" template.key_parts.enterprise_head)" "$(gitent rev-parse HEAD)"
+expect "key parts carry the core modules" \
+  "$(field "$summary" template.key_parts.core_modules)" '["base", "mail"]'
+expect "odoo_build is the dated line" "$(field "$summary" odoo_build)" "Odoo Server 19.0-20260901"
+expect "the first run builds the template" "$(field "$summary" template.reused)" "false"
+
+out="$(run k2 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "the same build and commit reuse the template" "$(field "$summary" template.reused)" "true"
+expect "and keep the template name" "$(field "$summary" template.db)" "$tplk1"
+
+out="$(STUB_DATE=20261001 run k3 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new --version date rebuilds" "$(field "$summary" template.reused)" "false"
+expect "under a new template name" \
+  "$( [ "$(field "$summary" template.db)" = "$tplk1" ] && echo same || echo different )" "different"
+
+gitent commit -q --allow-empty -m two
+out="$(run k4 --db verify --no-conf --template --enterprise "$ent" "$tree")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new enterprise HEAD rebuilds" "$(field "$summary" template.reused)" "false"
+expect "under a new template name again" \
+  "$( [ "$(field "$summary" template.db)" = "$tplk1" ] && echo same || echo different )" "different"
+unset PYSTUB
 
 # ---------- 9. skipped modules: version prefix, installable, dependents (#1134, #1166)
 sk="$work/skaddons"; mkdir -p "$sk"

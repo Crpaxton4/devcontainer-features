@@ -37,12 +37,17 @@
 #                Odoo and assumed correct, yet every iteration reinstalls it
 #                (~125 modules before the first line of custom code, #879). It
 #                is installed ONCE into a template database keyed by a hash of
-#                (Odoo build id, sorted core dependency set); each working
-#                database is then `CREATE DATABASE ... TEMPLATE ...` (what
-#                `createdb -T` issues) and installs only the custom modules.
-#                A key mismatch — new container build, changed dependencies —
-#                rebuilds the template, so a stale one cannot mask a real
-#                incompatibility.
+#                (odoo.release.version_info, the dated `odoo --version` line,
+#                the --enterprise git HEAD or "-", sorted core dependency set);
+#                each working database is then `CREATE DATABASE ... TEMPLATE
+#                ...` (what `createdb -T` issues) and installs only the custom
+#                modules. version_info alone is the same for a whole series, so
+#                the dated build line and the enterprise commit carry the
+#                rebuild signal. A key mismatch — new community build, new
+#                enterprise commit, changed dependencies — rebuilds the
+#                template, so a stale one cannot mask a real incompatibility.
+#                An enterprise tree that is not a git tree adds nothing: a
+#                change inside it does not change the key.
 #
 #   --per-tree   The loader aborts the whole registry on the first ParseError,
 #                so one serial full-tree install returns one defect per run no
@@ -61,7 +66,8 @@
 #
 # Output: the last stdout line is a JSON summary — {status, db, addons_path,
 # addons_path_effective, data_dir, enterprise_path, odoo_build, mode,
-# template:{db,key,reused,core_modules}, custom_modules,
+# template:{db,key,reused,core_modules,key_parts:{version_info,odoo_version,
+# enterprise_head,core_modules}}, custom_modules,
 # trees:[{modules,db,status,error,module,log,class}], full:{...},
 # env_failure:{decisive,log}|null, series, skipped:[{module,reason}],
 # expected_but_skipped:[module], passed}. status is pass | failed |
@@ -271,13 +277,20 @@ for tool in psql createdb dropdb; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
 done
 
-# Build id for the template key. odoo.release.version_info is the precise
-# answer; --version is the one that survives not being able to import odoo.
-build_id="$(python3 -c 'import odoo.release as r; print(".".join(str(p) for p in r.version_info))' 2>/dev/null || true)"
-if [ -z "$build_id" ]; then
-  build_id="$("$ODOO" --version 2>/dev/null | tail -1 | tr -d '\r' || true)"
+# Build id for the template key, three parts. version_info is identical for a
+# whole series, so the dated `odoo --version` line (always read, not only a
+# fallback) and the enterprise git HEAD ("-" when there is none) join it.
+version_info="$(python3 -c 'import odoo.release as r; print(".".join(str(p) for p in r.version_info))' 2>/dev/null || true)"
+odoo_version="$("$ODOO" --version 2>/dev/null | tail -1 | tr -d '\r' || true)"
+enterprise_head="-"
+if [ -n "$enterprise" ]; then
+  enterprise_head="$(git -C "$enterprise" rev-parse HEAD 2>/dev/null || true)"
+  enterprise_head="${enterprise_head:--}"
 fi
-build_id="${build_id:-unknown}"
+build_id="version_info=${version_info:--}
+odoo_version=${odoo_version:--}
+enterprise_head=$enterprise_head"
+odoo_build="${odoo_version:-${version_info:-unknown}}"
 
 # Target series ("19.0"): the first two parts of odoo.release.version_info, else
 # the first NN.0 in `odoo --version`. Empty when neither says, which disables the
@@ -607,16 +620,18 @@ write_summary() {
   local mode=full summary
   if [ "$per_tree" = true ]; then mode=per-tree; fi
   if [ "$use_template" = true ]; then mode="$mode+template"; fi
-  summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$build_id" "$mode" \
+  summary="$(python3 - "$records" "$db" "$addons" "$data_dir" "$odoo_build" "$mode" \
     "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
     "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
-    "$series" "$skipped_tsv" "$expected_skipped" <<'PY'
+    "$series" "$skipped_tsv" "$expected_skipped" \
+    "$version_info" "$odoo_version" "$enterprise_head" <<'PY'
 import json, os, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
  template_db, template_key, template_reused, use_template,
  addons_arg, status, enterprise, env_decisive, env_log,
- series, skipped_tsv, expected_skipped) = sys.argv[1:21]
+ series, skipped_tsv, expected_skipped,
+ version_info, odoo_version, enterprise_head) = sys.argv[1:24]
 skipped = [
     {"module": row.split("\t")[0], "reason": row.split("\t", 1)[1]}
     for row in skipped_tsv.splitlines() if "\t" in row
@@ -657,6 +672,11 @@ summary = {
     "template": {
         "db": template_db or None, "key": template_key,
         "reused": template_reused == "true", "core_modules": split(core_csv),
+        "key_parts": {
+            "version_info": version_info or None, "odoo_version": odoo_version or None,
+            "enterprise_head": enterprise_head if enterprise_head != "-" else None,
+            "core_modules": split(core_csv),
+        },
     } if use_template == "true" else None,
     "trees": trees,
     "full": full,
