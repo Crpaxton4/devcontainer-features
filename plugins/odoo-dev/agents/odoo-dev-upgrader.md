@@ -81,7 +81,8 @@ are the lines of your prompt.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
    Then run `upgrade-state.sh <ARTIFACTS> gate workbook --problems <N> --path <xlsx>`.
-7. `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
+7. Before the first install run: `xpath-check.py --worktree <W> --series <target> --source <community addons>,<enterprise_path>` (both from `upgrade-preflight.sh` and `addons_paths.sh`). Exit 1 lists every xpath miss: fix them first. Exit 2 means the check could not import Odoo: it is skipped, report it.
+   Then run `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
    green. Repeat it with `--previous <last summary>`; stop when stderr says progress: false (same module, same line twice) and report both. Derive `<name>` with `session-db.sh name <repo> <id> --session-id <job id>`, with the `session-db.sh` of the `odoo-session-db` skill, so that no other session can name the same database. Never pass a name you made up. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
    After each run, run `upgrade-state.sh <ARTIFACTS> gate install --summary <file>`.
    When `next` prints `STOP budget` or `STOP killed` at any step, end the run with `status: failed` and name that reason in the one-sentence line.
