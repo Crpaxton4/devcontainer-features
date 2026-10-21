@@ -8,8 +8,7 @@ user-invocable: false
 Code porting between major series. The database upgrade is human-run; never attempt it.
 
 Inputs: the source series is `ODOO_VERSION` of this shell; the target series comes from
-the request. The container must run the target series, else stop with "rebuild on
-<target>". A port that cannot be installed cannot be verified.
+the request. `preflight.sh --target-series <target>` checks the target series.
 
 Load references as needed, never all at once.
 

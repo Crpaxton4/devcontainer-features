@@ -36,7 +36,8 @@ are the lines of your prompt.
 1. Preflight. Run all five checks, report every failure, then stop on any failure:
    (a) when a host was given, `ssh -o BatchMode=yes <host> true` answers and
    `psql -Atc "select current_database()"` on it returns the source database;
-   (b) the container runs the target series; (c) one enterprise addon imports;
+   (b) `preflight.sh --target-series <target>` (the script of the `odoo-task-env`
+   skill) exits 0; (c) one enterprise addon imports;
    (d) `gh auth status` is clean; (e) the repo map resolves the project.
 2. `worktree-ensure.sh` as the builder does.
 3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and

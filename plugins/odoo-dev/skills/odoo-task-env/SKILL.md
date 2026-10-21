@@ -35,8 +35,10 @@ Every script prints one JSON object as its last stdout line. Write every path in
 ### 0. Preflight (once per machine or after a rebuild)
 
 ```bash
-<base directory>/scripts/preflight.sh [--soft]
+<base directory>/scripts/preflight.sh [--soft] [--target-series V]
 ```
+
+The series check fails (exit 1, `failures[]` carries both values) when `ODOO_VERSION` does not start with V.
 
 → `{"ok","context","failures":[],"warnings":[],"ram_available_gb","repos_dir"}`
 
