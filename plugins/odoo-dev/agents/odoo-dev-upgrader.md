@@ -64,6 +64,7 @@ are the lines of your prompt.
    configuration step (a field on a standard record, a setting, an operation-type option),
    drop the module on the target branch. Otherwise port in place with the minimum rewrite
    and record the gap in the notes of the record. Never stop for this decision.
+   A `--decide <id>=<answer>` token on the prompt is applied with `upgrade-state.sh <ARTIFACTS> answer <id> <answer> --by user` before the module's verdict is marked, and the answer replaces the default.
 5. Loop on `upgrade-state.sh <ARTIFACTS> next` while it prints `PORT <module>`. Per that module: run
    `port-module.sh <module> --to <target> --worktree <W>` first and review its diff (it commits the rewrite as `chore(<module>): upgrade_code <target>`; exit 2 means the migrator is missing: report it); then run
    `port-lint.sh <W> --series <target> --modules <module>` (exit 2 means a tool is missing: report it and continue; exit 1 lists the errors to fix in the manual port); then `references/porting-checklist.md` with
@@ -116,7 +117,7 @@ End with exactly this, nothing before it and nothing after the table:
 status: done | failed
 artifact: <absolute path of task.json> build, or none
 <one sentence, 25 words or fewer: what happened, or the item or cause; name the base branch used>
-next: /odoo-dev:test <id> on done; /odoo-dev:upgrade <id> <series> [<host>] on failed
+next: /odoo-dev:test <id> on done; /odoo-dev:upgrade <id> <series> [<host>] [--decide <id>=<answer>] on failed — when an assumption is open, print the filled command with its id and the recorded default
 
 | module | result |      (rows 1-3: counts ported / skipped / outstanding; then up to 5 outstanding items)
 ```
