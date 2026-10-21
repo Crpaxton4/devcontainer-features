@@ -496,6 +496,26 @@ wr "Write /tmp/inventory.json" deny Write '{"file_path":"/tmp/inventory.json"}'
 wr "NotebookEdit outside" deny NotebookEdit '{"notebook_path":"/tmp/n.ipynb"}'
 wr "Edit by a main session" allow Edit '{"file_path":"/tmp/inventory.json"}' ""
 
+# --- a STOP file kills the run -------------------------------------------------------
+KSTATE="$TMP/kstate"
+mkdir -p "$KSTATE/tasks/1"
+kill_case() { # kill_case <label> <allow|deny> <tool> <tool_input JSON> <command>
+  ODOO_DEV_STATE_DIR="$KSTATE" run "$AGENT" "$5" "$REPO" "$3" "$4"
+  if [ "$2" = deny ]; then
+    if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "the run is killed"; then ok "$1 -> denied"
+    else bad "$1: expected a kill deny, got: ${OUT:-<silence>}"; fi
+  elif [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "$1 -> allowed"
+  else bad "$1: expected silence, got rc=$RC out=${OUT:-<silence>}"; fi
+}
+kill_case "no STOP: Edit" allow Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
+kill_case "no STOP: Bash ls" allow Bash '{}' "ls"
+: > "$KSTATE/tasks/1/STOP"
+kill_case "STOP: Edit" deny Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
+kill_case "STOP: Bash ls" deny Bash '{}' "ls"
+kill_case "STOP: upgrade-state.sh next" allow Bash '{}' "bash /p/skills/odoo-upgrade/scripts/upgrade-state.sh /arts next"
+kill_case "STOP: upgrade-state.sh chained" deny Bash '{}' "upgrade-state.sh /arts next; ls"
+kill_case "STOP: Read" allow Read '{"file_path":"/x"}' ""
+
 echo
-echo "unattended-guard.test.sh: $pass passed, $fail failed"
+echo "unattended-guard.test.sh:$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

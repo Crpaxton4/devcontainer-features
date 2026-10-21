@@ -91,5 +91,36 @@ out="$(u init --task 7 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base
 expect "changed fingerprint" "$out" "STOP blocked_env"
 expect "next blocked" "$(u next)" "STOP blocked_env"
 
+# budget, kill file and fingerprint parts: each on a fresh artifacts dir
+mk() { rm -rf "$work/b"; mkdir -p "$work/b"; A="$work/b"; u init --task 8 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base-branch up \
+  --plan "$work/plan.json" --preflight "$work/pf3.json" "$@"; }
+echo '{"ok":true,"failures":[],"env_fingerprint":"fp3","env_fingerprint_parts":{"odoo_version":"19.0","enterprise_path":"/e","enterprise_head":"h","addons_path":"/a,/b"}}' > "$work/pf3.json"
+echo '{"passed":false,"status":"red"}' > "$work/red.json"
+echo '{"passed":true,"status":"green"}' > "$work/green.json"
+bget() { bash "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh" get "$A" upgrade | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=JSON.parse(s);console.log(eval(process.argv[1]))})' "$1"; }
+mk
+expect "no budget: next" "$(u next)" "PORT a"
+expect "budget defaults null" "$(bget 'u.run.budget.max_minutes+"|"+u.run.budget.max_install_runs')" "null|null"
+expect "fingerprint parts copied" "$(bget 'u.preflight.env_fingerprint_parts.addons_path')" "/a,/b"
+expect "run.updated is ISO" "$(bget '/^\d{4}-\d\d-\d\dT/.test(u.run.updated)')" true
+mk --max-install-runs 1
+expect "budget stored" "$(bget 'u.run.budget.max_install_runs')" 1
+u gate install --summary "$work/red.json"
+expect "one red install over budget" "$(u next)" "STOP budget"
+mk --max-install-runs 1
+u gate install --summary "$work/green.json"
+expect "green install is not a budget stop" "$(u next)" "PORT a"
+mk --max-minutes 0
+expect "max-minutes 0 later" "$(UPGRADE_STATE_NOW=2999-01-01T00:00:00Z u next)" "STOP budget"
+mk --max-minutes 60
+expect "within max-minutes" "$(u next)" "PORT a"
+mk
+touch "$A/STOP"
+expect "kill file" "$(u next)" "STOP killed"
+rm -f "$A/STOP"
+expect "kill file removed" "$(u next)" "PORT a"
+u init --task 8 --from 18.0 --to 19.0 --worktree "$wt" --branch br --base-branch up --plan "$work/plan.json" --preflight "$work/pf3.json" --max-minutes x 2>/dev/null
+expect "bad max-minutes" "$?" 2
+
 echo "upgrade-state.test.sh: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

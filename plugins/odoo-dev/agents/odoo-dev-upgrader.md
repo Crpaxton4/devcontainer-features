@@ -52,7 +52,8 @@ are the lines of your prompt.
    Then run `port-plan.py --from <source> --to <target> --worktree <W> --artifacts <ARTIFACTS>`
    and `upgrade-state.sh <ARTIFACTS> init --task <id> --from <source> --to <target> --worktree <W>
    --branch <branch> --base-branch <base> [--ssh <host>] --plan <ARTIFACTS>/plan.json
-   --preflight <ARTIFACTS>/preflight.json`. On a resume it prints `STOP blocked_env`
+   --preflight <ARTIFACTS>/preflight.json`. Add `--max-minutes <N>` and `--max-install-runs <N>`
+   only when the prompt supplies them. On a resume it prints `STOP blocked_env`
    when the environment changed: end there.
 4. Prior art per module → the workbook proposes `keep`, `replace` or `merge-into-standard`
    from the verdict; override only with a rationale in the record. The verdict and
@@ -82,6 +83,7 @@ are the lines of your prompt.
 7. `install_all.sh --db <name> --session-id <job id> --artifacts <ARTIFACTS>/install --addons-path <worktree> --enterprise <enterprise_path from upgrade-preflight.sh> --per-tree --template --summary <file>` until
    green. Repeat it with `--previous <last summary>`; stop when stderr says progress: false (same module, same line twice) and report both. Derive `<name>` with `session-db.sh name <repo> <id> --session-id <job id>`, with the `session-db.sh` of the `odoo-session-db` skill, so that no other session can name the same database. Never pass a name you made up. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it.
    After each run, run `upgrade-state.sh <ARTIFACTS> gate install --summary <file>`.
+   When `next` prints `STOP budget` or `STOP killed` at any step, end the run with `status: failed` and name that reason in the one-sentence line.
    After step 7, run `upgrade-state.sh <ARTIFACTS> build`.
 8. Append each gotcha the skill did not cover to `<state dir>/upgrade-lessons/`.
 

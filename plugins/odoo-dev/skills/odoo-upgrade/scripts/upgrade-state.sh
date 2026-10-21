@@ -8,6 +8,7 @@
 # Usage:
 #   upgrade-state.sh <artifacts> init --task ID --from S --to T --worktree W --branch B
 #                      --base-branch BB [--ssh H] --plan plan.json --preflight pf.json
+#                      [--max-minutes N] [--max-install-runs N]
 #   upgrade-state.sh <artifacts> next
 #   upgrade-state.sh <artifacts> mark <module> status <state>
 #   upgrade-state.sh <artifacts> mark <module> verdict|port|tests --json '<object>'
@@ -27,7 +28,16 @@
 # target series.
 #
 # `next` prints PREFLIGHT, PORT <module>, GATE workbook, INSTALL, TEST, PR,
-# STOP done, STOP blocked_env or STOP failed.
+# STOP done, STOP blocked_env, STOP killed, STOP budget or STOP failed.
+#
+# run.budget is {max_minutes, max_install_runs}, both null (no limit) unless init got
+# the flags. `STOP budget` means more than max_minutes passed since run.started, or
+# install.runs reached max_install_runs and the last install was not green.
+# run.kill_file is <artifacts>/STOP: while that file exists, `next` prints
+# `STOP killed`, and the unattended guard denies every tool but this script.
+# Every mark, gate and drop writes run.updated and modules.<m>.updated (ISO-8601).
+# Test-only: UPGRADE_STATE_NOW (an ISO-8601 time) replaces the clock.
+# preflight.env_fingerprint_parts is copied from the preflight JSON by init.
 #
 # Exit codes: 0 ok | 2 usage | 4 invalid transition or failed check | 5 no upgrade section
 set -euo pipefail
@@ -51,7 +61,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "fs";
 
 const [artSh, arts, cmd, ...args] = process.argv.slice(1);
 const fail = (msg, code = 2) => { console.error(`upgrade-state.sh: ${msg}`); process.exit(code); };
-const now = () => new Date().toISOString();
+const now = () => (process.env.UPGRADE_STATE_NOW ? new Date(process.env.UPGRADE_STATE_NOW) : new Date()).toISOString();
 const ORDER = ["inventoried", "verdict", "ported", "dropped", "installed", "tested"];
 
 function read(section) {
@@ -79,8 +89,11 @@ const touch = (u, m) => { u.run.updated = now(); if (m) u.modules[m].updated = u
 const mod = (u, m) => { if (!u.modules[m]) fail(`unknown module ${m}`); return u.modules[m]; };
 
 if (cmd === "init") {
-  const o = opts(args, ["task","from","to","worktree","branch","base-branch","ssh","plan","preflight"]);
+  const o = opts(args, ["task","from","to","worktree","branch","base-branch","ssh","plan","preflight","max-minutes","max-install-runs"]);
   for (const k of ["task","from","to","worktree","branch","base-branch","plan","preflight"]) if (!o[k]) fail(`init needs --${k}`);
+  for (const k of ["max-minutes","max-install-runs"]) if (o[k] !== undefined && !/^[0-9]+$/.test(o[k])) fail(`--${k} needs a whole number`);
+  const budget = { max_minutes: o["max-minutes"] === undefined ? null : Number(o["max-minutes"]),
+                   max_install_runs: o["max-install-runs"] === undefined ? null : Number(o["max-install-runs"]) };
   const plan = json(o.plan), pf = json(o.preflight), old = read("upgrade");
   if (old) {
     if (old.preflight.env_fingerprint !== pf.env_fingerprint) {
@@ -88,6 +101,8 @@ if (cmd === "init") {
       write("upgrade", old);
       console.log("STOP blocked_env"); process.exit(0);
     }
+    old.run.budget = old.run.budget || { max_minutes: null, max_install_runs: null };
+    for (const k of Object.keys(budget)) if (budget[k] !== null) old.run.budget[k] = budget[k];
     for (const m of Object.values(old.modules)) m.updated = m.updated || now();
     old.run.step = old.run.state === "running" ? "RESUME" : old.run.step;
     touch(old); write("upgrade", old);
@@ -97,8 +112,8 @@ if (cmd === "init") {
   for (const m of plan.order) modules[m] = { status: "inventoried", kind: "custom", updated: t };
   write("upgrade", {
     inputs: { task: o.task, from: o.from, to: o.to, ssh_host: o.ssh || null, base_branch: o["base-branch"], worktree: o.worktree, branch: o.branch },
-    run: { state: "running", step: "PREFLIGHT", started: t, updated: t, budget: { max_minutes: null, max_install_runs: null }, kill_file: `${arts}/STOP` },
-    preflight: { ok: !!pf.ok, checks: pf.failures || [], env_fingerprint: pf.env_fingerprint || null },
+    run: { state: "running", step: "PREFLIGHT", started: t, updated: t, budget, kill_file: `${arts}/STOP` },
+    preflight: { ok: !!pf.ok, checks: pf.failures || [], env_fingerprint: pf.env_fingerprint || null, env_fingerprint_parts: pf.env_fingerprint_parts || null },
     plan: { order: plan.order },
     modules,
     install: { runs: 0, last: null },
@@ -113,9 +128,14 @@ const u = need();
 if (cmd === "next") {
   const mods = u.plan.order.map(n => [n, u.modules[n].status]);
   let out;
+  const b = u.run.budget || {}, lastRun = u.install.last;
+  const overTime = b.max_minutes != null && Date.parse(now()) - Date.parse(u.run.started) > b.max_minutes * 60000;
+  const overInstalls = b.max_install_runs != null && (u.install.runs || 0) >= b.max_install_runs && !(lastRun && lastRun.green);
   if (u.run.state === "blocked_env") out = "STOP blocked_env";
+  else if (u.run.kill_file && existsSync(u.run.kill_file)) out = "STOP killed";
   else if (u.run.state === "failed" || mods.some(([, s]) => s === "failed")) out = "STOP failed";
   else if (u.pr && u.pr.url) out = "STOP done";
+  else if (overTime || overInstalls) out = "STOP budget";
   else if (!u.preflight.ok) out = "PREFLIGHT";
   else {
     const todo = mods.find(([, s]) => s === "inventoried" || s === "verdict");

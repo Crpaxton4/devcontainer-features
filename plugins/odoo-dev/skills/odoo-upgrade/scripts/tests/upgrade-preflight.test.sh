@@ -42,7 +42,7 @@ echo '{"ok":true,"failures":[]}'
 STUB
 cat > "$stubs/addons_paths.sh" <<'STUB'
 #!/usr/bin/env bash
-echo "{\"series\":\"19.0\",\"enterprise_path\":\"$ENT_PATH\",\"missing\":${ADDONS_MISSING:-[]}}"
+echo "{\"series\":\"19.0\",\"enterprise_path\":\"$ENT_PATH\",\"addons_paths\":${ADDONS_LIST:-[\"/a\",\"/b\"]},\"missing\":${ADDONS_MISSING:-[]}}"
 STUB
 export ENT_PATH="$ent"
 chmod +x "$bin"/* "$stubs"/*
@@ -71,6 +71,12 @@ before="$(field env_fingerprint)"
 git -C "$ent" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "chore: two"
 run --target 19.0 --project Acme >/dev/null
 [ "$before" != "$(field env_fingerprint)" ] && expect "fingerprint moves" ok ok || expect "fingerprint moves" same changed
+
+# fingerprint moves with the addons path, and its parts say why
+before="$(field env_fingerprint)"
+expect "parts addons_path" "$(field env_fingerprint_parts | python3 -I -c 'import sys,ast; print(ast.literal_eval(sys.stdin.read())["addons_path"])')" "/a,/b"
+ADDONS_LIST='["/a","/c"]' run --target 19.0 --project Acme >/dev/null
+[ "$before" != "$(field env_fingerprint)" ] && expect "fingerprint moves with addons path" ok ok || expect "fingerprint moves with addons path" same changed
 
 # missing addons entry
 expect "missing exit" "$(ADDONS_MISSING='["/mnt/enterprise"]' run --target 19.0 --project Acme)" 10

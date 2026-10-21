@@ -23,10 +23,12 @@
 # Output: one line per check on stderr (`PASS <check>` or `FAIL <check>: <why>`),
 # then one JSON line on stdout:
 #   {ok, failures[], source_db, enterprise_path, repo, repo_path,
-#    default_branch, env_fingerprint}
+#    default_branch, env_fingerprint, env_fingerprint_parts}
 # env_fingerprint is the sha256 of `odoo --version` (or $ODOO_VERSION),
-# enterprise_path, and the enterprise tree's git HEAD when it is a git tree,
-# joined by newlines.
+# enterprise_path, the enterprise tree's git HEAD when it is a git tree, and the
+# addons path (the addons_paths list of addons_paths.sh joined with commas),
+# joined by newlines. env_fingerprint_parts is {odoo_version, enterprise_path,
+# enterprise_head, addons_path}: the four inputs, so a mismatch can be explained.
 # Failure prefixes: `project: `, `addons: missing <x>`, `ssh: `, and the
 # failure strings of preflight.sh unchanged.
 #
@@ -75,7 +77,7 @@ jlist() { python3 -I -c 'import json,sys
 for x in json.load(sys.stdin).get(sys.argv[1]) or []: print(x)' "$1" 2>/dev/null; }
 lastline() { printf '%s\n' "$1" | awk 'NF{l=$0} END{print l}'; }
 
-repo=""; repo_path=""; default_branch=""; enterprise_path=""; source_db=""
+repo=""; repo_path=""; default_branch=""; enterprise_path=""; source_db=""; addons_path=""
 
 # --- project ------------------------------------------------------------------
 out="$(bash "$RESOLVE" "$project" 2>/dev/null)"; rc=$?
@@ -112,6 +114,7 @@ if [ -z "$json" ]; then
   fail addons "addons: addons_paths.sh printed no verdict"
 else
   enterprise_path="$(printf '%s' "$json" | jfield enterprise_path)"
+  addons_path="$(printf '%s' "$json" | jlist addons_paths | paste -sd, -)"
   addons_failed=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -137,7 +140,7 @@ head_rev=""
 if [ -n "$enterprise_path" ] && [ -d "$enterprise_path" ]; then
   head_rev="$(git -C "$enterprise_path" rev-parse HEAD 2>/dev/null || true)"
 fi
-fingerprint="$(printf '%s\n%s\n%s' "$odoo_ver" "$enterprise_path" "$head_rev" | sha256sum | awk '{print $1}')"
+fingerprint="$(printf '%s\n%s\n%s\n%s' "$odoo_ver" "$enterprise_path" "$head_rev" "$addons_path" | sha256sum | awk '{print $1}')"
 
 # --- verdict ------------------------------------------------------------------
 ok=true; [ "${#failures[@]}" -eq 0 ] || ok=false
@@ -145,7 +148,9 @@ printf '%s\0' "${failures[@]+"${failures[@]}"}" | python3 -I -c 'import json,sys
 a=sys.argv[1:]
 f=[x for x in sys.stdin.read().split("\0") if x]
 print(json.dumps({"ok":a[0]=="true","failures":f,"source_db":a[1],"enterprise_path":a[2],
- "repo":a[3],"repo_path":a[4],"default_branch":a[5],"env_fingerprint":a[6]}))' \
-  "$ok" "$source_db" "$enterprise_path" "$repo" "$repo_path" "$default_branch" "$fingerprint"
+ "repo":a[3],"repo_path":a[4],"default_branch":a[5],"env_fingerprint":a[6],
+ "env_fingerprint_parts":{"odoo_version":a[7],"enterprise_path":a[2],"enterprise_head":a[8],"addons_path":a[9]}}))' \
+  "$ok" "$source_db" "$enterprise_path" "$repo" "$repo_path" "$default_branch" "$fingerprint" \
+  "$odoo_ver" "$head_rev" "$addons_path"
 [ "$ok" = true ] && exit 0
 exit 10
