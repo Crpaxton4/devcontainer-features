@@ -88,6 +88,16 @@
 # enterprise dependency). The caller relays the code and never reads the log to
 # classify.
 #
+# Warning gate (#1139): a green install can still log a real defect as a WARNING
+# (an invalid view attribute, a rule with no group). After each install that
+# exits 0, the odoo.* WARNING lines after the first "loading" line are
+# normalised to "<logger>: <message>" and checked against
+# scripts/accepted_warnings.default.txt and the optional
+# <artifacts>/accepted_warnings.txt. An entry is a normalised line or a regex.
+# Any line no entry covers is new: summary.warnings_new[] (capped at 200) lists
+# it, summary.warnings_accepted counts the accepted ones, and the run is status
+# failed, exit 1. An environment failure (exit 10) keeps precedence.
+#
 # Skipped modules (#1134, #1166): a module Odoo would refuse never reaches `-i`.
 # That is `installable: False`, a manifest version whose series prefix is not the
 # target series (Odoo's check_version turns it into installable=False and logs
@@ -142,6 +152,12 @@ Options:
                          installed. The target is still dropped first.
   -h, --help             this text
 
+Warning gate (#1139): after each install that exits 0, every odoo.* WARNING line
+after the first "loading" line is normalised to "<logger>: <message>". A line
+that matches no entry of scripts/accepted_warnings.default.txt or of
+<artifacts>/accepted_warnings.txt (one line or regex per entry, # comments) is
+new: it goes to summary.warnings_new[] and the run exits 1 (status failed).
+
 Examples:
   install_all.sh --db upgrade_check --session-id job1 \
                  --artifacts /path/to/artifacts/install --addons-path /path/to/worktree
@@ -158,7 +174,7 @@ db=""; addons=""; data_dir=""; artifacts=""; conf=""; conf_explicit=false
 no_conf=false; force=false; use_template=false; template_db=""; per_tree=false
 summary_file=""; enterprise=""; expect_file=""; series=""; skipped_tsv=""; expected_skipped=""
 summary_written=false; env_decisive=""; env_log=""; failures=0; env_failures=0
-records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""
+records=""; session_id="${SESSION_DB_ID:-}"; tpl_dropped=""; warn_new=""; warn_acc=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -536,6 +552,68 @@ run_install() { # run_install <db> <modules-csv> <log>
   "$ODOO" -d "$1" -i "$2" "${odoo_args[@]}" > "$3" 2>&1
 }
 
+# The warning gate (#1139). scan_warnings <log> runs after every install that
+# exited 0. It lifts the WARNING lines of the odoo.* loggers that come after the
+# first "odoo.modules.loading: loading" line, normalises each to
+# "<logger>: <message>" and sorts it into the accepted file or the new file.
+# An entry of an accepted list is a normalised line or a regex searched in it.
+warn_new="$artifacts/warnings.new.txt"; warn_acc="$artifacts/warnings.accepted.txt"
+warn_default="$(dirname "${BASH_SOURCE[0]}")/accepted_warnings.default.txt"
+warn_project="$artifacts/accepted_warnings.txt"
+: > "$warn_new"; : > "$warn_acc"
+scan_warnings() { # scan_warnings <log>
+  python3 - "$1" "$warn_default" "$warn_project" "$warn_new" "$warn_acc" <<'PY'
+import re, sys
+
+log, default_list, project_list, new_out, acc_out = sys.argv[1:6]
+WARNING = re.compile(r"^\S+ \S+ \d+ WARNING \S+ (odoo\.[^\s:]+): (.*)$")
+
+
+def entries(path):
+    try:
+        text = open(path, errors="replace").read()
+    except OSError:
+        return []
+    return [e.strip() for e in text.splitlines() if e.strip() and not e.lstrip().startswith("#")]
+
+
+def accepted(line, patterns):
+    for entry in patterns:
+        if entry == line:
+            return True
+        try:
+            if re.search(entry, line):
+                return True
+        except re.error:
+            pass
+    return False
+
+
+patterns = entries(default_list) + entries(project_list)
+try:
+    lines = open(log, errors="replace").read().splitlines()
+except OSError:
+    lines = []
+started, seen, new, acc = False, set(), [], []
+for line in lines:
+    if "odoo.modules.loading: loading" in line:
+        started = True
+    if not started:
+        continue
+    found = WARNING.match(line)
+    if not found:
+        continue
+    norm = re.sub(r"\s+", " ", "%s: %s" % found.groups()).strip()
+    if norm in seen:
+        continue
+    seen.add(norm)
+    (acc if accepted(norm, patterns) else new).append(norm)
+for path, rows in ((new_out, new), (acc_out, acc)):
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.writelines(row + "\n" for row in rows)
+PY
+}
+
 # The failing module and the one line that decides why, lifted out of a log the
 # caller should not have to read. Everything else in that file is core loading.
 extract_failure() { # extract_failure <log> <tree> -> "<module>\t<line>\t<env|port>"
@@ -654,14 +732,28 @@ write_summary() {
     "$modules_csv" "$core_csv" "${template_db:-}" "${template_key:-}" "${template_reused:-false}" \
     "$use_template" "$addons_arg" "$1" "$enterprise" "$env_decisive" "$env_log" \
     "$series" "$skipped_tsv" "$expected_skipped" \
-    "$version_info" "$odoo_version" "$enterprise_head" "$tpl_dropped" "$session_id" <<'PY'
+    "$version_info" "$odoo_version" "$enterprise_head" "$tpl_dropped" "$session_id" \
+    "${warn_new:-}" "${warn_acc:-}" <<'PY'
 import json, os, sys
 
 (records, db, addons, data_dir, build_id, mode, modules_csv, core_csv,
  template_db, template_key, template_reused, use_template,
  addons_arg, status, enterprise, env_decisive, env_log,
  series, skipped_tsv, expected_skipped,
- version_info, odoo_version, enterprise_head, tpl_dropped, session_id) = sys.argv[1:26]
+ version_info, odoo_version, enterprise_head, tpl_dropped, session_id,
+ warn_new_file, warn_acc_file) = sys.argv[1:28]
+
+
+def unique_lines(path):
+    try:
+        text = open(path, encoding="utf-8").read() if path else ""
+    except OSError:
+        return []
+    return list(dict.fromkeys(row for row in text.splitlines() if row))
+
+
+warnings_new = unique_lines(warn_new_file)
+warnings_accepted = len(unique_lines(warn_acc_file))
 skipped = [
     {"module": row.split("\t")[0], "reason": row.split("\t", 1)[1]}
     for row in skipped_tsv.splitlines() if "\t" in row
@@ -711,9 +803,11 @@ summary = {
     } if use_template == "true" else None,
     "trees": trees,
     "full": full,
+    "warnings_new": warnings_new[:200],
+    "warnings_accepted": warnings_accepted,
     "env_failure": {"decisive": env_decisive, "log": env_log or None} if env_decisive else None,
     "passed": status == "pass" and bool(statuses) and all(s == "pass" for s in statuses)
-              and not expected_skipped,
+              and not expected_skipped and not warnings_new,
 }
 print(json.dumps(summary))
 PY
@@ -778,7 +872,9 @@ if [ "$use_template" = true ]; then
     done
     createdb "$template_db" >/dev/null
     template_log="$artifacts/$template_db.log"
-    if ! run_install "$template_db" "${core_csv:-base}" "$template_log"; then
+    if run_install "$template_db" "${core_csv:-base}" "$template_log"; then
+      scan_warnings "$template_log"
+    else
       split_failure "$(extract_failure "$template_log" "$addons")"
       echo "install_all.sh: building the template database failed — $f_error" >&2
       echo "  log: $template_log" >&2
@@ -807,6 +903,7 @@ if [ "$per_tree" = true ]; then
     ensure_fresh_db "$tree_db" "$template_from"
     created_dbs+=("$tree_db")
     if run_install "$tree_db" "$tree" "$tree_log"; then
+      scan_warnings "$tree_log"
       record tree "$tree_db" "$tree" pass "" "" "$tree_log"
       echo "install_all.sh: tree $index/${#trees[@]} PASS ($tree)" >&2
     else
@@ -830,6 +927,7 @@ if [ "$per_tree" = true ] && [ "$failures" -gt 0 ]; then
 else
   ensure_fresh_db "$db" "$template_from"
   if run_install "$db" "$modules_csv" "$full_log"; then
+    scan_warnings "$full_log"
     record full "$db" "$modules_csv" pass "" "" "$full_log"
   else
     split_failure "$(extract_failure "$full_log" "$addons")"
@@ -849,6 +947,12 @@ elif [ "$failures" -gt 0 ]; then
   exit 1
 elif [ -n "$expected_skipped" ]; then
   echo "install_all.sh: expected modules were skipped: $expected_skipped" >&2
+  write_summary failed
+  exit 1
+fi
+new_warnings="$(sort -u "$warn_new" | grep -c . || true)"
+if [ "$new_warnings" -gt 0 ]; then
+  echo "install_all.sh: $new_warnings new WARNING line(s); accept them in $warn_project or fix them" >&2
   write_summary failed
   exit 1
 fi

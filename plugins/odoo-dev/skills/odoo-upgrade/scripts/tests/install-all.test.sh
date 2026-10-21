@@ -115,7 +115,14 @@ for arg in "$@"; do
   case "$arg" in --addons-path=*) treeroot="${arg#--addons-path=}"; treeroot="${treeroot%%,*}" ;; esac
   prev="$arg"
 done
+if [ -n "${ODOO_WARN_PRE:-}" ]; then
+  echo "2026-09-25 09:59:59,000 1 WARNING $db odoo.tools.view_validation: startup noise before loading"
+fi
 echo "2026-09-25 10:00:00,000 1 INFO $db odoo.modules.loading: loading 1 modules..."
+if [ -n "${ODOO_WARN:-}" ]; then
+  echo "2026-09-25 10:00:00,500 1 WARNING $db odoo.modules.module: Missing \`author\` key in manifest for 'alpha', defaulting to 'False'"
+  echo "2026-09-25 10:00:00,600 1 WARNING $db odoo.tools.view_validation: attribute 'group'  is not valid.  Did you mean 'groups'?"
+fi
 IFS=, read -r -a wanted <<< "$mods"
 for module in "${wanted[@]}"; do
   echo "2026-09-25 10:00:01,000 1 INFO $db odoo.modules.loading: Loading module $module (1/1)"
@@ -160,7 +167,7 @@ art() { echo "$work/art"; }
 
 run() { # run <artifacts-suffix> [args...]; stdout captured, stderr to $state/err
   local suffix="$1"; shift
-  PATH="$bin:$PATH" PYTHONPATH="${PYSTUB:-}" ODOO_STUB_DATE="${STUB_DATE:-20260901}" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" \
+  PATH="$bin:$PATH" PYTHONPATH="${PYSTUB:-}" ODOO_STUB_DATE="${STUB_DATE:-20260901}" STUB_STATE="$state" ODOO_FAIL_ON="${FAIL_ON:-}" ODOO_INCOMPAT="${INCOMPAT:-}" ODOO_FRAME_ENV="${FRAME_ENV:-}" ODOO_WARN="${STUB_WARN:-}" ODOO_WARN_PRE="${STUB_WARN_PRE:-}" \
     bash "$SUT" --artifacts "$work/art-$suffix" --session-id "${SID:-sess-a}" "$@" 2>"$state/err"
 }
 
@@ -519,6 +526,33 @@ expect "an incompatible-version log fails the tree" "$rc" "1"
 expect "the named module is lifted" "$(field "$summary" trees.0.module)" "good"
 contains "the warning is the decisive line" "$(field "$summary" trees.0.error)" "incompatible version, setting installable=False"
 expect "and it is a port defect" "$(field "$summary" trees.0.class)" "port"
+
+# The warning gate (#1139): a WARNING that no accepted list covers fails a green install.
+reset
+out="$(STUB_WARN=1 run warn --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a new WARNING line exits 1" "$rc" "1"
+expect "the status is failed" "$(field "$summary" status)" "failed"
+expect "warnings_new holds the normalised line" "$(field "$summary" warnings_new)" "[\"odoo.tools.view_validation: attribute 'group' is not valid. Did you mean 'groups'?\"]"
+expect "the default list accepts the missing-author line" "$(field "$summary" warnings_accepted)" "1"
+contains "stderr counts the new lines" "$(cat "$state/err")" "1 new WARNING line(s); accept them in"
+
+# The project list accepts the line; the run is green and warnings_new is empty.
+printf '# project\n^odoo\\.tools\\.view_validation: attribute .group. is not valid\n' > "$work/accepted.txt"
+mkdir -p "$work/art-warn2"; cp "$work/accepted.txt" "$work/art-warn2/accepted_warnings.txt"
+reset
+out="$(STUB_WARN=1 run warn2 --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "an accepted WARNING exits 0" "$rc" "0"
+expect "warnings_new is empty" "$(field "$summary" warnings_new)" "[]"
+expect "both lines count as accepted" "$(field "$summary" warnings_accepted)" "2"
+
+# A warning before the first "loading" line is startup noise.
+reset
+out="$(STUB_WARN_PRE=1 run warn3 --db verify --no-conf "$sk")"; rc=$?
+summary="$(printf '%s\n' "$out" | tail -1)"
+expect "a warning before loading starts is ignored" "$rc" "0"
+expect "and is not listed" "$(field "$summary" warnings_new)" "[]"
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
