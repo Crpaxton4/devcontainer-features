@@ -771,5 +771,36 @@ check "bootstrap-foreign-remote-entry-proceeds" 0 $?
 REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-bootstrap.sh" "$TMP/mnt-b" --project Rho6 >/dev/null 2>&1
 check "bootstrap-same-remote-entry-exits-3" 3 $?
 
+# --- aliases: a second project on the same repo is a name, not an entry (#1126) ---
+seed
+map add "Deliv" deliv --no-repo-check --default-branch main --aliases "Support, Care" >/dev/null
+map add "Other" other --no-repo-check --default-branch main >/dev/null
+out="$(resolve Support 2>/dev/null)"
+check_contains "alias-resolves-project-is-alias" '"project":"Support"' "$out"
+check_contains "alias-resolves-alias-of-entry" '"alias_of":"Deliv"' "$out"
+check_contains "alias-resolves-entry-repo" '"repo":"deliv"' "$out"
+out="$(resolve care 2>/dev/null)"
+check_contains "alias-case-insensitive" '"alias_of":"Deliv"' "$out"
+out="$(resolve Deliv 2>/dev/null)"
+check_contains "direct-hit-alias-of-null" '"alias_of":null' "$out"
+out="$(resolve deliv 2>/dev/null)"
+check_contains "repo-folder-route-unchanged" '"project":"Deliv"' "$out"
+out="$(map get Support 2>/dev/null)"; check "get-by-alias" 0 $?
+check_contains "get-by-alias-prints-entry" '"repo":"deliv"' "$out"
+map set Other --aliases "X,Y" >/dev/null 2>&1; check "set-aliases" 0 $?
+check_contains "set-aliases-written" '"aliases": [' "$(map list)"
+map set Other --aliases "" >/dev/null 2>&1; check "set-aliases-empty-removes" 0 $?
+check_contains "set-aliases-removed" '"project":"Other"' "$(map get Other)"
+[ "$(map get Other | grep -c aliases)" -eq 0 ]; check "set-aliases-key-gone" 0 $?
+map set Other --aliases "Deliv" >/dev/null 2>&1; check "alias-equal-to-entry-rejected" 4 $?
+map set Other --aliases "Support" >/dev/null 2>&1; check "alias-duplicate-across-entries-rejected" 4 $?
+map add "Support" support --no-repo-check --default-branch main >/dev/null 2>&1; check "add-entry-named-as-alias-rejected" 4 $?
+err="$(map set Support --notes x 2>&1 >/dev/null)"; rc=$?
+check "set-on-alias-exit-3" 3 $rc
+check_contains "set-on-alias-message" '"Support" is an alias of "Deliv"; use the entry name' "$err"
+map set-flow Support ":task,main" >/dev/null 2>&1; check "set-flow-on-alias-exit-3" 3 $?
+map set-release-owners Support a b >/dev/null 2>&1; check "set-release-owners-on-alias-exit-3" 3 $?
+map remove Support >/dev/null 2>&1; check "remove-on-alias-exit-3" 3 $?
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
