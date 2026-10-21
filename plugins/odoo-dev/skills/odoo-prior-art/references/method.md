@@ -52,7 +52,7 @@ python3 <base directory>/scripts/oca_catalog.py --series 19.0 -o oca19_catalog.c
 
 `oca_check.py` (run first) cache one branch listing per repo. `oca_catalog.py` reuse those listings and fetch each module manifest through batched GitHub GraphQL (~60 modules/request, ~25 requests for full 19.0 org). CSV columns: `repo, module, name, summary, description, depends, license, installable, development_status`. Expect ~1,300 rows on mature series. Re-runs only fetch what missing.
 
-Both need authenticated `gh`. `oca_check.py` exit **2** on `PARTIAL SCAN` (network trouble, or >10% of repos failing) and leave CSV untouched — only full healthy scan prove absence, so never report partial scan as `none`.
+Both need authenticated `gh`. `oca_check.py` exit **2** on `PARTIAL SCAN` (network trouble, or >10% of repos failing) and leave CSV untouched — only full healthy scan prove absence, so never report partial scan as `none`. Exit **2** also mean bad `--csv` (absent, empty, or without `Module Name` header), reported before any scan with stderr line `oca_check.py: --csv <path>: <reason>`; two cases differ by stderr and by whether scan ran.
 
 Catalog is search space. Grep it — beat asking model what OCA have.
 
