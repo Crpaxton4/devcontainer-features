@@ -20,7 +20,7 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     argv = lifecycle.render_exec(settings, "qoc", "1234", "job-1", "the brief")
     cfg = str(settings.config("qoc"))
     ws = str(settings.workspace("qoc"))
-    assert argv[:11] == [
+    assert argv[:13] == [
         "devcontainer",
         "exec",
         "--config",
@@ -31,14 +31,16 @@ def test_exec_command_line_is_section_eight_exactly(settings):
         "ODOO_DEV_STATE_DIR=/usr/local/share/odoo-dev/dispatch/artifacts/job-1",
         "--remote-env",
         "ODOO_UNATTENDED=1",  # the contract with plugins/odoo-dev/hooks/unattended-guard.sh
+        "--remote-env",
+        "ODOO_JOB_ID=job-1",
         "--",
     ]
-    assert argv[11:14] == [
+    assert argv[13:16] == [
         "claude",
         "-p",
         "/odoo-dev:implement 1234\n\nthe brief",  # the entry, then the task id
     ]
-    rest = argv[14:]
+    rest = argv[16:]
     assert "--agent" not in argv  # the forked command names its own agent
     assert rest[:2] == [
         "--append-system-prompt",

@@ -346,6 +346,34 @@ def test_count_live_counts_pending_and_running(jobs):
     assert jobs.count_live("other") == 0
 
 
+def _row(job_id, task_id):
+    return dict(job_id=job_id, batch_id="B", task_id=task_id, repo="r", brief="x")
+
+
+def test_submit_all_inserts_in_order_and_list_by_batch_reads_them(jobs):
+    done = jobs.submit_all([_row("z", "1"), _row("a", "2")], now_us=T0)
+    assert [j.job_id for j in done] == ["z", "a"]
+    assert [j.job_id for j in jobs.list_by_batch("B")] == ["z", "a"]
+    assert jobs.list_by_batch("unknown") == []
+    assert jobs.submit_all([]) == []
+
+
+def test_submit_all_rolls_back_on_a_live_twin(jobs):
+    submit(jobs, "live", task_id="2")
+    with pytest.raises(DuplicateTaskInFlightError):
+        jobs.submit_all([_row("n", "1"), _row("m", "2")])
+    assert jobs.list_by_batch("B") == []
+    with pytest.raises(DuplicateTaskInFlightError):
+        jobs.submit_all([_row("p", "7"), _row("q", "7")])
+    assert jobs.list_by_batch("B") == []
+
+
+def test_submit_all_lets_a_job_id_clash_propagate(jobs):
+    jobs.submit_all([_row("n", "1")])
+    with pytest.raises(sqlite3.IntegrityError):
+        jobs.submit_all([_row("n", "2")])
+
+
 def test_reject_duplicate_row(jobs):
     submit(jobs)
     row = jobs.reject_duplicate(

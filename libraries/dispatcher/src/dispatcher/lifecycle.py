@@ -70,6 +70,7 @@ DISALLOWED_TOOLS = (
 )
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
+JOB_ID_VARIABLE = "ODOO_JOB_ID"
 #: Admission holds the single admission thread, and the per-job deadline does
 #: not cover it, so every call made while admitting has its own timeout.
 UP_TIMEOUT_S = 1200
@@ -226,6 +227,8 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         f"{STATE_DIR_VARIABLE}={ARTIFACTS_TARGET}/{job_id}",
         "--remote-env",
         f"{UNATTENDED_VARIABLE}=1",
+        "--remote-env",
+        f"{JOB_ID_VARIABLE}={job_id}",
         "--",
         "claude",
         "-p",
