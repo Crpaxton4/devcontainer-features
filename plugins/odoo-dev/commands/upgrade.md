@@ -26,5 +26,5 @@ Request, verbatim; its first token is the Odoo task id:
 $ARGUMENTS
 
 Port this task's modules to the target series (second token). A third token
-`user@host` is the ssh host for the Studio inventory. Stop at the port. Nothing
-here runs tests or opens a PR.
+`user@host` is the ssh host for the Studio inventory. The run ends after the
+install loop and the test stage; nothing here opens a PR.
