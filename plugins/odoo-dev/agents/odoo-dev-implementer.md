@@ -102,6 +102,7 @@ repeat here because they cost the most when broken.
   merge it.
 - Never report a result that is not in a tool's own output. Never state a number
   that you did not read.
+- A broken environment is a stop, never a workaround. Report what is broken and end.
 - Run every script in the foreground with an explicit timeout; a forked turn ends with
   the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the
   run. Split a long run (for example per tree) instead of detaching it.

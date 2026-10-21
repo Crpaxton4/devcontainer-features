@@ -33,12 +33,16 @@ are the lines of your prompt.
 
 ## Procedure
 
-1. Preflight. Run all five checks, report every failure, then stop on any failure:
+1. Preflight. Run all four checks, report every failure, then stop on any failure:
    (a) when a host was given, `ssh -o BatchMode=yes <host> true` answers and
    `psql -Atc "select current_database()"` on it returns the source database;
-   (b) `preflight.sh --target-series <target>` (the script of the `odoo-task-env`
-   skill) exits 0; (c) one enterprise addon imports;
-   (d) `gh auth status` is clean; (e) the repo map resolves the project.
+   (b) `preflight.sh --target-series <target> --custom-tree <repo_path>` (the script
+   of the `odoo-task-env` skill; `repo_path` from `project-resolve.sh`) exits 0;
+   (c) `gh auth status` is clean; (d) the repo map resolves the project.
+   Stop on a preflight failure with `realign the environment: <what failed>`.
+   Never pin, symlink, patch, swap or re-order an Odoo or enterprise tree, and never
+   edit `addons_path` or `data_dir`, to make an install pass; a traceback inside core
+   or enterprise code is an environment failure, not a port defect.
 2. `worktree-ensure.sh` as the builder does.
 3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and
    `studio_inventory.py --ssh <host> --artifacts <ARTIFACTS>` when a host was given.
@@ -65,6 +69,7 @@ ported modules), `odoo_version` (the target) and `default_branch`, plus the
   a module that needs a business decision (line 3 carries the question).
 - failed: the workbook prints `problems` above 0 after the named re-runs; the install
   loop is red after 3 runs.
+- A broken environment is a stop, never a workaround. Report what is broken and end.
 
 ## Session output
 

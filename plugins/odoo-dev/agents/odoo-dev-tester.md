@@ -70,6 +70,7 @@ Fail closed:
 - failed: the `build` section is absent; the stack or the database is unusable;
   `series_mismatch`.
 - Red tests are `done`, not `failed`. The verdict is in the table.
+- A broken environment is a stop, never a workaround. Report what is broken and end.
 
 ## Session output
 

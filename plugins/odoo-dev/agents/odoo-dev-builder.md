@@ -72,6 +72,7 @@ Never pass `--put` and never write the `test` section.
   answer (line 3 carries the question).
 - failed: `stack-ensure.sh` exit 5; `series_mismatch` from `run-tests.sh`; 3 red
   self-test runs (`build` is still written; line 3 says red).
+- A broken environment is a stop, never a workaround. Report what is broken and end.
 
 ## Session output
 

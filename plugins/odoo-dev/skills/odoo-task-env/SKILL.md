@@ -35,10 +35,11 @@ Every script prints one JSON object as its last stdout line. Write every path in
 ### 0. Preflight (once per machine or after a rebuild)
 
 ```bash
-<base directory>/scripts/preflight.sh [--soft] [--target-series V]
+<base directory>/scripts/preflight.sh [--soft] [--target-series V] [--custom-tree DIR]
 ```
 
 The series check fails (exit 1, `failures[]` carries both values) when `ODOO_VERSION` does not start with V.
+In a devcontainer, `--custom-tree DIR` also imports every enterprise module in the dependency closure of the modules under DIR (failure `import <name>: <error>`, or `closure: unknown module <name>`).
 
 → `{"ok","context","failures":[],"warnings":[],"ram_available_gb","repos_dir"}`
 
