@@ -362,7 +362,9 @@ case "$cmd" in
       // the delivery-project/upgrade-project case, and project-resolve.sh reports
       // it as ambiguous so a human names one.
       if (repoPath) {
-        const clash = Object.entries(data.projects).find(([, e]) => e.repo_path === repoPath);
+        // Same path AND same remote: a shared bind mount may hold one checkout per repo.
+        const mine = remote || repo;
+        const clash = Object.entries(data.projects).find(([, e]) => e.repo_path === repoPath && (e.remote || e.repo) === mine);
         if (clash) {
           console.error("--repo-path " + repoPath + " is already the repo_path of project: " + clash[0] +
             "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +
@@ -428,7 +430,10 @@ case "$cmd" in
         // because `set --repo-path` is the other way a collision can be written.
         // "" is the unset, which can never collide.
         if (key === "repo_path" && value !== "") {
-          const clash = Object.entries(data.projects).find(([n, e]) => n !== project && e.repo_path === value);
+          // Same path AND same remote (a --remote in this call counts), as in `add`.
+          let mine = entry.remote || entry.repo;
+          for (let j = 0; j < updates.length; j += 2) if (updates[j] === "remote") mine = updates[j + 1] || entry.repo;
+          const clash = Object.entries(data.projects).find(([n, e]) => n !== project && e.repo_path === value && (e.remote || e.repo) === mine);
           if (clash) {
             console.error("--repo-path " + value + " is already the repo_path of project: " + clash[0] +
               "\nOne checkout, one entry: give this project its own checkout path, or correct the other entry with" +

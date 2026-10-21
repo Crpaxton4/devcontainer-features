@@ -520,13 +520,13 @@ check_contains "unset-repo-path-falls-back" "\"repo_path\":\"$TMP/tree/iota\"" "
 seed
 map add "Upsilon" upsilon --repo-path "$TMP/mount/extra-addons" >/dev/null
 check "collide-first-add-ok" 0 $?
-out="$(map add "Phi" phi --repo-path "$TMP/mount/extra-addons" 2>&1)"
+out="$(map add "Phi" upsilon --repo-path "$TMP/mount/extra-addons" 2>&1)"
 check "add-rejects-colliding-repo-path" 2 $?
 check_contains "add-collision-names-flag" "--repo-path" "$out"
 check_contains "add-collision-names-holder" "Upsilon" "$out"
 
 # `set --repo-path` is the other way one could be written.
-map add "Chi" chi --no-repo-check >/dev/null
+map add "Chi" upsilon --no-repo-check >/dev/null
 out="$(map set "Chi" --repo-path "$TMP/mount/extra-addons" 2>&1)"
 check "set-rejects-colliding-repo-path" 2 $?
 check_contains "set-collision-names-holder" "Upsilon" "$out"
@@ -587,7 +587,7 @@ if command -v git >/dev/null 2>&1; then
   git init -q "$TMP/gitmount" >/dev/null 2>&1
   git -C "$TMP/gitmount" remote add origin git@github.com:acme/pinned-addons.git
   seed
-  map add "Omicron" omicron --repo-path "$TMP/gitmount" >/dev/null
+  map add "Omicron" pinned-addons --repo-path "$TMP/gitmount" >/dev/null
   out="$(resolve_in "$NO_TREE" Omicron)"; check "resolve-sniffs-origin-at-repo-path" 0 $?
   check_contains "repo-path-drives-origin-sniff" '"remote":"acme/pinned-addons"' "$out"
 
@@ -732,6 +732,44 @@ check "concurrent-writers-all-exit-0" 0 "$racers"
 map validate >/dev/null 2>&1; check "concurrent-map-still-validates" 0 $?
 no_scratch; check "concurrent-no-scratch-left" 0 $?
 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' "$TMP/map.json.bak" >/dev/null 2>&1; check "concurrent-bak-is-valid-json" 0 $?
+
+# --- one mount, one entry per remote (#1127) -------------------------------------
+# /mnt/extra-addons is a fixed bind-mount name, so two repos can legitimately
+# claim it on different sessions. Same path + same remote is still a collision.
+seed
+map add "Rho" rho --no-repo-check --repo-path /mnt/x --remote acme/rho --default-branch main >/dev/null
+map add "Sigma" sigma --no-repo-check --repo-path /mnt/x --remote acme/sigma --default-branch main >/dev/null 2>&1
+check "same-path-different-remote-add" 0 $?
+map add "Rho2" rho2 --no-repo-check --repo-path /mnt/x --remote acme/rho --default-branch main >/dev/null 2>&1
+check "same-path-same-remote-add-rejected" 2 $?
+map set Sigma --no-repo-check --repo-path /mnt/y >/dev/null 2>&1
+map set Sigma --no-repo-check --repo-path /mnt/x >/dev/null 2>&1; check "same-path-different-remote-set" 0 $?
+map add "Tau" tau --no-repo-check --default-branch main >/dev/null 2>&1
+map set Tau --no-repo-check --remote acme/rho --repo-path /mnt/x >/dev/null 2>&1; check "same-path-same-remote-set-rejected" 2 $?
+
+# A repo_path counts only when the checkout's origin is this entry's repo.
+mkdir -p "$TMP/mnt-a" "$TMP/mnt-b"
+git init -q "$TMP/mnt-a"; git -C "$TMP/mnt-a" remote add origin https://github.com/acme/other.git
+git init -q "$TMP/mnt-b"; git -C "$TMP/mnt-b" remote add origin https://github.com/acme/rho.git
+seed
+map add "Rho" rho --no-repo-check --repo-path "$TMP/mnt-a" --remote acme/rho --default-branch main >/dev/null
+map add "Rho3" rho --no-repo-check --repo-path "$TMP/mnt-b" --default-branch main >/dev/null
+map add "Rho4" rho --no-repo-check --repo-path "$TMP/mnt-a" --default-branch main >/dev/null
+err="$(resolve Rho 2>&1 >/dev/null)"; out="$(resolve Rho 2>/dev/null)"
+check_contains "resolve-foreign-origin-null" '"repo_path":null' "$out"
+check_contains "resolve-foreign-origin-warns" "is checked out from acme/other, not acme/rho — repo_path ignored" "$err"
+out="$(resolve Rho3 2>/dev/null)"
+check_contains "resolve-matching-origin-resolves" "\"repo_path\":\"$TMP/mnt-b\"" "$out"
+out="$(resolve Rho4 2>/dev/null)"
+check_contains "resolve-name-mismatch-null" '"repo_path":null' "$out"
+
+# project-bootstrap.sh: a foreign-remote entry holding the path does not own the checkout.
+seed
+map add "Other" other --no-repo-check --repo-path "$TMP/mnt-b" --remote acme/other --default-branch main >/dev/null
+REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-bootstrap.sh" "$TMP/mnt-b" --project Rho5 >/dev/null 2>&1
+check "bootstrap-foreign-remote-entry-proceeds" 0 $?
+REPO_MAP_FILE="$TMP/map.json" REPOS_DIR="" bash "$SCRIPTS/project-bootstrap.sh" "$TMP/mnt-b" --project Rho6 >/dev/null 2>&1
+check "bootstrap-same-remote-entry-exits-3" 3 $?
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
