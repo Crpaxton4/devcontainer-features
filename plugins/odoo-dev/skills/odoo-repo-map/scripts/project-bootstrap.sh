@@ -73,13 +73,26 @@ git -C "$repo_path" rev-parse --git-dir >/dev/null 2>&1 \
 # Asked before anything is derived: adding a second entry for a checkout that
 # already has one is the exact defect this script exists to stop happening by
 # hand, and the answer the caller needs is the project name, not a new entry.
+#
+# The checkout's origin is read first: a shared mount such as /mnt/extra-addons
+# may hold one entry per remote, so an entry on this path whose remote (or, with
+# none, repo name) is a different repo does not own this checkout.
+remote="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+if [ -n "$remote" ]; then
+  remote="$(node -e '
+    const url = process.argv[1].replace(/\.git$/, "");
+    const m = url.match(/[:/]([^/:]+\/[^/]+)$/);
+    if (m) console.log(m[1]);
+  ' "$remote")"
+fi
 existing="$(bash "$SCRIPT_DIR/repo-map.sh" list)"
 owner="$(node --input-type=module -e '
-  const [listRaw, repoPath] = process.argv.slice(1);
+  const [listRaw, repoPath, origin] = process.argv.slice(1);
   const projects = JSON.parse(listRaw);
-  const hit = Object.entries(projects).find(([, e]) => e.repo_path === repoPath);
+  const hit = Object.entries(projects).find(([, e]) => e.repo_path === repoPath &&
+    (!origin || (e.remote ? e.remote === origin : e.repo === origin.split("/")[1])));
   if (hit) console.log(hit[0]);
-' -- "$existing" "$repo_path")"
+' -- "$existing" "$repo_path" "$remote")"
 if [ -n "$owner" ]; then
   echo "project-bootstrap.sh: $repo_path is already the repo_path of project \"$owner\" — nothing to bootstrap; resolve by that project name: project-resolve.sh \"$owner\"" >&2
   bash "$SCRIPT_DIR/repo-map.sh" get "$owner"
@@ -89,17 +102,8 @@ fi
 [ -n "$project" ] || project="$repo"
 
 # --- remote -------------------------------------------------------------------
-# Same owner/repo shape project-resolve.sh sniffs, and left empty rather than
-# guessed when the clone has no origin: an absent remote is a field a human can
-# fill, a wrong one sends a release PR at somebody else's repository.
-remote="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
-if [ -n "$remote" ]; then
-  remote="$(node -e '
-    const url = process.argv[1].replace(/\.git$/, "");
-    const m = url.match(/[:/]([^/:]+\/[^/]+)$/);
-    if (m) console.log(m[1]);
-  ' "$remote")"
-fi
+# Read above, before the pinned-path lookup. Same owner/repo shape project-resolve.sh
+# sniffs, and left empty rather than guessed when the clone has no origin.
 
 # --- branch -------------------------------------------------------------------
 # origin/HEAD first: it is what the remote says its default is. The checked-out

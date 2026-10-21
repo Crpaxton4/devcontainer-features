@@ -123,23 +123,38 @@ node --input-type=module -e '
   // over the $REPOS_DIR/$repo convention — including on machines where no repos
   // tree resolves at all and reposDir is empty.
   const repoPath = entry.repo_path || (reposDir ? `${reposDir}/${entry.repo}` : null);
-  const repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
+  let repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
+
+  // The origin of the checkout as owner/repo. stderr is ignored rather than inherited:
+  // a checkout with no origin — or a repo_path that is not a git repo at all —
+  // means a null origin, not a line of git noise beside the JSON this script prints.
+  let origin = null;
+  if (repoPresent) {
+    try {
+      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
+      if (m) origin = m[1];
+    } catch { /* no origin — stays null */ }
+  }
+
+  // A pinned repo_path may be a shared mount holding the checkout of another repo.
+  // It counts only when the checkout is the repo of this entry: origin equals
+  // the remote of the entry, or (no remote recorded) the origin repo name equals the repo field.
+  // A checkout with no origin cannot be told apart, so it is trusted as before.
+  if (repoPresent && entry.repo_path && origin) {
+    const expected = entry.remote || entry.repo;
+    const matches = entry.remote ? origin === entry.remote : origin.split("/")[1] === entry.repo;
+    if (!matches) {
+      console.error(`project-resolve.sh: ${entry.project}: ${repoPath} is checked out from ${origin}, not ${expected} — repo_path ignored`);
+      repoPresent = false;
+    }
+  }
 
   // Map first, git second: the map is what a human vouched for, and a checkout
   // can sit on a fork or a stale remote. Gated on repoPresent, so pinning
   // repo_path is what makes this fire where no tree resolves.
-  let remote = entry.remote || null;
-  if (!remote && repoPresent) {
-    try {
-      // stderr is ignored rather than inherited: a checkout with no origin — or a
-      // repo_path that is not a git repo at all — means a null remote, not a line
-      // of git noise beside the JSON this script prints.
-      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
-      if (m) remote = m[1];
-    } catch { /* no origin — remote stays null */ }
-  }
+  const remote = entry.remote || (repoPresent ? origin : null);
 
   let nextEnv = null;
   let atProduction = null;

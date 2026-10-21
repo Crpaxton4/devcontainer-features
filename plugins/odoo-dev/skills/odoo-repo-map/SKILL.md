@@ -107,7 +107,10 @@ It records the mechanically derivable half of an entry and leaves `branch_flow` 
 ## Rules
 
 - An unknown project is a stop, never a guess. Bootstrap first, then stop on what remains.
-- One checkout, one entry. Two entries may share `repo`, never `repo_path`.
+- One checkout, one entry. Two entries may share `repo`, never `repo_path` with the same remote.
+  A shared bind mount such as `/mnt/extra-addons` may hold one entry per remote. A `repo_path`
+  counts only when the checkout's `origin` matches the entry's `remote` (or its `repo` name when
+  there is no `remote`). Otherwise `project-resolve.sh` prints `repo_path: null` and a stderr line.
 - An entry is added only with explicit user confirmation of repo, base, series and chain.
 - One repo with several projects is normal. Those entries can disagree on
   `odoo_version` and `branch_flow`. Name the project.
