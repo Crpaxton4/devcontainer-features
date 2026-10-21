@@ -24,4 +24,4 @@ Never edit code to silence a finding about it.
 Never state a number you did not read.
 
 # enforcement
-The irreversible and forbidden-route lines above are also refused by the hook unattended-guard.sh. It engages when the environment variable ODOO_UNATTENDED is set to a non-empty value, in this session and in every subagent it forks. A refusal from that hook is final. Never work around it.
+The irreversible and forbidden-route lines above are also refused by the hook unattended-guard.sh. It engages when the environment variable ODOO_UNATTENDED is set to a non-empty value, in this session and in every subagent it forks. It also engages when the agent type starts with `odoo-dev-`. A refusal from that hook is final. Never work around it.
