@@ -45,10 +45,11 @@ are the lines of your prompt.
 2. `worktree-ensure.sh` as the builder does.
 3. Inventory under `<ARTIFACTS>/inventory/`: `module_inventory.py`, and
    `studio_inventory.py --ssh <host> --artifacts <ARTIFACTS>` when a host was given.
-4. Prior art per module → `keep`, `replace` or `merge-into-standard`. A module whose
+4. Prior art per module → `keep`, `replace` or `merge-into-standard`. The verdict and
+   `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
 5. Per module in topological order: `references/porting-checklist.md` with
-   `references/<target>/changes.md`; write `enrich_<module>.json`; commit with the
+   `references/<target>/changes.md`; write the one `enrich_<module>.json` (all keys, with `oca_alt`); commit with the
    manifest version prefix bumped to the target series.
 6. `build_workbook.py --workdir <ARTIFACTS>/inventory --target-version <target>
    -o <ARTIFACTS>/inventory/<repo>-upgrade-<target>.xlsx` must print `problems: 0`.
@@ -66,7 +67,7 @@ ported modules), `odoo_version` (the target) and `default_branch`, plus the
 
 - parked: any preflight failure (all of them listed in line 3); an ambiguous project;
   a module that needs a business decision (line 3 carries the question).
-- failed: the workbook prints `problems` above 0 after the named re-runs; the install
+- failed: the workbook prints `problems` above 0 after the records are corrected; the install
   loop reports progress: false.
 - A broken environment is a stop, never a workaround. Report what is broken and end.
 

@@ -6,16 +6,14 @@ references/oca-base-review.md):
 
     inventory.csv     seeded by module_inventory.py, OCA repo column filled by
                       oca_check.py
-    enrich_*.json     phase 1 — per-module enrichment + "<major> native?"
-    oca_alt_*.json    phase 2 — per-module "OCA <major> alternative"
+    enrich_<module>.json
+                      one per seeded module: one JSON object with exactly the
+                      ENRICH_KEYS — enrichment, "<major> native?" and
+                      "OCA <major> alternative"
     studio.csv        optional — studio_inventory.py output (UI-built artifacts)
 
-Both agent groups are merged FIELD BY FIELD, per module, across every file in
-the group: an agent may deliver a partial record, and a second file naming the
-same module fills the keys the first left out instead of replacing the record.
-A key carrying different non-empty values in two files is a problem line naming
-the module, the key and both files; the first file read (files sorted by name)
-keeps the cell.
+There is no merge. A missing file, an array file, a file whose `module` differs
+from its name, a missing or extra key is a problem line; fix the record.
 
 Output: one xlsx with Module Inventory / Inventory Evidence, plus Studio
 Inventory when that CSV is present, plus CSV siblings. Everything else the
@@ -25,11 +23,10 @@ file.
     python3 build_workbook.py --workdir /tmp/inv --target-version 19.0 \
             -o <ARTIFACTS>/inventory/acme-upgrade-19.0.xlsx
 
-Prints a validation report — unenriched modules, conflicting enrichment
-files, `TODO-AI` sentinels in a delivered column, over-long cells, and
+Prints a validation report — missing or malformed enrichment records,
+`TODO-AI` sentinels in a delivered column, over-long cells, and
 inventory cells outside their documented vocabulary (Functional area, native
-verdict, OCA repo, OCA alternative). Read it: it is the only check that the
-fan-out agents followed the briefs. `problems: 0` means complete AND
+verdict, OCA repo, OCA alternative). `problems: 0` means complete AND
 schema-valid: a column still carrying the sentinel is counted, reported and
 exits non-zero.
 """
@@ -97,56 +94,72 @@ EVIDENCE_MAX = 300
 # What the seeding script writes when only an agent can answer. In a column the
 # workbook presents as an answer it is an unanswered question, not a value.
 SENTINEL = "TODO-AI"
+# The one record shape: `enrich_<module>.json` is an object with exactly these
+# keys (none optional; "" is a legal value, a missing key is not).
+ENRICH_KEYS = ["module", "purpose", "third_party", "third_party_link",
+               "complexity", "upgrade_action", "functional_area", "native",
+               "native_notes", "native_evidence", "vendor_release",
+               "complexity_rationale", "upgrade_action_rationale", "notes",
+               "oca_alt", "oca_alt_evidence"]
+# Keys that feed a delivered column: build_inventory reports a sentinel there
+# by column name, so the loader leaves them alone.
+DELIVERED_KEYS = {"purpose", "third_party", "complexity", "upgrade_action",
+                  "functional_area", "native", "native_notes", "oca_alt"}
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
 TOP_WRAP = Alignment(vertical="top", wrap_text=True)
 
 
-def load_group_json(workdir, pattern):
-    """Every entry in the group, tagged with the file it came from.
+def load_enrich(workdir, modules, problems):
+    """One strict `enrich_<module>.json` per seeded module, keyed by module.
 
-    The file name is carried because it is the only thing that makes a
-    conflict actionable: "two files disagree" is useless without their names.
+    The file is one JSON object with exactly the ENRICH_KEYS. A missing file,
+    a non-object (an array file is a second record source), a `module` that
+    differs from the file name (two files claiming one module), a missing or
+    extra key, or a sentinel in a key the build does not already report, is a
+    problem line; the record is then not used. There is no merge: a malformed
+    record is fixed, not repaired.
     """
-    merged = []
-    for path in sorted(workdir.glob(pattern)):
-        for entry in json.loads(path.read_text()):
-            merged.append((entry, path.name))
-    return merged
-
-
-def merge_group_json(workdir, pattern, problems):
-    """Field-wise merge of one agent group, keyed by module.
-
-    A fan-out writes one file per group, and nothing stops two groups from
-    covering the same module — a record-wise merge would keep whichever file
-    sorted last and silently drop every key the loser held (evidence keys have
-    no seed CSV to fall back on, so they would simply ship empty).
-
-    So: a key set by exactly one file wins; the same value in several files is
-    fine; different non-empty values are a problem line naming the module, the
-    key and both files, and the first file read keeps the cell. An empty value
-    never overwrites a filled one.
-    """
-    merged, source = {}, {}
-    for entry, name in load_group_json(workdir, pattern):
-        module = (entry.get("module") or "").strip()
-        if not module:
-            problems.append(f"{name}: entry with no module key — dropped")
+    records, seeded = {}, set(modules)
+    for path in sorted(workdir.glob("enrich_*.json")):
+        stem = path.stem[len("enrich_"):]
+        if stem not in seeded:
+            problems.append(f"{path.name}: module {stem!r} is not in the seed")
+    for module in modules:
+        name = f"enrich_{module}.json"
+        path = workdir / name
+        if not path.exists():
+            problems.append(f"{module}: {name} is missing")
             continue
-        record = merged.setdefault(module, {})
-        origin = source.setdefault(module, {})
-        for key, value in entry.items():
-            if value in ("", None):
-                continue
-            if key not in record or record[key] in ("", None):
-                record[key], origin[key] = value, name
-            elif record[key] != value:
-                problems.append(
-                    f"{module}: {origin[key]} and {name} disagree on {key} "
-                    f"— keeping {origin[key]}")
-    return merged
+        try:
+            record = json.loads(path.read_text())
+        except ValueError as exc:
+            problems.append(f"{module}: {name} is not valid JSON ({exc})")
+            continue
+        if not isinstance(record, dict):
+            problems.append(f"{module}: {name} is not one JSON object "
+                            f"(one record per module, one file per module)")
+            continue
+        if record.get("module") != module:
+            problems.append(f"{module}: {name} claims module "
+                            f"{record.get('module')!r}")
+            continue
+        missing = [k for k in ENRICH_KEYS if k not in record]
+        extra = [k for k in record if k not in ENRICH_KEYS]
+        if missing:
+            problems.append(f"{module}: {name} is missing key(s) "
+                            f"{', '.join(missing)}")
+        if extra:
+            problems.append(f"{module}: {name} has extra key(s) "
+                            f"{', '.join(extra)}")
+        if missing or extra:
+            continue
+        for key in ENRICH_KEYS:
+            if record[key] == SENTINEL and key not in DELIVERED_KEYS:
+                problems.append(f"{module}: {name} key {key} is {SENTINEL}")
+        records[module] = record
+    return records
 
 
 def style_sheet(sheet, widths, freeze):
@@ -289,9 +302,10 @@ def check_cap(label, value, cap):
 
 
 def build_inventory(workbook, workdir, source, native_column, notes_column,
-                    oca_column, problems, review):
-    enrich = merge_group_json(workdir, "enrich_*.json", problems)
-    alternatives = merge_group_json(workdir, "oca_alt_*.json", problems)
+                    oca_column, problems):
+    seed_rows = list(csv.DictReader(source.open(encoding="utf-8-sig")))
+    enrich = load_enrich(
+        workdir, [r["Module Name"].strip() for r in seed_rows], problems)
     columns = BASE_COLUMNS + [native_column, notes_column, oca_column]
     # The columns the workbook presents as answers. A sentinel in any of them
     # is an unanswered question shipped as a verdict.
@@ -301,24 +315,19 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
     sentinels = Counter()
 
     inventory_rows, evidence_rows, by_module = [], [], {}
-    for seeded in csv.DictReader(source.open(encoding="utf-8-sig")):
+    for seeded in seed_rows:
         # Module Name is the technical name and nothing else — it is the key
         # the enrichment JSON joins on, so it is used whole, never split.
         module = seeded["Module Name"].strip()
-        enriched = enrich.get(module)
-        alternative = alternatives.get(module)
-        if not enriched:
-            problems.append(f"{module}: no enrichment row (phase 1)")
-        if not alternative:
-            problems.append(f"{module}: no OCA alternative row (phase 2)")
-        enriched, alternative = enriched or {}, alternative or {}
+        # A missing or malformed record was reported by load_enrich.
+        enriched = enrich.get(module, {})
 
         # `native` is the verdict and nothing else; `native_notes` is the
         # explanation. A cell that is not exactly one verdict is a problem.
         verdict = (enriched.get("native") or SENTINEL).strip()
         native_notes = (enriched.get("native_notes") or "").strip()
         native_evidence = (enriched.get("native_evidence") or "").strip()
-        alt_evidence = (alternative.get("oca_alt_evidence") or "").strip()
+        alt_evidence = (enriched.get("oca_alt_evidence") or "").strip()
 
         row = dict(seeded)
         row["Module Purpose"] = enriched.get("purpose") or row["Module Purpose"]
@@ -334,7 +343,7 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
                                   or row["Functional area"])
         row[native_column] = verdict
         row[notes_column] = native_notes
-        row[oca_column] = alternative.get("oca_alt", SENTINEL)
+        row[oca_column] = enriched.get("oca_alt", SENTINEL)
 
         for column in delivered:
             if (row.get(column) or "").strip() == SENTINEL:
@@ -362,13 +371,12 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
         inventory_rows.append([row.get(c, "") for c in columns])
         by_module[module] = row
 
-        notes = " | ".join(x for x in [enriched.get("notes", ""),
-                                       alternative.get("notes", "")] if x)
         evidence_rows.append([
             module, native_evidence, alt_evidence,
             enriched.get("vendor_release", ""),
             enriched.get("complexity_rationale", ""),
-            enriched.get("upgrade_action_rationale", ""), notes])
+            enriched.get("upgrade_action_rationale", ""),
+            enriched.get("notes", "")])
 
     sheet = workbook.create_sheet("Module Inventory")
     sheet.append(columns)
@@ -414,13 +422,13 @@ def main():
     notes_column = f"{major} native notes"
     oca_column = f"OCA {major} alternative"
     source = args.inventory or args.workdir / "inventory.csv"
-    problems, review = [], []
+    problems = []
 
     workbook = Workbook()
     workbook.remove(workbook.active)
     inv_columns, inv_rows, evidence_rows, inventory, sentinels = \
         build_inventory(workbook, args.workdir, source, native_column,
-                        notes_column, oca_column, problems, review)
+                        notes_column, oca_column, problems)
 
     studio = build_passthrough_sheet(
         workbook, args.studio or default_if_present(args.workdir, "studio.csv"),
@@ -453,11 +461,6 @@ def main():
         print("  ", problem)
     if len(problems) > 80:
         print(f"   ... {len(problems) - 80} more")
-    print(f"to review (not blocking): {len(review)}")
-    for item in review[:40]:
-        print("  ", item)
-    if len(review) > 40:
-        print(f"   ... {len(review) - 40} more")
     return 1 if problems else 0
 
 
