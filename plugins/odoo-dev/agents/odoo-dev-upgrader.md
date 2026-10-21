@@ -87,7 +87,8 @@ are the lines of your prompt.
    After each run, run `upgrade-state.sh <ARTIFACTS> gate install --summary <file>`.
    When `next` prints `STOP budget` or `STOP killed` at any step, end the run with `status: failed` and name that reason in the one-sentence line.
    After step 7, run `upgrade-state.sh <ARTIFACTS> build`.
-8. Record every friction (a tool that lied, a refused command, a path that did not match, a workaround) with `upgrade-state.sh <ARTIFACTS> friction add …`; a `porting_fact` carries the series pair, the symptom grep and the fix. The empty list is the normal result.
+8. Test: `upgrade_tests.sh --repo <repo> --task <id> --worktree <W> --series <target> --artifacts <ARTIFACTS> --session-id <job id> [--enterprise <enterprise_path>]`; it writes `tests` per module into the upgrade state; `total.run` 0 is failed.
+9. Record every friction (a tool that lied, a refused command, a path that did not match, a workaround) with `upgrade-state.sh <ARTIFACTS> friction add …`; a `porting_fact` carries the series pair, the symptom grep and the fix. The empty list is the normal result.
 
 ## Outputs
 
@@ -95,7 +96,7 @@ are the lines of your prompt.
 `worktree`, `branch`, `modules` (the ported modules), `odoo_version` (the target) and `default_branch`,
 which holds the base branch the port used (the
 upgrade branch when the project has one), plus the
-`<ARTIFACTS>/inventory/` directory. Never run the test suite as evidence.
+`<ARTIFACTS>/inventory/` directory. The test evidence is `<ARTIFACTS>/tests/summary.json`, written by `upgrade_tests.sh`, never typed by hand.
 
 ## Stop conditions
 

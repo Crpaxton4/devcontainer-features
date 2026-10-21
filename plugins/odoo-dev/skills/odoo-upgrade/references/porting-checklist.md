@@ -75,5 +75,5 @@ Work target `changes.md` top to bottom: Manifest → Python/ORM → Views/XML �
 
 - `install_all.sh --db <throwaway> --session-id <id> --artifacts <ARTIFACTS>/install --addons-path <worktree>` — install EVERY custom module on a fresh throwaway DB (never the project's own: `--db` is required and the script refuses a database that already holds modules). Must exit clean: no tracebacks, no "invalid view" warnings.
 - Fix what break (minimal diffs, commit per module), rerun. Repeat until green.
-- Tests are the tester's step, not the port's: see the agent brief.
+- Tests run through `upgrade_tests.sh` (generated smoke module, module tests, dependency tests): see the agent brief.
 - Upgrade path: `-u <module>` on DB where previous version was installed, when available.
