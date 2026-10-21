@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Merge inventory CSV + agent JSON into the upgrade-preparation workbook.
 
-Inputs, all in one working dir (see references/inventory.md,
-references/oca-base-review.md):
+Inputs, all in one working dir (see references/inventory.md):
 
     inventory.csv     seeded by module_inventory.py, OCA repo column filled by
                       oca_check.py
@@ -330,6 +329,41 @@ def load_oca_index(workdir, problems):
     return alt, series
 
 
+def propose_action(native, oca_alt, third_party, seed_action):
+    """The `Upgrade action` the evidence implies. Single source of the table.
+
+    | native        | OCA alternative              | proposal             |
+    |---------------|------------------------------|----------------------|
+    | seed `drop?`  | anything                     | `drop?` (installable False wins) |
+    | yes, yes/partial | anything                  | merge-into-standard  |
+    | partial       | anything                     | review               |
+    | no            | `already OCA: ...`           | replace (diff the local copy first) |
+    | no            | any candidate `(full)`       | replace              |
+    | no            | `(partial)` only             | review (replace + custom delta, or keep: size the gap) |
+    | no            | none, 3rd party app No       | keep                 |
+    | no            | none, 3rd party app Yes      | review (replace if the vendor ships a target release, else escalate) |
+    | TODO-AI, empty, unknown | anything           | review               |
+
+    `review` means the evidence does not decide: the agent must write
+    keep, replace or merge-into-standard and say why.
+    """
+    if (seed_action or "").strip() == "drop?":
+        return "drop?"
+    native = (native or "").strip()
+    alt = (oca_alt or "").strip()
+    if native in ("yes", "yes/partial"):
+        return "merge-into-standard"
+    if native != "no" or alt in ("", SENTINEL):
+        return "review"
+    if OCA_ALREADY_RE.match(alt) or "(full)" in alt:
+        return "replace"
+    if "(partial)" in alt:
+        return "review"
+    if alt == OCA_NONE and (third_party or "").strip().lower() == "no":
+        return "keep"
+    return "review"
+
+
 def build_inventory(workbook, workdir, source, native_column, notes_column,
                     oca_column, problems):
     seed_rows = list(csv.DictReader(source.open(encoding="utf-8-sig")))
@@ -367,8 +401,6 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
                                      or row["3rd party app link"])
         row["Complexity/risk"] = (enriched.get("complexity")
                                   or row["Complexity/risk"])
-        row["Upgrade action"] = (enriched.get("upgrade_action")
-                                 or row["Upgrade action"])
         row["Functional area"] = (enriched.get("functional_area")
                                   or row["Functional area"])
         row[native_column] = verdict
@@ -378,6 +410,23 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
             # oca_check.py derived the literal from the scan: it wins.
             row[oca_column] = index_alt[module]
             alt_evidence = f"oca_check.py {index_series} index"
+
+        # The workbook proposes the action from native x OCA x 3rd party; the
+        # record fills nothing it does not override, and an override needs a
+        # rationale. `review` is the proposal when the evidence cannot decide.
+        proposed = propose_action(verdict, row[oca_column],
+                                  row["3rd party app?"], seeded["Upgrade action"])
+        chosen = (enriched.get("upgrade_action") or "").strip()
+        rationale = (enriched.get("upgrade_action_rationale") or "").strip()
+        row["Upgrade action"] = chosen or proposed
+        if chosen and chosen != SENTINEL and chosen != proposed:
+            if not rationale:
+                problems.append(
+                    f"{module}: Upgrade action {chosen!r} overrides the "
+                    f"proposed {proposed!r} without upgrade_action_rationale")
+        if row["Upgrade action"] == "review":
+            problems.append(f"{module}: Upgrade action is review — decide "
+                            "keep/replace/merge-into-standard")
 
         for column in delivered:
             if (row.get(column) or "").strip() == SENTINEL:
