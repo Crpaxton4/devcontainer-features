@@ -1,5 +1,29 @@
 # Changelog
 
+## [8.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.0.0...personal-features-v8.1.0) (2026-10-21)
+
+
+### Features
+
+* **dispatcher,odoo-orchestrator:** run the dispatcher as a compose service behind dispatch.sh ([#1236](https://github.com/Crpaxton4/devcontainer-features/issues/1236)) ([5981850](https://github.com/Crpaxton4/devcontainer-features/commit/5981850a4de7ae5ecd5792cbdfd7e220d2010b05))
+* **dispatcher,odoo-sdk:** dispatch submit and dispatch report, and ODOO_JOB_ID in each dispatched session ([0b7a02c](https://github.com/Crpaxton4/devcontainer-features/commit/0b7a02c1f6a2d8ccd79c1697f2327cb78f057fdd)), closes [#1213](https://github.com/Crpaxton4/devcontainer-features/issues/1213)
+* **dispatcher,odoo-sdk:** dispatch submit, dispatch report and ODOO_JOB_ID ([#1234](https://github.com/Crpaxton4/devcontainer-features/issues/1234)) ([0b7a02c](https://github.com/Crpaxton4/devcontainer-features/commit/0b7a02c1f6a2d8ccd79c1697f2327cb78f057fdd))
+* **dispatcher:** put the bundle root on the Feature's odoo-dev mount and drop the --mount that a running container ignores ([#1111](https://github.com/Crpaxton4/devcontainer-features/issues/1111)) ([ab6266a](https://github.com/Crpaxton4/devcontainer-features/commit/ab6266a64c1c8c81aded3a06547390a0ad012529))
+* **odoo-sdk:** add a source selector (events, runs, both) to the sessions query so the agreement check can be run ([#1102](https://github.com/Crpaxton4/devcontainer-features/issues/1102)) ([6b68777](https://github.com/Crpaxton4/devcontainer-features/commit/6b687779f52b733ba27d7995b986180ba67cef74)), closes [#1086](https://github.com/Crpaxton4/devcontainer-features/issues/1086)
+* **personal-features:** pin odoo-ls 1.6.1, which respects the client's dynamicRegistration ([#1180](https://github.com/Crpaxton4/devcontainer-features/issues/1180)) ([f8eaa13](https://github.com/Crpaxton4/devcontainer-features/commit/f8eaa137edb90fde28d2829e41feb51b18a3955d))
+* **personal-features:** refresh the odoo-dev plugin on postCreate and warn at session start when the installed version drifts ([#1109](https://github.com/Crpaxton4/devcontainer-features/issues/1109)) ([24ebaa0](https://github.com/Crpaxton4/devcontainer-features/commit/24ebaa0935258170ae04d460663842bac146fc86)), closes [#1052](https://github.com/Crpaxton4/devcontainer-features/issues/1052)
+* **usage-log:** log which owned features agents use, with a standalone SQLite writer ([#1239](https://github.com/Crpaxton4/devcontainer-features/issues/1239)) ([6450a38](https://github.com/Crpaxton4/devcontainer-features/commit/6450a38bb795a4a23fd92fcbf418d99849bdd8ba))
+* **webui:** a read-only web interface for jobs, the queue and the friction log ([#1237](https://github.com/Crpaxton4/devcontainer-features/issues/1237)) ([816f6de](https://github.com/Crpaxton4/devcontainer-features/commit/816f6de5562b6c5578cd9319dea8e3812661ee6b))
+
+
+### Bug Fixes
+
+* **devcontainer:** record docker-outside-of-docker in devcontainer-lock.json so a container start no longer rewrites it ([#1176](https://github.com/Crpaxton4/devcontainer-features/issues/1176)) ([b933fa5](https://github.com/Crpaxton4/devcontainer-features/commit/b933fa52df2b50ef0ebab73f22ce6bfa0f78edb4))
+* **dispatcher:** read the agent's task.json at tasks/&lt;task_id&gt;/task.json where state-dir.sh writes it ([#1099](https://github.com/Crpaxton4/devcontainer-features/issues/1099)) ([a968ff4](https://github.com/Crpaxton4/devcontainer-features/commit/a968ff4db7b5084c8bf30df42d2e271646582e69))
+* **odoo-sdk:** give RunStore a read-only constructor so read_runs stops building it with __new__ ([#1095](https://github.com/Crpaxton4/devcontainer-features/issues/1095)) ([0df9fef](https://github.com/Crpaxton4/devcontainer-features/commit/0df9fef94f2492b0846877c237d68e0db81535f4))
+* **release:** re-lock libraries/dispatcher on the release PR branch ([0774716](https://github.com/Crpaxton4/devcontainer-features/commit/07747163743b098d658c07167510bb606a8646cb))
+* **release:** re-lock libraries/dispatcher on the release PR branch so uv lock --check stays green after a release ([#1177](https://github.com/Crpaxton4/devcontainer-features/issues/1177)) ([0774716](https://github.com/Crpaxton4/devcontainer-features/commit/07747163743b098d658c07167510bb606a8646cb))
+
 ## [8.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v7.0.1...personal-features-v8.0.0) (2026-10-16)
 
 
