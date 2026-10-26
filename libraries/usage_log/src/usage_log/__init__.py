@@ -1,6 +1,6 @@
 """Usage log: one SQLite line per use of a feature, one declaration per feature.
 
-Stdlib only and imports nothing from odoo_sdk, the dispatcher or the tracker.
+Stdlib only and imports nothing from odoo_client, the dispatcher or the tracker.
 With ``USAGE_LOG_DIR`` unset or empty every function does nothing, so a host
 session that shares a hook configuration with the containers stays out of the
 log. A write that fails never raises: it prints one stderr line and returns

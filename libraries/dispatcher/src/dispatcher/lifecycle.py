@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_sdk.state.dispatch_state import artifacts_root, odoo_dev_dir
+from odoo_client.state.dispatch_state import artifacts_root, odoo_dev_dir
 
 from .schema import schema_argument
 from .settings import (

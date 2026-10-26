@@ -19,8 +19,8 @@ prerelease-mode = "allow"
 [manifest]
 members = [
     "dispatcher",
+    "odoo-client",
     "odoo-dev-data",
-    "odoo-sdk",
     "usage-log",
     "webui",
 ]
@@ -1225,7 +1225,7 @@ name = "dispatcher"
 version = "1.2.0"
 source = { editable = "libraries/dispatcher" }
 dependencies = [
-    { name = "odoo-sdk" },
+    { name = "odoo-client" },
     { name = "usage-log" },
 ]
 
@@ -1241,7 +1241,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "odoo-sdk", editable = "libraries/odoo_sdk" },
+    { name = "odoo-client", editable = "libraries/odoo_client" },
     { name = "usage-log", editable = "libraries/usage_log" },
 ]
 
@@ -3153,17 +3153,9 @@ wheels = [
 ]
 
 [[package]]
-name = "odoo-dev-data"
-version = "0.1.0"
-source = { editable = "libraries/odoo_dev_data" }
-
-[package.metadata]
-requires-dist = [{ name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" }]
-
-[[package]]
-name = "odoo-sdk"
+name = "odoo-client"
 version = "8.2.0"
-source = { editable = "libraries/odoo_sdk" }
+source = { editable = "libraries/odoo_client" }
 dependencies = [
     { name = "fastmcp" },
     { name = "markdown-it-py" },
@@ -3265,6 +3257,14 @@ test = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.15.2" },
     { name = "hypothesis", specifier = ">=6.157.1" },
 ]
+
+[[package]]
+name = "odoo-dev-data"
+version = "0.1.0"
+source = { editable = "libraries/odoo_dev_data" }
+
+[package.metadata]
+requires-dist = [{ name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" }]
 
 [[package]]
 name = "onnxruntime"

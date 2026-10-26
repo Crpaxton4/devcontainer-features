@@ -45,9 +45,9 @@ import signal
 import sys
 from collections.abc import Sequence
 
-from odoo_sdk.state.dispatch_state import bundle_dir, lock_path
-from odoo_sdk.state.jobs import DuplicateTaskInFlightError, Job, JobState, JobStore
-from odoo_sdk.state.runs_store import RunStore
+from odoo_client.state.dispatch_state import bundle_dir, lock_path
+from odoo_client.state.jobs import DuplicateTaskInFlightError, Job, JobState, JobStore
+from odoo_client.state.runs_store import RunStore
 
 from .engine import Engine
 from .gates import AdmissionGate, MemoryReadError

@@ -3,7 +3,7 @@
 # Executed against the 'on_odoo_base_image' scenario in scenarios.json, which
 # installs 'personal-features' on top of the official odoo:19 image.
 #
-# odoo_sdk is installed as an isolated uv tool (not system-wide) so that the
+# odoo_client is installed as an isolated uv tool (not system-wide) so that the
 # Debian-managed cryptography package is never touched. Checks verify the tool
 # environment directly rather than system Python.
 
@@ -17,14 +17,14 @@ check "claude is on PATH and executable" bash -c "test -x \"\$(command -v claude
 check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 
-# odoo_sdk: installed into an isolated tool environment.
+# odoo_client: installed into an isolated tool environment.
 # Verify via the tool env's own Python, not the system Python.
-check "odoo_sdk is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
+check "odoo_client is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_client'"
 
-check "odoo_sdk core API is accessible in tool env" \
+check "odoo_client core API is accessible in tool env" \
     bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk import (
+from odoo_client import (
     OdooClient,
     OdooConnectionSettings,
     OdooExecutor,
@@ -59,9 +59,9 @@ check "odoo-tui entrypoint is executable" bash -c "test -x \"\$(command -v odoo-
 # before the scenario, so the dir and schema exist).
 check "ODOO_TASK_TRACKER_DIR points at the host-provisioned tracker mount" bash -c \
     "[ \"\$ODOO_TASK_TRACKER_DIR\" = '/usr/local/share/odoo-task-tracker' ]"
-check "odoo_sdk resolves tracker.db under the mounted state root" \
+check "odoo_client resolves tracker.db under the mounted state root" \
     bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk.state.db import tracker_db_path
+from odoo_client.state.db import tracker_db_path
 
 path = tracker_db_path()
 assert str(path) == \"/usr/local/share/odoo-task-tracker/tracker.db\", path
@@ -90,7 +90,7 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
   STATE="$(mktemp -d)"
   DB="$STATE/tracker.db"
   # Provision a throwaway central DB with the SDK schema (never the real one).
-  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_sdk.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
+  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_client.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
     || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
   subj="scenario-hook-e2e-$$"
   # CLAUDE_CONFIG_DIR is sandboxed alongside the throwaway DB so the #804
@@ -103,7 +103,7 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
   for _ in $(seq 1 50); do
     "$SDK_BIN/python" - "$DB" "$subj" <<PY && { landed=1; break; }
 import json, sqlite3, sys
-from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE
+from odoo_client.state.db import _DEVELOPMENT_SOURCE_PREDICATE
 db, subj = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db)
 row = conn.execute(

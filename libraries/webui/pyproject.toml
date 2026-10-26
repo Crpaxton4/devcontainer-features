@@ -7,7 +7,7 @@ name = "webui"
 version = "0.1.0"
 description = "Read-only local web interface for the dispatcher's jobs, the orchestrator queue and the friction log."
 requires-python = ">=3.11"
-# Flask only. Jinja2 comes with it. The package does not import dispatcher or odoo_sdk.
+# Flask only. Jinja2 comes with it. The package does not import dispatcher or odoo_client.
 dependencies = [
     "flask>=3.1",
 ]

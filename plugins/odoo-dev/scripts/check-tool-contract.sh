@@ -29,7 +29,7 @@
 #                                  how the offline fixture tests inject a
 #                                  known surface.
 #   2. odoo-sdk cmd --list --json — the real installed CLI.
-#   3. python3 -c "from odoo_sdk.commands.builtin import BUILTIN_COMMANDS"
+#   3. python3 -c "from odoo_client.commands.builtin import BUILTIN_COMMANDS"
 #                                — the exact mapping register_builtins() puts
 #                                  on the registry `cmd --list` enumerates,
 #                                  for an install without the console script.
@@ -126,7 +126,7 @@ for entry in json.load(sys.stdin):
 
 surface_via_module() {
   python3 -c '
-from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
+from odoo_client.commands.builtin import BUILTIN_COMMANDS
 print("\n".join(sorted(BUILTIN_COMMANDS)))
 '
 }
@@ -162,16 +162,16 @@ else
 
   # Source 3 — the builtin mapping, for an install with no console script (or
   # one that source 2 just rejected).
-  if [ -z "$SURFACE" ] && python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
-    resolve_surface "odoo_sdk.commands.builtin.BUILTIN_COMMANDS" surface_via_module || SURFACE=""
+  if [ -z "$SURFACE" ] && python3 -c 'import odoo_client' >/dev/null 2>&1; then
+    resolve_surface "odoo_client.commands.builtin.BUILTIN_COMMANDS" surface_via_module || SURFACE=""
   fi
 
   if [ -z "$SURFACE" ]; then
     cat >&2 <<'MSG'
 tool contract: cannot resolve the command surface — odoo-sdk is not on PATH
-(or does not run) and odoo_sdk is not importable. Install the SDK first:
+(or does not run) and odoo_client is not importable. Install the SDK first:
 
-  python3 -m pip install ./libraries/odoo_sdk
+  python3 -m pip install ./libraries/odoo_client
 
 or pass an explicit listing with --surface-file <path>.
 MSG

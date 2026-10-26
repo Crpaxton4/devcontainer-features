@@ -1,11 +1,11 @@
 # Personal Dev Container Features
 
-This repo holds a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`, `second-brain`, `debian-eol-archives`), a Python SDK for Odoo ERP access (`odoo_sdk`), a Claude Code plugin for Odoo consulting and delivery (`odoo-dev`), a host-side task dispatcher (`dispatcher`) and the Claude Code plugin that feeds it (`odoo-orchestrator`). The master design of the orchestrator stack is [`docs/design/devcontainer-task-orchestrator.html`](docs/design/devcontainer-task-orchestrator.html).
+This repo holds a devcontainer [Features](https://containers.dev/implementors/features/) collection (`personal-features`, `second-brain`, `debian-eol-archives`), a Python SDK for Odoo ERP access (`odoo_client`), a Claude Code plugin for Odoo consulting and delivery (`odoo-dev`), a host-side task dispatcher (`dispatcher`) and the Claude Code plugin that feeds it (`odoo-orchestrator`). The master design of the orchestrator stack is [`docs/design/devcontainer-task-orchestrator.html`](docs/design/devcontainer-task-orchestrator.html).
 
 This is the only `README.md` in the repo. Per-Feature documentation lives in `devcontainer-features/src/<feature>/NOTES.md`, and the plugin's skills, agents and commands document themselves in their own files.
 
 - [`personal-features`](#personal-features)
-- [`odoo_sdk`](#odoo_sdk)
+- [`odoo_client`](#odoo_client)
 - [odoo-dev plugin](#odoo-dev-plugin)
 - [odoo-orchestrator plugin](#odoo-orchestrator-plugin)
 - [dispatcher](#dispatcher)
@@ -60,7 +60,7 @@ Run this before `devcontainer features test` too, or the test containers fail to
 | --- | --- | --- |
 | `~/.claude` | `/usr/local/share/claude-home` | `CLAUDE_CONFIG_DIR` — Claude Code's auth (`.credentials.json`) and settings. |
 | `~/.config/gh` | `/usr/local/share/gh-cli-config` | `GH_CONFIG_DIR` — so `gh auth login` happens once per machine. |
-| `~/.config/odoo_sdk` | `/usr/local/share/odoo-sdk-config` | `ODOO_SDK_CONFIG` — points at the dir; the SDK probes it for `config.toml`/`config.ini`. |
+| `~/.config/odoo_client` | `/usr/local/share/odoo-sdk-config` | `ODOO_SDK_CONFIG` — points at the dir; the SDK probes it for `config.toml`/`config.ini`. |
 | `~/.config/pr-automation` | `/usr/local/share/pr-automation` | `PR_AUTOMATION_CONFIG_DIR` — `create-pr`'s global and per-project config. |
 | `~/.config/coderabbit` | `/usr/local/share/coderabbit-config` | `CODERABBIT_CONFIG_DIR` — CodeRabbit CLI config/auth state. |
 | `~/.config/odoo-dev` | `/usr/local/share/odoo-dev` | `ODOO_DEV_STATE_DIR` — the [odoo-dev plugin](#odoo-dev-plugin)'s repo map and handoff artifacts. |
@@ -68,17 +68,17 @@ Run this before `devcontainer features test` too, or the test containers fail to
 
 See [`devcontainer-features/src/personal-features/NOTES.md`](devcontainer-features/src/personal-features/NOTES.md) for more detail, including the Windows and WSL notes.
 
-## `odoo_sdk`
+## `odoo_client`
 
 A Python SDK for Odoo ERP access via XML-RPC and JSON-RPC, with a built-in [MCP](https://modelcontextprotocol.io) server so AI agents can call Odoo operations as tools.
 
 ### Subsystems
 
-The complete map of `src/odoo_sdk/` — detail lives in the Sphinx docs.
+The complete map of `src/odoo_client/` — detail lives in the Sphinx docs.
 
 | Package | Role |
 | --- | --- |
-| `client` | `OdooClient` — connects to an Odoo server and returns model proxies via `client["model.name"]`; reads settings from keyword args or a `.odoo_sdk.ini` file. |
+| `client` | `OdooClient` — connects to an Odoo server and returns model proxies via `client["model.name"]`; reads settings from keyword args or a `.odoo_client.ini` file. |
 | `records` | `OdooRecordset` — an ordered set of records; supports `search`, `read`, `write`, `create`, `unlink`, and x2many field commands. |
 | `query` | `DomainExpression` — composes search domains from `Condition` nodes (`&`, `\|`, `!`) and serializes to the wire format. |
 | `fields` | Field-value adaptation and x2many command normalization. |
@@ -97,13 +97,13 @@ The complete map of `src/odoo_sdk/` — detail lives in the Sphinx docs.
 ### Quickstart
 
 ```python
-from odoo_sdk import OdooClient
+from odoo_client import OdooClient
 
 client = OdooClient(url="https://myodoo.example.com", db="mydb", username="admin", password="...")
 tasks = client["project.task"].search([("stage_id.name", "=", "In Progress")], limit=20).read(["name", "user_ids"])
 ```
 
-Connection settings can also be stored in `.odoo_sdk.ini`:
+Connection settings can also be stored in `.odoo_client.ini`:
 
 ```ini
 [odoo]
@@ -118,9 +118,9 @@ password = ...
 Build a `Registry`, turn its commands into an explicit tool set, and serve them:
 
 ```python
-from odoo_sdk import OdooClient, OdooMCPServer, Registry
-from odoo_sdk.commands.builtin import register_builtins
-from odoo_sdk.mcp.tools import build_explicit_tools
+from odoo_client import OdooClient, OdooMCPServer, Registry
+from odoo_client.commands.builtin import register_builtins
+from odoo_client.mcp.tools import build_explicit_tools
 
 # Register the SDK's built-in commands, then build the explicit, typed tool
 # set that wraps them. The server exposes exactly these tools — it does not
@@ -139,7 +139,7 @@ odoo-mcp
 ### Setup
 
 ```bash
-cd libraries/odoo_sdk
+cd libraries/odoo_client
 uv sync           # install deps + dev groups
 uv run python -m unittest discover -s tests -t .   # run tests
 make coverage     # run tests + enforce 90 % coverage threshold
@@ -260,7 +260,7 @@ One command, [`/odoo-orchestrator:run`](plugins/odoo-orchestrator/commands/run.m
 
 ## dispatcher
 
-The Python package at [`libraries/dispatcher/`](libraries/dispatcher): a host-side task dispatcher that runs one Odoo task per devcontainer session and records it as a run. It depends on `odoo_sdk` for the job store, run record and dispatch state. The entry point is `dispatch` (`dispatcher.cli:main`).
+The Python package at [`libraries/dispatcher/`](libraries/dispatcher): a host-side task dispatcher that runs one Odoo task per devcontainer session and records it as a run. It depends on `odoo_client` for the job store, run record and dispatch state. The entry point is `dispatch` (`dispatcher.cli:main`).
 
 ```bash
 dispatch run '<JSON array>'   # submit the approved set, then admit and run until nothing is pending
@@ -301,8 +301,8 @@ The packages sit under `devcontainer-features/` and `libraries/`, the plugins un
 │   ├── src/debian-eol-archives/   # devcontainer Feature — repoints apt at the archives on an EOL Debian base, NOTES.md
 │   └── test/                      # feature test scenarios, one dir per Feature
 ├── libraries
-│   ├── odoo_sdk/                  # owns src/, tests/, docs/, examples/, tools/ directly
-│   │   ├── src/odoo_sdk/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, state, transport, tui, utilities
+│   ├── odoo_client/                  # owns src/, tests/, docs/, examples/, tools/ directly
+│   │   ├── src/odoo_client/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, state, transport, tui, utilities
 │   │   ├── tests/                 # one test_<pkg>/ per subpackage
 │   │   ├── docs/source/           # Sphinx docs
 │   │   ├── examples/, tools/
@@ -352,10 +352,10 @@ devcontainer features test -p ./devcontainer-features --skip-scenarios -f person
 devcontainer features test -p ./devcontainer-features -f personal-features --skip-autogenerated --skip-duplicated .
 ```
 
-### `odoo_sdk`
+### `odoo_client`
 
 ```bash
-cd libraries/odoo_sdk
+cd libraries/odoo_client
 uv sync                      # install all dependency groups
 
 # Unit tests

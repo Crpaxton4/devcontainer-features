@@ -238,11 +238,11 @@ check "usage-log CLI is on PATH when the wheel is bundled (#1204)" bash -c \
 
 # #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
 # mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
-# lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
+# lowercase odoo_client_CONFIG (which pointed at a specific config.ini file) must be
 # gone - a case-sensitive stale name would leave the SDK reading nothing.
 check "ODOO_SDK_CONFIG points at the bind mount dir" bash -c \
   "[ \"\$ODOO_SDK_CONFIG\" = '/usr/local/share/odoo-sdk-config' ]"
-check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_CONFIG\" ]"
+check "legacy lowercase odoo_client_CONFIG is not set" bash -c "[ -z \"\$odoo_client_CONFIG\" ]"
 
 # NOTE: no check here that the odoo-sdk MCP server is registered. install.sh
 # registers it at BUILD time into CLAUDE_CONFIG_DIR=/usr/local/share/claude-home,
@@ -1104,7 +1104,7 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
   STATE="$(mktemp -d)"
   DB="$STATE/tracker.db"
   # Provision a throwaway central DB with the SDK schema (never the real one).
-  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_sdk.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
+  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_client.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
     || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
   subj="ci-hook-e2e-$$"
   printf "{\"session_id\":\"s-%s\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$$" "$subj" \
@@ -1113,7 +1113,7 @@ check "claude-event-hook drives a real PreToolUse event through --attach-active-
   for _ in $(seq 1 50); do
     "$SDK_BIN/python" - "$DB" "$subj" <<PY && { rm -rf "$STATE"; exit 0; }
 import json, sqlite3, sys
-from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE
+from odoo_client.state.db import _DEVELOPMENT_SOURCE_PREDICATE
 db, subj = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db)
 row = conn.execute(

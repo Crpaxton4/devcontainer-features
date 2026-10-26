@@ -6,9 +6,9 @@ import os
 import subprocess
 
 import pytest
-from odoo_sdk.state.dispatch_state import bundle_dir, odoo_dev_dir
-from odoo_sdk.state.jobs import JobStore
-from odoo_sdk.state.runs_store import RunOutcome, RunStore
+from odoo_client.state.dispatch_state import bundle_dir, odoo_dev_dir
+from odoo_client.state.jobs import JobStore
+from odoo_client.state.runs_store import RunOutcome, RunStore
 
 from dispatcher import collect, lifecycle, queue
 from dispatcher.lifecycle import Completed, Shell

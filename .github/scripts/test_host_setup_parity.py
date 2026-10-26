@@ -4,7 +4,7 @@ A devcontainer bind mount whose source doesn't exist on the host is a hard
 container-create failure, so ``setup.sh`` / ``setup.ps1`` must create *every*
 mount source the Feature declares. That list used to be duplicated in four
 places (the Feature JSON, ``setup.sh``, and ``.github/workflows/test.yaml``
-twice) and predictably drifted: ``~/.config/odoo_sdk`` was a mount source that
+twice) and predictably drifted: ``~/.config/odoo_client`` was a mount source that
 ``setup.sh`` never created.
 
 ``persisted-paths.tsv`` is now the single source of truth: ``setup.sh`` reads it
@@ -26,7 +26,7 @@ Linux test:
   materialises a missing single-file mount source as a directory and then fails
   the mount.
 
-Like the other helpers here this is CI-only and stdlib-only: no ``odoo_sdk``, no
+Like the other helpers here this is CI-only and stdlib-only: no ``odoo_client``, no
 third-party YAML/JSON5 parser.
 
 ``TestSetupShOwnership`` is the one group here that *runs* ``setup.sh`` rather

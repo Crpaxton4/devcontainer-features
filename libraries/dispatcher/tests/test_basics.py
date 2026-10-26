@@ -5,8 +5,8 @@ import json
 import multiprocessing
 
 import pytest
-from odoo_sdk.state.dispatch_state import odoo_dev_dir
-from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
+from odoo_client.state.dispatch_state import odoo_dev_dir
+from odoo_client.state.jobs import DeadReason, JobState, JobStore
 
 from dispatcher import deadletter, gates, queue, schema
 from dispatcher.deadletter import Ending, classify

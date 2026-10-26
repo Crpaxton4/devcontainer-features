@@ -6,7 +6,7 @@ and SENT Gmail as resync event sources, but — like the tracker database itself
 (#369) — it never runs an OAuth flow and never mints credentials. Credentials are
 HOST-PROVISIONED: this script runs the Google installed-app / loopback OAuth flow
 on the host and writes the resulting token JSON into the existing
-``~/.config/odoo_sdk`` mount, from where the container CONSUMES it (refreshing via
+``~/.config/odoo_client`` mount, from where the container CONSUMES it (refreshing via
 a plain token-endpoint POST when the access token goes stale).
 
 Run it once on the host, supplying the OAuth client id/secret you created in the
@@ -15,7 +15,7 @@ Google Cloud console (an "OAuth client ID" of type "Desktop app")::
     python3 scripts/google_oauth_setup.py \\
         --client-id  <CLIENT_ID>.apps.googleusercontent.com \\
         --client-secret <CLIENT_SECRET> \\
-        --output ~/.config/odoo_sdk/google_token.json
+        --output ~/.config/odoo_client/google_token.json
 
 Scopes requested (both READ-ONLY):
 
@@ -27,7 +27,7 @@ ephemeral ``http://localhost:<port>`` loopback, then exchanges the code for a
 refresh token and writes ``{client_id, client_secret, refresh_token, token,
 token_uri, scopes, expiry}`` to ``--output`` with ``0600`` permissions.
 
-Stdlib-only by design: it runs on a bare host with no ``odoo_sdk`` and no
+Stdlib-only by design: it runs on a bare host with no ``odoo_client`` and no
 third-party Google libraries installed — everything here is ``urllib`` /
 ``http.server`` / ``secrets``.
 """
@@ -53,7 +53,7 @@ _SCOPES = (
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
 )
-_DEFAULT_OUTPUT = "~/.config/odoo_sdk/google_token.json"
+_DEFAULT_OUTPUT = "~/.config/odoo_client/google_token.json"
 
 
 def _free_loopback_port() -> int:

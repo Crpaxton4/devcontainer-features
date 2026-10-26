@@ -22,15 +22,15 @@ from collections import deque
 from collections.abc import Callable
 
 import usage_log
-from odoo_sdk.state.artifacts import ensure_bundle_dir
-from odoo_sdk.state.dispatch_state import now_us, resolve_now_us
-from odoo_sdk.state.jobs import (
+from odoo_client.state.artifacts import ensure_bundle_dir
+from odoo_client.state.dispatch_state import now_us, resolve_now_us
+from odoo_client.state.jobs import (
     DeadReason,
     InvalidJobTransitionError,
     Job,
     JobStore,
 )
-from odoo_sdk.state.runs_store import RunStore
+from odoo_client.state.runs_store import RunStore
 
 from . import lifecycle
 from .collect import (

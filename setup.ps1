@@ -93,7 +93,7 @@ To fix, either:
 $paths = @(
     '.claude'
     '.config/gh'
-    '.config/odoo_sdk'
+    '.config/odoo_client'
     '.config/pr-automation'
     '.config/coderabbit'
     '.coderabbit'

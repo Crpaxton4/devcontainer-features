@@ -166,7 +166,7 @@ case "$task_id" in
 esac
 
 command -v odoo-sdk >/dev/null 2>&1 \
-  || fail_json 4 "MissingCLI" "odoo-sdk is not on PATH — install it with: python3 -m pip install ./libraries/odoo_sdk"
+  || fail_json 4 "MissingCLI" "odoo-sdk is not on PATH — install it with: python3 -m pip install ./libraries/odoo_client"
 
 # The binary existing is not the same as the binary serving `cmd` (#902 #889): an
 # odoo-sdk installed before #727 has no `cmd` subparser and answers every dispatch
@@ -178,7 +178,7 @@ probe_out="$(odoo-sdk cmd --help 2>&1)" || probe_rc=$?
 probe_out="${probe_out:0:400}"  # argparse names every choice it does accept; that
                                 # list is the useful half and it is short.
 [ "$probe_rc" -eq 0 ] || fail_json 4 "MissingCLI" \
-  "the installed odoo-sdk does not serve 'odoo-sdk cmd' — it predates the cmd subcommand (#727), which every writeback here dispatches through. Upgrade it with: python3 -m pip install --upgrade ./libraries/odoo_sdk (or: uv tool install --force ./libraries/odoo_sdk). Probe 'odoo-sdk cmd --help' exited ${probe_rc}: ${probe_out}"
+  "the installed odoo-sdk does not serve 'odoo-sdk cmd' — it predates the cmd subcommand (#727), which every writeback here dispatches through. Upgrade it with: python3 -m pip install --upgrade ./libraries/odoo_client (or: uv tool install --force ./libraries/odoo_client). Probe 'odoo-sdk cmd --help' exited ${probe_rc}: ${probe_out}"
 
 # ensure_session <task_id> — #891. task_note requires a RUNNING tracking session
 # and raises TaskNotRunningError without one, so the writeback creates it rather

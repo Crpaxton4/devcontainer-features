@@ -368,7 +368,7 @@ install -m 0755 "$WRAPPER_SRC" "$WRAPPER_PATH"
 # that removed X509_V_FLAG_NOTIFY_POLICY).
 #
 # The venv's interpreter is PINNED and deliberately independent of the base
-# image's python3 (#674). odoo_sdk is a pure RPC client - it never imports odoo
+# image's python3 (#674). odoo_client is a pure RPC client - it never imports odoo
 # core - so nothing requires its interpreter to match the container's Odoo
 # Python. uv is a static binary that runs on every supported base (odoo:16's
 # bullseye is glibc 2.31) and fetches its own python-build-standalone CPython
@@ -380,7 +380,7 @@ install -m 0755 "$WRAPPER_SRC" "$WRAPPER_PATH"
 # installs unconditionally on every base image.
 UV_PYTHON_PIN=3.11
 FEATURE_DIR="$(dirname "$0")"
-# Give uv's downloads plenty of headroom: the odoo_sdk dependency tree pulls
+# Give uv's downloads plenty of headroom: the odoo_client dependency tree pulls
 # large wheels (onnxruntime 17.8 MiB, numpy 15.9 MiB, ...) that can exceed
 # uv's default 30s HTTP timeout on a slow link and fail the whole image
 # build. Paired with the retry() wrapper on the install calls below.
@@ -408,11 +408,11 @@ if ! command -v uv >/dev/null 2>&1; then
     run_installer https://astral.sh/uv/install.sh
     unset UV_INSTALL_DIR
 fi
-# Install the bundled odoo_sdk wheel(s) into one shared uv venv. The glob
+# Install the bundled odoo_client wheel(s) into one shared uv venv. The glob
 # stays literal (a single non-matching entry) when no wheel is bundled, so
 # gate on the first entry actually being a file before doing any work.
 _SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
-_sdk_wheels=("$FEATURE_DIR"/odoo_sdk-*.whl)
+_sdk_wheels=("$FEATURE_DIR"/odoo_client-*.whl)
 if [ -f "${_sdk_wheels[0]}" ]; then
     # venv creation is hoisted out of the per-wheel loop: with a second
     # bundled wheel the old in-loop `uv venv` would re-run on the same path
@@ -425,7 +425,7 @@ if [ -f "${_sdk_wheels[0]}" ]; then
         retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
     done
     # usage_log (#1204): the stdlib-only usage-log writer shares the odoo-sdk
-    # env, because odoo_sdk imports it. Its wheel is bundled beside the SDK's;
+    # env, because odoo_client imports it. Its wheel is bundled beside the SDK's;
     # a checkout that bundled only the SDK wheel simply has no usage-log.
     for wheel in "$FEATURE_DIR"/usage_log-*.whl; do
         [ -f "$wheel" ] || continue
@@ -458,7 +458,7 @@ if [ -f "${_sdk_wheels[0]}" ]; then
     # ~/.claude mount is live, so sync-claude-hooks audits those at
     # container-create time instead.
     if ! /usr/local/bin/sync-claude-hooks --check-deps; then
-        echo "ERROR: the odoo_sdk console scripts are not all executable on PATH after install (expected $_SDK_ENV/bin/<script> -> /usr/local/bin/<script>)." >&2
+        echo "ERROR: the odoo_client console scripts are not all executable on PATH after install (expected $_SDK_ENV/bin/<script> -> /usr/local/bin/<script>)." >&2
         echo "The bundled wheel installed but did not provide every entry point; hooks and CLI tooling that depend on them would silently no-op, so failing the build instead." >&2
         exit 1
     fi
@@ -470,7 +470,7 @@ else
     # #674 fester. sync-claude-mcp additionally deregisters a stale user-scope
     # odoo-mcp entry at container-create time so the mounted ~/.claude stays
     # self-consistent.
-    echo "WARNING: no bundled odoo_sdk wheel in $FEATURE_DIR; skipping the odoo-sdk toolchain. This container will have NO odoo-sdk/odoo-mcp/odoo-tui on PATH (Claude Code hooks and the odoo-mcp MCP server will not work). Wheels are bundled at release/CI time." >&2
+    echo "WARNING: no bundled odoo_client wheel in $FEATURE_DIR; skipping the odoo-sdk toolchain. This container will have NO odoo-sdk/odoo-mcp/odoo-tui on PATH (Claude Code hooks and the odoo-mcp MCP server will not work). Wheels are bundled at release/CI time." >&2
 fi
 
 # mempalace: global cross-project memory palace, auto-mined via Claude Code

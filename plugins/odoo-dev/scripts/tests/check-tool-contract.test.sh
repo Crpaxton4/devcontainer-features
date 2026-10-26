@@ -5,7 +5,7 @@
 # their surface with --surface-file, and the real-tree case derives the surface
 # statically from the `_name = "..."` declarations in the SDK's builtin command
 # modules — the same names `cmd --list --json` serves, without importing the
-# package. When the real CLI (or an importable odoo_sdk) happens to be present,
+# package. When the real CLI (or an importable odoo_client) happens to be present,
 # a bonus case runs the gate end to end against it.
 #
 # Failures asserted by the name they must report, not by exit code alone —
@@ -21,7 +21,7 @@ SUT="$HERE/../check-tool-contract.sh"
 PLUGIN_ROOT="$(cd "$HERE/../.." && pwd)"
 REPO_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
 FIX="$HERE/fixtures/tool-contract"
-BUILTIN_DIR="$REPO_ROOT/libraries/odoo_sdk/src/odoo_sdk/commands/builtin"
+BUILTIN_DIR="$REPO_ROOT/libraries/odoo_client/src/odoo_client/commands/builtin"
 
 pass=0; fail=0
 ok()  { echo "PASS $*"; pass=$((pass + 1)); }
@@ -108,7 +108,7 @@ assert_falls_through() {
 # (a) does not import at all — `--help` itself fails.
 cat > "$stub_bin/odoo-sdk" <<'STUB'
 #!/usr/bin/env bash
-echo "ModuleNotFoundError: No module named 'odoo_sdk'" >&2
+echo "ModuleNotFoundError: No module named 'odoo_client'" >&2
 exit 1
 STUB
 chmod +x "$stub_bin/odoo-sdk"
@@ -170,7 +170,7 @@ fi
 # venv (#775) resolves and then serves nothing, and this case must skip on it
 # rather than report the gate's correct exit 2 as a failure.
 if { command -v odoo-sdk >/dev/null 2>&1 && odoo-sdk cmd --list --json >/dev/null 2>&1; } \
-   || python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
+   || python3 -c 'import odoo_client' >/dev/null 2>&1; then
   out="$(bash "$SUT" --plugin-root "$PLUGIN_ROOT" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then
     ok "real tree via installed SDK: $out"
@@ -178,7 +178,7 @@ if { command -v odoo-sdk >/dev/null 2>&1 && odoo-sdk cmd --list --json >/dev/nul
     bad "real tree via installed SDK: rc=$rc: $out"
   fi
 else
-  echo "SKIP real tree via installed SDK (no working odoo-sdk or odoo_sdk here)"
+  echo "SKIP real tree via installed SDK (no working odoo-sdk or odoo_client here)"
 fi
 
 echo

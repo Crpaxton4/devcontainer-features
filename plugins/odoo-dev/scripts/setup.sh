@@ -221,8 +221,8 @@ fi
 # ir.model (#444, #686). Ship without the project.task entry and the default call
 # — schedule_activity with only res_id — fails at the END of a task, which is the
 # worst possible moment to discover a config gap. Read-only, and read the way the
-# SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_sdk.*, then
-# ~/.config/odoo_sdk. ODOO_MODEL_IDS counts too — it is the documented override.
+# SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_client.*, then
+# ~/.config/odoo_client. ODOO_MODEL_IDS counts too — it is the documented override.
 MODEL_IDS_STEP="odoo-sdk cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
 
 sdk_config_path() {
@@ -237,8 +237,8 @@ sdk_config_path() {
     [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
     return 1
   fi
-  for f in ./.odoo_sdk.toml ./.odoo_sdk.ini \
-           "$HOME/.config/odoo_sdk/config.toml" "$HOME/.config/odoo_sdk/config.ini"; do
+  for f in ./.odoo_client.toml ./.odoo_client.ini \
+           "$HOME/.config/odoo_client/config.toml" "$HOME/.config/odoo_client/config.ini"; do
     [ -f "$f" ] && { printf '%s' "$f"; return 0; }
   done
   return 1
@@ -279,7 +279,7 @@ sdk_config="$(sdk_config_path || true)"
 if [ -n "$model_ids_state" ]; then
   pass sdk-model-ids "project.task supplied by ODOO_MODEL_IDS"
 elif [ -z "$sdk_config" ]; then
-  fail sdk-model-ids "no Odoo SDK config file found (\$ODOO_SDK_CONFIG, ./.odoo_sdk.*, ~/.config/odoo_sdk) — schedule_activity has nowhere to read the project.task ir.model id from" \
+  fail sdk-model-ids "no Odoo SDK config file found (\$ODOO_SDK_CONFIG, ./.odoo_client.*, ~/.config/odoo_client) — schedule_activity has nowhere to read the project.task ir.model id from" \
     "$MODEL_IDS_STEP"
 elif has_project_task_id "$sdk_config"; then
   pass sdk-model-ids "[model_ids] project.task in $sdk_config"

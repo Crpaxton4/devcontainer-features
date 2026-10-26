@@ -1,0 +1,134 @@
+import importlib
+import unittest
+
+
+class TestRecordsetFirstPublicExports(unittest.TestCase):
+    def test_top_level_all_exposes_recordset_first_exports(self) -> None:
+        package = importlib.import_module("odoo_client")
+
+        expected_exports = {
+            "commands",
+            "Command",
+            "OdooClient",
+            "OdooConnectionSettings",
+            "OdooExecutor",
+            "OdooJson2Executor",
+            "OdooMCPServer",
+            "OdooRecordset",
+            "OdooRpcExecutor",
+            "Registry",
+            "Domain",
+            "DomainExpression",
+            "Record",
+            "OdooError",
+            "OdooAuthenticationError",
+            "OdooAccessError",
+            "OdooValidationError",
+            "OdooMissingRecordError",
+            "OdooTransportError",
+            "OdooServerError",
+            "DeletionNotSupportedError",
+        }
+
+        self.assertEqual(set(package.__all__), expected_exports)
+
+    def test_top_level_all_promotes_recordset_primitives(self) -> None:
+        package = importlib.import_module("odoo_client")
+
+        self.assertIn("DomainExpression", package.__all__)
+        self.assertIn("OdooRecordset", package.__all__)
+        self.assertTrue(hasattr(package, "DomainExpression"))
+        self.assertTrue(hasattr(package, "OdooRecordset"))
+
+    def test_top_level_all_promotes_command_and_json2_executor(self) -> None:
+        package = importlib.import_module("odoo_client")
+
+        self.assertIn("Command", package.__all__)
+        self.assertIn("OdooJson2Executor", package.__all__)
+        self.assertTrue(hasattr(package, "Command"))
+        self.assertTrue(hasattr(package, "OdooJson2Executor"))
+
+    def test_mcp_server_resolves_lazily_through_module_getattr(self) -> None:
+        package = importlib.import_module("odoo_client")
+        from odoo_client.mcp.server import OdooMCPServer
+
+        self.assertIn("OdooMCPServer", package.__all__)
+        self.assertIs(package.OdooMCPServer, OdooMCPServer)
+
+    def test_unknown_attribute_raises_attribute_error(self) -> None:
+        package = importlib.import_module("odoo_client")
+
+        with self.assertRaises(AttributeError):
+            package.NotAPublicSymbol
+
+    def test_top_level_all_exposes_error_taxonomy(self) -> None:
+        package = importlib.import_module("odoo_client")
+        errors = importlib.import_module("odoo_client.transport.errors")
+
+        taxonomy = [
+            "OdooError",
+            "OdooAuthenticationError",
+            "OdooAccessError",
+            "OdooValidationError",
+            "OdooMissingRecordError",
+            "OdooTransportError",
+            "OdooServerError",
+            "DeletionNotSupportedError",
+        ]
+        for name in taxonomy:
+            self.assertIn(name, package.__all__)
+            self.assertTrue(hasattr(package, name))
+            # The top-level re-export is the same object as the canonical
+            # transport.errors definition, not a shadowing duplicate.
+            self.assertIs(getattr(package, name), getattr(errors, name))
+
+
+class TestErrorsFacadeExports(unittest.TestCase):
+    """The shared-kernel ``odoo_client.errors`` façade (ADR-005).
+
+    Additive coverage for the layering baseline: the façade must re-export
+    the canonical error objects (never shadowing duplicates) so that
+    internal layers can import them without the ``from odoo_client import``
+    root-import cycle.
+    """
+
+    TRANSPORT_TAXONOMY = (
+        "OdooError",
+        "OdooAuthenticationError",
+        "OdooAccessError",
+        "OdooValidationError",
+        "OdooMissingRecordError",
+        "OdooTransportError",
+        "OdooServerError",
+        "DeletionNotSupportedError",
+    )
+    STATE_TAXONOMY = (
+        "TrackerStateMissingError",
+        "TaskAlreadyRunningError",
+        "TaskNotRunningError",
+        "InvalidStateTransitionError",
+    )
+
+    def test_facade_all_is_exactly_the_two_taxonomies(self) -> None:
+        facade = importlib.import_module("odoo_client.errors")
+
+        self.assertEqual(
+            set(facade.__all__),
+            set(self.TRANSPORT_TAXONOMY) | set(self.STATE_TAXONOMY),
+        )
+
+    def test_facade_reexports_canonical_transport_errors(self) -> None:
+        facade = importlib.import_module("odoo_client.errors")
+        canonical = importlib.import_module("odoo_client.transport.errors")
+
+        for name in self.TRANSPORT_TAXONOMY:
+            self.assertIn(name, facade.__all__)
+            self.assertIs(getattr(facade, name), getattr(canonical, name))
+
+    def test_facade_reexports_canonical_state_errors(self) -> None:
+        facade = importlib.import_module("odoo_client.errors")
+        canonical = importlib.import_module("odoo_client.state.models")
+
+        for name in self.STATE_TAXONOMY:
+            self.assertIn(name, facade.__all__)
+            self.assertIs(getattr(facade, name), getattr(canonical, name))

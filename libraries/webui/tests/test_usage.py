@@ -280,4 +280,4 @@ def test_page_code_names_no_kind_or_key_and_imports_no_producer():
         assert not re.search(rf"['\"/>\s]{literal}[_a-z]*['\"<\s]", source), literal
     code = (SRC / "usage.py").read_text()
     imports = re.findall(r"^\s*(?:from|import)\s+(\S+)", code, re.M)
-    assert not [m for m in imports if "usage_log" in m or "odoo_sdk" in m]
+    assert not [m for m in imports if "usage_log" in m or "odoo_client" in m]

@@ -1,6 +1,6 @@
 """Where the data lives. Each rule copies the producer that writes the data.
 
-The state root follows ``odoo_sdk/state/dispatch_state.py`` and ``state/db.py``.
+The state root follows ``odoo_client/state/dispatch_state.py`` and ``state/db.py``.
 The artifacts root follows ``dispatch_state.artifacts_root``. The orchestrator
 home follows ``home()`` in ``plugins/odoo-orchestrator/scripts/orchestrator.py``.
 This package does not import those modules. Every function reads the

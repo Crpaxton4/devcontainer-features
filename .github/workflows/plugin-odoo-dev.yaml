@@ -28,13 +28,13 @@ on:
       - 'plugins/odoo-dev/**'
       - '.claude-plugin/marketplace.json'
       - '.github/workflows/plugin-odoo-dev.yaml'
-      - 'libraries/odoo_sdk/src/odoo_sdk/**'
+      - 'libraries/odoo_client/src/odoo_client/**'
   pull_request:
     paths:
       - 'plugins/odoo-dev/**'
       - '.claude-plugin/marketplace.json'
       - '.github/workflows/plugin-odoo-dev.yaml'
-      - 'libraries/odoo_sdk/src/odoo_sdk/**'
+      - 'libraries/odoo_client/src/odoo_client/**'
   workflow_dispatch:
 
 # A superseded push to the same ref has nothing left to prove.
@@ -107,7 +107,7 @@ jobs:
   # Postgres server and psycopg2, which only this job provides — a developer
   # machine has the client binaries but no server, so there it prints
   # "SKIP: no reachable postgres"; the parity and tool-contract suites SKIP
-  # their installed-SDK cases without the pip-installed odoo_sdk that jobs 4
+  # their installed-SDK cases without the pip-installed odoo_client that jobs 4
   # and 5 set up). They do not
   # fail off a runner — they quietly check less, so running them from
   # validate.sh would print PASS for a suite whose point went unexercised.
@@ -217,7 +217,7 @@ jobs:
 
       - name: "Referenced tool names exist on the odoo-sdk command surface"
         run: |
-          python -m pip install --quiet ./libraries/odoo_sdk
+          python -m pip install --quiet ./libraries/odoo_client
           bash plugins/odoo-dev/scripts/check-tool-contract.sh
 
   # Static shell lint over every shell script the plugin ships. Pinned

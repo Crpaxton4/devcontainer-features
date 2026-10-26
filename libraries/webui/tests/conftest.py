@@ -1,7 +1,7 @@
 """Fixtures. The table shapes are copied from the producers, not imported.
 
-jobs table:  libraries/odoo_sdk/src/odoo_sdk/state/jobs.py (JOBS_MIGRATIONS)
-runs tables: libraries/odoo_sdk/src/odoo_sdk/state/runs_store.py (runs, run_envelopes, run_artifacts)
+jobs table:  libraries/odoo_client/src/odoo_client/state/jobs.py (JOBS_MIGRATIONS)
+runs tables: libraries/odoo_client/src/odoo_client/state/runs_store.py (runs, run_envelopes, run_artifacts)
 The generated ``*_at`` columns, the triggers and STRICT are left out: the pages read only the *_us columns.
 """
 

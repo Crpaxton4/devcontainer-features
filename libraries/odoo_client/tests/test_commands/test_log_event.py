@@ -1,0 +1,529 @@
+"""Tests for :class:`LogEventCommand`, the command-layer owner of the events
+append write (issue #407).
+
+The command is the single place an ``EventRecord`` is constructed and handed to
+:meth:`LocalStateClient.add_event`; the CLI ``log-event`` subcommand and the MCP
+dispatch-event wrapper both route their writes through it. These tests drive the
+command directly against a schema-provisioned temp DB and assert the persisted
+row, so the shared write contract is pinned in one place.
+"""
+
+import os
+import sqlite3
+import subprocess
+import unittest
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from unittest.mock import Mock, patch
+
+from odoo_client.commands import LogEventCommand
+from odoo_client.commands.builtin import BUILTIN_COMMANDS
+from odoo_client.commands.log_event import (
+    _CONVENTIONAL_BRANCH_TYPES,
+    billable_task_ids,
+    current_branch_label,
+    normalize_task_ids,
+    task_ids_from_branch,
+)
+from odoo_client.reap import REAP_THRESHOLD_ENV
+from odoo_client.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
+from tests.support import make_state_db, make_state_db_path
+
+#: Patch targets for the two best-effort git lookups the command performs. Every
+#: test that is not specifically about provenance stubs both, so the suite never
+#: depends on the ambient checkout it happens to run in.
+REPO_LABEL = "odoo_client.commands.log_event.current_repo_label"
+BRANCH_LABEL = "odoo_client.commands.log_event.current_branch_label"
+
+
+class TestLogEventCommand(unittest.TestCase):
+    def setUp(self) -> None:
+        self.db = make_state_db()
+        for target in (REPO_LABEL, BRANCH_LABEL):
+            patcher = patch(target, return_value="")
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_not_a_builtin_command(self) -> None:
+        # Event emission must never be an LLM-callable tool, and the built-in
+        # surface is a bijection with the MCP tool surface, so ``log_event`` is
+        # deliberately NOT registered as a built-in.
+        self.assertNotIn("log_event", BUILTIN_COMMANDS)
+
+    def test_writes_all_fields_verbatim(self) -> None:
+        when = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        result = LogEventCommand(state=self.db).execute(
+            source="claude:PostToolUse",
+            subject="work",
+            payload={"tool": "Bash"},
+            task_ids=["101", "202"],
+            repo="o/r",
+            branch="feat/kiosk",
+            pr_num=202,
+            external_id="git:abc123",
+            timestamp=when,
+        )
+        events = self.db.get_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.source, "claude:PostToolUse")
+        self.assertEqual(event.subject, "work")
+        self.assertEqual(event.payload, {"tool": "Bash"})
+        self.assertEqual(event.task_ids, ["101", "202"])
+        self.assertEqual(event.repo, "o/r")
+        self.assertEqual(event.branch, "feat/kiosk")
+        self.assertEqual(event.pr_num, 202)
+        self.assertEqual(event.external_id, "git:abc123")
+        self.assertEqual(event.timestamp, when)
+        # The return value summarizes the written row for the caller.
+        self.assertEqual(
+            result,
+            {
+                "source": "claude:PostToolUse",
+                "subject": "work",
+                "task_ids": ["101", "202"],
+            },
+        )
+
+    def test_defaults_are_untargeted_empty_row(self) -> None:
+        # Only ``source`` is required. With no active run to attribute to and
+        # both git lookups stubbed empty (see setUp), every other field lands on
+        # the untargeted/empty value the frontends rely on.
+        LogEventCommand(state=self.db).execute(source="agent")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.source, "agent")
+        self.assertEqual(event.subject, "")
+        self.assertIsNone(event.payload)
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(event.repo, "")
+        self.assertEqual(event.branch, "")
+        self.assertEqual(event.pr_num, 0)
+        self.assertIsNone(event.external_id)
+
+    def test_timestamp_defaults_to_now_when_none(self) -> None:
+        before = datetime.now(timezone.utc)
+        LogEventCommand(state=self.db).execute(source="agent", timestamp=None)
+        after = datetime.now(timezone.utc)
+        stamped = self.db.get_events()[0].timestamp
+        self.assertGreaterEqual(stamped, before)
+        self.assertLessEqual(stamped, after)
+
+    def test_task_ids_are_copied_not_aliased(self) -> None:
+        # A caller mutating its list after the call must not affect the row.
+        scope = ["5"]
+        LogEventCommand(state=self.db).execute(source="agent", task_ids=scope)
+        scope.append("6")
+        self.assertEqual(self.db.get_events()[0].task_ids, ["5"])
+
+    def test_client_is_optional_and_unused(self) -> None:
+        # The command performs no Odoo RPC: constructing it with no client must
+        # work, and no method may be called on an injected client.
+        client = Mock()
+        LogEventCommand(client=client, state=self.db).execute(source="agent")
+        client.assert_not_called()
+        self.assertEqual(len(self.db.get_events()), 1)
+
+
+class TestNormalizeTaskIds(unittest.TestCase):
+    """The one coercion rule for explicit attribution hints (#507)."""
+
+    def test_int_and_str_converge(self) -> None:
+        self.assertEqual(normalize_task_ids([5, "5", " 5 "]), ["5", "5", "5"])
+
+    def test_none_iterable_is_empty(self) -> None:
+        self.assertEqual(normalize_task_ids(None), [])
+
+    def test_non_task_values_are_dropped(self) -> None:
+        # A free-text value, a ``None`` hole, and a stray object name no task;
+        # persisting them would write ids that can never join a real task.
+        self.assertEqual(normalize_task_ids(["abc", None, object(), 7]), ["7"])
+
+
+class TestTaskIdsFromBranch(unittest.TestCase):
+    """Recover a task id from the ``<task-id>-<slug>`` session branch (#574, #622)."""
+
+    def test_canonical_branch_yields_its_task_id(self) -> None:
+        # The exact form start_task writes: f"{task_id}-{slug}" (#622).
+        self.assertEqual(task_ids_from_branch("28788-hook-attribution"), ["28788"])
+
+    def test_slash_prefixed_branch_still_matches(self) -> None:
+        # A path-style prefix (feature/28788-slug) is anchored on the '/'.
+        self.assertEqual(task_ids_from_branch("feature/28788-slug"), ["28788"])
+
+    def test_none_and_empty_are_empty(self) -> None:
+        self.assertEqual(task_ids_from_branch(None), [])
+        self.assertEqual(task_ids_from_branch(""), [])
+
+    def test_ordinary_branch_names_have_no_task_id(self) -> None:
+        for branch in ("main", "master", "feat/kiosk", "fix/wc1-hook"):
+            self.assertEqual(task_ids_from_branch(branch), [], branch)
+
+    def test_conventional_commit_prefix_names_an_issue_not_a_task(self) -> None:
+        # #1040: branches like ``docs/1019-shellcheck-form-per-file-set``, in a
+        # repo with no Odoo project at all, minted phantom task lanes out of
+        # GitHub issue numbers. A conventional-commit type as the first path
+        # segment IS the GitHub-issue convention, so the digit run after it is
+        # an issue number, not a task id.
+        for prefix in sorted(_CONVENTIONAL_BRANCH_TYPES):
+            branch = f"{prefix}/1019-shellcheck-form-per-file-set"
+            self.assertEqual(task_ids_from_branch(branch), [], branch)
+
+    def test_conventional_prefix_match_is_case_insensitive(self) -> None:
+        self.assertEqual(task_ids_from_branch("DOCS/1019-slug"), [])
+
+    def test_feature_prefix_is_not_a_conventional_type(self) -> None:
+        # Only the conventional-commit spelling carries the convention: a
+        # ``feature/`` branch is still the documented #574 task-branch form.
+        self.assertEqual(task_ids_from_branch("feature/28788-slug"), ["28788"])
+
+    def test_root_task_branch_survives_the_prefix_rule(self) -> None:
+        # The form start_task actually writes has no path prefix at all (#622).
+        self.assertEqual(task_ids_from_branch("28788-hook-attribution"), ["28788"])
+
+    def test_short_number_is_not_a_task_id(self) -> None:
+        # Fewer than the shared 4-digit floor: a stray number, not a task id, so
+        # a hook event and the commit it accompanies never split lanes (#378).
+        self.assertEqual(task_ids_from_branch("123-x"), [])
+
+    def test_mid_token_digit_run_is_not_read_as_an_id(self) -> None:
+        # Digits buried mid-token ('fixes-28788') are not anchored at a token
+        # start, so they must not attribute.
+        self.assertEqual(task_ids_from_branch("fixes-28788-x"), [])
+
+    def test_legacy_hash_convention_is_not_parsed(self) -> None:
+        # #622 is a clean cutover: the retired hash-delimited form (task id
+        # followed by '#' then the slug) no longer attributes at all.
+        self.assertEqual(task_ids_from_branch("28788#legacy-slug"), [])
+
+    def test_zero_padded_id_is_canonicalized(self) -> None:
+        self.assertEqual(task_ids_from_branch("0028788-slug"), ["28788"])
+
+    def test_duplicate_ids_are_deduped_first_seen(self) -> None:
+        self.assertEqual(task_ids_from_branch("28788-a/28788-b"), ["28788"])
+
+    def test_producer_round_trips_through_the_parser(self) -> None:
+        # Producer/parser lockstep (#622): a branch built exactly the way the
+        # MCP tool builds it must parse back to the same task id.
+        task_id, slug = 28788, "hyphenated-branch-slug"
+        self.assertEqual(task_ids_from_branch(f"{task_id}-{slug}"), [str(task_id)])
+
+
+class TestBillableTaskIds(unittest.TestCase):
+    """The hook fan-out exclusion, unit-tested on its own (#1040, #779)."""
+
+    def test_hook_event_drops_the_attachment_only_ids(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:PreToolUse", ["101", "202"], ["101", "202"]), []
+        )
+
+    def test_hook_event_keeps_the_corroborated_id(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:Stop", ["28788", "101"], ["101"]), ["28788"]
+        )
+
+    def test_agent_source_is_untouched(self) -> None:
+        # Hook-scoped on purpose: an agent tool call inside an open run is a
+        # human driving that run (#507).
+        self.assertEqual(
+            billable_task_ids("agent", ["101", "202"], ["101", "202"]), ["101", "202"]
+        )
+
+    def test_other_sources_are_untouched(self) -> None:
+        for source in ("commit", "chatter", "merge", "claude", ""):
+            self.assertEqual(
+                billable_task_ids(source, ["101"], ["101"]), ["101"], source
+            )
+
+    def test_no_attachment_is_a_no_op(self) -> None:
+        self.assertEqual(billable_task_ids("claude:Stop", ["28788"], []), ["28788"])
+
+    def test_order_is_preserved(self) -> None:
+        self.assertEqual(
+            billable_task_ids("claude:Stop", ["3", "1", "2"], ["1"]), ["3", "2"]
+        )
+
+
+class TestCurrentBranchLabel(unittest.TestCase):
+    """Branch resolution is best-effort: it never raises on the write path."""
+
+    def _git(self, stdout: str = "", exc: Optional[Exception] = None):
+        if exc is not None:
+            return patch(
+                "odoo_client.commands.log_event.subprocess.run", side_effect=exc
+            )
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout)
+        return patch(
+            "odoo_client.commands.log_event.subprocess.run", return_value=completed
+        )
+
+    def test_branch_name_returned(self) -> None:
+        with self._git(stdout="feat/kiosk\n"):
+            self.assertEqual(current_branch_label(), "feat/kiosk")
+
+    def test_detached_head_and_non_repo_cwd_are_empty(self) -> None:
+        # Both make ``symbolic-ref`` exit non-zero, which ``check=True`` raises
+        # and the resolver swallows -- there is no branch to record.
+        failure = subprocess.CalledProcessError(128, ["git"])
+        with self._git(exc=failure):
+            self.assertEqual(current_branch_label(), "")
+
+    def test_missing_git_binary_is_empty(self) -> None:
+        with self._git(exc=FileNotFoundError("git")):
+            self.assertEqual(current_branch_label(), "")
+
+
+class TestAttributionPolicy(unittest.TestCase):
+    """The consolidated ingest-side attribution rule (#507).
+
+    An event that lands with an empty ``task_ids`` is excluded from session
+    derivation permanently and can therefore never bill, so an unhinted event
+    written while a run is active attributes to that run.
+    """
+
+    def setUp(self) -> None:
+        self.db_path = make_state_db_path()
+        self.db = make_state_db(self.db_path)
+        self.command = LogEventCommand(state=self.db)
+        for target in (REPO_LABEL, BRANCH_LABEL):
+            patcher = patch(target, return_value="")
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(os.environ.pop, REAP_THRESHOLD_ENV, None)
+
+    def _backdate(self, run_id: int, hours: float) -> None:
+        """Backdate one run's ``started_at`` so it reads as stale."""
+        old = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("UPDATE task_runs SET started_at = ? WHERE id = ?", (old, run_id))
+        conn.commit()
+        conn.close()
+
+    def test_explicit_hint_wins_over_active_runs(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.assertEqual(self.command.resolve_task_ids([999]), ["999"])
+
+    def test_unhinted_attributes_to_every_active_run(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.db.create_run(202, "Task B", 1, "Proj")
+        self.assertEqual(sorted(self.command.resolve_task_ids()), ["101", "202"])
+
+    def test_unhinted_with_no_active_run_is_untargeted(self) -> None:
+        self.assertEqual(self.command.resolve_task_ids(), [])
+
+    def test_attach_active_run_disabled_stays_untargeted(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.assertEqual(self.command.resolve_task_ids(attach_active_run=False), [])
+
+    def test_uncoercible_hint_falls_back_to_active_runs(self) -> None:
+        # The MCP wrapper hands over whatever the bound ``task_id`` held. A
+        # value that names no task leaves the event unhinted, not unattributed.
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.assertEqual(self.command.resolve_task_ids(["abc"]), ["101"])
+
+    def test_stale_run_is_excluded(self) -> None:
+        self.db.create_run(101, "Fresh", 1, "Proj")
+        stale = self.db.create_run(202, "Wedged", 1, "Proj")
+        self._backdate(stale.id, 30)
+        self.assertEqual(self.command.resolve_task_ids(), ["101"])
+
+    def test_env_override_widens_staleness_threshold(self) -> None:
+        stale = self.db.create_run(202, "Wedged", 1, "Proj")
+        self._backdate(stale.id, 30)
+        os.environ[REAP_THRESHOLD_ENV] = "48"
+        self.assertEqual(self.command.resolve_task_ids(), ["202"])
+
+    def test_branch_recovers_task_id_when_no_active_run(self) -> None:
+        # The #574 fix: a session bound to a task branch but never start_task-ed
+        # (so no FSM run exists) still attributes to that task, not triage.
+        self.assertEqual(
+            self.command.resolve_task_ids(branch="28788-hook-fix"), ["28788"]
+        )
+
+    def test_active_run_wins_over_branch(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.assertEqual(
+            self.command.resolve_task_ids(branch="28788-hook-fix"), ["101"]
+        )
+
+    def test_explicit_hint_wins_over_branch(self) -> None:
+        self.assertEqual(
+            self.command.resolve_task_ids([999], branch="28788-hook-fix"), ["999"]
+        )
+
+    def test_branch_without_task_id_stays_untargeted(self) -> None:
+        self.assertEqual(self.command.resolve_task_ids(branch="main"), [])
+
+    def test_attach_disabled_ignores_branch(self) -> None:
+        # attach_active_run=False keeps its documented "leave untargeted"
+        # contract: the branch-recovery fallback is gated with the active-run one.
+        self.assertEqual(
+            self.command.resolve_task_ids(
+                attach_active_run=False, branch="28788-hook-fix"
+            ),
+            [],
+        )
+
+    def test_execute_recovers_task_from_stated_branch(self) -> None:
+        # End to end: the hook vector (no active run, a stated task branch) lands
+        # a billable, sessionizable row instead of an untargeted triage one.
+        result = self.command.execute(
+            source="claude:PostToolUse", subject="Bash", branch="28788-hook-fix"
+        )
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, ["28788"])
+        # The branch is also recorded verbatim as provenance.
+        self.assertEqual(event.branch, "28788-hook-fix")
+        self.assertEqual(result["task_ids"], ["28788"])
+
+    def test_execute_does_not_recover_from_cwd_resolved_branch(self) -> None:
+        # Provenance is best-effort from the working tree, but attribution is not:
+        # a branch the caller did NOT state (only the cwd fallback saw) must not
+        # silently re-attribute. Here the patched cwd branch names a task, yet the
+        # event stays untargeted because nothing stated it.
+        with patch(BRANCH_LABEL, return_value="28788-ambient"):
+            self.command.execute(source="claude:Stop")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(event.branch, "28788-ambient")
+
+    def test_execute_persists_the_active_run_fallback(self) -> None:
+        # The end-to-end shape the MCP dispatch path now takes: a tool call with
+        # no ``task_id`` still lands a billable, sessionizable row.
+        self.db.create_run(101, "Task A", 1, "Proj")
+        result = self.command.execute(source="agent", subject="get_task")
+        self.assertEqual(self.db.get_events()[0].task_ids, ["101"])
+        self.assertEqual(result["task_ids"], ["101"])
+
+    def test_execute_normalizes_the_explicit_hint(self) -> None:
+        self.command.execute(source="agent", task_ids=[42])
+        self.assertEqual(self.db.get_events()[0].task_ids, ["42"])
+
+
+class TestAttachmentProvenance(unittest.TestCase):
+    """Rule-2 ids are recorded as attachment-only so liveness stays honest (#779).
+
+    The id itself still lands in ``task_ids`` — an attached event is billable
+    attribution and the derivation must keep seeing it. What the marker changes is
+    only whether the reaper may read that event back as evidence the run is alive.
+    """
+
+    def setUp(self) -> None:
+        self.db = make_state_db()
+        self.command = LogEventCommand(state=self.db)
+        for target in (REPO_LABEL, BRANCH_LABEL):
+            patcher = patch(target, return_value="")
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _payload(self) -> Optional[dict]:
+        return self.db.get_events()[0].payload
+
+    def test_attached_ids_are_marked(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.db.create_run(202, "Task B", 1, "Proj")
+        self.command.execute(source="claude:PostToolUse", payload={"tool": "Bash"})
+        event = self.db.get_events()[0]
+        # The hook event records both runs as attachment-only provenance and
+        # bills neither of them: #1040 drops the fan-out from ``task_ids``.
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
+        )
+        # The caller's own payload keys survive untouched.
+        self.assertEqual(event.payload["tool"], "Bash")
+
+    def test_agent_event_still_bills_the_attached_run(self) -> None:
+        # The exclusion is hook-scoped: a ``source="agent"`` tool call made
+        # inside an open run is a human driving that run, and keeping it billable
+        # is the #507 behaviour #1040 must not undo.
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(source="agent", subject="get_task")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.task_ids, ["101"])
+        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["101"])
+
+    def test_marker_is_added_to_a_payloadless_event(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(source="claude:Stop")
+        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
+
+    def test_explicit_hint_is_not_marked(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        self.command.execute(
+            source="agent", payload={"tool": "get_task"}, task_ids=[101]
+        )
+        self.assertEqual(self._payload(), {"tool": "get_task"})
+
+    def test_branch_recovery_is_not_marked(self) -> None:
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertIsNone(self._payload())
+
+    def test_branch_corroborated_active_run_is_not_marked(self) -> None:
+        # The session is sitting on the task's own branch, so its events name the
+        # task for a reason beyond the run being open: genuine liveness evidence.
+        self.db.create_run(28788, "Task A", 1, "Proj")
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertIsNone(self._payload())
+
+    def test_only_the_uncorroborated_run_is_marked(self) -> None:
+        self.db.create_run(28788, "Worked", 1, "Proj")
+        self.db.create_run(101, "Forgotten", 1, "Proj")
+        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
+        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
+
+    def test_caller_supplied_marker_is_never_trusted(self) -> None:
+        # The command owns the key: no frontend gets to fake liveness for a
+        # wedged run (or fake staleness for a live one) by stating it.
+        self.command.execute(
+            source="agent",
+            task_ids=[42],
+            payload={"tool": "x", ATTACHED_TASK_IDS_PAYLOAD_KEY: ["99"]},
+        )
+        self.assertEqual(self._payload(), {"tool": "x"})
+
+    def test_callers_payload_is_not_mutated(self) -> None:
+        self.db.create_run(101, "Task A", 1, "Proj")
+        payload = {"tool": "Bash"}
+        self.command.execute(source="claude:PostToolUse", payload=payload)
+        self.assertEqual(payload, {"tool": "Bash"})
+
+
+class TestProvenanceResolution(unittest.TestCase):
+    """``repo`` / ``branch`` are resolved by the command, not by the caller (#509)."""
+
+    def setUp(self) -> None:
+        self.db = make_state_db()
+
+    def _execute(self, **kwargs) -> None:
+        with (
+            patch(REPO_LABEL, return_value="o/r") as repo_label,
+            patch(BRANCH_LABEL, return_value="feat/kiosk") as branch_label,
+        ):
+            LogEventCommand(state=self.db).execute(source="agent", **kwargs)
+        self.repo_label, self.branch_label = repo_label, branch_label
+
+    def test_unstated_provenance_is_resolved_from_the_working_tree(self) -> None:
+        self._execute()
+        event = self.db.get_events()[0]
+        self.assertEqual(event.repo, "o/r")
+        self.assertEqual(event.branch, "feat/kiosk")
+
+    def test_explicit_empty_string_records_none_without_asking_git(self) -> None:
+        # "" is a statement that there is no repo/branch, distinct from the
+        # ``None`` default that means "work it out"; it must not shell out.
+        self._execute(repo="", branch="")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.repo, "")
+        self.assertEqual(event.branch, "")
+        self.repo_label.assert_not_called()
+        self.branch_label.assert_not_called()
+
+    def test_explicit_values_override_resolution(self) -> None:
+        self._execute(repo="other/repo", branch="main")
+        event = self.db.get_events()[0]
+        self.assertEqual(event.repo, "other/repo")
+        self.assertEqual(event.branch, "main")
+
+
+if __name__ == "__main__":
+    unittest.main()

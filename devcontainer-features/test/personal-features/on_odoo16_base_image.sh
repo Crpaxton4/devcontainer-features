@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Executed against the 'on_odoo16_base_image' scenario in scenarios.json.
-# odoo:16 is Debian 11 (bullseye) and ships only Python 3.9.2 - below odoo_sdk's
+# odoo:16 is Debian 11 (bullseye) and ships only Python 3.9.2 - below odoo_client's
 # requires-python (>=3.10). install.sh used to gate the ENTIRE Python block on
 # the base image's python3, so this image silently got no uv, no tool env, no
 # odoo-sdk/odoo-mcp/odoo-tui and no mempalace, surfacing weeks later as a
@@ -55,13 +55,13 @@ import sys
 assert sys.version_info[:2] == (3, 11), sys.version
 '"
 
-# odoo_sdk: installed into the isolated tool environment.
-check "odoo_sdk is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
+# odoo_client: installed into the isolated tool environment.
+check "odoo_client is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_client'"
 
-check "odoo_sdk core API is accessible in tool env" \
+check "odoo_client core API is accessible in tool env" \
     bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk import (
+from odoo_client import (
     OdooClient,
     OdooConnectionSettings,
     OdooExecutor,

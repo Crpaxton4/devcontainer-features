@@ -20,9 +20,9 @@ schema before use (see :func:`migrate_schema`); if any row would fail the new
 write-time validation the rebuild ABORTS with a clear listing and a non-zero exit,
 leaving the DB untouched, so setup fails loudly instead of dropping data.
 
-Stdlib-only by design: it runs on a bare host that has no ``odoo_sdk`` installed.
-The schema below is a verbatim copy of ``odoo_sdk.state.db.SCHEMA_DDL`` and the
-migration mirrors ``odoo_sdk.state.db.migrate_schema``; an SDK-side parity test
+Stdlib-only by design: it runs on a bare host that has no ``odoo_client`` installed.
+The schema below is a verbatim copy of ``odoo_client.state.db.SCHEMA_DDL`` and the
+migration mirrors ``odoo_client.state.db.migrate_schema``; an SDK-side parity test
 (``tests/test_state/test_init_script_parity.py``) provisions one database with
 each and asserts their ``sqlite_master`` and schema version are identical, so the
 two copies can never silently drift.
@@ -32,7 +32,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-#: Verbatim copy of ``odoo_sdk.state.db.SCHEMA_VERSION`` — the ``PRAGMA
+#: Verbatim copy of ``odoo_client.state.db.SCHEMA_VERSION`` — the ``PRAGMA
 #: user_version`` marker that tells an out-of-date DB from a current one. ``2``
 #: adds the terminal ``CLOSED`` state to the ``task_runs.state`` CHECK (#504);
 #: ``3`` adds the additive ``task_runs.question_message_id`` answer watermark
@@ -40,7 +40,7 @@ from pathlib import Path
 #: nullable ``task_runs.run_summary`` column (#626).
 SCHEMA_VERSION = 4
 
-# VERBATIM copy of odoo_sdk.state.db.SCHEMA_DDL — kept identical by the parity
+# VERBATIM copy of odoo_client.state.db.SCHEMA_DDL — kept identical by the parity
 # test noted in the module docstring. Do not edit one without the other.
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -103,7 +103,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chatter_dedupe_key
     ON chatter_dedupe(task_id, dedupe_key);
 """
 
-# Migration mirror of odoo_sdk.state.db (stdlib-only host copy). The tables,
+# Migration mirror of odoo_client.state.db (stdlib-only host copy). The tables,
 # validation predicates, and rebuild pattern below are logically identical to the
 # SDK's; the parity test asserts the resulting schema/version match, so behaviour
 # cannot drift even though the code is duplicated.
@@ -115,7 +115,7 @@ _MIGRATION_TABLES = (
     "chatter_dedupe",
 )
 
-# Mirror of odoo_sdk.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
+# Mirror of odoo_client.state.db._REQUIRED_TABLE_MARKERS: uppercase substrings whose
 # absence from a table's stored DDL means it predates a schema change and must be
 # rebuilt (``STRICT`` for #452, ``CLOSED`` in task_runs' CHECK for #504, the
 # ``question_message_id`` watermark column for #625, the ``run_summary``
@@ -164,7 +164,7 @@ _ROW_KEY = {
 class SchemaMigrationError(RuntimeError):
     """Raised when an old-shape tracker.db cannot be rebuilt into STRICT form.
 
-    Mirrors ``odoo_sdk.state.db.SchemaMigrationError``: the rebuild aborts and
+    Mirrors ``odoo_client.state.db.SchemaMigrationError``: the rebuild aborts and
     lists every offending row rather than silently dropping data.
     """
 
@@ -207,7 +207,7 @@ def _invalid_rows(conn, table):
 def _stale_tables(conn):
     """Return the existing tables whose DDL predates the current schema.
 
-    Mirror of ``odoo_sdk.state.db._stale_tables``: a table is stale when its
+    Mirror of ``odoo_client.state.db._stale_tables``: a table is stale when its
     stored DDL is missing any of its :data:`_REQUIRED_TABLE_MARKERS` (pre-STRICT,
     #452, or a pre-CLOSED task_runs CHECK, #504). Missing tables are skipped.
     """

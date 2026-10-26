@@ -29,8 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: odoo_sdk
-            dir: libraries/odoo_sdk
+          - name: odoo_client
+            dir: libraries/odoo_client
           - name: odoo_dev_data
             dir: libraries/odoo_dev_data
           - name: dispatcher
@@ -61,6 +61,6 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages --group dev
       - run: uv run lint-imports
-      - name: ADR-005 contracts (odoo_sdk, until WS2 deletes them)
-        working-directory: libraries/odoo_sdk
+      - name: ADR-005 contracts (odoo_client, until WS2 deletes them)
+        working-directory: libraries/odoo_client
         run: uv run lint-imports

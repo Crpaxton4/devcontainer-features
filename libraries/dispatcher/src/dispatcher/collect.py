@@ -17,9 +17,9 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from odoo_sdk.state.artifacts import Harvest, collect_artifacts, task_record_path
-from odoo_sdk.state.dispatch_state import bundle_dir
-from odoo_sdk.state.runs_store import RunOutcome, RunStore, map_reported_outcome
+from odoo_client.state.artifacts import Harvest, collect_artifacts, task_record_path
+from odoo_client.state.dispatch_state import bundle_dir
+from odoo_client.state.runs_store import RunOutcome, RunStore, map_reported_outcome
 
 from .schema import question_count, usable_structured
 
@@ -123,7 +123,7 @@ class RunWrite:
 
 
 def stored_outcome(envelope: dict | None, failed: bool) -> RunOutcome:
-    """The one mapping lives in odoo_sdk; a dead letter is stored as FAILED."""
+    """The one mapping lives in odoo_client; a dead letter is stored as FAILED."""
     structured = usable_structured(envelope)
     if failed or structured is None:
         return RunOutcome.FAILED

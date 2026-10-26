@@ -45,7 +45,7 @@
             "type": "bind"
         },
         {
-            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo_sdk",
+            "source": "${localEnv:HOME}${localEnv:USERPROFILE}/.config/odoo_client",
             "target": "/usr/local/share/odoo-sdk-config",
             "type": "bind"
         },

@@ -53,7 +53,7 @@ Run the setup script once per machine, **before** starting any dev container tha
    ```
    ~/.claude                            — Claude Code auth and settings
    ~/.config/gh                         — gh CLI auth and settings
-   ~/.config/odoo_sdk                   — odoo_sdk connection config
+   ~/.config/odoo_client                   — odoo_client connection config
    ~/.config/pr-automation              — create-pr config (global.yaml + projects/)
    ~/.config/coderabbit                 — CodeRabbit VS Code extension state
    ~/.coderabbit                        — CodeRabbit CLI auth/state (auth.json, machine-id)
@@ -96,7 +96,7 @@ Config and history are bind-mounted from your host home directory into fixed con
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
-- `~/.config/odoo_sdk` (host) → `/usr/local/share/odoo-sdk-config` (container) — `ODOO_SDK_CONFIG` points at this directory; the SDK probes it for `config.toml` then `config.ini`.
+- `~/.config/odoo_client` (host) → `/usr/local/share/odoo-sdk-config` (container) — `ODOO_SDK_CONFIG` points at this directory; the SDK probes it for `config.toml` then `config.ini`.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
 - `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here; it persists the VS Code CodeRabbit extension state (`user-data.json`). The CLI itself ignores `CODERABBIT_CONFIG_DIR` (#661).
 - `~/.coderabbit` (host) → `/home/vscode/.coderabbit` (container) — CodeRabbit **CLI** auth/state (`auth.json`, `machine-id`). Unlike every other row, the target is a literal home path, not `/usr/local/share/...`: the CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` and honors no env override, so the only way to persist its auth is to mount at exactly that path (#661). `/home/vscode` matches the primary consumers (`remoteUser: vscode`); under a root `remoteUser` the dir is provisioned but inert — the CLI resolves `/root/.coderabbit` there and auth does not persist.
@@ -602,7 +602,7 @@ deliberately-parallel paths. Only the second survives:
 
 2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
    *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
-   (`libraries/odoo_sdk/src/odoo_sdk/mcp/prompts/builtin/<name>.py`, one module
+   (`libraries/odoo_client/src/odoo_client/mcp/prompts/builtin/<name>.py`, one module
    per skill, underscored — `<skill-name>` → `<skill_name>`). Each module embeds
    its `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
    description; the markdown body becomes the returned prompt message) and is
@@ -884,9 +884,9 @@ about a non-root one, rather than implying a clean bill of health.
 
 ## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
 
-The Feature's Python tooling — the `odoo_sdk` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
+The Feature's Python tooling — the `odoo_client` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
 
-**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: `odoo_sdk` is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
+**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: `odoo_client` is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
 
 **That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-sdk`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
 

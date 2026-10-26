@@ -3,7 +3,7 @@
 
 CI-only helper for the mutation-testing gate (see
 ``.github/workflows/mutation.yaml``). It is intentionally self-contained: it
-depends only on the Python stdlib and must NOT import the ``odoo_sdk`` package,
+depends only on the Python stdlib and must NOT import the ``odoo_client`` package,
 so it runs without the SDK being installed.
 
 It reads the cosmic-ray ``mutation.json`` export (a list of mutant records,

@@ -1,0 +1,527 @@
+"""Tests for the shared derived-session upload loop (issue #354).
+
+This is the single upload path both the TUI ``u`` key and the headless
+``odoo-sdk upload`` subcommand delegate to. The tests exercise the loop's
+selection (numeric task ids only), the per-session ``reconcile_session``
+inputs, the orphan-sweep wiring (window scoping, skip on dry run), the
+``dry_run`` preview, the ``range_bounds`` date semantics, and the summary
+shape. The hours-writer and sweep are patched at the module boundary so the
+billed rows are asserted at the call level without a live Odoo; the full write
+path runs against a mocked transport in ``tests/test_cli/test_upload.py``.
+"""
+
+import unittest
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
+
+from odoo_client.commands.builtin.query_sessions import QuerySessionsCommand
+from odoo_client.state import EventRecord
+from odoo_client.state.config import LocalConfig
+from odoo_client.transport.errors import OdooServerError, OdooTransportError
+from odoo_client.billing.upload import (
+    range_bounds,
+    upload_sessions,
+    _derived_description,
+    _numeric_task_id,
+)
+from tests.support import make_state_db
+
+_MOD = "odoo_client.billing.upload"
+_RECONCILE = f"{_MOD}.reconcile_session"
+_SWEEP = f"{_MOD}.sweep_orphaned_uploads"
+
+
+def _sessions(n=2):
+    return [
+        {
+            "session_id": i,
+            "session_key": f"{100 + i}|{i}",
+            "task_id": str(100 + i),
+            "duration_secs": 3600,
+            "started_at": "2026-06-01T09:00:00+00:00",
+            "ended_at": "2026-06-01T10:00:00+00:00",
+            "events": [],
+        }
+        for i in range(n)
+    ]
+
+
+class TestNumericTaskId(unittest.TestCase):
+    def test_parses_numeric_ids(self):
+        self.assertEqual(_numeric_task_id("42"), 42)
+        self.assertEqual(_numeric_task_id(7), 7)
+
+    def test_rejects_non_numeric(self):
+        self.assertIsNone(_numeric_task_id("UNKNOWN"))
+        self.assertIsNone(_numeric_task_id(None))
+
+
+class TestRangeBounds(unittest.TestCase):
+    def test_inclusive_dates_cover_whole_end_day(self):
+        lo, hi = range_bounds("2026-06-01", "2026-06-03")
+        self.assertEqual(lo, datetime(2026, 6, 1, 0, 0))
+        self.assertEqual(hi, datetime(2026, 6, 4, 0, 0))  # midnight after end
+
+    def test_omitted_bounds_default_to_widest_range(self):
+        lo, hi = range_bounds(None, None)
+        self.assertEqual(lo, datetime.min)
+        self.assertEqual(hi, datetime.max)
+
+    def test_start_only_leaves_end_unbounded(self):
+        lo, hi = range_bounds("2026-06-01", None)
+        self.assertEqual(lo, datetime(2026, 6, 1, 0, 0))
+        self.assertEqual(hi, datetime.max)
+
+
+class TestUploadSessionsLoop(unittest.TestCase):
+    def test_reconciles_once_per_numeric_session(self):
+        with (
+            patch(_RECONCILE, return_value=500) as reconcile,
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), _sessions(3))
+        self.assertEqual(reconcile.call_count, 3)
+        self.assertEqual(result["uploaded"], 3)
+        self.assertEqual(result["skipped"], 0)
+
+    def test_non_numeric_task_skipped(self):
+        sessions = _sessions(1)
+        sessions.append({**sessions[0], "task_id": "UNKNOWN", "session_id": 9})
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        self.assertEqual(reconcile.call_count, 1)  # only the numeric one is billed
+        self.assertEqual(result["uploaded"], 1)
+        self.assertEqual(result["skipped"], 1)
+
+    def test_reconcile_receives_identity_hours_and_bounds(self):
+        sessions = [
+            {
+                "session_key": "100|5",
+                "task_id": "100",
+                "duration_secs": 7200,
+                "started_at": "2026-06-01T09:00:00+00:00",
+                "ended_at": "2026-06-01T11:00:00+00:00",
+            }
+        ]
+        state = MagicMock()
+        # No runs and no events on record: the derived description (#626) has
+        # nothing to tell, so the session-key fallback name is used.
+        state.get_runs_for_task.return_value = []
+        state.get_task_events.return_value = []
+        with (
+            patch(_RECONCILE, return_value=77) as reconcile,
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), state, sessions)
+        args = reconcile.call_args.args
+        self.assertEqual(args[2], 100)  # numeric task id
+        self.assertEqual(args[3], "100|5")  # stable session key
+        self.assertEqual(args[4], "[/] session 100|5")  # fallback description
+        self.assertEqual(args[5], 2.0)  # 7200s -> 2.0h
+        self.assertEqual(args[6], datetime.fromisoformat("2026-06-01T09:00:00+00:00"))
+        self.assertEqual(args[7], datetime.fromisoformat("2026-06-01T11:00:00+00:00"))
+        # The summary row records the id the hours-writer returned.
+        self.assertEqual(result["rows"][0]["timesheet_id"], 77)
+        self.assertEqual(result["rows"][0]["hours"], 2.0)
+
+    def test_sweep_runs_after_upload_with_window_scope(self):
+        # The stale-mapping sweep (#353) runs inside the shared path so both
+        # the TUI and the headless CLI get it, scoped to the queried range
+        # (bounds resolved internally via range_bounds so the query window and
+        # the sweep window cannot drift) and keyed on the just-derived key set.
+        sessions = _sessions(2)
+        with patch(_RECONCILE, return_value=1), patch(_SWEEP, return_value=2) as sweep:
+            result = upload_sessions(
+                MagicMock(),
+                MagicMock(),
+                sessions,
+                start_date="2026-06-01",
+                end_date="2026-06-03",
+            )
+        self.assertEqual(result["retired"], 2)
+        kwargs = sweep.call_args.kwargs
+        self.assertEqual(kwargs["derived_keys"], {"100|0", "101|1"})
+        self.assertEqual(kwargs["derived_task_ids"], {"100", "101"})
+        self.assertEqual(kwargs["window_lo"], datetime(2026, 6, 1, 0, 0))
+        self.assertEqual(kwargs["window_hi"], datetime(2026, 6, 4, 0, 0))
+
+    def test_dry_run_writes_nothing_but_summarises(self):
+        with patch(_RECONCILE) as reconcile, patch(_SWEEP) as sweep:
+            result = upload_sessions(
+                MagicMock(), MagicMock(), _sessions(2), dry_run=True
+            )
+        reconcile.assert_not_called()  # no Odoo write on a dry run
+        sweep.assert_not_called()  # the sweep also writes, so it is skipped too
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["uploaded"], 2)  # still counts the billable set
+        self.assertEqual(result["retired"], 0)
+        self.assertIsNone(result["rows"][0]["timesheet_id"])  # nothing written
+
+
+class TestDerivedDescription(unittest.TestCase):
+    """The billing upload attaches the machine-derived description (#626, #710).
+
+    Since #710 the name is two halves: the narrative headline
+    (``summarize_session_context`` — chatter notes, else commits/PRs/reviews,
+    else the hook context) followed by the machine tally as an explicit
+    ``; debug: `` suffix. With no headline the tally stands alone exactly as it
+    did before, and with neither the session-key fallback stands.
+    """
+
+    def _session(self, task_id, started, ended, key="100|5"):
+        return {
+            "session_key": key,
+            "task_id": str(task_id),
+            "duration_secs": 3600,
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
+        }
+
+    def _window(self):
+        now = datetime.now(timezone.utc)
+        return now - timedelta(hours=1), now + timedelta(hours=1)
+
+    def test_uses_stored_run_summary_of_overlapping_run(self):
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "actions: task_note x3; branch 100#fix-vat")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] actions: task_note x3; branch 100#fix-vat")
+
+    def test_closed_run_summary_still_attaches(self):
+        # Closing hides a run from default listings, not from billing (#626).
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "closed-run narrative")
+        db.close_run(100)
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] closed-run narrative")
+
+    def test_falls_back_to_event_summary_without_run_summary(self):
+        # Resync'd history that never passed through the FSM still derives a
+        # narrative from the session window's events.
+        db = make_state_db()
+        started, ended = self._window()
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="commit",
+                timestamp=datetime.now(timezone.utc),
+                task_ids=["100"],
+                repo="o/r",
+                branch="100#fix-vat",
+                subject="fix VAT rounding",
+                external_id="git:abc1234def999",
+            )
+        )
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertIn("commits: abc1234de fix VAT rounding", description)
+        self.assertTrue(description.startswith("[/] "))
+
+    def test_falls_back_to_session_key_when_nothing_derives(self):
+        db = make_state_db()
+        started, ended = self._window()
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] session 100|5")
+
+    def test_derivation_fault_falls_back_and_never_blocks_billing(self):
+        # Description is display metadata: a raising state store must not
+        # abort the hours write, mirroring the telemetry stance.
+        state = MagicMock()
+        state.get_runs_for_task.side_effect = RuntimeError("db down")
+        started, ended = self._window()
+        description = _derived_description(
+            state, 100, self._session(100, started, ended)
+        )
+        self.assertEqual(description, "[/] session 100|5")
+
+    def test_non_overlapping_run_summary_is_ignored(self):
+        db = make_state_db()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "other window's work")
+        # A session window that ended long before this run started.
+        started = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        ended = datetime(2020, 1, 2, tzinfo=timezone.utc)
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] session 100|5")
+
+    def _add_event(self, db, source, subject="", payload=None, pr_num=0, ext=None):
+        db.add_event(
+            EventRecord(
+                id=None,
+                source=source,
+                timestamp=datetime.now(timezone.utc),
+                task_ids=["100"],
+                repo="o/r",
+                pr_num=pr_num,
+                subject=subject,
+                payload=payload,
+                external_id=ext,
+            )
+        )
+
+    def test_tool_tallies_are_demoted_behind_the_narrative(self):
+        # The explicit requirement of #710: the tally is a TRAILING DEBUG
+        # SUFFIX, never the headline. The chatter note the user wrote leads and
+        # the 231-Bash tally follows it, labelled as debug.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(db, "chatter", subject="Reconciled the July VAT postings")
+        for _ in range(3):
+            self._add_event(db, "claude:PreToolUse", subject="Bash")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        headline, _, debug = description.partition("; debug: ")
+        self.assertEqual(headline, "[/] Reconciled the July VAT postings")
+        self.assertEqual(debug, "actions: Bash x3")
+
+    def test_stored_run_summary_becomes_the_debug_tail(self):
+        # #626's run_summary is still attached in full — it is just no longer
+        # what a reviewer reads first.
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "actions: Bash x231, Edit x50; branch 100-fix-vat")
+        self._add_event(db, "commit", subject="fix: VAT rounding", ext="git:abc1234def")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(
+            description,
+            "[/] commit: fix: VAT rounding"
+            "; debug: actions: Bash x231, Edit x50; branch 100-fix-vat",
+        )
+
+    def test_review_session_names_the_pr_and_verdict(self):
+        # Previously a review session said nothing about which PR was reviewed.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(
+            db,
+            "review",
+            subject="Add reconciliation wizard",
+            pr_num=53,
+            payload={"review_state": "APPROVED"},
+            ext="gh:review:1",
+        )
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(description, "[/] PR #53 reviewed (APPROVED); debug: PR #53")
+
+    def test_hook_only_session_is_named_by_its_first_prompt(self):
+        # The `[/] session <task>|<event>` case: hook rows only, but the shim
+        # now records the truncated first prompt, so the row says what was asked.
+        db = make_state_db()
+        started, ended = self._window()
+        self._add_event(
+            db,
+            "claude:UserPromptSubmit",
+            payload={"prompt": "Add a VAT column to the invoice report"},
+        )
+        self._add_event(db, "claude:PreToolUse", subject="Edit")
+        description = _derived_description(db, 100, self._session(100, started, ended))
+        self.assertEqual(
+            description,
+            "[/] prompt: Add a VAT column to the invoice report"
+            "; debug: actions: claude:UserPromptSubmit, Edit",
+        )
+
+    def test_upload_passes_derived_description_to_reconciler(self):
+        db = make_state_db()
+        started, ended = self._window()
+        run = db.create_run(100, "Fix VAT", 5, "Accounting")
+        db.stop_run(100)
+        db.set_run_summary(run.id, "derived narrative")
+        session = self._session(100, started, ended)
+        session["duration_secs"] = 7200
+        with (
+            patch(_RECONCILE, return_value=9) as reconcile,
+            patch(_SWEEP, return_value=0),
+        ):
+            upload_sessions(MagicMock(), db, [session])
+        self.assertEqual(reconcile.call_args.args[4], "[/] derived narrative")
+
+
+class TestPerSessionIsolation(unittest.TestCase):
+    """#582/#576: one failing session must not abort the batch or skip the sweep.
+
+    The historical bug: ``reconcile_session`` raised out of the plain ``for``
+    loop, so the first server fault (e.g. #576's "At least one analytic account
+    must be set" ``UserError``) aborted every remaining session AND skipped the
+    orphan sweep, leaving a silent partial upload. The loop now isolates each
+    session, collects a structured ``failed`` row, and still runs the sweep.
+    """
+
+    def _analytic_fault(self, bad_key: str):
+        """A reconcile side effect that faults for one session key, else bills."""
+
+        def _reconcile(client, state, task_id, key, *rest):
+            if key == bad_key:
+                raise OdooServerError(
+                    "At least one analytic account must be set",
+                    model="account.analytic.line",
+                    method="create",
+                )
+            return 500
+
+        return _reconcile
+
+    def test_one_fault_does_not_abort_the_batch(self):
+        sessions = _sessions(3)  # keys 100|0, 101|1, 102|2
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        # The two healthy sessions still billed despite the middle one faulting.
+        self.assertEqual(result["uploaded"], 2)
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertEqual({r["session_key"] for r in result["rows"]}, {"100|0", "102|2"})
+
+    def test_fault_is_captured_as_a_structured_failure_row(self):
+        sessions = _sessions(2)  # keys 100|0, 101|1
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        self.assertEqual(len(result["failed"]), 1)
+        failure = result["failed"][0]
+        self.assertEqual(failure["session_key"], "101|1")
+        self.assertEqual(failure["task_id"], 101)
+        self.assertEqual(failure["error"], "At least one analytic account must be set")
+
+    def test_sweep_still_runs_and_keeps_the_failed_key(self):
+        # #582: the sweep must still run over the successfully-processed keys, and
+        # the failed session's key stays in ``derived_keys`` so a partially-billed
+        # row for it is never zeroed as an orphan.
+        sessions = _sessions(2)
+        with (
+            patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
+            patch(_SWEEP, return_value=3) as sweep,
+        ):
+            result = upload_sessions(
+                MagicMock(),
+                MagicMock(),
+                sessions,
+                start_date="2026-06-01",
+                end_date="2026-06-03",
+            )
+        self.assertEqual(result["retired"], 3)
+        sweep.assert_called_once()
+        derived_keys = sweep.call_args.kwargs["derived_keys"]
+        self.assertIn("100|0", derived_keys)  # the billed one
+        self.assertIn("101|1", derived_keys)  # the failed one — not swept
+
+    def test_all_sessions_faulting_returns_partial_not_raises(self):
+        sessions = _sessions(2)
+        with (
+            patch(_RECONCILE, side_effect=OdooTransportError("connection reset")),
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+        self.assertEqual(result["uploaded"], 0)
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(len(result["failed"]), 2)
+        self.assertTrue(all("connection reset" in f["error"] for f in result["failed"]))
+
+    def test_no_failures_leaves_failed_list_empty(self):
+        with patch(_RECONCILE, return_value=1), patch(_SWEEP, return_value=0):
+            result = upload_sessions(MagicMock(), MagicMock(), _sessions(2))
+        self.assertEqual(result["failed"], [])
+
+
+class TestSharedPathWithTui(unittest.TestCase):
+    """The TUI and a headless caller bill identically: one shared loop."""
+
+    def test_tui_delegation_and_direct_call_bill_identically(self):
+        from odoo_client.tui.app import TuiDeps, _upload_sessions
+        from odoo_client.tui.window import DateWindow
+
+        sessions = _sessions(3)
+        window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
+        client, state = MagicMock(), MagicMock()
+        # The driver forwards its own injected (client, store) pair to the shared
+        # loop — no reaching into a command's private ``._client``/``.state``.
+        deps = TuiDeps(registry={}, client=client, store=state, config=MagicMock())
+
+        # The TUI 'u' path routes through the shared loop.
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0) as sweep,
+        ):
+            uploaded, retired = _upload_sessions(deps, sessions, window)
+        tui_calls = [c.args for c in reconcile.call_args_list]
+        tui_sweep = sweep.call_args.kwargs
+
+        # A direct headless invocation of the same loop, same inputs.
+        with (
+            patch(_RECONCILE, return_value=1) as reconcile,
+            patch(_SWEEP, return_value=0) as sweep,
+        ):
+            upload_sessions(
+                client,
+                state,
+                sessions,
+                start_date="2026-06-01",
+                end_date="2026-06-03",
+            )
+        cli_calls = [c.args for c in reconcile.call_args_list]
+        cli_sweep = sweep.call_args.kwargs
+
+        self.assertEqual((uploaded, retired), (3, 0))
+        self.assertEqual(tui_calls, cli_calls)  # identical set of billed rows
+        self.assertEqual(tui_sweep, cli_sweep)  # identically scoped sweep
+
+
+class TestReviewSessionBillsThroughSharedPath(unittest.TestCase):
+    """#378 item 6: a review-derived session bills like any other session.
+
+    Review-family sessions carry ``category='Review'`` but are otherwise ordinary
+    derived windows, so they must flow through the SAME min/rounding upload path
+    with no special-casing — a lone review event (zero-span) picks up the #355
+    per-session minimum exactly as a lone commit would.
+    """
+
+    def test_lone_review_session_floors_to_minimum(self):
+        state = make_state_db()
+        state.add_event(
+            EventRecord(
+                id=None,
+                source="review",
+                timestamp=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+                task_ids=["100"],
+                repo="owner/repo",
+                pr_num=7,
+            )
+        )
+        # Derive through the real query path so the session dict is exactly what
+        # the TUI/CLI would hand the uploader.
+        query = QuerySessionsCommand(
+            client=MagicMock(), state=state, config=LocalConfig.load()
+        )
+        sessions = query.execute(start_date="2026-06-01", end_date="2026-06-01")
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["category"], "Review")
+        self.assertEqual(sessions[0]["duration_secs"], 0)  # zero-span lone event
+
+        with (
+            patch(_RECONCILE, return_value=42) as reconcile,
+            patch(_SWEEP, return_value=0),
+        ):
+            result = upload_sessions(
+                MagicMock(), state, sessions, config=LocalConfig.load()
+            )
+        # The review session bills the default 0.25h floor via the shared path.
+        self.assertEqual(result["uploaded"], 1)
+        self.assertEqual(result["rows"][0]["hours"], 0.25)
+        self.assertEqual(reconcile.call_args.args[5], 0.25)
+
+
+if __name__ == "__main__":
+    unittest.main()

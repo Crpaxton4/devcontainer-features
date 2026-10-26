@@ -20,13 +20,13 @@ CLAUDE.md
 # Node
 node_modules/
 
-# Python (consolidated from odoo_sdk)
+# Python (consolidated from odoo_client)
 **/__pycache__/
 *.py[cod]
 .venv/
-libraries/odoo_sdk/build/
-libraries/odoo_sdk/docs/build/
-libraries/odoo_sdk/docs/source/api/
+libraries/odoo_client/build/
+libraries/odoo_client/docs/build/
+libraries/odoo_client/docs/source/api/
 .hypothesis/
 .cosmic-ray/
 reports/
@@ -35,4 +35,4 @@ reports/
 .complexipy_cache/
 
 # Secrets
-.odoo_sdk.ini
+.odoo_client.ini

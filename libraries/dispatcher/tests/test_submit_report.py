@@ -3,9 +3,9 @@
 import json
 
 import pytest
-from odoo_sdk.state.artifacts import ensure_bundle_dir
-from odoo_sdk.state.dispatch_state import lock_path
-from odoo_sdk.state.jobs import JobState, JobStore
+from odoo_client.state.artifacts import ensure_bundle_dir
+from odoo_client.state.dispatch_state import lock_path
+from odoo_client.state.jobs import JobState, JobStore
 
 from dispatcher import cli, lifecycle
 from dispatcher.lock import DispatcherLock

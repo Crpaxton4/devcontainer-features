@@ -58,7 +58,7 @@ names before going further. On the host it also reports the resolved `repos_dir`
 - `claude mcp list` shows `odoo-mcp` connected.
 - `ODOO_SDK_CONFIG` (directory containing `config.ini`) and
   `ODOO_TASK_TRACKER_DIR` (holding `tracker.db`) are both set. The older
-  `~/.odoo_sdk.ini` and `~/.config/odoo-task-tracker` paths are not used.
+  `~/.odoo_client.ini` and `~/.config/odoo-task-tracker` paths are not used.
 - One live round trip: `get_task` on a known task id returns identity fields.
 
 MCP is not callable from bash, which is why `preflight.sh` does not check it.

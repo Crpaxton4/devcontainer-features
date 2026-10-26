@@ -1,7 +1,7 @@
 name: "CI - .github/scripts tests"
 
 # Lightweight gate for the CI helper scripts under .github/scripts/. These are
-# stdlib-only and intentionally decoupled from the odoo_sdk package, so this
+# stdlib-only and intentionally decoupled from the odoo_client package, so this
 # job needs neither uv, the SDK, nor the coverage gate — just a Python
 # interpreter. It only runs when those scripts (or their tests) change.
 on:
@@ -49,7 +49,7 @@ jobs:
         run: |
           scratch="$(mktemp -d)"
           HOME="$scratch" pwsh -NoProfile -File ./setup.ps1
-          for dir in .claude .config/gh .config/odoo_sdk \
+          for dir in .claude .config/gh .config/odoo_client \
                      .config/pr-automation .config/coderabbit .coderabbit \
                      .config/devcontainer/shell-history \
                      .config/odoo-task-tracker; do

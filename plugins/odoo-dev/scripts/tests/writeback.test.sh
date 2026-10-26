@@ -43,8 +43,8 @@ mkdir -p "$stubbin" "$STUB_DIR"
 cat > "$stubbin/odoo-sdk" <<'EOF'
 #!/usr/bin/env bash
 if [ -n "${STUB_NO_CMD:-}" ]; then
-  echo "usage: python -m odoo_sdk.cli [-h] {list,stop,report,prune} ..." >&2
-  echo "python -m odoo_sdk.cli: error: argument command: invalid choice: 'cmd'" >&2
+  echo "usage: python -m odoo_client.cli [-h] {list,stop,report,prune} ..." >&2
+  echo "python -m odoo_client.cli: error: argument command: invalid choice: 'cmd'" >&2
   exit 2
 fi
 if [ "${1:-}" = "cmd" ] && [ "${2:-}" = "--help" ]; then
