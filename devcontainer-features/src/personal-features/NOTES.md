@@ -196,6 +196,7 @@ gh-as-owner whoami    [<repo-path>]
 - **No fallback** — an owner with no authenticated account is exit 2 with an actionable message, never a silent fall back to whichever account happens to be active. Landing work under the wrong identity is the failure this replaces.
 - **`<repo-path>`** — optional everywhere, defaults to the current directory. It is only recognised when it contains a `/` (or is `.` / `..`) **and** names an existing directory, so a branch name or a `gh` subcommand can never be swallowed as one.
 - **`whoami`** — prints the repo, the derived owner, and whether a token for it resolves (never the token itself), so the identity can be checked *before* a push rather than diagnosed after a rejected one.
+- **`gh` output** — passed through unchanged. On a non-TTY, `gh issue view` prints nothing useful without `--json`; that is `gh` itself, not the wrapper.
 
 **Shape matters as much as behaviour.** Claude Code's permission classifier accepts a plain command — a literal program path, literal arguments, no command substitution, no environment prefix, no chaining — and refuses the inline `GH_TOKEN="$(gh auth token --user X)" git …` form inside a worktree-isolated session. Everything that has to be computed is therefore computed inside the script, where a single bash process makes the environment ordinary. Invoke it plainly; don't wrap it.
 

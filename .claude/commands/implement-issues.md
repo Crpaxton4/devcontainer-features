@@ -313,7 +313,9 @@ One template, filled per worker.
   from every sibling — that is Phase 7's named failure mode arriving by design
   rather than by accident, and it has now happened twice, to six workers and
   then to five.
-- `Read the issue first: gh issue view <n> -R <owner>/<repo>`
+- `Read the issue first: gh issue view <n> -R <owner>/<repo> --json title,body,comments --jq '.title, .body, (.comments[] | .body)'`
+  — without `--json`, a non-TTY `gh issue view --comments` prints only the
+  comments, and nothing at all when there are none.
 - `## The change` — numbered steps with `file:line` pointers from Phase 2.
 - `## Hard constraints`
   - Do **not** bump any `version` field, edit any `CHANGELOG.md`, or touch
