@@ -18,8 +18,7 @@ git and gh are in the image. The image builds on the first `up` or `run`.
 `ODOO_ORCHESTRATOR_DOCKER_GID` (the group of `/var/run/docker.sock`). Set them
 yourself when you call `docker compose` directly.
 
-Required: `HOME`, `SECOND_BRAIN_DIR`, `DISPATCH_REPOS_DIR`, `DISPATCH_CONFIG_ROOT`,
-`DISPATCH_REPO_OWNER`. An unset one stops compose with a message.
+Required: `HOME`, `SECOND_BRAIN_DIR`, `DISPATCH_REPOS_DIR`, `DISPATCH_CONFIG_ROOT`. An unset one stops compose with a message.
 
 Optional, passed through when set: `DISPATCH_CLAUDE_HOME` (default `~/.claude`),
 `ODOO_DISPATCH_STATE_DIR` (default `$XDG_STATE_HOME` or `~/.local/state`, then
@@ -27,7 +26,9 @@ Optional, passed through when set: `DISPATCH_CLAUDE_HOME` (default `~/.claude`),
 `~/.local/state/odoo-orchestrator`), `MIN_FREE_GB`, `DISPATCH_SETTLE_S`,
 `DISPATCH_POLL_S`, `DISPATCH_DEADLINE_S`, `DISPATCH_ADMIT_TIMEOUT_S`,
 `DISPATCH_INVARIANTS_FILE`, `DISPATCH_ENTRY`, `DISPATCH_ADDITIONAL_FEATURES`,
-`DISPATCH_ARTIFACTS_DIR`, `USERPROFILE`.
+`DISPATCH_ARTIFACTS_DIR`, `USERPROFILE`, `DISPATCH_REPO_OWNER`. The dispatcher
+finds the config owner of each repo under `DISPATCH_CONFIG_ROOT/github.com/*/<repo>`;
+`DISPATCH_REPO_OWNER` only picks one when a repo name exists under two owners.
 
 Compose also reads an optional `stack/.env`. Do not commit it.
 

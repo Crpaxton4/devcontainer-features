@@ -210,6 +210,21 @@ def test_workspace_mount_invalid(world):
     assert not shell.spawned
 
 
+def test_an_unresolvable_config_dead_letters_one_job_and_the_run_continues(world):
+    engine, shell, _ = world
+    (engine.settings.workspace("ghost") / ".git").mkdir(parents=True)
+    (engine.settings.workspace("ghost") / ".git" / "HEAD").write_text("ref: x\n")
+    (bad,) = _submit(engine, ("ghost", "16"))
+    (good,) = _submit(engine, ("qoc", "17"))
+    engine.run()
+    dead = engine.jobs.get(bad.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert "ghost" in dead.detail and "no devcontainer config" in dead.detail
+    assert engine.jobs.get(good.job_id).dead_reason != (
+        DeadReason.CONTAINER_START_FAILED.value
+    )
+
+
 PG = ["docker", "exec", "c", "pg_isready"]
 ODOO = ["docker", "exec", "c", "odoo", "--version"]
 
@@ -715,7 +730,9 @@ def test_reap_exception_is_contained(world, monkeypatch):
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("DISPATCH_REPOS_DIR", str(tmp_path / "repos"))
     monkeypatch.setenv("DISPATCH_CONFIG_ROOT", str(tmp_path / "c"))
-    monkeypatch.setenv("DISPATCH_REPO_OWNER", "acme")
+    config = tmp_path / "c" / "github.com" / "any-owner" / "qoc" / ".devcontainer"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "devcontainer.json").write_text("{}", "utf-8")
 
 
 def test_cli_refuses_when_another_dispatcher_holds_the_lock(state_root, capsys):
@@ -738,7 +755,6 @@ def test_cli_usage_errors(monkeypatch, tmp_path, capsys):
         "DISPATCH_REPOS_DIR",
         "REPOS_DIR",
         "DISPATCH_CONFIG_ROOT",
-        "DISPATCH_REPO_OWNER",
     ):
         monkeypatch.delenv(name, raising=False)
     assert cli.main(["run", arg]) == cli.EXIT_USAGE

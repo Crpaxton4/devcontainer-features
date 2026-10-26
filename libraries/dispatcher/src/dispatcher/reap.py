@@ -25,7 +25,7 @@ import posixpath
 from dataclasses import dataclass
 from pathlib import Path
 
-from .lifecycle import Shell, render_exec_prefix
+from .lifecycle import Shell, StageError, render_exec_prefix
 from .settings import WORKSPACE_TARGET, Settings
 
 
@@ -82,7 +82,12 @@ def reap(
         return ReapResult(
             False, f"worktree {container_worktree} does not exist; nothing to reap"
         )
-    prefix = render_exec_prefix(settings, repo)
+    try:
+        prefix = render_exec_prefix(settings, repo)
+    except StageError as exc:
+        return ReapResult(
+            False, f"worktree {container_worktree} left in place: {exc.detail}"
+        )
     problem = _unpushed_reason(shell, prefix, container_worktree, branch, env)
     if problem:
         return ReapResult(

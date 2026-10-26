@@ -1,5 +1,6 @@
 """Command-line rendering, container lifecycle, mount assertion, reap, collection."""
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -320,6 +321,16 @@ def test_reap_removes_a_pushed_matching_worktree_through_the_container(
     assert all(c[len(_exec(settings))] == "git" for c, _ in shell.calls)
     assert all(e == env for _, e in shell.calls)
     assert {t for _, t in shell.timeouts} == {120}
+
+
+def test_reap_notes_an_unresolvable_config_and_does_not_raise(
+    settings, worktree, tmp_path
+):
+    shell = FakeShell()
+    lost = dataclasses.replace(settings, config_root=tmp_path / "none", owner="")
+    result = reap(shell, lost, "qoc", WT, "feat", {"PATH": "/bin"})
+    assert not result.reaped and "no devcontainer config" in result.note
+    assert not shell.calls
 
 
 @pytest.mark.parametrize(

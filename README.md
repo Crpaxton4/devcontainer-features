@@ -277,10 +277,11 @@ The JSON array is one argument. Each element is `{"repo": ..., "task": ..., "bri
 | 2 | Bad arguments, bad settings or an unreadable brief |
 | 3 | Another dispatcher holds the lock |
 
-Settings come from the environment ([`settings.py`](libraries/dispatcher/src/dispatcher/settings.py) has the full list). Three are required: `DISPATCH_REPOS_DIR` (or `REPOS_DIR`), `DISPATCH_CONFIG_ROOT` and `DISPATCH_REPO_OWNER`.
+Settings come from the environment ([`settings.py`](libraries/dispatcher/src/dispatcher/settings.py) has the full list). Two are required: `DISPATCH_REPOS_DIR` (or `REPOS_DIR`) and `DISPATCH_CONFIG_ROOT`. The config owner is found per repo under `DISPATCH_CONFIG_ROOT/github.com/*/<repo>`.
 
 | Setting | Default |
 | --- | --- |
+| `DISPATCH_REPO_OWNER` | unset; a tie-breaker when one repo name exists under two owners |
 | `DISPATCH_ENTRY` | `/odoo-dev:implement` |
 | `DISPATCH_ARTIFACTS_DIR` | `~/.config/odoo-dev/dispatch/artifacts` (must sit under `~/.config/odoo-dev`) |
 | `DISPATCH_ADMIT_TIMEOUT_S` | `1800` |

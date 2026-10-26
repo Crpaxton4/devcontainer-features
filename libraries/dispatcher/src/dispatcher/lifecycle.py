@@ -46,6 +46,7 @@ from .settings import (
     ARTIFACTS_TARGET,
     DEFAULT_ENTRY,
     ODOO_DEV_MOUNT_TARGET,
+    ConfigResolutionError,
     Settings,
     WORKSPACE_TARGET,
     normalize_project,
@@ -99,6 +100,18 @@ class ContainerStartError(StageError):
 
 class MountInvalidError(StageError):
     """WORKSPACE_MOUNT_INVALID."""
+
+
+def resolve_config(settings: Settings, repo: str) -> Path:
+    """``settings.config(repo)``, with a failure raised as a per-job stage error.
+
+    ``JobRun.admit`` turns :class:`ContainerStartError` into a dead letter, so
+    an unresolvable config ends one job and never the dispatcher.
+    """
+    try:
+        return settings.config(repo)
+    except ConfigResolutionError as exc:
+        raise ContainerStartError(exc.detail) from exc
 
 
 @dataclass(frozen=True)
@@ -176,7 +189,7 @@ def render_up(settings: Settings, repo: str) -> list[str]:
         "devcontainer",
         "up",
         "--config",
-        str(settings.config(repo)),
+        str(resolve_config(settings, repo)),
         "--workspace-folder",
         str(settings.workspace(repo)),
         "--additional-features",
@@ -197,7 +210,7 @@ def render_exec_prefix(settings: Settings, repo: str) -> list[str]:
         "devcontainer",
         "exec",
         "--config",
-        str(settings.config(repo)),
+        str(resolve_config(settings, repo)),
         "--workspace-folder",
         str(settings.workspace(repo)),
     ]

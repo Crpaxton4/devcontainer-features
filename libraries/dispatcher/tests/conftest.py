@@ -21,6 +21,12 @@ def state_root(tmp_path, monkeypatch):
 def settings(tmp_path):
     invariants = tmp_path / "unattended-invariants.md"
     invariants.write_text("Standing line.\nNever ask.\n", "utf-8")
+    for repo in ("qoc", "a", "b", "c", "x"):
+        config = (
+            tmp_path / "central" / "github.com" / "acme" / repo / ".devcontainer"
+        ) / "devcontainer.json"
+        config.parent.mkdir(parents=True)
+        config.write_text("{}", "utf-8")
     return Settings(
         repos_dir=tmp_path / "repos",
         config_root=tmp_path / "central",
