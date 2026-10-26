@@ -227,7 +227,7 @@ class JobRun:
             self.container_id,
             self.job.task_id,
             self._env(),
-            self.settings.entry,
+            lifecycle.job_entry(self.job, self.settings),
         )
 
     def _on_deadline(self) -> None:
@@ -250,7 +250,7 @@ class JobRun:
                 self.container_id,
                 self.job.task_id,
                 self._env(),
-                self.settings.entry,
+                lifecycle.job_entry(self.job, self.settings),
             )
         finally:
             self._deadline_done.set()
@@ -258,7 +258,12 @@ class JobRun:
     def _session(self) -> None:
         job = self.job
         argv = lifecycle.render_exec(
-            self.settings, job.repo, job.task_id, job.job_id, job.brief
+            self.settings,
+            job.repo,
+            job.task_id,
+            job.job_id,
+            job.brief,
+            entry=lifecycle.job_entry(job, self.settings),
         )
         if self.engine._stop.is_set():  # a stop arrived during admission
             self._fail(
@@ -382,7 +387,7 @@ class JobRun:
         try:
             usage_log.record(
                 "job",
-                self.settings.entry,
+                lifecycle.job_entry(self.job, self.settings),
                 **job_usage_context(self.job, self.parser, self.cause is None),
             )
         except Exception as exc:

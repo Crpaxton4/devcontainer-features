@@ -648,6 +648,36 @@ def test_a_stop_kill_uses_the_configured_entry(world):
     assert cmd[-1] == lifecycle.kill_pattern("71", "/x:y") and "/x:y" in cmd[-1]
 
 
+UPGRADE = "/odoo-dev:upgrade-implement"
+
+
+def test_a_job_entry_reaches_the_prompt(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD))
+    queue.submit(
+        engine.jobs, [queue.JobSpec("qoc", "80", "the brief", entry=UPGRADE)], "b"
+    )
+    engine.run()
+    argv, _env = shell.spawned[0]
+    assert argv[argv.index("-p") + 1] == f"{UPGRADE} 80\n\nthe brief"
+
+
+def test_a_job_entry_reaches_the_stop_kill_pattern(world):
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream()[:1], hang=True)
+    queue.submit(engine.jobs, [queue.JobSpec("qoc", "81", "b", entry=UPGRADE)], "b")
+    t = threading.Thread(target=engine.run)
+    t.start()
+    for _ in range(300):
+        if shell.spawned and engine._active:
+            break
+        threading.Event().wait(0.01)
+    engine.request_stop()
+    t.join(10)
+    (cmd,) = shell.commands("docker", "exec", "c", "pkill")
+    assert cmd[-1] == lifecycle.kill_pattern("81", UPGRADE)
+
+
 def test_idle_check_failure_never_fails_a_job(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))

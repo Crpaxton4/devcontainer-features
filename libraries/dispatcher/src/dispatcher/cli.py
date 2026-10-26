@@ -13,7 +13,8 @@
 
 The JSON array is **one argument**; each element is
 ``{"repo": "...", "task": "...", "brief": "<path readable as text>"}`` with an
-optional ``"round": <int>``. ``run`` prints one JSON object on stdout
+optional ``"round": <int>`` and ``"entry"`` (``/odoo-dev:implement`` or
+``/odoo-dev:upgrade-implement``; default ``DISPATCH_ENTRY``). ``run`` prints one JSON object on stdout
 (``{"batch_id": ..., "jobs": [...]}``), and so do ``submit`` and ``report``;
 everything else goes to stderr.
 
@@ -72,6 +73,7 @@ def job_report(job: Job, notes: dict | None = None) -> dict:
         "task": job.task_id,
         "repo": job.repo,
         "round": job.round,
+        "entry": job.entry,
         "state": job.state.value,
         "outcome": job.outcome,
         "dead_reason": job.dead_reason,
@@ -86,13 +88,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dispatch", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="submit a JSON array of jobs and run them")
-    run.add_argument("jobs", nargs="?", help="JSON array of {repo, task, brief}")
+    run.add_argument(
+        "jobs",
+        nargs="?",
+        help="JSON array of {repo, task, brief[, round][, entry]}",
+    )
     submit_cmd = sub.add_parser(
         "submit",
         help="queue a JSON array of jobs and exit; refuses a repo with no "
         "checkout or no central config",
     )
-    submit_cmd.add_argument("jobs", help="JSON array of {repo, task, brief}")
+    submit_cmd.add_argument(
+        "jobs", help="JSON array of {repo, task, brief[, round][, entry]}"
+    )
     report_cmd = sub.add_parser("report", help="print one batch as JSON")
     report_cmd.add_argument("batch_id")
     sub.add_parser("dead-letters", help="print the dead letter list as JSON")
@@ -184,6 +192,7 @@ def _submit(jobs_argument: str) -> int:
             repo=spec.repo,
             brief=spec.brief,
             round=spec.round,
+            entry=spec.entry,
         )
         for spec in specs
     ]

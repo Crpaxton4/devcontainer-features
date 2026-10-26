@@ -268,7 +268,7 @@ dispatch run                  # no argument: resume whatever is PENDING
 dispatch dead-letters         # print the dead letter list as JSON (read only, takes no lock)
 ```
 
-The JSON array is one argument. Each element is `{"repo": ..., "task": ..., "brief": <path>}` with an optional `"round"`. `run` prints one JSON object (`batch_id`, `jobs`) on stdout. A singleton lock is taken first. To run a second dispatcher, point it at another state root with `ODOO_DISPATCH_STATE_DIR`.
+The JSON array is one argument. Each element is `{"repo": ..., "task": ..., "brief": <path>}` with an optional `"round"` and an optional `"entry"` (`/odoo-dev:implement` or `/odoo-dev:upgrade-implement`). `run` prints one JSON object (`batch_id`, `jobs`) on stdout. A singleton lock is taken first. To run a second dispatcher, point it at another state root with `ODOO_DISPATCH_STATE_DIR`.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -282,7 +282,7 @@ Settings come from the environment ([`settings.py`](libraries/dispatcher/src/dis
 | Setting | Default |
 | --- | --- |
 | `DISPATCH_REPO_OWNER` | unset; a tie-breaker when one repo name exists under two owners |
-| `DISPATCH_ENTRY` | `/odoo-dev:implement` |
+| `DISPATCH_ENTRY` | `/odoo-dev:implement`; a job's own `entry` overrides it |
 | `DISPATCH_ARTIFACTS_DIR` | `~/.config/odoo-dev/dispatch/artifacts` (must sit under `~/.config/odoo-dev`) |
 | `DISPATCH_ADMIT_TIMEOUT_S` | `1800` |
 | `DISPATCH_ADDITIONAL_FEATURES` | the `personal-features` Feature |

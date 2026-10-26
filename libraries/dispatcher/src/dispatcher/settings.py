@@ -69,6 +69,8 @@ from pathlib import Path
 from odoo_sdk.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
 
 DEFAULT_ENTRY = "/odoo-dev:implement"
+#: The entries that a submitted job may name for itself (its ``entry`` key).
+ALLOWED_ENTRIES = (DEFAULT_ENTRY, "/odoo-dev:upgrade-implement")
 DEFAULT_ADDITIONAL_FEATURES = (
     '{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}'
 )
