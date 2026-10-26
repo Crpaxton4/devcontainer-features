@@ -9,6 +9,7 @@ members = ["libraries/*", "apps/*"]
 odoo_sdk = { workspace = true }
 dispatcher = { workspace = true }
 usage_log = { workspace = true }
+odoo_dev_data = { workspace = true }
 webui = { workspace = true }
 
 [tool.uv]
@@ -31,16 +32,16 @@ target-version = ["py310"]
 # Cross-package rules (ADR-006): apps import logic only; data imports nothing
 # above it. Members join root_packages as they are created.
 [tool.importlinter]
-root_packages = ["odoo_sdk", "dispatcher", "usage_log", "webui"]
+root_packages = ["odoo_sdk", "dispatcher", "usage_log", "odoo_dev_data", "webui"]
 
 [[tool.importlinter.contracts]]
 name = "ADR-006: apps never import a data package"
 type = "forbidden"
 source_modules = ["webui"]
-forbidden_modules = ["usage_log"]
+forbidden_modules = ["usage_log", "odoo_dev_data"]
 
 [[tool.importlinter.contracts]]
 name = "ADR-006: data never imports logic or apps"
 type = "forbidden"
-source_modules = ["usage_log"]
+source_modules = ["usage_log", "odoo_dev_data"]
 forbidden_modules = ["odoo_sdk", "dispatcher", "webui"]
