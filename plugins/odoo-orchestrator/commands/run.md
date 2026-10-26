@@ -173,7 +173,8 @@ Exit codes of `dispatch.sh add`:
   error. Show the stderr text. Mark nothing handled. If the jobs were already
   queued, run `batch-add` for the printed `batch_id`.
 - 2: nothing was queued: the array was rejected (bad array, a task that already
-  has a live job, or a task named twice), or `add` got no argument. Show the
+  has a live job, a task named twice, or a repo with no checkout or no central
+  config), or `add` got no argument. Show the
   stderr text. Fix the array, or wait until the live job of that task ends, and
   submit again. Mark nothing handled.
 - 3: another dispatcher holds the lock. Do not retry in a loop. Tell the user.
