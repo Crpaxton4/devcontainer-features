@@ -30,7 +30,6 @@ env:
   SECOND_BRAIN_DIR: /home/ci/second-brain
   DISPATCH_REPOS_DIR: /home/ci/repos
   DISPATCH_CONFIG_ROOT: /home/ci/config
-  DISPATCH_REPO_OWNER: ci-owner
   ODOO_ORCHESTRATOR_CHECKOUT: /home/ci/checkout
   ODOO_ORCHESTRATOR_UID: "1000"
   ODOO_ORCHESTRATOR_GID: "1000"

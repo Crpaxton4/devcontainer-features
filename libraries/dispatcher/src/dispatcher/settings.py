@@ -8,8 +8,11 @@ Variables (all optional unless marked required):
 ``DISPATCH_CONFIG_ROOT``  required
     Root of the central devcontainer config tree. The config for a repo is
     ``<root>/github.com/<owner>/<repo>/.devcontainer/devcontainer.json``.
-``DISPATCH_REPO_OWNER``  required
-    The ``<owner>`` path component above.
+``DISPATCH_REPO_OWNER``
+    Optional tie-breaker for the ``<owner>`` path component above. The owner is
+    resolved per repo: the single match of
+    ``<root>/github.com/*/<repo>/.devcontainer/devcontainer.json``. When this is
+    set and its own path exists, that path wins; otherwise the glob decides.
 ``DISPATCH_PLUGIN_ROOT``
     Root of the odoo-dev plugin (default ``$CLAUDE_PLUGIN_ROOT``, then the
     checkout this package lives in).
@@ -81,6 +84,18 @@ class SettingsError(RuntimeError):
     """A required setting is missing or malformed."""
 
 
+class ConfigResolutionError(RuntimeError):
+    """No single central config exists for a repo; ``detail`` says why.
+
+    This is a per-job error, not a settings error: the engine dead-letters the
+    one job and the dispatcher carries on.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
+
+
 def read_invariants(path: str) -> str:
     """The text of the invariants file, read on the host.
 
@@ -130,7 +145,6 @@ def normalize_project(repo: str) -> str:
 class Settings:
     repos_dir: Path
     config_root: Path
-    owner: str
     plugin_root: Path
     invariants_file: str
     entry: str
@@ -142,20 +156,36 @@ class Settings:
     claude_home: Path
     additional_features: str = DEFAULT_ADDITIONAL_FEATURES
     invariants: str = ""  # the text of ``invariants_file``, read once by from_env
+    owner: str = ""  # optional tie-breaker; "" means resolve by glob only
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
         return self.repos_dir / repo
 
     def config(self, repo: str) -> Path:
-        """The central ``devcontainer.json`` of a repo (``--config``)."""
-        return (
-            self.config_root
-            / "github.com"
-            / self.owner
-            / repo
-            / ".devcontainer"
-            / "devcontainer.json"
+        """The central ``devcontainer.json`` of a repo (``--config``).
+
+        Raises :class:`ConfigResolutionError` when no single config exists.
+        """
+        tail = Path(repo) / ".devcontainer" / "devcontainer.json"
+        github = self.config_root / "github.com"
+        if self.owner:
+            preferred = github / self.owner / tail
+            if preferred.is_file():
+                return preferred
+        pattern = f"*/{tail}"
+        found = sorted(github.glob(pattern))
+        if len(found) == 1:
+            return found[0]
+        if not found:
+            raise ConfigResolutionError(
+                f"no devcontainer config for repo {repo}: nothing matches "
+                f"{github / pattern}"
+            )
+        raise ConfigResolutionError(
+            f"more than one devcontainer config for repo {repo}: "
+            + ", ".join(str(p) for p in found)
+            + "; set DISPATCH_REPO_OWNER to choose one"
         )
 
     @classmethod
@@ -167,7 +197,6 @@ class Settings:
             for name, value in (
                 ("DISPATCH_REPOS_DIR", repos),
                 ("DISPATCH_CONFIG_ROOT", env.get("DISPATCH_CONFIG_ROOT")),
-                ("DISPATCH_REPO_OWNER", env.get("DISPATCH_REPO_OWNER")),
             )
             if not value
         ]
@@ -201,7 +230,7 @@ class Settings:
         return cls(
             repos_dir=Path(repos),
             config_root=Path(env["DISPATCH_CONFIG_ROOT"]),
-            owner=env["DISPATCH_REPO_OWNER"],
+            owner=env.get("DISPATCH_REPO_OWNER", ""),
             plugin_root=plugin_root,
             invariants_file=invariants_file,
             invariants=read_invariants(invariants_file),

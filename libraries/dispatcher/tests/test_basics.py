@@ -1,5 +1,6 @@
 """Lock, gate, queue, settings, schema and the ten dead-letter causes."""
 
+import dataclasses
 import json
 import multiprocessing
 
@@ -11,6 +12,7 @@ from dispatcher.deadletter import Ending, classify
 from dispatcher.lock import AlreadyRunningError, DispatcherLock
 from dispatcher.settings import (
     DEFAULT_ENTRY,
+    ConfigResolutionError,
     Settings,
     SettingsError,
     normalize_project,
@@ -203,11 +205,14 @@ def test_settings_from_env(tmp_path):
         "MIN_FREE_GB": "3",
         "DISPATCH_CLAUDE_HOME": "/h",
     }
+    config = tmp_path / "c" / "github.com" / "acme" / "qoc" / ".devcontainer"
+    config.mkdir(parents=True)
+    (config / "devcontainer.json").write_text("{}", "utf-8")
+    env["DISPATCH_CONFIG_ROOT"] = str(tmp_path / "c")
     s = Settings.from_env(env)
     assert str(s.workspace("qoc")) == "/r/qoc"
-    assert (
-        str(s.config("qoc")) == "/c/github.com/acme/qoc/.devcontainer/devcontainer.json"
-    )
+    assert s.config("qoc") == config / "devcontainer.json"
+    assert Settings.from_env({**env, "DISPATCH_REPO_OWNER": ""}).owner == ""
     assert s.invariants_file == str(prompts / "unattended-invariants.md")
     assert s.invariants == "default text"
     assert (s.min_available_gb, s.deadline_s, s.entry) == (
@@ -242,8 +247,14 @@ def test_settings_defaults_and_errors(tmp_path):
     with pytest.raises(SettingsError, match="invariants file") as caught:
         Settings.from_env({**env, "DISPATCH_INVARIANTS_FILE": str(missing)})
     assert str(missing) in str(caught.value)
-    with pytest.raises(SettingsError, match="DISPATCH_REPO_OWNER"):
+    with pytest.raises(SettingsError, match="DISPATCH_CONFIG_ROOT"):
         Settings.from_env({"DISPATCH_REPOS_DIR": "/r"})
+    assert (
+        Settings.from_env(
+            {k: v for k, v in env.items() if k != "DISPATCH_REPO_OWNER"}
+        ).owner
+        == ""
+    )
     with pytest.raises(SettingsError, match="malformed"):
         Settings.from_env({**env, "MIN_FREE_GB": "x"})
     assert Settings.from_env(env).admit_timeout_s == 1800
@@ -277,6 +288,51 @@ def test_settings_refuse_a_bundle_root_the_container_cannot_see(tmp_path, monkey
     with pytest.raises(SettingsError, match="not under") as caught:
         Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": str(tmp_path / "out")})
     assert "DISPATCH_ARTIFACTS_DIR" in str(caught.value)
+
+
+def _make_config(root, owner, repo):
+    path = root / "github.com" / owner / repo / ".devcontainer" / "devcontainer.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", "utf-8")
+    return path
+
+
+def test_config_is_resolved_per_repo_under_its_own_owner(settings, tmp_path):
+    root = tmp_path / "multi"
+    a = _make_config(root, "owner-a", "repo-a")
+    b = _make_config(root, "owner-b", "repo-b")
+    s = dataclasses.replace(settings, config_root=root, owner="")
+    assert (s.config("repo-a"), s.config("repo-b")) == (a, b)
+    # A tie-breaker that names the wrong owner falls back to the glob.
+    wrong = dataclasses.replace(s, owner="owner-b")
+    assert wrong.config("repo-a") == a
+
+
+def test_config_owner_breaks_a_tie(settings, tmp_path):
+    root = tmp_path / "tie"
+    _make_config(root, "owner-a", "shared")
+    b = _make_config(root, "owner-b", "shared")
+    s = dataclasses.replace(settings, config_root=root, owner="owner-b")
+    assert s.config("shared") == b
+
+
+def test_config_with_no_match_names_the_repo_and_pattern(settings, tmp_path):
+    s = dataclasses.replace(settings, config_root=tmp_path / "none", owner="")
+    with pytest.raises(ConfigResolutionError) as caught:
+        s.config("ghost")
+    assert "ghost" in caught.value.detail
+    assert "github.com/*/ghost/.devcontainer/devcontainer.json" in caught.value.detail
+
+
+def test_config_with_duplicate_matches_lists_the_candidates(settings, tmp_path):
+    root = tmp_path / "dup"
+    a = _make_config(root, "owner-a", "shared")
+    b = _make_config(root, "owner-b", "shared")
+    s = dataclasses.replace(settings, config_root=root, owner="")
+    with pytest.raises(ConfigResolutionError) as caught:
+        s.config("shared")
+    assert "more than one" in caught.value.detail
+    assert str(a) in caught.value.detail and str(b) in caught.value.detail
 
 
 # -- schema and the success test ----------------------------------------
