@@ -208,14 +208,14 @@ check gh-auth gh auth status
 # The mutable state dir lives outside the plugin tree, so a fresh machine or a
 # skipped bootstrap leaves it missing. Named here rather than discovered later as
 # a bogus "project unmapped" from repo-map.sh reading a file that is not there.
-STATE_DIR="${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+STATE_DIR="$(bash "$PLUGIN_ROOT/scripts/state-dir.sh")"
 state_dir_ready() { [ -f "$STATE_DIR/repo-map.json" ]; }
 check state-dir state_dir_ready
 
 # Leftover pre-migration loose copies of plugin skills shadow their plugin
 # twins. Reports only; the strays are safe to delete — the devcontainer feature
 # stopped shipping them (#701–#708), so nothing recreates them on rebuild.
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 stray_skills_clean() {
   [ -z "$(bash "$PLUGIN_ROOT/scripts/check-stray-skills.sh" 2>/dev/null)" ]
 }

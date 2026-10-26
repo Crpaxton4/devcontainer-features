@@ -63,7 +63,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAP="${REPO_MAP_FILE:-${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}/repo-map.json}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+MAP="${REPO_MAP_FILE:-$("$PLUGIN_ROOT/scripts/state-dir.sh")/repo-map.json}"
 
 [ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>] [--series NN.0]" >&2; exit 2; }
 key="$1"; shift
