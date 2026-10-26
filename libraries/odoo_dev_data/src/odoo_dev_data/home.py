@@ -94,3 +94,14 @@ def job_bundle_dir(task_id: int | str, job_id: str, home: Path | None = None) ->
     if not _JOB_ID.fullmatch(job_id):
         raise ValueError(f"invalid job id: {job_id!r}")
     return task_dir(task_id, home) / "jobs" / job_id
+
+
+def ensure_job_bundle_dir(
+    task_id: int | str, job_id: str, home: Path | None = None
+) -> Path:
+    """Create ``tasks/<id>/jobs/<job>`` (and its parents) and return it."""
+    path = job_bundle_dir(task_id, job_id, home)
+    ensure_task_dir(task_id, home)
+    path.parent.mkdir(exist_ok=True)
+    path.mkdir(exist_ok=True)
+    return path

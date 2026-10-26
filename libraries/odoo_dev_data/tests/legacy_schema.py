@@ -65,3 +65,69 @@ CREATE TABLE IF NOT EXISTS chatter_dedupe (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chatter_dedupe_key
     ON chatter_dedupe(task_id, dedupe_key);
 """
+
+# The legacy ``jobs.db`` (``odoo_sdk.state.jobs`` migrations 1 and 2), without
+# the schema_migrations ledger the real store also carries.
+LEGACY_JOBS_DDL = """
+CREATE TABLE jobs (
+    job_id        TEXT    PRIMARY KEY,
+    batch_id      TEXT    NOT NULL,
+    task_id       TEXT    NOT NULL CHECK (task_id <> ''),
+    repo          TEXT    NOT NULL CHECK (repo <> ''),
+    round         INTEGER NOT NULL DEFAULT 1 CHECK (round >= 1),
+    state         TEXT    NOT NULL CHECK (state IN
+        ('PENDING','RUNNING','DONE','DEAD_LETTER')),
+    brief         TEXT    NOT NULL CHECK (brief <> ''),
+    submitted_us  INTEGER NOT NULL CHECK (submitted_us > 0),
+    started_us    INTEGER CHECK (started_us IS NULL OR started_us >= submitted_us),
+    ended_us      INTEGER CHECK (ended_us   IS NULL OR ended_us   >= started_us),
+    session_id    TEXT    NOT NULL DEFAULT '',
+    container     TEXT    NOT NULL DEFAULT '',
+    worktree      TEXT    NOT NULL DEFAULT '',
+    outcome       TEXT    NOT NULL DEFAULT '',
+    dead_reason   TEXT    NOT NULL DEFAULT '',
+    detail        TEXT    NOT NULL DEFAULT '',
+    entry         TEXT    NOT NULL DEFAULT '',
+    CHECK (state <> 'PENDING' OR started_us IS NULL),
+    CHECK (state <> 'RUNNING' OR (started_us IS NOT NULL AND ended_us IS NULL)),
+    CHECK (state NOT IN ('DONE','DEAD_LETTER') OR ended_us IS NOT NULL),
+    CHECK ((state = 'DEAD_LETTER') = (dead_reason <> ''))
+) STRICT;
+"""
+
+# The legacy ``runs.db`` (``odoo_sdk.state.runs_store`` migration 1), without
+# the append-only triggers and the generated columns.
+LEGACY_RUNS_DDL = """
+CREATE TABLE runs (
+    session_id    TEXT    PRIMARY KEY,
+    job_id        TEXT    NOT NULL,
+    task_id       TEXT    NOT NULL CHECK (task_id <> ''),
+    repo          TEXT    NOT NULL DEFAULT '',
+    branch        TEXT    NOT NULL DEFAULT '',
+    pr_num        INTEGER NOT NULL DEFAULT 0 CHECK (pr_num >= 0),
+    started_us    INTEGER NOT NULL CHECK (started_us > 0),
+    ended_us      INTEGER NOT NULL CHECK (ended_us >= started_us),
+    outcome       TEXT    NOT NULL CHECK (outcome IN
+        ('COMPLETED','COMPLETED_WITH_QUESTIONS','BLOCKED','FAILED')),
+    tool_version  TEXT    NOT NULL CHECK (tool_version <> ''),
+    transcript    TEXT    NOT NULL DEFAULT '',
+    brief         TEXT    NOT NULL DEFAULT ''
+) STRICT;
+
+CREATE TABLE run_envelopes (
+    session_id    TEXT PRIMARY KEY REFERENCES runs(session_id),
+    envelope      TEXT NOT NULL CHECK (json_valid(envelope))
+) STRICT;
+
+CREATE TABLE run_artifacts (
+    job_id        TEXT    PRIMARY KEY,
+    session_id    TEXT    NOT NULL DEFAULT '',
+    dir           TEXT    NOT NULL CHECK (dir <> ''),
+    has_task_json INTEGER NOT NULL DEFAULT 0 CHECK (has_task_json IN (0,1)),
+    has_session   INTEGER NOT NULL DEFAULT 0 CHECK (has_session   IN (0,1)),
+    has_envelope  INTEGER NOT NULL DEFAULT 0 CHECK (has_envelope  IN (0,1)),
+    bytes         INTEGER NOT NULL DEFAULT 0 CHECK (bytes >= 0),
+    harvested_us  INTEGER NOT NULL CHECK (harvested_us > 0),
+    missing       TEXT    NOT NULL DEFAULT ''
+) STRICT;
+"""
