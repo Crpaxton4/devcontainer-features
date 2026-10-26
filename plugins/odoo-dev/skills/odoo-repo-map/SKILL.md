@@ -11,7 +11,9 @@ base, the folder name is not the project name, and the chain lives nowhere in gi
 
 ## The data
 
-`$ODOO_DEV_STATE_DIR/repo-map.json` (default `~/.local/share/odoo-dev/repo-map.json`).
+`$ODOO_DEV_STATE_DIR/repo-map.json`. Containers always have `ODOO_DEV_STATE_DIR` set. On a
+host where it is unset, the default is `~/.config/odoo-dev` when that directory exists (the
+directory the containers bind), else `~/.local/share/odoo-dev`.
 `REPO_MAP_FILE` overrides the path. A map that exists but does not parse or validate
 exits 4 naming the file and the complaint. It is never reseeded.
 

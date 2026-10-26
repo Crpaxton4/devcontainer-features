@@ -286,5 +286,16 @@ out="$(ODOO_ENTERPRISE_ROOT="$work/ent" PATH="$work/pfcl" "$work/pfcl/bash" "$SC
 node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("import ")||x.startsWith("closure:"))?1:0)' "$out"
 expect_exit "an importable enterprise closure raises no failure" 0 $?
 
+# The state-dir check resolves through state-dir.sh (#1251): with ODOO_DEV_STATE_DIR
+# unset, a repo-map.json under $HOME/.config/odoo-dev satisfies it.
+mkdir -p "$work/pfhome/.config/odoo-dev"
+echo '{}' > "$work/pfhome/.config/odoo-dev/repo-map.json"
+out="$(env -u ODOO_DEV_STATE_DIR HOME="$work/pfhome" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("state-dir")?1:0)' "$out"
+expect_exit "state-dir check passes through the host default" 0 $?
+out="$(env -u ODOO_DEV_STATE_DIR HOME="$work/pfempty" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("state-dir")?0:1)' "$out"
+expect_exit "state-dir check fails when no map is at the default" 0 $?
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]
