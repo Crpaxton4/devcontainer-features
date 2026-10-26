@@ -25,9 +25,17 @@ $ODOO_DEV_HOME/
 `ensure_home()` is the only function that creates directories. It creates the
 root with mode `0o700`.
 
-## Planned modules
+## Modules
 
-`config.py`, `db/`, `events.py` and `doctor.py` arrive in later tasks.
+| Module | Holds |
+|---|---|
+| `home.py` | the state root resolver and the layout |
+| `config.py` | `LocalConfig`: `config.toml` reader, `[model_ids]` writer, `connection_values()` |
+| `db/` | `connect()`, the migration runner and the numbered migrations of `state.db` |
+| `events.py` | `EventStore`: events, derived sessions, upload ledger, chatter dedupe, settings |
+| `doctor.py` | `doctor()` and `render()`: a read-only report of the root |
+
+`python -m odoo_dev_data doctor [--json]` prints the report.
 
 ## Test
 
