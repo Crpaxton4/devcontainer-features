@@ -216,7 +216,19 @@ def render_exec_prefix(settings: Settings, repo: str) -> list[str]:
     ]
 
 
-def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief: str):
+def job_entry(job, settings: Settings) -> str:
+    """The job's own entry, else the dispatcher's ``settings.entry``."""
+    return job.entry or settings.entry
+
+
+def render_exec(
+    settings: Settings,
+    repo: str,
+    task_id: str,
+    job_id: str,
+    brief: str,
+    entry: str | None = None,
+):
     """The dispatch command line of design section 8, exactly.
 
     ``--remote-env ODOO_UNATTENDED=1`` is a contract with the odoo-dev guard
@@ -229,7 +241,7 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
     environment. Without this variable every protection in that hook is
     decorative during an unattended run. Do not drop it as redundant.
 
-    The prompt starts with ``settings.entry`` (``/odoo-dev:implement``), a
+    The prompt starts with ``entry``, else ``settings.entry`` (``/odoo-dev:implement``), a
     forked command that names its own agent, so there is no ``--agent`` flag.
     A slash command in the prompt string expands before the run, and ``-p``
     waits for the fork. The task id is the command's first argument.
@@ -245,7 +257,7 @@ def render_exec(settings: Settings, repo: str, task_id: str, job_id: str, brief:
         "--",
         "claude",
         "-p",
-        f"{settings.entry} {task_id}\n\n{brief}",
+        f"{entry or settings.entry} {task_id}\n\n{brief}",
         "--append-system-prompt",
         settings.invariants,
         "--output-format",

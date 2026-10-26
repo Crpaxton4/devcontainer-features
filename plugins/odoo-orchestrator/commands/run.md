@@ -145,8 +145,11 @@ Only an approved path goes into the array.
 ## 4. Submit the approved set as one argument
 
 If the set is empty, stop. Otherwise build one JSON array and pass it as a single
-argument. Each element has exactly `repo`, `task` and `brief` (an absolute path),
-plus `round` when it is above 1 (new tasks are round 1):
+argument. Each element has `repo`, `task` and `brief` (an absolute path), plus
+`round` when it is above 1 (new tasks are round 1). `entry` is optional. It is
+`/odoo-dev:implement` (the default) or `/odoo-dev:upgrade-implement`, and any
+other value is refused. Set `/odoo-dev:upgrade-implement` for an upgrade task on
+an upgrade branch:
 
     dispatch.sh add '[{"repo":"<repo>","task":"<task>","brief":"<path>"}]'
 

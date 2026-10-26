@@ -99,12 +99,17 @@ CREATE TABLE jobs (
             "CREATE INDEX idx_jobs_state ON jobs(state, submitted_us)",
         ),
     ),
+    Migration(
+        2,
+        "add jobs.entry",
+        ("ALTER TABLE jobs ADD COLUMN entry TEXT NOT NULL DEFAULT ''",),
+    ),
 )
 
 _COLUMNS = (
     "job_id, batch_id, task_id, repo, round, state, brief, submitted_us, "
     "started_us, ended_us, session_id, container, worktree, outcome, "
-    "dead_reason, detail, submitted_at"
+    "dead_reason, detail, submitted_at, entry"
 )
 
 
@@ -129,6 +134,7 @@ class Job:
     dead_reason: str
     detail: str
     submitted_at: str
+    entry: str = ""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Job":
@@ -169,6 +175,7 @@ class JobStore:
         repo: str,
         brief: str,
         round: int = 1,
+        entry: str = "",
         now_us: int | None = None,
     ) -> Job:
         """Insert a PENDING job. Raises DuplicateTaskInFlightError on a live twin.
@@ -180,7 +187,8 @@ class JobStore:
             with self._tx() as conn:
                 conn.execute(
                     "INSERT INTO jobs (job_id, batch_id, task_id, repo, round, "
-                    "state, brief, submitted_us) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+                    "state, brief, submitted_us, entry) "
+                    "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)",
                     (
                         job_id,
                         batch_id,
@@ -189,6 +197,7 @@ class JobStore:
                         round,
                         brief,
                         resolve_now_us(now_us),
+                        entry,
                     ),
                 )
         except sqlite3.IntegrityError as exc:
@@ -214,8 +223,8 @@ class JobStore:
                     task_id = row["task_id"]
                     conn.execute(
                         "INSERT INTO jobs (job_id, batch_id, task_id, repo, round, "
-                        "state, brief, submitted_us) "
-                        "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+                        "state, brief, submitted_us, entry) "
+                        "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)",
                         (
                             row["job_id"],
                             row["batch_id"],
@@ -224,6 +233,7 @@ class JobStore:
                             row.get("round", 1),
                             row["brief"],
                             now,
+                            row.get("entry", ""),
                         ),
                     )
         except sqlite3.IntegrityError as exc:
@@ -242,6 +252,7 @@ class JobStore:
         brief: str,
         round: int = 1,
         detail: str = "",
+        entry: str = "",
         now_us: int | None = None,
     ) -> Job:
         """Record the DUPLICATE_TASK_IN_FLIGHT dead letter for a rejected submit.
@@ -253,8 +264,8 @@ class JobStore:
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO jobs (job_id, batch_id, task_id, repo, round, state, "
-                "brief, submitted_us, ended_us, dead_reason, detail) "
-                "VALUES (?, ?, ?, ?, ?, 'DEAD_LETTER', ?, ?, ?, ?, ?)",
+                "brief, submitted_us, ended_us, dead_reason, detail, entry) "
+                "VALUES (?, ?, ?, ?, ?, 'DEAD_LETTER', ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     batch_id,
@@ -266,6 +277,7 @@ class JobStore:
                     now,
                     DeadReason.DUPLICATE_TASK_IN_FLIGHT.value,
                     detail,
+                    entry,
                 ),
             )
         return self.get(job_id)

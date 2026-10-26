@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dispatcher import queue
 from dispatcher.collect import StreamParser
 from dispatcher.engine import job_usage_context
 from odoo_sdk.state.jobs import JobState
@@ -83,6 +84,19 @@ def test_a_finished_job_writes_one_job_line(world, log_dir):  # noqa: F811
     assert {k: figures[k] for k in USAGE} == USAGE
     assert figures["total_cost_usd"] == 1.25 and figures["num_turns"] == 3
     assert figures["duration_ms"] == 99 and figures["ok"] is True
+
+
+def test_the_usage_line_names_the_job_entry(world, log_dir):  # noqa: F811
+    engine, shell, _ = world
+    shell.proc = FakeProc(stream(structured=GOOD, usage=USAGE))
+    queue.submit(
+        engine.jobs,
+        [queue.JobSpec("qoc", "11", "b", entry="/odoo-dev:upgrade-implement")],
+        "b",
+    )
+    engine.run()
+    ((kind, name, _context),) = _lines(log_dir)
+    assert (kind, name) == ("job", "odoo-dev:upgrade-implement")
 
 
 def test_a_failing_usage_log_does_not_fail_the_job(

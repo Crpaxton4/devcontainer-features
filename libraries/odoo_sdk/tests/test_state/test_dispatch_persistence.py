@@ -21,6 +21,7 @@ from odoo_sdk.state.artifacts import (
 from odoo_sdk.state.jobs import (
     DeadReason,
     DuplicateTaskInFlightError,
+    JOBS_MIGRATIONS,
     InvalidJobTransitionError,
     JobState,
     JobStore,
@@ -261,6 +262,43 @@ def test_defaults_use_the_clock(jobs):
         job_id="d", batch_id="b", task_id="2", repo="r", brief="x"
     )
     assert dup.state is JobState.DEAD_LETTER
+
+
+def test_entry_round_trips_and_defaults_to_empty(jobs):
+    assert submit(jobs, "j1", task_id="1").entry == ""
+    job = submit(jobs, "j2", task_id="2", entry="/odoo-dev:upgrade-implement")
+    assert jobs.get("j2").entry == job.entry == "/odoo-dev:upgrade-implement"
+    rows = [
+        {"job_id": "j3", "batch_id": "b3", "task_id": "3", "repo": "r", "brief": "x"},
+        {
+            "job_id": "j4",
+            "batch_id": "b3",
+            "task_id": "4",
+            "repo": "r",
+            "brief": "x",
+            "entry": "/odoo-dev:implement",
+        },
+    ]
+    assert [j.entry for j in jobs.submit_all(rows)] == ["", "/odoo-dev:implement"]
+    dup = jobs.reject_duplicate(
+        job_id="d", batch_id="b", task_id="2", repo="r", brief="x", entry="/e"
+    )
+    assert dup.entry == "/e"
+
+
+def test_migration_two_adds_entry_to_a_v1_store(tmp_path):
+    path = tmp_path / "jobs.db"
+    conn = open_store(path, JOBS_MIGRATIONS[:1], synchronous="NORMAL", now_us=T0)
+    conn.execute(
+        "INSERT INTO jobs (job_id, batch_id, task_id, repo, state, brief, "
+        "submitted_us) VALUES ('old', 'b', '9', 'r', 'PENDING', 'x', 5)"
+    )
+    conn.close()
+    store = JobStore(path)
+    try:
+        assert store.get("old").entry == ""
+    finally:
+        store.close()
 
 
 def test_generated_submitted_at_renders_the_integer(jobs):

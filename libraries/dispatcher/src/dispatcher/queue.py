@@ -5,7 +5,8 @@ approved set arrives as **one JSON array argument**, each element::
 
     {"repo": "<repo>", "task": "<task id>", "brief": "<path readable as text>"}
 
-and optionally ``"round": <int >= 1>``. There is no batch file. The brief path
+and optionally ``"round": <int >= 1>`` and ``"entry"``, one of
+``ALLOWED_ENTRIES`` (the job's slash command; default ``DISPATCH_ENTRY``). There is no batch file. The brief path
 is dereferenced here, on the host, once; the text goes into the job row and the
 path is forgotten (the file may be deleted at once; a re-dispatch uses the
 stored text). The whole call is validated before anything is written, so a bad
@@ -31,6 +32,7 @@ from odoo_sdk.state.runs_store import RunStore
 
 from .collect import StreamParser, read_task_record, record_then_collect, worktree_of
 from .deadletter import STATEMENTS
+from .settings import ALLOWED_ENTRIES
 from .lifecycle import INSPECT_TIMEOUT_S, container_name, transcript_path
 from .reap import host_worktree
 
@@ -55,13 +57,24 @@ class JobSpec:
     task_id: str
     brief: str
     round: int = 1
+    entry: str = ""
+
+
+def _check_entry(where: str, entry: object) -> str:
+    if entry == "":
+        return ""
+    if not isinstance(entry, str) or entry not in ALLOWED_ENTRIES:
+        raise SubmissionError(
+            f"{where}: entry must be one of {list(ALLOWED_ENTRIES)}, got {entry!r}"
+        )
+    return entry
 
 
 def _element(index: int, raw: object) -> JobSpec:
     where = f"element {index}"
     if not isinstance(raw, dict):
         raise SubmissionError(f"{where} is not an object")
-    unknown = set(raw) - {"repo", "task", "brief", "round"}
+    unknown = set(raw) - {"repo", "task", "brief", "round", "entry"}
     if unknown:
         raise SubmissionError(f"{where} has unknown keys: {sorted(unknown)}")
     repo, task, path = raw.get("repo"), raw.get("task"), raw.get("brief")
@@ -88,7 +101,8 @@ def _element(index: int, raw: object) -> JobSpec:
             f"{where}: brief {path!r} is too large to pass on a command line "
             f"(limit {MAX_PROMPT_BYTES} bytes)"
         )
-    return JobSpec(repo=repo, task_id=task, brief=text, round=rnd)
+    entry = _check_entry(where, raw.get("entry", ""))
+    return JobSpec(repo=repo, task_id=task, brief=text, round=rnd, entry=entry)
 
 
 def parse_submission(argument: str) -> list[JobSpec]:
@@ -129,6 +143,7 @@ def submit(store: JobStore, specs: list[JobSpec], batch_id: str) -> list[Job]:
             repo=spec.repo,
             brief=spec.brief,
             round=spec.round,
+            entry=spec.entry,
         )
         try:
             jobs.append(store.submit(**fields))

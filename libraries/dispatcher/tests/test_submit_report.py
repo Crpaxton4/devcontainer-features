@@ -83,6 +83,42 @@ def test_a_task_named_twice_in_one_array_writes_nothing(submit_env, tmp_path, ca
     assert code == cli.EXIT_USAGE and _rows() == []
 
 
+def test_a_submitted_entry_is_stored_and_reported(submit_env, tmp_path, capsys):
+    brief = tmp_path / "b.md"
+    brief.write_text("do it")
+    jobs = json.dumps(
+        [
+            {"repo": "qoc", "task": "1", "brief": str(brief)},
+            {
+                "repo": "qoc",
+                "task": "2",
+                "brief": str(brief),
+                "entry": "/odoo-dev:upgrade-implement",
+            },
+        ]
+    )
+    code, out, _ = _submit_err(capsys, jobs)
+    assert code == cli.EXIT_OK
+    assert [j["entry"] for j in json.loads(out)["jobs"]] == [
+        "",
+        "/odoo-dev:upgrade-implement",
+    ]
+
+
+@pytest.mark.parametrize("entry", ["/odoo-dev:pr", 7, None, ["x"]])
+def test_an_unknown_entry_exits_2_and_writes_nothing(
+    submit_env, tmp_path, capsys, entry
+):
+    brief = tmp_path / "b.md"
+    brief.write_text("do it")
+    jobs = json.dumps(
+        [{"repo": "qoc", "task": "1", "brief": str(brief), "entry": entry}]
+    )
+    code, out, err = _submit_err(capsys, jobs)
+    assert code == cli.EXIT_USAGE and out == "" and _rows() == []
+    assert "entry must be one of" in err
+
+
 def test_a_repo_with_no_checkout_exits_2_and_writes_nothing(
     submit_env, tmp_path, capsys
 ):
