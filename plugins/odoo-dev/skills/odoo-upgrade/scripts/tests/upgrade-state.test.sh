@@ -81,7 +81,7 @@ dsha="$(dget 'u.modules.d.drop.commit')"
 expect "drop commit is real" "$(git -C "$wt" rev-parse HEAD)" "$dsha"
 expect "module dir gone" "$([ -e "$wt/d" ] && echo present || echo gone)" gone
 expect "assumption entry" "$(dget 'u.assumptions[0].id+"|"+u.assumptions[0].question')" "A1|Q"
-expect "enrich action" "$(node -e 'const e=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(e.upgrade_action+"|"+e.notes+"|"+Object.keys(e).length)' "$A/inventory/enrich_d.json")" "merge-into-standard|Set the standard field X on the product|16"
+expect "enrich action" "$(node -e 'const e=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(e.upgrade_action+"|"+e.notes+"|"+Object.keys(e).length)' "$A/inventory/enrich_d.json")" "merge-into-standard|Set the standard field X on the product|15"
 
 # a drop whose git rm fails: exit 4, nothing changed
 node -e 'const {spawnSync:s}=require("child_process");const a=process.argv[1];const g=s("bash",[process.argv[2],"get",a,"upgrade"],{encoding:"utf8"});const u=JSON.parse(g.stdout);u.modules.c={status:"inventoried",kind:"custom"};s("bash",[process.argv[2],"set",a,"upgrade","--json",JSON.stringify(u)])' "$A" "$(cd "$SCRIPT_DIR/../../../.." && pwd)/scripts/artifact.sh"

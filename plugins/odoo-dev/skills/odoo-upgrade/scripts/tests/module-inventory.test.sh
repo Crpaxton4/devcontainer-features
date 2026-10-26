@@ -229,9 +229,10 @@ record = {
     "module": "acme", "purpose": "Extra fields on the sale order",
     "third_party": "No", "third_party_link": "", "complexity": "Low",
     "upgrade_action": "merge-into-standard", "functional_area": "Sales",
-    "native": "yes/partial",
     "native_notes": "sale.order has carried the same field since 17.0",
-    "native_evidence": "odoo/addons/sale/models/sale_order.py",
+    "native_evidence": [{"capability": "extra field", "grep": "x_acme",
+                         "path": "odoo/addons/sale/models/sale_order.py",
+                         "hits": 2}],
     "vendor_release": "n/a", "complexity_rationale": "",
     "upgrade_action_rationale": "", "notes": "",
     "oca_alt": "none",
@@ -263,14 +264,55 @@ contains "a complete build reports no sentinels" "$wb_out" "sentinels: {}"
 expect "16 columns, verdict and notes beside each other" \
   "$(csv_header "$dir/out_inventory.csv")" \
   "Module Name|Display Name|Module Purpose|Source version|LoC|Dependencies|Dependency origin|3rd party app?|3rd party app link|OCA repo|Complexity/risk|Upgrade action|Functional area|19 native?|19 native notes|OCA 19 alternative"
-expect "verdict comes from the record" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes/partial"
+expect "verdict is derived from the evidence rows" \
+  "$(csv_cell "$dir/out_inventory.csv" acme '19 native?')" "yes"
 expect "notes come from the same record" \
   "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" \
   "sale.order has carried the same field since 17.0"
 expect "evidence comes from the same record" \
   "$(csv_cell "$dir/out_evidence.csv" acme 'native? evidence')" \
-  "odoo/addons/sale/models/sale_order.py"
+  "extra field: x_acme -> odoo/addons/sale/models/sale_order.py (2)"
+
+# --- #1244: native is derived from the evidence rows, never typed ------------
+# Rule: a capability is covered when one of its rows has hits > 0. All covered
+# = yes, some = partial, none = no.
+HIT='{"capability": "a", "grep": "g", "path": "p.py", "hits": 3}'
+MISS='{"capability": "a", "grep": "g", "path": "", "hits": 0}'
+HIT_B='{"capability": "b", "grep": "g", "path": "q.py", "hits": 1}'
+MISS_B='{"capability": "b", "grep": "g", "path": "", "hits": 0}'
+derive_case() {  # <name> <expected verdict> <rows-json>
+  local d
+  d="$(wb_case "derive_$1")"
+  wb_record "$d" "{\"native_evidence\": $3}"
+  wb_run "$d"
+  expect "derive $1: verdict $2" \
+    "$(csv_cell "$d/out_inventory.csv" acme '19 native?')" "$2"
+}
+derive_case allhit yes "[$HIT, $HIT_B]"
+derive_case retry yes "[$MISS, $HIT, $MISS_B, $HIT_B]"
+derive_case some partial "[$HIT, $MISS_B]"
+derive_case none no "[$MISS, $MISS_B]"
+
+bad_evidence_case() {  # <name> <rows-json> <problem text>
+  local d
+  d="$(wb_case "bad_$1")"
+  wb_record "$d" "{\"native_evidence\": $2}"
+  wb_run "$d"
+  contains "bad evidence $1: problem line" "$wb_out" "$3"
+  expect "bad evidence $1: exits non-zero" "$wb_status" "1"
+}
+bad_evidence_case empty '[]' \
+  "acme: enrich_acme.json native_evidence must be a non-empty array of evidence rows"
+bad_evidence_case string '"odoo/addons/sale/models/sale_order.py"' \
+  "acme: enrich_acme.json native_evidence must be a non-empty array of evidence rows"
+bad_evidence_case notdict '["sale_order.py"]' \
+  "native_evidence row 0 must be an object with exactly capability, grep, path, hits"
+bad_evidence_case missingkey '[{"capability": "a", "grep": "g", "path": ""}]' \
+  "native_evidence row 0 must be an object with exactly capability, grep, path, hits"
+bad_evidence_case strhits '[{"capability": "a", "grep": "g", "path": "", "hits": "3"}]' \
+  "native_evidence row 0 key hits must be an int >= 0"
+bad_evidence_case neghits '[{"capability": "a", "grep": "g", "path": "", "hits": -1}]' \
+  "native_evidence row 0 key hits must be an int >= 0"
 
 # --- #1146: the Upgrade action is proposed from native x OCA x 3rd party -----
 # One case per row of the table in propose_action's docstring. An empty
@@ -289,22 +331,24 @@ action_case() {  # <name> <expected> <record-overrides-json> [problems-text]
   fi
 }
 RV='"upgrade_action": "", "upgrade_action_rationale": ""'
-action_case yes merge-into-standard "{$RV, \"native\": \"yes\"}"
-action_case yespartial merge-into-standard "{$RV, \"native\": \"yes/partial\"}"
-action_case full replace "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
-action_case already replace "{$RV, \"native\": \"no\", \"oca_alt\": \"already OCA: sale/acme\"}"
-action_case partialalt review "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (partial)\"}" \
+EVYES="\"native_evidence\": [$HIT]"
+EVNO="\"native_evidence\": [$MISS]"
+EVPART="\"native_evidence\": [$HIT, $MISS_B]"
+action_case yes merge-into-standard "{$RV, $EVYES}"
+action_case full replace "{$RV, $EVNO, \"oca_alt\": \"sale/sale_acme (full)\"}"
+action_case already replace "{$RV, $EVNO, \"oca_alt\": \"already OCA: sale/acme\"}"
+action_case partialalt review "{$RV, $EVNO, \"oca_alt\": \"sale/sale_acme (partial)\"}" \
   "acme: Upgrade action is review — decide keep/replace/merge-into-standard"
-action_case inhouse keep "{$RV, \"native\": \"no\"}"
-action_case vendor review "{$RV, \"native\": \"no\", \"third_party\": \"Yes\"}" \
+action_case inhouse keep "{$RV, $EVNO}"
+action_case vendor review "{$RV, $EVNO, \"third_party\": \"Yes\"}" \
   "acme: Upgrade action is review"
-action_case partialnative review "{$RV, \"native\": \"partial\"}" \
+action_case partialnative review "{$RV, $EVPART}" \
   "acme: Upgrade action is review"
-action_case sentinelnative review "{$RV, \"native\": \"TODO-AI\"}" \
+action_case noevidence review "{$RV, \"native_evidence\": []}" \
   "acme: Upgrade action is review"
 
 dir="$(wb_case override)"
-wb_record "$dir" '{"native": "no", "upgrade_action": "replace"}'
+wb_record "$dir" "{$EVNO, \"upgrade_action\": \"replace\"}"
 wb_run "$dir"
 contains "an override without a rationale is a problem" "$wb_out" \
   "acme: Upgrade action 'replace' overrides the proposed 'keep' without upgrade_action_rationale"
@@ -312,7 +356,7 @@ expect "an override without a rationale exits non-zero" \
   "$([ "$wb_status" -ne 0 ] && echo yes)" "yes"
 
 dir="$(wb_case overrideok)"
-wb_record "$dir" '{"native": "no", "upgrade_action": "replace", "upgrade_action_rationale": "vendor ships 19.0"}'
+wb_record "$dir" "{$EVNO, \"upgrade_action\": \"replace\", \"upgrade_action_rationale\": \"vendor ships 19.0\"}"
 wb_run "$dir"
 contains "an override with a rationale is accepted" "$wb_out" "problems: 0"
 expect "the override is the delivered action" \
@@ -320,7 +364,7 @@ expect "the override is the delivered action" \
 
 dir="$(wb_case seeddrop)"
 printf '%s\n%s\n' "$SEED_HEADER" "${SEED_ROW/,keep,/,drop?,}" > "$dir/inventory.csv"
-wb_record "$dir" "{$RV, \"native\": \"no\", \"oca_alt\": \"sale/sale_acme (full)\"}"
+wb_record "$dir" "{$RV, $EVNO, \"oca_alt\": \"sale/sale_acme (full)\"}"
 wb_run "$dir"
 expect "the seed drop? wins over the proposal" \
   "$(csv_cell "$dir/out_inventory.csv" acme 'Upgrade action')" "drop?"
@@ -395,40 +439,32 @@ contains "a sentinel in an evidence key is a problem line" "$wb_out" \
   "acme: enrich_acme.json key vendor_release is TODO-AI"
 expect "a sentinel in an evidence key exits non-zero" "$wb_status" "1"
 
-# --- #1144: the legacy single-string cell is a problem, not split ------------
-dir="$(wb_case legacy)"
-wb_record "$dir" '{"native": "yes/partial: mail composer has cc/bcc fields", "native_notes": "", "native_evidence": "addons/mail/wizard/mail_compose_message.py"}'
+# --- #1244: a typed `native` key is an extra key, not a verdict --------------
+dir="$(wb_case typednative)"
+wb_record "$dir" '{"native": "yes"}'
 wb_run "$dir"
-contains "a legacy '<verdict>: <text>' cell is a problem line" "$wb_out" \
-  "acme: 19 native? is 'yes/partial: mail composer has cc/bcc fields' — expected exactly one of yes, yes/partial, partial, no"
-expect "legacy cell is not split into a notes cell" \
-  "$(csv_cell "$dir/out_inventory.csv" acme '19 native notes')" ""
-expect "legacy cell exits non-zero" "$wb_status" "1"
+contains "a typed native key is a problem line" "$wb_out" \
+  "acme: enrich_acme.json has extra key(s) native"
+expect "a typed native key exits non-zero" "$wb_status" "1"
 
-# --- #925: anything outside the four verdicts is a problem -------------------
-dir="$(wb_case verdict)"
-wb_record "$dir" '{"native": "maybe", "native_notes": "half of it"}'
-wb_run "$dir"
-contains "a verdict outside the vocabulary is rejected" "$wb_out" \
-  "acme: 19 native? is 'maybe' — expected exactly one of yes, yes/partial, partial, no"
-expect "a bad verdict exits non-zero" "$wb_status" "1"
-
-# --- #919: the documented 300-char evidence cap is enforced ------------------
+# --- #919: the documented 600-char native evidence cap is enforced -----------
 dir="$(wb_case evidence)"
-wb_record "$dir" "{\"native\": \"no\", \"native_notes\": \"nothing in 19 covers it\", \"native_evidence\": \"$(printf 'x%.0s' $(seq 301))\"}"
+wb_record "$dir" "{\"native_notes\": \"nothing in 19 covers it\", \"native_evidence\": [{\"capability\": \"a\", \"grep\": \"$(printf 'x%.0s' $(seq 601))\", \"path\": \"\", \"hits\": 0}]}"
 wb_run "$dir"
-contains "301 chars of native evidence is one char too many" "$wb_out" \
-  "acme: native? evidence is 301 chars (max 300)"
+contains "an over-long rendered evidence cell is a problem line" "$wb_out" \
+  "acme: native? evidence is"
+contains "the cap is 600" "$wb_out" "(max 600)"
 expect "over-long evidence exits non-zero" "$wb_status" "1"
 
 # --- #909: a sentinel in a delivered column is unanswered, not valid ---------
+# A record with unusable evidence rows is rejected, so no verdict is derived.
 dir="$(wb_case sentinel)"
-wb_record "$dir" '{"native": "TODO-AI"}'
+wb_record "$dir" '{"native_evidence": []}'
 wb_run "$dir"
 contains "a sentinel verdict is a problem line" "$wb_out" \
   "acme: 19 native? is TODO-AI"
 contains "sentinels are counted per column" "$wb_out" \
-  "sentinels: {'19 native?': 1}"
+  "sentinels: {'19 native?': 1, 'OCA 19 alternative': 1}"
 expect "a sentinel exits non-zero" "$wb_status" "1"
 
 # --- #963: the OCA literal contract — one owner, asserted by grep ------------

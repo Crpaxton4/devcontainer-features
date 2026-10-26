@@ -56,8 +56,8 @@ are the lines of your prompt.
    only when the prompt supplies them. On a resume it prints `STOP blocked_env`
    when the environment changed: end there.
 4. Prior art per module → the workbook proposes `keep`, `replace` or `merge-into-standard`
-   from the verdict; override only with a rationale in the record. The verdict and
-   `oca_alt` go into the one `enrich_<module>.json`. A module whose
+   from the verdict; override only with a rationale in the record. The evidence rows
+   (the build derives the verdict from them) and `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
    End with `upgrade-state.sh <ARTIFACTS> mark <module> verdict --json <verdict>`.
    Decision rule: when native is yes, or yes/partial with the gap closed by a documented
