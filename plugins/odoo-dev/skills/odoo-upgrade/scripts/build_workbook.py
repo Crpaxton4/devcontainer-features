@@ -91,30 +91,90 @@ STUDIO_REVIEW_KINDS = {"view-inline-edit"}
 # "<major> native?" is a VERDICT and nothing else: a closed vocabulary can be
 # filtered and counted in a spreadsheet, which is the single biggest cost lever
 # in the exercise. The explanation lives in "<major> native notes" beside it.
+# `yes/partial` is only a legacy cell value; derive_native never produces it.
 NATIVE_VERDICTS = ("yes", "yes/partial", "partial", "no")
 NATIVE_NOTES_MAX = 300
 # Every evidence cell is read inside one spreadsheet cell, and it is the
 # reader's only audit trail back to the source tree; a runaway entry displaces
 # the columns beside it. Same cap as references/inventory.md documents.
 EVIDENCE_MAX = 300
+# The native? evidence cell renders every evidence row (capability, term, path,
+# hit count), so it needs more room than the one-line OCA evidence cell.
+NATIVE_EVIDENCE_MAX = 600
+# Keys of one evidence row in `native_evidence`, and the type of each.
+EVIDENCE_ROW_KEYS = {"capability": str, "grep": str, "path": str, "hits": int}
 # What the seeding script writes when only an agent can answer. In a column the
 # workbook presents as an answer it is an unanswered question, not a value.
 SENTINEL = "TODO-AI"
 # The one record shape: `enrich_<module>.json` is an object with exactly these
 # keys (none optional; "" is a legal value, a missing key is not).
 ENRICH_KEYS = ["module", "purpose", "third_party", "third_party_link",
-               "complexity", "upgrade_action", "functional_area", "native",
+               "complexity", "upgrade_action", "functional_area",
                "native_notes", "native_evidence", "vendor_release",
                "complexity_rationale", "upgrade_action_rationale", "notes",
                "oca_alt", "oca_alt_evidence"]
 # Keys that feed a delivered column: build_inventory reports a sentinel there
 # by column name, so the loader leaves them alone.
 DELIVERED_KEYS = {"purpose", "third_party", "complexity", "upgrade_action",
-                  "functional_area", "native", "native_notes", "oca_alt"}
+                  "functional_area", "native_notes", "oca_alt"}
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
 TOP_WRAP = Alignment(vertical="top", wrap_text=True)
+
+
+def check_evidence_rows(rows):
+    """Problem text for a `native_evidence` value that is not a usable list.
+
+    It must be a non-empty array of objects with exactly the EVIDENCE_ROW_KEYS:
+    `hits` an int >= 0 (not a bool), the other three strings.
+    """
+    if not isinstance(rows, list) or not rows:
+        yield "must be a non-empty array of evidence rows"
+        return
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != set(EVIDENCE_ROW_KEYS):
+            yield (f"row {i} must be an object with exactly "
+                   f"{', '.join(EVIDENCE_ROW_KEYS)}")
+            continue
+        for key, kind in EVIDENCE_ROW_KEYS.items():
+            value = row[key]
+            if not isinstance(value, kind) or isinstance(value, bool) \
+                    or (kind is int and value < 0):
+                yield (f"row {i} key {key} must be "
+                       f"{'an int >= 0' if kind is int else 'a string'}")
+
+
+def derive_native(rows):
+    """The `native?` verdict, from well-formed evidence rows alone.
+
+    Group the rows by `capability`. A capability is covered when at least one
+    of its rows has `hits > 0`.
+
+    | capabilities covered | verdict   |
+    |----------------------|-----------|
+    | all of them          | `yes`     |
+    | some, not all        | `partial` |
+    | none                 | `no`      |
+
+    No worker decides keep or drop: two workers with the same rows get the
+    same verdict. (`yes/partial` is a legacy cell value, never derived.)
+    """
+    covered = {}
+    for row in rows:
+        covered[row["capability"]] = (covered.get(row["capability"], False)
+                                      or row["hits"] > 0)
+    hit = sum(covered.values())
+    if hit == len(covered):
+        return "yes"
+    return "partial" if hit else "no"
+
+
+def render_evidence(rows):
+    """One cell: `capability: grep -> path (hits)`, rows joined by `; `."""
+    return "; ".join(
+        f"{r['capability']}: {r['grep']} -> {r['path'] or '-'} ({r['hits']})"
+        for r in rows)
 
 
 def load_enrich(workdir, modules, problems):
@@ -123,7 +183,8 @@ def load_enrich(workdir, modules, problems):
     The file is one JSON object with exactly the ENRICH_KEYS. A missing file,
     a non-object (an array file is a second record source), a `module` that
     differs from the file name (two files claiming one module), a missing or
-    extra key, or a sentinel in a key the build does not already report, is a
+    extra key, a `native_evidence` that is not a non-empty array of evidence
+    rows (see check_evidence_rows), or a sentinel in a key the build does not already report, is a
     problem line; the record is then not used. There is no merge: a malformed
     record is fixed, not repaired.
     """
@@ -160,6 +221,11 @@ def load_enrich(workdir, modules, problems):
             problems.append(f"{module}: {name} has extra key(s) "
                             f"{', '.join(extra)}")
         if missing or extra:
+            continue
+        bad = list(check_evidence_rows(record["native_evidence"]))
+        for message in bad:
+            problems.append(f"{module}: {name} native_evidence {message}")
+        if bad:
             continue
         for key in ENRICH_KEYS:
             if record[key] == SENTINEL and key not in DELIVERED_KEYS:
@@ -386,11 +452,13 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
         # A missing or malformed record was reported by load_enrich.
         enriched = enrich.get(module, {})
 
-        # `native` is the verdict and nothing else; `native_notes` is the
-        # explanation. A cell that is not exactly one verdict is a problem.
-        verdict = (enriched.get("native") or SENTINEL).strip()
+        # `native` is derived from the evidence rows (derive_native); no
+        # record carries it. A record load_enrich rejected has no rows, so its
+        # verdict stays the sentinel and the loader already reported why.
+        rows = enriched.get("native_evidence")
+        verdict = derive_native(rows) if rows else SENTINEL
         native_notes = (enriched.get("native_notes") or "").strip()
-        native_evidence = (enriched.get("native_evidence") or "").strip()
+        native_evidence = render_evidence(rows) if rows else ""
         alt_evidence = (enriched.get("oca_alt_evidence") or "").strip()
 
         row = dict(seeded)
@@ -444,7 +512,8 @@ def build_inventory(workbook, workdir, source, native_column, notes_column,
             validate_native(verdict, native_column, notes_column)
             if verdict != SENTINEL else (),
             check_cap(notes_column, native_notes, NATIVE_NOTES_MAX),
-            check_cap("native? evidence", native_evidence, EVIDENCE_MAX),
+            check_cap("native? evidence", native_evidence,
+                      NATIVE_EVIDENCE_MAX),
             check_cap("OCA alternative evidence", alt_evidence, EVIDENCE_MAX),
             validate_oca_alt(oca_alt, oca_column, oca_repo)
             if oca_alt != SENTINEL else ())

@@ -90,7 +90,7 @@ One block per capability, nothing that not traceable to path or row:
 Capability: <one line, user's words>
   native: yes | yes/partial | partial | no
     native notes: <where in target, when not no>
-    evidence: <path(s) grepped, or the terms tried>
+    evidence: rows {capability, grep, path, hits} — one per grep tried, hits 0 when nothing found
   oca: none | <repo>/<module> (full|partial)
     evidence: <catalog rows, READMEs fetched, or keywords tried>
     gap: <what is still missing, when partial>
