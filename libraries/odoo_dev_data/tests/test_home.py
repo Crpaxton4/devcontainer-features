@@ -81,3 +81,16 @@ def test_job_bundle_dir_rejects_job(bad, tmp_path):
 def test_job_bundle_dir_rejects_task(tmp_path):
     with pytest.raises(ValueError, match="task id"):
         h.job_bundle_dir("x", "j", tmp_path)
+
+
+def test_ensure_task_dir_creates_parents(tmp_path):
+    home = tmp_path / "new-home"
+    got = h.ensure_task_dir(7, home)
+    assert got == home / "tasks" / "7"
+    assert got.is_dir()
+    assert h.ensure_task_dir("7", home) == got
+
+
+def test_ensure_task_dir_rejects_bad_id(tmp_path):
+    with pytest.raises(ValueError, match="task id"):
+        h.ensure_task_dir("x", tmp_path)
