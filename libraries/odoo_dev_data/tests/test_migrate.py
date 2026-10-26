@@ -153,8 +153,14 @@ def build_world(root: Path, *, version: int = 4, running: bool = False) -> dict:
     (orch / "approved" / "legacy-name.txt").write_text("nowhere\n")
     (orch / "handled.txt").write_text("j-dead\nghost\n")
     (orch / "batches-done.txt").write_text("b2\n")
-    (usage / "usage.db").write_bytes(b"usage-bytes")
-    (usage / "declarations.db").write_bytes(b"decl-bytes")
+    for name, marker in (
+        ("usage.db", "usage-bytes"),
+        ("declarations.db", "decl-bytes"),
+    ):
+        with closing(sqlite3.connect(usage / name)) as conn:
+            conn.execute("CREATE TABLE marker (value TEXT)")
+            conn.execute("INSERT INTO marker VALUES (?)", (marker,))
+            conn.commit()
     home = root / "home"
     home.mkdir()
     (home / "repo-map.json").write_text(json.dumps(REPO_MAP))
@@ -273,8 +279,12 @@ def test_full_migration(world):
     assert jobs["j-done2"]["reported_us"] == T0 + 99
     assert jobs["j-done1"]["reported_us"] is None
 
-    assert (home / "usage.db").read_bytes() == b"usage-bytes"
-    assert (home / "declarations.db").read_bytes() == b"decl-bytes"
+    for name, marker in (
+        ("usage.db", "usage-bytes"),
+        ("declarations.db", "decl-bytes"),
+    ):
+        with closing(sqlite3.connect(home / name)) as conn:
+            assert conn.execute("SELECT value FROM marker").fetchone()[0] == marker
 
 
 def test_second_run_skips_everything_and_changes_nothing(world):
