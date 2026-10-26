@@ -34,8 +34,13 @@ root with mode `0o700`.
 | `db/` | `connect()`, the migration runner and the numbered migrations of `state.db` |
 | `events.py` | `EventStore`: events, derived sessions, upload ledger, chatter dedupe, settings |
 | `doctor.py` | `doctor()` and `render()`: a read-only report of the root |
+| `migrate.py` | `migrate()`: imports every legacy store into the root, idempotent, never deletes |
+| `jobs.py` | `JobStore`: the job row, the only run record |
+| `repo_map.py` | `repo-map.json` parser, validator, writer and project resolver |
+| `tasks.py` | `task.json`, `brief.md`, `draft-N.md` and the one friction list per task |
+| `locks.py` | `exclusive(name)`: flock files under `locks/` |
 
-`python -m odoo_dev_data doctor [--json]` prints the report.
+`python -m odoo_dev_data doctor [--json]` prints the report. `doctor --migrate [--dry-run]` runs the import.
 
 ## Test
 

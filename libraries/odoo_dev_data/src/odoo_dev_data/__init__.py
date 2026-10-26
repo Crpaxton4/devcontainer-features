@@ -4,6 +4,16 @@ from odoo_dev_data.config import ConnectionValues, LocalConfig, connection_value
 from odoo_dev_data.db import connect, schema_version
 from odoo_dev_data.doctor import DoctorReport
 from odoo_dev_data.events import EventRecord, EventStore, SessionWindow, session_key
+from odoo_dev_data.jobs import Job, JobState, JobStore, RunOutcome
+from odoo_dev_data.locks import LockHeldError, exclusive
+from odoo_dev_data.repo_map import (
+    RepoMap,
+    Resolved,
+    load_repo_map,
+    resolve_project,
+    save_repo_map,
+)
+from odoo_dev_data.tasks import TaskRecord, read_task, write_task
 from odoo_dev_data.home import (
     CONTAINER_HOME,
     DEFAULT_HOME,
@@ -24,16 +34,30 @@ __all__ = [
     "ENV_HOME",
     "EventRecord",
     "EventStore",
+    "Job",
+    "JobState",
+    "JobStore",
+    "LockHeldError",
     "LocalConfig",
     "Paths",
+    "RepoMap",
+    "Resolved",
+    "RunOutcome",
     "SessionWindow",
+    "TaskRecord",
     "connect",
     "connection_values",
     "ensure_home",
+    "exclusive",
     "job_bundle_dir",
+    "load_repo_map",
     "paths",
+    "read_task",
     "resolve_home",
+    "resolve_project",
+    "save_repo_map",
     "schema_version",
     "session_key",
     "task_dir",
+    "write_task",
 ]

@@ -693,8 +693,15 @@ def _step_usage(ctx: _Ctx) -> Step:
     if ctx.dry_run:
         return ctx.would("usage", "copy " + ", ".join(s.name for s, _ in todo))
     for src, dst in todo:
-        shutil.copy2(src, dst)
+        _backup_sqlite(src, dst)
     return Step("usage", DONE, "copied " + ", ".join(s.name for s, _ in todo))
+
+
+def _backup_sqlite(src: Path, dst: Path) -> None:
+    """Copy a SQLite file through the backup API, so a pending WAL is included."""
+    with closing(sqlite3.connect(f"file:{src}?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(dst)) as target:
+            source.backup(target)
 
 
 _STEPS: tuple[Callable[[_Ctx], Step], ...] = (
