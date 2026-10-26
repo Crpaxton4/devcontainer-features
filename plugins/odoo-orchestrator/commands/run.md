@@ -106,7 +106,9 @@ For each task id in the request, read the task and its chatter through the org
 connector.
 The array needs a repo for each task. Use the `<repo>:` prefix when given. If it
 is missing, ask the user for the repo name once per task. Do not guess it. A repo
-and a task id are each one plain name of letters, digits, dot, dash or underscore.
+name is one plain name of letters, digits, dot, dash or underscore. It may start
+with a dot (such as `.github`), but it is never `.` or `..`. A task id is the same
+plain name and never starts with a dot.
 
 Write the brief with these parts, all as behaviour:
 
