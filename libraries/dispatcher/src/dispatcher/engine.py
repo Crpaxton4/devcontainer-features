@@ -164,7 +164,7 @@ class JobRun:
         self.job = engine.jobs.mark_running(
             job.job_id, container=lifecycle.container_name(job.repo)
         )
-        ensure_bundle_dir(job.job_id)
+        lifecycle.seed_repo_map(self.settings, ensure_bundle_dir(job.job_id))
         env = self._env()
         lifecycle.require_workspace(self.settings, job.repo)
         container_id = lifecycle.up(engine.shell, self.settings, job.repo, env)

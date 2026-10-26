@@ -58,12 +58,15 @@ Variables (all optional unless marked required):
     directory is a settings error (exit 2), because the container cannot see it.
     A running container keeps the mounts it was created with, so the dispatcher
     passes no ``--mount`` of its own.
+``DISPATCH_REPO_MAP_FILE``
+    The shared repo map (default ``~/.config/odoo-dev/repo-map.json``), copied
+    into each job's bundle so ``ODOO_DEV_STATE_DIR`` resolves the project.
 """
 
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from odoo_sdk.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
@@ -159,6 +162,9 @@ class Settings:
     additional_features: str = DEFAULT_ADDITIONAL_FEATURES
     invariants: str = ""  # the text of ``invariants_file``, read once by from_env
     owner: str = ""  # optional tie-breaker; "" means resolve by glob only
+    repo_map_file: Path = field(
+        default_factory=lambda: odoo_dev_dir() / "repo-map.json"
+    )
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
@@ -238,6 +244,9 @@ class Settings:
             invariants=read_invariants(invariants_file),
             entry=env.get("DISPATCH_ENTRY") or DEFAULT_ENTRY,
             claude_home=Path(claude_home),
+            repo_map_file=Path(
+                env.get("DISPATCH_REPO_MAP_FILE") or odoo_dev_dir() / "repo-map.json"
+            ),
             additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")
             or DEFAULT_ADDITIONAL_FEATURES,
             **numbers,

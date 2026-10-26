@@ -32,6 +32,7 @@ here builds a container. Non-negotiable points, each with its reason:
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -112,6 +113,22 @@ def resolve_config(settings: Settings, repo: str) -> Path:
         return settings.config(repo)
     except ConfigResolutionError as exc:
         raise ContainerStartError(exc.detail) from exc
+
+
+def seed_repo_map(settings: Settings, bundle: Path) -> Path:
+    """Copy the shared repo map into the job bundle, which is ``ODOO_DEV_STATE_DIR``.
+
+    A missing or unreadable map is a per-job :class:`ContainerStartError`, so
+    ``JobRun.admit`` dead-letters that one job and the run continues.
+    """
+    target = bundle / "repo-map.json"
+    try:
+        shutil.copyfile(settings.repo_map_file, target)
+    except OSError as exc:
+        raise ContainerStartError(
+            f"cannot copy the repo map {settings.repo_map_file} into {bundle}: {exc}"
+        ) from exc
+    return target
 
 
 @dataclass(frozen=True)
