@@ -313,7 +313,9 @@ One template, filled per worker.
   from every sibling — that is Phase 7's named failure mode arriving by design
   rather than by accident, and it has now happened twice, to six workers and
   then to five.
-- `Read the issue first: gh issue view <n> -R <owner>/<repo>`
+- `Read the issue first: gh issue view <n> -R <owner>/<repo> --json title,body,comments --jq '.title, .body, (.comments[] | .body)'`
+  — without `--json`, a non-TTY `gh issue view --comments` prints only the
+  comments, and nothing at all when there are none.
 - `## The change` — numbered steps with `file:line` pointers from Phase 2.
 - `## Hard constraints`
   - Do **not** bump any `version` field, edit any `CHANGELOG.md`, or touch
@@ -476,6 +478,10 @@ is one:
 
 `<pr>:<parent-pr>` declares a child. Above: 770 root, 771 child of 770, 772
 child of 771, 773 and 774 roots.
+
+The script takes a repo lock (`<git-common-dir>/stack-merge.lock`) so only one
+train runs per repo. A second train prints `stack-merge: another train holds the
+repo lock: <id> pid=… since=… stack=…; waiting` and blocks until the first ends.
 
 Exit `0` means the stack landed — go to Phase 9. **Any other exit is the raw
 status and stderr of the `git` or `gh` command that failed.** There is no

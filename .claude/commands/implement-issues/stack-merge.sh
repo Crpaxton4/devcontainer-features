@@ -37,6 +37,10 @@
 # argument signature, and that a stack cannot be silently re-planned under an
 # id that is already in flight (exit 20).
 #
+# One train per repo: a run holds flock on <git-common-dir>/stack-merge.lock for
+# its whole life (#1243). A second train, even with another --id or from another
+# worktree, prints the holder line and waits. The kernel frees the lock on exit.
+#
 # Usage:
 #   stack-merge.sh --repo <abs-path> --id <id> --stack <pr>[:<parent-pr>] ...
 #                  [--base <branch>] [--status]
@@ -70,6 +74,9 @@ exit 21  a child branch is checked out in another worktree; nothing mutated
 exit 23  the train ended with PRs still unmerged (a bug in this script)
 exit 24  every PR merged but an issue named by a closing keyword is still open
 other    the raw exit status of the git or gh command that failed
+
+A run takes <git-common-dir>/stack-merge.lock first, so one train runs per repo.
+A second train prints the holder line and waits. --status does not take it.
 EOF
 }
 
@@ -147,6 +154,26 @@ if ((STATUS_ONLY)); then
 fi
 
 ((${#STACK[@]})) || die "--stack is required"
+
+# One merge train per repo at a time (#1243). The lock is keyed on the repo's
+# common git dir, so two trains from two worktrees of one repo share it. The
+# kernel drops the flock when this process exits, so a dead holder leaves no
+# stale lock. Only a train on this host is seen; another host's is not.
+acquire_repo_lock() {
+    local common lockfile
+    common=$(git -C "$REPO" rev-parse --git-common-dir)
+    [[ $common == /* ]] || common=$REPO/$common
+    lockfile=$common/stack-merge.lock
+    exec 9>>"$lockfile"
+    if ! flock -n 9; then
+        step "another train holds the repo lock: $(head -n 1 "$lockfile"); waiting"
+        until flock -w 60 9; do
+            step "another train holds the repo lock: $(head -n 1 "$lockfile"); waiting"
+        done
+    fi
+    printf '%s pid=%s since=%s stack=%s\n' "$ID" "$$" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${STACK[*]}" >"$lockfile"
+}
 
 # Parse <pr>[:<parent-pr>] into an ordered list plus a parent map.
 declare -A PARENT=()
@@ -242,6 +269,8 @@ mark_complete() {
 # current, and a resume is precisely the case where they are not: the run stopped,
 # a human fixed something, and time passed. Fetching only while creating the state
 # file made the first attempt correct and every resume operate on a stale view.
+acquire_repo_lock
+
 git -C "$REPO" fetch origin --quiet
 
 if [[ -f $STATE ]]; then
@@ -468,9 +497,12 @@ merge_node() {
                 printf '%s\n' "$out" >&2
                 printf 'stack-merge: %s really did advance, %s -> %s.\n' \
                     "$BASE" "${base_before:0:7}" "${base_now:0:7}" >&2
-                printf '  #%s was rebased onto the older tip, so its rebase is stale.\n' "$pr" >&2
-                printf '  Re-rebase it before retrying: this script will not silently\n' >&2
+                printf '  If #%s is a child, it was rebased onto the older tip, so its rebase\n' "$pr" >&2
+                printf '  is stale. Re-rebase it before retrying: this script will not silently\n' >&2
                 printf '  merge a node computed against a base that has moved.\n' >&2
+                printf '  This train holds the repo lock, so no other train on this host\n' >&2
+                printf '  moved %s. The cause is a manual merge, release-please or\n' "$BASE" >&2
+                printf '  Dependabot, or a train on another host, which the lock cannot see.\n' >&2
                 exit "$rc"
             fi
         fi
@@ -511,6 +543,10 @@ merge_node() {
                 exit "$resync_rc"
             fi
             printf 'stack-merge: #%s was BEHIND; re-synced and retrying\n' "$pr" >&2
+            # The node now sits on the new tip. Compare later advances against
+            # that tip, not against the one taken before the re-sync (#1243).
+            git -C "$REPO" fetch origin --quiet
+            base_before=$(git -C "$REPO" rev-parse "origin/$BASE")
         fi
 
         # A check the rollup still calls pending, whose workflow run has already

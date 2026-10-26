@@ -82,6 +82,9 @@ recognised when it contains a "/" (or is "." / "..") and is a directory.
 Invoke it as a plain command - no environment prefix, no command substitution,
 no chaining. That is the whole point.
 
+The "gh" subcommand passes gh output through unchanged. On a non-TTY,
+"gh issue view" prints nothing useful without --json.
+
 exit 2   bad arguments, not a checkout, or no authenticated token for the owner
 other    the raw exit status of the git or gh command that ran
 EOF
