@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from odoo_sdk.state.artifacts import ensure_bundle_dir
 from odoo_sdk.state.dispatch_state import lock_path
 from odoo_sdk.state.jobs import JobState, JobStore
@@ -10,6 +11,22 @@ from dispatcher import cli, lifecycle
 from dispatcher.lock import DispatcherLock
 from support import GOOD, FakeProc, stream
 from test_engine_cli import world  # noqa: F401  (fixture)
+
+
+@pytest.fixture
+def submit_env(settings, monkeypatch):
+    """The DISPATCH_* env of a dispatcher container, with repo ``qoc`` ready.
+
+    ``settings`` already holds a central config for qoc; this adds the git
+    checkout. Request it after ``world``, which makes the same checkout.
+    """
+    monkeypatch.setenv("DISPATCH_REPOS_DIR", str(settings.repos_dir))
+    monkeypatch.setenv("DISPATCH_CONFIG_ROOT", str(settings.config_root))
+    monkeypatch.setenv("DISPATCH_INVARIANTS_FILE", settings.invariants_file)
+    git = settings.workspace("qoc") / ".git"
+    git.mkdir(parents=True, exist_ok=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    return settings
 
 
 def _arg(tmp_path, *tasks, repo="qoc"):
@@ -23,6 +40,12 @@ def _call(capsys, *argv):
     return code, capsys.readouterr().out
 
 
+def _submit_err(capsys, jobs):
+    code = cli.main(["submit", jobs])
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
 def _rows():
     store = JobStore()
     try:
@@ -31,7 +54,9 @@ def _rows():
         store.close()
 
 
-def test_submit_while_the_lock_is_held_writes_pending_rows(tmp_path, capsys):
+def test_submit_while_the_lock_is_held_writes_pending_rows(
+    submit_env, tmp_path, capsys
+):
     with DispatcherLock(lock_path()):
         code, out = _call(capsys, "submit", _arg(tmp_path, "1", "2"))
     report = json.loads(out)
@@ -46,20 +71,60 @@ def test_a_rejected_array_writes_nothing_and_exits_2(capsys):
     assert code == cli.EXIT_USAGE and out == "" and _rows() == []
 
 
-def test_a_live_task_exits_2_and_writes_nothing(tmp_path, capsys):
+def test_a_live_task_exits_2_and_writes_nothing(submit_env, tmp_path, capsys):
     assert _call(capsys, "submit", _arg(tmp_path, "1"))[0] == cli.EXIT_OK
     code, out = _call(capsys, "submit", _arg(tmp_path, "2", "1"))
     assert code == cli.EXIT_USAGE and out == ""
     assert _rows() == [("1", JobState.PENDING)]  # no row of task 2, no dead letter
 
 
-def test_a_task_named_twice_in_one_array_writes_nothing(tmp_path, capsys):
+def test_a_task_named_twice_in_one_array_writes_nothing(submit_env, tmp_path, capsys):
     code, _ = _call(capsys, "submit", _arg(tmp_path, "5", "5"))
     assert code == cli.EXIT_USAGE and _rows() == []
 
 
+def test_a_repo_with_no_checkout_exits_2_and_writes_nothing(
+    submit_env, tmp_path, capsys
+):
+    code, out, err = _submit_err(capsys, _arg(tmp_path, "1", repo="a"))
+    assert code == cli.EXIT_USAGE and out == "" and _rows() == []
+    assert "repo a:" in err and str(submit_env.workspace("a")) in err
+
+
+def test_a_repo_with_no_config_exits_2_and_writes_nothing(submit_env, tmp_path, capsys):
+    git = submit_env.workspace("zzz") / ".git"
+    git.mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    code, out, err = _submit_err(capsys, _arg(tmp_path, "1", repo="zzz"))
+    assert code == cli.EXIT_USAGE and out == "" and _rows() == []
+    assert "repo zzz:" in err and "github.com/*/zzz/.devcontainer" in err
+
+
+def test_one_bad_repo_in_a_batch_writes_nothing_and_is_named_once(
+    submit_env, tmp_path, capsys
+):
+    brief = tmp_path / "b.md"
+    brief.write_text("x")
+    jobs = [
+        {"repo": repo, "task": task, "brief": str(brief)}
+        for repo, task in (("qoc", "1"), ("a", "2"), ("a", "3"))
+    ]
+    code, _, err = _submit_err(capsys, json.dumps(jobs))
+    assert code == cli.EXIT_USAGE and _rows() == []
+    assert err.count("repo a:") == 1
+
+
+def test_submit_without_settings_exits_2_and_writes_nothing(
+    tmp_path, capsys, monkeypatch
+):
+    for name in ("DISPATCH_REPOS_DIR", "REPOS_DIR", "DISPATCH_CONFIG_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    code, out = _call(capsys, "submit", _arg(tmp_path, "1"))
+    assert code == cli.EXIT_USAGE and out == "" and _rows() == []
+
+
 def test_a_running_engine_picks_up_a_row_submitted_after_it_started(
-    world, tmp_path, capsys, monkeypatch  # noqa: F811
+    world, submit_env, tmp_path, capsys, monkeypatch  # noqa: F811
 ):
     engine, shell, _ = world
     sessions = iter(["sess-a", "sess-b"])
@@ -83,7 +148,7 @@ def test_a_running_engine_picks_up_a_row_submitted_after_it_started(
     assert sorted(_rows()) == [("10", JobState.DONE), ("11", JobState.DONE)]
 
 
-def test_report_matches_the_batch_while_locked_and_after(tmp_path, capsys):
+def test_report_matches_the_batch_while_locked_and_after(submit_env, tmp_path, capsys):
     submitted = json.loads(_call(capsys, "submit", _arg(tmp_path, "1", "2"))[1])
     batch = submitted["batch_id"]
     with DispatcherLock(lock_path()):
@@ -99,7 +164,7 @@ def test_report_matches_the_batch_while_locked_and_after(tmp_path, capsys):
     assert after["jobs"][0].keys() == submitted["jobs"][0].keys()
 
 
-def test_report_adds_the_bundle_when_its_directory_exists(tmp_path, capsys):
+def test_report_adds_the_bundle_when_its_directory_exists(submit_env, tmp_path, capsys):
     submitted = json.loads(_call(capsys, "submit", _arg(tmp_path, "1", "2"))[1])
     directory = ensure_bundle_dir(submitted["jobs"][0]["job_id"])
     jobs = json.loads(_call(capsys, "report", submitted["batch_id"])[1])["jobs"]

@@ -19,7 +19,8 @@ everything else goes to stderr.
 
 ``submit`` is all or nothing: if any task already has a PENDING or RUNNING job,
 or the array names a task twice, it exits 2 and writes nothing (``run`` instead
-records a DUPLICATE dead letter). A running dispatcher admits the new rows at
+records a DUPLICATE dead letter). It also refuses, with exit 2, a repo that has no
+checkout or no central config. A running dispatcher admits the new rows at
 its next step. ``report`` adds ``bundle`` (the artifact directory) to a job whose
 directory exists. It cannot give ``reap``, ``reaped``, ``missing`` or ``notes``,
 which only the run process holds. An unknown batch id prints
@@ -49,7 +50,7 @@ from odoo_sdk.state.runs_store import RunStore
 
 from .engine import Engine
 from .gates import AdmissionGate, MemoryReadError
-from .lifecycle import Shell
+from .lifecycle import Shell, StageError, require_workspace, resolve_config
 from .lock import AlreadyRunningError, DispatcherLock
 from .queue import (
     SubmissionError,
@@ -86,7 +87,11 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="submit a JSON array of jobs and run them")
     run.add_argument("jobs", nargs="?", help="JSON array of {repo, task, brief}")
-    submit_cmd = sub.add_parser("submit", help="queue a JSON array of jobs and exit")
+    submit_cmd = sub.add_parser(
+        "submit",
+        help="queue a JSON array of jobs and exit; refuses a repo with no "
+        "checkout or no central config",
+    )
     submit_cmd.add_argument("jobs", help="JSON array of {repo, task, brief}")
     report_cmd = sub.add_parser("report", help="print one batch as JSON")
     report_cmd.add_argument("batch_id")
@@ -147,11 +152,28 @@ def _run(jobs_argument: str | None) -> int:
         return EXIT_JOB_ERROR if engine.errors or fatal or left else EXIT_OK
 
 
+def _check_repos(settings: Settings, specs: Sequence) -> list[str]:
+    """One problem line per repo with no checkout or no central config."""
+    problems = []
+    for repo in dict.fromkeys(spec.repo for spec in specs):
+        try:
+            require_workspace(settings, repo)
+            resolve_config(settings, repo)
+        except StageError as exc:
+            problems.append(f"repo {repo}: {exc.detail}")
+    return problems
+
+
 def _submit(jobs_argument: str) -> int:
     try:
         specs = order_by_project(parse_submission(jobs_argument))
-    except SubmissionError as exc:
+        settings = Settings.from_env()
+    except (SubmissionError, SettingsError) as exc:
         print(f"dispatch: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    problems = _check_repos(settings, specs)
+    if problems:
+        print("\n".join(problems), file=sys.stderr)
         return EXIT_USAGE
     batch_id = new_id()
     rows = [
