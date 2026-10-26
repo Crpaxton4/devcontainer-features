@@ -31,7 +31,7 @@
   // Pinned to match DEVCONTAINERS_CLI_VERSION in .github/workflows/test.yaml.
   // Refresh both together when bumping (no shared source across the two files).
   "updateContentCommand": "npm install -g @devcontainers/cli@0.87.0",
-  "postCreateCommand": "cd libraries/odoo_sdk && uv sync --group dev",
+  "postCreateCommand": "uv sync --all-packages --group dev",
   "remoteEnv": {
     "UV_PROJECT_ENVIRONMENT": "${containerWorkspaceFolder}/.venv"
   },
@@ -80,9 +80,10 @@
         ],
         "python.testing.pytestEnabled": true,
         "python.testing.unittestEnabled": false,
-        "python.testing.cwd": "${workspaceFolder}/libraries/odoo_sdk",
+        "python.testing.cwd": "${workspaceFolder}",
         "python.testing.pytestArgs": [
-          "tests"
+          "libraries",
+          "apps"
         ],
         "testing.coverageToolbarEnabled": false,
         "testing.gutterEnabled": true,
