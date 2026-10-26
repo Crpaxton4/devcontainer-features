@@ -149,6 +149,25 @@ def test_submission_rejects_the_whole_call(argument):
         queue.parse_submission(argument)
 
 
+@pytest.mark.parametrize("repo", [".github", ".github-private"])
+def test_repo_name_may_start_with_a_dot(tmp_path, repo):
+    arg = json.dumps([{"repo": repo, "task": "1", "brief": _brief(tmp_path)}])
+    assert [s.repo for s in queue.parse_submission(arg)] == [repo]
+
+
+@pytest.mark.parametrize("repo", [".", "..", ".../x", "a/b", "", "..x"])
+def test_repo_name_refuses_dot_and_traversal(tmp_path, repo):
+    arg = json.dumps([{"repo": repo, "task": "1", "brief": _brief(tmp_path)}])
+    with pytest.raises(queue.SubmissionError, match="plain name"):
+        queue.parse_submission(arg)
+
+
+def test_task_id_still_refuses_a_leading_dot(tmp_path):
+    arg = json.dumps([{"repo": "a", "task": ".1", "brief": _brief(tmp_path)}])
+    with pytest.raises(queue.SubmissionError, match="plain name"):
+        queue.parse_submission(arg)
+
+
 def test_empty_brief_is_rejected(tmp_path):
     arg = json.dumps(
         [{"repo": "a", "task": "1", "brief": _brief(tmp_path, text="  \n")}]
