@@ -352,7 +352,7 @@
 <div class="wrap">
 
 <header class="mast">
-  <p class="eyebrow">As built · issue #1065 · not yet run on real hardware</p>
+  <p class="eyebrow">As built · issue #1065 · first host run 2026-10-23</p>
   <h1>Devcontainer Task Orchestrator</h1>
   <p class="standfirst">One session on your laptop pulls Odoo tasks, hardens what each one asks for, and queues them to unattended Claude sessions inside each project's devcontainer. You review briefs going in and draft pull requests coming out.</p>
   <div class="chips">
@@ -610,7 +610,7 @@
         <text x="837" y="662" text-anchor="middle" font-family="var(--mono)" font-size="9" fill="var(--muted)">never unattended</text>
       </svg>
     </div>
-    <figcaption><b>Figure 2.</b> Three zones and a mounted column. The host plans and dispatches. The container builds. The column is what the personal-features Feature mounts into every container, and the bundle root rides on one of those mounts, so the dispatcher adds no mount of its own. The one contract line between the two sides is <code>ODOO_UNATTENDED=1</code>: the dispatcher sets it, and the guard hook engages on it in every fork.</figcaption>
+    <figcaption><b>Figure 2.</b> Three zones and a mounted column. The host plans and queues, and the compose dispatcher service dispatches. The container builds. The column is what the personal-features Feature mounts into every container, and the bundle root rides on one of those mounts, so the dispatcher adds no mount of its own. The one contract line between the two sides is <code>ODOO_UNATTENDED=1</code>: the dispatcher sets it, and the guard hook engages on it in every fork.</figcaption>
   </figure>
 
   <div class="tbl">
@@ -618,7 +618,10 @@
     <thead><tr><th>Component</th><th>Owns</th><th>Lives in</th><th>Section</th></tr></thead>
     <tbody>
       <tr><td class="nowrap"><strong>Orchestrator command</strong></td><td>Pulling tasks, hardening the requirement, writing the brief, approval, the dead letter list, the friction log.</td><td><code>plugins/odoo-orchestrator/commands/run.md</code>, <code>scripts/orchestrator.py</code>, <code>scripts/dispatch.sh</code></td><td>1, 3</td></tr>
-      <tr><td class="nowrap"><strong>The dispatcher</strong></td><td>The lock, the gate, the container lifecycle, the session, the clock, the ending sequence. Everything deterministic.</td><td><code>libraries/dispatcher/src/dispatcher/</code></td><td>7, 8, 17</td></tr>
+      <tr><td class="nowrap"><strong>The dispatcher</strong></td><td>The lock, the gate, the container lifecycle, the session, the clock, the ending sequence. Everything deterministic. It runs as the singleton <code>dispatcher</code> service of the compose project <code>odoo-orchestrator</code>, started by <code>dispatch.sh add</code>, and exits when the queue drains.</td><td><code>libraries/dispatcher/src/dispatcher/</code>, <code>stack/compose.yaml</code></td><td>7, 8, 17</td></tr>
+      <tr><td class="nowrap"><strong>The orchestrator service</strong></td><td>A one-off <code>run --rm</code> container for <code>orchestrator.py</code>, started by <code>orchestrator.sh</code>. It has no docker socket and never starts on <code>up</code>.</td><td><code>stack/compose.yaml</code>, <code>scripts/orchestrator.sh</code></td><td>3, 13</td></tr>
+      <tr><td class="nowrap"><strong>The web interface</strong></td><td>A read-only view of jobs, the queue and the friction log at <code>127.0.0.1:8765</code>, over the state dir, the orchestrator home, the artifacts and the usage-log. The <code>webui</code> service is <code>restart: unless-stopped</code>, so it outlives the dispatcher.</td><td><code>libraries/webui/</code>, <code>stack/compose.yaml</code></td><td>3, 13</td></tr>
+      <tr><td class="nowrap"><strong>The usage-log</strong></td><td>Which owned features agents use. Written by the devcontainers and by the dispatcher's job line. Stores under <code>~/.local/state/usage-log</code>.</td><td><code>libraries/usage_log/</code></td><td>13, 21</td></tr>
       <tr><td class="nowrap"><strong>The job store</strong></td><td>Pending, running, done and dead-lettered jobs. Dispatcher-private, mutable, survives a restart.</td><td><code>libraries/odoo_sdk/src/odoo_sdk/state/jobs.py</code></td><td>7, 11</td></tr>
       <tr><td class="nowrap"><strong>The run record</strong></td><td>One write-once row per session, its envelope, and the bundle index. The billing atom.</td><td><code>odoo_sdk/state/runs_store.py</code>, <code>run_sessions.py</code></td><td>10, 11, 19</td></tr>
       <tr><td class="nowrap"><strong>The bundle</strong></td><td>One directory per job: the agent's <code>task.json</code>, the transcript, the envelope, the harvest.</td><td><code>odoo_sdk/state/artifacts.py</code>, <code>dispatch_state.py</code></td><td>11, 17</td></tr>
@@ -716,32 +719,31 @@
 
   <p>Approval is per task, not per batch. Six tasks are six small reviews, and a skip never stops the rest. After dispatch there is no second gate, so the brief is your last chance to steer. A failure comes back as a status, never as a question.</p>
 
-  <h3>The shape of <code>/odoo-orchestrator:run</code></h3>
+  <h3>The shape of <code>/odoo-orchestrator:run</code>: queue now, read later</h3>
   <ol class="spec">
     <li><strong>Read the dead letters first.</strong> <code>dispatch.sh dead-letters</code> through <code>orchestrator.py unhandled</code>. Each entry is a task that owes a result. Decide one at a time: re-queue unchanged, amend the brief and re-queue, or drop. Nothing retries itself.</li>
     <li><strong>Pull and harden.</strong> Read the task and its chatter through the org connector. Write the brief as behaviour and outcome only: no file, module, model, method, command or mechanism. <code>orchestrator.py plan-path</code> mints a draft file, <code>orchestrator.py lint</code> is a backstop, never the approval.</li>
     <li><strong>Approve per task.</strong> One block per task: approve, revise, or skip. A revise rewrites the brief and dispatches nothing. A re-queued task is approved again like any other.</li>
-    <li><strong>Submit the approved set as one argument.</strong> <code>dispatch.sh run '[{"repo","task","brief"}]'</code>, started as a background call and waited for. The script tees the result to <code>runs/&lt;time&gt;-&lt;pid&gt;.json</code> under the orchestrator home and the command reads that file, never scrollback.</li>
-    <li><strong>After the run.</strong> <code>orchestrator.py friction</code> appends the batch's friction entries. <code>orchestrator.py records</code> prints the batch's records for import. Dead letters are shown with their cause and detail. Questions on a <code>DONE</code> job become a new brief, approved again, and submitted at <code>round</code> plus one.</li>
+    <li><strong>Submit the approved set as one argument.</strong> <code>dispatch.sh add '[{"repo","task","brief"}]'</code> queues the jobs in seconds, starts the <code>dispatcher</code> and <code>webui</code> services in the background and prints <code>{"batch_id","jobs"}</code>. An element can add <code>round</code> and <code>entry</code>. The command records the batch with <code>batch-add</code>, marks the old dead letters <code>handled</code>, tells you the ids and <code>http://127.0.0.1:8765</code>, and ends. It does not wait and does not poll.</li>
+    <li><strong>Later, read the finished batches.</strong> Run the command again with no task ids. <code>orchestrator.sh batches</code> lists the batches not yet read. For each one, <code>dispatch.sh report &lt;batch_id&gt;</code> gives the jobs. <code>orchestrator.py friction</code> appends the batch's friction entries and <code>orchestrator.py records</code> prints its records for import. Dead letters are shown with their cause and detail. Questions on a <code>DONE</code> job become a new brief, approved again, and submitted at <code>round</code> plus one. <code>batch-done</code> closes the batch.</li>
   </ol>
 
   <div class="tbl">
   <table>
     <thead><tr><th>Exit</th><th>Meaning</th><th>The command then</th></tr></thead>
     <tbody>
-      <tr><td><code>0</code></td><td>The queue drained. Dead letters are data, not failure. Nothing is left pending.</td><td>Goes to step 5.</td></tr>
-      <tr><td><code>1</code></td><td>A job raised inside the dispatcher, the run stopped fatally, or a job is still pending (a stop request, an unreadable memory figure, the bounded wait of section 7 expired).</td><td>Shows stderr, still goes to step 5 for the jobs that finished.</td></tr>
-      <tr><td><code>2</code></td><td>Bad arguments, bad settings, or an unreadable brief. Nothing was stored.</td><td>Fixes the argument and runs again. Marks nothing handled.</td></tr>
+      <tr><td><code>0</code></td><td>The jobs are queued.</td><td>Records the batch, marks the old dead letters handled, tells you the ids and the web address, and ends.</td></tr>
+      <tr><td><code>1</code></td><td>Docker compose could not start the containers, or the dispatcher raised an error.</td><td>Shows stderr. Marks nothing handled. If the jobs were queued, still records the batch.</td></tr>
+      <tr><td><code>2</code></td><td>Nothing was queued: a bad array, a task that already has a live job, a task named twice, a repo with no checkout or no central config, or no argument.</td><td>Shows stderr. Fixes the array, or waits for the live job to end, and submits again. Marks nothing handled.</td></tr>
       <tr><td><code>3</code></td><td>Another dispatcher holds the lock. There is no flag to skip it.</td><td>Tells you. Does not retry in a loop.</td></tr>
-      <tr><td><code>74</code></td><td><code>dispatch.sh</code> could not create the orchestrator home.</td><td>Shows stderr.</td></tr>
-      <tr><td><code>127</code></td><td>No dispatcher was found on <code>PATH</code> and <code>ODOO_ORCHESTRATOR_DISPATCHER_DIR</code> is unset.</td><td>Tells you.</td></tr>
+      <tr><td><code>127</code></td><td><code>stack/compose.yaml</code> was not found.</td><td>Tells you to set <code>ODOO_ORCHESTRATOR_CHECKOUT</code> to the checkout that holds it.</td></tr>
     </tbody>
   </table>
   </div>
 
   <div class="note stop">
-    <span class="tag">Known limit: the dispatcher lives in your session's process tree</span>
-    <p><code>dispatch.sh run</code> is a background Bash call of the host session. If that session ends, the call dies with it, and every job it was running becomes a <code>KILLED_BY_SIGNAL</code> dead letter. Keep the host session open until the run returns. Detaching the dispatcher with <code>setsid</code> and polling the result file is the alternative, recorded in section 22 (F17) and not built.</p>
+    <span class="tag">The jobs outlive your session</span>
+    <p>The dispatcher is a compose service, not a child of your session. If the session ends after <code>add</code> returns, the jobs go on. The dispatcher exits when no job is <code>PENDING</code> or <code>RUNNING</code>, and <code>restart: "no"</code> keeps it down until the next <code>add</code>. It is still not a daemon: it runs only while there is work. The blocking <code>dispatch run</code> call that this section once described is now only the container command of the service. Section 22 (F17) recorded the old limit.</p>
   </div>
 </section>
 
@@ -990,8 +992,8 @@
   <h3>The job store is on disk</h3>
   <p>One row per job with a state, persisted in <code>jobs.db</code>, private to the dispatcher, and separate from the run record because mutable working state and write-once evidence have different lifetimes. Persistence buys restart, and restart needs reconciliation: <strong>every job marked running at startup is lying</strong>, because its process died with the previous dispatcher. Before anything is admitted, each stale running row has its container and worktree inspected, gets a <code>FAILED</code> run row when it had a session id, and becomes an <code>ORPHANED_BY_RESTART</code> dead letter. Skip this and the duplicate gate blocks those tasks forever.</p>
 
-  <h3>The singleton lock</h3>
-  <p>Two dispatchers would not overload the machine, because both read the same memory figure and both back off. They would corrupt state: both could mark one pending job running, and one could start a container the other is about to stop as idle. So the entry point takes an exclusive whole-file advisory lock on <code>dispatcher.lock</code> before anything else and holds it for the life of the process. The kernel releases it on any exit, including an uncatchable kill, so there is no stale lock. It is a separate file from both databases, because locking a database file collides with the engine's own locking. There is no flag to skip it. Running two means a second state root, which is an explicit act. This holds on a local filesystem only. <code>dispatch dead-letters</code> only reads and takes no lock.</p>
+  <h3>The singleton lock, and a submit that needs none</h3>
+  <p>Two dispatchers would not overload the machine, because both read the same memory figure and both back off. They would corrupt state: both could mark one pending job running, and one could start a container the other is about to stop as idle. So the entry point takes an exclusive whole-file advisory lock on <code>dispatcher.lock</code> before anything else and holds it for the life of the process. The kernel releases it on any exit, including an uncatchable kill, so there is no stale lock. It is a separate file from both databases, because locking a database file collides with the engine's own locking. There is no flag to skip it. Running two means a second state root, which is an explicit act. This holds on a local filesystem only. The singleton is the <code>dispatcher</code> service of the compose project <code>odoo-orchestrator</code>, which <code>dispatch.sh add</code> starts. <code>dispatch dead-letters</code> and <code>dispatch report</code> only read, and <code>dispatch submit</code> only inserts. None of the three takes the lock, so they work while the dispatcher runs, and the running dispatcher admits new rows at its next step.</p>
 
   <h3>Containers come up on demand and stop when idle</h3>
   <p>Two independent idempotent checks at two lifecycle points. On admission: <code>devcontainer up</code> starts or reuses the project's container. On every ending: if the project has no job running and none pending, stop its compose project. Both halves of that predicate, or a finishing job stops a container out from under a sibling mid-test. Stop, never remove, and never touch the shared sidecars. The check races: a job can end, stop the container, and a new job can start it a second later. That costs one restart, which is why there is no lock around it.</p>
@@ -1001,7 +1003,9 @@
   <div class="sechead"><span class="secnum">08</span><h2>The job</h2></div>
   <p class="lede">One call submits as many jobs as you approved. One admitted job renders one <code>up</code> and one <code>exec</code>. Every flag on the command line is there for a reason already verified, or marked as untested in section 22.</p>
 
-  <p>The approved set arrives as <strong>a single argument, a JSON array</strong>, each element a repo, a task id and a path to the brief. There is no batch file, because a dispatch list is a product of one orchestration run and writing one would make the dispatcher own a file format. The brief path is different: the contract is "a path I can read as text". The dispatcher reads it once, on the host, at submission. The text goes into the job row and into the prompt, and the path is forgotten. The orchestrator can delete the file at once, and a re-dispatch uses the stored text. Reading host-side is also what makes it work at all: a path handed into the container would not resolve. The whole call is validated before anything is written, so one bad element rejects the call and no job of it exists. A prompt of more than 120 KB is refused, because one argv string is capped at 128 KiB.</p>
+  <p>The approved set arrives as <strong>a single argument, a JSON array</strong>, each element <code>{repo, task, brief}</code> with an optional <code>round</code> and an optional <code>entry</code>. The call is <code>dispatch submit</code>, which <code>dispatch.sh add</code> runs. It takes no lock, so it works while a dispatcher runs. There is no batch file, because a dispatch list is a product of one orchestration run and writing one would make the dispatcher own a file format. The brief path is different: the contract is "a path I can read as text". The dispatcher reads it once, at submission. The text goes into the job row and into the prompt, and the path is forgotten. The orchestrator can delete the file at once, and a re-dispatch uses the stored text. The path must resolve in the dispatcher container, which is why the compose file binds every path under the same string as on the host. A path handed into the job container would not resolve. The whole call is validated before anything is written, so one bad element rejects the call and no job of it exists. It exits 2 on a task named twice, on a task that already has a live job, and on a repo with no checkout or no central config. A repo name can start with a dot, and is never <code>.</code> or <code>..</code>. A prompt of more than 120 KB is refused, because one argv string is capped at 128 KiB.</p>
+
+  <p><code>entry</code> is the slash command the prompt starts with. It is one of <code>/odoo-dev:implement</code> and <code>/odoo-dev:upgrade-implement</code>, and it defaults to <code>DISPATCH_ENTRY</code>. It is stored on the job row (the <code>entry</code> column of <code>jobs</code>, SDK migration 2), so a re-dispatch and a report keep it, and the job line of the usage-log names it. The central config for a repo is the single match of <code>&lt;config root&gt;/github.com/*/&lt;repo&gt;/.devcontainer/devcontainer.json</code>. <code>DISPATCH_REPO_OWNER</code> only breaks a tie. Zero matches or several matches dead-letter that one job as <code>CONTAINER_START_FAILED</code>, and the other jobs go on. Each job's bundle is also its <code>ODOO_DEV_STATE_DIR</code>. Before <code>up</code>, the dispatcher copies the repo map (<code>DISPATCH_REPO_MAP_FILE</code>, default <code>~/.config/odoo-dev/repo-map.json</code>) into the bundle. A missing map dead-letters that job as <code>CONTAINER_START_FAILED</code> with the detail <code>cannot copy the repo map &lt;file&gt; into &lt;bundle&gt;</code>. The order is <code>mark_running</code>, the bundle directory, the repo map, the workspace check, <code>up</code>, the mount assertion, the readiness wait. Each session also gets <code>ODOO_JOB_ID</code>.</p>
 
   <pre class="cmd">devcontainer up \
   --config <b>&lt;config root&gt;</b>/github.com/&lt;owner&gt;/&lt;repo&gt;/.devcontainer/devcontainer.json \
@@ -1011,9 +1015,10 @@
 devcontainer exec \
   --config &lt;the same file&gt; --workspace-folder &lt;the same folder&gt; \
   --remote-env <b>ODOO_DEV_STATE_DIR=/usr/local/share/odoo-dev/dispatch/artifacts/&lt;job-id&gt;</b> \
+  --remote-env <b>ODOO_JOB_ID=&lt;job-id&gt;</b> \
   --remote-env <b>ODOO_UNATTENDED=1</b> \
   -- claude -p "<b>/odoo-dev:implement &lt;task-id&gt; &lt;contents of the brief path&gt;</b>" \
-       --append-system-prompt "<b>&lt;contents of the invariants file, read on the host&gt;</b>" \
+       --append-system-prompt "<b>&lt;contents of the invariants file, read by the dispatcher&gt;</b>" \
        --output-format stream-json --verbose \
        --json-schema <b>&lt;the run schema, section 19&gt;</b> \
        --permission-mode dontAsk \
@@ -1032,9 +1037,10 @@ devcontainer exec \
       <tr><td class="nowrap"><code>--additional-features</code></td><td>The personal-features Feature, which installs <code>claude</code> and mounts the config and odoo-dev directories. Required at create, ignored on a running container. The default is the Feature id, never empty. <span class="lag">code lags · F3</span></td></tr>
       <tr><td class="nowrap">no <code>--mount</code></td><td>The bundle root lives under <code>~/.config/odoo-dev</code>, which the Feature already binds at <code>/usr/local/share/odoo-dev</code>. One fewer flag, and a container that VS Code created serves the dispatcher unchanged. <span class="lag">code lags · F2</span></td></tr>
       <tr><td class="nowrap"><code>--remote-env ODOO_DEV_STATE_DIR</code></td><td>Points the odoo-dev state directory at the job's bundle, so <code>task.json</code> is written there in place by scripts that know nothing about this design.</td></tr>
+      <tr><td class="nowrap"><code>--remote-env ODOO_JOB_ID</code></td><td>The job's id, so tools in the session can tie what they write to the job. <code>lifecycle.py</code> names it <code>JOB_ID_VARIABLE</code>.</td></tr>
       <tr><td class="nowrap"><code>--remote-env ODOO_UNATTENDED=1</code></td><td>The one contract line with the guard hook. A fork inherits the session environment, so the hook engages inside <code>/odoo-dev:pr</code>, where the pushes happen and the agent type is <code>odoo-dev-pr</code>.</td></tr>
       <tr><td class="nowrap"><code>-p "/odoo-dev:implement …"</code></td><td>The whole input, with the brief inlined. A slash command in the prompt expands before the run, so the session is the implementer. Section 4.</td></tr>
-      <tr><td class="nowrap"><code>--append-system-prompt</code></td><td>The invariants of section 9, read on the host and inlined like the brief. A file flag would need a path the container can open, and the plugin lives in the marketplace cache there. <span class="lag">code lags · F10</span></td></tr>
+      <tr><td class="nowrap"><code>--append-system-prompt</code></td><td>The invariants of section 9, read by the dispatcher and inlined like the brief. A file flag would need a path the container can open, and the plugin lives in the marketplace cache there. <span class="lag">code lags · F10</span></td></tr>
       <tr><td class="nowrap"><code>--output-format stream-json --verbose</code></td><td>The progress stream, the session id from the first event, and the result envelope captured whole.</td></tr>
       <tr><td class="nowrap"><code>--json-schema</code></td><td>Forces the final turn to be a validated object of the shape in section 19. Harness-enforced, not requested of the agent.</td></tr>
       <tr><td class="nowrap"><code>--permission-mode dontAsk</code></td><td>Nobody is there to answer a prompt. Without it the session blocks forever on the first one.</td></tr>
@@ -1554,12 +1560,12 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
   <table>
     <thead><tr><th>Path</th><th>Owns</th></tr></thead>
     <tbody>
-      <tr><td class="nowrap"><code>libraries/dispatcher/src/dispatcher/cli.py</code></td><td><code>dispatch run</code> and <code>dispatch dead-letters</code>, the exit codes, the JSON report.</td></tr>
+      <tr><td class="nowrap"><code>libraries/dispatcher/src/dispatcher/cli.py</code></td><td><code>dispatch submit</code>, <code>dispatch report</code>, <code>dispatch dead-letters</code> and <code>dispatch run</code> (the service command, which resumes what is pending and exits when drained), the exit codes, the JSON report.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/lock.py</code></td><td>The singleton <code>flock</code> on <code>dispatcher.lock</code>.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/settings.py</code></td><td>Every setting of section 21, read once from the environment.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/queue.py</code></td><td>Submission validation, brief dereference, project ordering, startup reconciliation.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/gates.py</code></td><td>The memory gate on <code>MemAvailable</code>, and the settle.</td></tr>
-      <tr><td class="nowrap"><code>…/dispatcher/lifecycle.py</code></td><td>Rendering <code>up</code> and <code>exec</code>, the workspace check, the mount assertion, the readiness wait, the idle stop, the container-side kill, transcript discovery.</td></tr>
+      <tr><td class="nowrap"><code>…/dispatcher/lifecycle.py</code></td><td>Rendering <code>up</code> and <code>exec</code>, the repo map copy into the bundle, the workspace check, the mount assertion, the readiness wait, the idle stop, the container-side kill, transcript discovery.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/engine.py</code></td><td>One job's life from admit to its final state, the deadline, the stop request, the <code>finally</code> ordering of section 17.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/collect.py</code></td><td>The stream parser, the run row write, then the collector call.</td></tr>
       <tr><td class="nowrap"><code>…/dispatcher/reap.py</code></td><td>Reap only what is provably pushed, inside the container.</td></tr>
@@ -1570,8 +1576,12 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
       <tr><td class="nowrap"><code>…/state/runs_store.py</code></td><td><code>runs.db</code>: the three tables, <code>map_reported_outcome</code>, a read-only constructor for readers.</td></tr>
       <tr><td class="nowrap"><code>…/state/artifacts.py</code></td><td>The bundle layout and the collector that never raises.</td></tr>
       <tr><td class="nowrap"><code>…/state/run_sessions.py</code></td><td>Runs as a sessionization source, merged by time with the event windows.</td></tr>
-      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/commands/run.md</code></td><td>The host command of section 3.</td></tr>
-      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/dispatch.sh</code></td><td>The one call site of the dispatcher, the result file, the exit codes.</td></tr>
+      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/commands/run.md</code></td><td>The command of section 3: queue with task ids, read finished batches without them.</td></tr>
+      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/dispatch.sh</code></td><td>The one call site of the dispatcher: a front end for <code>docker compose</code> that submits, starts <code>dispatcher</code> and <code>webui</code>, creates the four bind sources (the usage-log, the artifacts, the state dir and the orchestrator home) before compose, and passes the exit codes through, plus 127.</td></tr>
+      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/orchestrator.sh</code></td><td>The front end for the one-off <code>orchestrator</code> service that runs <code>orchestrator.py</code>.</td></tr>
+      <tr><td class="nowrap"><code>stack/compose.yaml</code>, <code>stack/Dockerfile</code></td><td>The compose project <code>odoo-orchestrator</code>: the <code>dispatcher</code>, <code>orchestrator</code> and <code>webui</code> services, with identical host and container paths.</td></tr>
+      <tr><td class="nowrap"><code>libraries/webui/</code></td><td>The read-only web interface of jobs, the queue, the friction log and usage.</td></tr>
+      <tr><td class="nowrap"><code>libraries/usage_log/</code></td><td>The usage-log stores and their standalone SQLite writer.</td></tr>
       <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/orchestrator.py</code></td><td>Drafts, approvals, the lint backstop, handled dead letters, the friction log, the records table. Four small ledgers under the orchestrator home, and no more.</td></tr>
       <tr><td class="nowrap"><code>plugins/odoo-dev/agents/odoo-dev-implementer.md</code></td><td>The implementer of section 4, the deferral rule and the friction contract of section 5.</td></tr>
       <tr><td class="nowrap"><code>plugins/odoo-dev/commands/implement.md</code></td><td>The entry the dispatcher invokes. Under the workflow option it launches <code>workflows/implement.js</code>.</td></tr>
@@ -1599,14 +1609,14 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
 <section id="s16">
   <div class="sechead"><span class="secnum">16</span><h2>What this is not</h2></div>
   <ul class="plain">
-    <li><strong>Not a daemon.</strong> You start a batch. Nothing runs on a schedule and nothing watches Odoo on its own.</li>
+    <li><strong>Not a daemon.</strong> You start a batch. Nothing runs on a schedule and nothing watches Odoo on its own. The <code>dispatcher</code> service starts on <code>dispatch.sh add</code>, uses <code>restart: "no"</code> and exits when the queue drains. Only the read-only <code>webui</code> service stays up.</li>
     <li><strong>Not an auto-merge.</strong> The run ends at a draft pull request. Nothing is marked ready, approved or merged without you.</li>
     <li><strong>Not a general job runner.</strong> The queue admits jobs and dead-letters the rest. No automatic retries, no priorities, no lifecycle beyond the four states.</li>
     <li><strong>Not self-healing.</strong> A run that does not return a complete valid object fails, and stays failed until someone looks. Nothing reconstructs a partial or invents a description.</li>
     <li><strong>Not a self-filing bug tracker.</strong> Friction reports accumulate in one file you read.</li>
     <li><strong>Not an automatic timesheet.</strong> Runs are evidence. Turning sessions into billable hours stays a step you take.</li>
     <li><strong>Not a replacement for the interactive workflow.</strong> Typing the stage commands by hand keeps working exactly as it does now.</li>
-    <li><strong>Not the 2026-08-21 design.</strong> That put the orchestrator inside a devcontainer. This puts it on the host, and it supersedes rather than extends.</li>
+    <li><strong>Not the 2026-08-21 design.</strong> That put the orchestrator inside a devcontainer. This puts the orchestrator command in your own session, and the dispatcher in a compose service beside it. The host needs only Docker. It supersedes rather than extends.</li>
   </ul>
 </section>
 
@@ -1790,31 +1800,40 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
 
 <section id="s21">
   <div class="sechead"><span class="secnum">21</span><h2>Configuration and environment</h2></div>
-  <p class="lede">Every variable the stack reads, in one place. Three are required. The rest have a default that the first run can keep.</p>
+  <p class="lede">Every variable the stack reads, in one place. <code>stack/compose.yaml</code> refuses to start without eight of them: the three ids, <code>HOME</code>, <code>SECOND_BRAIN_DIR</code>, <code>DISPATCH_REPOS_DIR</code>, <code>DISPATCH_CONFIG_ROOT</code> and <code>ODOO_ORCHESTRATOR_CHECKOUT</code>. <code>dispatch.sh</code> sets the three ids. Some have a default that the first run can keep. The rest are passed into the <code>dispatcher</code> service only when they are set. Paths are the same string on the host and in the container.</p>
 
   <div class="tbl">
   <table>
     <thead><tr><th>Variable</th><th>Read by</th><th>Default</th><th>Meaning</th></tr></thead>
     <tbody>
-      <tr><td class="nowrap"><code>DISPATCH_REPOS_DIR</code> (or <code>REPOS_DIR</code>)</td><td>dispatcher</td><td>required</td><td>Host directory holding the customer repos. <code>&lt;repos&gt;/&lt;repo&gt;</code> is the <code>--workspace-folder</code>.</td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_CONFIG_ROOT</code></td><td>dispatcher</td><td>required</td><td>Root of the central config tree: <code>&lt;root&gt;/github.com/&lt;owner&gt;/&lt;repo&gt;/.devcontainer/devcontainer.json</code>.</td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_REPO_OWNER</code></td><td>dispatcher</td><td>required</td><td>The <code>&lt;owner&gt;</code> path component above.</td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_PLUGIN_ROOT</code></td><td>dispatcher</td><td><code>$CLAUDE_PLUGIN_ROOT</code>, then this checkout's <code>plugins/odoo-dev</code></td><td>Where the odoo-dev plugin is on the host, to find the invariants file.</td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_INVARIANTS_FILE</code></td><td>dispatcher</td><td><code>&lt;plugin root&gt;/prompts/unattended-invariants.md</code></td><td>A host path. Read once and inlined into <code>--append-system-prompt</code>. <span class="lag">code lags · F10</span></td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_ENTRY</code></td><td>dispatcher</td><td><code>/odoo-dev:implement</code></td><td>The command the prompt starts with. Replaces <code>DISPATCH_AGENT</code>. <span class="lag">code lags · F4</span></td></tr>
+      <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_UID</code>, <code>ODOO_ORCHESTRATOR_GID</code></td><td>compose</td><td>required, set by <code>dispatch.sh</code> from <code>id -u</code> and <code>id -g</code></td><td>The user the services run as, so files in the bind mounts belong to you.</td></tr>
+      <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_DOCKER_GID</code></td><td>compose</td><td>required, set by <code>dispatch.sh</code> from the group of <code>/var/run/docker.sock</code></td><td>The group added to the <code>dispatcher</code> service so it can use the socket.</td></tr>
+      <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_CHECKOUT</code></td><td>compose, <code>dispatch.sh</code></td><td>required</td><td>The checkout that holds <code>stack/compose.yaml</code>. It is bound read-only into the <code>dispatcher</code>, and <code>DISPATCH_PLUGIN_ROOT</code> derives from it. Replaces <code>ODOO_ORCHESTRATOR_DISPATCHER_DIR</code>. Exit 127 when the file is not there.</td></tr>
+      <tr><td class="nowrap"><code>HOME</code></td><td>compose</td><td>required</td><td>The base of the defaults below. The services get an empty <code>tmpfs</code> at this path, and the binds nest inside it.</td></tr>
+      <tr><td class="nowrap"><code>SECOND_BRAIN_DIR</code></td><td>dispatcher</td><td>required</td><td>The vault directory that the second-brain Feature binds into the job containers.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_REPOS_DIR</code></td><td>dispatcher</td><td>required</td><td>Directory holding the customer repos. <code>&lt;repos&gt;/&lt;repo&gt;</code> is the <code>--workspace-folder</code>.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_CONFIG_ROOT</code></td><td>dispatcher</td><td>required</td><td>Root of the central config tree. A repo's config is the single match of <code>&lt;root&gt;/github.com/*/&lt;repo&gt;/.devcontainer/devcontainer.json</code>.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_REPO_OWNER</code></td><td>dispatcher</td><td>optional, pass-through</td><td>Breaks a tie when more than one owner has a config for the repo. Without a tie it is not read.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_REPO_MAP_FILE</code></td><td>dispatcher</td><td>optional, <code>~/.config/odoo-dev/repo-map.json</code></td><td>The repo map copied into each job bundle before <code>up</code>. A missing file dead-letters the job.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_PLUGIN_ROOT</code></td><td>dispatcher</td><td><code>$CLAUDE_PLUGIN_ROOT</code>, then this checkout's <code>plugins/odoo-dev</code></td><td>Where the odoo-dev plugin is, to find the invariants file. In the compose file it is fixed at <code>${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-dev</code>.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_INVARIANTS_FILE</code></td><td>dispatcher</td><td><code>&lt;plugin root&gt;/prompts/unattended-invariants.md</code></td><td>A path the dispatcher can read. Read once and inlined into <code>--append-system-prompt</code>. <span class="lag">code lags · F10</span></td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_ENTRY</code></td><td>dispatcher</td><td><code>/odoo-dev:implement</code></td><td>The command the prompt starts with when an element names no <code>entry</code>. Replaces <code>DISPATCH_AGENT</code>. <span class="lag">code lags · F4</span></td></tr>
       <tr><td class="nowrap"><code>DISPATCH_ADDITIONAL_FEATURES</code></td><td>dispatcher</td><td><code>{"ghcr.io/crpaxton4/devcontainer-features/personal-features":{}}</code></td><td>Passed to <code>devcontainer up --additional-features</code>. <span class="lag">code lags · F3</span></td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_ARTIFACTS_DIR</code></td><td>dispatcher</td><td><code>~/.config/odoo-dev/dispatch/artifacts</code></td><td>The bundle root on the host. Must sit under the directory the Feature binds at <code>/usr/local/share/odoo-dev</code>. <span class="lag">code lags · F2</span></td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_ARTIFACTS_DIR</code></td><td>dispatcher</td><td><code>~/.config/odoo-dev/dispatch/artifacts</code></td><td>The bundle root. It is mounted read-only into the <code>orchestrator</code> and <code>webui</code> services. Must sit under the directory the Feature binds at <code>/usr/local/share/odoo-dev</code>. <span class="lag">code lags · F2</span></td></tr>
       <tr><td class="nowrap"><code>MIN_FREE_GB</code></td><td>dispatcher</td><td><code>6</code></td><td>Admission threshold on <code>MemAvailable</code>, the same knob <code>stack-ensure.sh</code> uses.</td></tr>
       <tr><td class="nowrap"><code>DISPATCH_SETTLE_S</code></td><td>dispatcher</td><td><code>5</code></td><td>Seconds to let the machine settle after an admission.</td></tr>
       <tr><td class="nowrap"><code>DISPATCH_POLL_S</code></td><td>dispatcher</td><td><code>15</code></td><td>Seconds between admission attempts while waiting.</td></tr>
       <tr><td class="nowrap"><code>DISPATCH_ADMIT_TIMEOUT_S</code></td><td>dispatcher</td><td><code>1800</code></td><td>The bounded wait of section 7: nothing admitted for this long ends the run with exit 1. <span class="lag">code lags · F7</span></td></tr>
       <tr><td class="nowrap"><code>DISPATCH_DEADLINE_S</code></td><td>dispatcher</td><td><code>21600</code></td><td>Wall-clock deadlock guard per job. Not a budget.</td></tr>
-      <tr><td class="nowrap"><code>DISPATCH_CLAUDE_HOME</code></td><td>dispatcher</td><td><code>$CLAUDE_CONFIG_DIR</code>, then <code>~/.claude</code></td><td>The host directory that is the bind source of <code>/usr/local/share/claude-home</code>. Transcripts are found under its <code>projects/</code>. If the Feature binds a different source, this must name it, or <code>session.jsonl</code> is never collected.</td></tr>
+      <tr><td class="nowrap"><code>DISPATCH_CLAUDE_HOME</code></td><td>dispatcher</td><td><code>$CLAUDE_CONFIG_DIR</code>, then <code>~/.claude</code></td><td>The directory that is the bind source of <code>/usr/local/share/claude-home</code>. Transcripts are found under its <code>projects/</code>. If the Feature binds a different source, this must name it, or <code>session.jsonl</code> is never collected.</td></tr>
       <tr><td class="nowrap"><code>ODOO_DISPATCH_STATE_DIR</code></td><td>odoo_sdk</td><td><code>$ODOO_TASK_TRACKER_DIR</code>, then <code>$XDG_STATE_HOME/odoo-task-tracker</code>, then <code>~/.local/state/odoo-task-tracker</code></td><td>The state root: <code>jobs.db</code>, <code>runs.db</code>, <code>dispatcher.lock</code>. Local filesystem only.</td></tr>
       <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_HOME</code></td><td><code>dispatch.sh</code>, <code>orchestrator.py</code></td><td><code>~/.local/state/odoo-orchestrator</code></td><td>Briefs, approvals, handled dead letters, result files, the friction log.</td></tr>
-      <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_DISPATCHER_DIR</code></td><td><code>dispatch.sh</code></td><td>unset</td><td>The <code>libraries/dispatcher</code> directory, used through <code>uv run</code> when no <code>dispatch</code> is on <code>PATH</code>.</td></tr>
+      <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_SCRIPTS_DIR</code></td><td><code>orchestrator.sh</code></td><td>the plugin's installed scripts, else <code>${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts</code></td><td>The scripts directory bound read-only into the <code>orchestrator</code> service.</td></tr>
+      <tr><td class="nowrap"><code>USERPROFILE</code></td><td>dispatcher</td><td>optional, pass-through</td><td>Passed into the <code>dispatcher</code> only when set.</td></tr>
+      <tr><td class="nowrap"><code>USAGE_LOG_DIR</code></td><td>dispatcher, <code>webui</code></td><td><code>${HOME}/.local/state/usage-log</code>, fixed</td><td>The usage-log stores. <code>dispatch.sh</code> creates the directory, with the state dir, the artifacts and the orchestrator home, before compose. The devcontainers write to it, and so does the dispatcher's job line.</td></tr>
       <tr><td class="nowrap"><code>COMPOSE_PROJECT_NAME</code></td><td>never</td><td>removed</td><td>Removed from every child's environment. Section 12.</td></tr>
       <tr><td class="nowrap"><code>ODOO_DEV_STATE_DIR</code></td><td>in the container</td><td>set per job</td><td>The job's bundle directory in container terms. The stage scripts write <code>tasks/&lt;task&gt;/task.json</code> under it.</td></tr>
+      <tr><td class="nowrap"><code>ODOO_JOB_ID</code></td><td>in the container</td><td>set per job</td><td>The job's id. Set in every dispatched session.</td></tr>
       <tr><td class="nowrap"><code>ODOO_UNATTENDED</code></td><td>in the container</td><td><code>1</code> per job</td><td>Engages the guard hook in the session and every fork, and gates the tracking call in <code>worktree-ensure.sh</code>. Any non-empty value is on.</td></tr>
     </tbody>
   </table>
@@ -1823,7 +1842,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
 
 <section id="s22">
   <div class="sechead"><span class="secnum">22</span><h2>Verification and findings</h2></div>
-  <p class="lede">Nothing has run on real hardware. This section lists what the first run must show, the experiments that must pass before the design is trusted, and the twenty findings of the static review, each the diff between this document and the code.</p>
+  <p class="lede">The first host run happened on 2026-10-23 and produced issues #1248 to #1254, which the sections above now describe. The findings below are from the earlier static review. This section lists what the first run must show, the experiments that must pass before the design is trusted, and the twenty findings of the static review, each the diff between this document and the code.</p>
 
   <h3>The acceptance pass</h3>
   <ol class="spec">
@@ -1874,7 +1893,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
       <tr><td class="nowrap">F14<br><a href="https://github.com/Crpaxton4/devcontainer-features/issues/1087">#1087</a></td><td>Billing starts at admission, before a container start of up to twenty minutes.</td><td>10</td><td>The run row's start is the exec spawn; the job row keeps the admit time.</td><td>2</td></tr>
       <tr><td>F15</td><td>Shared refs in one repo were "to design". Nothing addresses it.</td><td>6</td><td>Stated as an accepted risk. No code.</td><td>&nbsp;</td></tr>
       <tr><td class="nowrap">F16<br><a href="https://github.com/Crpaxton4/devcontainer-features/issues/1088">#1088</a></td><td><code>read_runs</code> builds a <code>RunStore</code> with <code>__new__</code> to skip migration.</td><td>13</td><td>A read-only constructor on <code>RunStore</code>.</td><td>1</td></tr>
-      <tr><td class="nowrap">F17<br><a href="https://github.com/Crpaxton4/devcontainer-features/issues/1089">#1089</a></td><td><code>dispatch.sh</code> runs in the host session's process tree and dies with it.</td><td>3</td><td>Stated as a known limit. Detaching with <code>setsid</code> is the recorded alternative.</td><td>4</td></tr>
+      <tr><td class="nowrap">F17<br><a href="https://github.com/Crpaxton4/devcontainer-features/issues/1089">#1089</a></td><td><code>dispatch.sh</code> runs in the host session's process tree and dies with it.</td><td>3</td><td>Stated as a known limit. Superseded: the dispatcher is now a compose service and <code>add</code> returns after queueing (decision 34), so the limit no longer holds.</td><td>4</td></tr>
       <tr><td>F18</td><td>The host reads Odoo through the org connector while the global rules name <code>odoo-mcp</code> only.</td><td>1</td><td>Stated as the host exception. No code.</td><td>&nbsp;</td></tr>
       <tr><td class="nowrap">F19<br><a href="https://github.com/Crpaxton4/devcontainer-features/issues/1073">#1073</a></td><td><code>README.md</code> is stale (#1073).</td><td>13, 21</td><td>The README is written from sections 13 and 21.</td><td>5</td></tr>
       <tr><td>F20</td><td>Transcript discovery assumes the host <code>CLAUDE_CONFIG_DIR</code> is the bind source of <code>/usr/local/share/claude-home</code>.</td><td>21</td><td>Stated as a requirement on <code>DISPATCH_CLAUDE_HOME</code>; the first run verifies it.</td><td>&nbsp;</td></tr>
@@ -1905,7 +1924,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
     <li><strong>The stage commands are callable by the implementer.</strong> Lands in: section 4, <code>agents/odoo-dev-implementer.md</code>.</li>
     <li><strong>Parallel sessions need one change: a test database per session.</strong> The suffix is hashed from the session id. Lands in: section 6, <code>skills/odoo-session-db</code>.</li>
     <li><strong>The central config repo does not change.</strong> The dispatcher adapts to what is there. Lands in: section 12.</li>
-    <li><strong>One call submits the whole set as one JSON argument, each brief as a path read once on the host.</strong> No batch file. Lands in: section 8, <code>queue.py</code>.</li>
+    <li><strong>One call submits the whole set as one JSON argument, each brief as a path read once at submission.</strong> No batch file. Lands in: section 8, <code>queue.py</code>. Decision 34 changed the call that carries it.</li>
     <li><strong>No workflow engine in the queue.</strong> It decides when a job starts, never what it does. A workflow inside the container (section 4) is a different thing: it orders one job's stages. Lands in: section 7.</li>
     <li><strong>The host retries, after reading the cause.</strong> Nothing retries itself. Lands in: section 18, <code>run.md</code>.</li>
     <li><strong>The agent never asks mid-run; it defers.</strong> Lands in: section 5, the implementer definition.</li>
@@ -1938,6 +1957,15 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
     <li><strong>The run row's clock starts at the session spawn.</strong> The admit time stays on the job row. Lands in: section 10.</li>
     <li><strong>Eviction is manual, and the memory wait is bounded.</strong> Lands in: section 7, section 21.</li>
   </ol>
+
+  <p>Five decisions taken after the first host run on 2026-10-23:</p>
+  <ol class="spec" start="33">
+    <li><strong>The dispatcher is a compose service, not a host process.</strong> The host then needs only Docker, and no Python, <code>uv</code> or checkout path. The service keeps identical host and container paths, the host user and the docker socket group, so the devcontainer CLI and the mount assertion still agree. It is a singleton with <code>restart: "no"</code>, started by <code>dispatch.sh add</code>, and exits when drained. Lands in: sections 2, 3, 13, 21, <code>stack/compose.yaml</code>.</li>
+    <li><strong>Submit and report replace the blocking run.</strong> <code>dispatch submit</code> queues without the lock and is all or nothing. <code>dispatch report &lt;batch_id&gt;</code> reads a batch later, and the orchestrator ends after it queues. Jobs then outlive the session that queued them, which retires the known limit of F17. Lands in: sections 3, 7, 8, <code>cli.py</code>, <code>commands/run.md</code>.</li>
+    <li><strong>A repo's central config is found by a single match, and the owner only breaks a tie.</strong> Zero or several matches dead-letter that one job. Lands in: section 8, section 21, <code>settings.py</code>.</li>
+    <li><strong>The entry is chosen per job.</strong> An element can name <code>/odoo-dev:implement</code> or <code>/odoo-dev:upgrade-implement</code>. The choice is stored on the job row, and <code>DISPATCH_ENTRY</code> is the default. Lands in: section 8, section 21, <code>queue.py</code>, SDK migration 2.</li>
+    <li><strong>The repo map is copied into each job bundle before the container starts.</strong> The bundle is the job's <code>ODOO_DEV_STATE_DIR</code>, so the task-env preflight resolves the project from the copy. A missing map dead-letters that job. Lands in: section 8, <code>lifecycle.seed_repo_map</code>.</li>
+  </ol>
 </section>
 
 <section id="appB">
@@ -1965,6 +1993,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
       <tr><td>The dispatcher writes the friction log under the state root.</td><td>The orchestrator reads the result file and writes the log under its own home. Two owners on paper, one in practice.</td><td>Section 11. F12.</td></tr>
       <tr><td>The in-flight projects stay out of <code>stack-ensure.sh</code>'s eviction sweep through <code>ODOO_ACTIVE_REPOS</code>.</td><td>The dispatcher never calls the script, so nothing reads the variable. Eviction is manual.</td><td>Section 7. F7.</td></tr>
       <tr><td>The reap runs on the host through the workspace mount.</td><td>A worktree made inside the container has a <code>.git</code> file holding container paths that do not resolve on the host.</td><td>Section 17. F8.</td></tr>
+      <tr><td>2026-10-26. The dispatcher runs on the host, installed beside the orchestrator command, and the command waits for <code>dispatch run</code> in a background call.</td><td>The first host run (2026-10-23) showed that this needs Python and a checkout path on the host, and that the run dies with the session. The dispatcher is now a compose service, and the call returns after the jobs are queued.</td><td>Sections 3, 8, 21. Decisions 33 and 34.</td></tr>
       <tr><td>Sibling worktrees collide on the index lock.</td><td>Each worktree has its own index. Refs, objects and <code>packed-refs</code> are shared, and that is the real collision.</td><td>Section 6, accepted risk. F15.</td></tr>
       <tr><td>The brief lives in the disposable store only.</td><td>Jobs are deletable after a quiet week, and "what was asked for" must stay answerable.</td><td>Section 11, <code>runs.brief</code>.</td></tr>
       <tr><td>The two invariant tests, the rules file and the guard are enough to make the file binding.</td><td>Three lines had no mechanism at all, and one was contradicted by a script that opened a tracking session on every build.</td><td>Section 9, the per-line table. F6.</td></tr>
@@ -1974,7 +2003,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
 </section>
 
 <footer class="end">
-  <p>Sections 1 to 16 keep the numbers the code cites. Sections 17 to 22 and the appendices were split out of them on 2026-10-16, after the static review of the six commits that closed issue #1065. Nothing has run on real hardware. Figures 7 and 9 describe behaviour measured on 2026-10-15 against the real tooling and the central config repo. Every <span class="lag">code lags</span> tag names a row in section 22, and the code is wrong until that row's fix lands.</p>
+  <p>Sections 1 to 16 keep the numbers the code cites. Sections 17 to 22 and the appendices were split out of them on 2026-10-16, after the static review of the six commits that closed issue #1065. The first host run was on 2026-10-23, and the dispatcher, the web interface and the helper now run as compose services. Figures 7 and 9 describe behaviour measured on 2026-10-15 against the real tooling and the central config repo. Every <span class="lag">code lags</span> tag names a row in section 22, and the code is wrong until that row's fix lands.</p>
 </footer>
 
 </div>
