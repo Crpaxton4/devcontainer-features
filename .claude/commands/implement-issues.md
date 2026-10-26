@@ -479,6 +479,10 @@ is one:
 `<pr>:<parent-pr>` declares a child. Above: 770 root, 771 child of 770, 772
 child of 771, 773 and 774 roots.
 
+The script takes a repo lock (`<git-common-dir>/stack-merge.lock`) so only one
+train runs per repo. A second train prints `stack-merge: another train holds the
+repo lock: <id> pid=… since=… stack=…; waiting` and blocks until the first ends.
+
 Exit `0` means the stack landed — go to Phase 9. **Any other exit is the raw
 status and stderr of the `git` or `gh` command that failed.** There is no
 exit-code taxonomy to memorise and the script does not translate errors. Read
