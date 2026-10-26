@@ -8,6 +8,7 @@ from .engine import (
     connect,
     now_us,
     open_store,
+    resolve_now_us,
     schema_version,
     transaction,
 )

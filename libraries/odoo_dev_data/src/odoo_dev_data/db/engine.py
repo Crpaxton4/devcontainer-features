@@ -149,7 +149,9 @@ def now_us() -> int:
     return time.time_ns() // 1000
 
 
-_clock = now_us
+def resolve_now_us(explicit: int | None) -> int:
+    """Return ``explicit`` when given, else the current :func:`now_us`."""
+    return now_us() if explicit is None else explicit
 
 
 def connect(
@@ -159,8 +161,12 @@ def connect(
     from .migrations import MIGRATIONS  # migrations.py imports Migration from here
 
     layout = ensure_home(home)
-    stamp = _clock() if now_us is None else now_us
-    return open_store(layout.state_db, MIGRATIONS, synchronous="FULL", now_us=stamp)
+    return open_store(
+        layout.state_db,
+        MIGRATIONS,
+        synchronous="FULL",
+        now_us=resolve_now_us(now_us),
+    )
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
