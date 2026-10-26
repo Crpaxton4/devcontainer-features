@@ -543,6 +543,29 @@ def _repo_map_entry_path(entry: Any) -> Optional[str]:
     return os.path.realpath(path) if isinstance(path, str) and path.strip() else None
 
 
+def _origin_slug(repo_root: str) -> Optional[str]:
+    """``owner/repo`` of ``repo_root``'s ``origin`` remote, or ``None`` (#1245)."""
+    result = _git("-C", repo_root, "remote", "get-url", "origin")
+    url = (result.stdout or "").strip()
+    if result.returncode != 0 or not url:
+        return None
+    url = url[: -len(".git")] if url.endswith(".git") else url
+    match = re.search(r"[:/]([^/:]+/[^/]+)$", url)
+    return match.group(1) if match else None
+
+
+def _entry_matches_origin(entry: dict, origin: str) -> bool:
+    """Whether ``entry`` names the ``origin`` remote (``owner/repo``) (#1245).
+
+    An entry's ``remote`` must equal ``origin``; one without a ``remote`` is
+    compared by repo name (``entry["repo"]`` against the part after the slash).
+    """
+    remote = entry.get("remote")
+    if remote:
+        return remote == origin
+    return entry.get("repo") == origin.split("/", 1)[1]
+
+
 def _repo_map_entry_for(repo_root: str) -> Optional[dict]:
     """Return the repo map's entry for ``repo_root``, or ``None`` (#979).
 
@@ -551,7 +574,9 @@ def _repo_map_entry_for(repo_root: str) -> Optional[dict]:
     * an entry whose ``repo_path`` resolves (``realpath``) to ``repo_root`` — the
       unambiguous identification, and the only one that works for the several
       projects that live under a shared checkout path family such as
-      ``/mnt/extra-addons``;
+      ``/mnt/extra-addons``. When the checkout has an ``origin`` remote, the
+      entry must also name it (``remote`` equal to ``owner/repo``, or, with no
+      ``remote``, ``repo`` equal to the repo name); no origin is trusted (#1245);
     * otherwise an entry whose ``repo`` (a bare folder name) equals
       ``basename(repo_root)``, **and only when exactly one entry does**. Two
       projects on one repo — an ongoing engagement and its version upgrade —
@@ -560,6 +585,9 @@ def _repo_map_entry_for(repo_root: str) -> Optional[dict]:
     """
     entries = [e for e in _repo_map_projects().values() if isinstance(e, dict)]
     by_path = [e for e in entries if _repo_map_entry_path(e) == repo_root]
+    origin = _origin_slug(repo_root) if by_path else None
+    if origin:
+        by_path = [e for e in by_path if _entry_matches_origin(e, origin)]
     if by_path:
         return by_path[0]
     basename = os.path.basename(repo_root)

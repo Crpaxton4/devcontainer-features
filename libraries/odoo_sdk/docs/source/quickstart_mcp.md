@@ -109,7 +109,10 @@ Forking from the remote default there puts both the work and its PR on the
 wrong base, and the differing trees make the auto-stash collide (#979).
 
 The map is read-only here and matched to the checkout by `repo_path`
-(`realpath`-compared), else by `repo` against the git root's folder name when
+(`realpath`-compared). When the checkout has an `origin` remote, a `repo_path`
+match counts only if the entry's `remote` equals `origin` as `owner/repo` (or,
+with no `remote`, the entry's `repo` equals the origin's repo name). Failing
+that, by `repo` against the git root's folder name when
 exactly one entry claims it — two projects on one repo, say an engagement and
 its version upgrade, disagree about `default_branch`, so a bare name match is
 not enough to decide. A missing, unreadable or malformed map is simply "no
