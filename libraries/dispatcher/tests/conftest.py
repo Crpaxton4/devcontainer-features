@@ -27,7 +27,10 @@ def settings(tmp_path):
         ) / "devcontainer.json"
         config.parent.mkdir(parents=True)
         config.write_text("{}", "utf-8")
+    repo_map = tmp_path / "repo-map.json"
+    repo_map.write_text('{"projects": {}}', "utf-8")
     return Settings(
+        repo_map_file=repo_map,
         repos_dir=tmp_path / "repos",
         config_root=tmp_path / "central",
         owner="acme",

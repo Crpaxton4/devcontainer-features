@@ -5,6 +5,7 @@ import json
 import multiprocessing
 
 import pytest
+from odoo_sdk.state.dispatch_state import odoo_dev_dir
 from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
 
 from dispatcher import deadletter, gates, queue, schema
@@ -213,6 +214,9 @@ def test_settings_from_env(tmp_path):
     assert str(s.workspace("qoc")) == "/r/qoc"
     assert s.config("qoc") == config / "devcontainer.json"
     assert Settings.from_env({**env, "DISPATCH_REPO_OWNER": ""}).owner == ""
+    assert s.repo_map_file == odoo_dev_dir() / "repo-map.json"
+    custom = {**env, "DISPATCH_REPO_MAP_FILE": "/m/map.json"}
+    assert str(Settings.from_env(custom).repo_map_file) == "/m/map.json"
     assert s.invariants_file == str(prompts / "unattended-invariants.md")
     assert s.invariants == "default text"
     assert (s.min_available_gb, s.deadline_s, s.entry) == (

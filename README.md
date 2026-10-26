@@ -284,6 +284,7 @@ Settings come from the environment ([`settings.py`](libraries/dispatcher/src/dis
 | `DISPATCH_REPO_OWNER` | unset; a tie-breaker when one repo name exists under two owners |
 | `DISPATCH_ENTRY` | `/odoo-dev:implement`; a job's own `entry` overrides it |
 | `DISPATCH_ARTIFACTS_DIR` | `~/.config/odoo-dev/dispatch/artifacts` (must sit under `~/.config/odoo-dev`) |
+| `DISPATCH_REPO_MAP_FILE` | `~/.config/odoo-dev/repo-map.json`; copied into each job's bundle so `ODOO_DEV_STATE_DIR` resolves the project |
 | `DISPATCH_ADMIT_TIMEOUT_S` | `1800` |
 | `DISPATCH_ADDITIONAL_FEATURES` | the `personal-features` Feature |
 | `MIN_FREE_GB`, `DISPATCH_SETTLE_S`, `DISPATCH_POLL_S`, `DISPATCH_DEADLINE_S` | `6`, `5`, `15`, `21600` |
