@@ -14,7 +14,9 @@
 # literal path. This file is that script, and it is also the single definition of
 # the rules the rest of the plugin has to agree on:
 #
-#   * the state dir is $ODOO_DEV_STATE_DIR, defaulting to $HOME/.local/share/odoo-dev.
+#   * the state dir is $ODOO_DEV_STATE_DIR. When that is unset, a host uses
+#     $HOME/.config/odoo-dev if that directory exists (the Feature bind source, so host
+#     and containers read one repo map), else $HOME/.local/share/odoo-dev.
 #     In a devcontainer that variable is normally set for you: the personal-features
 #     Feature bind-mounts host ~/.config/odoo-dev at /usr/local/share/odoo-dev and
 #     points ODOO_DEV_STATE_DIR at it through containerEnv (#884), so state outlives
@@ -53,7 +55,13 @@
 
 # The state dir, with the documented default. No trailing slash, ever.
 odoo_dev_state_dir() {
-  printf '%s' "${ODOO_DEV_STATE_DIR:-${HOME:-}/.local/share/odoo-dev}"
+  if [ -n "${ODOO_DEV_STATE_DIR:-}" ]; then
+    printf '%s' "$ODOO_DEV_STATE_DIR"
+  elif [ -d "${HOME:-}/.config/odoo-dev" ]; then
+    printf '%s' "${HOME:-}/.config/odoo-dev"
+  else
+    printf '%s' "${HOME:-}/.local/share/odoo-dev"
+  fi
 }
 
 # The disambiguation rule for every <artifacts_dir> argument in this plugin: a bare

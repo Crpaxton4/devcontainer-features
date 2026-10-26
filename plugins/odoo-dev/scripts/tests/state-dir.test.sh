@@ -205,6 +205,24 @@ tmps="$(find "$A" -maxdepth 1 -name '.task.*.tmp' | wc -l | tr -d ' ')"
 [ "$tmps" = 0 ] && ok "artifact.sh: atomic writes leave no temp file" \
   || bad "artifact.sh: $tmps temp file(s) left in $A"
 
+# Host default (#1251): with ODOO_DEV_STATE_DIR unset, ~/.config/odoo-dev wins when it
+# exists (the directory the containers bind), else ~/.local/share/odoo-dev.
+FAKE_HOME="$(mktemp -d)"
+got="$(env -u ODOO_DEV_STATE_DIR HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
+[ "$got" = "$FAKE_HOME/.local/share/odoo-dev" ] \
+  && ok "state-dir.sh: unset env, no ~/.config/odoo-dev -> old default" \
+  || bad "state-dir.sh: old default — got [$got]"
+mkdir -p "$FAKE_HOME/.config/odoo-dev"
+got="$(env -u ODOO_DEV_STATE_DIR HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
+[ "$got" = "$FAKE_HOME/.config/odoo-dev" ] \
+  && ok "state-dir.sh: unset env, ~/.config/odoo-dev present -> it wins" \
+  || bad "state-dir.sh: host default — got [$got]"
+got="$(env ODOO_DEV_STATE_DIR="$STATE" HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
+[ "$got" = "$STATE" ] \
+  && ok "state-dir.sh: ODOO_DEV_STATE_DIR beats ~/.config/odoo-dev" \
+  || bad "state-dir.sh: explicit env — got [$got]"
+rm -rf "$FAKE_HOME"
+
 rm -rf "$STATE"
 
 echo
