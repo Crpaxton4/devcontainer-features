@@ -42,7 +42,11 @@ from .reap import host_worktree
 #: name, so only ``<task>\n\n<brief>`` is counted.
 MAX_PROMPT_BYTES = 120_000
 
+#: A task id is one plain name. It never starts with a dot.
 _COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+#: A repo name may start with one dot (``.github``). A letter or digit must
+#: follow, so ``.`` and ``..`` never match.
+_REPO_NAME = re.compile(r"^\.?[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class SubmissionError(ValueError):
@@ -70,6 +74,11 @@ def _check_entry(where: str, entry: object) -> str:
     return entry
 
 
+def _check_name(where: str, name: str, value: object, pattern: re.Pattern) -> None:
+    if not isinstance(value, str) or not pattern.match(value):
+        raise SubmissionError(f"{where}: {name} must be one plain name, got {value!r}")
+
+
 def _element(index: int, raw: object) -> JobSpec:
     where = f"element {index}"
     if not isinstance(raw, dict):
@@ -78,11 +87,8 @@ def _element(index: int, raw: object) -> JobSpec:
     if unknown:
         raise SubmissionError(f"{where} has unknown keys: {sorted(unknown)}")
     repo, task, path = raw.get("repo"), raw.get("task"), raw.get("brief")
-    for name, value in (("repo", repo), ("task", task)):
-        if not isinstance(value, str) or not _COMPONENT.match(value):
-            raise SubmissionError(
-                f"{where}: {name} must be one plain name, got {value!r}"
-            )
+    _check_name(where, "repo", repo, _REPO_NAME)
+    _check_name(where, "task", task, _COMPONENT)
     if not isinstance(path, str) or not path:
         raise SubmissionError(f"{where}: brief must be a path")
     rnd = raw.get("round", 1)
