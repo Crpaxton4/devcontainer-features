@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.1.0...personal-features-v8.2.0) (2026-10-26)
+
+
+### Features
+
+* **dispatcher:** accept an optional per-job entry so one batch can mix implement and upgrade-implement tasks ([#1265](https://github.com/Crpaxton4/devcontainer-features/issues/1265)) ([8235482](https://github.com/Crpaxton4/devcontainer-features/commit/8235482d2a0bfbcb6e24f77aabcc304d7072f171))
+
+
+### Bug Fixes
+
+* **dispatcher:** resolve the devcontainer config per repo instead of one DISPATCH_REPO_OWNER per process ([#1261](https://github.com/Crpaxton4/devcontainer-features/issues/1261)) ([60027d1](https://github.com/Crpaxton4/devcontainer-features/commit/60027d11164639446b4284c8e84fdf10933463f8))
+* **dispatcher:** seed each job bundle with the shared repo-map.json so task-env preflight resolves the project ([#1267](https://github.com/Crpaxton4/devcontainer-features/issues/1267)) ([cd331f7](https://github.com/Crpaxton4/devcontainer-features/commit/cd331f7161b4e939e5ec80d2d88024c2bdade672))
+* **odoo-sdk:** match the repo-map entry by origin remote as well as repo_path in start_task ([#1259](https://github.com/Crpaxton4/devcontainer-features/issues/1259)) ([8f1b8c1](https://github.com/Crpaxton4/devcontainer-features/commit/8f1b8c18fb9f5a2e1550796ea253e71c574b15b8)), closes [#1245](https://github.com/Crpaxton4/devcontainer-features/issues/1245)
+
 ## [8.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.0.0...personal-features-v8.1.0) (2026-10-21)
 
 

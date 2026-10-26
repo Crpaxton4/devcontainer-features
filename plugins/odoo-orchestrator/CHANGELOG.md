@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.1.0...odoo-orchestrator-plugin-v1.2.0) (2026-10-26)
+
+
+### Features
+
+* **dispatcher:** accept an optional per-job entry so one batch can mix implement and upgrade-implement tasks ([#1265](https://github.com/Crpaxton4/devcontainer-features/issues/1265)) ([8235482](https://github.com/Crpaxton4/devcontainer-features/commit/8235482d2a0bfbcb6e24f77aabcc304d7072f171))
+
+
+### Bug Fixes
+
+* **dispatcher:** accept a repo name with a leading dot such as .github, never . or .. ([#1266](https://github.com/Crpaxton4/devcontainer-features/issues/1266)) ([fd63f7c](https://github.com/Crpaxton4/devcontainer-features/commit/fd63f7c3c331daba3f42202f69f3b6254352b838))
+* **dispatcher:** refuse a submit whose repo has no checkout or no central config ([44003b5](https://github.com/Crpaxton4/devcontainer-features/commit/44003b50ced5593133315c61fd95d3873560cc56))
+* **dispatcher:** refuse a submit whose repo has no checkout or no central config, so nothing dead-letters later ([#1264](https://github.com/Crpaxton4/devcontainer-features/issues/1264)) ([44003b5](https://github.com/Crpaxton4/devcontainer-features/commit/44003b50ced5593133315c61fd95d3873560cc56))
+* **odoo-orchestrator:** create the state and orchestrator-home bind sources before compose ([a03219d](https://github.com/Crpaxton4/devcontainer-features/commit/a03219d8fd607983a0797bc2861fbf091fdc12bd))
+* **odoo-orchestrator:** create the state and orchestrator-home bind sources before compose so docker does not make them root-owned ([#1257](https://github.com/Crpaxton4/devcontainer-features/issues/1257)) ([a03219d](https://github.com/Crpaxton4/devcontainer-features/commit/a03219d8fd607983a0797bc2861fbf091fdc12bd))
+
 ## [1.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.0.0...odoo-orchestrator-plugin-v1.1.0) (2026-10-21)
 
 

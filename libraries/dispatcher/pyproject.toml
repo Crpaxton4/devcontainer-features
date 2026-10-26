@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dispatcher"
-version = "1.1.0"
+version = "1.2.0"
 description = "Host-side task dispatcher: one Odoo task per devcontainer session, recorded as a run."
 requires-python = ">=3.11"
 dependencies = [
