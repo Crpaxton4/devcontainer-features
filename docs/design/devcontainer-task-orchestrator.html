@@ -610,7 +610,7 @@
         <text x="837" y="662" text-anchor="middle" font-family="var(--mono)" font-size="9" fill="var(--muted)">never unattended</text>
       </svg>
     </div>
-    <figcaption><b>Figure 2.</b> Three zones and a mounted column. The host plans and dispatches. The container builds. The column is what the personal-features Feature mounts into every container, and the bundle root rides on one of those mounts, so the dispatcher adds no mount of its own. The one contract line between the two sides is <code>ODOO_UNATTENDED=1</code>: the dispatcher sets it, and the guard hook engages on it in every fork.</figcaption>
+    <figcaption><b>Figure 2.</b> Three zones and a mounted column. The host plans and queues, and the compose dispatcher service dispatches. The container builds. The column is what the personal-features Feature mounts into every container, and the bundle root rides on one of those mounts, so the dispatcher adds no mount of its own. The one contract line between the two sides is <code>ODOO_UNATTENDED=1</code>: the dispatcher sets it, and the guard hook engages on it in every fork.</figcaption>
   </figure>
 
   <div class="tbl">
@@ -1577,7 +1577,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
       <tr><td class="nowrap"><code>…/state/artifacts.py</code></td><td>The bundle layout and the collector that never raises.</td></tr>
       <tr><td class="nowrap"><code>…/state/run_sessions.py</code></td><td>Runs as a sessionization source, merged by time with the event windows.</td></tr>
       <tr><td class="nowrap"><code>plugins/odoo-orchestrator/commands/run.md</code></td><td>The command of section 3: queue with task ids, read finished batches without them.</td></tr>
-      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/dispatch.sh</code></td><td>The one call site of the dispatcher: a front end for <code>docker compose</code> that submits, starts <code>dispatcher</code> and <code>webui</code>, creates the usage-log and artifacts directories, and passes the exit codes through, plus 127.</td></tr>
+      <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/dispatch.sh</code></td><td>The one call site of the dispatcher: a front end for <code>docker compose</code> that submits, starts <code>dispatcher</code> and <code>webui</code>, creates the four bind sources (the usage-log, the artifacts, the state dir and the orchestrator home) before compose, and passes the exit codes through, plus 127.</td></tr>
       <tr><td class="nowrap"><code>plugins/odoo-orchestrator/scripts/orchestrator.sh</code></td><td>The front end for the one-off <code>orchestrator</code> service that runs <code>orchestrator.py</code>.</td></tr>
       <tr><td class="nowrap"><code>stack/compose.yaml</code>, <code>stack/Dockerfile</code></td><td>The compose project <code>odoo-orchestrator</code>: the <code>dispatcher</code>, <code>orchestrator</code> and <code>webui</code> services, with identical host and container paths.</td></tr>
       <tr><td class="nowrap"><code>libraries/webui/</code></td><td>The read-only web interface of jobs, the queue, the friction log and usage.</td></tr>
@@ -1830,7 +1830,7 @@ CREATE TRIGGER runs_no_update BEFORE UPDATE ON runs
       <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_HOME</code></td><td><code>dispatch.sh</code>, <code>orchestrator.py</code></td><td><code>~/.local/state/odoo-orchestrator</code></td><td>Briefs, approvals, handled dead letters, result files, the friction log.</td></tr>
       <tr><td class="nowrap"><code>ODOO_ORCHESTRATOR_SCRIPTS_DIR</code></td><td><code>orchestrator.sh</code></td><td>the plugin's installed scripts, else <code>${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts</code></td><td>The scripts directory bound read-only into the <code>orchestrator</code> service.</td></tr>
       <tr><td class="nowrap"><code>USERPROFILE</code></td><td>dispatcher</td><td>optional, pass-through</td><td>Passed into the <code>dispatcher</code> only when set.</td></tr>
-      <tr><td class="nowrap"><code>USAGE_LOG_DIR</code></td><td>dispatcher, <code>webui</code></td><td><code>${HOME}/.local/state/usage-log</code>, fixed</td><td>The usage-log stores. <code>dispatch.sh</code> creates the directory before compose. The devcontainers write to it, and so does the dispatcher's job line.</td></tr>
+      <tr><td class="nowrap"><code>USAGE_LOG_DIR</code></td><td>dispatcher, <code>webui</code></td><td><code>${HOME}/.local/state/usage-log</code>, fixed</td><td>The usage-log stores. <code>dispatch.sh</code> creates the directory, with the state dir, the artifacts and the orchestrator home, before compose. The devcontainers write to it, and so does the dispatcher's job line.</td></tr>
       <tr><td class="nowrap"><code>COMPOSE_PROJECT_NAME</code></td><td>never</td><td>removed</td><td>Removed from every child's environment. Section 12.</td></tr>
       <tr><td class="nowrap"><code>ODOO_DEV_STATE_DIR</code></td><td>in the container</td><td>set per job</td><td>The job's bundle directory in container terms. The stage scripts write <code>tasks/&lt;task&gt;/task.json</code> under it.</td></tr>
       <tr><td class="nowrap"><code>ODOO_JOB_ID</code></td><td>in the container</td><td>set per job</td><td>The job's id. Set in every dispatched session.</td></tr>
