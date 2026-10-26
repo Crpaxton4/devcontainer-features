@@ -225,6 +225,36 @@ def test_an_unresolvable_config_dead_letters_one_job_and_the_run_continues(world
     )
 
 
+def test_the_shared_repo_map_is_copied_into_the_bundle_before_up(world):
+    engine, shell, _ = world
+    engine.settings.repo_map_file.write_text('{"projects": {"p": 1}}', "utf-8")
+    (job,) = _submit(engine, ("qoc", "20"))
+    seeded = {}
+
+    def spy(*args, **kwargs):
+        seeded["text"] = (bundle_dir(job.job_id) / "repo-map.json").read_text("utf-8")
+        return real(*args, **kwargs)
+
+    real = lifecycle.up
+    lifecycle.up = spy
+    try:
+        assert JobRun(engine, engine.jobs.get(job.job_id)).admit() is True
+    finally:
+        lifecycle.up = real
+    assert seeded["text"] == '{"projects": {"p": 1}}'
+
+
+def test_a_missing_repo_map_dead_letters_one_job_and_the_run_continues(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "21"))
+    missing = engine.settings.repo_map_file
+    missing.unlink()
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert str(missing) in dead.detail and "repo map" in dead.detail
+
+
 PG = ["docker", "exec", "c", "pg_isready"]
 ODOO = ["docker", "exec", "c", "odoo", "--version"]
 
@@ -763,6 +793,9 @@ def _env(monkeypatch, tmp_path):
     config = tmp_path / "c" / "github.com" / "any-owner" / "qoc" / ".devcontainer"
     config.mkdir(parents=True, exist_ok=True)
     (config / "devcontainer.json").write_text("{}", "utf-8")
+    repo_map = tmp_path / "repo-map.json"
+    repo_map.write_text('{"projects": {}}', "utf-8")
+    monkeypatch.setenv("DISPATCH_REPO_MAP_FILE", str(repo_map))
 
 
 def test_cli_refuses_when_another_dispatcher_holds_the_lock(state_root, capsys):

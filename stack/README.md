@@ -26,7 +26,8 @@ Optional, passed through when set: `DISPATCH_CLAUDE_HOME` (default `~/.claude`),
 `~/.local/state/odoo-orchestrator`), `MIN_FREE_GB`, `DISPATCH_SETTLE_S`,
 `DISPATCH_POLL_S`, `DISPATCH_DEADLINE_S`, `DISPATCH_ADMIT_TIMEOUT_S`,
 `DISPATCH_INVARIANTS_FILE`, `DISPATCH_ENTRY`, `DISPATCH_ADDITIONAL_FEATURES`,
-`DISPATCH_ARTIFACTS_DIR`, `USERPROFILE`, `DISPATCH_REPO_OWNER`. The dispatcher
+`DISPATCH_ARTIFACTS_DIR`, `USERPROFILE`, `DISPATCH_REPO_OWNER`,
+`DISPATCH_REPO_MAP_FILE` (default `~/.config/odoo-dev/repo-map.json`, copied into each job's bundle). The dispatcher
 finds the config owner of each repo under `DISPATCH_CONFIG_ROOT/github.com/*/<repo>`;
 `DISPATCH_REPO_OWNER` only picks one when a repo name exists under two owners.
 
