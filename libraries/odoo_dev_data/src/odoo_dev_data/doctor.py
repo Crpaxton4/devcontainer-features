@@ -20,6 +20,7 @@ from .config import LocalConfig
 from .db.engine import schema_version
 from .db.migrations import MIGRATIONS
 from .home import ENV_HOME, Paths, paths, resolve_home
+from .migrate import migrate, render_migrate
 
 OK, NOTE, FAIL = "ok", "note", "fail"
 
@@ -239,7 +240,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     cmd = sub.add_parser("doctor", help="read-only report of the state root")
     cmd.add_argument("--json", action="store_true", help="print JSON")
+    cmd.add_argument("--migrate", action="store_true", help="import every legacy store")
+    cmd.add_argument(
+        "--dry-run", action="store_true", help="with --migrate: change nothing"
+    )
     args = parser.parse_args(argv)
+    if args.dry_run and not args.migrate:
+        parser.error("--dry-run needs --migrate")
+    if args.migrate:
+        result = migrate(dry_run=args.dry_run)
+        print(
+            json.dumps(result.to_dict(), indent=2)
+            if args.json
+            else render_migrate(result)
+        )
+        return 0 if result.ok else 1
     report = doctor()
     print(json.dumps(report.to_dict(), indent=2) if args.json else render(report))
     return 0 if report.ok else 1
