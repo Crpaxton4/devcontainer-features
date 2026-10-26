@@ -821,5 +821,14 @@ check_absent "upgrade-branch-removed" 'upgrade_branch' "$(map get Up)"
 map add "Up2" up2 --no-repo-check --default-branch main --upgrade-branch 18.0=18-up --upgrade-branch 19.0=19-up >/dev/null 2>&1; check "add-upgrade-branch" 0 $?
 check_contains "add-upgrade-branch-written" '"18.0":"18-up","19.0":"19-up"' "$(map get Up2)"
 
+# Host default (#1251): no REPO_MAP_FILE, no ODOO_DEV_STATE_DIR — project-resolve.sh
+# reads the map at $HOME/.config/odoo-dev, the one the containers bind.
+HOST_HOME="$TMP/host-home"
+mkdir -p "$HOST_HOME/.config/odoo-dev"
+seed && cp "$TMP/map.json" "$HOST_HOME/.config/odoo-dev/repo-map.json"
+out="$(env -u REPO_MAP_FILE -u ODOO_DEV_STATE_DIR -u CLAUDE_PLUGIN_ROOT HOME="$HOST_HOME" REPOS_DIR="" bash "$SCRIPTS/project-resolve.sh" Alpha 2>&1)"
+check "host-default-map-resolves" 0 $?
+check_contains "host-default-map-project" '"alpha"' "$out"
+
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

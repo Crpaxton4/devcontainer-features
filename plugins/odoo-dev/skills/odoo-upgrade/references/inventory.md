@@ -12,7 +12,7 @@ Standard deliverable = ONE xlsx, the sheets of the table below, no legend/README
 
 One enrichment pass writes one `enrich_<module>.json` per module, then one merge-free build script reads them. Under about 40 modules there is no fan-out: one agent writes every record. Above that, see [Enrichment: the fan-out rule](#phase-1--enrichment-fan-out).
 
-The record holds, per module: purpose, area, complexity, 3rd-party, action, `<major> native?` and the OCA alternative (method: the `odoo-dev:odoo-prior-art` skill) — one pass, one writer per cell.
+The record holds, per module: purpose, area, complexity, 3rd-party, action, the evidence rows `<major> native?` is derived from, and the OCA alternative (method: the `odoo-dev:odoo-prior-art` skill) — one pass, one writer per cell.
 
 ## Generate seed
 
@@ -83,7 +83,7 @@ Per-row `classification` is a proposal to sort a review, not a verdict:
 | 11 | Complexity/risk | script → AI | Seed: LoC bands (<300 Low, <1500 Medium, else High) +1 level if custom JS or QWeb reports present. AI adjust after reading code (heavy ORM overrides, SQL, controllers ⇒ raise) |
 | 12 | Upgrade action | script seeds → `build_workbook.py` proposes → AI overrides with a rationale → human confirms | Script seed `drop?` when manifest say `installable: False` (already dead — confirm, drop); the seed wins over the proposal. Otherwise computed by `build_workbook.py` (`propose_action`, table in its docstring) from native × OCA × 3rd party: `keep` (port in-house code), `replace` (download vendor/OCA target release), `merge-into-standard` (target version cover natively), or `review` when the evidence cannot decide. An empty `upgrade_action` in the record takes the proposal. A different value is an override and needs a non-empty `upgrade_action_rationale`. `review` in the output is a problem line, so `problems: 0` means decided. `drop` (dead/unused/superseded) is always an override. Final call = human planning review |
 | 13 | Functional area | AI | ONE bucket from a closed 11-value list (`AREA_ORDER` in `build_workbook.py`): Sales, CRM, Purchasing, Inventory, Manufacturing, Accounting, HR, Website/Portal, Reporting, Integration, Technical/Base. Mapping rule: one bucket per module — the area its primary user sit in. Compound values (`Sales / Reporting`), and anything off the list (`Pricing`, `Data migration`, `Integration (WMS)`), are rejected: pick the nearest bucket, secondary areas go in Purpose text. Drive per-department test planning |
-| 14 | `<major> native?` | AI (phase 1) | The **verdict** and nothing else: exactly one of `yes`, `yes/partial`, `partial`, `no`. Does target-version standard (community **or** enterprise) do some/all of this? A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
+| 14 | `<major> native?` | `build_workbook.py`, derived from the `native_evidence` rows (no worker types it) | The **verdict** and nothing else: `yes`, `partial` or `no` (`yes/partial` is only a legacy cell value, never derived). Does target-version standard (community **or** enterprise) do some/all of this? The rule (`derive_native`): a capability is covered when at least one of its rows has `hits > 0`; every capability covered ⇒ `yes`; some but not all ⇒ `partial`; none ⇒ `no`. A closed vocabulary because the sheet is FILTERED on this column — "everything target native already covers" is the single biggest cost lever in the exercise, and a substring match on a sentence is not a filter. The explanation goes in column 15, never here; `build_workbook.py` reject anything else |
 | 15 | `<major> native notes` | AI (phase 1) | How and where the target covers it — the sentence that used to be crammed into column 14. ≤ 300 chars. Empty is allowed when the verdict is `no` and there is nothing to add; the receipt (paths grepped) still go to the Evidence sheet |
 | 16 | `OCA <major> alternative` | AI (`oca_alt` in the same enrich record) | `none`, `already OCA: <repo>/<module>` when the module IS the OCA module carried locally (derived — `oca_check.py` write the literal into `oca_index.json`; `none` would be false and naming the upstream alone read as an alternative to itself), or `<repo>/<module> (full\|partial)`, `; `-separated, ≤ 3 candidates. Source rule: when `<workdir>/oca_index.json` lists the module, the index literal wins over the record's `oca_alt` and the evidence cell reads `oca_check.py <series> index`; otherwise the record supplies the cell. Method: the `odoo-dev:odoo-prior-art` skill |
 
@@ -96,7 +96,7 @@ Verdict columns are short by design, so every one of them need a receipt. One ro
 | Column | From | Content |
 |--------|------|---------|
 | Module | — | technical name |
-| native? evidence | phase 1 | ≤ 300 chars, enforced by `build_workbook.py`. Path(s) in target tree, or `none found after grepping X, Y`. MUST cite ≥ 1 path or the grep terms tried |
+| native? evidence | phase 1 (`native_evidence`) | The evidence rows rendered as `capability: grep -> path (hits)`, joined by `; `. ≤ 600 chars, enforced by `build_workbook.py` (more room than the 300 of the other cells: one row carries four parts). A row with no hit shows `-` for the path and `(0)` |
 | OCA alternative evidence | phase 1 (`oca_alt_evidence`) | ≤ 300 chars, enforced by `build_workbook.py`. Catalog rows / READMEs checked, why fit or not. `none` ⇒ name keywords grepped |
 | Vendor release | phase 1 | `yes` / `no` / `unknown` / `n/a` (n/a = in-house) — is there a target-series build of the vendor app? |
 | Complexity rationale | phase 1 | ≤ 120 chars |
@@ -142,19 +142,19 @@ Give every agent: module dir, seed CSV path, and the source trees —
 
 Confirm paths exist before briefing — `odoo-dev:odoo-devcontainer` skill list what's checked out.
 
-JSON keys, exactly (`ENRICH_KEYS` in `build_workbook.py`; none optional, `""` is a legal value): `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native`, `native_notes`, `native_evidence`, `notes`, `oca_alt`, `oca_alt_evidence`. Semantics = columns 3/8/9/11/12/13/14/15/16 above + evidence sheet. `native` carry the verdict alone, `native_notes` the explanation; `oca_alt` is `none` when nothing fits.
+JSON keys, exactly (`ENRICH_KEYS` in `build_workbook.py`; none optional, `""` is a legal value): `module`, `purpose`, `functional_area`, `complexity`, `complexity_rationale`, `third_party`, `third_party_link`, `vendor_release`, `upgrade_action`, `upgrade_action_rationale`, `native_notes`, `native_evidence`, `notes`, `oca_alt`, `oca_alt_evidence` (15 keys). Semantics = columns 3/8/9/11/12/13/15/16 above + evidence sheet. There is no `native` key: the build derives column 14. `native_evidence` is a non-empty JSON array of evidence rows, one per grep: `{"capability": "<what was looked for>", "grep": "<term or pattern>", "path": "<file found, or empty>", "hits": <int >= 0>}`. A capability is one customization from step 2; give it one row per grep tried. The derivation rule: every capability has a row with `hits > 0` ⇒ `yes`; some ⇒ `partial`; none ⇒ `no`. An empty array, or a row that is not an object with exactly those four keys (`hits` an int >= 0), is a problem line and the record is rejected. `native_notes` carries the explanation; `oca_alt` is `none` when nothing fits.
 
 Method each agent follow (order matters — verdict come from greps, not memory):
 
 1. Read `__manifest__.py`, `models/*.py`, `views/*.xml`, `wizard/`, `report/`, `static/src/**`, `security/`, `data/`.
 2. Write the concrete customization list: fields added, methods overridden, views changed, buttons, crons, reports, controllers.
 3. Per item grep target community + enterprise for equivalent — field names, model names, xmlids, and functional keywords. Check the target model AND neighbours (`sale`, `sale_stock`, `stock`, `mrp`, `mrp_workorder`, `account`, `delivery_*`, `payment_*`, `mail`, `web`, `base`), plus `res.config.settings` and list/toolbar features. Also check whether target REMOVED the thing the module extends (dropped payment provider, deleted field) — that's a finding, say so in evidence.
-4. Decide `native` + evidence. `no` is a fine answer; unsupported `yes/partial` is not.
+4. Record evidence rows (`native_evidence`) for every item from step 2, one row per grep, with the real hit count. Do not decide `native`: the build derives it from the rows. `no` is a fine outcome; a row without a grep behind it is not.
 5. Decide remaining fields. Vendor-product check on `author`/`website` every row: free LGPL vendor modules carry no `price` key and masquerade as in-house code — vendor lineage means `replace` via vendor release, not in-house port. In-house OPL-1 ⇒ `third_party = No`.
 
-`native` / `native_notes` pairs: `yes/partial` + `mail composer has cc/bcc fields`; `yes/partial` + `stock.picking has carried date_done since 17.0`; `no` + `19 dropped the payment provider this module extends`.
+`native_notes` examples (the verdict is derived, the note says how): `mail composer has cc/bcc fields`; `stock.picking has carried date_done since 17.0`; `19 dropped the payment provider this module extends`.
 
-A `native` cell carrying the old one-string shape (`yes/partial: <text>`) is a problem line, not split. Fix the record.
+A `native` key in the record is an extra key, a problem line. Fix the record.
 
 Agent reply back = one line per module `<module> | <native verdict> | <upgrade_action>` — enough to spot a worker that skipped the greps without reading its JSON.
 
@@ -167,7 +167,7 @@ python3 <base directory>/scripts/build_workbook.py --workdir <ARTIFACTS>/invento
 
 Combine seed CSV + one `enrich_<module>.json` per module into the workbook (+ CSV siblings): Module Inventory and Inventory Evidence, plus Studio Inventory when `studio.csv` is present. `scripts/inventory.sh` writes `inventory.csv`, `oca_index.json` and `studio.csv` into `<ARTIFACTS>/inventory/`. When `oca_index.json` is in the work dir, the build reads `OCA <major> alternative` from it for each module it lists (see column 16); `oca_alt` and `oca_alt_evidence` stay required in the record, `""` is legal.
 
-Script print a validation report and exit 1 when non-empty: a module with no `enrich_<module>.json`, a record that is not one object, names another module, or has a missing or extra key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native?` verdict outside its four literals, over-long notes and evidence cells (a legacy `yes/partial: <text>` cell is a `native?` verdict outside its four literals, not split). The loader rejects a malformed record; fix the record.
+Script print a validation report and exit 1 when non-empty: a module with no `enrich_<module>.json`, a record that is not one object, names another module, or has a missing or extra key, a `TODO-AI` sentinel left in any column the workbook present as an answer (counted per column as `sentinels: {column: count}` — `problems: 0` therefore mean answered, not merely well-formed), a `native_evidence` that is not a non-empty array of well-formed rows, over-long notes and evidence cells. The loader rejects a malformed record; fix the record.
 
 ## Interpretation for estimating
 

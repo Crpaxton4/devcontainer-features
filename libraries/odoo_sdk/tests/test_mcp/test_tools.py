@@ -43,6 +43,7 @@ def _make_sp(
     remote_branches=(),
     origin_head="",
     toplevel="",
+    origin="",
 ) -> MagicMock:
     """Fake ``subprocess`` for the git helpers in ``start_task``.
 
@@ -64,6 +65,8 @@ def _make_sp(
         (``_repo_root``). Empty — the default — makes that probe *fail*, so the
         odoo-dev repo-map lookup (#979) is skipped entirely and no test picks up
         the developer's ambient ``repo-map.json``. Pass a path to exercise it.
+    :param origin: URL returned by ``git -C <root> remote get-url origin``
+        (#1245); empty means no ``origin`` remote (the probe fails).
     """
     sp = MagicMock()
     state = {"stash_entries": 0}
@@ -72,7 +75,10 @@ def _make_sp(
         r = MagicMock()
         r.returncode = 0
         r.stdout = ""
-        if args[1] == "symbolic-ref":
+        if "get-url" in args:
+            r.stdout = f"{origin}\n" if origin else ""
+            r.returncode = 0 if origin else 2
+        elif args[1] == "symbolic-ref":
             r.stdout = f"{origin_head}\n" if origin_head else ""
             r.returncode = 0 if origin_head else 1
         elif args[1] == "rev-parse" and "--show-toplevel" in args:
@@ -1036,6 +1042,50 @@ class TestRepoMapDefaultBranch(unittest.TestCase):
             Upgrade={"repo": "Fulton", "default_branch": "28224#19-upgrade"},
         )
         self.assertIsNone(self._lookup(root, map_text=text))
+
+    def test_shared_repo_path_picks_the_entry_whose_remote_is_the_origin(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            First={"repo_path": root, "remote": "acme/other", "default_branch": "no"},
+            Second={"repo_path": root, "remote": "acme/app", "default_branch": "yes"},
+        )
+        with patch(_SP_PATCH, _make_sp(origin="git@github.com:acme/app.git")):
+            self.assertEqual(self._lookup(root, map_text=text), "yes")
+
+    def test_path_match_with_a_foreign_remote_is_ignored(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            Foreign={"repo_path": root, "remote": "acme/other", "default_branch": "no"}
+        )
+        with patch(_SP_PATCH, _make_sp(origin="https://github.com/acme/app")):
+            self.assertIsNone(self._lookup(root, map_text=text))
+
+    def test_foreign_path_match_falls_through_to_the_unique_name_match(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            Foreign={"repo_path": root, "remote": "acme/other", "default_branch": "no"},
+            Named={"repo": os.path.basename(root), "default_branch": "yes"},
+        )
+        with patch(_SP_PATCH, _make_sp(origin="https://github.com/acme/app.git")):
+            self.assertEqual(self._lookup(root, map_text=text), "yes")
+
+    def test_entry_without_remote_matches_on_the_origin_repo_name(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            Wrong={"repo": "other", "repo_path": root, "default_branch": "no"},
+            Right={"repo": "app", "repo_path": root, "default_branch": "yes"},
+        )
+        with patch(_SP_PATCH, _make_sp(origin="https://github.com/acme/app.git")):
+            self.assertEqual(self._lookup(root, map_text=text), "yes")
+
+    def test_no_origin_keeps_the_first_repo_path_match(self):
+        root = os.path.realpath(self._tmp.name)
+        text = self._map(
+            First={"repo_path": root, "remote": "acme/other", "default_branch": "one"},
+            Second={"repo_path": root, "remote": "acme/app", "default_branch": "two"},
+        )
+        with patch(_SP_PATCH, _make_sp(origin="")):
+            self.assertEqual(self._lookup(root, map_text=text), "one")
 
     def test_unmapped_repo_resolves_to_nothing(self):
         text = self._map(QOC={"repo": "qocinnovations", "default_branch": "UAT"})

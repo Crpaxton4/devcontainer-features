@@ -220,7 +220,7 @@ if (cmd === "drop") {
   if (ORDER.indexOf(rec.status) > ORDER.indexOf("dropped") && rec.status !== "failed") fail(`cannot drop ${m} from ${rec.status}`, 4);
   const wt = u.inputs.worktree;
   const enrichPath = `${arts}/inventory/enrich_${m}.json`;
-  const ENRICH_KEYS = ["module","purpose","third_party","third_party_link","complexity","upgrade_action","functional_area","native","native_notes","native_evidence","vendor_release","complexity_rationale","upgrade_action_rationale","notes","oca_alt","oca_alt_evidence"];
+  const ENRICH_KEYS = ["module","purpose","third_party","third_party_link","complexity","upgrade_action","functional_area","native_notes","native_evidence","vendor_release","complexity_rationale","upgrade_action_rationale","notes","oca_alt","oca_alt_evidence"];
   const oldEnrich = existsSync(enrichPath) ? readFileSync(enrichPath, "utf8") : null;
   const oldRec = JSON.stringify(rec), oldAssumptions = JSON.stringify(u.assumptions);
   const undo = (step, detail) => {
@@ -235,7 +235,7 @@ if (cmd === "drop") {
   // (1) the record first
   const step = o["config-step"];
   let enrich;
-  try { enrich = oldEnrich === null ? Object.fromEntries(ENRICH_KEYS.map(k => [k, ""])) : JSON.parse(oldEnrich); }
+  try { enrich = oldEnrich === null ? Object.fromEntries(ENRICH_KEYS.map(k => [k, k === "native_evidence" ? [] : ""])) : JSON.parse(oldEnrich); }
   catch { fail(`${enrichPath} is not JSON`, 4); }
   enrich.module = m;
   enrich.upgrade_action = "merge-into-standard";
