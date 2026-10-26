@@ -29,7 +29,7 @@ webui = ["templates/*.html", "static/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
-pythonpath = ["src", "tests"]
+pythonpath = ["tests"]
 
 [tool.black]
 target-version = ["py311"]

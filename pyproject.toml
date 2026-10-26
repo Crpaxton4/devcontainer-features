@@ -1,0 +1,46 @@
+# Workspace root (ADR-006). No [project] table: this file only declares the uv
+# workspace, the shared dev tool set and the cross-package import rules.
+# Each member under libraries/ and apps/ carries its own [project].
+
+[tool.uv.workspace]
+members = ["libraries/*", "apps/*"]
+
+[tool.uv.sources]
+odoo_sdk = { workspace = true }
+dispatcher = { workspace = true }
+usage_log = { workspace = true }
+webui = { workspace = true }
+
+[tool.uv]
+# toon-format ships its encoder only as a pre-release (odoo_sdk dependency).
+prerelease = "allow"
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "complexipy>=6.0.1",
+    "coverage[toml]>=7.15.2",
+    "hypothesis>=6.157.1",
+    "import-linter>=2.3",
+    "pytest>=9.1.1",
+]
+
+[tool.black]
+target-version = ["py310"]
+
+# Cross-package rules (ADR-006): apps import logic only; data imports nothing
+# above it. Members join root_packages as they are created.
+[tool.importlinter]
+root_packages = ["odoo_sdk", "dispatcher", "usage_log", "webui"]
+
+[[tool.importlinter.contracts]]
+name = "ADR-006: apps never import a data package"
+type = "forbidden"
+source_modules = ["webui"]
+forbidden_modules = ["usage_log"]
+
+[[tool.importlinter.contracts]]
+name = "ADR-006: data never imports logic or apps"
+type = "forbidden"
+source_modules = ["usage_log"]
+forbidden_modules = ["odoo_sdk", "dispatcher", "webui"]

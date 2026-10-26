@@ -62,12 +62,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
-# Prepend *this* checkout's src/ to sys.path, ahead of the editable install in
-# the shared .venv whose .pth file names one absolute path into the main
-# checkout. Without it, pytest launched from a worktree imports main's
-# odoo_sdk and validates source the run never touched (#860). Paths are
-# resolved against rootdir, which is this file's directory.
-pythonpath = ["src"]
 
 [tool.black]
 target-version = ["py310"]
@@ -338,16 +332,3 @@ ignore_imports = [
     "odoo_sdk.settings -> odoo_sdk.state.config",
 ]
 unmatched_ignore_imports_alerting = "error"
-
-[tool.uv]
-# ``toon-format`` currently ships its first functional encoder only as a
-# pre-release, so allow uv to resolve pre-release versions.
-prerelease = "allow"
-
-[tool.uv.workspace]
-members = [
-    ".",
-]
-
-[tool.uv.sources]
-odoo_sdk = { workspace = true }
