@@ -35,9 +35,8 @@ from typing import Any, Callable, Optional
 from odoo_dev_core.billing.logged import logged_hours_by_task_day
 from odoo_dev_core import CommandService
 from odoo_dev_core.billing.upload import range_bounds
-from odoo_dev_core.ports import RpcClient, SettingsView, StateStore
-from odoo_client.errors import OdooError
-from odoo_dev_data.events import EventRecord
+from odoo_dev_core.ports import EventRecord, RpcClient, SettingsView, StateStore
+from odoo_dev_core.telemetry import BOUNDARY_ERRORS
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
@@ -222,7 +221,7 @@ def confirm_upload(state: AppState, deps: TuiDeps, confirmed: bool) -> AppState:
         return replace(state, pending_upload=False, status="upload cancelled")
     try:
         result = _run_upload(deps, state.sessions, state.window)
-    except OdooError as exc:
+    except BOUNDARY_ERRORS as exc:
         return replace(state, pending_upload=False, status=f"upload failed: {exc}")
     return replace(state, pending_upload=False, status=_upload_status(result))
 

@@ -2,7 +2,7 @@
 
 The TUI's export shortcuts share ONE source of truth with billing (issue #404):
 the final time entries and the Odoo CSV are projected from the SQL-derived read
-path (:meth:`~odoo_dev_data.events.EventStore.derive_sessions_overlapping`) — the
+path (``EventStore.derive_sessions_overlapping``) — the
 same query the live timeline and the upload path bill from — so an exported figure
 is exactly what an upload would write. Each derived :class:`SessionWindow` is
 billed through the shared :func:`~odoo_dev_core.sessionization.billable_seconds` policy
@@ -35,7 +35,7 @@ from odoo_dev_core.sessionization import (
 )
 from odoo_dev_core.sessionization.jobs import derive_windows
 from odoo_dev_core.sessionization.persistence import load_raw_events
-from odoo_dev_data.events import SessionWindow
+from odoo_dev_core.ports import SessionWindow
 
 
 def config_for_window(

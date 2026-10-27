@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
-from odoo_dev_data.events import EventRecord
+from odoo_dev_core.ports import EventRecord
 
 STRONG = "STRONG"
 WEAK = "WEAK"
@@ -45,7 +45,7 @@ _CITATIONS = (
     (re.compile(r"^odoo:mail:(?P<n>.+)$"), "chatter msg {n}"),
 )
 
-# The key the #378a producer (:mod:`odoo_dev_data.adapters`) stamps when
+# The key the #378a producer (the ingestion adapters) stamps when
 # a task id was extracted but did not validate against ``project.task``. A truthy
 # value (a non-empty list) marks the session weak; its absence is simply no
 # signal (an un-flagged event is not evidence of validity either way).
