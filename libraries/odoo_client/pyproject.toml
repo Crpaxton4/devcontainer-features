@@ -5,20 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "odoo_client"
 version = "8.2.0"
-description = "Python SDK for Odoo XML-RPC access and command dispatch helpers."
+description = "Python SDK for Odoo XML-RPC and JSON-2 access: transport, client, records, query, fields and env."
 requires-python = ">=3.10"
-dependencies = [
-    "odoo_dev_data",
-    "fastmcp>=4,<5",
-    "markdown-it-py>=3.0.0",
-    "markitdown[docx,pdf]>=0.1.6",
-    "pydantic>=2.13.4",
-    "textual>=1.0.0",
-    "toon-format>=0.9.0b1",
-    # `tomllib` is stdlib only from 3.11; on the 3.10 floor (odoo:17) the
-    # API-compatible backport supplies the TOML config parser instead.
-    "tomli>=2.0.1; python_version < '3.11'",
-]
+dependencies = []
 
 [dependency-groups]
 static-analysis = [
@@ -48,11 +37,6 @@ dev = [
     {include-group = "test"},
     "pytest>=9.1.1",
 ]
-
-[project.scripts]
-odoo-mcp = "odoo_client.mcp.__main__:main"
-odoo-tui = "odoo_client.tui.__main__:main"
-odoo-sdk = "odoo_client.cli.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -103,184 +87,26 @@ exclude = ["tests", "examples", "build", "htmlcov"]
 output-format = ["json"]
 output = "reports/complexipy/"
 
-# ── ADR-005 layering contracts ──────────────────────────────────────────────
-# Layer model (docs/source/design/architecture/ADR-005): surface (cli, mcp,
-# tui) / core (commands, billing, sessionization, and —
-# promoted by #718 — the records/query domain types) / data (transport,
-# client, fields, env, services) + shared kernel (_utils,
-# errors, settings). Every ignore entry below is either marked "permanent"
-# (a named ADR-005 exception) or carries the issue that deletes it;
-# `unmatched_ignore_imports_alerting = "error"` means the lists can only
-# shrink. Adding a NEW entry requires an ADR-005 amendment in the same PR.
+# Layering of the client's own packages. `errors` is the kernel facade that
+# re-exports the transport error taxonomy, so it stays out of the layer map.
 [tool.importlinter]
 root_packages = ["odoo_client"]
 
 [[tool.importlinter.contracts]]
-name = "ADR-005 rule 1: surfaces are mutually independent (cli / mcp / tui)"
-type = "independence"
-modules = [
-    "odoo_client.cli",
-    "odoo_client.mcp",
-    "odoo_client.tui",
-]
-
-# The root façade (odoo_client/__init__.py) is deliberately outside the source
-# list: its PEP 562 lazy `OdooMCPServer` export is the one sanctioned
-# below-surface reference to a surface module (ADR-005 named exception).
-[[tool.importlinter.contracts]]
-name = "ADR-005 rule 2: nothing below a surface imports a surface"
-type = "forbidden"
-source_modules = [
-    # core (records/query promoted by #718: the recordset-first domain
-    # types the public API is built around)
-    "odoo_client.commands",
-    "odoo_client.billing",
-    "odoo_client.sessionization",
-    "odoo_client.records",
-    "odoo_client.query",
-    # data
-    "odoo_client.transport",
-    "odoo_client.client",
-    "odoo_client.fields",
-    "odoo_client.env",
-    "odoo_client.services",
-    # shared kernel
-    "odoo_client._utils",
-    "odoo_client.errors",
-    "odoo_client.settings",
-]
-forbidden_modules = [
-    "odoo_client.cli",
-    "odoo_client.mcp",
-    "odoo_client.tui",
-]
-
-[[tool.importlinter.contracts]]
-name = "ADR-005 rule 3: data does not import core"
-type = "forbidden"
-source_modules = [
-    "odoo_client.transport",
-    "odoo_client.client",
-    "odoo_client.fields",
-    "odoo_client.env",
-    "odoo_client.services",
-]
-forbidden_modules = [
-    "odoo_client.commands",
-    "odoo_client.billing",
-    "odoo_client.sessionization",
-    # promoted core domain types (#718)
-    "odoo_client.records",
-    "odoo_client.query",
-]
-ignore_imports = [
-    # permanent (ADR-005 amendment, #718): the client is the adapter behind
-    # the RpcClient port, and OdooRecordset is that port's return type — an
-    # adapter naming the domain type it produces is the sanctioned
-    # hexagonal direction.
-    "odoo_client.client.client -> odoo_client.records.recordset",
-]
-unmatched_ignore_imports_alerting = "error"
-
-# Direct-only on purpose (`allow_indirect_imports`): surface -> core -> data
-# chains are exactly the sanctioned path.
-[[tool.importlinter.contracts]]
-name = "ADR-005 rule 4: surfaces reach data only through core"
-type = "forbidden"
-source_modules = [
-    "odoo_client.cli",
-    "odoo_client.mcp",
-    "odoo_client.tui",
-]
-forbidden_modules = [
-    "odoo_client.transport",
-    "odoo_client.client",
-    "odoo_client.fields",
-    "odoo_client.env",
-    "odoo_client.services",
-]
-allow_indirect_imports = true
-# The baseline-debt register is EMPTY (#718): the last nine surface->data
-# entries were retired by the StateStore/SettingsView ports, the promoted
-# tracker vocabulary (tracking.models), the errors kernel façade, and the
-# core doors tracking.events / billing.logged. (#716 retired the three
-# per-entrypoint composition-root entries via odoo_client.bootstrap; #717
-# retired cli.__main__ -> adapters; #713 retired mcp.server -> state.models.)
-# A new entry requires an ADR-005 amendment in the same PR.
-
-# odoo_client.bootstrap is the single composition root (#716): the ONE module
-# allowed to touch every layer, which it is granted by being outside every
-# source list in rules 1-4. The price of that freedom is this rule: nothing
-# imports the composition root except the three surface entrypoints (tests
-# live outside the package and are unconstrained).
-[[tool.importlinter.contracts]]
-name = "ADR-005 rule 5: only the entrypoints import the composition root"
-type = "forbidden"
-source_modules = [
-    # surfaces
-    "odoo_client.cli",
-    "odoo_client.mcp",
-    "odoo_client.tui",
-    # core
-    "odoo_client.commands",
-    "odoo_client.billing",
-    "odoo_client.sessionization",
-    # data
-    "odoo_client.transport",
-    "odoo_client.client",
-    "odoo_client.records",
-    "odoo_client.query",
-    "odoo_client.fields",
-    "odoo_client.env",
-    "odoo_client.services",
-    # shared kernel
-    "odoo_client._utils",
-    "odoo_client.errors",
-    "odoo_client.settings",
-]
-forbidden_modules = [
-    "odoo_client.bootstrap",
-]
-ignore_imports = [
-    # permanent: composition root — the three entrypoints are the only
-    # sanctioned importers of the assembled object graph.
-    "odoo_client.cli.__main__ -> odoo_client.bootstrap",
-    "odoo_client.mcp.__main__ -> odoo_client.bootstrap",
-    "odoo_client.tui.__main__ -> odoo_client.bootstrap",
-]
-unmatched_ignore_imports_alerting = "error"
-
-# The #718 endgame: EXHAUSTIVE layer membership. Every direct child of
-# odoo_client must claim a layer here (or be a named exhaustive_ignores
-# exception), so an unclassified new module fails CI instead of silently
-# escaping rules 1-5. Within a layer, ":"-separated siblings may import each
-# other (surface independence stays rule 1's job, so its one named exception
-# is not restated here); a lower layer importing a higher one is a contract
-# break. The one upward exception duplicates rule 3's permanent entry and
-# is an ADR-005 named exception.
-[[tool.importlinter.contracts]]
-name = "ADR-005 rule 6: exhaustive layer map — unclassified new modules fail CI"
+name = "odoo_client: exhaustive layer map"
 type = "layers"
 containers = ["odoo_client"]
 exhaustive = true
-exhaustive_ignores = [
-    # composition root: the ONE module allowed to name every layer (#716);
-    # rule 5 already guards who may import it.
-    "bootstrap",
-    # shared-kernel façade re-exporting the data/core error taxonomies by
-    # design (ADR-005): listing it in the kernel layer would only restate
-    # its job as ignores.
-    "errors",
-]
+exhaustive_ignores = ["errors"]
 layers = [
-    "cli : mcp : tui",
-    "commands : billing : sessionization : records : query",
-    "transport : client : fields : env : services",
-    "_utils : settings : _text",
+    "records : query",
+    "client",
+    "transport : fields : env",
+    "_utils : settings",
 ]
 ignore_imports = [
-    # permanent (ADR-005 amendment, #718): adapter names the domain type its
-    # port returns.
+    # permanent: the client is the adapter behind the RpcClient port, and
+    # OdooRecordset is that port's return type.
     "odoo_client.client.client -> odoo_client.records.recordset",
 ]
 unmatched_ignore_imports_alerting = "error"

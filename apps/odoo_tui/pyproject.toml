@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo_tui"
+version = "0.1.0"
+description = "Terminal UI app of the odoo-dev suite: the odoo-tui entry point."
+requires-python = ">=3.10"
+dependencies = [
+    "odoo_dev_core",
+    "textual>=1.0.0",
+]
+
+[project.scripts]
+odoo-tui = "odoo_tui.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.black]
+target-version = ["py310"]
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15

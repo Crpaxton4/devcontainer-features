@@ -343,7 +343,7 @@ _RAW_COMMAND_NORMALIZERS: Final[dict[int, Any]] = {
 _DEPRECATED_COMMAND_ALIAS = (
     "odoo_client.fields.commands.Command is deprecated and will be removed; import "
     "X2ManyCommand instead (renamed to disambiguate it from the command-registry "
-    "base odoo_client.commands.command.Command)."
+    "base odoo_dev_core.commands.command.Command)."
 )
 
 
@@ -351,7 +351,7 @@ def __getattr__(name: str) -> Any:
     """Resolve the deprecated ``Command`` alias to :class:`X2ManyCommand` (PEP 562).
 
     The builder was renamed to :class:`X2ManyCommand` to avoid colliding with the
-    command-registry base :class:`odoo_client.commands.command.Command`; the old name
+    command-registry base :class:`odoo_dev_core.commands.command.Command`; the old name
     still resolves but emits a :class:`DeprecationWarning`.
 
     :raises AttributeError: If ``name`` is not a module attribute.

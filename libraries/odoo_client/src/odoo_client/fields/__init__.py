@@ -29,7 +29,7 @@ def __getattr__(name: str) -> Any:
 
     The x2many write-command builder was renamed to :class:`X2ManyCommand` to stop
     its public name colliding with the command-registry base
-    :class:`odoo_client.commands.command.Command`. The old ``Command`` name still
+    :class:`odoo_dev_core.commands.command.Command`. The old ``Command`` name still
     resolves here for backward compatibility, but emits a
     :class:`DeprecationWarning`.
 

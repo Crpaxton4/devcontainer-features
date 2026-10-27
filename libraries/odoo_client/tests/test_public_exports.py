@@ -7,16 +7,12 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
         package = importlib.import_module("odoo_client")
 
         expected_exports = {
-            "commands",
-            "Command",
             "OdooClient",
             "OdooConnectionSettings",
             "OdooExecutor",
             "OdooJson2Executor",
-            "OdooMCPServer",
             "OdooRecordset",
             "OdooRpcExecutor",
-            "Registry",
             "Domain",
             "DomainExpression",
             "Record",
@@ -40,20 +36,18 @@ class TestRecordsetFirstPublicExports(unittest.TestCase):
         self.assertTrue(hasattr(package, "DomainExpression"))
         self.assertTrue(hasattr(package, "OdooRecordset"))
 
-    def test_top_level_all_promotes_command_and_json2_executor(self) -> None:
+    def test_top_level_all_promotes_json2_executor(self) -> None:
         package = importlib.import_module("odoo_client")
 
-        self.assertIn("Command", package.__all__)
         self.assertIn("OdooJson2Executor", package.__all__)
-        self.assertTrue(hasattr(package, "Command"))
         self.assertTrue(hasattr(package, "OdooJson2Executor"))
 
-    def test_mcp_server_resolves_lazily_through_module_getattr(self) -> None:
+    def test_logic_and_app_symbols_are_not_exported(self) -> None:
         package = importlib.import_module("odoo_client")
-        from odoo_client.mcp.server import OdooMCPServer
 
-        self.assertIn("OdooMCPServer", package.__all__)
-        self.assertIs(package.OdooMCPServer, OdooMCPServer)
+        for name in ("commands", "Command", "Registry", "OdooMCPServer"):
+            self.assertNotIn(name, package.__all__)
+            self.assertFalse(hasattr(package, name))
 
     def test_unknown_attribute_raises_attribute_error(self) -> None:
         package = importlib.import_module("odoo_client")

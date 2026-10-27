@@ -1,0 +1,149 @@
+"""Built-in command that reconciles local event state against external history.
+
+``resync`` is a manual reconciliation utility (no background trigger): it runs
+the idempotent :mod:`odoo_dev_data.adapters` pullers and writes any
+missing events. Since #652 the surface is directory-agnostic: the ``git``
+puller recursively discovers every checkout under the current directory and the
+``github`` puller searches the authenticated account across all repos, so the
+same activity is captured wherever resync runs. Sessions are derived from
+events at query time, so a resync needs only to write events — the next
+``query_sessions`` call surfaces the reconciled sessions automatically, with no
+ingest step.
+
+The ``git`` and ``github`` pullers are purely local/CLI-backed and never touch
+Odoo; only the ``odoo`` puller uses the injected client. Each puller is
+idempotent. A source whose tooling is entirely unusable reports an ``error``
+entry (callers decide whether that is fatal — the CLI exits nonzero); a
+genuinely optional absence still reports ``skipped``.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any, Callable, Mapping, Optional
+
+# The pullers live in :mod:`odoo_dev_data.adapters`. Each sits behind a
+# core-owned Protocol in :mod:`odoo_dev_core.commands.protocols`
+# (``GitGateway`` / ``IssueTracker``; the chatter
+# puller rides the existing ``RpcClient`` port), and this module's
+# :data:`_SYNC_DISPATCH` is core's default binding of those ports to the
+# concrete adapters. The names stay module globals so the frozen tests'
+# ``commands.builtin.resync.sync_*`` patch points keep intercepting.
+from odoo_dev_data.adapters import sync_git_log, sync_github, sync_odoo_chatter
+
+from ..command import Command
+from ._registration import builtin_command
+
+# The pullers a resync can run, keyed by source in a stable order; each value
+# runs that source's sync against the command's shared dependencies plus the
+# optional explicit date range, which every puller honors.
+_SYNC_DISPATCH = {
+    "git": lambda cmd, start, end: sync_git_log(
+        cmd.state, cmd.config, cmd._client, start=start, end=end
+    ),
+    "github": lambda cmd, start, end: sync_github(
+        cmd.state, cmd.config, cmd._client, start=start, end=end
+    ),
+    "odoo": lambda cmd, start, end: sync_odoo_chatter(
+        cmd._client, cmd.state, cmd.config, start=start, end=end
+    ),
+}
+_DEFAULT_SOURCES = ("git", "github", "odoo")
+_ALL_SOURCES = tuple(_SYNC_DISPATCH)
+
+
+def _parse_sources(sources: str) -> list[str]:
+    """Return the requested pullers from a comma-separated ``sources`` string.
+
+    Order follows :data:`_ALL_SOURCES` (not the input order) so the result is
+    stable, and unknown tokens are ignored. An empty/blank string selects the
+    DEFAULT sources (git/github/odoo).
+    """
+    requested = {token.strip() for token in sources.split(",") if token.strip()}
+    if not requested:
+        return list(_DEFAULT_SOURCES)
+    return [source for source in _ALL_SOURCES if source in requested]
+
+
+def _parse_range_date(value: Optional[str]) -> Optional[date]:
+    """Parse one optional inclusive ISO date bound.
+
+    :raises ValueError: When ``value`` is present but not a valid ISO date, so a
+        malformed range fails loudly before any puller runs.
+    """
+    return date.fromisoformat(value) if value else None
+
+
+@builtin_command
+class ResyncCommand(Command):
+    """Reconcile local event state against git, GitHub, and Odoo chatter.
+
+    Manual-only, directory-agnostic (#652), and idempotent. Runs the requested
+    pullers over the resolved date window and returns a per-source summary
+    dict; a second run inserts nothing because every event is deduped on its
+    stable external id.
+    """
+
+    def __init__(
+        self,
+        client,
+        state=None,
+        config=None,
+        *,
+        pullers: Optional[Mapping[str, Callable[..., dict[str, Any]]]] = None,
+    ):
+        """Bind the shared peers, optionally overriding the puller table.
+
+        ``pullers`` (keyword-only, #717) maps source name to a
+        ``(command, start, end) -> summary`` callable and defaults to
+        :data:`_SYNC_DISPATCH`. It exists for exactly one caller: the CLI's
+        ``resync`` subcommand dispatches THIS command as the single writer of
+        the resync workflow while keeping its historical local-first
+        per-source semantics (no Odoo client for git/github, a lazily-guarded
+        odoo puller) — and its patchable module-level puller names — by
+        injecting its own table. The registry always builds the default.
+        """
+        super().__init__(client, state=state, config=config)
+        self._pullers: Mapping[str, Callable[..., dict[str, Any]]] = (
+            dict(pullers) if pullers is not None else _SYNC_DISPATCH
+        )
+
+    _name = "resync"
+    _description = (
+        "Reconcile local event state against external history: pull authored "
+        "git commits from every repository under the current directory (any "
+        "depth), the authenticated user's account-wide GitHub PRs, reviews, and "
+        "comments, and their Odoo task chatter into the local events table. "
+        "Manual and idempotent (dedup by external id). A source whose tooling "
+        "is entirely unusable reports an 'error' entry; an optional absent "
+        "source reports 'skipped'. Optional inclusive 'start'/'end' ISO dates "
+        "bound the capture window (default: the rolling "
+        "resync_window_days). Pass a comma-separated 'sources' subset of "
+        "git,github,odoo (default: git,github,odoo)."
+    )
+
+    def execute(
+        self,
+        sources: str = "git,github,odoo",
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Run the requested pullers and return a per-source summary.
+
+        :param sources: Comma-separated subset of ``git,github,odoo``;
+            blank or unrecognized-only input runs the default git/github/odoo.
+        :param start: Optional inclusive ISO start date (``YYYY-MM-DD``) for
+            the capture window.
+        :param end: Optional inclusive ISO end date, same scope as ``start``.
+        :return: Mapping of each run source to its puller summary dict
+            (``{"inserted": n, ...}``, ``{"skipped": reason}``, or
+            ``{"error": reason}``).
+        :raises ValueError: When ``start`` or ``end`` is not a valid ISO date.
+        """
+        start_date = _parse_range_date(start)
+        end_date = _parse_range_date(end)
+        selected = _parse_sources(sources)
+        return {
+            source: self._pullers[source](self, start_date, end_date)
+            for source in selected
+        }

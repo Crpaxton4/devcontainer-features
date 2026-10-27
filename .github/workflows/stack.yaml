@@ -9,12 +9,14 @@ on:
     paths:
       - 'stack/**'
       - 'libraries/**'
+      - 'apps/**'
       - 'plugins/odoo-orchestrator/scripts/dispatch.sh'
       - '.github/workflows/stack.yaml'
   pull_request:
     paths:
       - 'stack/**'
       - 'libraries/**'
+      - 'apps/**'
       - 'plugins/odoo-orchestrator/scripts/dispatch.sh'
       - '.github/workflows/stack.yaml'
   workflow_dispatch:

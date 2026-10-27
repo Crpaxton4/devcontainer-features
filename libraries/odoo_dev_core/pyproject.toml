@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo_dev_core"
+version = "0.1.0"
+description = "Logic layer of the odoo-dev suite: the command registry and builtins, billing and sessionization."
+requires-python = ">=3.10"
+dependencies = [
+    "odoo_client",
+    "odoo_dev_data",
+    "markitdown[docx,pdf]>=0.1.6",
+    "markdown-it-py>=3.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.black]
+target-version = ["py310"]
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15

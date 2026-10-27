@@ -15,7 +15,7 @@ class OdooClient:
     Owns shared environment state and cached model proxies while hiding the
     executor and transport details. Pass an ``executor`` directly (e.g. a test
     double), or resolved ``settings`` from which the transport executor is built.
-    :func:`odoo_client.bootstrap.bootstrap` is the one place that loads the
+    The ``bootstrap`` module of each app is the one place that loads the
     configuration and builds the production client.
     """
 
@@ -122,7 +122,7 @@ class OdooClient:
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate one model method call through the shared guarded seam.
 
-        Satisfies the :class:`~odoo_client.commands.protocols.RpcClient` contract by
+        Satisfies the :class:`~odoo_dev_core.commands.protocols.RpcClient` contract by
         composition and routes through :func:`guarded_execute` — the single
         chokepoint that applies the ``forbid_unlink`` guard exactly once.
         """
