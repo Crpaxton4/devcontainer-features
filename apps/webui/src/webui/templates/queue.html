@@ -1,20 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Queue{% endblock %}
 {% block content %}
-<h1>Orchestrator queue</h1>
-<p>Briefs and approved tasks whose task has no job row yet.</p>
-{% if tasks %}
+<h1>Queue</h1>
+<h2>PENDING and RUNNING jobs</h2>
+{% if entries %}
 <table>
-  <tr><th>task</th><th>drafts</th><th>approved brief</th></tr>
-  {% for t in tasks %}
+  <tr><th>job</th><th>task</th><th>state</th><th>started</th></tr>
+  {% for e in entries %}
   <tr>
-    <td>{{ t.task }}</td>
-    <td>{{ t.drafts|join(", ") }}</td>
-    <td>{{ t.approved or "not approved" }}</td>
+    <td><a href="{{ url_for('jobs.detail', job_id=e.job_id) }}">{{ e.job_id }}</a></td>
+    <td>{{ e.task }}</td><td>{{ e.state }}</td><td>{{ e.started_at or "" }}</td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
-<p class="empty">No brief or approved task is waiting.</p>
+<p class="empty">No job is waiting or running.</p>
+{% endif %}
+
+<h2>Batches waiting for their report</h2>
+{% if batches %}
+<ul>{% for b in batches %}<li>{{ b }}</li>{% endfor %}</ul>
+{% else %}
+<p class="empty">No batch is waiting for its report.</p>
 {% endif %}
 {% endblock %}

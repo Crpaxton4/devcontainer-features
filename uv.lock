@@ -5381,6 +5381,7 @@ name = "webui"
 version = "0.1.0"
 source = { editable = "apps/webui" }
 dependencies = [
+    { name = "dispatcher" },
     { name = "flask" },
 ]
 
@@ -5393,7 +5394,10 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "flask", specifier = ">=3.1" }]
+requires-dist = [
+    { name = "dispatcher", editable = "libraries/dispatcher" },
+    { name = "flask", specifier = ">=3.1" },
+]
 
 [package.metadata.requires-dev]
 static-analysis = [{ name = "black", specifier = ">=26.5.1" }]

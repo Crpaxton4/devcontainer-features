@@ -1,27 +1,12 @@
 <div id="usage-table">
-{% if not items %}
-  <p class="empty">{% if not have_store %}No usage store found.{% else %}No rows.{% endif %}</p>
-{% elif table in ("counts", "context") %}
+{% if items %}
   <table>
-    <tr><th>{{ args.group }}</th><th>count</th><th>last used</th>{% for k in sum_keys %}<th>sum {{ k }}</th>{% endfor %}</tr>
+    <tr><th>kind</th><th>name</th><th>count</th><th>last used</th></tr>
     {% for r in items %}
-    <tr><td>{{ r.group if r.group is not none else "(none)" }}</td><td>{{ r.count }}</td><td>{{ r.last }}</td>
-      {% for k in sum_keys %}<td>{{ r.sums.get(k, "") }}</td>{% endfor %}</tr>
-    {% endfor %}
-  </table>
-{% elif table == "last" %}
-  <table>
-    <tr><th>kind</th><th>name</th><th>last used</th><th>count</th></tr>
-    {% for r in items %}
-    <tr><td>{{ r.kind }}</td><td>{{ r.name }}</td><td>{{ r.last }}</td><td>{{ r.n }}</td></tr>
+    <tr><td>{{ r.kind }}</td><td>{{ r.name }}</td><td>{{ r.count }}</td><td>{{ r.last_used }}</td></tr>
     {% endfor %}
   </table>
 {% else %}
-  <table>
-    <tr><th>kind</th><th>name</th><th>declared</th><th>last used</th><th>count</th></tr>
-    {% for r in items %}
-    <tr><td>{{ r.kind }}</td><td>{{ r.name }}</td><td>{{ r.declared_at }}</td><td>{{ r.last or "never" }}</td><td>{{ r.n }}</td></tr>
-    {% endfor %}
-  </table>
+  <p class="empty">No usage line in the last {{ days }} days.</p>
 {% endif %}
 </div>

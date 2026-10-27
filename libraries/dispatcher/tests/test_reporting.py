@@ -161,6 +161,33 @@ def test_usage_summary_groups_by_kind_and_name(home):
     assert len(reporting.usage_summary(home, since_days=365)) == 3
 
 
+def test_usage_summary_filters_by_kind(home):
+    home.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    _usage_db(home, [(stamp, "job", "a"), (stamp, "skill", "b")])
+    assert [i["name"] for i in reporting.usage_summary(home, kind="skill")] == ["b"]
+
+
+def test_state_home_follows_the_environment(tmp_path):
+    assert reporting.state_home({"ODOO_DEV_HOME": str(tmp_path)}) == tmp_path
+
+
+def test_friction_lists_every_task_newest_first(home):
+    from odoo_dev_data import tasks
+
+    entry = {"tool": "t", "expected": "e", "observed": "o", "did": "d"}
+    tasks.append_friction(7, [entry], job_id="j7", home=home)
+    tasks.append_friction(3, [entry], job_id="j3", home=home)
+    (home / "tasks" / "notes").mkdir()  # not a task directory
+    found = reporting.friction(home)
+    assert [e["task_id"] for e in found] == ["3", "7"]
+    assert set(found[0]) == {
+        "task_id", "job_id", "recorded_at", "tool", "expected", "observed", "did",
+    }  # fmt: skip
+    assert found[0]["job_id"] == "j3" and found[0]["tool"] == "t"
+    assert reporting.friction(home / "absent") == []
+
+
 def test_usage_summary_without_a_file_is_empty(home):
     assert reporting.usage_summary(home) == []
     home.mkdir(parents=True, exist_ok=True)
