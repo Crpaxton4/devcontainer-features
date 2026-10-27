@@ -79,7 +79,7 @@ def test_a_good_run_completes_and_is_recorded(world):
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")  # idle: stopped
 
 
-def test_the_job_row_window_starts_at_admission_and_ends_at_the_session_end(world):
+def test_the_job_row_window_starts_at_the_spawn_and_ends_at_the_session_end(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     base = now_us()
@@ -98,7 +98,8 @@ def test_the_job_row_window_starts_at_admission_and_ends_at_the_session_end(worl
     (job,) = _submit(engine, ("qoc", "10"))
     engine.run()
     row = engine.jobs.get(job.job_id)
-    assert row.started_us < base + 60 * 1_000_000  # the admit time; never moved
+    assert row.started_us == base + up_s * 1_000_000  # the spawn clock, not admission
+    assert row.ended_us - row.started_us == session_s * 1_000_000  # no cold start
     assert row.ended_us == base + (up_s + session_s) * 1_000_000
 
 

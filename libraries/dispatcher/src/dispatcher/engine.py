@@ -278,6 +278,10 @@ class JobRun:
             self.ending = Ending(127, stderr_tail=str(exc))
             return
         self.spawned_us = self.engine.clock()
+        try:  # the billable window starts at the spawn, not at admission
+            self.engine.jobs.mark_spawned(job.job_id, now_us=self.spawned_us)
+        except InvalidJobTransitionError as exc:
+            self.engine.log(f"spawn time of {job.job_id} not recorded: {exc}")
         if self.engine._stop.is_set():  # a stop arrived while spawning
             self.terminate()
         tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
