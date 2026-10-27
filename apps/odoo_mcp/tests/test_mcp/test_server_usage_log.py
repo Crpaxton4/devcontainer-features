@@ -11,8 +11,8 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_client import _utils
-from odoo_dev_core.commands import Registry
 from odoo_mcp.server import OdooMCPServer
+from ..support import make_service
 
 
 def _tools(explicit_tools):
@@ -20,9 +20,7 @@ def _tools(explicit_tools):
     added = []
     mock_mcp.add_tool.side_effect = added.append
     with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(
-            Registry(Mock(), state_client=Mock()), explicit_tools=explicit_tools
-        )
+        OdooMCPServer(make_service(Mock(), Mock()), explicit_tools=explicit_tools)
     return {t.name: t for t in added}
 
 

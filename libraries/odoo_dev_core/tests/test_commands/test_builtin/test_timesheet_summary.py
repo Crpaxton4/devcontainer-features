@@ -8,25 +8,30 @@ server wrapper with ``ODOO_TOON_OUTPUT=1``.
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS, TimesheetSummaryCommand
-from odoo_dev_core.commands.command_registry import Registry
+from odoo_dev_core import default_registry
 from odoo_mcp import server
 from odoo_mcp.server import OdooMCPServer
 from odoo_mcp.tools.atomic import make_timesheet_summary_tool
+from ...fakes import service
 
-_HELPER = "odoo_dev_core.commands.builtin.timesheet_summary.timesheet_summary"
+_HELPER = "odoo_dev_core.builtins.timesheet_summary.timesheet_summary"
 
 
 class TestTimesheetSummaryCommand(unittest.TestCase):
     def test_registered_under_its_name(self):
-        self.assertIs(BUILTIN_COMMANDS["timesheet_summary"], TimesheetSummaryCommand)
-        self.assertEqual(TimesheetSummaryCommand(MagicMock()).name, "timesheet_summary")
+        self.assertEqual(
+            default_registry().get("timesheet_summary").id, "timesheet_summary"
+        )
 
     def test_delegates_to_helper_with_all_arguments(self):
         client = MagicMock()
         with patch(_HELPER, return_value={"ok": True}) as helper:
-            result = TimesheetSummaryCommand(client).execute(
-                "2026-07-01", "2026-07-31", group_by="client", only_mine=False
+            result = service(client=client).execute(
+                "timesheet_summary",
+                start_date="2026-07-01",
+                end_date="2026-07-31",
+                group_by="client",
+                only_mine=False,
             )
         helper.assert_called_once_with(
             client,
@@ -40,7 +45,9 @@ class TestTimesheetSummaryCommand(unittest.TestCase):
     def test_defaults_group_by_project_and_only_mine_true(self):
         client = MagicMock()
         with patch(_HELPER, return_value={}) as helper:
-            TimesheetSummaryCommand(client).execute("2026-07-01", "2026-07-31")
+            service(client=client).execute(
+                "timesheet_summary", start_date="2026-07-01", end_date="2026-07-31"
+            )
         self.assertEqual(
             helper.call_args.kwargs, {"group_by": "project", "only_mine": True}
         )
@@ -48,23 +55,13 @@ class TestTimesheetSummaryCommand(unittest.TestCase):
 
 def _server_tool(name, tool_fn):
     """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    registry = Registry(Mock())
+    command_service = service(client=Mock())
     mock_mcp = MagicMock()
     added = []
     mock_mcp.add_tool.side_effect = added.append
     with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(registry, explicit_tools={name: tool_fn})
+        OdooMCPServer(command_service, explicit_tools={name: tool_fn})
     return added[0]
-
-
-class _CommandRegistry:
-    """Registry stub returning a real command wired to ``client``."""
-
-    def __init__(self, client):
-        self._client = client
-
-    def __getitem__(self, name):
-        return TimesheetSummaryCommand(self._client)
 
 
 class TestTimesheetSummaryToonOutput(unittest.TestCase):
@@ -73,7 +70,7 @@ class TestTimesheetSummaryToonOutput(unittest.TestCase):
         client.execute.return_value = [
             {"project_id": [5, "Accounting"], "unit_amount": 8.0, "__count": 3},
         ]
-        tool_fn = make_timesheet_summary_tool(_CommandRegistry(client))
+        tool_fn = make_timesheet_summary_tool(service(client=client))
         tool = _server_tool("timesheet_summary", tool_fn)
         with patch.dict("os.environ", {server.TOON_OUTPUT_ENV: "1"}):
             result = tool.fn("2026-07-01", "2026-07-31", "project", False)

@@ -7,39 +7,65 @@ the per-source output lines, and the error exit contract.
 """
 
 import unittest
+from contextlib import ExitStack
 from datetime import date
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import odoo_cli.__main__ as cli
+
+from ..support import make_service
 
 _MOD = "odoo_cli.__main__"
 
 
 class TestCmdResync(unittest.TestCase):
+    def _service(self, patches):
+        """A real command service whose gateways are the given puller mocks."""
+        quiet = MagicMock(return_value={"inserted": 0})
+        return make_service(
+            git=SimpleNamespace(sync_git_log=patches.get("sync_git_log", quiet)),
+            github=SimpleNamespace(sync_github=patches.get("sync_github", quiet)),
+            chatter=SimpleNamespace(
+                sync_odoo_chatter=patches.get("sync_odoo_chatter", quiet)
+            ),
+        )
+
+    def _patches(self, patches):
+        stack = ExitStack()
+        stack.enter_context(
+            patch(f"{_MOD}._build_service", return_value=self._service(patches))
+        )
+        stack.enter_context(
+            patch(
+                f"{_MOD}.assert_configured",
+                patches.get("assert_configured", MagicMock()),
+            )
+        )
+        return stack
+
     def _run(self, argv, **patches):
         out = StringIO()
         with (
-            patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
             patch("sys.stdout", out),
             patch("sys.argv", ["odoo-dev", *argv]),
+            self._patches(patches),
         ):
-            with _apply(patches):
-                cli.main()
+            cli.main()
         return out.getvalue()
 
     def _run_expect_exit(self, argv, **patches):
         """Run the CLI expecting ``SystemExit``; return (exit code, stdout)."""
         out = StringIO()
         with (
-            patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
             patch("sys.stdout", out),
             patch("sys.stderr", StringIO()),
             patch("sys.argv", ["odoo-dev", *argv]),
+            self._patches(patches),
         ):
-            with _apply(patches):
-                with self.assertRaises(SystemExit) as ctx:
-                    cli.main()
+            with self.assertRaises(SystemExit) as ctx:
+                cli.main()
         return ctx.exception.code, out.getvalue()
 
     def test_default_runs_all_sources(self):
@@ -49,7 +75,6 @@ class TestCmdResync(unittest.TestCase):
             sync_github=MagicMock(return_value={"inserted": 1}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 3}),
             assert_configured=MagicMock(),
-            build_client=MagicMock(),
         )
         self.assertIn("git: inserted 2", out)
         self.assertIn("github: inserted 1", out)
@@ -187,16 +212,6 @@ class TestCmdResync(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("git: error (git unavailable or user.email unset)", out)
         self.assertIn("github: inserted 1 (found 1)", out)
-
-
-def _apply(patches):
-    """Context manager applying a dict of ``name -> mock`` patches on the CLI."""
-    from contextlib import ExitStack
-
-    stack = ExitStack()
-    for name, mock in patches.items():
-        stack.enter_context(patch(f"{_MOD}.{name}", mock))
-    return stack
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ are actually persisted on an event row.
 import unittest
 from datetime import datetime, timezone
 
-from odoo_dev_core.commands.command import MAX_CHATTER_BODY_CHARS
+from odoo_dev_core.builtins._chatter import MAX_CHATTER_BODY_CHARS
 from odoo_dev_data.events import EventRecord
 from odoo_dev_core.billing.summary import (
     _HEADLINE_ITEM_CHARS,

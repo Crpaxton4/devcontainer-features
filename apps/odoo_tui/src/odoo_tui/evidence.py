@@ -51,7 +51,7 @@ _CITATIONS = (
 # signal (an un-flagged event is not evidence of validity either way).
 _UNVALIDATED_KEY = "unvalidated_task_ids"
 
-# The key :func:`odoo_dev_core.commands.dispatch_telemetry._queried_task_ids` stamps
+# The key :func:`odoo_dev_core.telemetry.queried_task_ids` stamps
 # with the task id a READ tool merely looked at (#1040). Its presence means the
 # event is an investigation read, not work on the task.
 _READ_KEY = "read_task_ids"

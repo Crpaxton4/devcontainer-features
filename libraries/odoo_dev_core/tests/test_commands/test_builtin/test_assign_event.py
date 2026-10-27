@@ -11,9 +11,11 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from odoo_dev_core.commands.builtin.assign_event import AssignEventCommand
 from odoo_dev_data.events import EventRecord, EventStore
 from ...support import make_event_store
+from odoo_dev_core import CommandService
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 UTC = timezone.utc
 
@@ -37,16 +39,16 @@ def _unattributed(store: EventStore, external_id: str) -> int:
     return record.id
 
 
-def _cmd(store: EventStore) -> AssignEventCommand:
+def _cmd(store: EventStore) -> CommandService:
     # The command needs no RPC client; a MagicMock stands in and is never called.
-    return AssignEventCommand(MagicMock(), state=store)
+    return service(client=MagicMock(), events=store)
 
 
 class TestAssignEventCommand(unittest.TestCase):
     def test_attributes_every_event_in_one_call(self):
         store = _tmp_db()
         ids = [_unattributed(store, f"gcal:m:tick:{n}") for n in range(3)]
-        result = _cmd(store).execute(event_ids=ids, task_id=24648)
+        result = _cmd(store).execute("assign_event", event_ids=ids, task_id=24648)
         self.assertEqual(result["updated"], 3)
         self.assertEqual(result["task_id"], 24648)
         self.assertEqual(result["event_ids"], ids)
@@ -57,13 +59,15 @@ class TestAssignEventCommand(unittest.TestCase):
         store = _tmp_db()
         ids = [_unattributed(store, "gcal:solo")]
         client = MagicMock()
-        AssignEventCommand(client, state=store).execute(event_ids=ids, task_id=7)
+        service(client=client, events=store).execute(
+            "assign_event", event_ids=ids, task_id=7
+        )
         client.execute.assert_not_called()
 
     def test_assigned_events_become_derivable(self):
         store = _tmp_db()
         ids = [_unattributed(store, f"gcal:m:tick:{n}") for n in range(2)]
-        _cmd(store).execute(event_ids=ids, task_id=24648)
+        _cmd(store).execute("assign_event", event_ids=ids, task_id=24648)
         lo = datetime(2026, 6, 1, tzinfo=UTC)
         hi = datetime(2026, 6, 2, tzinfo=UTC)
         sessions = store.derive_sessions_overlapping(lo, hi, gap_secs=3600)
@@ -72,7 +76,7 @@ class TestAssignEventCommand(unittest.TestCase):
 
     def test_empty_event_list_is_a_noop(self):
         store = _tmp_db()
-        result = _cmd(store).execute(event_ids=[], task_id=24648)
+        result = _cmd(store).execute("assign_event", event_ids=[], task_id=24648)
         self.assertEqual(result["updated"], 0)
 
     def test_rejects_non_positive_task_id(self):
@@ -80,17 +84,18 @@ class TestAssignEventCommand(unittest.TestCase):
         ids = [_unattributed(store, "gcal:solo")]
         for bad in (0, -1):
             with self.assertRaises(ValueError):
-                _cmd(store).execute(event_ids=ids, task_id=bad)
+                _cmd(store).execute("assign_event", event_ids=ids, task_id=bad)
 
     def test_rejects_boolean_task_id(self):
         store = _tmp_db()
         ids = [_unattributed(store, "gcal:solo")]
         with self.assertRaises(ValueError):
-            _cmd(store).execute(event_ids=ids, task_id=True)
+            _cmd(store).execute("assign_event", event_ids=ids, task_id=True)
 
     def test_name_and_description_are_set(self):
-        self.assertEqual(AssignEventCommand._name, "assign_event")
-        self.assertNotEqual(AssignEventCommand._description, "")
+        spec = default_registry().get("assign_event")
+        self.assertEqual(spec.id, "assign_event")
+        self.assertNotEqual(spec.description, "")
 
 
 if __name__ == "__main__":

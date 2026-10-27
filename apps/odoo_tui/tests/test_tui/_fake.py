@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
@@ -55,14 +56,19 @@ class FakeCommand:
         return self._result
 
 
-class FakeRegistry:
-    """A dict-backed registry returning pre-seeded :class:`FakeCommand`s."""
+class FakeService:
+    """A stand-in command service: records each command's calls.
 
-    def __init__(self, commands: dict[str, FakeCommand]):
-        self._commands = commands
+    ``execute`` dispatches to the pre-seeded :class:`FakeCommand` of that id;
+    ``services`` carries the injected peers a ``TuiDeps`` reads.
+    """
 
-    def __getitem__(self, name: str) -> FakeCommand:
-        return self._commands[name]
+    def __init__(self, commands, client=None, store=None, config=None):
+        self.commands = commands
+        self.services = SimpleNamespace(client=client, events=store, config=config)
+
+    def execute(self, command_id, /, **kwargs):
+        return self.commands[command_id].execute(**kwargs)
 
 
 def build_fake_store() -> MagicMock:
@@ -84,7 +90,7 @@ def build_fake_store() -> MagicMock:
 def build_fake_deps(
     query_result: Optional[list[dict[str, Any]]] = None,
     *,
-    registry: Any = None,
+    commands: Optional[dict[str, FakeCommand]] = None,
     store: Any = None,
     client: Any = None,
     config: Any = None,
@@ -92,24 +98,24 @@ def build_fake_deps(
     """Return a :class:`~odoo_tui.app.TuiDeps` over fakes (no Odoo, no SQLite).
 
     The driver receives its dependencies as an injected bundle; by default every
-    peer is an in-memory stand-in: a registry whose ``query_sessions`` returns
+    peer is an in-memory stand-in: a service whose ``query_sessions`` returns
     ``query_result`` (the sample sessions when omitted), a MagicMock store with
     empty canned reads, a MagicMock client, and a config carrying only the
     session gap the empty hint renders.
     """
     from odoo_tui.app import TuiDeps
 
-    if registry is None:
-        registry = FakeRegistry(
-            {
-                "query_sessions": FakeCommand(
-                    result=sample_sessions() if query_result is None else query_result
-                ),
-            }
-        )
+    if commands is None:
+        commands = {
+            "query_sessions": FakeCommand(
+                result=sample_sessions() if query_result is None else query_result
+            ),
+        }
     return TuiDeps(
-        registry=registry,
-        client=client if client is not None else MagicMock(),
-        store=store if store is not None else build_fake_store(),
-        config=config if config is not None else MagicMock(session_gap_mins=60),
+        service=FakeService(
+            commands,
+            client=client if client is not None else MagicMock(),
+            store=store if store is not None else build_fake_store(),
+            config=config if config is not None else MagicMock(session_gap_mins=60),
+        )
     )

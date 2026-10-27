@@ -1,21 +1,21 @@
 """Explicit MCP tool definitions for the atomic (non-``ctx``) commands.
 
 Each factory returns a plainly-written function with a real, typed signature that
-delegates to the like-named command in the registry. Defining these explicitly —
+delegates to the like-named command of the command service. Defining these explicitly —
 rather than reflecting ``command.execute`` via ``inspect.signature`` — keeps the
 MCP wire schema an intentional, reviewable part of the interaction surface.
 """
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from odoo_dev_core.commands import Registry
+from odoo_dev_core import CommandService
 
-#: Public MCP tool name -> factory ``(registry) -> tool callable`` for the atomic
+#: Public MCP tool name -> factory ``(service) -> tool callable`` for the atomic
 #: (non-``ctx``) commands. Populated at import time by :func:`atomic_tool`,
 #: replacing the formerly hand-maintained dict literal.
-ATOMIC_TOOL_FACTORIES: Dict[str, Callable[[Registry], Callable[..., Any]]] = {}
+ATOMIC_TOOL_FACTORIES: Dict[str, Callable[[CommandService], Callable[..., Any]]] = {}
 
-_Factory = Callable[[Registry], Callable[..., Any]]
+_Factory = Callable[[CommandService], Callable[..., Any]]
 
 
 def atomic_tool(name: str) -> Callable[[_Factory], _Factory]:
@@ -23,7 +23,7 @@ def atomic_tool(name: str) -> Callable[[_Factory], _Factory]:
 
     Apply this to every atomic tool factory. ``name`` is the *public MCP tool
     name*; it is a separate argument from the command name the factory body
-    looks up (``registry["..."]``), so a tool may be exposed under a name that
+    executes (``service.execute("...")``), so a tool may be exposed under a name that
     differs from its backing command. The factory itself is returned unchanged.
 
     :param name: Public tool name under which to register the factory.
@@ -47,16 +47,16 @@ def atomic_tool(name: str) -> Callable[[_Factory], _Factory]:
 
 
 @atomic_tool("get_uid")
-def make_get_uid_tool(registry: Registry):
+def make_get_uid_tool(service: CommandService):
     def get_uid() -> int:
         """Get the UID of the current user."""
-        return registry["get_uid"].execute()
+        return service.execute("get_uid")
 
     return get_uid
 
 
 @atomic_tool("get_models")
-def make_get_models_tool(registry: Registry):
+def make_get_models_tool(service: CommandService):
     def get_models(persist: Optional[List[str]] = None) -> Dict[str, Any]:
         """Get a list of all models with their names, as
         ``{"models": [...], "persisted": {}}``. ``persist`` names models
@@ -65,13 +65,13 @@ def make_get_models_tool(registry: Registry):
         schedule_activity reads — so the entry need not be typed by hand. When
         the config cannot be written the read still succeeds and ``warning``
         says why."""
-        return registry["get_models"].execute(persist=persist)
+        return service.execute("get_models", persist=persist)
 
     return get_models
 
 
 @atomic_tool("get_tasks")
-def make_get_tasks_tool(registry: Registry):
+def make_get_tasks_tool(service: CommandService):
     def get_tasks(
         domain: Optional[List[Tuple[str, str, Any]]] = None,
         limit: int = 10,
@@ -79,33 +79,31 @@ def make_get_tasks_tool(registry: Registry):
     ) -> List[Dict[str, Any]]:
         """List project tasks with an optional Odoo domain filter and
         opt-in per-task detail (``include``, same contract as get_task)."""
-        return registry["get_tasks"].execute(
-            domain=domain, limit=limit, include=include
-        )
+        return service.execute("get_tasks", domain=domain, limit=limit, include=include)
 
     return get_tasks
 
 
 @atomic_tool("get_todo")
-def make_get_todo_tool(registry: Registry):
+def make_get_todo_tool(service: CommandService):
     def get_todo(task_id: int) -> Optional[Dict[str, Any]]:
         """Return one project task by id, or None if not found."""
-        return registry["get_todo"].execute(task_id)
+        return service.execute("get_todo", task_id=task_id)
 
     return get_todo
 
 
 @atomic_tool("get_task")
-def make_get_task_tool(registry: Registry):
+def make_get_task_tool(service: CommandService):
     def get_task(task_id: int, include: Optional[List[str]] = None) -> Optional[dict]:
         """Fetch task context for a project task with opt-in extra detail."""
-        return registry["get_task"].execute(task_id, include=include)
+        return service.execute("get_task", task_id=task_id, include=include)
 
     return get_task
 
 
 @atomic_tool("get_task_chatter")
-def make_get_task_chatter_tool(registry: Registry):
+def make_get_task_chatter_tool(service: CommandService):
     def get_task_chatter(
         task_id: int,
         limit: int = 100,
@@ -117,51 +115,57 @@ def make_get_task_chatter_tool(registry: Registry):
         messages after a cursor: an int is a message-id cursor, a string an
         Odoo datetime cursor.
         """
-        return registry["get_task_chatter"].execute(task_id, limit=limit, since=since)
+        return service.execute(
+            "get_task_chatter", task_id=task_id, limit=limit, since=since
+        )
 
     return get_task_chatter
 
 
 @atomic_tool("get_mail_status")
-def make_get_mail_status_tool(registry: Registry):
+def make_get_mail_status_tool(service: CommandService):
     def get_mail_status(res_model: str, res_id: int) -> List[dict]:
         """Report outgoing-mail (``mail.mail``) delivery status for a record."""
-        return registry["get_mail_status"].execute(res_model, res_id)
+        return service.execute("get_mail_status", res_model=res_model, res_id=res_id)
 
     return get_mail_status
 
 
 @atomic_tool("get_task_attachments")
-def make_get_task_attachments_tool(registry: Registry):
+def make_get_task_attachments_tool(service: CommandService):
     def get_task_attachments(task_id: int, include_content: bool = False) -> List[dict]:
         """List a task's attachments from both the task and its chatter."""
-        return registry["get_task_attachments"].execute(
-            task_id, include_content=include_content
+        return service.execute(
+            "get_task_attachments", task_id=task_id, include_content=include_content
         )
 
     return get_task_attachments
 
 
 @atomic_tool("read_attachment")
-def make_read_attachment_tool(registry: Registry):
+def make_read_attachment_tool(service: CommandService):
     def read_attachment(attachment_id: int, mode: str = "text") -> Dict[str, Any]:
         """Read one document already stored in Odoo (read-only)."""
-        return registry["read_attachment"].execute(attachment_id, mode=mode)
+        return service.execute(
+            "read_attachment", attachment_id=attachment_id, mode=mode
+        )
 
     return read_attachment
 
 
 @atomic_tool("create_task")
-def make_create_task_tool(registry: Registry):
+def make_create_task_tool(service: CommandService):
     def create_task(name: str, project_id: int, description: str = "") -> int:
         """Create a project task with standard default values."""
-        return registry["create_task"].execute(name, project_id, description)
+        return service.execute(
+            "create_task", name=name, project_id=project_id, description=description
+        )
 
     return create_task
 
 
 @atomic_tool("schedule_activity")
-def make_schedule_activity_tool(registry: Registry):
+def make_schedule_activity_tool(service: CommandService):
     def schedule_activity(
         res_id: int,
         res_model: str = "project.task",
@@ -178,8 +182,9 @@ def make_schedule_activity_tool(registry: Registry):
         an inclusive ``YYYY-MM-DD`` date, and ``user_id`` defaults to the
         authenticated user.
         """
-        return registry["schedule_activity"].execute(
-            res_id,
+        return service.execute(
+            "schedule_activity",
+            res_id=res_id,
             res_model=res_model,
             activity_type=activity_type,
             summary=summary,
@@ -192,7 +197,7 @@ def make_schedule_activity_tool(registry: Registry):
 
 
 @atomic_tool("get_activities")
-def make_get_activities_tool(registry: Registry):
+def make_get_activities_tool(service: CommandService):
     def get_activities(
         res_id: Optional[int] = None,
         res_model: Optional[str] = None,
@@ -204,43 +209,49 @@ def make_get_activities_tool(registry: Registry):
         A ``res_id`` without ``res_model`` is read as a ``project.task`` id; a
         call with no filters at all scopes to the authenticated user.
         """
-        return registry["get_activities"].execute(
-            res_id=res_id, res_model=res_model, user_id=user_id, limit=limit
+        return service.execute(
+            "get_activities",
+            res_id=res_id,
+            res_model=res_model,
+            user_id=user_id,
+            limit=limit,
         )
 
     return get_activities
 
 
 @atomic_tool("mark_activity_done")
-def make_mark_activity_done_tool(registry: Registry):
+def make_mark_activity_done_tool(service: CommandService):
     def mark_activity_done(activity_id: int, feedback: str = "") -> Dict[str, Any]:
         """Mark an activity done (``action_feedback``), posting the feedback.
 
         Completing an activity deletes the ``mail.activity`` record, so the
         activity that was closed is returned in full.
         """
-        return registry["mark_activity_done"].execute(activity_id, feedback=feedback)
+        return service.execute(
+            "mark_activity_done", activity_id=activity_id, feedback=feedback
+        )
 
     return mark_activity_done
 
 
 @atomic_tool("search_activity_types")
-def make_search_activity_types_tool(registry: Registry):
+def make_search_activity_types_tool(service: CommandService):
     def search_activity_types(
         query: Optional[str] = None,
         res_model: Optional[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """List activity types (``mail.activity.type``) available to schedule."""
-        return registry["search_activity_types"].execute(
-            query=query, res_model=res_model, limit=limit
+        return service.execute(
+            "search_activity_types", query=query, res_model=res_model, limit=limit
         )
 
     return search_activity_types
 
 
 @atomic_tool("search_chatter")
-def make_search_chatter_tool(registry: Registry):
+def make_search_chatter_tool(service: CommandService):
     def search_chatter(
         query: str,
         model: Optional[str] = None,
@@ -250,8 +261,9 @@ def make_search_chatter_tool(registry: Registry):
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Full-text search across Odoo chatter (``mail.message``) bodies."""
-        return registry["search_chatter"].execute(
-            query,
+        return service.execute(
+            "search_chatter",
+            query=query,
             model=model,
             record_id=record_id,
             date_from=date_from,
@@ -263,54 +275,56 @@ def make_search_chatter_tool(registry: Registry):
 
 
 @atomic_tool("search_knowledge_articles")
-def make_search_knowledge_articles_tool(registry: Registry):
+def make_search_knowledge_articles_tool(service: CommandService):
     def search_knowledge_articles(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search the Odoo Knowledge base (``knowledge.article``) by text."""
-        return registry["search_knowledge_articles"].execute(query, limit=limit)
+        return service.execute("search_knowledge_articles", query=query, limit=limit)
 
     return search_knowledge_articles
 
 
 @atomic_tool("read_knowledge_article")
-def make_read_knowledge_article_tool(registry: Registry):
+def make_read_knowledge_article_tool(service: CommandService):
     def read_knowledge_article(article_id: int) -> Dict[str, Any]:
         """Read one Odoo Knowledge article (``knowledge.article``) by id."""
-        return registry["read_knowledge_article"].execute(article_id)
+        return service.execute("read_knowledge_article", article_id=article_id)
 
     return read_knowledge_article
 
 
 @atomic_tool("search_projects")
-def make_search_projects_tool(registry: Registry):
+def make_search_projects_tool(service: CommandService):
     def search_projects(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search Odoo projects by name substring; returns id/name candidates."""
-        return registry["search_projects"].execute(query, limit=limit)
+        return service.execute("search_projects", query=query, limit=limit)
 
     return search_projects
 
 
 @atomic_tool("search_tasks")
-def make_search_tasks_tool(registry: Registry):
+def make_search_tasks_tool(service: CommandService):
     def search_tasks(
         query: str, project_id: int, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Search tasks within a project by name; returns id/name candidates."""
-        return registry["search_tasks"].execute(query, project_id, limit=limit)
+        return service.execute(
+            "search_tasks", query=query, project_id=project_id, limit=limit
+        )
 
     return search_tasks
 
 
 @atomic_tool("assign_event")
-def make_assign_event_tool(registry: Registry):
+def make_assign_event_tool(service: CommandService):
     def assign_event(event_ids: List[int], task_id: int) -> Dict[str, Any]:
         """Attribute tracker events to an Odoo task id in one transaction."""
-        return registry["assign_event"].execute(event_ids=event_ids, task_id=task_id)
+        return service.execute("assign_event", event_ids=event_ids, task_id=task_id)
 
     return assign_event
 
 
 @atomic_tool("resync")
-def make_resync_tool(registry: Registry):
+def make_resync_tool(service: CommandService):
     def resync(
         sources: str = "git,github,odoo",
         start: Optional[str] = None,
@@ -322,13 +336,13 @@ def make_resync_tool(registry: Registry):
         searches account-wide. Optional inclusive ``start``/``end`` ISO dates
         bound the capture window.
         """
-        return registry["resync"].execute(sources=sources, start=start, end=end)
+        return service.execute("resync", sources=sources, start=start, end=end)
 
     return resync
 
 
 @atomic_tool("task_note")
-def make_task_note_tool(registry: Registry):
+def make_task_note_tool(service: CommandService):
     def task_note(
         task_id: int,
         note: str,
@@ -354,9 +368,10 @@ def make_task_note_tool(registry: Registry):
         pull request, the commit history, or an internal channel; reference it
         from the note rather than attaching it.
         """
-        return registry["task_note"].execute(
-            task_id,
-            note,
+        return service.execute(
+            "task_note",
+            task_id=task_id,
+            note=note,
             attachments=attachments,
             dedupe_key=dedupe_key,
         )
@@ -365,37 +380,37 @@ def make_task_note_tool(registry: Registry):
 
 
 @atomic_tool("task_list")
-def make_task_list_tool(registry: Registry):
+def make_task_list_tool(service: CommandService):
     def task_list(
         project_name_query: Optional[str] = None,
         stage: Optional[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """List project tasks assigned to the authenticated user."""
-        return registry["task_list"].execute(
-            project_name_query=project_name_query, stage=stage, limit=limit
+        return service.execute(
+            "task_list", project_name_query=project_name_query, stage=stage, limit=limit
         )
 
     return task_list
 
 
 @atomic_tool("task_aging")
-def make_task_aging_tool(registry: Registry):
+def make_task_aging_tool(service: CommandService):
     def task_aging(
         project_id: Optional[int] = None,
         stage: Optional[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """List open project tasks going stale, sorted stalest-first (read-only)."""
-        return registry["task_aging"].execute(
-            project_id=project_id, stage=stage, limit=limit
+        return service.execute(
+            "task_aging", project_id=project_id, stage=stage, limit=limit
         )
 
     return task_aging
 
 
 @atomic_tool("task_question")
-def make_task_question_tool(registry: Registry):
+def make_task_question_tool(service: CommandService):
     def task_question(
         task_id: int, question: str, dedupe_key: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -404,15 +419,15 @@ def make_task_question_tool(registry: Registry):
         ``dedupe_key`` makes the call idempotent: a retried call with an
         already-seen key skips the post and returns the existing message id.
         """
-        return registry["task_question"].execute(
-            task_id, question, dedupe_key=dedupe_key
+        return service.execute(
+            "task_question", task_id=task_id, question=question, dedupe_key=dedupe_key
         )
 
     return task_question
 
 
 @atomic_tool("optimize_sessions")
-def make_optimize_sessions_tool(registry: Registry):
+def make_optimize_sessions_tool(service: CommandService):
     def optimize_sessions(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -421,7 +436,8 @@ def make_optimize_sessions_tool(registry: Registry):
         sweep_step_mins: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Analyze stored events by sweeping gaps; report the best gap (read-only)."""
-        return registry["optimize_sessions"].execute(
+        return service.execute(
+            "optimize_sessions",
             start_date=start_date,
             end_date=end_date,
             sweep_min_gap_mins=sweep_min_gap_mins,
@@ -433,22 +449,25 @@ def make_optimize_sessions_tool(registry: Registry):
 
 
 @atomic_tool("unbilled_hours")
-def make_unbilled_hours_tool(registry: Registry):
+def make_unbilled_hours_tool(service: CommandService):
     def unbilled_hours(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Report logged-but-not-yet-invoiced timesheet hours (read-only)."""
-        return registry["unbilled_hours"].execute(
-            start_date=start_date, end_date=end_date, project_id=project_id
+        return service.execute(
+            "unbilled_hours",
+            start_date=start_date,
+            end_date=end_date,
+            project_id=project_id,
         )
 
     return unbilled_hours
 
 
 @atomic_tool("unlogged_time_report")
-def make_unlogged_time_report_tool(registry: Registry):
+def make_unlogged_time_report_tool(service: CommandService):
     def unlogged_time_report(
         start_date: str,
         end_date: str,
@@ -456,9 +475,10 @@ def make_unlogged_time_report_tool(registry: Registry):
         include_all: bool = False,
     ) -> Dict[str, Any]:
         """Reconcile derived-vs-logged hours per day and task (read-only)."""
-        return registry["unlogged_time_report"].execute(
-            start_date,
-            end_date,
+        return service.execute(
+            "unlogged_time_report",
+            start_date=start_date,
+            end_date=end_date,
             only_mine=only_mine,
             include_all=include_all,
         )
@@ -467,16 +487,16 @@ def make_unlogged_time_report_tool(registry: Registry):
 
 
 @atomic_tool("normalize_timesheets")
-def make_normalize_timesheets_tool(registry: Registry):
+def make_normalize_timesheets_tool(service: CommandService):
     def normalize_timesheets(apply: bool = False) -> Dict[str, Any]:
         """Detect (and optionally merge) duplicate timesheet entries."""
-        return registry["normalize_timesheets"].execute(apply=apply)
+        return service.execute("normalize_timesheets", apply=apply)
 
     return normalize_timesheets
 
 
 @atomic_tool("query_sessions")
-def make_query_sessions_tool(registry: Registry):
+def make_query_sessions_tool(service: CommandService):
     def query_sessions(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -486,7 +506,8 @@ def make_query_sessions_tool(registry: Registry):
         include_events: bool = True,
     ) -> List[Dict[str, Any]]:
         """Query global cross-day sessions overlapping a date range (whole)."""
-        return registry["query_sessions"].execute(
+        return service.execute(
+            "query_sessions",
             start_date=start_date,
             end_date=end_date,
             task_id=task_id,
@@ -499,7 +520,7 @@ def make_query_sessions_tool(registry: Registry):
 
 
 @atomic_tool("timesheet_summary")
-def make_timesheet_summary_tool(registry: Registry):
+def make_timesheet_summary_tool(service: CommandService):
     def timesheet_summary(
         start_date: str,
         end_date: str,
@@ -507,9 +528,10 @@ def make_timesheet_summary_tool(registry: Registry):
         only_mine: bool = True,
     ) -> Dict[str, Any]:
         """Summarize logged timesheet hours over a date range, grouped one way."""
-        return registry["timesheet_summary"].execute(
-            start_date,
-            end_date,
+        return service.execute(
+            "timesheet_summary",
+            start_date=start_date,
+            end_date=end_date,
             group_by=group_by,
             only_mine=only_mine,
         )
@@ -518,12 +540,12 @@ def make_timesheet_summary_tool(registry: Registry):
 
 
 @atomic_tool("search_count")
-def make_search_count_tool(registry: Registry):
+def make_search_count_tool(service: CommandService):
     def search_count(
         model: str,
         domain: Optional[List[Tuple[str, str, Any]]] = None,
     ) -> int:
         """Count records on a model matching a domain, without fetching them."""
-        return registry["search_count"].execute(model, domain=domain)
+        return service.execute("search_count", model=model, domain=domain)
 
     return search_count

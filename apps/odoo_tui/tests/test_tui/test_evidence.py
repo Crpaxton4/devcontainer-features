@@ -8,7 +8,7 @@ No terminal, no live Odoo — the impure fetches happen in the driver.
 import unittest
 from datetime import datetime, timezone
 
-from odoo_dev_core.commands.dispatch_telemetry import READ_TASK_IDS_PAYLOAD_KEY
+from odoo_dev_core.telemetry import READ_TASK_IDS_PAYLOAD_KEY
 from odoo_dev_data.events import EventRecord
 from odoo_tui import evidence as evidence_mod
 from odoo_tui.evidence import (

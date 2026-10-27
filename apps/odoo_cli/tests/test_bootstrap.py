@@ -1,101 +1,157 @@
 """Wiring tests for the single composition root (``odoo_cli.bootstrap``, #716).
 
-Additive only: the entrypoint tests (``tests/test_cli/test_cli_main.py``,
+The entrypoint tests (``tests/test_cli/test_cli_main.py``,
 ``tests/test_mcp/test_main.py``, ``tests/test_tui/test_main.py``) pin the
-parse → bootstrap → dispatch → format behavior of the three ``__main__``
-modules; these tests pin the composition root itself — the default graph,
+parse, bootstrap, dispatch, format behavior of the three ``__main__``
+modules; these tests pin the composition root itself - the default graph,
 injected overrides, and the config-loaded-once contract.
 """
 
 import unittest
+from datetime import timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, Mock, patch
 
+from odoo_dev_core import CommandService, default_registry
+from odoo_dev_core.ports import (
+    ChatterGateway,
+    Clock,
+    GitGateway,
+    IssueTracker,
+    JobsPort,
+    RepoMapPort,
+    StateStore,
+    TaskRecords,
+)
 from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.repo_map import RepoMap
+from odoo_dev_data.tasks import TaskRecord
 
-from odoo_cli.bootstrap import bootstrap, build_client, settings_from_config
-from odoo_dev_core.commands import Registry
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
+from odoo_cli.bootstrap import (
+    RepoMapStore,
+    SystemClock,
+    TaskStore,
+    bootstrap,
+    build_client,
+    settings_from_config,
+)
 
 
 class TestBootstrapDefaults(unittest.TestCase):
+    def setUp(self):
+        self._home = TemporaryDirectory()
+        self.addCleanup(self._home.cleanup)
+        self.env = {"ODOO_DEV_HOME": self._home.name}
+
     def test_default_graph_builds_client_and_loads_config_once(self):
         with (
             patch("odoo_cli.bootstrap.OdooClient") as MockClient,
             patch("odoo_cli.bootstrap.LocalConfig") as MockConfig,
             patch("odoo_cli.bootstrap.settings_from_config") as settings,
         ):
-            registry = bootstrap()
+            service = bootstrap(env=self.env)
 
         MockClient.from_settings.assert_called_once()
         self.assertEqual(
             MockClient.from_settings.call_args.args, (settings.return_value,)
         )
-        MockConfig.load.assert_called_once_with()
-        self.assertIsInstance(registry, Registry)
-        # The one loaded config and the one built client are injected into
-        # every command the registry resolves.
-        command = registry["query_sessions"]
-        self.assertIs(command._client, MockClient.from_settings.return_value)
-        self.assertIs(command.config, MockConfig.load.return_value)
+        MockConfig.load.assert_called_once_with(env=self.env)
+        self.assertIsInstance(service, CommandService)
+        # The one loaded config and the one built client are shared by every
+        # command through the Services bundle.
+        self.assertIs(service.services.client, MockClient.from_settings.return_value)
+        self.assertIs(service.services.config, MockConfig.load.return_value)
+        self.assertIs(service.services.env, self.env)
 
     def test_registers_all_builtins(self):
-        with (
-            patch("odoo_cli.bootstrap.OdooClient"),
-            patch("odoo_cli.bootstrap.LocalConfig"),
-            patch("odoo_cli.bootstrap.settings_from_config"),
-        ):
-            registry = bootstrap()
+        service = bootstrap(env=self.env, client=MagicMock(), config=LocalConfig())
+        self.assertEqual(service.registry.ids(), default_registry().ids())
 
-        registered = [name for name, _ in registry.items()]
-        self.assertEqual(set(registered), set(BUILTIN_COMMANDS))
+    def test_every_port_is_built(self):
+        services = bootstrap(
+            env=self.env, client=MagicMock(), config=LocalConfig()
+        ).services
+        self.assertIsInstance(services.events, StateStore)
+        self.assertIsInstance(services.git, GitGateway)
+        self.assertIsInstance(services.github, IssueTracker)
+        self.assertIsInstance(services.chatter, ChatterGateway)
+        self.assertIsInstance(services.repo_map, RepoMapPort)
+        self.assertIsInstance(services.tasks, TaskRecords)
+        self.assertIsInstance(services.clock, Clock)
 
-    def test_state_stays_lazy_when_omitted(self):
-        # Merely assembling a graph must never force the SQLite tracker DB
-        # into existence (the MCP entry point relies on this).
-        with (
-            patch("odoo_cli.bootstrap.OdooClient"),
-            patch("odoo_cli.bootstrap.LocalConfig"),
-            patch("odoo_cli.bootstrap.settings_from_config"),
-            patch("odoo_dev_core.commands.command_registry.EventStore") as MockState,
-        ):
-            bootstrap()
+    def test_events_live_under_the_state_home(self):
+        bootstrap(env=self.env, client=MagicMock(), config=LocalConfig())
+        self.assertTrue((Path(self._home.name) / "state.db").exists())
 
-        MockState.assert_not_called()
+    def test_job_ledger_is_built_only_inside_a_dispatched_job(self):
+        plain = bootstrap(env=self.env, client=MagicMock(), config=LocalConfig())
+        self.assertIsNone(plain.services.jobs)
+        job_env = {**self.env, "ODOO_JOB_ID": "job-1"}
+        dispatched = bootstrap(env=job_env, client=MagicMock(), config=LocalConfig())
+        self.assertIsInstance(dispatched.services.jobs, JobsPort)
 
 
 class TestBootstrapOverrides(unittest.TestCase):
     def test_injected_peers_are_used_verbatim(self):
-        client, state, config = Mock(), Mock(), Mock()
+        client, events, config = Mock(), Mock(), Mock()
         with (
             patch("odoo_cli.bootstrap.OdooClient") as MockClient,
             patch("odoo_cli.bootstrap.LocalConfig") as MockConfig,
         ):
-            registry = bootstrap(client=client, state=state, config=config)
+            service = bootstrap(env={}, client=client, events=events, config=config)
 
         # Explicit peers suppress every default construction.
         MockClient.from_settings.assert_not_called()
         MockConfig.load.assert_not_called()
-        command = registry["query_sessions"]
-        self.assertIs(command._client, client)
-        self.assertIs(command.state, state)
-        self.assertIs(command.config, config)
-        self.assertIs(registry.state_client, state)
+        self.assertIs(service.services.client, client)
+        self.assertIs(service.services.events, events)
+        self.assertIs(service.services.config, config)
 
     def test_partial_override_still_loads_config_once(self):
         client = MagicMock()
-        with (
-            patch("odoo_cli.bootstrap.OdooClient") as MockClient,
-            patch("odoo_cli.bootstrap.LocalConfig") as MockConfig,
-        ):
-            registry = bootstrap(client=client)
+        with TemporaryDirectory() as home:
+            with (
+                patch("odoo_cli.bootstrap.OdooClient") as MockClient,
+                patch("odoo_cli.bootstrap.LocalConfig") as MockConfig,
+            ):
+                service = bootstrap(env={"ODOO_DEV_HOME": home}, client=client)
 
         MockClient.from_settings.assert_not_called()
-        MockConfig.load.assert_called_once_with()
-        self.assertIs(registry["query_sessions"].config, MockConfig.load.return_value)
+        MockConfig.load.assert_called_once()
+        self.assertIs(service.services.config, MockConfig.load.return_value)
 
     def test_peers_are_keyword_only(self):
         with self.assertRaises(TypeError):
-            bootstrap(Mock())  # noqa — the positional form is the contract
+            bootstrap(Mock())  # noqa - the positional form is the contract
+
+
+class TestBootstrapAdapters(unittest.TestCase):
+    def test_system_clock_reads_aware_utc(self):
+        self.assertEqual(SystemClock().now().tzinfo, timezone.utc)
+
+    def test_repo_map_store_round_trips_under_its_home(self):
+        with TemporaryDirectory() as home:
+            store = RepoMapStore(Path(home))
+            self.assertEqual(store.load(), RepoMap())
+            path = store.save(RepoMap())
+            self.assertEqual(path.parent, Path(home))
+            self.assertIsNone(store.resolve("nope", cwd=Path(home)).project)
+
+    def test_task_store_round_trips_under_its_home(self):
+        with TemporaryDirectory() as home:
+            store = TaskStore(Path(home))
+            self.assertEqual(store.read(5).sections, {})
+            record = TaskRecord(task_id="5", sections={"brief": "b"})
+            store.write(record)
+            self.assertEqual(store.read(5).sections, {"brief": "b"})
+            count = store.append_friction(
+                5,
+                [{"tool": "t", "expected": "e", "observed": "o", "did": "d"}],
+                job_id="job-1",
+            )
+            self.assertEqual(count, 1)
+            self.assertEqual(store.read(5).friction[0]["job_id"], "job-1")
 
 
 class TestSettingsFromConfig(unittest.TestCase):

@@ -2,14 +2,15 @@
 
 The Textual driver itself is exercised headlessly in ``test_textual_app``; these
 tests cover the pure transitions and the command composition through a fake
-registry, so no terminal and no live Odoo are involved. The transitions receive
+command service, so no terminal and no live Odoo are involved. The transitions receive
 their dependencies as an injected :class:`~odoo_tui.app.TuiDeps` bundle
-(client, store, config, and the command registry) rather than harvesting them
+(client, store, config, and the command service) rather than harvesting them
 off command instances.
 """
 
 import unittest
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from odoo_tui.app import (
@@ -71,24 +72,34 @@ class FakeCommand:
         return self._result
 
 
-class FakeRegistry:
-    """A dict-backed registry returning pre-seeded fake commands."""
+class FakeService:
+    """A stand-in command service: records each command's calls.
 
-    def __init__(self, commands):
-        self._commands = commands
+    ``execute`` dispatches to the pre-seeded :class:`FakeCommand` of that id;
+    ``services`` carries the injected peers a ``TuiDeps`` reads.
+    """
 
-    def __getitem__(self, name):
-        return self._commands[name]
+    def __init__(self, commands, client=None, store=None, config=None):
+        self.commands = commands
+        self.services = SimpleNamespace(client=client, events=store, config=config)
+
+    def execute(self, command_id, /, **kwargs):
+        return self.commands[command_id].execute(**kwargs)
 
 
-def _registry(query_result=None):
-    return FakeRegistry(
-        {
-            "query_sessions": FakeCommand(result=query_result or _sessions()),
-            "start_task": FakeCommand(result={"run_id": 1}),
-            "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
-        }
-    )
+def _commands(query_result=None):
+    return {
+        "query_sessions": FakeCommand(result=query_result or _sessions()),
+        "start_task": FakeCommand(result={"run_id": 1}),
+        "stop_task": FakeCommand(result={"elapsed_hours": 1.0}),
+    }
+
+
+def _upload_command(deps, return_value=None, side_effect=None):
+    """Install a stub ``upload`` command on ``deps`` and return its ``execute`` mock."""
+    execute = MagicMock(return_value=return_value, side_effect=side_effect)
+    deps.service.commands["upload"] = MagicMock(execute=execute)
+    return execute
 
 
 def _default_store():
@@ -99,15 +110,17 @@ def _default_store():
     return store
 
 
-def _deps(query_result=None, store=None, client=None, config=None, registry=None):
+def _deps(query_result=None, store=None, client=None, config=None, commands=None):
     """Build a :class:`TuiDeps` over fakes for the driver's injected dependencies."""
-    if registry is None:
-        registry = _registry(query_result=query_result)
+    if commands is None:
+        commands = _commands(query_result=query_result)
     return TuiDeps(
-        registry=registry,
-        client=client if client is not None else MagicMock(),
-        store=store if store is not None else _default_store(),
-        config=config if config is not None else MagicMock(),
+        service=FakeService(
+            commands,
+            client=client if client is not None else MagicMock(),
+            store=store if store is not None else _default_store(),
+            config=config if config is not None else MagicMock(),
+        )
     )
 
 
@@ -128,7 +141,7 @@ class TestQueryAndRefresh(unittest.TestCase):
         deps = _deps()
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
         query_sessions(deps, window)
-        call = deps.registry["query_sessions"].calls[0]
+        call = deps.service.commands["query_sessions"].calls[0]
         self.assertEqual(call["start_date"], "2026-06-01")
         self.assertEqual(call["end_date"], "2026-06-03")
         self.assertTrue(call["include_events"])
@@ -146,9 +159,9 @@ class TestEmptyHint(unittest.TestCase):
     def _deps_for_hint(self, *, events, gap_mins=30):
         store = MagicMock()
         store.count_events.return_value = events
-        registry = FakeRegistry({"query_sessions": FakeCommand(result=[])})
+        commands = {"query_sessions": FakeCommand(result=[])}
         deps = _deps(
-            registry=registry,
+            commands=commands,
             store=store,
             config=MagicMock(session_gap_mins=gap_mins),
         )
@@ -209,7 +222,7 @@ class TestEmptyHint(unittest.TestCase):
         empty = refresh(deps, state)
         self.assertNotEqual(empty.empty_hint, "")
         # A later refresh that finds sessions clears the hint.
-        deps.registry["query_sessions"]._result = _sessions(2)
+        deps.service.commands["query_sessions"]._result = _sessions(2)
         populated = refresh(deps, empty)
         self.assertEqual(populated.empty_hint, "")
         self.assertEqual(len(populated.sessions), 2)
@@ -223,7 +236,7 @@ class TestMoveWindow(unittest.TestCase):
         )
         moved = move_window(deps, state, "left")
         self.assertEqual(moved.window.start, date(2026, 6, 2))
-        self.assertEqual(len(deps.registry["query_sessions"].calls), 1)
+        self.assertEqual(len(deps.service.commands["query_sessions"].calls), 1)
 
     def test_no_change_does_not_requery(self):
         deps = _deps()
@@ -233,7 +246,7 @@ class TestMoveWindow(unittest.TestCase):
         )
         moved = move_window(deps, state, "right")
         self.assertEqual(moved, state)
-        self.assertEqual(len(deps.registry["query_sessions"].calls), 0)
+        self.assertEqual(len(deps.service.commands["query_sessions"].calls), 0)
 
 
 class TestExport(unittest.TestCase):
@@ -284,8 +297,8 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch("odoo_tui.app.upload_sessions") as mock_upload:
-            resolved = confirm_upload(state, deps, confirmed=False)
+        mock_upload = _upload_command(deps)
+        resolved = confirm_upload(state, deps, confirmed=False)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("cancelled", resolved.status)
         # The shared upload loop is never invoked on a cancel.
@@ -296,11 +309,8 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(2), pending_upload=True
         )
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            return_value={"uploaded": 2, "retired": 0},
-        ) as mock_upload:
-            resolved = confirm_upload(state, deps, confirmed=True)
+        mock_upload = _upload_command(deps, {"uploaded": 2, "retired": 0})
+        resolved = confirm_upload(state, deps, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
         self.assertNotIn("retired", resolved.status)  # 0 orphans stays quiet
@@ -311,11 +321,8 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(1), pending_upload=True
         )
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            return_value={"uploaded": 1, "retired": 2},
-        ):
-            resolved = confirm_upload(state, deps, confirmed=True)
+        _upload_command(deps, {"uploaded": 1, "retired": 2})
+        resolved = confirm_upload(state, deps, confirmed=True)
         self.assertIn("uploaded 1", resolved.status)
         self.assertIn("retired 2 orphaned upload(s)", resolved.status)
 
@@ -327,9 +334,9 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(3), pending_upload=True
         )
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            return_value={
+        _upload_command(
+            deps,
+            {
                 "uploaded": 2,
                 "retired": 0,
                 "failed": [
@@ -340,8 +347,8 @@ class TestUploadGate(unittest.TestCase):
                     }
                 ],
             },
-        ):
-            resolved = confirm_upload(state, deps, confirmed=True)
+        )
+        resolved = confirm_upload(state, deps, confirmed=True)
         self.assertFalse(resolved.pending_upload)
         self.assertIn("uploaded 2", resolved.status)
         self.assertIn("1 failed", resolved.status)
@@ -352,9 +359,9 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(3), pending_upload=True
         )
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            return_value={
+        _upload_command(
+            deps,
+            {
                 "uploaded": 1,
                 "retired": 0,
                 "failed": [
@@ -362,8 +369,8 @@ class TestUploadGate(unittest.TestCase):
                     {"session_key": "102|2", "error": "later"},
                 ],
             },
-        ):
-            resolved = confirm_upload(state, deps, confirmed=True)
+        )
+        resolved = confirm_upload(state, deps, confirmed=True)
         self.assertIn("2 failed (first: boom)", resolved.status)
 
     def test_confirm_catches_upload_error_without_crashing(self):
@@ -374,11 +381,8 @@ class TestUploadGate(unittest.TestCase):
         state = AppState(
             window=default_window(), sessions=_sessions(1), pending_upload=True
         )
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            side_effect=OdooServerError("connection lost"),
-        ):
-            resolved = confirm_upload(state, deps, confirmed=True)  # must not raise
+        _upload_command(deps, side_effect=OdooServerError("connection lost"))
+        resolved = confirm_upload(state, deps, confirmed=True)  # must not raise
         self.assertFalse(resolved.pending_upload)
         self.assertIn("upload failed", resolved.status)
         self.assertIn("connection lost", resolved.status)
@@ -386,24 +390,19 @@ class TestUploadGate(unittest.TestCase):
 
 class TestUploadSessions(unittest.TestCase):
     def test_delegates_to_shared_loop_with_sessions_and_window(self):
-        # The TUI upload path is a thin delegation to the shared upload loop
-        # (#354): it forwards the driver's own injected (client, store) pair, the
-        # derived sessions, and the window's inclusive dates (the loop resolves
-        # the sweep bounds itself so the query and sweep windows cannot drift),
-        # and returns the (uploaded, retired) counts for the status line.
+        # The TUI upload path is a thin delegation to the ``upload`` command
+        # (#354): it forwards the derived sessions and the window's inclusive
+        # dates (the loop resolves the sweep bounds itself so the query and sweep
+        # windows cannot drift), and returns the (uploaded, retired) counts for
+        # the status line.
         deps = _deps()
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 3))
         sessions = _sessions(3)
-        with patch(
-            "odoo_tui.app.upload_sessions",
-            return_value={"uploaded": 3, "retired": 1},
-        ) as mock_upload:
-            uploaded, retired = _upload_sessions(deps, sessions, window)
+        mock_upload = _upload_command(deps, {"uploaded": 3, "retired": 1})
+        uploaded, retired = _upload_sessions(deps, sessions, window)
         self.assertEqual((uploaded, retired), (3, 1))
         mock_upload.assert_called_once_with(
-            deps.client,
-            deps.store,
-            sessions,
+            sessions=sessions,
             start_date="2026-06-01",
             end_date="2026-06-03",
         )
@@ -413,13 +412,11 @@ class TestResync(unittest.TestCase):
     """The ``r`` keybind runs resync, refreshes, and reports per-source counts."""
 
     def _resync_deps(self, resync_result, query_result=None):
-        registry = FakeRegistry(
-            {
-                "resync": FakeCommand(result=resync_result),
-                "query_sessions": FakeCommand(result=query_result or _sessions()),
-            }
-        )
-        return _deps(registry=registry)
+        commands = {
+            "resync": FakeCommand(result=resync_result),
+            "query_sessions": FakeCommand(result=query_result or _sessions()),
+        }
+        return _deps(commands=commands)
 
     def test_resync_status_summarizes_inserts_and_skips(self):
         status = _resync_status(
@@ -466,7 +463,7 @@ class TestResync(unittest.TestCase):
         state = AppState(window=default_window(today=date(2026, 6, 5)), sessions=[])
         result = do_resync(deps, state)
         # The resync command ran with the default (all) sources.
-        self.assertEqual(deps.registry["resync"].calls, [{}])
+        self.assertEqual(deps.service.commands["resync"].calls, [{}])
         # Sessions were re-queried and the status shows per-source counts.
         self.assertEqual(len(result.sessions), 2)
         self.assertIn("git: +3", result.status)

@@ -41,8 +41,7 @@ Two Odoo facts drive the shape of the write path:
   So :func:`_res_model_id` reads the hand-managed ``[model_ids]`` map instead,
   via :meth:`~odoo_dev_data.config.LocalConfig.require_model_id`. The
   :class:`~odoo_dev_data.config.LocalConfig` is threaded in from the command
-  layer (every :class:`~odoo_dev_core.commands.command.Command` already exposes a
-  lazily-resolved ``self.config``) rather than loaded inside this module, so the
+  layer (every handler receives it as ``services.config``) rather than loaded inside this module, so the
   dependency is explicit at the call site and a test can supply its own map
   without reaching for the developer's real config file. A model absent from the
   map raises a typed :class:`ValueError` naming the exact entry to add — because

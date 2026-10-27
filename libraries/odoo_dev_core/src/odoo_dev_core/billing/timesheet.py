@@ -68,7 +68,7 @@ def emit_agent_event(
     As of #326, MCP tool dispatch events are **not** emitted through here: the
     generic ``_event_emitting`` wrapper in :mod:`odoo_mcp.server` is the sole
     producer for the MCP tool surface, and since #427 it routes through
-    :class:`~odoo_dev_core.commands.log_event.LogEventCommand` rather than building
+    the ``log_event`` builtin rather than building
     the ``EventRecord`` itself, so non-task-scoped tools can log with an empty
     task scope. This helper has no production callers left; it is retained as
     the supported single-task-scoped entry point for future callers.

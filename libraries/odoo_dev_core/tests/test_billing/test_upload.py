@@ -14,7 +14,6 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from odoo_dev_core.commands.builtin.query_sessions import QuerySessionsCommand
 from odoo_dev_data.events import EventRecord
 from odoo_dev_data.config import LocalConfig
 from odoo_client.transport.errors import OdooServerError, OdooTransportError
@@ -25,6 +24,7 @@ from odoo_dev_core.billing.upload import (
     _numeric_task_id,
 )
 from ..support import make_event_store
+from ..fakes import service
 
 _MOD = "odoo_dev_core.billing.upload"
 _RECONCILE = f"{_MOD}.reconcile_session"
@@ -79,7 +79,9 @@ class TestUploadSessionsLoop(unittest.TestCase):
             patch(_RECONCILE, return_value=500) as reconcile,
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), _sessions(3))
+            result = upload_sessions(
+                MagicMock(), MagicMock(), _sessions(3), config=LocalConfig()
+            )
         self.assertEqual(reconcile.call_count, 3)
         self.assertEqual(result["uploaded"], 3)
         self.assertEqual(result["skipped"], 0)
@@ -91,7 +93,9 @@ class TestUploadSessionsLoop(unittest.TestCase):
             patch(_RECONCILE, return_value=1) as reconcile,
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+            result = upload_sessions(
+                MagicMock(), MagicMock(), sessions, config=LocalConfig()
+            )
         self.assertEqual(reconcile.call_count, 1)  # only the numeric one is billed
         self.assertEqual(result["uploaded"], 1)
         self.assertEqual(result["skipped"], 1)
@@ -114,7 +118,7 @@ class TestUploadSessionsLoop(unittest.TestCase):
             patch(_RECONCILE, return_value=77) as reconcile,
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), state, sessions)
+            result = upload_sessions(MagicMock(), state, sessions, config=LocalConfig())
         args = reconcile.call_args.args
         self.assertEqual(args[2], 100)  # numeric task id
         self.assertEqual(args[3], "100|5")  # stable session key
@@ -139,6 +143,7 @@ class TestUploadSessionsLoop(unittest.TestCase):
                 sessions,
                 start_date="2026-06-01",
                 end_date="2026-06-03",
+                config=LocalConfig(),
             )
         self.assertEqual(result["retired"], 2)
         kwargs = sweep.call_args.kwargs
@@ -150,7 +155,11 @@ class TestUploadSessionsLoop(unittest.TestCase):
     def test_dry_run_writes_nothing_but_summarises(self):
         with patch(_RECONCILE) as reconcile, patch(_SWEEP) as sweep:
             result = upload_sessions(
-                MagicMock(), MagicMock(), _sessions(2), dry_run=True
+                MagicMock(),
+                MagicMock(),
+                _sessions(2),
+                dry_run=True,
+                config=LocalConfig(),
             )
         reconcile.assert_not_called()  # no Odoo write on a dry run
         sweep.assert_not_called()  # the sweep also writes, so it is skipped too
@@ -293,7 +302,7 @@ class TestDerivedDescription(unittest.TestCase):
             patch(_RECONCILE, return_value=9) as reconcile,
             patch(_SWEEP, return_value=0),
         ):
-            upload_sessions(MagicMock(), db, [session])
+            upload_sessions(MagicMock(), db, [session], config=LocalConfig())
         self.assertTrue(reconcile.call_args.args[4].startswith("[/] derived narrative"))
 
 
@@ -327,7 +336,9 @@ class TestPerSessionIsolation(unittest.TestCase):
             patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+            result = upload_sessions(
+                MagicMock(), MagicMock(), sessions, config=LocalConfig()
+            )
         # The two healthy sessions still billed despite the middle one faulting.
         self.assertEqual(result["uploaded"], 2)
         self.assertEqual(len(result["rows"]), 2)
@@ -339,7 +350,9 @@ class TestPerSessionIsolation(unittest.TestCase):
             patch(_RECONCILE, side_effect=self._analytic_fault("101|1")),
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+            result = upload_sessions(
+                MagicMock(), MagicMock(), sessions, config=LocalConfig()
+            )
         self.assertEqual(len(result["failed"]), 1)
         failure = result["failed"][0]
         self.assertEqual(failure["session_key"], "101|1")
@@ -361,6 +374,7 @@ class TestPerSessionIsolation(unittest.TestCase):
                 sessions,
                 start_date="2026-06-01",
                 end_date="2026-06-03",
+                config=LocalConfig(),
             )
         self.assertEqual(result["retired"], 3)
         sweep.assert_called_once()
@@ -374,7 +388,9 @@ class TestPerSessionIsolation(unittest.TestCase):
             patch(_RECONCILE, side_effect=OdooTransportError("connection reset")),
             patch(_SWEEP, return_value=0),
         ):
-            result = upload_sessions(MagicMock(), MagicMock(), sessions)
+            result = upload_sessions(
+                MagicMock(), MagicMock(), sessions, config=LocalConfig()
+            )
         self.assertEqual(result["uploaded"], 0)
         self.assertEqual(result["rows"], [])
         self.assertEqual(len(result["failed"]), 2)
@@ -382,7 +398,9 @@ class TestPerSessionIsolation(unittest.TestCase):
 
     def test_no_failures_leaves_failed_list_empty(self):
         with patch(_RECONCILE, return_value=1), patch(_SWEEP, return_value=0):
-            result = upload_sessions(MagicMock(), MagicMock(), _sessions(2))
+            result = upload_sessions(
+                MagicMock(), MagicMock(), _sessions(2), config=LocalConfig()
+            )
         self.assertEqual(result["failed"], [])
 
 
@@ -398,7 +416,7 @@ class TestSharedPathWithTui(unittest.TestCase):
         client, state = MagicMock(), MagicMock()
         # The driver forwards its own injected (client, store) pair to the shared
         # loop — no reaching into a command's private ``._client``/``.state``.
-        deps = TuiDeps(registry={}, client=client, store=state, config=MagicMock())
+        deps = TuiDeps(service=service(client=client, events=state))
 
         # The TUI 'u' path routes through the shared loop.
         with (
@@ -420,6 +438,7 @@ class TestSharedPathWithTui(unittest.TestCase):
                 sessions,
                 start_date="2026-06-01",
                 end_date="2026-06-03",
+                config=LocalConfig(),
             )
         cli_calls = [c.args for c in reconcile.call_args_list]
         cli_sweep = sweep.call_args.kwargs
@@ -452,10 +471,10 @@ class TestReviewSessionBillsThroughSharedPath(unittest.TestCase):
         )
         # Derive through the real query path so the session dict is exactly what
         # the TUI/CLI would hand the uploader.
-        query = QuerySessionsCommand(
-            client=MagicMock(), state=state, config=LocalConfig.load()
+        query = service(client=MagicMock(), events=state, config=LocalConfig.load())
+        sessions = query.execute(
+            "query_sessions", start_date="2026-06-01", end_date="2026-06-01"
         )
-        sessions = query.execute(start_date="2026-06-01", end_date="2026-06-01")
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0]["category"], "Review")
         self.assertEqual(sessions[0]["duration_secs"], 0)  # zero-span lone event

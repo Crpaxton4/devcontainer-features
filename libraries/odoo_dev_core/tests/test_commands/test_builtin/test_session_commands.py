@@ -4,10 +4,11 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from odoo_dev_core.commands.builtin import QuerySessionsCommand
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord, EventStore
 from ...support import make_event_store
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 UTC = timezone.utc
 
@@ -36,7 +37,7 @@ class TestQuerySessionsCommand(unittest.TestCase):
     """QuerySessions now derives sessions directly from events (no ingest step)."""
 
     def _query(self, state):
-        return QuerySessionsCommand(client=MagicMock(), state=state, config=_config())
+        return service(client=MagicMock(), events=state, config=_config())
 
     def test_returns_overlapping_sessions_whole(self):
         state = _tmp_state()
@@ -48,7 +49,7 @@ class TestQuerySessionsCommand(unittest.TestCase):
         _commit(state, 0, hour=12)
         # Query a narrow window inside the session; it returns whole, no ingest.
         result = self._query(state).execute(
-            start_date="2026-06-01", end_date="2026-06-01"
+            "query_sessions", start_date="2026-06-01", end_date="2026-06-01"
         )
         self.assertEqual(len(result), 1)
         session = result[0]
@@ -76,7 +77,7 @@ class TestQuerySessionsCommand(unittest.TestCase):
                 payload={"tool": "stop_task", "outcome": "ok", "run_id": 3},
             )
         )
-        session = self._query(state).execute()[0]
+        session = self._query(state).execute("query_sessions")[0]
         event = session["events"][0]
         self.assertEqual(event["subject"], "stop_task")
         self.assertEqual(event["branch"], "101#fix-vat")
@@ -89,36 +90,43 @@ class TestQuerySessionsCommand(unittest.TestCase):
         state = _tmp_state()
         _commit(state, 0)
         _commit(state, 20)
-        result = self._query(state).execute(include_events=False)
+        result = self._query(state).execute("query_sessions", include_events=False)
         self.assertNotIn("events", result[0])
 
     def test_filters(self):
         state = _tmp_state()
         _commit(state, 0, task="101", repo="a/b")
         _commit(state, 0, hour=15, task="202", repo="c/d")
-        by_task = self._query(state).execute(task_id="101")
+        by_task = self._query(state).execute("query_sessions", task_id="101")
         self.assertEqual(len(by_task), 1)
         self.assertEqual(by_task[0]["task_id"], "101")
-        by_repo = self._query(state).execute(repo="c/d")
+        by_repo = self._query(state).execute("query_sessions", repo="c/d")
         self.assertEqual(len(by_repo), 1)
 
     def test_non_development_strategy_matches_nothing(self):
         state = _tmp_state()
         _commit(state, 0)
         _commit(state, 20)
-        self.assertEqual(self._query(state).execute(strategy_name="fixed"), [])
+        self.assertEqual(
+            self._query(state).execute("query_sessions", strategy_name="fixed"), []
+        )
         # development is the derived strategy and still matches.
         self.assertEqual(
-            len(self._query(state).execute(strategy_name="development")), 1
+            len(
+                self._query(state).execute(
+                    "query_sessions", strategy_name="development"
+                )
+            ),
+            1,
         )
 
     def test_no_sessions_returns_empty(self):
-        self.assertEqual(self._query(_tmp_state()).execute(), [])
+        self.assertEqual(self._query(_tmp_state()).execute("query_sessions"), [])
 
     def test_metadata(self):
-        cmd = self._query(_tmp_state())
-        self.assertEqual(cmd.name, "query_sessions")
-        self.assertTrue(cmd.description)
+        spec = default_registry().get("query_sessions")
+        self.assertEqual(spec.id, "query_sessions")
+        self.assertTrue(spec.description)
 
 
 if __name__ == "__main__":

@@ -426,7 +426,7 @@ class OdooTuiApp(App[None]):
     ) -> None:
         """Bind the app to its injected ``deps``.
 
-        :param deps: The command registry, client, store, and config bundle.
+        :param deps: The command service, client, store, and config bundle.
         :param export_writer: Sink for the export keys, injected so tests never
             write to the working directory.
         :param initial_window: Starting date window (defaults to the last week),

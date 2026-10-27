@@ -30,14 +30,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.get_activities import GetActivitiesCommand
-from odoo_dev_core.commands.builtin.get_models import GetModelsCommand
-from odoo_dev_core.commands.builtin.mark_activity_done import MarkActivityDoneCommand
-from odoo_dev_core.commands.builtin.schedule_activity import ScheduleActivityCommand
-from odoo_dev_core.commands.builtin.search_activity_types import (
-    SearchActivityTypesCommand,
-)
+from odoo_dev_core import default_registry
 from odoo_dev_data.config import LocalConfig
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services.activities import (
@@ -48,6 +41,7 @@ from odoo_dev_core.services.activities import (
     schedule_activity,
     search_activity_types,
 )
+from ...fakes import service
 
 _ACTIVITY_FIELDS = [
     "id",
@@ -483,9 +477,9 @@ class TestGetModelsFillsTheSchedulingEntryIn(unittest.TestCase):
                         {"id": 84, "model": "crm.lead", "name": "Lead"},
                     ]
                 )
-                result = GetModelsCommand(
-                    OdooClient(executor=ir_model), config=config
-                ).execute(persist=["project.task"])
+                result = service(
+                    client=OdooClient(executor=ir_model), config=config
+                ).execute("get_models", persist=["project.task"])
                 self.assertEqual(result["persisted"], {"project.task": 71})
                 self.assertNotIn("warning", result)
 
@@ -638,31 +632,31 @@ class TestActivityCommands(unittest.TestCase):
     """Each built-in command registers and delegates to its helper."""
 
     def test_all_four_commands_are_registered(self):
-        for name, cls in (
-            ("schedule_activity", ScheduleActivityCommand),
-            ("get_activities", GetActivitiesCommand),
-            ("mark_activity_done", MarkActivityDoneCommand),
-            ("search_activity_types", SearchActivityTypesCommand),
+        for name in (
+            "schedule_activity",
+            "get_activities",
+            "mark_activity_done",
+            "search_activity_types",
         ):
-            self.assertIn(name, BUILTIN_COMMANDS)
-            self.assertIs(BUILTIN_COMMANDS[name], cls)
+            self.assertIn(name, default_registry().ids())
 
     def test_every_description_is_non_empty(self):
-        for cls in (
-            ScheduleActivityCommand,
-            GetActivitiesCommand,
-            MarkActivityDoneCommand,
-            SearchActivityTypesCommand,
+        for name in (
+            "schedule_activity",
+            "get_activities",
+            "mark_activity_done",
+            "search_activity_types",
         ):
-            self.assertTrue(cls._description.strip())
+            self.assertTrue(default_registry().get(name).description.strip())
 
     def test_schedule_delegates_every_argument(self):
         client = MagicMock()
         config = _config()
-        target = "odoo_dev_core.commands.builtin.schedule_activity.schedule_activity"
+        target = "odoo_dev_core.builtins.schedule_activity.schedule_activity"
         with patch(target, return_value={"activity_id": 1}) as helper:
-            result = ScheduleActivityCommand(client, config=config).execute(
-                42,
+            result = service(client=client, config=config).execute(
+                "schedule_activity",
+                res_id=42,
                 res_model="crm.lead",
                 activity_type="Call",
                 summary="s",
@@ -684,30 +678,30 @@ class TestActivityCommands(unittest.TestCase):
         )
 
     def test_schedule_passes_the_injected_config_not_a_freshly_loaded_one(self):
-        # ``Command.config`` is the injected peer dependency (#686); building a
+        # ``services.config`` is the injected peer dependency (#686); building a
         # second ``LocalConfig`` here would read whatever file happens to be on
         # the machine instead of the one the host resolved.
         client = MagicMock()
         config = _config()
-        command = ScheduleActivityCommand(client, config=config)
-        target = "odoo_dev_core.commands.builtin.schedule_activity.schedule_activity"
+        command = service(client=client, config=config)
+        target = "odoo_dev_core.builtins.schedule_activity.schedule_activity"
         with patch(target, return_value={}) as helper:
-            command.execute(42)
+            command.execute("schedule_activity", res_id=42)
         self.assertIs(helper.call_args.kwargs["config"], config)
 
     def test_schedule_description_documents_model_ids_not_ir_model_access(self):
         # The description is LLM-facing: it has to point at the [model_ids]
         # entry, never at asking an admin for ir.model access (#686).
-        description = ScheduleActivityCommand._description
+        description = default_registry().get("schedule_activity").description
         self.assertIn("[model_ids]", description)
         self.assertNotIn("requires read access on ir.model", description)
 
     def test_get_activities_delegates_every_argument(self):
         client = MagicMock()
-        target = "odoo_dev_core.commands.builtin.get_activities.get_activities"
+        target = "odoo_dev_core.builtins.get_activities.get_activities"
         with patch(target, return_value=[]) as helper:
-            GetActivitiesCommand(client).execute(
-                res_id=42, res_model="crm.lead", user_id=12, limit=5
+            service(client=client).execute(
+                "get_activities", res_id=42, res_model="crm.lead", user_id=12, limit=5
             )
         helper.assert_called_once_with(
             client, res_id=42, res_model="crm.lead", user_id=12, limit=5
@@ -715,19 +709,19 @@ class TestActivityCommands(unittest.TestCase):
 
     def test_mark_done_delegates_every_argument(self):
         client = MagicMock()
-        target = "odoo_dev_core.commands.builtin.mark_activity_done.mark_activity_done"
+        target = "odoo_dev_core.builtins.mark_activity_done.mark_activity_done"
         with patch(target, return_value={"done": True}) as helper:
-            MarkActivityDoneCommand(client).execute(1, "fb")
+            service(client=client).execute(
+                "mark_activity_done", activity_id=1, feedback="fb"
+            )
         helper.assert_called_once_with(client, 1, "fb")
 
     def test_search_types_delegates_every_argument(self):
         client = MagicMock()
-        target = (
-            "odoo_dev_core.commands.builtin.search_activity_types.search_activity_types"
-        )
+        target = "odoo_dev_core.builtins.search_activity_types.search_activity_types"
         with patch(target, return_value=[]) as helper:
-            SearchActivityTypesCommand(client).execute(
-                query="call", res_model="project.task", limit=5
+            service(client=client).execute(
+                "search_activity_types", query="call", res_model="project.task", limit=5
             )
         helper.assert_called_once_with(
             client, query="call", res_model="project.task", limit=5
@@ -750,11 +744,8 @@ class TestActivityToolExposure(unittest.TestCase):
         "search_activity_types",
     )
 
-    def _registry(self):
-        from odoo_dev_core.commands import Registry
-        from odoo_dev_core.commands.builtin import register_builtins
-
-        return register_builtins(Registry(MagicMock()))
+    def _service(self):
+        return service(client=MagicMock())
 
     def test_factories_are_registered_as_atomic_tools(self):
         from odoo_mcp.tools.atomic import ATOMIC_TOOL_FACTORIES
@@ -765,7 +756,7 @@ class TestActivityToolExposure(unittest.TestCase):
     def test_tools_are_built_with_their_command_descriptions(self):
         from odoo_mcp.tools import build_explicit_tools
 
-        tools = build_explicit_tools(self._registry())
+        tools = build_explicit_tools(self._service())
         for name in self._TOOL_NAMES:
             self.assertIn(name, tools)
             _, description = tools[name]
@@ -775,12 +766,14 @@ class TestActivityToolExposure(unittest.TestCase):
         from odoo_mcp.server import OdooMCPServer
         from odoo_mcp.tools import build_explicit_tools
 
-        registry = self._registry()
+        command_service = self._service()
         added: list[Any] = []
         mock_mcp = MagicMock()
         mock_mcp.add_tool.side_effect = added.append
         with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-            OdooMCPServer(registry, explicit_tools=build_explicit_tools(registry))
+            OdooMCPServer(
+                command_service, explicit_tools=build_explicit_tools(command_service)
+            )
         exposed = {tool.name for tool in added}
         for name in self._TOOL_NAMES:
             self.assertIn(name, exposed)
@@ -792,13 +785,11 @@ class TestActivityToolSchemas(unittest.TestCase):
     def _schema(self, factory, name: str):
         from fastmcp.tools import Tool
 
-        class _Reg:
-            def __getitem__(self, key):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
+        class _Service:
+            def execute(self, command_id, /, **kwargs):
+                return {"kwargs": kwargs}
 
-        return Tool.from_function(factory(_Reg()), name=name).parameters
+        return Tool.from_function(factory(_Service()), name=name).parameters
 
     def test_schedule_requires_only_res_id(self):
         from odoo_mcp.tools.atomic import make_schedule_activity_tool
@@ -834,17 +825,15 @@ class TestActivityToolSchemas(unittest.TestCase):
     def test_schedule_tool_forwards_every_argument_to_the_command(self):
         from odoo_mcp.tools.atomic import make_schedule_activity_tool
 
-        class _Reg:
-            def __getitem__(self, key):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
+        class _Service:
+            def execute(self, command_id, /, **kwargs):
+                return {"kwargs": kwargs}
 
-        result = make_schedule_activity_tool(_Reg())(42, activity_type="Call")
-        self.assertEqual(result["args"], (42,))
+        result = make_schedule_activity_tool(_Service())(42, activity_type="Call")
         self.assertEqual(
             result["kwargs"],
             {
+                "res_id": 42,
                 "res_model": "project.task",
                 "activity_type": "Call",
                 "summary": "",

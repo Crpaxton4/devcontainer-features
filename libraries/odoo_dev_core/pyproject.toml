@@ -26,3 +26,18 @@ target-version = ["py310"]
 [tool.complexipy]
 paths = ["src"]
 max-complexity-allowed = 15
+
+[tool.importlinter]
+root_packages = ["odoo_dev_core"]
+
+[[tool.importlinter.contracts]]
+name = "odoo_dev_core: exhaustive layer map"
+type = "layers"
+containers = ["odoo_dev_core"]
+exhaustive = true
+exhaustive_ignores = []
+layers = [
+    "workflows : builtins : telemetry",
+    "registry : billing : sessionization : services : attribution : _text",
+    "ports",
+]

@@ -14,7 +14,8 @@ under any regex and so hid a format mismatch (issues #517, #526).
 import unittest
 from datetime import date, datetime, timedelta, timezone
 
-from odoo_dev_core.commands.builtin import AssignEventCommand
+from unittest.mock import MagicMock
+
 from odoo_dev_data.events import EventRecord
 from odoo_tui.app import (
     AppState,
@@ -33,6 +34,7 @@ from odoo_tui.triage import (
     series_key,
     triage_body_lines,
 )
+from ..support import make_service
 from odoo_tui.window import DateWindow
 from ..support import make_event_store
 
@@ -85,25 +87,6 @@ def _rec(event_id, *, source="chatter", ts=None, subject="", external_id=None):
     )
 
 
-class FakeCommand:
-    def __init__(self, result=None, state=None):
-        self._result = result
-        self.state = state
-        self.calls = []
-
-    def execute(self, **kwargs):
-        self.calls.append(kwargs)
-        return self._result
-
-
-class FakeRegistry:
-    def __init__(self, commands):
-        self._commands = commands
-
-    def __getitem__(self, name):
-        return self._commands[name]
-
-
 def _deps(store):
     """Bundle the driver's injected deps over a real store.
 
@@ -111,13 +94,7 @@ def _deps(store):
     the same store, so the assignment lands in the DB exactly as it does in
     production (no fake short-circuits the write path).
     """
-    registry = FakeRegistry(
-        {
-            "query_sessions": FakeCommand(state=store),
-            "assign_event": AssignEventCommand(None, state=store),
-        }
-    )
-    return TuiDeps(registry=registry, client=None, store=store, config=None)
+    return TuiDeps(service=make_service(store, MagicMock()))
 
 
 # ── Series recognition ──────────────────────────────────────────────────────

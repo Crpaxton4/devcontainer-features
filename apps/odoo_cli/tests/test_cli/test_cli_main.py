@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_cli.__main__ as cli
 from odoo_dev_data.events import EventStore as TaskStateDB
-from ..support import make_event_store
+from ..support import make_event_store, make_service
 
 ASSERT_GUARD = "odoo_cli.__main__.assert_configured"
 
@@ -20,14 +20,9 @@ def _client() -> MagicMock:
     return MagicMock()
 
 
-def _registry(db: TaskStateDB, client: MagicMock = None):
-    """Build the shared built-in registry over ``db`` for direct cmd_* calls."""
-    from odoo_dev_core.commands import Registry
-    from odoo_dev_core.commands.builtin import register_builtins
-
-    return register_builtins(
-        Registry(client if client is not None else MagicMock(), state_client=db)
-    )
+def _service(db: TaskStateDB, client: MagicMock = None):
+    """Build the shared command service over ``db`` for direct cmd_* calls."""
+    return make_service(db, client if client is not None else MagicMock())
 
 
 def _record_upload(db: TaskStateDB, key: str, timesheet_id: int, hour: int) -> None:
@@ -42,7 +37,7 @@ def _record_upload(db: TaskStateDB, key: str, timesheet_id: int, hour: int) -> N
     )
 
 
-NORMALIZE_MERGE = "odoo_dev_core.commands.builtin.normalize_timesheets.merge_timesheets"
+NORMALIZE_MERGE = "odoo_dev_core.builtins.normalize_timesheets.merge_timesheets"
 
 
 # ── _assert_env ───────────────────────────────────────────────────────────────
@@ -91,7 +86,7 @@ class TestCmdNormalize(unittest.TestCase):
         args = MagicMock(apply=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_normalize(_registry(db, _client()), args)
+            cli.cmd_normalize(_service(db, _client()), args)
         self.assertIn("No duplicate", captured.getvalue())
 
     def test_dry_run_reports_without_merging(self):
@@ -104,7 +99,7 @@ class TestCmdNormalize(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(_registry(db, _client()), args)
+            cli.cmd_normalize(_service(db, _client()), args)
         mock_merge.assert_not_called()
         output = captured.getvalue()
         self.assertIn("Dry run", output)
@@ -120,7 +115,7 @@ class TestCmdNormalize(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(_registry(db, _client()), args)
+            cli.cmd_normalize(_service(db, _client()), args)
         mock_merge.assert_called_once()
         self.assertIn("Merged", captured.getvalue())
         # The upload ledger now maps both sessions onto the primary timesheet.
@@ -131,19 +126,19 @@ class TestCmdNormalize(unittest.TestCase):
 
 # ── cmd_get_employee_id (U15 fold-in) ─────────────────────────────────────────
 
-_RESOLVE_EMP = "odoo_dev_core.commands.builtin.get_employee_id.resolve_employee_id"
+_RESOLVE_EMP = "odoo_dev_core.builtins.get_employee_id.resolve_employee_id"
 
 
 class TestCmdGetEmployeeId(unittest.TestCase):
     def test_prints_employee_id(self):
         db = _tmp_db()
-        registry = _registry(db, _client())
+        service = _service(db, _client())
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
             patch(_RESOLVE_EMP, return_value=77),
         ):
-            cli.cmd_get_employee_id(registry, MagicMock())
+            cli.cmd_get_employee_id(service, MagicMock())
         self.assertIn("employee_id=77", captured.getvalue())
 
 
@@ -156,7 +151,7 @@ class TestMain(unittest.TestCase):
             db = _tmp_db()
         with (
             patch(ASSERT_GUARD),
-            patch("odoo_cli.__main__.TaskStateDB", return_value=db),
+            patch("odoo_cli.__main__._build_service", return_value=_service(db)),
             patch("sys.argv", ["odoo_cli"] + argv),
         ):
             cli.main()
@@ -194,7 +189,7 @@ class TestMain(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(ASSERT_GUARD),
             patch("odoo_cli.__main__.build_client"),
-            patch("odoo_cli.__main__.TaskStateDB", return_value=db),
+            patch("odoo_cli.__main__._build_service", return_value=_service(db)),
             patch(_RESOLVE_EMP, return_value=77),
             patch("sys.argv", ["odoo_cli", "get-employee-id"]),
         ):

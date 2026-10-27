@@ -11,7 +11,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands.command_registry import Registry
 from odoo_mcp.server import (
     PROFILE_KEEP_LAST,
     PROFILE_SUBDIR,
@@ -20,6 +19,8 @@ from odoo_mcp.server import (
     _profiled,
     _prune_profiles,
 )
+from odoo_dev_core import CommandService
+from ..support import make_service
 
 
 def _zips(directory: str) -> list[Path]:
@@ -217,8 +218,8 @@ class TestPruneProfiles(unittest.TestCase):
         self.assertEqual(len(zips), PROFILE_KEEP_LAST)
 
 
-def _registry() -> Registry:
-    return Registry(Mock())
+def _registry() -> CommandService:
+    return make_service(client=Mock())
 
 
 class TestServerProfilingWiring(unittest.TestCase):

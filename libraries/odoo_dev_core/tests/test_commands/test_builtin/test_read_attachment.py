@@ -14,8 +14,6 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.read_attachment import ReadAttachmentCommand
 from odoo_client.transport.errors import OdooMissingRecordError
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services import attachments
@@ -24,6 +22,8 @@ from odoo_dev_core.services.attachments import (
     _file_extension,
     read_attachment,
 )
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _METADATA_FIELDS = [
     "name",
@@ -304,20 +304,21 @@ class TestReadAttachmentCommand(unittest.TestCase):
     """The built-in command registers and delegates to the helper."""
 
     def test_registered_under_name(self):
-        self.assertIn("read_attachment", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["read_attachment"], ReadAttachmentCommand)
+        self.assertIn("read_attachment", default_registry().ids())
 
     def test_execute_delegates_to_helper(self):
         client = MagicMock()
-        target = "odoo_dev_core.commands.builtin.read_attachment.read_attachment"
+        target = "odoo_dev_core.builtins.read_attachment.read_attachment"
         with patch(target, return_value={"ok": True}) as helper:
-            result = ReadAttachmentCommand(client).execute(7, mode="raw")
+            result = service(client=client).execute(
+                "read_attachment", attachment_id=7, mode="raw"
+            )
         self.assertEqual(result, {"ok": True})
         helper.assert_called_once_with(client, 7, mode="raw")
 
     def test_execute_defaults_to_text_mode(self):
         client, executor = _client([_attach(datas=_b64(b"a,b\n1,2\n"))])
-        ReadAttachmentCommand(client).execute(7)
+        service(client=client).execute("read_attachment", attachment_id=7)
         # A single read-only ``read`` call, no writes of any kind.
         self.assertEqual(len(executor.calls), 1)
         model, method, _, kwargs = executor.calls[0]
