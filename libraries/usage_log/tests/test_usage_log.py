@@ -16,7 +16,9 @@ SRC = str(Path(__file__).resolve().parents[1] / "src")
 @pytest.fixture
 def log_dir(tmp_path, monkeypatch):
     target = tmp_path / "log"
-    monkeypatch.setenv("USAGE_LOG_DIR", str(target))
+    target.mkdir()
+    monkeypatch.setenv("ODOO_DEV_HOME", str(target))
+    monkeypatch.delenv("ODOO_DEV_USAGE_LOG", raising=False)
     monkeypatch.delenv("ODOO_JOB_ID", raising=False)
     return target
 
@@ -58,17 +60,45 @@ def test_context_may_name_kind(log_dir):
     assert usage_log.record("hook", "a", kind="x", name="y")
 
 
-@pytest.mark.parametrize("value", [None, "", "  "])
-def test_unset_or_empty_does_nothing(value, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    if value is None:
-        monkeypatch.delenv("USAGE_LOG_DIR", raising=False)
-    else:
-        monkeypatch.setenv("USAGE_LOG_DIR", value)
+def test_switch_zero_disables(log_dir, monkeypatch):
+    monkeypatch.setenv("ODOO_DEV_USAGE_LOG", "0")
     assert usage_log.record("hook", "a") is False
     assert usage_log.declare([("hook", "a")]) is False
     assert cli.main(["record", "hook", "a"]) == 0
-    assert list(tmp_path.iterdir()) == []
+    assert list(log_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", [None, "1", "", "false"])
+def test_other_switch_values_enable(log_dir, monkeypatch, value):
+    if value is not None:
+        monkeypatch.setenv("ODOO_DEV_USAGE_LOG", value)
+    assert usage_log.record("hook", "a") is True
+    assert (log_dir / "usage.db").exists()
+
+
+def test_missing_root_writes_nothing_and_creates_nothing(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "absent"
+    monkeypatch.setenv("ODOO_DEV_HOME", str(root))
+    monkeypatch.delenv("ODOO_DEV_USAGE_LOG", raising=False)
+    assert usage_log.record("hook", "a") is False
+    assert usage_log.declare([("hook", "a")]) is False
+    assert cli.main(["record", "hook", "a"]) == 0
+    assert not root.exists()
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_default_root_uses_home(tmp_path, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("ODOO_DEV_HOME", raising=False)
+    else:
+        monkeypatch.setenv("ODOO_DEV_HOME", value)
+    monkeypatch.delenv("ODOO_DEV_USAGE_LOG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".config" / "odoo-dev"
+    root.mkdir(parents=True)
+    assert usage_log.record("hook", "a") is True
+    assert (root / "usage.db").exists()
 
 
 def test_declare_upserts_and_normalises(log_dir):
@@ -89,17 +119,15 @@ def test_declare_bad_item_is_dropped(log_dir, capsys):
     assert "usage-log: dropped" in capsys.readouterr().err
 
 
-def test_unwritable_dir_drops_with_one_stderr_line(tmp_path, monkeypatch, capsys):
-    blocker = tmp_path / "file"
-    blocker.write_text("x")
-    monkeypatch.setenv("USAGE_LOG_DIR", str(blocker / "sub"))
+def test_unwritable_db_drops_with_one_stderr_line(log_dir, capsys):
+    (log_dir / "usage.db").mkdir()
     assert usage_log.record("hook", "a") is False
     err = capsys.readouterr().err
     assert err.startswith("usage-log: dropped") and err.count("\n") == 1
 
 
 def run_cli(env_dir, *args, stdin=None):
-    env = {**os.environ, "PYTHONPATH": SRC, "USAGE_LOG_DIR": env_dir}
+    env = {**os.environ, "PYTHONPATH": SRC, "ODOO_DEV_HOME": env_dir}
     return subprocess.run(
         [sys.executable, "-m", "usage_log.cli", *args],
         input=stdin,
@@ -126,10 +154,9 @@ def test_cli_bad_json_exits_zero(log_dir):
     assert done.returncode == 0 and "dropped" in done.stderr
 
 
-def test_cli_missing_dir_exits_zero(tmp_path):
-    blocker = tmp_path / "f"
-    blocker.write_text("x")
-    done = run_cli(str(blocker / "d"), "record", "hook", "a")
+def test_cli_failed_write_exits_zero(log_dir):
+    (log_dir / "usage.db").mkdir()
+    done = run_cli(str(log_dir), "record", "hook", "a")
     assert done.returncode == 0 and done.stderr.count("\n") == 1
 
 
@@ -145,7 +172,7 @@ WRITER = (
 
 
 def test_concurrent_writers_lose_nothing(log_dir):
-    env = {**os.environ, "PYTHONPATH": SRC, "USAGE_LOG_DIR": str(log_dir)}
+    env = {**os.environ, "PYTHONPATH": SRC, "ODOO_DEV_HOME": str(log_dir)}
     procs = [
         subprocess.Popen(
             [sys.executable, "-c", WRITER, str(n)],

@@ -9,23 +9,23 @@ tracker. Those call it, never the reverse.
 
 | Item | Value |
 | --- | --- |
-| Env var | `USAGE_LOG_DIR`. Unset or empty: `record`, `declare` and the CLI do nothing and exit 0. |
-| Container path | `/usr/local/share/usage-log` (set in the `personal-features` `containerEnv`) |
-| Host path | `~/.local/state/usage-log`, bind-mounted from `${localEnv:HOME}${localEnv:USERPROFILE}/.local/state/usage-log` |
+| Root | `$ODOO_DEV_HOME` when set and not empty, else `~/.config/odoo-dev`. |
+| Switch | `ODOO_DEV_USAGE_LOG=0` turns logging off. Any other value, or unset, leaves it on. |
 | Job id | `ODOO_JOB_ID`, when set, is added to every usage line as `job_id` |
 
-Host sessions never set `USAGE_LOG_DIR`, so they write nothing even when they
-fire the hooks in the shared `~/.claude/settings.json`.
+`usage_log` never creates the root directory. When the root does not exist,
+`record`, `declare` and the CLI do nothing and the CLI exits 0. When the switch
+is `0`, they do nothing too.
 
 ## Line format (the contract)
 
-`$USAGE_LOG_DIR/usage.db`, one row per use:
+`$ODOO_DEV_HOME/usage.db`, one row per use:
 
 ```sql
 usage(ts TEXT, kind TEXT, name TEXT, context TEXT)   -- index (kind, name, ts)
 ```
 
-`$USAGE_LOG_DIR/declarations.db`, one row per defined feature:
+`$ODOO_DEV_HOME/declarations.db`, one row per defined feature:
 
 ```sql
 declarations(kind TEXT, name TEXT, declared_at TEXT, context TEXT,

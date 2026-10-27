@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 
 import usage_log
@@ -31,7 +30,7 @@ def _declare(args: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if not os.environ.get(usage_log.ENV_DIR, "").strip():
+    if usage_log._directory() is None:
         return 0
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["record"] and len(args) >= 3:

@@ -1,10 +1,10 @@
 """Usage log: one SQLite line per use of a feature, one declaration per feature.
 
-Stdlib only and imports nothing from odoo_client, the dispatcher or the tracker.
-With ``USAGE_LOG_DIR`` unset or empty every function does nothing, so a host
-session that shares a hook configuration with the containers stays out of the
-log. A write that fails never raises: it prints one stderr line and returns
-False.
+Stdlib only and independent of every other package. It writes ``usage.db`` and
+``declarations.db`` under ``$ODOO_DEV_HOME`` (default ``~/.config/odoo-dev``).
+``ODOO_DEV_USAGE_LOG=0`` turns logging off. It never creates the root directory:
+when the root is missing every function does nothing. A write that fails never
+raises: it prints one stderr line and returns False.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ from typing import Any, Iterable, Mapping
 
 __all__ = ["declare", "normalise", "record"]
 
-ENV_DIR = "USAGE_LOG_DIR"
+ENV_HOME = "ODOO_DEV_HOME"
+ENV_SWITCH = "ODOO_DEV_USAGE_LOG"
+DEFAULT_HOME = "~/.config/odoo-dev"
 ENV_JOB_ID = "ODOO_JOB_ID"
 USAGE_DB = "usage.db"
 DECLARATIONS_DB = "declarations.db"
@@ -58,7 +60,11 @@ def _now() -> str:
 
 
 def _directory() -> str | None:
-    return os.environ.get(ENV_DIR, "").strip() or None
+    """Return the state root, or None when logging is off or the root is missing."""
+    if os.environ.get(ENV_SWITCH) == "0":
+        return None
+    root = os.path.expanduser(os.environ.get(ENV_HOME) or DEFAULT_HOME)
+    return root if os.path.isdir(root) else None
 
 
 def _dump(context: Mapping[str, Any]) -> str:
@@ -67,7 +73,6 @@ def _dump(context: Mapping[str, Any]) -> str:
 
 def _write(directory: str, filename: str, schema: tuple, sql: str, rows: list) -> None:
     """One connection, one short ``BEGIN IMMEDIATE`` transaction, close."""
-    os.makedirs(directory, exist_ok=True)
     conn = sqlite3.connect(
         os.path.join(directory, filename),
         timeout=BUSY_TIMEOUT_MS / 1000,
