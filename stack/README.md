@@ -1,6 +1,8 @@
 # Orchestrator stack
 
-A compose project (`odoo-orchestrator`) that runs the dispatcher in a container.
+A compose project (`odoo-orchestrator`) that runs on the host. It has three
+services: `dispatcher` (`libraries/dispatcher`), `webui` (`apps/webui`) and
+`orchestrator` (the helper). `Dockerfile` builds the `dispatcher` and `webui` targets.
 Start it through `plugins/odoo-orchestrator/scripts/dispatch.sh`.
 
 ## Host prerequisites
@@ -50,6 +52,9 @@ is published on the loopback interface only. The pages are read-only:
   the run outcome, the token and cost figures and the files of its bundle.
 - Queue: the pending and running jobs.
 - Friction: the friction entries of each task.
+- Usage: the usage lines of the last days, by kind and name.
+
+See `apps/webui/README.md` for the routes.
 
 The service mounts `ODOO_DEV_HOME` read-write (a `:ro` bind breaks a WAL reader).
 It does not mount the docker socket. Stop it with
