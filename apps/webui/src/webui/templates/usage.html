@@ -5,40 +5,8 @@
 <form id="usage-form" method="get" action="{{ url_for('usage.index') }}"
       hx-get="{{ url_for('usage.index') }}" hx-target="#usage-table" hx-swap="outerHTML"
       hx-push-url="true" hx-trigger="change, submit">
-  <label>View
-    <select name="view">
-      {% for value, label in views %}<option value="{{ value }}" {{ 'selected' if args.view == value }}>{{ label }}</option>{% endfor %}
-    </select></label>
-  <label>Kind
-    <select name="kind"><option value="">(all)</option>
-      {% for k in choices.kinds %}<option value="{{ k }}" {{ 'selected' if args.kind == k }}>{{ k }}</option>{% endfor %}
-    </select></label>
-  <label>Name
-    <select name="name"><option value="">(all)</option>
-      {% for n in choices.names %}<option value="{{ n }}" {{ 'selected' if args.name == n }}>{{ n }}</option>{% endfor %}
-    </select></label>
-  <label>Since <input type="date" name="since" value="{{ args.since }}"></label>
-  <label>Until <input type="date" name="until" value="{{ args.until }}"></label>
-  <label>Context key
-    <select name="ctx_key"><option value="">(none)</option>
-      {% for k in choices.context_keys %}<option value="{{ k }}" {{ 'selected' if args.ctx_key == k }}>{{ k }}</option>{% endfor %}
-    </select></label>
-  <label>Value <input name="ctx_value" list="usage-values" value="{{ args.ctx_value }}"></label>
-  <datalist id="usage-values">{% for v in values %}<option value="{{ v }}">{% endfor %}</datalist>
-  <label>Group
-    <select name="group">
-      {% for g in groups %}<option value="{{ g }}" {{ 'selected' if args.group == g }}>{{ g }}</option>{% endfor %}
-    </select></label>
-  <label>Sort
-    <select name="sort">
-      {% for s in sorts %}<option value="{{ s }}" {{ 'selected' if args.sort == s }}>{{ s }}</option>{% endfor %}
-    </select></label>
-  <label>Order
-    <select name="order">
-      <option value="desc" {{ 'selected' if args.order == 'desc' }}>desc</option>
-      <option value="asc" {{ 'selected' if args.order == 'asc' }}>asc</option>
-    </select></label>
-  <label>Days <input type="number" min="0" name="days" value="{{ args.days }}" style="width:5em"></label>
+  <label>Kind <input name="kind" value="{{ kind }}"></label>
+  <label>Days <input type="number" min="0" name="days" value="{{ days }}" style="width:5em"></label>
   <button type="submit">Apply</button>
 </form>
 {% include "_usage_table.html" %}

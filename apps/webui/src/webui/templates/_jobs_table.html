@@ -1,26 +1,17 @@
 <div id="jobs-table" hx-get="{{ url_for('jobs.index') }}" hx-trigger="every 3s" hx-swap="outerHTML">
-{% for state, jobs in grouped.items() %}
-  <h2>{{ state }} ({{ jobs|length }})</h2>
-  {% if jobs %}
+{% if entries %}
   <table>
+    <tr><th>job</th><th>task</th><th>state</th><th>outcome</th><th>duration (s)</th><th>cost (USD)</th><th>questions</th></tr>
+    {% for e in entries %}
     <tr>
-      <th>task_id</th><th>repo</th><th>batch_id</th><th>round</th><th>submitted</th>
-      <th>started</th><th>ended</th><th>session_id</th><th>container</th>
-      <th>worktree</th><th>outcome</th><th>dead_reason</th>
-    </tr>
-    {% for j in jobs %}
-    <tr>
-      <td><a href="{{ url_for('jobs.detail', job_id=j.job_id) }}">{{ j.task_id }}</a></td>
-      <td>{{ j.repo }}</td><td>{{ j.batch_id }}</td><td>{{ j.round }}</td>
-      <td>{{ format_us(j.submitted_us) }}</td><td>{{ format_us(j.started_us) }}</td>
-      <td>{{ format_us(j.ended_us) }}</td><td>{{ j.session_id }}</td>
-      <td>{{ j.container }}</td><td>{{ j.worktree }}</td>
-      <td>{{ j.outcome }}</td><td>{{ j.dead_reason }}</td>
+      <td><a href="{{ url_for('jobs.detail', job_id=e.job_id) }}">{{ e.job_id }}</a></td>
+      <td>{{ e.task }}</td><td>{{ e.state }}</td><td>{{ e.outcome }}</td>
+      <td>{{ e.duration_s if e.duration_s is not none else "" }}</td>
+      <td>{{ e.cost_usd }}</td><td>{{ e.question_count }}</td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}
-  <p class="empty">No {{ state }} jobs.</p>
-  {% endif %}
-{% endfor %}
+{% else %}
+  <p class="empty">No job exists.</p>
+{% endif %}
 </div>

@@ -5,6 +5,7 @@ line to ``PAGES`` below. ``PAGES`` is the only registration point. It also
 builds the navigation of ``base.html``.
 """
 
+from dispatcher import reporting
 from flask import Flask, redirect, url_for
 
 from webui import friction, jobs, queue, usage
@@ -20,6 +21,7 @@ PAGES = (
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.config["ODOO_DEV_HOME"] = reporting.state_home()
     for blueprint, _label, _endpoint in PAGES:
         app.register_blueprint(blueprint)
 

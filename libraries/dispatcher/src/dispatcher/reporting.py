@@ -9,9 +9,16 @@ rows through these functions. Nothing here writes a job row: each call opens
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Mapping
 
-from odoo_dev_data.home import paths
+from odoo_dev_data.home import paths, resolve_home
 from odoo_dev_data.jobs import Job, JobState, JobStore
+from odoo_dev_data.tasks import read_task
+
+
+def state_home(env: Mapping[str, str] | None = None) -> Path:
+    """The state root: ``$ODOO_DEV_HOME`` or the default."""
+    return resolve_home(env)
 
 
 def jobs(
@@ -118,11 +125,41 @@ def batch_report(home: Path, batch_id: str) -> dict:
     }
 
 
-def usage_summary(home: Path, *, since_days: int = 30) -> list[dict]:
+def friction(home: Path) -> list[dict]:
+    """Every friction entry of every ``tasks/*/task.json``, newest first.
+
+    Each item has ``task_id``, ``job_id``, ``recorded_at``, ``tool``,
+    ``expected``, ``observed`` and ``did``. A task with no readable
+    ``task.json`` adds nothing.
+    """
+    found = []
+    for path in sorted(paths(home).tasks.glob("*/task.json")):
+        try:
+            record = read_task(path.parent.name, home)
+        except ValueError:  # a non-numeric directory or a malformed file
+            continue
+        for entry in record.friction:
+            found.append(
+                {
+                    "task_id": record.task_id,
+                    "job_id": entry.get("job_id", ""),
+                    "recorded_at": entry.get("recorded_at", ""),
+                    "tool": entry.get("tool", ""),
+                    "expected": entry.get("expected", ""),
+                    "observed": entry.get("observed", ""),
+                    "did": entry.get("did", ""),
+                }
+            )
+    return sorted(found, key=lambda e: e["recorded_at"], reverse=True)
+
+
+def usage_summary(
+    home: Path, *, since_days: int = 30, kind: str | None = None
+) -> list[dict]:
     """Usage lines of the last ``since_days`` days grouped by ``kind, name``.
 
-    Each item has ``kind``, ``name``, ``count`` and ``last_used``. The list is
-    empty when ``usage.db`` does not exist.
+    Each item has ``kind``, ``name``, ``count`` and ``last_used``. ``kind``
+    keeps one kind only. The list is empty when ``usage.db`` does not exist.
     """
     path = paths(home).usage_db
     if not path.is_file():
@@ -133,9 +170,10 @@ def usage_summary(home: Path, *, since_days: int = 30) -> list[dict]:
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         rows = conn.execute(
-            "SELECT kind, name, COUNT(*), MAX(ts) FROM usage WHERE ts >= ? "
+            "SELECT kind, name, COUNT(*), MAX(ts) FROM usage "
+            "WHERE ts >= ? AND (? IS NULL OR kind = ?) "
             "GROUP BY kind, name ORDER BY COUNT(*) DESC, kind, name",
-            (cutoff,),
+            (cutoff, kind, kind),
         ).fetchall()
     except sqlite3.OperationalError:
         return []

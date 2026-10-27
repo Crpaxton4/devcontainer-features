@@ -1,43 +1,20 @@
-"""The friction files ``friction/<date>.md`` of the state dir and the orchestrator home."""
+"""The friction entries recorded in the task records, grouped by task."""
 
-from flask import Blueprint, Response, abort, render_template
+from itertools import groupby
 
-from webui import paths
+from dispatcher import reporting
+from flask import Blueprint, current_app, render_template
 
 bp = Blueprint("friction", __name__)
 
 
-def _sources() -> dict:
-    return {
-        "state": paths.state_root() / "friction",
-        "orchestrator": paths.orchestrator_home() / "friction",
-    }
-
-
 @bp.get("/friction")
 def index():
-    files = []
-    for source, folder in _sources().items():
-        if folder.is_dir():
-            files += [
-                {"source": source, "name": p.name}
-                for p in sorted(folder.glob("*.md"), reverse=True)
-            ]
-    return render_template("friction.html", files=files)
-
-
-@bp.get("/friction/<source>/<name>")
-def show(source: str, name: str):
-    folder = _sources().get(source)
-    if folder is None or not name.endswith(".md"):
-        abort(404)
-    root = folder.resolve()
-    target = (root / name).resolve()
-    if not target.is_relative_to(root) or not target.is_file():
-        abort(404)
-    return render_template(
-        "friction_file.html",
-        source=source,
-        name=name,
-        text=target.read_text(encoding="utf-8", errors="replace"),
-    )
+    entries = reporting.friction(current_app.config["ODOO_DEV_HOME"])
+    # Newest first overall: a task sits where its newest entry is.
+    by_task = sorted(entries, key=lambda e: e["task_id"])
+    groups = [
+        (task, list(rows)) for task, rows in groupby(by_task, lambda e: e["task_id"])
+    ]
+    groups.sort(key=lambda g: g[1][0]["recorded_at"], reverse=True)
+    return render_template("friction.html", groups=groups)
