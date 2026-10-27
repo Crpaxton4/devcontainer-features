@@ -20,8 +20,14 @@ from io import StringIO
 from unittest.mock import patch
 
 import odoo_cli.__main__ as cli
-from odoo_dev_core.attribution import normalize_repo_label
+from odoo_dev_core import attribution
+from odoo_dev_data.adapters import git as git_adapter
 from odoo_dev_data.events import EventStore as TaskStateDB
+
+
+def normalize_repo_label(value):
+    """Normalize through the real git adapter, the production gateway."""
+    return attribution.normalize_repo_label(value, git_adapter)
 
 
 def _run(argv: list[str]) -> None:

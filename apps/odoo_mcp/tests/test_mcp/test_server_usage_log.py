@@ -10,7 +10,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_client import _utils
+from odoo_dev_core import telemetry
 from odoo_mcp.server import OdooMCPServer
 from ..support import make_service
 
@@ -86,21 +86,21 @@ class TestUtilsHelpers(unittest.TestCase):
     def test_record_and_declare_delegate(self):
         fake = MagicMock()
         with patch.dict(sys.modules, {"usage_log": fake}):
-            _utils.record_usage("cli_command", "list", ok=True)
-            _utils.declare_usage([{"kind": "x", "name": "y"}])
+            telemetry.record_usage("cli_command", "list", ok=True)
+            telemetry.declare_usage([{"kind": "x", "name": "y"}])
         fake.record.assert_called_once_with("cli_command", "list", ok=True)
         fake.declare.assert_called_once_with([{"kind": "x", "name": "y"}])
 
     def test_missing_package_is_a_noop(self):
         with patch.dict(sys.modules, {"usage_log": None}):
-            _utils.record_usage("cli_command", "list")
-            _utils.declare_usage([])
+            telemetry.record_usage("cli_command", "list")
+            telemetry.declare_usage([])
 
     def test_a_raising_writer_never_propagates(self):
         fake = MagicMock()
         fake.record.side_effect = RuntimeError("disk")
         with patch.dict(sys.modules, {"usage_log": fake}):
-            _utils.record_usage("cli_command", "list")
+            telemetry.record_usage("cli_command", "list")
 
 
 if __name__ == "__main__":

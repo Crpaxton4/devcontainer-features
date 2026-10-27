@@ -8,9 +8,7 @@ import re
 import subprocess
 from typing import Any, Iterable, Optional
 
-# The one ``owner/repo`` normalization rule, borrowed rather than restated
-# (#742): the same helper the external-sync pullers use for a git remote URL.
-from odoo_dev_data.adapters.git import derive_repo_label
+from .ports import GitGateway
 
 
 def _git_text(*args: str) -> str:
@@ -35,7 +33,7 @@ def current_branch_label() -> str:
     """Return the branch checked out in the cwd, or ``""`` when there is none.
 
     The ``branch`` counterpart to
-    :func:`~odoo_dev_data.adapters.git.current_repo_label`, and best-effort in the same
+    :meth:`~odoo_dev_core.ports.GitGateway.current_repo_label`, and best-effort in the same
     way: a detached HEAD or a non-repo cwd yields ``""`` rather than a bogus
     branch name.
 
@@ -49,12 +47,12 @@ def current_branch_label() -> str:
     return _git_text("symbolic-ref", "--short", "HEAD")
 
 
-def normalize_repo_label(value: Optional[str]) -> Optional[str]:
+def normalize_repo_label(value: Optional[str], git: GitGateway) -> Optional[str]:
     """Return the canonical ``owner/repo`` label for a caller-stated repo (#742).
 
     The core-layer door the surfaces normalize an incoming repo through, so the
-    CLI never has to reach past core into :mod:`odoo_dev_data.adapters.git` (ADR-005 rule
-    4). The caller may hand over whatever it happens to have: the hook shim
+    CLI never has to reach past core into the git adapter (ADR-005 rule
+    4). The ``git`` gateway derives the label. The caller may hand over whatever it happens to have: the hook shim
     states the raw ``git remote get-url origin`` URL of the *session's* cwd
     (which is not the shim's own cwd, so the SDK cannot re-derive it), and a
     remote-less checkout falls back to the bare directory name.
@@ -71,13 +69,14 @@ def normalize_repo_label(value: Optional[str]) -> Optional[str]:
 
     :param value: Raw git remote URL, plain repo label, blank, or ``None``.
     :type value: Optional[str]
+    :param git: The git gateway whose ``derive_repo_label`` applies the rule.
     :return: The ``owner/repo`` label, or ``None`` to defer to cwd derivation.
     :rtype: Optional[str]
     """
 
     if value is None or not value.strip():
         return None
-    return derive_repo_label(value)
+    return git.derive_repo_label(value)
 
 
 def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:

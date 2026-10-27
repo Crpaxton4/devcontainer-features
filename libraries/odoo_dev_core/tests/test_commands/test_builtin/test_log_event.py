@@ -22,20 +22,19 @@ from odoo_dev_core.attribution import (
     task_ids_from_branch,
 )
 from ...support import make_event_store
-from ...fakes import FixedClock, service
+from ...fakes import FakeGit, FixedClock, service
 from odoo_dev_core import default_registry
 
-#: Patch targets for the two best-effort git lookups the command performs. Every
-#: test that is not specifically about provenance stubs both, so the suite never
+#: Patch target for the best-effort branch lookup the command performs. The repo
+#: lookup goes through ``FakeGit.current_repo_label`` (``""``), so the suite never
 #: depends on the ambient checkout it happens to run in.
-REPO_LABEL = "odoo_dev_core.builtins.log_event.current_repo_label"
 BRANCH_LABEL = "odoo_dev_core.builtins.log_event.current_branch_label"
 
 
 class TestLogEventCommand(unittest.TestCase):
     def setUp(self) -> None:
         self.db = make_event_store()
-        for target in (REPO_LABEL, BRANCH_LABEL):
+        for target in (BRANCH_LABEL,):
             patcher = patch(target, return_value="")
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -241,7 +240,7 @@ class TestAttributionPolicy(unittest.TestCase):
     def setUp(self) -> None:
         self.db = make_event_store()
         self.command = service(events=self.db)
-        for target in (REPO_LABEL, BRANCH_LABEL):
+        for target in (BRANCH_LABEL,):
             patcher = patch(target, return_value="")
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -316,7 +315,9 @@ class TestProvenanceResolution(unittest.TestCase):
 
     def _execute(self, **kwargs) -> None:
         with (
-            patch(REPO_LABEL, return_value="o/r") as repo_label,
+            patch.object(
+                FakeGit, "current_repo_label", return_value="o/r"
+            ) as repo_label,
             patch(BRANCH_LABEL, return_value="feat/kiosk") as branch_label,
         ):
             service(events=self.db).execute("log_event", source="agent", **kwargs)

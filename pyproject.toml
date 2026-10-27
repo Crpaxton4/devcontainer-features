@@ -74,10 +74,6 @@ ignore_imports = [
     "odoo_tui.bootstrap -> odoo_dev_data.*",
     "odoo_tui.bootstrap -> odoo_client.*",
     # bypass, removed in WS4
-    "odoo_cli.__main__ -> odoo_client._utils",
-    # bypass, removed in WS4
-    "odoo_mcp.server -> odoo_client._utils",
-    # bypass, removed in WS4
     "odoo_tui.triage -> odoo_dev_data.events",
     # bypass, removed in WS4
     "odoo_tui.export -> odoo_dev_data.events",
@@ -130,12 +126,8 @@ forbidden_modules = [
 ]
 allow_indirect_imports = true
 ignore_imports = [
-    # bypass: type-only vocabulary of the repo-map and task-record ports
+    # permanent: type-only vocabulary under TYPE_CHECKING
     "odoo_dev_core.ports -> odoo_dev_data.repo_map",
+    # permanent: type-only vocabulary under TYPE_CHECKING
     "odoo_dev_core.ports -> odoo_dev_data.tasks",
-    # bypass: the exception set_model_id raises, caught by get_models
-    "odoo_dev_core.builtins.get_models -> odoo_dev_data.config",
-    # bypass: the git remote label helpers, used to stamp event provenance
-    "odoo_dev_core.attribution -> odoo_dev_data.adapters.git",
-    "odoo_dev_core.builtins.log_event -> odoo_dev_data.adapters.git",
 ]

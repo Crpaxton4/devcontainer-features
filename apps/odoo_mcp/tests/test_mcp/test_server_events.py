@@ -23,7 +23,7 @@ from ..support import make_service
 
 #: Patch targets for the best-effort git lookups the ``log_event`` command performs
 #: when a caller leaves ``repo``/``branch`` unstated (#509).
-REPO_LABEL = "odoo_dev_core.builtins.log_event.current_repo_label"
+REPO_LABEL = "odoo_dev_data.adapters.git.current_repo_label"
 BRANCH_LABEL = "odoo_dev_core.builtins.log_event.current_branch_label"
 
 

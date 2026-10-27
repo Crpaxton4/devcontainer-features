@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from odoo_dev_data.config import ModelIdsNotWritableError
 
 from ..ports import Services
 from ..registry import command
@@ -58,7 +57,7 @@ def handle(services: Services, args: Args) -> Dict[str, Any]:
             continue
         try:
             services.config.set_model_id(model, ir_model_id)
-        except ModelIdsNotWritableError as exc:
+        except RuntimeError as exc:
             warnings.append(str(exc))
             continue
         persisted[model] = ir_model_id

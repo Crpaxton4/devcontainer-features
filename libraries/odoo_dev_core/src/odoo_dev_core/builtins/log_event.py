@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from odoo_dev_data.adapters.git import current_repo_label
 from odoo_dev_data.events import EventRecord
 
 from ..attribution import current_branch_label, resolve_task_ids
@@ -72,7 +71,7 @@ def handle(services: Services, args: Args) -> dict[str, Any]:
         source=args.source,
         timestamp=args.timestamp or services.clock.now(),
         task_ids=resolve_task_ids(args.task_ids, args.attach_active_run, args.branch),
-        repo=current_repo_label() if args.repo is None else args.repo,
+        repo=services.git.current_repo_label() if args.repo is None else args.repo,
         branch=resolved_branch,
         pr_num=args.pr_num,
         subject=args.subject,
