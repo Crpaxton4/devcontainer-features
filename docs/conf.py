@@ -66,20 +66,14 @@ suppress_warnings = ["ref.python", "misc.highlighting_failure"]
 # The same re-export pattern makes apidoc document some objects on both the
 # package page and the module page. The Python domain emits the "duplicate object
 # description" warning without a suppress_warnings type, so a log filter drops it.
-# The second filter drops one docutils warning from a docstring in
-# dispatcher.lifecycle.kill_pattern, which this documentation build cannot edit.
 class _KnownWarningFilter:
     def filter(self, record):
-        message = record.getMessage()
-        where = str(getattr(record, "location", ""))
-        return not (
-            "duplicate object description" in message
-            or "dispatcher.lifecycle.kill_pattern" in message + where
-        )
+        return "duplicate object description" not in record.getMessage()
 
 
-for _name in ("sphinx.domains.python", "sphinx.util.docutils"):
-    sphinx_logging.getLogger(_name).logger.addFilter(_KnownWarningFilter())
+sphinx_logging.getLogger("sphinx.domains.python").logger.addFilter(
+    _KnownWarningFilter()
+)
 
 # The linkcheck builder skips local addresses and the Odoo instance patterns
 # that appear in the examples.
@@ -105,7 +99,13 @@ _PACKAGE_DIRS = [
     for parent, names in (
         (
             "libraries",
-            ("odoo_client", "odoo_dev_data", "odoo_dev_core", "dispatcher", "usage_log"),
+            (
+                "odoo_client",
+                "odoo_dev_data",
+                "odoo_dev_core",
+                "dispatcher",
+                "usage_log",
+            ),
         ),
         ("apps", ("odoo_cli", "odoo_mcp", "odoo_tui", "webui")),
     )

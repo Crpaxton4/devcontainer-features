@@ -123,9 +123,8 @@ the SDK config-file variable, `ODOO_DISPATCH_STATE_DIR`, `DISPATCH_ARTIFACTS_DIR
 `DISPATCH_REPO_MAP_FILE`, `ODOO_ORCHESTRATOR_HOME`, `USAGE_LOG_DIR`. Only
 `odoo_dev_data.migrate` still reads them, to find legacy stores. The usage log
 writes into the root when the root exists and never creates it;
-`ODOO_DEV_USAGE_LOG=0` turns it off. At the date of this ADR the MCP server
-(`odoo_mcp.server`) still tests `USAGE_LOG_DIR` before it declares its tools to
-the usage log, so the retirement of that one variable is not complete.
+`ODOO_DEV_USAGE_LOG=0` turns it off, and the MCP server tests that same switch
+before it declares its tools to the usage log.
 
 ### Boundaries: task, job, orchestrator, time
 

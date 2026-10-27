@@ -295,7 +295,7 @@ def record_usage(kind: str, name: str, **context: Any) -> None:
 
     ``usage_log`` is a separate stdlib-only package bundled beside this one in
     the devcontainers. It is imported lazily and guarded, so an environment
-    without it (or with ``USAGE_LOG_DIR`` unset) runs exactly as before.
+    without it (or with ``ODOO_DEV_USAGE_LOG=0``) runs exactly as before.
     """
     try:
         import usage_log

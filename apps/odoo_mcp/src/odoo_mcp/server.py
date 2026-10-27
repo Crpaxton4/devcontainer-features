@@ -348,7 +348,7 @@ class OdooMCPServer:
         tools = build_tools(service)
         for tool_name, (tool_fn, description) in tools.items():
             self._add_tool(tool_name, tool_fn, description)
-        if os.environ.get("USAGE_LOG_DIR", "").strip():
+        if os.environ.get("ODOO_DEV_USAGE_LOG") != "0":
             declare_usage(_usage_declarations(list(tools), service))
 
     def _add_tool(

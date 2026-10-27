@@ -280,7 +280,7 @@ def kill_pattern(task_id: str, entry: str = DEFAULT_ENTRY) -> str:
     ``node <path>/cli.js``. All of those match.
 
     Anchored with ``^``: the command line must *start* with one of them, so a
-    sibling's inlined brief containing ``claude -p <entry> <task> `` further
+    sibling's inlined brief containing ``claude -p <entry> <task>`` further
     along never matches. The entry and the task id are literals, and the task
     id is followed by whitespace, so task 12 never matches task 123.
     """

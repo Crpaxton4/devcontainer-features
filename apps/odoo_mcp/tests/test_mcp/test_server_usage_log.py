@@ -56,10 +56,10 @@ class TestMcpUsageLine(unittest.TestCase):
 
     def test_declarations_only_when_the_log_is_on(self):
         with patch("odoo_mcp.server.declare_usage") as declare:
-            with patch.dict("os.environ", {"USAGE_LOG_DIR": ""}):
+            with patch.dict("os.environ", {"ODOO_DEV_USAGE_LOG": "0"}):
                 _tools({})
             declare.assert_not_called()
-            with patch.dict("os.environ", {"USAGE_LOG_DIR": "/x"}):
+            with patch.dict("os.environ", {"ODOO_DEV_USAGE_LOG": "1"}):
                 _tools({})
         (items,) = declare.call_args.args
         declared = {i["name"] for i in items if i["kind"] == "mcp_tool"}
