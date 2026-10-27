@@ -584,8 +584,7 @@ moved to the `odoo-dev` plugin, which bundles each one as `odoo-dev:<name>`
 `sync-claude-mcp` installs that plugin from this repo's own marketplace at
 container-create time (#723).
 
-Historically the content reached an agent by two independent,
-deliberately-parallel paths. Only the second survives:
+Historically the content reached an agent as mounted skill files. That path is removed:
 
 1. **Mounted `SKILL.md` files (Claude Code only) — removed (#738).**
    `install.sh` used to stage the `skills/` tree at build time to
@@ -600,19 +599,6 @@ deliberately-parallel paths. Only the second survives:
    slash-command UX, but only inside a live container with this Feature
    installed and a working bind mount — the plugin install provides the same UX
    everywhere.
-
-2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
-   *also* exposed as a built-in MCP prompt by the `odoo-mcp` MCP server
-   (`prompts/builtin/<name>.py`, one module
-   per skill, underscored — `<skill-name>` → `<skill_name>`). Each module embeds
-   its `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
-   description; the markdown body becomes the returned prompt message) and is
-   registered through the same `@builtin_prompt` decorator as `implement_task`
-   and `report_incident`. Because the prompts ship inside the SDK package, any
-   MCP client gets them for free — no mount, no `postCreateCommand`, no live
-   personal-features container required. **All six prompt modules outlived their
-   skills**: the `skills/` tree is gone, so each module's embedded body is the
-   only copy of that text left outside the plugin.
 
 **Stale loose copies are cleaned up, not just reported (#738).**
 `$CLAUDE_CONFIG_DIR/skills` is a host bind mount, so copies written by

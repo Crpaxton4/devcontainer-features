@@ -39,8 +39,12 @@ root with mode `0o700`.
 | `repo_map.py` | `repo-map.json` parser, validator, writer and project resolver |
 | `tasks.py` | `task.json`, `brief.md`, `draft-N.md` and the one friction list per task |
 | `locks.py` | `exclusive(name)`: flock files under `locks/` |
+| `adapters/` | `git`, `github` and `odoo` resync sources that satisfy the core ports |
 
-`python -m odoo_dev_data doctor [--json]` prints the report. `doctor --migrate [--dry-run]` runs the import.
+`odoo-dev doctor [--json]` prints the report. `odoo-dev doctor --migrate [--dry-run]`
+runs the import. `python -m odoo_dev_data` runs the same doctor without the CLI.
+
+It depends on nothing in the workspace (`tomli` on Python 3.10 only).
 
 ## Test
 
