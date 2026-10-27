@@ -4,7 +4,7 @@
 # The lifted originals hard-coded repo_dir = "$REPOS_DIR/$repo". That holds on
 # the host, where the repos tree exists, and fails everywhere else — most
 # importantly inside the Odoo devcontainer, where the checkout is bind-mounted
-# at /mnt/extra-addons and no repos tree is visible at all. --repo-path is the
+# at /mnt/extra-addons and no repos tree is visible at all. --repo-root is the
 # escape hatch: give a path and no tree resolution is attempted.
 #
 # ODOO_REPO_MAP_SCRIPTS lets the sibling skill move without editing five files.
@@ -19,7 +19,7 @@ resolve_repo_dir() {
   else
     [ -n "${REPOS_DIR:-}" ] || {
       [ -x "$REPO_MAP_SCRIPTS/repos-dir.sh" ] || {
-        echo "cannot locate odoo-repo-map/scripts/repos-dir.sh (set ODOO_REPO_MAP_SCRIPTS) and no --repo-path given" >&2
+        echo "cannot locate odoo-repo-map/scripts/repos-dir.sh (set ODOO_REPO_MAP_SCRIPTS) and no --repo-root given" >&2
         return 2
       }
       REPOS_DIR="$("$REPO_MAP_SCRIPTS/repos-dir.sh" --raw)" || return 2

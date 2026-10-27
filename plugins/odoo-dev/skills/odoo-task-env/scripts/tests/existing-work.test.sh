@@ -12,6 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/../existing-work.sh"
+JSON_GET="$SCRIPT_DIR/../../../../scripts/json-get.sh"
 [ -x "$SUT" ] || { echo "not executable: $SUT" >&2; exit 1; }
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/existing-work-test.XXXXXX")"
@@ -22,13 +23,8 @@ checked=0
 
 # ---------- assertions ----------
 field() {
-  node -e '
-    const value = process.argv.slice(2).reduce(
-      (node, key) => (node === null || node === undefined ? node : node[key]),
-      JSON.parse(process.argv[1]),
-    );
-    console.log(value === null || value === undefined ? "null" : String(value));
-  ' "$1" "${@:2}"
+  "$JSON_GET" 'a.path.split(".").reduce((n, k) => (n === null || n === undefined ? n : n[k]), d) ?? "null"' \
+    path="$(IFS=.; echo "${*:2}")" <<<"$1"
 }
 
 expect() {
@@ -139,6 +135,10 @@ expect "29616 counts its commit" "$(field "$out" candidates 0 commits)" "1"
 out="$(GH_STUB_PRS="$work/open-pr.json" run_sut QOC 29616 Odoov18)"
 expect "an open PR joins its candidate" "$(field "$out" prs length)" "1"
 expect "an open PR does not make it complete" "$(field "$out" state)" "resume"
+
+git -C "$repo" remote set-head origin Odoov18 >/dev/null
+out="$(run_sut QOC 29617 "")"
+expect "an empty base_branch measures against origin/HEAD" "$(field "$out" state)" "ambiguous"
 
 out="$(run_sut QOC 27072 Odoov18)"
 expect "27072 merged into the default branch is complete" "$(field "$out" state)" "complete"

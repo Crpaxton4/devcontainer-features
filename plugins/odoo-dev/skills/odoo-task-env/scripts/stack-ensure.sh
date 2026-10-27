@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # stack-ensure.sh — ensure the singleton project stack is running.
 #
-# Usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]
+# Usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-root DIR]
 #
 #   --target-series: the Odoo series the work targets, as in 18.0. Inside the
 #                    devcontainer it is compared against the series this core
 #                    actually runs; no flag means no comparison.
-#   --repo-path:     the checkout of <repo>. On the host it replaces
+#   --repo-root:     the checkout of <repo>. On the host it replaces
 #                    $REPOS_DIR/<repo>, so the repo itself needs no repos tree.
 #                    Inside a container it is accepted and ignored.
 #
@@ -96,17 +96,17 @@ MIN_FREE_GB="${MIN_FREE_GB:-6}"
 READY_TIMEOUT_S="${STACK_READY_TIMEOUT_S:-60}"
 LOCK_FILE="${TMPDIR:-/tmp}/odoo-task-env-stack.lock"
 
-usage() { echo "usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]" >&2; exit 2; }
+usage() { echo "usage: stack-ensure.sh <repo> [--target-series NN.0] [--repo-root DIR]" >&2; exit 2; }
 
 target_series=""
-repo_path=""
+repo_root=""
 positional=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --target-series) [ $# -ge 2 ] || usage; target_series="$2"; shift 2 ;;
     --target-series=*) target_series="${1#*=}"; shift ;;
-    --repo-path) [ $# -ge 2 ] || usage; repo_path="$2"; shift 2 ;;
-    --repo-path=*) repo_path="${1#*=}"; shift ;;
+    --repo-root) [ $# -ge 2 ] || usage; repo_root="$2"; shift 2 ;;
+    --repo-root=*) repo_root="${1#*=}"; shift ;;
     *) positional+=("$1"); shift ;;
   esac
 done
@@ -144,7 +144,7 @@ side_cores_json() {
 resolve_repos_dir() {
   [ -z "${REPOS_DIR:-}" ] || return 0
   REPOS_DIR="$("$REPO_MAP_SCRIPTS/repos-dir.sh" --raw)" || {
-    echo "stack-ensure.sh: cannot resolve the repos tree: pass --repo-path DIR (the checkout of $repo) and set REPOS_DIR (or ODOO_SHARED_COMPOSE for the shared compose file)" >&2
+    echo "stack-ensure.sh: cannot resolve the repos tree: pass --repo-root DIR (the checkout of $repo) and set REPOS_DIR (or ODOO_SHARED_COMPOSE for the shared compose file)" >&2
     exit 2
   }
 }
@@ -177,8 +177,8 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # ---- host mode -----------------------------------------------------------------
-if [ -n "$repo_path" ]; then
-  repo_dir="$repo_path"
+if [ -n "$repo_root" ]; then
+  repo_dir="$repo_root"
 else
   resolve_repos_dir
   repo_dir="$REPOS_DIR/$repo"
@@ -270,9 +270,8 @@ done
 
 lru_json="[]"
 if [ "${#stopped_lru[@]}" -gt 0 ]; then
-  lru_json=$(printf '%s\n' "${stopped_lru[@]}" | node -e '
-    const lines = require("fs").readFileSync(0, "utf8").trim().split("\n");
-    console.log(JSON.stringify(lines));')
+  lru_json=$("$SCRIPT_DIR/../../../scripts/json-get.sh" 'a.lru.trim().split("\n")' \
+    lru="$(printf '%s\n' "${stopped_lru[@]}")" <<<'{}')
 fi
 
 echo "{\"stack\": \"$repo\", \"status\": \"$status\", \"stopped_lru\": $lru_json}"

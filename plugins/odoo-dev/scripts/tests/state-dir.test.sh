@@ -91,7 +91,7 @@ else
 fi
 
 # A build section with its five keys lands in task.json.
-BUILD='{"worktree":"/wt","branch":"task-30413","modules":["acme_sale"],"odoo_version":"18.0","default_branch":"staging"}'
+BUILD='{"worktree":"/wt","branch":"task-30413","modules":["acme_sale"],"odoo_version":"18.0","base_branch":"staging"}'
 out="$(bash "$ART" set "$A" build --json "$BUILD" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF '"file":"'"$A"'/task.json"' \
    && [ -f "$A/task.json" ]; then
@@ -101,7 +101,7 @@ else
 fi
 
 # A second set of the same section REPLACES it; the file holds the latest state only.
-BUILD2='{"worktree":"/wt","branch":"task-30413","modules":["acme_sale","acme_stock"],"odoo_version":"18.0","default_branch":"staging"}'
+BUILD2='{"worktree":"/wt","branch":"task-30413","modules":["acme_sale","acme_stock"],"odoo_version":"18.0","base_branch":"staging"}'
 bash "$ART" set "$A" build --json "$BUILD2" >/dev/null 2>&1
 n="$(bash "$ART" get "$A" build --key modules 2>/dev/null | grep -c acme_)"
 [ "$n" = 2 ] && ok "artifact.sh: a second set replaces the section in place" \
@@ -122,7 +122,7 @@ n="$(bash "$ART" get "$A" build --key modules 2>/dev/null | grep -c acme_)"
   || bad "artifact.sh: refused payload changed the section"
 
 # A wrong type exits 4 too.
-out="$(bash "$ART" set "$A" build --json '{"worktree":"/wt","branch":"b","modules":"acme","odoo_version":"18.0","default_branch":"main"}' 2>&1)"; rc=$?
+out="$(bash "$ART" set "$A" build --json '{"worktree":"/wt","branch":"b","modules":"acme","odoo_version":"18.0","base_branch":"main"}' 2>&1)"; rc=$?
 [ "$rc" -eq 4 ] && printf '%s' "$out" | grep -qF 'field modules: expected array' \
   && ok "artifact.sh: modules must be an array" \
   || bad "artifact.sh: wrong type: rc=$rc out=$out"

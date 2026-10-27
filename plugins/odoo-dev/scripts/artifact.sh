@@ -6,7 +6,7 @@
 #
 #   plan    written by /odoo-dev:plan after approval  ({"markdown": "..."})
 #   build   written by the builder and the upgrader   (worktree, branch, modules,
-#                                                      odoo_version, default_branch)
+#                                                      odoo_version, base_branch)
 #   test    written by run-tests.sh --put, one entry per module under test.<module>
 #   review  written by the tester                     (findings, criteria_results)
 #   upgrade written only by upgrade-state.sh (inputs, run, preflight, plan, modules,
@@ -55,7 +55,7 @@ die() { echo "artifact.sh: $*" >&2; exit "${2:-2}"; }
 SCHEMA='
 const SCHEMA = {
   plan:   { required: ["markdown"], types: { markdown: "string" }, fields: [] },
-  build:  { required: ["worktree","branch","modules","odoo_version","default_branch"],
+  build:  { required: ["worktree","branch","modules","odoo_version","base_branch"],
             types: { modules: "array" }, fields: ["claims","diff_summary"] },
   test:   { required: [], types: {}, keyed: true,
             fields: ["passed","status","error","tests_run","tours_declared","tours_run",

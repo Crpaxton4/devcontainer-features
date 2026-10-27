@@ -28,14 +28,17 @@ are the lines of your prompt. Every section is optional.
 - `<ARTIFACT> get <ARTIFACTS> test` and `<ARTIFACT> get <ARTIFACTS> review`: present
   means an iterate run. Their failures come first.
 - Project: get_task gives the project name. `project-resolve.sh "<project>"` gives
-  `repo`, `repo_path`, `default_branch` and `odoo_version`.
+  `repo`, `repo_root`, `base_branch` and `odoo_version`. `base_branch` is null when no
+  branch of the flow exists on `origin`: pass an empty string, and the scripts warn and
+  use `origin/HEAD`. A repo folder with no map entry gives a warning, and the run goes on
+  with `repo_root` and `origin` from the resolver.
 
 ## Procedure
 
-1. `existing-work.sh <repo> <id> <default_branch> --repo-path <repo_path>`. State
+1. `existing-work.sh <repo> <id> <base_branch> --repo-root <repo_root>`. State
    `complete` or `ambiguous`, or an open PR for this task, parks the run.
-2. `worktree-ensure.sh <repo> <id> <slug> <default_branch> [<resume_branch>]
-   --repo-path <repo_path>`, then `stack-ensure.sh <repo> --target-series
+2. `worktree-ensure.sh <repo> <id> <slug> <base_branch> [<resume_branch>]
+   --repo-root <repo_root>`, then `stack-ensure.sh <repo> --target-series
    <odoo_version>`. A `series_mismatch` warning goes in line 3 of the session output.
 3. Work the fix list, in this order: every `failures[]` entry of every `test` entry;
    every `review` finding with severity blocker or high; every `criteria_results[]`
@@ -44,13 +47,12 @@ are the lines of your prompt. Every section is optional.
    next. Tests ship with the code. No `## Plan`: one step per `## Acceptance criteria`
    entry. No plan at all: steps from the task description, recorded as `claims`.
 5. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it. Self-test per module until green, 3 runs at most: `session-db.sh run <repo> <id>
-   <module> --session-id <session id> --repo-path <worktree> --target-series
+   <module> --session-id <session id> --repo-root <worktree> --target-series
    <odoo_version>`, never with `--put`. `session-db.sh` is the script of the
    `odoo-session-db` skill. It runs `run-tests.sh` on a database that no other session
    can name. The session id is the job id: read the environment variable
-   `ODOO_DEV_STATE_DIR` with `printenv`. When its path contains `/dispatch/artifacts/`,
-   the job id is the last part of that path. Otherwise leave out `--session-id`, and
-   `session-db.sh` picks a random suffix. Never pass `--db-suffix`. A series
+   `ODOO_JOB_ID` with `printenv`. When it is set, its value is the job id. Otherwise
+   leave out `--session-id`, and `session-db.sh` picks a random suffix. Never pass `--db-suffix`. A series
    that differs from the container's selects its side core (`odooNN-bin`) by itself when
    it exists; `--odoo-bin` and `--odoo-conf` name one by hand. Run it
    first without `--with-tours`; when `tours_declared` is above 0, run it again with
@@ -62,7 +64,7 @@ are the lines of your prompt. Every section is optional.
 ## Outputs
 
 `<ARTIFACT> set <ARTIFACTS> build <file>` with `worktree`, `branch`, `modules`,
-`odoo_version` and `default_branch`. Add `claims` only when no `plan` section exists.
+`odoo_version` and `base_branch`. Add `claims` only when no `plan` section exists.
 Never pass `--put` and never write the `test` section.
 
 ## Stop conditions

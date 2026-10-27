@@ -24,7 +24,7 @@ Read through `<ARTIFACT> get <ARTIFACTS> <section>`, where `ARTIFACT` and `ARTIF
 are the lines of your prompt.
 
 - `build` (required): `worktree`, `branch`, `modules`, `odoo_version`,
-  `default_branch`.
+  `base_branch`.
 - `plan` (optional, `--raw`): the `## Acceptance criteria`. Absent: judge against
   `build.claims`.
 - The session id: the second token of the request, when the request has one. The
@@ -39,7 +39,7 @@ are the lines of your prompt.
    only to `/dev/null`.
 1. `browser-ensure.sh` when a module declares tours.
 2. Run every script in the foreground with an explicit timeout; a forked turn ends with the call, so a background Bash call, `&`, `nohup`, `setsid` or `disown` loses the run. Split a long run (for example per tree) instead of detaching it. Per module in `build.modules`: `session-db.sh run <repo> <id> <module> --session-id
-   <session id> --repo-path <worktree> --target-series <odoo_version> --put <ARTIFACTS>
+   <session id> --repo-root <worktree> --target-series <odoo_version> --put <ARTIFACTS>
    [--with-tours]`, with the `session-db.sh` of the `odoo-session-db` skill. It runs
    `run-tests.sh` on a database that no other session can name, so two sessions on one
    task cannot drop each other's database. Without a session id, leave out
@@ -48,8 +48,8 @@ are the lines of your prompt.
    the same name. The script writes the `test` entry for the module itself. A series that differs from the
    container's selects the container's side core (`odooNN-bin`) by itself when it exists;
    `--odoo-bin` and `--odoo-conf` name one by hand.
-3. The Odoo review lens over `git -C <worktree> diff <default_branch>...HEAD` minus the `upgrade_code` commits
-   (`git log --format=%H --grep='^chore(.*): upgrade_code ' <default_branch>..HEAD` lists them; review the manual
+3. The Odoo review lens over `git -C <worktree> diff <base_branch>...HEAD` minus the `upgrade_code` commits
+   (`git log --format=%H --grep='^chore(.*): upgrade_code ' <base_branch>..HEAD` lists them; review the manual
    commits with `git diff <that commit>..HEAD` per module): one
    `criteria_results[]` entry per acceptance criterion, with its evidence and a
    verdict; `findings` with file, line and severity. Then

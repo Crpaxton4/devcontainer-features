@@ -30,8 +30,9 @@ are the lines of your prompt.
 - Prompt tokens: the task id, the target series, an optional `user@host` for the
   Studio inventory.
 - Project: get_task gives the project name. `project-resolve.sh "<project>" --series <target>`
-  gives `repo`, `repo_path`, `default_branch`, `odoo_version` and the base branch for
-  the port (the project's upgrade branch for the target series, else `default_branch`).
+  gives `repo`, `repo_root`, `base_branch`, `odoo_version` and `upgrade_branch`, the base
+  branch for the port (the project's upgrade branch for the target series, else the
+  last element of `branch_flow`).
 
 ## Procedure
 
@@ -45,7 +46,7 @@ are the lines of your prompt.
    or enterprise code is an environment failure, not a port defect.
    Keep the JSON line of a green preflight in `<ARTIFACTS>/preflight.json`. Step 3 uses it.
 2. `worktree-ensure.sh` as the builder does, with the upgrade branch from the
-   `--series` output of the resolved project in the place of `<default_branch>`.
+   `upgrade_branch` of the `--series` output in the place of `<base_branch>`.
 3. Inventory under `<ARTIFACTS>/inventory/`, in one call: `inventory.sh --artifacts <ARTIFACTS>
    --worktree <worktree> --series <target> [--ssh <host>]` (the script of the `odoo-upgrade`
    skill). Exit 10 is a stop; relay its failure lines verbatim.
@@ -95,7 +96,7 @@ are the lines of your prompt.
 ## Outputs
 
 `upgrade-state.sh <ARTIFACTS> build` writes the `build` section from the `upgrade` section:
-`worktree`, `branch`, `modules` (the ported modules), `odoo_version` (the target) and `default_branch`,
+`worktree`, `branch`, `modules` (the ported modules), `odoo_version` (the target) and `base_branch`,
 which holds the base branch the port used (the
 upgrade branch when the project has one), plus the
 `<ARTIFACTS>/inventory/` directory. The test evidence is `<ARTIFACTS>/tests/summary.json`, written by `upgrade_tests.sh`, never typed by hand.

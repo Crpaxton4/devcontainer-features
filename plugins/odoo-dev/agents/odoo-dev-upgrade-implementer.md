@@ -53,10 +53,9 @@ to.
    the install loop, then the test stage of that procedure. Its command
    `upgrade-state.sh next` drives the loop.
 2. Test. Run `/odoo-dev:test <task id> <session id>`. The session id is the job id.
-   Read the environment variable `ODOO_DEV_STATE_DIR` with `printenv`. When its path
-   contains `/dispatch/artifacts/`, the job id is the last part of that path. Use
-   the same job id on every test run of this session. Otherwise run `/odoo-dev:test
-   <task id>` with no session id.
+   Read the environment variable `ODOO_JOB_ID` with `printenv`. When it is set, its
+   value is the job id. Use the same job id on every test run of this session.
+   Otherwise run `/odoo-dev:test <task id>` with no session id.
 3. Iterate. Give the failure lines to `/odoo-dev:upgrade <task id> <series> <host>`.
    Run the test stage again, with the same session id. Stop the loop at three red
    test runs and report the failure.

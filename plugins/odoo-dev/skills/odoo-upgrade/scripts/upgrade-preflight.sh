@@ -7,13 +7,13 @@
 # agent relays verbatim and never judges (#1149).
 #
 # Usage: upgrade-preflight.sh --target <series> --project "<name>"
-#                             [--ssh <host>] [--repo-path <dir>]
+#                             [--ssh <host>] [--repo-root <dir>]
 #
 # Checks, in order, each through the sibling skill script (path resolved from
 # this file's location):
-#   project   project-resolve.sh "<name>" -> repo, repo_path, default_branch
-#             (--repo-path overrides repo_path)
-#   env       preflight.sh --soft --target-series V --custom-tree <repo_path>
+#   project   project-resolve.sh "<name>" -> repo, repo_root, base_branch
+#             (--repo-root overrides repo_root)
+#   env       preflight.sh --soft --target-series V --custom-tree <repo_root>
 #             -> its failures[] are merged
 #   addons    addons_paths.sh --series V -> enterprise_path; every missing[]
 #             entry is a failure
@@ -22,8 +22,8 @@
 #
 # Output: one line per check on stderr (`PASS <check>` or `FAIL <check>: <why>`),
 # then one JSON line on stdout:
-#   {ok, failures[], source_db, enterprise_path, repo, repo_path,
-#    default_branch, env_fingerprint, env_fingerprint_parts}
+#   {ok, failures[], source_db, enterprise_path, repo, repo_root,
+#    base_branch, env_fingerprint, env_fingerprint_parts}
 # env_fingerprint is the sha256 of `odoo --version` (or $ODOO_VERSION),
 # enterprise_path, the enterprise tree's git HEAD when it is a git tree, and the
 # addons path (the addons_paths list of addons_paths.sh joined with commas),
@@ -40,6 +40,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS="$(cd "$SCRIPT_DIR/../.." && pwd)"
+JSON_GET="$SKILLS/../scripts/json-get.sh"
 if [ -n "${ODOO_DEV_SIBLING_SCRIPTS:-}" ]; then
   PREFLIGHT="$ODOO_DEV_SIBLING_SCRIPTS/preflight.sh"
   ADDONS="$ODOO_DEV_SIBLING_SCRIPTS/addons_paths.sh"
@@ -50,15 +51,15 @@ else
   RESOLVE="$SKILLS/odoo-repo-map/scripts/project-resolve.sh"
 fi
 
-usage() { echo "usage: upgrade-preflight.sh --target <series> --project <name> [--ssh <host>] [--repo-path <dir>]" >&2; exit 2; }
+usage() { echo "usage: upgrade-preflight.sh --target <series> --project <name> [--ssh <host>] [--repo-root <dir>]" >&2; exit 2; }
 
-target=""; project=""; ssh_host=""; repo_path_arg=""
+target=""; project=""; ssh_host=""; repo_root_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) [ $# -ge 2 ] || usage; target="$2"; shift 2 ;;
     --project) [ $# -ge 2 ] || usage; project="$2"; shift 2 ;;
     --ssh) [ $# -ge 2 ] || usage; ssh_host="$2"; shift 2 ;;
-    --repo-path) [ $# -ge 2 ] || usage; repo_path_arg="$2"; shift 2 ;;
+    --repo-root) [ $# -ge 2 ] || usage; repo_root_arg="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -68,16 +69,13 @@ failures=()
 fail() { failures+=("$2"); echo "FAIL $1: $2" >&2; }
 pass() { echo "PASS $1" >&2; }
 
-# jq-free JSON access: field NAME of the JSON on stdin ("" when absent),
-# or the list under NAME, one element per line.
-jfield() { python3 -I -c 'import json,sys
-v=json.load(sys.stdin).get(sys.argv[1],"")
-print("" if v is None else v)' "$1" 2>/dev/null; }
-jlist() { python3 -I -c 'import json,sys
-for x in json.load(sys.stdin).get(sys.argv[1]) or []: print(x)' "$1" 2>/dev/null; }
+# Field NAME of the JSON on stdin ("" when absent), or the list under NAME, one
+# element per line. Both go through the plugin's one JSON helper.
+jfield() { "$JSON_GET" 'd[a.name]' name="$1" 2>/dev/null; }
+jlist() { "$JSON_GET" -l 'd[a.name] || []' name="$1" 2>/dev/null; }
 lastline() { printf '%s\n' "$1" | awk 'NF{l=$0} END{print l}'; }
 
-repo=""; repo_path=""; default_branch=""; enterprise_path=""; source_db=""; addons_path=""
+repo=""; repo_root=""; base_branch=""; enterprise_path=""; source_db=""; addons_path=""
 
 # --- project ------------------------------------------------------------------
 out="$(bash "$RESOLVE" "$project" 2>/dev/null)"; rc=$?
@@ -86,17 +84,17 @@ if [ "$rc" -ne 0 ] || [ -z "$json" ]; then
   fail project "project: '$project' did not resolve (project-resolve.sh exit $rc)"
 else
   repo="$(printf '%s' "$json" | jfield repo)"
-  repo_path="$(printf '%s' "$json" | jfield repo_path)"
-  default_branch="$(printf '%s' "$json" | jfield default_branch)"
+  repo_root="$(printf '%s' "$json" | jfield repo_root)"
+  base_branch="$(printf '%s' "$json" | jfield base_branch)"
   pass project
 fi
-[ -n "$repo_path_arg" ] && repo_path="$repo_path_arg"
+[ -n "$repo_root_arg" ] && repo_root="$repo_root_arg"
 
 # --- env ----------------------------------------------------------------------
-if [ -z "$repo_path" ]; then
-  fail env "env: no repo_path to import the custom tree from"
+if [ -z "$repo_root" ]; then
+  fail env "env: no repo_root to import the custom tree from"
 else
-  out="$(bash "$PREFLIGHT" --soft --target-series "$target" --custom-tree "$repo_path" 2>/dev/null)"
+  out="$(bash "$PREFLIGHT" --soft --target-series "$target" --custom-tree "$repo_root" 2>/dev/null)"
   json="$(lastline "$out")"
   env_failed=0
   while IFS= read -r line; do
@@ -144,13 +142,23 @@ fingerprint="$(printf '%s\n%s\n%s\n%s' "$odoo_ver" "$enterprise_path" "$head_rev
 
 # --- verdict ------------------------------------------------------------------
 ok=true; [ "${#failures[@]}" -eq 0 ] || ok=false
-printf '%s\0' "${failures[@]+"${failures[@]}"}" | python3 -I -c 'import json,sys
-a=sys.argv[1:]
-f=[x for x in sys.stdin.read().split("\0") if x]
-print(json.dumps({"ok":a[0]=="true","failures":f,"source_db":a[1],"enterprise_path":a[2],
- "repo":a[3],"repo_path":a[4],"default_branch":a[5],"env_fingerprint":a[6],
- "env_fingerprint_parts":{"odoo_version":a[7],"enterprise_path":a[2],"enterprise_head":a[8],"addons_path":a[9]}}))' \
-  "$ok" "$source_db" "$enterprise_path" "$repo" "$repo_path" "$default_branch" "$fingerprint" \
-  "$odoo_ver" "$head_rev" "$addons_path"
+"$JSON_GET" '({
+  ok: a.ok === "true",
+  failures: a.failures.split("\n").filter(Boolean),
+  source_db: a.source_db,
+  enterprise_path: a.enterprise_path,
+  repo: a.repo,
+  repo_root: a.repo_root,
+  base_branch: a.base_branch,
+  env_fingerprint: a.fingerprint,
+  env_fingerprint_parts: {
+    odoo_version: a.odoo_ver,
+    enterprise_path: a.enterprise_path,
+    enterprise_head: a.head_rev,
+    addons_path: a.addons_path,
+  },
+})' ok="$ok" failures="$(printf '%s\n' "${failures[@]+"${failures[@]}"}")" source_db="$source_db" \
+  enterprise_path="$enterprise_path" repo="$repo" repo_root="$repo_root" base_branch="$base_branch" \
+  fingerprint="$fingerprint" odoo_ver="$odoo_ver" head_rev="$head_rev" addons_path="$addons_path" <<<'{}'
 [ "$ok" = true ] && exit 0
 exit 10

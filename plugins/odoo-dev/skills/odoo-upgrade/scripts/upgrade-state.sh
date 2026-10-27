@@ -321,7 +321,7 @@ if (cmd === "friction") {
 
 if (cmd === "build") {
   const live = Object.entries(u.modules).filter(([, r]) => ["ported", "installed", "tested"].includes(r.status)).map(([n]) => n);
-  write("build", { worktree: u.inputs.worktree, branch: u.inputs.branch, modules: live, odoo_version: u.inputs.to, default_branch: u.inputs.base_branch });
+  write("build", { worktree: u.inputs.worktree, branch: u.inputs.branch, modules: live, odoo_version: u.inputs.to, base_branch: u.inputs.base_branch });
   process.exit(0);
 }
 ' -- "$ARTIFACT_SH" "$ARTS" "$CMD" "$@"
