@@ -18,8 +18,7 @@
 #   setup.sh                 creates each host_source under the host home directory
 #                            (mkdir -p / chmod mode - the container sees the HOST
 #                            mode through an active bind mount, so the mode column
-#                            must be enforced on both sides), and initializes the
-#                            host-provisioned tracker database schema. It never
+#                            must be enforced on both sides). It never
 #                            chowns: a source it does not own stops it with the
 #                            `sudo chown` remedy rather than a chmod failure (#974)
 #   setup.ps1                mirrors setup.sh row-for-row (hand-kept in sync; no pwsh CI
@@ -44,13 +43,11 @@
 #                    container_target, setup.sh chmods host_source (setup.ps1
 #                    does not - NTFS has no POSIX modes, and Docker Desktop
 #                    synthesizes in-container bits for shared paths). 0700 for
-#                    the credential-holding dirs (#233) and the billing DB (#369);
+#                    the credential-holding dirs (#233), including the odoo-dev
+#                    state root, whose config.toml holds the Odoo credentials;
 #                    0777 for shell-history so any container uid can create/append
 #                    bash_history through the bind mount even when it does not own
-#                    the host dir (#323); also 0700 for the odoo-dev plugin state
-#                    dir (#884), which holds no credentials but does hold client
-#                    task artifacts, repo-map.json and release history; 0755
-#                    otherwise.
+#                    the host dir (#323); 0755 otherwise.
 #   provision        who creates the container_target: `container` = install.sh
 #                    mkdir/chown/chmods it at build time (the common case);
 #                    `host` = the host provisions it (setup.sh/setup.ps1) and it is
@@ -64,12 +61,11 @@
 # marks a FILE (created with touch, after mkdir -p of its parent). Docker
 # materialises a *missing* single-file mount source as a directory, which then
 # fails the mount, so file sources must be touched into existence - hence the
-# distinction. All eleven paths are directories today.
+# distinction. All paths are directories today.
 #
 # name	host_source	container_target	env_var	env_value	mode	provision
 claude	.claude/	/usr/local/share/claude-home/	CLAUDE_CONFIG_DIR	/usr/local/share/claude-home	0700	container
 gh	.config/gh/	/usr/local/share/gh-cli-config/	GH_CONFIG_DIR	/usr/local/share/gh-cli-config	0700	container
-odoo_client	.config/odoo_client/	/usr/local/share/odoo-sdk-config/	ODOO_SDK_CONFIG	/usr/local/share/odoo-sdk-config	0700	container
 pr-automation	.config/pr-automation/	/usr/local/share/pr-automation/	PR_AUTOMATION_CONFIG_DIR	/usr/local/share/pr-automation	0755	container
 coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CONFIG_DIR	/usr/local/share/coderabbit-config	0700	container
 # coderabbit-cli: target hardcodes /home/vscode — the CLI derives its state dir as
@@ -78,15 +74,9 @@ coderabbit	.config/coderabbit/	/usr/local/share/coderabbit-config/	CODERABBIT_CO
 # consumers (remoteUser vscode); under a root remoteUser the dir is provisioned but inert.
 coderabbit-cli	.coderabbit/	/home/vscode/.coderabbit/	-	-	0700	container
 shell-history	.config/devcontainer/shell-history/	/usr/local/share/shell-history/	-	-	0777	container
-odoo-tracker	.config/odoo-task-tracker/	/usr/local/share/odoo-task-tracker/	ODOO_TASK_TRACKER_DIR	/usr/local/share/odoo-task-tracker	0700	host
 mempalace	.mempalace/	/usr/local/share/mempalace/	MEMPALACE_PALACE_PATH	/usr/local/share/mempalace/palace	0700	container
-# odoo-dev: the odoo-dev plugin's state dir (#884). Its scripts resolve
-# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}, and in a container $HOME is
-# image storage - so without this mount every task artifact, repo-map.json and
-# release record is discarded on the next rebuild, silently and with no error.
-# ODOO_DEV_STATE_DIR below is what makes the plugin resolve the mount instead.
-odoo-dev	.config/odoo-dev/	/usr/local/share/odoo-dev/	ODOO_DEV_STATE_DIR	/usr/local/share/odoo-dev	0700	container
-# usage-log (#1204): the usage and declaration SQLite stores. Fixed host path (not a
-# host env var, #649). 0777 like shell-history: writers in different containers may
-# run as different uids and each creates its own WAL side files in this directory.
-usage-log	.local/state/usage-log/	/usr/local/share/usage-log/	USAGE_LOG_DIR	/usr/local/share/usage-log	0777	container
+# odoo-dev: the suite's one state root (ODOO_DEV_HOME). config.toml holds the Odoo
+# credentials, hence 0700; the same directory holds repo-map.json, state.db,
+# usage.db, tasks/ and locks/. In a container $HOME is image storage, so without
+# this mount all of it is discarded on the next rebuild, silently.
+odoo-dev	.config/odoo-dev/	/usr/local/share/odoo-dev/	ODOO_DEV_HOME	/usr/local/share/odoo-dev	0700	container

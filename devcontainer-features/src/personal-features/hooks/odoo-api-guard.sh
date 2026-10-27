@@ -65,7 +65,7 @@ set -u
 IN=$(cat 2>/dev/null || true)
 # Usage log (#1204): record this hook's own run before any early exit. Silent
 # (stdout carries the permission JSON), never fails the hook.
-if [ -n "${USAGE_LOG_DIR:-}" ] && command -v usage-log >/dev/null 2>&1; then
+if [ "${ODOO_DEV_USAGE_LOG:-1}" != 0 ] && command -v usage-log >/dev/null 2>&1; then
     usage-log record hook odoo-api-guard.sh source=personal-features </dev/null >/dev/null 2>&1 || true
 fi
 [ -n "$IN" ] || exit 0
@@ -117,8 +117,8 @@ RULES = (
     ),
     (
         "odoo-credentials",
-        "the service-account credential directory odoo-mcp reads",
-        r"odoo-sdk-config",
+        "the service-account credential file odoo-mcp reads",
+        r"(/usr/local/share|\.config)/odoo-dev/config\.toml",
         "Those credentials belong to odoo-mcp and to nothing else; do not read, "
         "copy or print them.",
     ),

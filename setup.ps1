@@ -93,15 +93,12 @@ To fix, either:
 $paths = @(
     '.claude'
     '.config/gh'
-    '.config/odoo_client'
     '.config/pr-automation'
     '.config/coderabbit'
     '.coderabbit'
     '.config/devcontainer/shell-history'
-    '.config/odoo-task-tracker'
     '.mempalace'
     '.config/odoo-dev'
-    '.local/state/usage-log'
 )
 
 foreach ($path in $paths) {
@@ -110,4 +107,4 @@ foreach ($path in $paths) {
     Write-Host "ok  $full"
 }
 
-# The host no longer provisions tracker.db; `odoo-dev doctor --migrate` imports it later.
+Write-Host "Next: inside the container, run 'odoo-dev doctor --migrate' to migrate the legacy stores."

@@ -17,17 +17,16 @@
 #                        is NOT documented on that page. `.skill` is the key Claude
 #                        Code uses; `.name` is read as a fallback.
 # Only NAMES are read. tool_input is never logged beyond the skill name, and
-# mcp__odoo-mcp__* calls are not logged here (odoo-sdk logs them itself).
+# mcp__odoo-mcp__* calls are not logged here (odoo-mcp logs them itself).
 #
 # Only names in this repo's namespaces are kept: `odoo-dev:` for skills and
 # commands; `odoo-dev:`-prefixed or bare `odoo-dev-*` for agent types.
 #
 # CONTRACT: never write to stdout (SessionStart stdout becomes session context),
-# never exit non-zero, and do nothing when USAGE_LOG_DIR is unset (host sessions
-# share the same settings.json and must not log).
+# never exit non-zero, and do nothing when ODOO_DEV_USAGE_LOG=0.
 set -u
 
-[ -n "${USAGE_LOG_DIR:-}" ] || exit 0
+[ "${ODOO_DEV_USAGE_LOG:-1}" != 0 ] || exit 0
 command -v usage-log >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
