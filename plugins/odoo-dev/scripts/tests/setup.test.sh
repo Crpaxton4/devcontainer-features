@@ -293,7 +293,7 @@ json="$(printf '%s' "$out" | tail -1)"
 assert_shape "no sdk config" "$json"
 has     "no sdk config: sdk-model-ids named in missing[]" "$(jarr "$json" missing)" sdk-model-ids
 has_sub "no sdk config: manual_steps carries the get_models command" \
-        "$(jarr "$json" manual_steps)" "odoo-sdk cmd get_models --args"
+        "$(jarr "$json" manual_steps)" "odoo-dev cmd get_models --args"
 
 mkdir -p "$T/sdk"
 printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n' \

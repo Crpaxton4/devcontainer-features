@@ -35,7 +35,7 @@
 # that exists is not enough: an old install answers `cmd` with an argparse usage
 # dump and nothing on stdout. So `odoo-dev --version` is probed once, and its major
 # is compared with the suite version this plugin requires (the "odoo-dev" entry of
-# "requires" in .claude-plugin/plugin.json, for example ">=9.0"). A CLI that is
+# requires.json at the plugin root, for example ">=9.0"). A CLI that is
 # missing or older fails here as MissingCLI (exit 4) naming the upgrade.
 #
 # Sessions: no verb starts or needs a run. `task_note` posts without an active run.
@@ -150,14 +150,14 @@ command -v odoo-dev >/dev/null 2>&1 \
   || fail_json 4 "MissingCLI" "odoo-dev is not on PATH — install the suite with: uv sync --all-packages"
 
 # The binary existing is not the same as the binary being the suite version this
-# plugin was written for. Read the required version from the plugin manifest (one
+# plugin was written for. Read the required version from requires.json (one
 # parse), the installed one from `odoo-dev --version` ("odoo-dev <version>").
 required="$(node -e '
   const fs = require("fs");
-  const req = (JSON.parse(fs.readFileSync(process.argv[1], "utf8")).requires || {})["odoo-dev"] || "";
+  const req = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))["odoo-dev"] || "";
   const m = /(\d+)/.exec(req);
   console.log(m ? m[1] : "");
-' "$(dirname "${BASH_SOURCE[0]}")/../.claude-plugin/plugin.json" 2>/dev/null)" || required=""
+' "$(dirname "${BASH_SOURCE[0]}")/../requires.json" 2>/dev/null)" || required=""
 probe_rc=0
 probe_out="$(odoo-dev --version 2>&1)" || probe_rc=$?
 probe_out="${probe_out:0:400}"
@@ -165,7 +165,7 @@ installed="$(printf '%s' "$probe_out" | sed -nE 's/^odoo-dev ([0-9]+)\..*/\1/p' 
 if [ "$probe_rc" -ne 0 ] || [ -z "$installed" ] \
    || { [ -n "$required" ] && [ "$installed" -lt "$required" ]; }; then
   fail_json 4 "MissingCLI" \
-    "the installed odoo-dev CLI is missing or older than this plugin requires (major ${required:-unknown}, from plugin.json). Upgrade it with: uv sync --all-packages. Probe 'odoo-dev --version' exited ${probe_rc}: ${probe_out}"
+    "the installed odoo-dev CLI is missing or older than this plugin requires (major ${required:-unknown}, from requires.json). Upgrade it with: uv sync --all-packages. Probe 'odoo-dev --version' exited ${probe_rc}: ${probe_out}"
 fi
 
 case "$verb" in

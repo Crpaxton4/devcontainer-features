@@ -90,8 +90,8 @@ expect_exit "missing CLI exits 4" 4 $rc
 expect_contains "missing CLI names MissingCLI" "$out" '"type":"MissingCLI"'
 
 # ---------- odoo-dev older than the plugin requires (#902 #889) ------------------
-# The binary is on PATH but its major is below the "requires" field of
-# plugin.json. The preflight probe must catch that before any verb dispatches.
+# The binary is on PATH but its major is below the "odoo-dev" entry of
+# requires.json. The preflight probe must catch that before any verb dispatches.
 reset_stub
 out="$(STUB_OLD=1 bash "$SUT" note 42 "hello" 2>/dev/null)"; rc=$?
 expect_exit "odoo-dev older than required exits 4" 4 $rc

@@ -222,7 +222,7 @@ fi
 # worst possible moment to discover a config gap. Read-only, and read the way the
 # SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_client.*, then
 # ~/.config/odoo_client. ODOO_MODEL_IDS counts too — it is the documented override.
-MODEL_IDS_STEP="odoo-sdk cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
+MODEL_IDS_STEP="odoo-dev cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
 
 sdk_config_path() {
   local candidate="${ODOO_SDK_CONFIG:-}" f
@@ -301,7 +301,7 @@ fi
 # The repo-map scripts are wrappers over it.
 odoo_dev_version="$(bounded "$BOUND_S" odoo-dev --version 2>/dev/null || true)"
 odoo_dev_version="${odoo_dev_version#odoo-dev }"
-# plugin.json requires odoo-dev >=9
+# requires.json: odoo-dev >=9
 if [ "${odoo_dev_version%%.*}" -ge 9 ] 2>/dev/null; then
   pass odoo-dev "$odoo_dev_version"
 else

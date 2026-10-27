@@ -218,7 +218,7 @@ odoo_dev_cli_ready() {
   local version
   version="$(odoo-dev --version)" || return 1
   version="${version#odoo-dev }"
-  # plugin.json requires odoo-dev >=9
+  # requires.json: odoo-dev >=9
   [ "${version%%.*}" -ge 9 ] 2>/dev/null
 }
 check odoo-dev-cli odoo_dev_cli_ready
