@@ -1,4 +1,4 @@
-"""Tests for the generic ``odoo-sdk cmd`` dispatcher (#713).
+"""Tests for the generic ``odoo-dev cmd`` dispatcher (#713).
 
 The dispatcher exposes every registry command on the CLI with one contract:
 stdout is always exactly one JSON document. Success prints the raw command
@@ -42,7 +42,7 @@ def _run_cli(*argv: str) -> tuple[int, str]:
     """Run ``cli.main()`` with ``argv``; return ``(exit_code, stdout)``."""
     out = StringIO()
     code = 0
-    with patch.object(sys, "argv", ["odoo-sdk", *argv]), redirect_stdout(out):
+    with patch.object(sys, "argv", ["odoo-dev", *argv]), redirect_stdout(out):
         try:
             cli.main()
         except SystemExit as exc:
@@ -169,7 +169,7 @@ class TestCmdDispatchSuccess(unittest.TestCase):
         )
 
     def test_read_dispatch_records_the_queried_id_without_attributing(self):
-        # #1040 on the CLI dispatch surface: ``odoo-sdk cmd get_task`` is just as
+        # #1040 on the CLI dispatch surface: ``odoo-dev cmd get_task`` is just as
         # capable of minting a phantom 0.25 h session as the MCP tool was, so the
         # queried id lands in the payload and NOT in ``task_ids``.
         db = _tmp_db()

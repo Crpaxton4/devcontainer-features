@@ -1,7 +1,7 @@
 # usage_log
 
 Standalone usage logging for the features this repo owns (skills, agents,
-slash commands, hooks, odoo-mcp tools, odoo-sdk commands). Python stdlib only,
+slash commands, hooks, odoo-mcp tools, odoo-dev commands). Python stdlib only,
 Python 3.10 or later. It imports nothing from `odoo_client`, the dispatcher or the
 tracker. Those call it, never the reverse.
 

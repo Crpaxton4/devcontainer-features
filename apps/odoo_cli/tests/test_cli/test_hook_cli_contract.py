@@ -1,7 +1,7 @@
 """Cross-boundary contract test: the ``claude-event-hook`` shim ↔ ``log-event``.
 
 The devcontainer feature's ``claude-event-hook`` shim shells out to
-``odoo-sdk log-event --source claude:<HookName> --attach-active-run [--payload …]``
+``odoo-dev log-event --source claude:<HookName> --attach-active-run [--payload …]``
 and swallows every failure by design (it always exits 0 and forks the SDK call
 into a detached background job). So a rename of ``--attach-active-run`` /
 ``--payload`` or of the ``claude:`` source prefix would pass every existing SDK
@@ -192,7 +192,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         models the one case where it has none to forward (a detached HEAD or a
         non-repo cwd), where the event attributes to no task."""
         argv = [
-            "odoo-sdk",
+            "odoo-dev",
             "log-event",
             "--source",
             f"{_CLAUDE_SOURCE_PREFIX}PreToolUse",
@@ -277,7 +277,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         # is non-git (repo/branch resolve empty), proving attribution rides on the
         # STATED branch, not the working tree.
         argv = [
-            "odoo-sdk",
+            "odoo-dev",
             "log-event",
             "--source",
             f"{_CLAUDE_SOURCE_PREFIX}PostToolUse",

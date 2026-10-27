@@ -5,7 +5,7 @@ small end: a single-event session (``MIN == MAX`` timestamp) spans zero hours
 and a sub-minute session rounds toward nothing. The upload path now applies a
 configurable **minimum** (floor, default ``0.25h``) and **rounding** (nearest
 multiple, half-up, default ``0.05h``) at the one choke point that feeds both the
-TUI ``u`` key and ``odoo-sdk upload``.
+TUI ``u`` key and ``odoo-dev upload``.
 
 The suite has three layers:
 
@@ -232,7 +232,7 @@ def _run_cli(
         patch(f"{_MOD}.build_client", return_value=client),
         patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
-        patch("sys.argv", ["odoo-sdk", *argv]),
+        patch("sys.argv", ["odoo-dev", *argv]),
     ):
         local_config.load.return_value = config
         cli.main()

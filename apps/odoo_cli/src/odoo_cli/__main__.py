@@ -400,7 +400,7 @@ def cmd_upload(
     ``query_sessions`` command derives the sessions for the optional date range,
     then the shared :func:`~odoo_dev_core.billing.upload.upload_sessions` loop
     reconciles each session's hours and sweeps the window's stale upload mappings
-    — so a non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI
+    — so a non-interactive ``odoo-dev upload`` bills exactly the rows the TUI
     would. ``--dry-run`` previews the billable set without writing to Odoo.
     """
     sessions = registry["query_sessions"].execute(
@@ -434,7 +434,7 @@ def _cmd_fail(exc: BaseException, code: int) -> NoReturn:
 
     The envelope is built by the same :func:`~odoo_dev_core.commands.
     dispatch_telemetry._error_payload` the MCP error boundary uses, so a script
-    driving ``odoo-sdk cmd`` sees exactly the ``{"error": {"type", "message"}}``
+    driving ``odoo-dev cmd`` sees exactly the ``{"error": {"type", "message"}}``
     shape an MCP caller would. Exit ``1`` marks a boundary (caller-actionable)
     failure, ``2`` a usage error — unknown name, malformed ``--args``, bad
     kwargs.

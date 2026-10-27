@@ -1,4 +1,4 @@
-"""Tests for the ``odoo-sdk log-event`` subcommand.
+"""Tests for the ``odoo-dev log-event`` subcommand.
 
 Events land in the one host-provisioned central tracker DB
 (``$ODOO_DEV_HOME/state.db``, #369) regardless of the cwd's repo. The
@@ -25,7 +25,7 @@ def _run(argv: list[str]) -> StringIO:
     """Invoke ``cli.main`` with ``argv``; return captured stderr."""
     stderr = StringIO()
     with (
-        patch("sys.argv", ["odoo-sdk", *argv]),
+        patch("sys.argv", ["odoo-dev", *argv]),
         patch("sys.stderr", stderr),
         patch("sys.stdout", StringIO()),
     ):
@@ -123,7 +123,7 @@ class TestLogEvent(unittest.TestCase):
         stderr = StringIO()
         with self.assertRaises(SystemExit) as ctx:
             with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
-                with patch("sys.argv", ["odoo-sdk", "log-event", "--source", "bogus"]):
+                with patch("sys.argv", ["odoo-dev", "log-event", "--source", "bogus"]):
                     cli.main()
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("unknown event source 'bogus'", stderr.getvalue())

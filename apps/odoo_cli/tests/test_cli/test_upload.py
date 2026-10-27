@@ -1,4 +1,4 @@
-"""End-to-end tests for the headless ``odoo-sdk upload`` subcommand (issue #354).
+"""End-to-end tests for the headless ``odoo-dev upload`` subcommand (issue #354).
 
 Seeds a temporary state DB with events that derive into one session, then drives
 ``main`` with a recording fake Odoo client (mocked transport, no live Odoo), so
@@ -7,7 +7,7 @@ the whole pipeline runs for real: ``query_sessions`` derives from SQL,
 and runs the orphan sweep, and the idempotency ledger is written. The key
 evidence is the shared-path test: the same seeded events driven through the TUI
 ``u`` path produce the identical ``account.analytic.line`` wire calls, proving a
-non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI would.
+non-interactive ``odoo-dev upload`` bills exactly the rows the TUI would.
 """
 
 import unittest
@@ -98,7 +98,7 @@ def _run_cli(argv: list[str], db: EventStore, client: _RecordingOdooClient) -> s
         patch(f"{_MOD}.build_client", return_value=client),
         patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
-        patch("sys.argv", ["odoo-sdk", *argv]),
+        patch("sys.argv", ["odoo-dev", *argv]),
     ):
         local_config.load.return_value = _config()
         cli.main()
@@ -174,7 +174,7 @@ class TestCmdUpload(unittest.TestCase):
 
     def test_cli_bills_identical_rows_to_the_tui_upload_path(self):
         # The acceptance proof for #354: the same seeded events driven through
-        # the TUI 'u' loop and through headless `odoo-sdk upload` produce the
+        # the TUI 'u' loop and through headless `odoo-dev upload` produce the
         # IDENTICAL account.analytic.line wire calls, because both surfaces
         # share the one billing.upload.upload_sessions loop.
         from odoo_dev_core.commands import Registry

@@ -1,6 +1,6 @@
 # Cosmic Ray config for CI — uses the local (single-process) distributor so
 # no HTTP worker infrastructure is needed. Used by the mutation job in
-# .github/workflows/odoo-sdk-quality.yaml; the http-worker config in
+# .github/workflows/suite.yaml; the http-worker config in
 # cosmic-ray.toml is for local parallel runs.
 
 [cosmic-ray]

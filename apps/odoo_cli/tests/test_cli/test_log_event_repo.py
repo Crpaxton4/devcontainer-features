@@ -1,4 +1,4 @@
-"""Tests for ``odoo-sdk log-event --repo`` — caller-stated repo attribution (#742).
+"""Tests for ``odoo-dev log-event --repo`` — caller-stated repo attribution (#742).
 
 The repo an event belongs to is the repo of the *session's* cwd, which is not
 the cwd the CLI process happens to run in: the hook shim is spawned by Claude
@@ -27,7 +27,7 @@ from odoo_dev_data.events import EventStore as TaskStateDB
 def _run(argv: list[str]) -> None:
     """Invoke ``cli.main`` with ``argv``, swallowing its stdio."""
     with (
-        patch("sys.argv", ["odoo-sdk", *argv]),
+        patch("sys.argv", ["odoo-dev", *argv]),
         patch("sys.stderr", StringIO()),
         patch("sys.stdout", StringIO()),
     ):

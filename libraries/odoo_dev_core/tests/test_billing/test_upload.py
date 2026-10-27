@@ -1,7 +1,7 @@
 """Tests for the shared derived-session upload loop (issue #354).
 
 This is the single upload path both the TUI ``u`` key and the headless
-``odoo-sdk upload`` subcommand delegate to. The tests exercise the loop's
+``odoo-dev upload`` subcommand delegate to. The tests exercise the loop's
 selection (numeric task ids only), the per-session ``reconcile_session``
 inputs, the orphan-sweep wiring (window scoping, skip on dry run), the
 ``dry_run`` preview, the ``range_bounds`` date semantics, and the summary

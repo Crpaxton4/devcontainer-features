@@ -1,4 +1,4 @@
-"""Smoke tests for the ``odoo-sdk resync`` subcommand (issues #328, #652, #653).
+"""Smoke tests for the ``odoo-dev resync`` subcommand (issues #328, #652, #653).
 
 The pullers themselves are unit-tested against faked tools elsewhere; here they
 are patched so the tests assert only the CLI's wiring: source selection, the
@@ -22,7 +22,7 @@ class TestCmdResync(unittest.TestCase):
         with (
             patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
             patch("sys.stdout", out),
-            patch("sys.argv", ["odoo-sdk", *argv]),
+            patch("sys.argv", ["odoo-dev", *argv]),
         ):
             with _apply(patches):
                 cli.main()
@@ -35,7 +35,7 @@ class TestCmdResync(unittest.TestCase):
             patch(f"{_MOD}.TaskStateDB", return_value=MagicMock()),
             patch("sys.stdout", out),
             patch("sys.stderr", StringIO()),
-            patch("sys.argv", ["odoo-sdk", *argv]),
+            patch("sys.argv", ["odoo-dev", *argv]),
         ):
             with _apply(patches):
                 with self.assertRaises(SystemExit) as ctx:

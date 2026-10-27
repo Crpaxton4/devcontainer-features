@@ -1,7 +1,7 @@
 """The shared derived-session upload loop (issue #354).
 
 This is the single upload code path shared by every surface: the ``odoo-tui``
-``u`` key and the headless ``odoo-sdk upload`` subcommand both derive sessions
+``u`` key and the headless ``odoo-dev upload`` subcommand both derive sessions
 the same way (the ``query_sessions`` command) and feed those session dicts into
 :func:`upload_sessions` here, so a non-interactive invocation bills exactly the
 rows the TUI would. It lives in ``billing`` — not in a command — because it is
@@ -69,7 +69,7 @@ def _billable_hours(raw_hours: float, minimum: float, step: float) -> float:
     (half-up; ``step == 0`` disables rounding), then raised to ``minimum`` so a
     below-minimum session is floored *up* to the minimum (never dropped) and the
     rounded result can never dip below the floor. Both the TUI ``u`` key and
-    ``odoo-sdk upload`` reach this through :func:`upload_sessions`.
+    ``odoo-dev upload`` reach this through :func:`upload_sessions`.
 
     :param raw_hours: The session's raw wall-clock span in hours.
     :param minimum: The per-session floor in hours (``min_session_hours``).
@@ -265,7 +265,7 @@ def upload_sessions(
     :param config: Resolved SDK settings supplying the per-session billing
         policy (``min_session_hours`` / ``round_session_hours``, issue #355).
         When omitted it is loaded via :meth:`LocalConfig.load` so both entry
-        points (the TUI ``u`` key and ``odoo-sdk upload``) pick up the file and
+        points (the TUI ``u`` key and ``odoo-dev upload``) pick up the file and
         environment overrides automatically.
     :return: A summary dict with ``uploaded`` (billable session count),
         ``skipped`` (non-numeric-task sessions), ``failed`` (per-session

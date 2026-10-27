@@ -53,7 +53,7 @@ TOON_OUTPUT_ENV = "ODOO_TOON_OUTPUT"
 #: Name of the subdirectory (under the system temp dir) that holds MCP profiling
 #: archives. Confining artifacts to a dedicated folder keeps pruning scoped to
 #: the SDK's own files and away from anything else living in the temp dir.
-PROFILE_SUBDIR = "odoo-sdk-profiles"
+PROFILE_SUBDIR = "odoo-dev-profiles"
 
 #: Maximum number of profiling zips retained on disk. After every dump the
 #: oldest archives beyond this count are deleted, so an enabled profiler cannot

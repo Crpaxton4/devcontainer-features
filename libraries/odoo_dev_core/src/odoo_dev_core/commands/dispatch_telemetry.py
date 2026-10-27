@@ -1,6 +1,6 @@
 """Shared dispatch boundary + telemetry for the command-dispatching surfaces.
 
-Extracted from ``odoo_mcp.server`` (#713) so the CLI's generic ``odoo-sdk
+Extracted from ``odoo_mcp.server`` (#713) so the CLI's generic ``odoo-dev
 cmd`` dispatcher and the MCP tool surface share ONE error vocabulary and ONE
 event emitter instead of two drifting copies. This module is core-layer on
 purpose (ADR-005): it imports nothing from any surface (``cli`` / ``mcp`` /

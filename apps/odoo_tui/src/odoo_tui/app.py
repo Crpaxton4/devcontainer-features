@@ -231,7 +231,7 @@ def _run_upload(
 ) -> dict[str, Any]:
     """Bill the derived sessions through the shared upload loop (#354).
 
-    The ``u`` key and the headless ``odoo-sdk upload`` subcommand share the one
+    The ``u`` key and the headless ``odoo-dev upload`` subcommand share the one
     :func:`~odoo_dev_core.billing.upload.upload_sessions` path: idempotent per
     ``session_key`` (a re-run never double-bills) plus a window-scoped orphan
     sweep (#353) scoped to the inclusive dates forwarded here. Returns the full
