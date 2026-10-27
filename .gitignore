@@ -25,8 +25,8 @@ node_modules/
 *.py[cod]
 .venv/
 libraries/odoo_client/build/
-libraries/odoo_client/docs/build/
-libraries/odoo_client/docs/source/api/
+docs/_build/
+docs/api/
 .hypothesis/
 .cosmic-ray/
 reports/

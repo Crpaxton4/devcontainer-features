@@ -29,6 +29,12 @@ dev = [
     "import-linter>=2.3",
     "pytest>=9.1.1",
 ]
+docs = [
+    "furo>=2024.8.6",
+    "myst-parser>=3.0,<5",
+    "sphinx>=7.0,<9",
+    "sphinx-autodoc-typehints>=2.0,<3.11",
+]
 
 [tool.pytest.ini_options]
 # One pytest config for the workspace: rootdir is this directory, every test
