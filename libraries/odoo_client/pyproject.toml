@@ -107,7 +107,7 @@ output = "reports/complexipy/"
 # Layer model (docs/source/design/architecture/ADR-005): surface (cli, mcp,
 # tui) / core (commands, billing, sessionization, and —
 # promoted by #718 — the records/query domain types) / data (transport,
-# client, fields, env, adapters, services) + shared kernel (_utils,
+# client, fields, env, services) + shared kernel (_utils,
 # errors, settings). Every ignore entry below is either marked "permanent"
 # (a named ADR-005 exception) or carries the issue that deletes it;
 # `unmatched_ignore_imports_alerting = "error"` means the lists can only
@@ -143,7 +143,6 @@ source_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.adapters",
     "odoo_client.services",
     # shared kernel
     "odoo_client._utils",
@@ -164,7 +163,6 @@ source_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.adapters",
     "odoo_client.services",
 ]
 forbidden_modules = [
@@ -199,7 +197,6 @@ forbidden_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.adapters",
     "odoo_client.services",
 ]
 allow_indirect_imports = true
@@ -235,7 +232,6 @@ source_modules = [
     "odoo_client.query",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.adapters",
     "odoo_client.services",
     # shared kernel
     "odoo_client._utils",
@@ -279,7 +275,7 @@ exhaustive_ignores = [
 layers = [
     "cli : mcp : tui",
     "commands : billing : sessionization : records : query",
-    "transport : client : fields : env : adapters : services",
+    "transport : client : fields : env : services",
     "_utils : settings : _text",
 ]
 ignore_imports = [

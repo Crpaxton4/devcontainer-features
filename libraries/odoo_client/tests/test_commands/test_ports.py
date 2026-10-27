@@ -15,8 +15,6 @@ New file, deliberately additive (#718 test policy).
 import inspect
 import unittest
 
-from odoo_client.adapters import git as git_adapter
-from odoo_client.adapters import github as github_adapter
 from odoo_client.client import OdooClient
 from odoo_client.commands.protocols import (
     GitGateway,
@@ -25,6 +23,8 @@ from odoo_client.commands.protocols import (
     SettingsView,
     StateStore,
 )
+from odoo_dev_data.adapters import git as git_adapter
+from odoo_dev_data.adapters import github as github_adapter
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventStore
 

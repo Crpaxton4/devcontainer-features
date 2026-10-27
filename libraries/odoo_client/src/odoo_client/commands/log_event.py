@@ -114,7 +114,7 @@ def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:
 
 
 # Minimum digit count for a task id recovered from a branch, mirroring the resync
-# puller (``adapters.external_sync._MIN_TASK_ID_DIGITS``): a shorter run is almost
+# puller (``odoo_dev_data.adapters._common._MIN_TASK_ID_DIGITS``): a shorter run is almost
 # always a stray number, and using the same floor keeps a hook event and the
 # commit it accompanies on the SAME task lane rather than splitting them (#378).
 _MIN_TASK_ID_DIGITS = 4
@@ -123,7 +123,7 @@ _MIN_TASK_ID_DIGITS = 4
 # BEFORE the ``-``), anchored to a token start (``^`` or a ``/`` path separator)
 # so a digit run buried mid-token (e.g. ``fixes-1234-x``) is never read as a
 # task id. Kept in lockstep with the same ``(\d+)-`` form in
-# ``adapters.external_sync._TASK_ID_PATTERNS`` so hook and resync attribution
+# ``odoo_dev_data.adapters._common._TASK_ID_PATTERNS`` so hook and resync attribution
 # agree on a session branch.
 _BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}})-")
 

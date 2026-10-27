@@ -45,7 +45,7 @@ _CITATIONS = (
     (re.compile(r"^odoo:mail:(?P<n>.+)$"), "chatter msg {n}"),
 )
 
-# The key the #378a producer (:mod:`odoo_client.adapters.external_sync`) stamps when
+# The key the #378a producer (:mod:`odoo_dev_data.adapters`) stamps when
 # a task id was extracted but did not validate against ``project.task``. A truthy
 # value (a non-empty list) marks the session weak; its absence is simply no
 # signal (an un-flagged event is not evidence of validity either way).

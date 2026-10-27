@@ -3,17 +3,17 @@
 ADR-005's hexagonal seam, defined where it is consumed: core (and the
 surfaces that ride on core) depend on these structural Protocols, and the
 concrete adapters satisfy them without registration or inheritance. One port
-per external system, mirroring the ``adapters/`` package layout:
+per external system:
 
-========================  =====================================  =========================
-Port                      Concrete adapter                       Adapter package
-========================  =====================================  =========================
-:class:`RpcClient`        ``OdooClient``                         ``client/`` + ``transport/``
-:class:`StateStore`       ``EventStore``                   ``state/`` (+ ``adapters/state``)
-:class:`GitGateway`       ``sync_git_log`` module surface        ``adapters/git``
-:class:`IssueTracker`     ``sync_github`` module surface         ``adapters/github``
-:class:`SettingsView`     ``LocalConfig``                        ``state/config``
-========================  =====================================  =========================
+========================  ===========================  ================================
+Port                      Concrete adapter             Adapter module
+========================  ===========================  ================================
+:class:`RpcClient`        ``OdooClient``               ``client/`` + ``transport/``
+:class:`StateStore`       ``EventStore``               ``odoo_dev_data.events``
+:class:`GitGateway`       ``sync_git_log``             ``odoo_dev_data.adapters.git``
+:class:`IssueTracker`     ``sync_github``              ``odoo_dev_data.adapters.github``
+:class:`SettingsView`     ``LocalConfig``              ``odoo_dev_data.config``
+========================  ===========================  ================================
 
 Every member of every port is *derived from what the consumers actually
 call today* — nothing speculative. The gateway ports are satisfied by the
@@ -27,6 +27,7 @@ inject overrides through that command's ``pullers`` seam, while
 """
 
 from datetime import date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 from odoo_dev_data.events import EventRecord, SessionWindow
@@ -149,7 +150,7 @@ class GitGateway(Protocol):
     Derived from core's one call site
     (:data:`odoo_client.commands.builtin.resync._SYNC_DISPATCH`): a single
     idempotent reconcile over the resolved capture window. The adapter
-    package :mod:`odoo_client.adapters.git` satisfies it as a module
+    module :mod:`odoo_dev_data.adapters.git` satisfies it as a module
     (PEP 544); tests satisfy it with plain fakes through the ``pullers``
     seam.
     """
@@ -160,6 +161,7 @@ class GitGateway(Protocol):
         config: Optional["LocalConfig"] = None,
         client: Any = None,
         *,
+        root: Optional[Path] = None,
         now: Optional[datetime] = None,
         start: Optional[date] = None,
         end: Optional[date] = None,
@@ -173,7 +175,7 @@ class IssueTracker(Protocol):
     (:data:`odoo_client.commands.builtin.resync._SYNC_DISPATCH`): one
     account-wide, idempotent reconcile of authored PRs, reviews, and
     comments over the resolved window. The adapter package
-    :mod:`odoo_client.adapters.github` satisfies it as a module (PEP 544).
+    :mod:`odoo_dev_data.adapters.github` satisfies it as a module (PEP 544).
     (Odoo task chatter needs no sibling port: its puller reaches Odoo
     through the existing :class:`RpcClient`.)
     """
