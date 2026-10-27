@@ -8,11 +8,11 @@ import asyncio
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 from odoo_mcp import server
-from odoo_mcp.server import OdooMCPServer, _to_toon, _toon_output_enabled
-from ..support import make_service
+from odoo_mcp.server import _to_toon, _toon_output_enabled
+from ..support import make_service, wire_tools
 
 
 def _dict_tool() -> dict:
@@ -37,13 +37,7 @@ async def _async_dict_tool() -> dict:
 
 def _build_added(name, tool_fn):
     """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    registry = make_service(client=Mock())
-    mock_mcp = MagicMock()
-    added = []
-    mock_mcp.add_tool.side_effect = added.append
-    with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(registry, explicit_tools={name: tool_fn})
-    return added[0]
+    return wire_tools(make_service(client=Mock()), {name: tool_fn})[name]
 
 
 class TestToonOutputFlag(unittest.TestCase):
@@ -143,19 +137,13 @@ class TestToonComposesWithProfiling(unittest.TestCase):
 
     def test_both_wrappers_apply_when_enabled(self):
         registry = make_service(client=Mock())
-        mock_mcp = MagicMock()
-        added = []
-        mock_mcp.add_tool.side_effect = added.append
         with (
             TemporaryDirectory() as tmp,
             patch("tempfile.gettempdir", return_value=tmp),
             patch.dict("os.environ", {server.TOON_OUTPUT_ENV: "1"}),
-            patch("odoo_mcp.server.FastMCP", return_value=mock_mcp),
         ):
-            OdooMCPServer(
-                registry, explicit_tools={"dict_tool": _dict_tool}, profiling=True
-            )
-            result = added[0].fn()
+            tools = wire_tools(registry, {"dict_tool": _dict_tool}, profiling=True)
+            result = tools["dict_tool"].fn()
             profiles = sorted(
                 (Path(tmp) / server.PROFILE_SUBDIR).glob("odoo_profile_*.zip")
             )

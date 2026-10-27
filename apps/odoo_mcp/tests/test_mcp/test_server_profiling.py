@@ -231,36 +231,33 @@ class TestServerProfilingWiring(unittest.TestCase):
         self.assertTrue(on.profiling)
 
     def test_tools_not_wrapped_when_profiling_off(self):
-        def a() -> str:
-            """Tool A."""
-            return "a"
-
         with (
             patch("odoo_mcp.server.FastMCP", return_value=MagicMock()),
             patch("odoo_mcp.server._profiled") as mock_profiled,
         ):
-            OdooMCPServer(_registry(), explicit_tools={"a": a}, profiling=False)
+            OdooMCPServer(_registry(), profiling=False)
         mock_profiled.assert_not_called()
 
     def test_tools_wrapped_when_profiling_on(self):
-        def a() -> str:
-            """Tool A."""
-            return "a"
-
         with (
             patch("odoo_mcp.server.FastMCP", return_value=MagicMock()),
-            patch("odoo_mcp.server._profiled", return_value=a) as mock_profiled,
+            patch(
+                "odoo_mcp.server._profiled", side_effect=lambda fn, name: fn
+            ) as mock_profiled,
         ):
-            OdooMCPServer(_registry(), explicit_tools={"a": a}, profiling=True)
+            OdooMCPServer(_registry(), profiling=True)
+        # One profiled wrapper per generated tool.
+        self.assertEqual(mock_profiled.call_count, 32)
+        wrapped_fn, tool_name = next(
+            c.args for c in mock_profiled.call_args_list if c.args[1] == "get_uid"
+        )
         # Wrapping order is usage-logging (innermost, #1204), then event-emitting,
         # then error-boundary, then TOON, then profiling (outermost), so the tool
-        # passed to _profiled is the TOON wrapper around the error-boundary
-        # wrapper around the event-emitting wrapper around the usage-logging
-        # wrapper around ``a`` -- not ``a`` directly.
-        mock_profiled.assert_called_once()
-        wrapped_fn, tool_name = mock_profiled.call_args.args
-        self.assertEqual(tool_name, "a")
-        self.assertIs(wrapped_fn.__wrapped__.__wrapped__.__wrapped__.__wrapped__, a)
+        # passed to _profiled is the TOON wrapper, four wrappers above the
+        # generated tool.
+        generated = wrapped_fn.__wrapped__.__wrapped__.__wrapped__.__wrapped__
+        self.assertEqual(generated.__name__, "get_uid")
+        self.assertFalse(hasattr(generated, "__wrapped__"))
 
 
 if __name__ == "__main__":

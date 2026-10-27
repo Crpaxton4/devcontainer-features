@@ -4,22 +4,21 @@ The ``_event_emitting`` wrapper is the *sole* event producer for the MCP tool
 surface: every successful tool dispatch writes exactly one ``source="agent"``
 event row, exceptions and SEP-2322 input-required ask legs (#664) emit nothing,
 and telemetry failures never break the tool call. These tests drive the wrapper
-through the full registration chain (built by ``OdooMCPServer._register_tools``)
+through the full registration chain (built by ``OdooMCPServer._add_tool``)
 and unit-test the small emission helpers.
 """
 
 import asyncio
 import inspect
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 from odoo_dev_core import default_registry, telemetry
 from odoo_dev_core.telemetry import READ_TASK_IDS_PAYLOAD_KEY
 from odoo_mcp import server as server_mod
-from odoo_mcp.server import OdooMCPServer
 from odoo_dev_data.events import EventStore
 from ..support import make_event_store
-from ..support import make_service
+from ..support import make_service, wire_tools
 
 #: Patch targets for the best-effort git lookups the ``log_event`` command performs
 #: when a caller leaves ``repo``/``branch`` unstated (#509).
@@ -31,14 +30,9 @@ def _tmp_db() -> EventStore:
     return make_event_store()
 
 
-def _build_tools(registry, explicit_tools):
-    """Build a server with FastMCP mocked out; return {name: Tool} added."""
-    mock_mcp = MagicMock()
-    added = []
-    mock_mcp.add_tool.side_effect = added.append
-    with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(registry, explicit_tools=explicit_tools)
-    return {t.name: t for t in added}
+def _build_tools(registry, fake_tools):
+    """Run the fake tools through the server chain; return {name: Tool}."""
+    return wire_tools(registry, fake_tools)
 
 
 class TestDispatchEmitsEvent(unittest.TestCase):
