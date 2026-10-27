@@ -34,9 +34,7 @@ services:
       DISPATCH_CONFIG_ROOT: "${DISPATCH_CONFIG_ROOT:?set DISPATCH_CONFIG_ROOT}"
       DISPATCH_PLUGIN_ROOT: "${ODOO_ORCHESTRATOR_CHECKOUT:?set ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-dev"
       DISPATCH_CLAUDE_HOME: "${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}"
-      ODOO_DISPATCH_STATE_DIR: "${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}"
-      ODOO_ORCHESTRATOR_HOME: "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
-      USAGE_LOG_DIR: "${HOME}/.local/state/usage-log"
+      ODOO_DEV_HOME: "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
       # Optional settings: passed through only when set on the host.
       USERPROFILE:
       MIN_FREE_GB:
@@ -47,7 +45,6 @@ services:
       DISPATCH_INVARIANTS_FILE:
       DISPATCH_ENTRY:
       DISPATCH_ADDITIONAL_FEATURES:
-      DISPATCH_ARTIFACTS_DIR:
       DISPATCH_REPO_OWNER:
       DISPATCH_REPO_MAP_FILE:
     volumes:
@@ -56,10 +53,7 @@ services:
       - "${DISPATCH_REPOS_DIR}:${DISPATCH_REPOS_DIR}"
       - "${DISPATCH_CONFIG_ROOT}:${DISPATCH_CONFIG_ROOT}"
       - "${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}:${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}"
-      - "${HOME}/.config/odoo-dev:${HOME}/.config/odoo-dev"
-      - "${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}:${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}"
-      - "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}:${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
-      - "${HOME}/.local/state/usage-log:${HOME}/.local/state/usage-log"
+      - "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}:${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
 
   # The orchestrator helper (orchestrator.py), run by orchestrator.sh as a one-off
   # `run --rm`. It needs no docker socket. It never starts on `up`.
@@ -75,14 +69,13 @@ services:
       - "${HOME:?HOME must be set}:uid=${ODOO_ORCHESTRATOR_UID},gid=${ODOO_ORCHESTRATOR_GID},mode=0700"
     environment:
       HOME: "${HOME:?HOME must be set}"
-      ODOO_ORCHESTRATOR_HOME: "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
+      ODOO_DEV_HOME: "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
     # The scripts dir is the plugin's installed copy, set by orchestrator.sh. The
-    # fallback is the copy in the checkout. friction and records read
-    # <bundle>/envelope.json from the artifacts dir, which is read-only.
+    # fallback is the copy in the checkout. The service runs from the dispatcher
+    # image, which carries odoo_dev_data and dispatcher.reporting.
     volumes:
-      - "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}:${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
+      - "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}:${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
       - "${ODOO_ORCHESTRATOR_SCRIPTS_DIR:-${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts}:${ODOO_ORCHESTRATOR_SCRIPTS_DIR:-${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts}:ro"
-      - "${DISPATCH_ARTIFACTS_DIR:-${HOME}/.config/odoo-dev/dispatch/artifacts}:${DISPATCH_ARTIFACTS_DIR:-${HOME}/.config/odoo-dev/dispatch/artifacts}:ro"
 
   # The read-only web interface at http://127.0.0.1:8765. It needs no docker socket.
   # dispatch.sh starts it with the dispatcher (`up -d dispatcher webui`; a second
@@ -101,15 +94,9 @@ services:
     user: "${ODOO_ORCHESTRATOR_UID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_UID to id -u}:${ODOO_ORCHESTRATOR_GID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_GID to id -g}"
     environment:
       HOME: "${HOME:?HOME must be set}"
-      ODOO_DISPATCH_STATE_DIR: "${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}"
-      ODOO_ORCHESTRATOR_HOME: "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
-      DISPATCH_ARTIFACTS_DIR: "${DISPATCH_ARTIFACTS_DIR:-${HOME}/.config/odoo-dev/dispatch/artifacts}"
-      USAGE_LOG_DIR: "${HOME}/.local/state/usage-log"
-    # The state dir and the orchestrator home are read-write on purpose: a :ro bind
-    # breaks a WAL reader when -wal and -shm are absent. The pages open SQLite
-    # with mode=ro and have no write route. The artifacts are only read.
+      ODOO_DEV_HOME: "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
+    # The state root is read-write on purpose: a :ro bind breaks a WAL reader when
+    # -wal and -shm are absent. The pages open SQLite with mode=ro and have no
+    # write route.
     volumes:
-      - "${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}:${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/odoo-task-tracker}"
-      - "${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}:${ODOO_ORCHESTRATOR_HOME:-${HOME}/.local/state/odoo-orchestrator}"
-      - "${DISPATCH_ARTIFACTS_DIR:-${HOME}/.config/odoo-dev/dispatch/artifacts}:${DISPATCH_ARTIFACTS_DIR:-${HOME}/.config/odoo-dev/dispatch/artifacts}:ro"
-      - "${HOME}/.local/state/usage-log:${HOME}/.local/state/usage-log"
+      - "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}:${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"

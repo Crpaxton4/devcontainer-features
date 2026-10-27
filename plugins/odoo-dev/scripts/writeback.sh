@@ -10,13 +10,7 @@
 #
 # Usage:
 #   writeback.sh note <task_id> <text> [--dedupe-key KEY]
-#       -> odoo-sdk cmd get_tasks        --args '{"domain":[["id","=",N]],"limit":1}'
-#          then
-#          odoo-sdk cmd start_task       --args '{"task_id":N,"task_name":...,
-#            "project_id":...,"project_name":...}'
-#          (the ensure-session step — see "Sessions" below; start_task needs the
-#           resolved identity, which is why the task is read first)
-#       -> odoo-sdk cmd task_note        --args '{"task_id":N,"note":TEXT[,"dedupe_key":KEY]}'
+#       -> odoo-sdk cmd task_note       --args '{"task_id":N,"note":TEXT[,"dedupe_key":KEY]}'
 #   writeback.sh activity <task_id> --summary TEXT
 #                [--type NAME] [--note TEXT] [--deadline YYYY-MM-DD] [--user-id N]
 #       -> odoo-sdk cmd search_activity_types --args '{"query":NAME,"res_model":"project.task"}'
@@ -39,25 +33,14 @@
 #
 # Preflight (#902 #889): `odoo-sdk cmd` is what every verb below rides on, and it
 # has existed since #727 (cli/__main__.py registers the `cmd` subparser and routes
-# it to cmd_cmd). Both issues were filed from machines whose *installed* odoo-sdk
+# it to cmd_cmd). Both issues were filed from machines whose *installed* odoo-dev CLI
 # predated that release, so the binary was on PATH but argparse rejected `cmd` and
 # the caller got a usage dump on stderr and nothing on stdout. Checking that the
 # binary exists is therefore not enough: `odoo-sdk cmd --help` is probed too, and a
 # CLI that cannot serve `cmd` fails here as MissingCLI (exit 4) naming the upgrade.
 #
-# Sessions (#891): `task_note` requires a RUNNING tracking session
-# (require_active_run) and raises TaskNotRunningError without one — which bites
-# exactly when the branch was cut by hand rather than driven through start_task.
-# The `note` verb therefore ensures the session itself: it resolves the task's
-# identity with `get_tasks` and calls `start_task`, which is idempotent in every
-# session state (already RUNNING -> already_running: true and zero side effects;
-# AWAITING_ANSWERS / STOPPED -> reopened in place; none -> a fresh run). The
-# session is deliberately NOT stopped afterwards: the note is part of running work,
-# and stopping a session this script did not own would truncate someone's tracking.
-# `activity` and `done` do not ensure a session, because none of the commands they
-# dispatch (search_activity_types / schedule_activity / get_activities /
-# mark_activity_done) calls require_active_run — starting a run for them would
-# leave a session nobody opened and nobody stops.
+# Sessions: no verb starts or needs a tracking session. `task_note` posts without
+# an active run.
 #
 # Output: on success, the CLI's own JSON result, verbatim, as the last stdout
 # line. On a CLI failure, the CLI's JSON error envelope {"error":{"type",
@@ -178,39 +161,7 @@ probe_out="$(odoo-sdk cmd --help 2>&1)" || probe_rc=$?
 probe_out="${probe_out:0:400}"  # argparse names every choice it does accept; that
                                 # list is the useful half and it is short.
 [ "$probe_rc" -eq 0 ] || fail_json 4 "MissingCLI" \
-  "the installed odoo-sdk does not serve 'odoo-sdk cmd' — it predates the cmd subcommand (#727), which every writeback here dispatches through. Upgrade it with: python3 -m pip install --upgrade ./libraries/odoo_client (or: uv tool install --force ./libraries/odoo_client). Probe 'odoo-sdk cmd --help' exited ${probe_rc}: ${probe_out}"
-
-# ensure_session <task_id> — #891. task_note requires a RUNNING tracking session
-# and raises TaskNotRunningError without one, so the writeback creates it rather
-# than making the caller discover the requirement at the end of a task. start_task
-# is idempotent in every session state, but it takes *resolved* identity (task
-# name, project id and name — the MCP tool does that resolution), so the task is
-# read first. The session is left running on purpose: the note is part of the work.
-ensure_session() {
-  cli get_tasks "{\"domain\":[[\"id\",\"=\",$1]],\"limit\":1}"
-  [ "$CLI_RC" -eq 0 ] || die_cli
-  identity_rc=0
-  start_args="$(node -e '
-    const rows = JSON.parse(process.argv[1]);
-    const row = Array.isArray(rows) ? rows[0] : null;
-    if (!row) process.exit(20);
-    const project = row.project_id;
-    if (!Array.isArray(project) || project.length !== 2) process.exit(21);
-    console.log(JSON.stringify({
-      task_id: Number(process.argv[2]),
-      task_name: String(row.name),
-      project_id: Number(project[0]),
-      project_name: String(project[1]),
-    }));
-  ' "$CLI_OUT" "$1")" || identity_rc=$?
-  if [ "$identity_rc" -eq 20 ]; then
-    fail_json 3 "ValueError" "task $1 does not exist (or is not visible to this login), so no tracking session can be started for it"
-  elif [ "$identity_rc" -ne 0 ]; then
-    fail_json 3 "ValueError" "task $1 has no project, and start_task needs a resolved project — start the session yourself (mcp__odoo-mcp__start_task) and rerun"
-  fi
-  cli start_task "$start_args"
-  [ "$CLI_RC" -eq 0 ] || die_cli
-}
+  "the installed odoo-dev CLI does not serve 'odoo-sdk cmd' — it predates the cmd subcommand (#727), which every writeback here dispatches through. Upgrade it with: python3 -m pip install --upgrade ./libraries/odoo_client (or: uv tool install --force ./libraries/odoo_client). Probe 'odoo-sdk cmd --help' exited ${probe_rc}: ${probe_out}"
 
 case "$verb" in
   note)
@@ -228,8 +179,6 @@ case "$verb" in
     chars="$(node -e 'console.log(Array.from(process.argv[1]).length)' "$text")"
     [ "$chars" -le 500 ] || fail_json 2 "ValueError" \
       "note is ${chars} characters; the chatter cap is 500 — shorten it (the SDK rejects over-limit notes, it does not truncate)"
-    # #891: task_note refuses without a RUNNING session, so ensure one first.
-    ensure_session "$task_id"
     args="$(node -e '
       const o = {task_id: Number(process.argv[1]), note: process.argv[2]};
       if (process.argv[3] !== "") o.dedupe_key = process.argv[3];

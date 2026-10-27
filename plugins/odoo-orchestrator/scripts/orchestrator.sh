@@ -6,8 +6,8 @@
 #
 # The container runs the orchestrator.py that sits beside this script, mounted
 # read-only at the same path, so the command and its helper never differ. Standard
-# input passes through (`unhandled` reads it). The container has no docker socket.
-# It sees the orchestrator home (read-write) and the artifacts dir (read-only).
+# input passes through. The container has no docker socket. It sees the
+# ODOO_DEV_HOME state root (read-write).
 #
 # Exit codes are those of orchestrator.py: 0 done, 1 `lint` found a hit, 2 bad
 # arguments or unreadable input. This script adds 127 when
@@ -37,8 +37,11 @@ if [[ -z ${ODOO_ORCHESTRATOR_DOCKER_GID:-} ]]; then
 fi
 export ODOO_ORCHESTRATOR_UID ODOO_ORCHESTRATOR_GID ODOO_ORCHESTRATOR_DOCKER_GID
 # A missing bind source would be created by the daemon, owned by root.
-mkdir -p "${DISPATCH_ARTIFACTS_DIR:-$HOME/.config/odoo-dev/dispatch/artifacts}"
-mkdir -p "${ODOO_ORCHESTRATOR_HOME:-$HOME/.local/state/odoo-orchestrator}"
+odoo_dev_home=${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}
+if [[ ! -d $odoo_dev_home ]]; then
+    mkdir -p "$odoo_dev_home" && chmod 0700 "$odoo_dev_home"
+fi
+export ODOO_DEV_HOME=$odoo_dev_home
 
 exec docker compose -f "$stack_file" run --rm -T orchestrator \
     python3 "$scripts_dir/orchestrator.py" "$@"
