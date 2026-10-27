@@ -1,7 +1,19 @@
 import unittest
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
-from odoo_dev_core.sessionization import ET, SessionizationConfig
+from odoo_dev_core.sessionization import SessionizationConfig
+
+ET = ZoneInfo("America/Chicago")
+
+
+class _Settings:
+    """A settings view carrying only the four knobs ``from_settings`` reads."""
+
+    session_gap_secs = 1800
+    min_session_hours = 0.2
+    round_session_hours = 0.1
+    day_bucket_tz = ZoneInfo("UTC")
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -48,6 +60,22 @@ class TestDerivedProperties(unittest.TestCase):
         self.assertEqual(cfg.min_session_hours, 0.25)
         self.assertEqual(cfg.round_session_hours, 0.05)
         self.assertEqual(cfg.session_gap_secs, 3600)
+
+    def test_from_settings_reads_the_four_knobs(self):
+        cfg = SessionizationConfig.from_settings(
+            _Settings(), start_date=date(2026, 6, 1), end_date=date(2026, 6, 1)
+        )
+        self.assertEqual(cfg.session_gap_secs, 1800)
+        self.assertEqual(cfg.min_session_hours, 0.2)
+        self.assertEqual(cfg.round_session_hours, 0.1)
+        self.assertEqual(cfg.day_bucket_tz, ZoneInfo("UTC"))
+        self.assertEqual(cfg.start_date, date(2026, 6, 1))
+
+    def test_from_settings_moves_the_range_bounds(self):
+        cfg = SessionizationConfig.from_settings(
+            _Settings(), start_date=date(2026, 6, 3), end_date=date(2026, 6, 3)
+        )
+        self.assertEqual(cfg.range_start, datetime(2026, 6, 3, tzinfo=ZoneInfo("UTC")))
 
     def test_in_range(self):
         cfg = SessionizationConfig(

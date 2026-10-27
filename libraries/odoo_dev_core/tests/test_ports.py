@@ -87,7 +87,7 @@ class TestDataObjectsSatisfyThePorts(_Conformance):
 
     def test_ingest_only_members_stay_off_the_state_port(self):
         declared = set(_methods(StateStore))
-        for absent in ("add_event_dedup", "get_event", "get_events"):
+        for absent in ("add_event_dedup", "get_event"):
             self.assertNotIn(absent, declared)
 
     def test_local_config(self):

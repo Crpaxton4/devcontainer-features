@@ -84,12 +84,12 @@ class TestBootstrapDefaults(unittest.TestCase):
         bootstrap(env=self.env, client=MagicMock(), config=LocalConfig())
         self.assertTrue((Path(self._home.name) / "state.db").exists())
 
-    def test_job_ledger_is_built_only_inside_a_dispatched_job(self):
-        plain = bootstrap(env=self.env, client=MagicMock(), config=LocalConfig())
-        self.assertIsNone(plain.services.jobs)
-        job_env = {**self.env, "ODOO_JOB_ID": "job-1"}
-        dispatched = bootstrap(env=job_env, client=MagicMock(), config=LocalConfig())
-        self.assertIsInstance(dispatched.services.jobs, JobsPort)
+    def test_job_ledger_is_always_built_on_the_event_store_connection(self):
+        services = bootstrap(
+            env=self.env, client=MagicMock(), config=LocalConfig()
+        ).services
+        self.assertIsInstance(services.jobs, JobsPort)
+        self.assertIs(services.jobs._conn, services.events._conn)
 
 
 class TestBootstrapOverrides(unittest.TestCase):
@@ -107,6 +107,8 @@ class TestBootstrapOverrides(unittest.TestCase):
         self.assertIs(service.services.client, client)
         self.assertIs(service.services.events, events)
         self.assertIs(service.services.config, config)
+        # An injected store has no connection to share, so no job ledger.
+        self.assertIsNone(service.services.jobs)
 
     def test_partial_override_still_loads_config_once(self):
         client = MagicMock()

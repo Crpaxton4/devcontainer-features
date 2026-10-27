@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord, EventStore
 from ...support import make_event_store
-from ...fakes import service
+from odoo_dev_core.sessionization.jobs import to_us
+from ...fakes import FakeJob, FakeJobs, service
 from odoo_dev_core import default_registry
 
 UTC = timezone.utc
@@ -58,6 +59,28 @@ class TestQuerySessionsCommand(unittest.TestCase):
         self.assertEqual(len(session["events"]), 4)
         self.assertEqual(session["session_key"], "101|1")  # task|min_event_id
         self.assertEqual(session["strategy_name"], "development")
+
+    def test_finished_jobs_fold_into_the_event_sessions(self):
+        state = _tmp_state()
+        _commit(state, 0, hour=9)
+        job = FakeJob(
+            task_id="101",
+            started_us=to_us(datetime(2026, 6, 1, 9, 30, tzinfo=UTC)),
+            ended_us=to_us(datetime(2026, 6, 1, 10, 15, tzinfo=UTC)),
+            session_id="abc",
+            outcome="FAILED",
+        )
+        cmd = service(
+            client=MagicMock(),
+            events=state,
+            config=_config(),
+            jobs=FakeJobs([job]),
+        )
+        (session,) = cmd.execute("query_sessions", start_date="2026-06-01")
+        self.assertEqual(session["session_key"], "101|run:abc")
+        self.assertEqual(session["ended_at"][11:16], "10:15")
+        self.assertEqual(session["duration_secs"], 4500)
+        self.assertEqual(len(session["events"]), 1)
 
     def test_embedded_events_carry_audit_substance(self):
         # #626: one query yields a chronological audit with enough substance to

@@ -9,7 +9,7 @@ Strictly a composition of existing pieces — it adds no storage and issues no
 write:
 
 * **Derived hours** come from the same path the upload takes. Sessions are
-  derived with :meth:`~odoo_dev_data.events.EventStore.derive_sessions_overlapping`
+  derived with :meth:`~odoo_dev_core.ports.StateStore.derive_sessions_overlapping`
   (the ``query_sessions`` derivation) and run through
   :func:`~odoo_dev_core.billing.upload.upload_sessions` in ``dry_run`` mode, so the
   reported hours carry the *exact* billing transform an upload applies — the
@@ -38,8 +38,9 @@ from datetime import date
 from typing import Any, Optional
 
 from odoo_client.errors import OdooTransportError
-from odoo_dev_data.config import LocalConfig
-from odoo_dev_data.events import EventStore, SessionWindow, session_key
+from odoo_dev_core.ports import JobsPort, SettingsView, StateStore
+from odoo_dev_core.sessionization.jobs import derive_windows
+from odoo_dev_data.events import SessionWindow, session_key
 from odoo_dev_core.services.odoo_helpers import (
     get_employee_id,
     m2o_id,
@@ -75,12 +76,13 @@ def _session_dict(window: SessionWindow) -> dict[str, Any]:
 
 def _derived_hours_by_day_task(
     client: Any,
-    state: EventStore,
-    config: LocalConfig,
+    state: StateStore,
+    config: SettingsView,
     start: date,
     end: date,
     start_date: str,
     end_date: str,
+    jobs: JobsPort | None,
 ) -> dict[tuple[str, int], float]:
     """Bill the window's derived sessions (dry run) into (day, task) buckets.
 
@@ -90,8 +92,11 @@ def _derived_hours_by_day_task(
     the window (a session that overlaps the window but began earlier) are dropped
     so the report stays scoped to the requested days.
     """
-    windows = state.derive_sessions_overlapping(
-        *range_bounds(start_date, end_date), gap_secs=config.session_gap_secs
+    windows = derive_windows(
+        state,
+        jobs,
+        *range_bounds(start_date, end_date),
+        gap_secs=config.session_gap_secs,
     )
     preview = upload_sessions(
         client,
@@ -279,12 +284,13 @@ def _group_by_day(
 
 def unlogged_time_report(
     client: Any,
-    state: EventStore,
-    config: LocalConfig,
+    state: StateStore,
+    config: SettingsView,
     start_date: str,
     end_date: str,
     only_mine: bool = True,
     include_all: bool = False,
+    jobs: JobsPort | None = None,
 ) -> dict[str, Any]:
     """Report per (day, task) derived-vs-logged hours and their delta.
 
@@ -300,6 +306,8 @@ def unlogged_time_report(
         timesheets (matching what the upload would bill).
     :param include_all: Keep reconciled (zero-delta) rows too; by default only
         rows with a nonzero delta are returned.
+    :param jobs: The job ledger whose finished jobs fold into the derived
+        sessions, or None to derive from events alone.
     :return: A report dict with the echoed window, ``days`` (each a per-day total
         plus its rows), and window ``total_derived_hours`` /
         ``total_logged_hours`` / ``total_delta_hours``.
@@ -309,7 +317,7 @@ def unlogged_time_report(
     start = parse_date(start_date, "start_date")
     end = parse_date(end_date, "end_date")
     derived = _derived_hours_by_day_task(
-        client, state, config, start, end, start_date, end_date
+        client, state, config, start, end, start_date, end_date, jobs
     )
     logged = _logged_hours_by_day_task(client, start, end, only_mine)
     task_ids = {cell[1] for cell in derived.keys() | logged.keys()}

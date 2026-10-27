@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from odoo_dev_core.sessionization.formatting import (
     business_context,
@@ -15,10 +16,13 @@ UTC = timezone.utc
 
 class TestFormatting(unittest.TestCase):
     def test_fmt_et(self):
-        # Default day-bucket zone is US Central (issue #378 item 11): 16:00 UTC in
-        # June is 11:00 CDT, and the label is the resolved zone's abbreviation.
+        # The zone is explicit (issue #378 item 11): 16:00 UTC in June is 11:00
+        # CDT, and the label is the given zone's abbreviation.
         ts = datetime(2026, 6, 1, 16, 0, tzinfo=UTC)
-        self.assertEqual(fmt_et(ts), "2026-06-01 11:00 CDT")
+        self.assertEqual(
+            fmt_et(ts, ZoneInfo("America/Chicago")), "2026-06-01 11:00 CDT"
+        )
+        self.assertEqual(fmt_et(ts, ZoneInfo("UTC")), "2026-06-01 16:00 UTC")
 
     def test_fmt_duration(self):
         self.assertEqual(fmt_duration(3660), "1h 1m")

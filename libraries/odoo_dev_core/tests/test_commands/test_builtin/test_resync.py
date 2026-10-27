@@ -1,32 +1,17 @@
-"""Tests for the ``resync`` builtin command orchestration (issues #328, #652).
+"""Tests for the ``resync`` builtin: a thin handler over the resync workflow.
 
-The individual pullers are exercised in ``tests/test_adapters/test_external_sync``;
-here the gateways are fakes so the tests assert only the handler's own behavior:
-source selection, which pullers run, how the client/state are threaded, and how
-the explicit ``start``/``end`` range reaches (only) the git/github/odoo pullers.
+The workflow's dispatch is covered in ``tests/test_workflows/test_resync.py`` and
+the pullers in ``libraries/odoo_dev_data/tests/test_adapters_sync.py``. Here the
+tests assert only the handler: the string and date arguments it parses, and that
+it returns the workflow's per-source results.
 """
 
 import unittest
 from datetime import date
 from unittest.mock import MagicMock
 
-from odoo_dev_core.builtins.resync import _parse_sources
 from ...fakes import FakeChatter, FakeGit, FakeGitHub, service
 from odoo_dev_core import default_registry
-
-
-class TestParseSources(unittest.TestCase):
-    def test_default_and_blank_select_all(self) -> None:
-        self.assertEqual(_parse_sources("git,github,odoo"), ["git", "github", "odoo"])
-        self.assertEqual(_parse_sources(""), ["git", "github", "odoo"])
-        self.assertEqual(_parse_sources("  "), ["git", "github", "odoo"])
-
-    def test_subset_kept_in_stable_order(self) -> None:
-        # Order follows the canonical order, not the input order.
-        self.assertEqual(_parse_sources("odoo,git"), ["git", "odoo"])
-
-    def test_unknown_tokens_ignored(self) -> None:
-        self.assertEqual(_parse_sources("git,bogus"), ["git"])
 
 
 class TestResyncCommand(unittest.TestCase):

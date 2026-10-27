@@ -6,6 +6,8 @@ from typing import Any, Optional
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from odoo_dev_data.config import LocalConfig
+
 
 def sample_sessions() -> list[dict[str, Any]]:
     """Return a small set of session dicts in the ``query_sessions`` shape."""
@@ -65,7 +67,9 @@ class FakeService:
 
     def __init__(self, commands, client=None, store=None, config=None):
         self.commands = commands
-        self.services = SimpleNamespace(client=client, events=store, config=config)
+        self.services = SimpleNamespace(
+            client=client, events=store, config=config, jobs=None
+        )
 
     def execute(self, command_id, /, **kwargs):
         return self.commands[command_id].execute(**kwargs)
@@ -116,6 +120,6 @@ def build_fake_deps(
             commands,
             client=client if client is not None else MagicMock(),
             store=store if store is not None else build_fake_store(),
-            config=config if config is not None else MagicMock(session_gap_mins=60),
+            config=config if config is not None else LocalConfig(),
         )
     )

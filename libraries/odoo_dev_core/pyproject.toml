@@ -37,7 +37,8 @@ containers = ["odoo_dev_core"]
 exhaustive = true
 exhaustive_ignores = []
 layers = [
-    "workflows : builtins : telemetry",
+    "builtins : telemetry",
+    "workflows",
     "registry : billing : sessionization : services : attribution : _text",
     "ports",
 ]

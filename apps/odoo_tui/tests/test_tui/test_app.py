@@ -36,6 +36,7 @@ from odoo_tui.app import (
     _upload_sessions,
 )
 from odoo_client.transport.errors import OdooServerError
+from odoo_dev_data.config import LocalConfig
 from odoo_tui.evidence import WEAK, ReviewCard
 from odoo_tui.triage import TriageRow
 from odoo_tui.window import DateWindow
@@ -81,7 +82,9 @@ class FakeService:
 
     def __init__(self, commands, client=None, store=None, config=None):
         self.commands = commands
-        self.services = SimpleNamespace(client=client, events=store, config=config)
+        self.services = SimpleNamespace(
+            client=client, events=store, config=config, jobs=None
+        )
 
     def execute(self, command_id, /, **kwargs):
         return self.commands[command_id].execute(**kwargs)
@@ -119,7 +122,7 @@ def _deps(query_result=None, store=None, client=None, config=None, commands=None
             commands,
             client=client if client is not None else MagicMock(),
             store=store if store is not None else _default_store(),
-            config=config if config is not None else MagicMock(),
+            config=config if config is not None else LocalConfig(),
         )
     )
 

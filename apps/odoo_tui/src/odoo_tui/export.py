@@ -22,7 +22,7 @@ from datetime import date, timedelta
 # Core and core-owned ports only (#718): the raw-event read goes through the
 # tracking façade (ADR-005 rule 4), the state store is the consumer-side
 # Protocol, and the window vocabulary is the promoted core module.
-from odoo_dev_core.ports import StateStore
+from odoo_dev_core.ports import JobsPort, SettingsView, StateStore
 from odoo_dev_core.sessionization import (
     SessionizationConfig,
     TimeEntry,
@@ -33,18 +33,21 @@ from odoo_dev_core.sessionization import (
     render_odoo_csv,
     sweep,
 )
+from odoo_dev_core.sessionization.jobs import derive_windows
 from odoo_dev_core.sessionization.persistence import load_raw_events
 from odoo_dev_data.events import SessionWindow
 
 
-def config_for_window(start: date, end: date) -> SessionizationConfig:
+def config_for_window(
+    settings: SettingsView, start: date, end: date
+) -> SessionizationConfig:
     """Build a :class:`SessionizationConfig` covering the inclusive window.
 
-    The fixed session gap and the billing policy default from ``LocalConfig``, so
-    the config re-windows and rounds on exactly the knobs the SQL derivation and
-    the upload path use.
+    The fixed session gap, the billing policy and the day bucket zone come from
+    ``settings``, so the config re-windows and rounds on exactly the knobs the
+    SQL derivation and the upload path use.
     """
-    return SessionizationConfig(start_date=start, end_date=end)
+    return SessionizationConfig.from_settings(settings, start_date=start, end_date=end)
 
 
 def _entry_from_window(
@@ -69,22 +72,33 @@ def _entry_from_window(
 
 
 def build_result(
-    state: StateStore, start: date, end: date
+    state: StateStore,
+    settings: SettingsView,
+    start: date,
+    end: date,
+    *,
+    jobs: JobsPort | None = None,
 ) -> tuple[TransformResult, SessionizationConfig]:
     """Derive the window's sessions and project them into a render result.
 
-    The final entries come straight from ``derive_sessions_overlapping`` (the
-    billing source of truth); the sweep tables are a decoupled read-only analysis
-    over the same window's raw events.
+    The final entries come straight from the derived sessions (the billing
+    source of truth, finished jobs folded in when ``jobs`` is given); the sweep
+    tables are a decoupled read-only analysis over the same window's raw events.
 
     :param state: The state store (any :class:`StateStore`) to read from.
+    :param settings: The resolved settings the config is built from.
     :param start: Inclusive window start date.
     :param end: Inclusive window end date.
+    :param jobs: The job ledger to fold into the sessions, or None.
     :return: The computed :class:`TransformResult` and the config used.
     """
-    config = config_for_window(start, end)
-    windows = state.derive_sessions_overlapping(
-        config.range_start, config.range_end, gap_secs=config.session_gap_secs
+    config = config_for_window(settings, start, end)
+    windows = derive_windows(
+        state,
+        jobs,
+        config.range_start,
+        config.range_end,
+        gap_secs=config.session_gap_secs,
     )
     entries = [_entry_from_window(window, config) for window in windows]
     events = load_raw_events(state, config.range_start, config.range_end)
@@ -98,13 +112,27 @@ def build_result(
     return result, config
 
 
-def export_markdown(state: StateStore, start: date, end: date) -> str:
+def export_markdown(
+    state: StateStore,
+    settings: SettingsView,
+    start: date,
+    end: date,
+    *,
+    jobs: JobsPort | None = None,
+) -> str:
     """Return the markdown diagnostics document for the window."""
-    result, config = build_result(state, start, end)
+    result, config = build_result(state, settings, start, end, jobs=jobs)
     return render_markdown(result, config)
 
 
-def export_csv(state: StateStore, start: date, end: date) -> str:
+def export_csv(
+    state: StateStore,
+    settings: SettingsView,
+    start: date,
+    end: date,
+    *,
+    jobs: JobsPort | None = None,
+) -> str:
     """Return the Odoo-importable CSV for the window's derived entries."""
-    result, config = build_result(state, start, end)
+    result, config = build_result(state, settings, start, end, jobs=jobs)
     return render_odoo_csv(result, config)

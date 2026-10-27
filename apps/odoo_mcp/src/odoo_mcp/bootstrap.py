@@ -25,6 +25,7 @@ from odoo_dev_core import CommandService, Services, default_registry
 from odoo_dev_core.ports import RpcClient, SettingsView, StateStore
 from odoo_dev_data import adapters
 from odoo_dev_data.config import LocalConfig, connection_values
+from odoo_dev_data.db import connect
 from odoo_dev_data.events import EventStore
 from odoo_dev_data.home import resolve_home
 from odoo_dev_data.jobs import JobStore
@@ -146,7 +147,9 @@ def bootstrap(
         state home and the config, and rides on ``Services.env``.
     :param client: Any ``RpcClient``; defaults to a fresh :class:`OdooClient`.
     :param events: The event store; defaults to an :class:`EventStore` under
-        the state home.
+        the state home. The default shares its ``state.db`` connection with the
+        :class:`JobStore` that fills ``Services.jobs``. An injected store has no
+        connection to share, so ``Services.jobs`` is then ``None``.
     :param config: The resolved settings; defaults to ``LocalConfig.load(env=env)``.
     :returns: A :class:`CommandService` over every builtin command.
     """
@@ -156,8 +159,12 @@ def bootstrap(
         config = LocalConfig.load(env=env)
     if client is None:
         client = build_client(config)
+    jobs: Optional[JobStore] = None
     if events is None:
-        events = EventStore(home=home)
+        # One connection per process: the event store and the job ledger share it.
+        conn = connect(home)
+        events = EventStore(conn=conn)
+        jobs = JobStore(conn=conn)
     services = Services(
         client=client,
         events=events,
@@ -165,8 +172,7 @@ def bootstrap(
         git=adapters.git,
         github=adapters.github,
         chatter=adapters.odoo,
-        # The job ledger only matters inside a dispatched run (``ODOO_JOB_ID``).
-        jobs=JobStore(home=home) if env.get("ODOO_JOB_ID") else None,
+        jobs=jobs,
         repo_map=RepoMapStore(home),
         tasks=TaskStore(home),
         clock=SystemClock(),

@@ -9,73 +9,12 @@ filesystem, or MCP.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timezone
 from enum import Enum, auto
 
-
-def resolve_day_bucket_tz() -> tzinfo:
-    """Return the configured day-bucketing timezone (issue #378 item 11).
-
-    Reads the standard config resolver (``[behavior] day_bucket_tz`` /
-    ``ODOO_DAY_BUCKET_TZ``, default ``America/Chicago``). The import is local so
-    this state-agnostic module carries no import-time dependency on the state
-    layer and so each call re-resolves the current config (a test can move the
-    zone via an environment variable and see the new bucketing immediately).
-    """
-    from odoo_dev_data.config import LocalConfig
-
-    return LocalConfig.load().day_bucket_tz
-
-
-def resolve_session_gap_secs() -> int:
-    """Return the fixed sessionization inactivity gap in seconds (issue #404).
-
-    Reads the single first-class knob (``[behavior] session_gap_secs`` /
-    ``ODOO_SESSION_GAP_MINS``) so the pure Transform phase re-windows on exactly
-    the gap the SQL-derived billing path (``derive_sessions_overlapping``) uses.
-    The import is local so this state-agnostic module carries no import-time
-    dependency on the state layer and each call re-resolves the current config.
-    """
-    from odoo_dev_data.config import LocalConfig
-
-    return LocalConfig.load().session_gap_secs
-
-
-def resolve_min_session_hours() -> float:
-    """Return the per-session billing floor in hours (issue #404).
-
-    Reads the same ``[behavior] min_session_hours`` / ``ODOO_MIN_SESSION_HOURS``
-    knob the upload path bills with, so the diagnostic gap-sweep and export
-    round identically to what an upload writes. Resolved lazily per call.
-    """
-    from odoo_dev_data.config import LocalConfig
-
-    return LocalConfig.load().min_session_hours
-
-
-def resolve_round_session_hours() -> float:
-    """Return the per-session rounding step in hours (issue #404).
-
-    Reads the same ``[behavior] round_session_hours`` / ``ODOO_ROUND_SESSION_HOURS``
-    knob the upload path bills with (half-up rounding), so the diagnostic
-    gap-sweep and export never report hours an upload would not write.
-    """
-    from odoo_dev_data.config import LocalConfig
-
-    return LocalConfig.load().round_session_hours
-
-
-# Day-bucketing timezone reference used by scoring and rendering. Was a hardcoded
-# EDT (UTC-4) offset, which mis-bucketed the US-Central user's midnight-crossing
-# evening sessions; now config-driven (default US Central). This module-level
-# value is the resolved default for display helpers that carry no config;
-# ``SessionizationConfig.day_bucket_tz`` carries a per-run copy so the pure
-# Transform phase reads the zone from its config object, not this global.
-ET = resolve_day_bucket_tz()
-
-# Default fixed sessionization gap (seconds). The billing floor/step now share the
+# Default fixed sessionization gap (seconds). The billing floor/step share the
 # upload path's hour-denominated knobs (``min_session_hours`` /
-# ``round_session_hours``), so no minute-denominated billing constant survives.
+# ``round_session_hours``), so no minute-denominated billing constant exists.
 DEFAULT_WINDOW_GAP_SECS = 3600
 
 

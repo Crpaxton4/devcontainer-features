@@ -3,6 +3,7 @@
 import unittest
 from datetime import date, datetime, timezone
 
+from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord, EventStore
 from odoo_tui.export import (
     build_result,
@@ -13,6 +14,7 @@ from odoo_tui.export import (
 from ..support import make_event_store
 
 UTC = timezone.utc
+SETTINGS = LocalConfig()
 
 
 def _tmp_db() -> EventStore:
@@ -33,12 +35,12 @@ def _commit(db, hour, minute, *, day=1, task="101", repo="acme/web"):
 
 class TestConfigForWindow(unittest.TestCase):
     def test_config_spans_inclusive_window(self):
-        config = config_for_window(date(2026, 6, 1), date(2026, 6, 5))
+        config = config_for_window(SETTINGS, date(2026, 6, 1), date(2026, 6, 5))
         self.assertEqual(config.start_date, date(2026, 6, 1))
         self.assertEqual(config.end_date, date(2026, 6, 5))
 
     def test_single_day_window_is_valid(self):
-        config = config_for_window(date(2026, 6, 1), date(2026, 6, 1))
+        config = config_for_window(SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertEqual(config.num_days, 1)
 
 
@@ -48,13 +50,13 @@ class TestBuildResult(unittest.TestCase):
         _commit(db, 9, 0)
         _commit(db, 9, 20)
         _commit(db, 9, 40)
-        result, config = build_result(db, date(2026, 6, 1), date(2026, 6, 1))
+        result, config = build_result(db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertTrue(result.best_gap_entries)
         self.assertEqual(config.start_date, date(2026, 6, 1))
 
     def test_empty_db_yields_no_entries(self):
         db = _tmp_db()
-        result, _ = build_result(db, date(2026, 6, 1), date(2026, 6, 1))
+        result, _ = build_result(db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertEqual(result.best_gap_entries, [])
 
 
@@ -66,18 +68,18 @@ class TestRenderers(unittest.TestCase):
         _commit(self.db, 10, 30)
 
     def test_markdown_export_is_a_document(self):
-        text = export_markdown(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        text = export_markdown(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertIn("## Final Time Entries", text)
         self.assertIn("```mermaid", text)
 
     def test_csv_export_has_header_and_rows(self):
-        text = export_csv(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        text = export_csv(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         lines = text.strip().splitlines()
         self.assertTrue(lines[0].startswith("Date,Description,Task/ID"))
         self.assertGreater(len(lines), 1)
 
     def test_csv_export_empty_window_is_header_only(self):
-        text = export_csv(self.db, date(2026, 7, 1), date(2026, 7, 1))
+        text = export_csv(self.db, SETTINGS, date(2026, 7, 1), date(2026, 7, 1))
         self.assertEqual(
             text.strip().splitlines(),
             ["Date,Description,Task/ID,Quantity,Employee/ID"],
@@ -100,18 +102,18 @@ class TestAgentlessRepoExport(unittest.TestCase):
         _commit(self.db, 10, 30, repo="")
 
     def test_markdown_export_has_no_control_characters(self):
-        text = export_markdown(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        text = export_markdown(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertIn("## Final Time Entries", text)
         self.assertNotIn("\x00", text)
 
     def test_csv_export_has_no_control_characters(self):
-        text = export_csv(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        text = export_csv(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         lines = text.strip().splitlines()
         self.assertGreater(len(lines), 1)
         self.assertNotIn("\x00", text)
 
     def test_derived_entries_carry_an_absent_repo(self):
-        result, _ = build_result(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        result, _ = build_result(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         self.assertTrue(result.best_gap_entries)
         for entry in result.best_gap_entries:
             self.assertEqual(entry.repo, "")
@@ -120,7 +122,7 @@ class TestAgentlessRepoExport(unittest.TestCase):
         # A repo-less event alongside a labeled one must not drag the entry back
         # to the absent repo — the real label is the display metadata.
         _commit(self.db, 9, 40, repo="acme/web")
-        result, _ = build_result(self.db, date(2026, 6, 1), date(2026, 6, 1))
+        result, _ = build_result(self.db, SETTINGS, date(2026, 6, 1), date(2026, 6, 1))
         repos = {entry.repo for entry in result.best_gap_entries}
         self.assertIn("acme/web", repos)
         self.assertNotIn("\x00", "".join(repos))

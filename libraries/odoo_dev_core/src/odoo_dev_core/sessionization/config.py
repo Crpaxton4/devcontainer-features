@@ -11,14 +11,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
-from typing import Optional
+from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
-from .models import (
-    resolve_day_bucket_tz,
-    resolve_min_session_hours,
-    resolve_round_session_hours,
-    resolve_session_gap_secs,
-)
+from ..ports import SettingsView
+from .models import DEFAULT_WINDOW_GAP_SECS
+
+# Defaults of a bare ``SessionizationConfig()``. They equal the defaults of the
+# resolved settings; ``from_settings`` replaces them with the user's values.
+DEFAULT_MIN_SESSION_HOURS = 0.25
+DEFAULT_ROUND_SESSION_HOURS = 0.05
+DEFAULT_DAY_BUCKET_TZ = ZoneInfo("America/Chicago")
 
 
 @dataclass
@@ -28,11 +31,11 @@ class SessionizationConfig:
     All fields have defaults so a bare ``SessionizationConfig()`` is valid; the
     CLI and adapters override individual fields.
 
-    The window gap and the billing policy (floor + rounding step) default from the
-    single first-class config (``LocalConfig``, issue #404), so the diagnostic
-    gap-sweep and the export re-window and round on exactly the knobs the
-    SQL-derived billing/upload path uses — no parallel minute-denominated
-    ``min_task_minutes`` / ``billing_step_mins`` vocabulary survives.
+    The window gap, the billing policy (floor + rounding step) and the day
+    bucket zone come from the resolved settings through
+    :meth:`from_settings` (issue #404), so the diagnostic gap-sweep and the
+    export re-window and round on exactly the knobs the SQL-derived
+    billing/upload path uses. This class never loads a config itself.
     """
 
     # Date range (inclusive).
@@ -40,11 +43,12 @@ class SessionizationConfig:
     end_date: date = field(default_factory=lambda: date(2026, 6, 2))
     target_excluded_dates: set[date] = field(default_factory=set)
 
-    # Fixed session gap + billing policy (resolved from LocalConfig; shared with
-    # the SQL derivation and the upload path so numbers cannot diverge).
-    session_gap_secs: int = field(default_factory=resolve_session_gap_secs)
-    min_session_hours: float = field(default_factory=resolve_min_session_hours)
-    round_session_hours: float = field(default_factory=resolve_round_session_hours)
+    # Fixed session gap + billing policy (``from_settings`` fills them from the
+    # settings port; shared with the SQL derivation and the upload path so
+    # numbers cannot diverge).
+    session_gap_secs: int = DEFAULT_WINDOW_GAP_SECS
+    min_session_hours: float = DEFAULT_MIN_SESSION_HOURS
+    round_session_hours: float = DEFAULT_ROUND_SESSION_HOURS
 
     # Gap sweep bounds (minutes).
     sweep_min_gap_mins: int = 30
@@ -74,11 +78,27 @@ class SessionizationConfig:
     # so supplying them was at best a no-op and at worst a wrong attribution.
     odoo_employee_id: Optional[int] = None
 
-    # Day-bucketing timezone (issue #378 item 11). Resolved from the standard
-    # config resolver by default (``[behavior] day_bucket_tz``, default US
-    # Central); the pure Transform phase reads the zone from here so bucketing is
-    # config-driven without this module touching the state layer at import.
-    day_bucket_tz: tzinfo = field(default_factory=resolve_day_bucket_tz)
+    # Day-bucketing timezone (issue #378 item 11). ``from_settings`` fills it
+    # from ``[behavior] day_bucket_tz``; the default is US Central. The pure
+    # Transform phase reads the zone from here.
+    day_bucket_tz: tzinfo = DEFAULT_DAY_BUCKET_TZ
+
+    @classmethod
+    def from_settings(
+        cls, settings: SettingsView, **overrides: Any
+    ) -> "SessionizationConfig":
+        """Build a config whose gap, billing policy and zone come from ``settings``.
+
+        :param settings: The resolved settings port.
+        :param overrides: Any other field, passed through to the constructor.
+        """
+        return cls(
+            session_gap_secs=settings.session_gap_secs,
+            min_session_hours=settings.min_session_hours,
+            round_session_hours=settings.round_session_hours,
+            day_bucket_tz=settings.day_bucket_tz,
+            **overrides,
+        )
 
     def __post_init__(self) -> None:
         """Enforce the monotonicity precondition on the sweep minimum gap.
