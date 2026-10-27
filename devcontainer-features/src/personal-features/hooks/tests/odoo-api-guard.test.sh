@@ -128,7 +128,11 @@ run_case deny odoo-rpc "an RPC client library" \
 run_case deny odoo-rpc "execute_kw inside a heredoc body" \
     "$(printf 'python3 <<EOF\nmodels.execute_kw(db, uid, pw, "res.partner", "search", [[]])\nEOF\n')"
 run_case deny odoo-credentials "reading the service-account credentials" \
-    "cat /usr/local/share/odoo-sdk-config/config.json"
+    "cat /usr/local/share/odoo-dev/config.toml"
+run_case deny odoo-credentials "reading the host-form credentials" \
+    "cat ~/.config/odoo-dev/config.toml"
+run_case allow - "the repo map under the state root is not a credential" \
+    "cat /usr/local/share/odoo-dev/repo-map.json"
 run_case deny odoo-prod-host "ssh to an odoo.sh production build host" \
     "ssh 31385103@qoc-fulton-main-31385103.dev.odoo.com psql -c 'select 1'"
 

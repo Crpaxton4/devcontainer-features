@@ -10,7 +10,7 @@
 # persist across rebuilds and across projects.
 #
 # The hooks call `claude-event-hook <EventName>`, which forwards each event to
-# `odoo-sdk log-event` (see that script). PreToolUse fires on every tool call;
+# `odoo-dev log-event` (see that script). PreToolUse fires on every tool call;
 # the shim excludes `mcp__odoo-mcp__*` tools (the odoo MCP server logs those
 # server-side, #326/#340), so we register PreToolUse with a match-all matcher
 # and let the shim enforce the exclusion.
@@ -120,7 +120,7 @@ HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","
 
 # The programs a feature-owned hook command goes on to EXEC. Resolving the hook
 # command itself is only half of what a working hook needs: claude-event-hook
-# shells out to `odoo-sdk log-event` and guards that call on `command -v`, so an
+# shells out to `odoo-dev log-event` and guards that call on `command -v`, so an
 # unlinked console script turns every feature hook into a dead no-op whose first
 # symptom is an empty event table weeks later (#496). odoo-mcp and odoo-tui ship
 # in the same wheel, so listing all three also catches a half-installed wheel at
@@ -130,7 +130,7 @@ HOOK_MARKERS='["claude-event-hook","worktree-context-hook","odoo-api-guard.sh","
 # -> add that program here in the same change. Overridable so the feature test can
 # drive --check-deps against names it controls rather than the real toolchain.
 HOOK_DEPS=()
-IFS=' ' read -r -a HOOK_DEPS <<< "${PERSONAL_FEATURES_HOOK_DEPS:-odoo-sdk odoo-mcp odoo-tui}" || true
+IFS=' ' read -r -a HOOK_DEPS <<< "${PERSONAL_FEATURES_HOOK_DEPS:-odoo-dev odoo-mcp odoo-tui}" || true
 
 # The provision marker (#806) — the one piece of state about this machine's
 # feature scripts that outlives the image, because it lives in the shared,
@@ -150,7 +150,7 @@ note() { echo "sync-claude-hooks: $1" >&2; }
 
 # --- hook command resolvability (#805) ---------------------------------------
 # This replaces two hand-written one-offs, each added reactively after the thing
-# it guarded had already broken: install.sh's odoo-sdk entry-point loop (#496)
+# it guarded had already broken: install.sh's odoo-dev entry-point loop (#496)
 # and mempalace-repair's mempalace-recall.sh check (#744). They covered two of
 # the commands reachable from settings.json; every other one was provisioned on
 # trust. Both are deleted in favour of the two routines below, which check the
@@ -274,14 +274,14 @@ audit_hook_commands() {
 # is the observation that the answer can stop being yes at any time afterwards
 # and nothing notices: a hook that cannot execute produces no event AND NO
 # SIGNAL, so 3,506 events went missing over three months and the only trace was a
-# string in the transcripts. The tracker's own tables cannot show it — the
+# string in the transcripts. The state DB's own tables cannot show it — the
 # signature is the ABSENCE of rows, which looks exactly like a quiet week.
 #
 # Neither half of the pair can be written by the failing component: whatever
 # breaks the hook (an unlinked console script, #496; a command that resolves on
 # only one side of the mount, #803) stops the shim before any failure counter it
 # holds could run. So the breadcrumb is written by the path that SUCCEEDS —
-# claude-event-hook stamps last_event_epoch/last_event_at after `odoo-sdk`
+# claude-event-hook stamps last_event_epoch/last_event_at after `odoo-dev`
 # actually exits 0 — and the comparison is made here, by a different program at a
 # different time, which is the only arrangement where a total failure of the hook
 # still produces a report.
@@ -344,7 +344,7 @@ check_hook_heartbeat() {
     if [ "$last" -gt 0 ]; then
         age=$(( now - last ))
         if [ "$age" -gt "$HOOK_STALE_SECONDS" ]; then
-            note "WARNING: the feature-owned Claude Code hooks have not recorded a successful event since $at ($(( age / 86400 ))d ago). The shim stamps that timestamp only after 'odoo-sdk log-event' exits 0, so a silence this long means every event since then was dropped - and a dropped event leaves NO other trace, which is how 3,506 of them went unnoticed for three months (#804). Check that the hook command in $SETTINGS resolves on the machine running the session (#803) and that 'odoo-sdk' is runnable there (#496); evidence in $marker."
+            note "WARNING: the feature-owned Claude Code hooks have not recorded a successful event since $at ($(( age / 86400 ))d ago). The shim stamps that timestamp only after 'odoo-dev log-event' exits 0, so a silence this long means every event since then was dropped - and a dropped event leaves NO other trace, which is how 3,506 of them went unnoticed for three months (#804). Check that the hook command in $SETTINGS resolves on the machine running the session (#803) and that 'odoo-dev' is runnable there (#496); evidence in $marker."
         fi
         return 0
     fi
@@ -357,7 +357,7 @@ check_hook_heartbeat() {
 
     age=$(( now - since ))
     if [ "$age" -gt "$HOOK_STALE_SECONDS" ]; then
-        note "WARNING: no feature-owned Claude Code hook has EVER recorded a successful event in the $(( age / 86400 ))d this config dir has been watched. The hooks are wired into $SETTINGS but nothing is reaching the tracker, so every event in that window was dropped silently (#804). Check that the hook command resolves on the machine running the session (#803) and that 'odoo-sdk' is runnable there (#496); evidence in $marker."
+        note "WARNING: no feature-owned Claude Code hook has EVER recorded a successful event in the $(( age / 86400 ))d this config dir has been watched. The hooks are wired into $SETTINGS but nothing is reaching the state DB, so every event in that window was dropped silently (#804). Check that the hook command resolves on the machine running the session (#803) and that 'odoo-dev' is runnable there (#496); evidence in $marker."
     fi
     return 0
 }
@@ -455,8 +455,7 @@ RECALL_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/mempalace-recall.sh"'
 # And the odoo-dev plugin drift check (#1052), same per-machine expansion.
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 DRIFT_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/odoo-dev-plugin-drift-check.sh"'
-# And the usage-log hook (#1204). It writes nothing when USAGE_LOG_DIR is unset,
-# which is how a host session sharing this settings.json stays out of the log.
+# And the usage-log hook (#1204). It writes nothing when ODOO_DEV_USAGE_LOG=0.
 # shellcheck disable=SC2016  # deliberately unexpanded: /bin/sh expands it at hook time
 USAGE_CMD='"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-log-hook.sh"'
 

@@ -18,10 +18,10 @@ check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \
 
 # odoo_client: installed into an isolated tool environment.
 check "odoo_client is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_client'"
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c 'import odoo_client'"
 
 check "odoo_client core API is accessible in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
 from odoo_client import (
     OdooClient,
     OdooConnectionSettings,

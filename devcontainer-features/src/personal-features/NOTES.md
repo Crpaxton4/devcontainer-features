@@ -9,9 +9,9 @@
 - [The `create-pr` command](#the-create-pr-command)
 - [The `gh-as-owner` command](#the-gh-as-owner-command)
 - [The `claude` command](#the-claude-command)
-- [Claude Code lifecycle hooks (odoo-sdk event capture)](#claude-code-lifecycle-hooks-odoo-sdk-event-capture)
+- [Claude Code lifecycle hooks (odoo-dev event capture)](#claude-code-lifecycle-hooks-odoo-dev-event-capture)
 - [Odoo consulting skills (two delivery paths)](#odoo-consulting-skills-two-delivery-paths)
-- [Python toolchain (odoo-sdk, odoo-mcp, mempalace)](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)
+- [Python toolchain (odoo-dev, odoo-mcp, mempalace)](#python-toolchain-odoo-dev-odoo-mcp-mempalace)
 - [The mempalace workspace config (`mempalace.yaml`)](#the-mempalace-workspace-config-mempalaceyaml)
 - [The shared mempalace MCP hub](#the-shared-mempalace-mcp-hub)
 - [The Odoo language server (odoo-ls)](#the-odoo-language-server-odoo-ls)
@@ -53,12 +53,14 @@ Run the setup script once per machine, **before** starting any dev container tha
    ```
    ~/.claude                            — Claude Code auth and settings
    ~/.config/gh                         — gh CLI auth and settings
-   ~/.config/odoo_client                   — odoo_client connection config
    ~/.config/pr-automation              — create-pr config (global.yaml + projects/)
    ~/.config/coderabbit                 — CodeRabbit VS Code extension state
    ~/.coderabbit                        — CodeRabbit CLI auth/state (auth.json, machine-id)
    ~/.config/devcontainer/shell-history — bash history
+   ~/.config/odoo-dev                   — the odoo-dev state root (config.toml, repo-map.json, state.db, usage.db)
    ```
+
+   Then, inside the container, run `odoo-dev doctor --migrate` once to migrate any legacy stores into the state root.
 
 Re-running is safe — creating an existing directory is a no-op.
 
@@ -96,12 +98,11 @@ Config and history are bind-mounted from your host home directory into fixed con
 
 - `~/.claude` (host) → `/usr/local/share/claude-home` (container) — `CLAUDE_CONFIG_DIR` points here, so Claude Code's auth and settings survive rebuilds.
 - `~/.config/gh` (host) → `/usr/local/share/gh-cli-config` (container) — `GH_CONFIG_DIR` points here, so `gh auth login` only needs to happen once per machine.
-- `~/.config/odoo_client` (host) → `/usr/local/share/odoo-sdk-config` (container) — `ODOO_SDK_CONFIG` points at this directory; the SDK probes it for `config.toml` then `config.ini`.
 - `~/.config/pr-automation` (host) → `/usr/local/share/pr-automation` (container) — `PR_AUTOMATION_CONFIG_DIR` points here, so `create-pr` picks up your global and per-project PR config across rebuilds. Optional: `create-pr` still works with no config mounted.
 - `~/.config/coderabbit` (host) → `/usr/local/share/coderabbit-config` (container) — `CODERABBIT_CONFIG_DIR` points here; it persists the VS Code CodeRabbit extension state (`user-data.json`). The CLI itself ignores `CODERABBIT_CONFIG_DIR` (#661).
 - `~/.coderabbit` (host) → `/home/vscode/.coderabbit` (container) — CodeRabbit **CLI** auth/state (`auth.json`, `machine-id`). Unlike every other row, the target is a literal home path, not `/usr/local/share/...`: the CLI hardcodes its state dir as `join(homedir(), ".coderabbit")` and honors no env override, so the only way to persist its auth is to mount at exactly that path (#661). `/home/vscode` matches the primary consumers (`remoteUser: vscode`); under a root `remoteUser` the dir is provisioned but inert — the CLI resolves `/root/.coderabbit` there and auth does not persist.
 - `~/.config/devcontainer/shell-history` (host) → `/usr/local/share/shell-history` (container) — `HISTFILE` points at `bash_history` inside it, and `~/.bash_history` is symlinked to it, so bash history follows you across rebuilds and is shared across containers. Bash is the only supported shell.
-- `~/.config/odoo-dev` (host) → `/usr/local/share/odoo-dev` (container) — `ODOO_DEV_STATE_DIR` points here, so the odoo-dev plugin's state survives rebuilds: this is where its per-task handoff artifacts (`tasks/<task_id>/`), `repo-map.json`, and `releases/` now live. The plugin resolves `${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}`, and in a container `$HOME` is image storage, not a mount — so before this row an in-progress multi-session task lost its entire handoff chain on the next rebuild, silently: the next session resolved the same path, found it empty, and started over (#884). Mode `0700`: it holds no credentials, but it does hold client task artifacts. The mount is also the whole answer to #885 — plugin state is no longer inside any repository, so there is nothing for a `.gitignore` or a machine-wide excludes entry to ignore.
+- `~/.config/odoo-dev` (host) → `/usr/local/share/odoo-dev` (container) — `ODOO_DEV_HOME` points here. This is the suite's one state root: `config.toml` (the Odoo credentials), `repo-map.json`, `state.db` (events and jobs), `usage.db` (the usage log), `tasks/` and `locks/`. In a container `$HOME` is image storage, not a mount, so without this row a multi-session task lost its handoff chain on the next rebuild, silently (#884). Mode `0700`, because `config.toml` holds the Odoo credentials. Set `ODOO_DEV_USAGE_LOG=0` to turn the usage log off. Run `odoo-dev doctor --migrate` to migrate legacy stores into this root.
 
 A note on the history mount: bash writes `HISTFILE` after every command, and the container user's uid need not match the owner of the host directory the mount exposes (e.g. with `"updateRemoteUserUID": false` and a non-root `remoteUser`, or from a root shell). To keep history writable regardless of uid, `setup.sh` makes the host `shell-history` directory world-writable (mode `0777`); the container inherits that mode through the bind mount, so any user can create and append `bash_history`. Without it, `history -a` fails on every command with `bash: history: .../bash_history: cannot create: Permission denied` (#323).
 
@@ -244,10 +245,10 @@ absent from an old image as the step it would check"). Both pieces above are
 forward-looking; the cure for an already-stale container is still a no-cache
 rebuild.
 
-## Claude Code lifecycle hooks (odoo-sdk event capture)
+## Claude Code lifecycle hooks (odoo-dev event capture)
 
 This Feature provisions a set of Claude Code lifecycle hooks that record session
-and tool-call activity into the odoo-sdk local state DB, so time/activity
+and tool-call activity into the odoo-dev `state.db`, so time/activity
 sessionization has an automatic event stream to work from. This is
 infrastructure-level capture: the agent never has to think about logging its own
 activity — the hooks fire automatically around every session transition and tool
@@ -279,7 +280,7 @@ the container, `~/.claude/hooks/…` on a host that sets no `CLAUDE_CONFIG_DIR` 
 the two ends of the same bind mount, hence the same file. Nothing has to be
 installed on the host, and because the published file is the real shim rather
 than a stub, host sessions **record** their events (or no-op silently where
-`odoo-sdk` isn't installed) instead of failing. Stale absolute-path entries left
+`odoo-dev` isn't installed) instead of failing. Stale absolute-path entries left
 in a settings.json by an older container are stripped and replaced on the next
 sync. If no shim can be published and none is already in place, the sync writes
 no entries at all rather than hand a session a command that resolves nowhere.
@@ -292,7 +293,7 @@ point for this repo's own prohibition on Odoo RPC and credential access, failed
 exactly that way 73 times across five sessions with the file present and
 executable, and nothing anywhere reported it. Against ten commands referenced
 from the shared `settings.json` the Feature asserted precisely two — the
-`odoo-sdk` console scripts (#496) and `mempalace-recall.sh` (#744) — each added
+`odoo-dev` console scripts (#496) and `mempalace-recall.sh` (#744) — each added
 reactively, after the thing it guarded had already broken. Both one-offs are
 gone, replaced by one routine in `sync-claude-hooks` that resolves the lot:
 
@@ -307,8 +308,8 @@ gone, replaced by one routine in `sync-claude-hooks` that resolves the lot:
   create.
 - **Build time**, via `sync-claude-hooks --check-deps` called from `install.sh`:
   the programs a feature hook command goes on to exec (`HOOK_DEPS` —
-  `odoo-sdk`, which `claude-event-hook` shells out to and silently skips when it
-  is missing, plus the two console scripts from the same wheel). This half
+  `odoo-dev`, which `claude-event-hook` shells out to and silently skips when it
+  is missing, plus the two console scripts from the same venv). This half
   **fails the build**, which is what replaced the hand-written entry-point loop.
 
 **The split is forced, not stylistic.** `settings.json` lives in the
@@ -333,12 +334,12 @@ globbing disabled, the expansion can perform parameter and tilde expansion and
 word splitting, and nothing else.
 
 **A hook that stops working says so (#804).** The shim's contract is to exit 0 on
-every path — a tracker that blocks a session because its own database is
-unreachable is worse than a tracker that misses a row — but failing *open* had
+every path — an event log that blocks a session because its own database is
+unreachable is worse than an event log that misses a row — but failing *open* had
 become the same thing as failing *silently*. 3,506 events were dropped over
 roughly three months from two unrelated causes (#496's unlinked console scripts,
 #803's container-absolute command) and both presented identically: nothing at
-all. The tracker's own tables cannot show it, because the signature is the
+all. The state DB's own tables cannot show it, because the signature is the
 **absence** of rows, which is indistinguishable from a quiet week.
 
 A failure counter written by the shim cannot close that gap — the shim is the
@@ -347,7 +348,7 @@ breadcrumb is written by the path that **succeeds**, and read by a different
 program at a different time:
 
 - `claude-event-hook` stamps `last_event_at` / `last_event_epoch` /
-  `last_event_hook` into the provision marker, chained onto the `odoo-sdk` call
+  `last_event_hook` into the provision marker, chained onto the `odoo-dev` call
   with `&&` so it attests the *whole* path — hook resolved, shim ran, SDK exited
   0 — rather than just the first link. It rides the same detached background job,
   so it costs the session nothing, and is throttled to one write a minute so a
@@ -378,7 +379,7 @@ merge still runs, the hooks are still wired up, and the container create still
 exits 0.
 
 **What's captured.** Each hook invokes `claude-event-hook <EventName>`, which
-forwards one event to `odoo-sdk log-event --source claude:<EventName>`. The
+forwards one event to `odoo-dev log-event --source claude:<EventName>`. The
 following events are wired (verified against the current Claude Code hooks
 reference):
 
@@ -391,8 +392,8 @@ reference):
 Only a small, non-sensitive payload is forwarded (`session_id`, plus
 `tool_name`/`agent_type`/`agent_id`/`source` where present) — never prompt text
 or `tool_input` contents. Events are attributed via `--attach-active-run` to
-**every** active odoo-sdk run, not just the current project's: there is one
-host-provisioned central `tracker.db` shared by all projects and the lookup
+**every** active odoo-dev run, not just the current project's: there is one
+central `state.db` shared by all projects and the lookup
 applies no repo filter (#388), so a hook firing in project A also attaches
 project B's task id when both have runs in flight. Runs whose last activity
 predates the reap threshold (`ODOO_REAP_THRESHOLD_HOURS`, default 12h) are
@@ -410,8 +411,8 @@ written to the local events store on either path.
 
 **Never blocks a session.** `claude-event-hook` always exits 0, never writes to
 stdout (which the hooks contract could interpret as a permission decision),
-runs the SDK under a short timeout, and no-ops cleanly when `odoo-sdk` isn't
-installed (e.g. a build with no bundled SDK wheel) or the cwd isn't a git repo.
+runs the SDK under a short timeout, and no-ops cleanly when `odoo-dev` isn't
+installed (e.g. a build with no bundled wheel) or the cwd isn't a git repo.
 
 **A second, unrelated `SessionStart` hook: the worktree Bash constraint (#809).**
 The same sync also registers `worktree-context-hook`, which has nothing to do
@@ -524,10 +525,10 @@ can never overwrite or remove yours:
   `odoo-dev` skills lose their descriptions first. It is a ceiling, not an
   allocation: while the listing fits it costs nothing.
 
-**What deliberately stays local:** anything under `odoo-sdk-config`,
+**What deliberately stays local:** `config.toml` under the odoo-dev state root,
 `identity.txt`, the palace data, any token; and the personal-preference keys
 (`model`, `effortLevel`, `theme`, `tui`, `timeZone`, `statusLine`, `spinnerVerbs`,
-`skillOverrides`). `ODOO_DEV_STATE_DIR` is **not** in the fragment either — it is
+`skillOverrides`). `ODOO_DEV_HOME` is **not** in the fragment either — it is
 delivered through `containerEnv`, and one value with two owners is a drift bug
 waiting to happen.
 
@@ -601,8 +602,8 @@ deliberately-parallel paths. Only the second survives:
    everywhere.
 
 2. **`odoo-mcp` built-in prompts (any MCP client).** Since #455, each skill was
-   *also* exposed as a built-in MCP prompt by the `odoo-sdk` MCP server
-   (`libraries/odoo_client/src/odoo_client/mcp/prompts/builtin/<name>.py`, one module
+   *also* exposed as a built-in MCP prompt by the `odoo-mcp` MCP server
+   (`prompts/builtin/<name>.py`, one module
    per skill, underscored — `<skill-name>` → `<skill_name>`). Each module embeds
    its `SKILL.md` body verbatim (frontmatter `description` becomes the prompt
    description; the markdown body becomes the returned prompt message) and is
@@ -645,7 +646,7 @@ into the two groups that actually need different handling:
 
 The plugin-shadowed five are not a third hand-maintained copy: since #784 the
 plugin's own `plugins/odoo-dev/skills/` tree is the single source for those
-bodies (the SDK's packaged twin, `odoo-sdk sync-skills` and the
+bodies (the SDK's packaged twin, `sync-skills` and the
 `check-skill-parity.sh` gate were all deleted with it), and that on-disk
 listing is what the group is anchored on.
 `.github/scripts/test_stray_skill_parity.py` gates all of it — the two lists
@@ -882,13 +883,13 @@ As root, `[ -w ]` is true for every path whatever its mode, so a run as a root
 `remoteUser` reports `OK` and says in the same breath that it proves nothing
 about a non-root one, rather than implying a clean bill of health.
 
-## Python toolchain (odoo-sdk, odoo-mcp, mempalace)
+## Python toolchain (odoo-dev, odoo-mcp, mempalace)
 
-The Feature's Python tooling — the `odoo_client` wheel (providing the `odoo-sdk` CLI, the `odoo-mcp` MCP server, and the `odoo-tui` TUI) and `mempalace` — installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
+The Feature's Python tooling — every bundled suite wheel, installed in one `uv pip install` call into one venv (`/usr/local/share/uv/tools/odoo-dev`), which provides the `odoo-dev` CLI, the `odoo-mcp` MCP server, the `odoo-tui` TUI and the `usage-log` command — and `mempalace` installs into isolated `uv`-managed environments under `/usr/local/share/uv/tools`, never into the base image's site-packages (which would break odoo:17's pyOpenSSL, among other things).
 
-**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: `odoo_client` is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
+**The interpreter is pinned, not inherited (#674).** Each environment carries its own `uv`-managed CPython 3.11 (`UV_PYTHON_PIN` in `install.sh`), downloaded by `uv` when the image doesn't already provide that exact version. The base image's Python is irrelevant: the suite is a pure RPC client that never imports Odoo core, so its interpreter has no reason to match the container's Odoo Python, and `uv` itself is a static binary that runs on every supported base (odoo:16's bullseye included). This means **odoo:16 — Debian 11, system Python 3.9 — is fully supported**: it gets the same complete toolchain as every newer image.
 
-**That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-sdk`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
+**That downloaded interpreter lives in a shared location, not root's home.** `install.sh` sets `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python`, alongside the tool environments. `uv`'s default is `$HOME/.local/share/uv/python`, and the Feature installs as root — so the interpreter would sit under `/root` (mode `0700`) while every console script's shebang chain resolves through it. On any base image with a non-root `remoteUser`, running `odoo-dev`/`odoo-mcp`/`mempalace` then failed with `bad interpreter: Permission denied` (an `exec` `EACCES`, not a `PATH` problem). Both the shared path and a follow-up `chmod -R a+rX` keep the interpreter readable and executable for whichever user the container ends up running as.
 
 It didn't used to be. `install.sh` previously gated the whole Python block on the *base image* shipping `python3 >= 3.10` and skipped it silently on older images, so an odoo:16 container had no `odoo-mcp` at all while the bind-mounted `~/.claude` could still carry an `odoo-mcp` MCP registration written by a newer container — Claude Code then reported a baffling `ENOENT` for a binary that was never installed. The gate is gone; the only remaining skip is a build with no bundled SDK wheel (a plain dev checkout — wheels are bundled at release/CI time), which now warns loudly, and `sync-claude-mcp` deregisters a stale user-scope `odoo-mcp` entry at container-create time whenever the binary isn't installed, so the persisted registration state stays consistent with what the container actually ships.
 
@@ -1065,7 +1066,7 @@ This Feature is the owner's own personal, opinionated setup, not a configurable 
 
   Also set `--system`, for the same reason: `core.pager`/`interactive.diffFilter` (so `delta` renders every diff), and `core.excludesfile` pointing at `/usr/local/share/git-excludes/gitignore`, which keeps `mempalace init`'s project-local artifacts out of every repo on the machine — see the `mempalace` bullet below for the rationale and its two tradeoffs.
 - The [Starship](https://starship.rs) prompt and `zoxide`'s shell hook, plus aliasing `cat`/`find`/`ls` to `bat`/`fd`/`eza`, and persisted shell history (see above).
-- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-sdk env (see [Python toolchain](#python-toolchain-odoo-sdk-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
+- [`mempalace`](https://github.com/mempalace/mempalace) — a global, cross-project memory palace installed via `uv tool install`, pinned to the same `uv`-managed CPython as the odoo-dev env (see [Python toolchain](#python-toolchain-odoo-dev-odoo-mcp-mempalace)). `MEMPAL_DIR` (which project tree to mine) is resolved at container-create time by the Feature's `resolve-mempal-dir`, not hardcoded in `containerEnv`: a Feature cannot know the workspace path at image-build time, and mempalace treats an unresolvable `MEMPAL_DIR` as a reason to no-op. Once the Claude Code plugin is registered, its Stop/SessionEnd/PreCompact hooks auto-mine that tree in the background.
 
   Both of the steps this section used to list as "still manual" are now automated: `devcontainer-feature.json` declares the `~/.mempalace` → `/usr/local/share/mempalace` bind mount and sets `MEMPALACE_PALACE_PATH`, and `sync-claude-mcp` registers the plugin at user scope from `postCreateCommand`. Nothing is left to do by hand after a rebuild.
 

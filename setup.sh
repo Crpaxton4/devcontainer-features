@@ -20,7 +20,7 @@
 # marks a FILE source, which is created with touch after its parent dir. That
 # distinction matters: Docker materialises a *missing* single-file mount source
 # as a directory, which then fails the mount, so a file source must exist as a
-# file before the container starts. (All eleven sources are directories today.)
+# file before the container starts. (All sources are directories today.)
 #
 # Safe to re-run: mkdir -p / touch are no-ops when the targets already exist,
 # and chmod just re-asserts the manifest's mode column (0700 for the
@@ -121,4 +121,4 @@ while IFS="$TAB" read -r _name _host_source _container_target _env_var _env_valu
     printf 'ok  %s\n' "$HOME/$_host_source"
 done < "$MANIFEST"
 
-# The host no longer provisions tracker.db; `odoo-dev doctor --migrate` imports it later.
+echo "Next: inside the container, run 'odoo-dev doctor --migrate' to migrate the legacy stores."

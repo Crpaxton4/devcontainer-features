@@ -188,9 +188,7 @@ class TestHostSetupParity(unittest.TestCase):
         # an empty container-created dir. The loop can't statically be executed
         # here, so assert install.sh's loop consumes the provision column and
         # short-circuits host rows.
-        rows = checker.load_manifest()
-        host_rows = [r for r in rows if r["provision"] == "host"]
-        self.assertTrue(host_rows, "expected at least one host-provisioned row")
+        # No row is host-provisioned today; the semantics stay supported.
         body = INSTALL_SH.read_text()
         self.assertIn("_provision", body)
         self.assertRegex(

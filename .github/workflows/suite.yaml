@@ -1,5 +1,5 @@
-# One matrix workflow over the uv workspace members. It replaces
-# odoo-sdk-quality.yaml, dispatcher.yaml, usage-log.yaml and webui.yaml.
+# One matrix workflow over the uv workspace members. It replaces the
+# per-package quality, dispatcher, usage-log and webui workflows.
 # Each member runs tests, black and complexipy; one root job runs import-linter.
 name: "CI - suite"
 

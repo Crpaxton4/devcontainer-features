@@ -107,19 +107,19 @@ retry() {
 # The `provision` column decides whether the container creates the target.
 # `container` rows are created/chowned/chmod'ed here (they double as the empty
 # fallback dirs the containerEnv vars point at when no bind mount is active, e.g.
-# in the features-test harness). `host` rows (the odoo-sdk task-tracker DB, #369)
-# are the deliberate exception: the host provisions that directory + database and
+# in the features-test harness). `host` rows (#369)
+# are the deliberate exception: the host provisions that directory and
 # it is ONLY ever a bind mount, so the container must NOT pre-create it. This
 # reverses the #115 conclusion, which was wrong: #115 correctly diagnosed that a
 # build-time `chown` to $_REMOTE_USER bakes in the PRE-remap uid (updateRemoteUserUID
 # moves the user at container-create precisely so bind mounts line up), but drew
 # the wrong lesson - "therefore don't mount it". A mounted path never needs that
 # build-time chown (the mount shadows the image dir), which is exactly why the six
-# credential mounts already work. Pre-creating the tracker target here would be
-# actively harmful: a missing/misconfigured mount would then be indistinguishable
-# from a working one - the container would find an empty dir and silently build a
-# fresh, container-local database that is discarded on rebuild. Not creating it is
-# what makes a broken mount fail loudly (TrackerStateMissingError) instead.
+# credential mounts already work. Pre-creating a host-provisioned target here
+# would be actively harmful: a missing/misconfigured mount would then be
+# indistinguishable from a working one - the container would find an empty dir and
+# silently build a fresh, container-local database that is discarded on rebuild.
+# Not creating it is what makes a broken mount fail loudly instead.
 _MANIFEST="$(dirname "$0")/persisted-paths.tsv"
 _TAB="$(printf '\t')"
 while IFS="$_TAB" read -r _name _host_source _container_target _env_var _env_value _mode _provision; do
@@ -176,7 +176,7 @@ install -m 0755 "$(dirname "$0")/gh-as-owner" /usr/local/bin/gh-as-owner
 
 # --- Claude Code lifecycle hooks (#327) -------------------------------------
 # claude-event-hook: the hook shim invoked by every feature-owned hook entry; it
-# forwards each Claude Code lifecycle event to `odoo-sdk log-event`. Installed to
+# forwards each Claude Code lifecycle event to `odoo-dev log-event`. Installed to
 # /usr/local/bin (outside the CLAUDE_CONFIG_DIR bind mount) so it is always on
 # PATH at runtime. sync-claude-hooks: at runtime (postCreateCommand) merges the
 # feature-owned hooks block into the live, mounted $CLAUDE_CONFIG_DIR/
@@ -215,7 +215,7 @@ install -m 0755 "$(dirname "$0")/worktree-context-hook" /usr/local/bin/worktree-
 # contradicted: a stub or a generated value would mask the loss of the real file.
 # This ships the real files, so nothing is masked.
 #
-# What deliberately stays local and unshipped: anything under odoo-sdk-config,
+# What deliberately stays local and unshipped: config.toml under the odoo-dev state root,
 # identity.txt, the palace data, any token; and the personal-preference keys
 # (model, effortLevel, theme, tui, timeZone, statusLine, spinnerVerbs,
 # skillOverrides). The fragment carries policy only.
@@ -368,7 +368,7 @@ install -m 0755 "$WRAPPER_SRC" "$WRAPPER_PATH"
 # that removed X509_V_FLAG_NOTIFY_POLICY).
 #
 # The venv's interpreter is PINNED and deliberately independent of the base
-# image's python3 (#674). odoo_client is a pure RPC client - it never imports odoo
+# image's python3 (#674). The suite is a pure RPC client - it never imports odoo
 # core - so nothing requires its interpreter to match the container's Odoo
 # Python. uv is a static binary that runs on every supported base (odoo:16's
 # bullseye is glibc 2.31) and fetches its own python-build-standalone CPython
@@ -380,14 +380,14 @@ install -m 0755 "$WRAPPER_SRC" "$WRAPPER_PATH"
 # installs unconditionally on every base image.
 UV_PYTHON_PIN=3.11
 FEATURE_DIR="$(dirname "$0")"
-# Give uv's downloads plenty of headroom: the odoo_client dependency tree pulls
+# Give uv's downloads plenty of headroom: the suite dependency tree pulls
 # large wheels (onnxruntime 17.8 MiB, numpy 15.9 MiB, ...) that can exceed
 # uv's default 30s HTTP timeout on a slow link and fail the whole image
 # build. Paired with the retry() wrapper on the install calls below.
 export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
 # Put the uv-managed CPython somewhere EVERY container user can read. uv's
 # default install dir is $HOME/.local/share/uv/python, and install.sh runs as
-# root, so the interpreter would land under /root (mode 0700). Both the odoo-sdk
+# root, so the interpreter would land under /root (mode 0700). Both the odoo-dev
 # venv and the mempalace tool venv symlink bin/python at that absolute path, so
 # on any base image with a non-root remoteUser (mcr.../javascript-node ships
 # `node`; the odoo images run as root, which is why only that one CI matrix leg
@@ -408,40 +408,27 @@ if ! command -v uv >/dev/null 2>&1; then
     run_installer https://astral.sh/uv/install.sh
     unset UV_INSTALL_DIR
 fi
-# Install the bundled odoo_client wheel(s) into one shared uv venv. The glob
-# stays literal (a single non-matching entry) when no wheel is bundled, so
-# gate on the first entry actually being a file before doing any work.
-_SDK_ENV=/usr/local/share/uv/tools/odoo-sdk
-_sdk_wheels=("$FEATURE_DIR"/odoo_client-*.whl)
-if [ -f "${_sdk_wheels[0]}" ]; then
-    # venv creation is hoisted out of the per-wheel loop: with a second
-    # bundled wheel the old in-loop `uv venv` would re-run on the same path
-    # and error. The `[ -d ]` guard also makes a re-provision over a
-    # persisted venv a no-op. `uv pip install` still runs per wheel.
+# Install every bundled wheel into one shared uv venv, in ONE `uv pip install`
+# call so the workspace wheels resolve against each other. The glob stays
+# literal (a single non-matching entry) when no wheel is bundled, so gate on
+# the first entry actually being a file before doing any work.
+_SUITE_ENV=/usr/local/share/uv/tools/odoo-dev
+wheels=("$FEATURE_DIR"/*.whl)
+if [ -f "${wheels[0]}" ]; then
+    # The `[ -d ]` guard makes a re-provision over a persisted venv a no-op.
     # --python pins the uv-managed interpreter (#674); a failure here aborts
     # the build loudly rather than leaving a container with no odoo-mcp.
-    [ -d "$_SDK_ENV" ] || retry uv venv --python "$UV_PYTHON_PIN" "$_SDK_ENV"
-    for wheel in "${_sdk_wheels[@]}"; do
-        retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
-    done
-    # usage_log (#1204): the stdlib-only usage-log writer shares the odoo-sdk
-    # env, because odoo_client imports it. Its wheel is bundled beside the SDK's;
-    # a checkout that bundled only the SDK wheel simply has no usage-log.
-    for wheel in "$FEATURE_DIR"/usage_log-*.whl; do
-        [ -f "$wheel" ] || continue
-        retry uv pip install --python "$_SDK_ENV/bin/python" "$wheel"
-        ln -sf "$_SDK_ENV/bin/usage-log" /usr/local/bin/usage-log
-    done
-    # Link the entry points once, after all wheels are installed. ALL THREE
-    # console scripts must be linked: `odoo-sdk` is the CLI that
-    # claude-event-hook shells out to (it guards on `command -v odoo-sdk`
+    [ -d "$_SUITE_ENV" ] || retry uv venv --python "$UV_PYTHON_PIN" "$_SUITE_ENV"
+    retry uv pip install --python "$_SUITE_ENV/bin/python" "${wheels[@]}"
+    # Link the entry points once, after the wheels are installed. ALL FOUR
+    # console scripts must be linked: `odoo-dev` is the CLI that
+    # claude-event-hook shells out to (it guards on `command -v odoo-dev`
     # and silently no-ops when it is missing, so leaving it unlinked made
-    # every feature-owned Claude Code hook a dead no-op - #496) and the only
-    # entry point to `odoo-sdk prune`. Adding an entry point to the wheel
-    # means adding it here.
-    _SDK_ENTRYPOINTS=(odoo-sdk odoo-mcp odoo-tui)
-    for _entry in "${_SDK_ENTRYPOINTS[@]}"; do
-        ln -sf "$_SDK_ENV/bin/$_entry" "/usr/local/bin/$_entry"
+    # every feature-owned Claude Code hook a dead no-op - #496). Adding an
+    # entry point to a wheel means adding it here.
+    _SUITE_ENTRYPOINTS=(odoo-dev odoo-mcp odoo-tui usage-log)
+    for _entry in "${_SUITE_ENTRYPOINTS[@]}"; do
+        ln -sf "$_SUITE_ENV/bin/$_entry" "/usr/local/bin/$_entry"
     done
     # Verify at build time, where a broken install is cheap to catch and
     # loud. The downstream consumers (claude-event-hook, the MCP
@@ -458,7 +445,7 @@ if [ -f "${_sdk_wheels[0]}" ]; then
     # ~/.claude mount is live, so sync-claude-hooks audits those at
     # container-create time instead.
     if ! /usr/local/bin/sync-claude-hooks --check-deps; then
-        echo "ERROR: the odoo_client console scripts are not all executable on PATH after install (expected $_SDK_ENV/bin/<script> -> /usr/local/bin/<script>)." >&2
+        echo "ERROR: the odoo-dev, odoo-mcp, odoo-tui and usage-log console scripts are not all executable on PATH after install (expected $_SUITE_ENV/bin/<script> -> /usr/local/bin/<script>)." >&2
         echo "The bundled wheel installed but did not provide every entry point; hooks and CLI tooling that depend on them would silently no-op, so failing the build instead." >&2
         exit 1
     fi
@@ -470,12 +457,12 @@ else
     # #674 fester. sync-claude-mcp additionally deregisters a stale user-scope
     # odoo-mcp entry at container-create time so the mounted ~/.claude stays
     # self-consistent.
-    echo "WARNING: no bundled odoo_client wheel in $FEATURE_DIR; skipping the odoo-sdk toolchain. This container will have NO odoo-sdk/odoo-mcp/odoo-tui on PATH (Claude Code hooks and the odoo-mcp MCP server will not work). Wheels are bundled at release/CI time." >&2
+    echo "WARNING: no bundled wheel in $FEATURE_DIR; skipping the odoo-dev toolchain. This container will have NO odoo-dev/odoo-mcp/odoo-tui on PATH (Claude Code hooks and the odoo-mcp MCP server will not work). Wheels are bundled at release/CI time." >&2
 fi
 
 # mempalace: global cross-project memory palace, auto-mined via Claude Code
 # hooks (MEMPAL_DIR below). Install its venv under the same shared uv tools
-# dir as odoo-sdk - pinned to the same uv-managed interpreter (#674) so the
+# dir as odoo-dev - pinned to the same uv-managed interpreter (#674) so the
 # base image's Python is irrelevant here too - and link the entry point onto
 # /usr/local/bin so it lands on every user's PATH (install.sh runs as root,
 # so uv's default ~/.local would be root-only). Best-effort - a PyPI/network
@@ -1058,7 +1045,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # The server registers under the name of its console script: odoo-mcp. The
-# guard has to check that SAME name - it used to check `odoo-sdk`, a name
+# guard has to check that SAME name - it used to check another name that
 # nothing ever registers, so it could never match and the add re-ran on every
 # provision, the exact opposite of the intended "skip if already there" (#486).
 if [ -x /usr/local/bin/odoo-mcp ]; then
