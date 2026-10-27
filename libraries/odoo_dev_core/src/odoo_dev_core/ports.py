@@ -38,7 +38,30 @@ from typing import (
     runtime_checkable,
 )
 
-from odoo_dev_data.events import EventRecord, SessionWindow
+from odoo_dev_data.events import (
+    EventRecord,
+    SessionWindow,
+    format_repo_label,
+    session_key,
+)
+
+__all__ = [
+    "ChatterGateway",
+    "Clock",
+    "EventRecord",
+    "GitGateway",
+    "IssueTracker",
+    "JobsPort",
+    "RepoMapPort",
+    "RpcClient",
+    "Services",
+    "SessionWindow",
+    "SettingsView",
+    "StateStore",
+    "TaskRecords",
+    "format_repo_label",
+    "session_key",
+]
 
 if TYPE_CHECKING:  # pragma: no cover
     from zoneinfo import ZoneInfo
@@ -145,7 +168,12 @@ class StateStore(Protocol):
 
 @runtime_checkable
 class GitGateway(Protocol):
-    """Port for the local-git resync source."""
+    """Port for the local-git resync source and the repo-label helpers.
+
+    ``current_repo_label`` returns the normalized ``owner/repo`` label of the
+    working directory, or ``""``. ``derive_repo_label`` normalizes one git
+    remote URL to the same label.
+    """
 
     def sync_git_log(
         self,
@@ -158,6 +186,10 @@ class GitGateway(Protocol):
         start: Optional[date] = None,
         end: Optional[date] = None,
     ) -> dict[str, Any]: ...
+
+    def current_repo_label(self) -> str: ...
+
+    def derive_repo_label(self, remote_url: str) -> str: ...
 
 
 @runtime_checkable
@@ -231,7 +263,12 @@ class SettingsView(Protocol):
 
     def require_model_id(self, model: str) -> int: ...
 
-    def set_model_id(self, model: str, ir_model_id: int) -> Path: ...
+    def set_model_id(self, model: str, ir_model_id: int) -> Path:
+        """Record ``ir_model_id`` for ``model`` and return the file written.
+
+        :raises RuntimeError: When the file cannot be written.
+        """
+        ...
 
     def get(self, key: str, default: Any = None) -> Any: ...
 

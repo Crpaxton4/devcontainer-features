@@ -40,13 +40,10 @@ class TestEmitToolEvent:
     def _emit(self, name, arguments, result=None, **kwargs):
         db = make_event_store()
         with patch(
-            "odoo_dev_core.builtins.log_event.current_repo_label", return_value=""
+            "odoo_dev_core.builtins.log_event.current_branch_label",
+            return_value="",
         ):
-            with patch(
-                "odoo_dev_core.builtins.log_event.current_branch_label",
-                return_value="",
-            ):
-                emit_tool_event(service(events=db), name, arguments, result, **kwargs)
+            emit_tool_event(service(events=db), name, arguments, result, **kwargs)
         return db.get_events()
 
     def test_mutating_tool_hints_its_task_id(self):

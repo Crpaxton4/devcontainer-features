@@ -20,7 +20,6 @@ import time
 from datetime import date, datetime
 from typing import Any, Callable, NamedTuple, NoReturn, Optional
 
-from odoo_client._utils import declare_usage, record_usage
 from odoo_dev_core import CommandService
 from odoo_dev_core.attribution import normalize_repo_label
 from odoo_dev_core.registry import CommandArgumentError
@@ -32,9 +31,11 @@ from odoo_dev_core.sessionization.persistence import (
 from odoo_dev_core.workflows.resync import format_resync_line
 from odoo_dev_core.telemetry import (
     BOUNDARY_ERRORS,
+    declare_usage,
     emit_tool_event,
     error_payload,
     is_dispatched_run,
+    record_usage,
 )
 
 from .bootstrap import OdooClient, assert_configured, bootstrap, build_client
@@ -175,7 +176,7 @@ def cmd_log_event(service: CommandService, args: argparse.Namespace) -> None:
         subject=args.subject,
         payload=payload,
         task_ids=args.task_id,
-        repo=normalize_repo_label(args.repo),
+        repo=normalize_repo_label(args.repo, service.services.git),
         branch=args.branch,
         timestamp=args.timestamp,
         attach_active_run=args.attach_active_run,

@@ -16,14 +16,15 @@ from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from mcp.types import InputRequiredResult
 
-from odoo_client._utils import declare_usage, record_usage
 from odoo_dev_core import CommandService
 
 from odoo_dev_core.telemetry import (
     BOUNDARY_ERRORS,
+    declare_usage,
     emit_tool_event,
     error_payload,
     is_dispatched_run,
+    record_usage,
 )
 
 log = logging.getLogger(__name__)

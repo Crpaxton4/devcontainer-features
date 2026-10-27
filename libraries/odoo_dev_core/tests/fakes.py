@@ -74,6 +74,12 @@ class FakeGit(_FakeGateway):
     def sync_git_log(self, state, config=None, client=None, **kwargs):
         return self._record(state, config, client, **kwargs)
 
+    def current_repo_label(self) -> str:
+        return ""
+
+    def derive_repo_label(self, remote_url: str) -> str:
+        return remote_url
+
 
 class FakeGitHub(_FakeGateway):
     def sync_github(self, state, config=None, client=None, **kwargs):

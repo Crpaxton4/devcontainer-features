@@ -18,31 +18,6 @@ def as_utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-def record_usage(kind: str, name: str, **context: Any) -> None:
-    """Write one usage-log line (#1204); never raises, no-op without ``usage_log``.
-
-    ``usage_log`` is a separate stdlib-only package bundled beside this one in
-    the devcontainers. It is imported lazily and guarded, so an environment
-    without it (or with ``USAGE_LOG_DIR`` unset) runs exactly as before.
-    """
-    try:
-        import usage_log
-
-        usage_log.record(kind, name, **context)
-    except Exception:
-        pass
-
-
-def declare_usage(items: list[dict[str, Any]]) -> None:
-    """Upsert usage-log declarations (#1204); never raises, no-op without it."""
-    try:
-        import usage_log
-
-        usage_log.declare(items)
-    except Exception:
-        pass
-
-
 def _is_sequence(value: Any) -> bool:
     """Return whether a value is a non-string, non-bytes sequence."""
     if isinstance(value, (str, bytes, bytearray)):
