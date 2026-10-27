@@ -10,6 +10,8 @@ settings, and that it is not checked by building an :class:`OdooClient`.
 import unittest
 from unittest.mock import patch
 
+from odoo_dev_data.config import LocalConfig
+
 from odoo_cli.bootstrap import assert_configured
 
 _MOD = "odoo_cli.bootstrap"
@@ -25,12 +27,12 @@ _FULL_ENV = {
 class TestAssertConfigured(unittest.TestCase):
     def test_passes_when_connection_settings_resolve(self):
         with patch.dict("os.environ", _FULL_ENV):
-            self.assertIsNone(assert_configured())
+            self.assertIsNone(assert_configured(LocalConfig.load()))
 
     def test_raises_value_error_when_connection_settings_missing(self):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ValueError) as ctx:
-                assert_configured()
+                assert_configured(LocalConfig.load())
         self.assertIn("Missing Odoo connection settings", str(ctx.exception))
 
     def test_ignores_odoo_devcontainer_markers(self):
@@ -41,7 +43,7 @@ class TestAssertConfigured(unittest.TestCase):
         reported as wrongly refused.
         """
         with patch.dict("os.environ", _FULL_ENV, clear=True):
-            assert_configured()  # must not raise
+            assert_configured(LocalConfig.load())  # must not raise
 
     def test_builds_no_odoo_client(self):
         """The lazy-client contract: settings are resolved, no client constructed."""
@@ -49,7 +51,7 @@ class TestAssertConfigured(unittest.TestCase):
             patch.dict("os.environ", _FULL_ENV),
             patch(f"{_MOD}.OdooClient") as client_class,
         ):
-            assert_configured()
+            assert_configured(LocalConfig.load())
         client_class.assert_not_called()
         client_class.from_settings.assert_not_called()
 

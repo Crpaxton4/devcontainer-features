@@ -15,21 +15,22 @@ import unittest
 from io import StringIO
 from unittest.mock import patch
 
-import odoo_cli.__main__ as cli
 from odoo_dev_data.events import EventStore as TaskStateDB
 
-ASSERT_GUARD = "odoo_cli.__main__.assert_configured"
+from ..support import invoke
+
+ASSERT_GUARD = "odoo_cli.commands.assert_configured"
 
 
 def _run(argv: list[str]) -> StringIO:
-    """Invoke ``cli.main`` with ``argv``; return captured stderr."""
+    """Invoke ``main`` with ``argv``; return captured stderr."""
     stderr = StringIO()
     with (
         patch("sys.argv", ["odoo-dev", *argv]),
         patch("sys.stderr", stderr),
         patch("sys.stdout", StringIO()),
     ):
-        cli.main()
+        invoke()
     return stderr
 
 
@@ -124,7 +125,7 @@ class TestLogEvent(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
                 with patch("sys.argv", ["odoo-dev", "log-event", "--source", "bogus"]):
-                    cli.main()
+                    invoke()
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("unknown event source 'bogus'", stderr.getvalue())
 

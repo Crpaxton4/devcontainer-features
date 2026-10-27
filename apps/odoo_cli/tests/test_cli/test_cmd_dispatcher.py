@@ -20,15 +20,15 @@ from io import StringIO
 from dataclasses import dataclass
 from unittest.mock import Mock, patch
 
-import odoo_cli.__main__ as cli
 from odoo_dev_core import CommandRegistry, CommandService, CommandSpec, default_registry
 from odoo_dev_core.telemetry import BOUNDARY_ERRORS, READ_TASK_IDS_PAYLOAD_KEY
 from odoo_client.errors import OdooError
+from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventStore
-from ..support import make_event_store, make_service
+from odoo_cli.__main__ import main
+from odoo_cli.bootstrap import bootstrap
 
-BUILD_SERVICE = "odoo_cli.__main__._build_service"
-ASSERT_GUARD = "odoo_cli.__main__.assert_configured"
+from ..support import make_event_store, make_service, serving
 
 
 def _tmp_db() -> EventStore:
@@ -36,12 +36,11 @@ def _tmp_db() -> EventStore:
 
 
 def _run_cli(*argv: str) -> tuple[int, str]:
-    """Run ``cli.main()`` with ``argv``; return ``(exit_code, stdout)``."""
+    """Run ``main()`` with ``argv``; return ``(exit_code, stdout)``."""
     out = StringIO()
-    code = 0
-    with patch.object(sys, "argv", ["odoo-dev", *argv]), redirect_stdout(out):
+    with redirect_stdout(out):
         try:
-            cli.main()
+            code = main(list(argv))
         except SystemExit as exc:
             code = exc.code or 0
     return code, out.getvalue()
@@ -106,8 +105,8 @@ def _service(db, extra=(), client=None) -> CommandService:
 
 
 def _patched(service: CommandService):
-    """Patch the CLI's service factory to hand back ``service``."""
-    return patch(BUILD_SERVICE, lambda: service)
+    """Make the CLI's ``bootstrap()`` hand back ``service``."""
+    return serving(service)
 
 
 # ── cmd --list ────────────────────────────────────────────────────────────────
@@ -294,26 +293,27 @@ class TestCmdUsageErrors(unittest.TestCase):
 
 class TestCmdLazyClient(unittest.TestCase):
     def test_local_only_command_dispatches_with_no_odoo_config(self):
-        # A local-only command must dispatch through the REAL lazy-client path:
-        # no OdooClient construction, no _assert_env capability check. The
-        # env guard is patched to explode so any call to it fails the test.
-        db = _tmp_db()
+        # A local-only command must dispatch through the REAL lazy client: no
+        # OdooClient construction and no Odoo configuration check. The guard is
+        # patched to explode so any call to it fails the test.
+        service = bootstrap(events=_tmp_db(), config=LocalConfig())
         with (
-            patch("odoo_cli.__main__.OdooClient") as make_client,
-            patch(ASSERT_GUARD, side_effect=AssertionError("env config touched")),
+            patch("odoo_cli.bootstrap.OdooClient") as make_client,
+            patch(
+                "odoo_cli.commands.assert_configured",
+                side_effect=AssertionError("env config touched"),
+            ),
+            _patched(service),
         ):
-            service = _service(db, client=cli._LazyOdooClient())
-            with _patched(service):
-                code, out = _run_cli("cmd", "query_sessions")
+            code, out = _run_cli("cmd", "query_sessions")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out), [])
         make_client.assert_not_called()
 
-    def test_list_builds_no_state_and_no_client(self):
-        # ``cmd --list`` walks the real (unpatched) service factory: with the
-        # OdooClient constructor patched to explode, listing still succeeds and
-        # never constructs a client.
-        with patch("odoo_cli.__main__.OdooClient") as make_client:
+    def test_list_builds_no_client(self):
+        # ``cmd --list`` walks the real (unpatched) bootstrap: with the
+        # OdooClient constructor patched, listing still never constructs one.
+        with patch("odoo_cli.bootstrap.OdooClient") as make_client:
             code, out = _run_cli("cmd", "--list", "--json")
         self.assertEqual(code, 0)
         self.assertEqual(len(json.loads(out)), 35)

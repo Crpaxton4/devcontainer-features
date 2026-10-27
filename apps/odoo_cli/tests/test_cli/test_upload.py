@@ -16,11 +16,10 @@ from io import StringIO
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import odoo_cli.__main__ as cli
+from odoo_cli.commands import _COMMANDS
 from odoo_dev_data.events import EventRecord, EventStore
-from ..support import make_event_store, make_service
+from ..support import CONFIGURED, invoke, make_event_store, make_service, serving
 
-_MOD = "odoo_cli.__main__"
 UTC = timezone.utc
 GAP = 3600  # one hour, matching the seeded event spacing
 
@@ -80,6 +79,7 @@ class _RecordingOdooClient:
 
 def _config() -> MagicMock:
     config = MagicMock()
+    config.connection = CONFIGURED.connection
     config.session_gap_secs = GAP
     # Real billing-policy floats so the shared upload path's minimum/rounding
     # (issue #355) can do arithmetic; the seeded 1h session is unaffected by the
@@ -93,15 +93,11 @@ def _run_cli(argv: list[str], db: EventStore, client: _RecordingOdooClient) -> s
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
     with (
-        patch(
-            f"{_MOD}._build_service",
-            return_value=make_service(db, client, _config()),
-        ),
-        patch(f"{_MOD}._assert_env"),
+        serving(make_service(db, client, _config())),
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-dev", *argv]),
     ):
-        cli.main()
+        invoke()
     return out.getvalue()
 
 
@@ -160,8 +156,8 @@ class TestCmdUpload(unittest.TestCase):
 
     def test_upload_requires_odoo_env(self):
         # A real upload writes to Odoo, so the subcommand must stay behind the
-        # global devcontainer assert (not in the local-only set).
-        self.assertNotIn("upload", cli._LOCAL_ONLY)
+        # global Odoo-configuration assert.
+        self.assertTrue(_COMMANDS["upload"][1])
 
     def test_invalid_date_rejected_cleanly(self):
         # A malformed --start/--end is an argparse usage error (exit 2, clean

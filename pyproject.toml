@@ -69,6 +69,8 @@ allow_indirect_imports = true
 ignore_imports = [
     "odoo_cli.bootstrap -> odoo_dev_data.*",
     "odoo_cli.bootstrap -> odoo_client.*",
+    "odoo_cli.doctor -> odoo_dev_data.*",  # permanent: state maintenance
+    "odoo_cli.repo_map -> odoo_dev_data.*",  # permanent: state maintenance
     "odoo_mcp.bootstrap -> odoo_dev_data.*",
     "odoo_mcp.bootstrap -> odoo_client.*",
     "odoo_tui.bootstrap -> odoo_dev_data.*",

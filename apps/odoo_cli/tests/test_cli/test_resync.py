@@ -7,17 +7,16 @@ the per-source output lines, and the error exit contract.
 """
 
 import unittest
-from contextlib import ExitStack
 from datetime import date
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import odoo_cli.__main__ as cli
+from odoo_dev_data.config import LocalConfig
 
-from ..support import make_service
+from odoo_cli.commands import _COMMANDS
 
-_MOD = "odoo_cli.__main__"
+from ..support import CONFIGURED, invoke, make_service, serving
 
 
 class TestCmdResync(unittest.TestCase):
@@ -25,6 +24,7 @@ class TestCmdResync(unittest.TestCase):
         """A real command service whose gateways are the given puller mocks."""
         quiet = MagicMock(return_value={"inserted": 0})
         return make_service(
+            config=patches.get("config", CONFIGURED),
             git=SimpleNamespace(sync_git_log=patches.get("sync_git_log", quiet)),
             github=SimpleNamespace(sync_github=patches.get("sync_github", quiet)),
             chatter=SimpleNamespace(
@@ -32,27 +32,14 @@ class TestCmdResync(unittest.TestCase):
             ),
         )
 
-    def _patches(self, patches):
-        stack = ExitStack()
-        stack.enter_context(
-            patch(f"{_MOD}._build_service", return_value=self._service(patches))
-        )
-        stack.enter_context(
-            patch(
-                f"{_MOD}.assert_configured",
-                patches.get("assert_configured", MagicMock()),
-            )
-        )
-        return stack
-
     def _run(self, argv, **patches):
         out = StringIO()
         with (
             patch("sys.stdout", out),
             patch("sys.argv", ["odoo-dev", *argv]),
-            self._patches(patches),
+            serving(self._service(patches)),
         ):
-            cli.main()
+            invoke()
         return out.getvalue()
 
     def _run_expect_exit(self, argv, **patches):
@@ -62,10 +49,10 @@ class TestCmdResync(unittest.TestCase):
             patch("sys.stdout", out),
             patch("sys.stderr", StringIO()),
             patch("sys.argv", ["odoo-dev", *argv]),
-            self._patches(patches),
+            serving(self._service(patches)),
         ):
             with self.assertRaises(SystemExit) as ctx:
-                cli.main()
+                invoke()
         return ctx.exception.code, out.getvalue()
 
     def test_default_runs_all_sources(self):
@@ -74,7 +61,6 @@ class TestCmdResync(unittest.TestCase):
             sync_git_log=MagicMock(return_value={"inserted": 2}),
             sync_github=MagicMock(return_value={"inserted": 1}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 3}),
-            assert_configured=MagicMock(),
         )
         self.assertIn("git: inserted 2", out)
         self.assertIn("github: inserted 1", out)
@@ -96,9 +82,7 @@ class TestCmdResync(unittest.TestCase):
         out = self._run(
             ["resync", "--sources", "odoo"],
             sync_odoo_chatter=odoo,
-            assert_configured=MagicMock(
-                side_effect=ValueError("Missing Odoo connection settings: url")
-            ),
+            config=LocalConfig(),
         )
         odoo.assert_not_called()
         self.assertIn("odoo: skipped (odoo sdk not configured)", out)
@@ -113,7 +97,7 @@ class TestCmdResync(unittest.TestCase):
     def test_resync_is_local_only(self):
         # resync must skip the global capability assert so git/github work on an
         # unconfigured SDK; the guard lives in the odoo path only.
-        self.assertIn("resync", cli._LOCAL_ONLY)
+        self.assertFalse(_COMMANDS["resync"][1])
 
     def test_start_end_thread_date_objects_into_pullers(self):
         git = MagicMock(return_value={"inserted": 0, "found": 0, "repos": 1})
