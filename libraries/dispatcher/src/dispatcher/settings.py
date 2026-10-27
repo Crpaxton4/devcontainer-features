@@ -50,26 +50,22 @@ Variables (all optional unless marked required):
     personal-features Feature, never empty). The Feature provides ``claude``,
     ``/usr/local/share/claude-home`` and ``/usr/local/share/odoo-dev`` in a
     container that the dispatcher creates cold.
-``DISPATCH_ARTIFACTS_DIR``
-    The bundle root on the HOST (default ``~/.config/odoo-dev/dispatch/artifacts``),
-    read by :func:`dispatcher.store.dispatch_state.artifacts_root`. The container
-    sees it at ``/usr/local/share/odoo-dev/dispatch/artifacts`` through the bind
-    that the Feature makes of ``~/.config/odoo-dev``. A value outside that
-    directory is a settings error (exit 2), because the container cannot see it.
-    A running container keeps the mounts it was created with, so the dispatcher
-    passes no ``--mount`` of its own.
-``DISPATCH_REPO_MAP_FILE``
-    The shared repo map (default ``~/.config/odoo-dev/repo-map.json``), copied
-    into each job's bundle so ``ODOO_DEV_STATE_DIR`` resolves the project.
+``ODOO_DEV_HOME``
+    The host state root (default ``~/.config/odoo-dev``), resolved by
+    :func:`odoo_dev_data.home.resolve_home`. It holds ``state.db`` (the job
+    rows), ``usage.db``, ``repo-map.json`` and ``tasks/``. The Feature binds it
+    at ``/usr/local/share/odoo-dev`` in every container, and a job sees it at
+    that one mount. A running container keeps the mounts it was created with,
+    so the dispatcher passes no ``--mount`` of its own.
 """
 
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from dispatcher.store.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
+from odoo_dev_data.home import ensure_home, resolve_home
 
 DEFAULT_ENTRY = "/odoo-dev:implement"
 #: The entries that a submitted job may name for itself (its ``entry`` key).
@@ -79,10 +75,6 @@ DEFAULT_ADDITIONAL_FEATURES = (
 )
 INVARIANTS_RELATIVE = Path("prompts") / "unattended-invariants.md"
 WORKSPACE_TARGET = "/mnt/extra-addons"
-#: Where the personal-features Feature binds the host ``~/.config/odoo-dev``.
-ODOO_DEV_MOUNT_TARGET = "/usr/local/share/odoo-dev"
-#: The bundle root as the container sees it (under the Feature's odoo-dev bind).
-ARTIFACTS_TARGET = f"{ODOO_DEV_MOUNT_TARGET}/dispatch/artifacts"
 
 
 class SettingsError(RuntimeError):
@@ -113,24 +105,6 @@ def read_invariants(path: str) -> str:
         raise SettingsError(f"cannot read the invariants file {path}: {exc}") from exc
 
 
-def check_artifacts_dir(env: Mapping[str, str]) -> None:
-    """Raise :class:`SettingsError` when ``DISPATCH_ARTIFACTS_DIR`` is not visible.
-
-    The container sees the host only through the Feature's bind of
-    ``~/.config/odoo-dev``, so the bundle root must sit under that directory.
-    """
-    value = env.get(DISPATCH_ARTIFACTS_DIR_ENV)
-    if not value:
-        return
-    wanted = Path(value).expanduser().resolve()
-    if not wanted.is_relative_to(odoo_dev_dir().resolve()):
-        raise SettingsError(
-            f"{DISPATCH_ARTIFACTS_DIR_ENV}={value} is not under {odoo_dev_dir()}, "
-            f"the directory that the Feature binds at {ODOO_DEV_MOUNT_TARGET}; "
-            "the container could not see the bundles"
-        )
-
-
 def check_no_stale_agent(env: Mapping[str, str]) -> None:
     """Raise :class:`SettingsError` when the retired ``DISPATCH_AGENT`` is set."""
     if env.get("DISPATCH_AGENT"):
@@ -159,12 +133,10 @@ class Settings:
     deadline_s: float
     admit_timeout_s: float
     claude_home: Path
+    home: Path
     additional_features: str = DEFAULT_ADDITIONAL_FEATURES
     invariants: str = ""  # the text of ``invariants_file``, read once by from_env
     owner: str = ""  # optional tie-breaker; "" means resolve by glob only
-    repo_map_file: Path = field(
-        default_factory=lambda: odoo_dev_dir() / "repo-map.json"
-    )
 
     def workspace(self, repo: str) -> Path:
         """The ``--workspace-folder`` of a repo."""
@@ -230,7 +202,8 @@ class Settings:
             }
         except ValueError as exc:
             raise SettingsError(f"a numeric setting is malformed: {exc}") from exc
-        check_artifacts_dir(env)
+        home = resolve_home(env)
+        ensure_home(home)
         check_no_stale_agent(env)
         invariants_file = env.get("DISPATCH_INVARIANTS_FILE") or str(
             plugin_root / INVARIANTS_RELATIVE
@@ -244,9 +217,7 @@ class Settings:
             invariants=read_invariants(invariants_file),
             entry=env.get("DISPATCH_ENTRY") or DEFAULT_ENTRY,
             claude_home=Path(claude_home),
-            repo_map_file=Path(
-                env.get("DISPATCH_REPO_MAP_FILE") or odoo_dev_dir() / "repo-map.json"
-            ),
+            home=home,
             additional_features=env.get("DISPATCH_ADDITIONAL_FEATURES")
             or DEFAULT_ADDITIONAL_FEATURES,
             **numbers,

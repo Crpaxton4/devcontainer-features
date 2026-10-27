@@ -1229,6 +1229,7 @@ name = "dispatcher"
 version = "1.2.0"
 source = { editable = "libraries/dispatcher" }
 dependencies = [
+    { name = "odoo-dev-data" },
     { name = "usage-log" },
 ]
 
@@ -1243,7 +1244,10 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "usage-log", editable = "libraries/usage_log" }]
+requires-dist = [
+    { name = "odoo-dev-data", editable = "libraries/odoo_dev_data" },
+    { name = "usage-log", editable = "libraries/usage_log" },
+]
 
 [package.metadata.requires-dev]
 static-analysis = [

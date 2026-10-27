@@ -9,9 +9,11 @@ from a ``finally`` on every path, because the expensive cases are the ones
 that crash. The order inside it is fixed:
 
 1. decide the cause (or success) from what the dispatcher saw,
-2. write the run row, then collect artifacts (``collect.record_then_collect``),
+2. write the result to the job row, then collect the bundle
+   (``collect.record_then_collect``),
 3. reap the worktree if, and only if, it is provably pushed,
-4. move the job to DONE or DEAD_LETTER,
+4. move the job to DEAD_LETTER (a success was moved to DONE in step 2),
+   then index the bundle on the row,
 5. only then the idle check, which may stop the container.
 """
 
@@ -22,21 +24,20 @@ from collections import deque
 from collections.abc import Callable
 
 import usage_log
-from dispatcher.store.artifacts import ensure_bundle_dir
-from dispatcher.store.dispatch_state import now_us, resolve_now_us
-from dispatcher.store.jobs import (
+from odoo_dev_data.db import now_us, resolve_now_us
+from odoo_dev_data.jobs import (
     DeadReason,
     InvalidJobTransitionError,
     Job,
     JobStore,
 )
-from dispatcher.store.runs_store import RunStore
 
 from . import lifecycle
 from .collect import (
     RunWrite,
     StreamParser,
     branch_of,
+    index_collected,
     read_task_record,
     record_then_collect,
     worktree_of,
@@ -110,7 +111,7 @@ class JobRun:
         self.cause: tuple[DeadReason, str] | None = None
         self.ending: Ending | None = None
         self.ended_us: int | None = None
-        self.spawned_us: int | None = None  # the run row's start; None before a spawn
+        self.spawned_us: int | None = None  # the session spawn; None before a spawn
         self.proc = None
         self.deadline_hit = False
         self.reap_result = ReapResult(False, "no session ran; nothing reaped")
@@ -164,7 +165,6 @@ class JobRun:
         self.job = engine.jobs.mark_running(
             job.job_id, container=lifecycle.container_name(job.repo)
         )
-        lifecycle.seed_repo_map(self.settings, ensure_bundle_dir(job.job_id))
         env = self._env()
         lifecycle.require_workspace(self.settings, job.repo)
         container_id = lifecycle.up(engine.shell, self.settings, job.repo, env)
@@ -326,7 +326,7 @@ class JobRun:
                 try:
                     self.engine.jobs.set_session(self.job.job_id, session_id)
                 except InvalidJobTransitionError:
-                    pass  # the run row, not the job row, is the billing record
+                    pass  # the row already finished; the result write records the session
 
     # -- phase 3: everything after the exec -----------------------------
 
@@ -357,10 +357,10 @@ class JobRun:
         spawned = self.spawned_us if self.spawned_us is not None else job.started_us
         started = resolve_now_us(spawned)
         ended = max(resolve_now_us(self.ended_us), started)
-        record = read_task_record(job.job_id, job.task_id)
+        record = read_task_record(job.task_id, self.settings.home)
         transcript = lifecycle.transcript_path(self.settings, self.parser.session_id)
         write = record_then_collect(
-            engine.runs,
+            engine.jobs,
             parser=self.parser,
             job=job,
             started_us=started,
@@ -368,6 +368,7 @@ class JobRun:
             failed=self.cause is not None,
             transcript=transcript,
             record=record,
+            home=self.settings.home,
         )
         self._reap(record)
         self._transition(write, ended)
@@ -410,14 +411,14 @@ class JobRun:
     def _transition(self, write: RunWrite, ended: int) -> None:
         jobs, job_id = self.engine.jobs, self.job.job_id
         if self.cause is None:
-            jobs.complete(job_id, outcome=write.outcome.value, now_us=ended)
-            return
+            return  # record_then_collect moved the row to DONE
         reason, detail = self.cause
         if self.container_kill_note:
             detail = f"{detail} [{self.container_kill_note}]"
         if not self.reap_result.reaped:
             detail = f"{detail} [{self.reap_result.note}]"
         jobs.dead_letter(job_id, reason, detail=detail, now_us=ended)
+        index_collected(jobs, job_id, write)
 
     def _idle_check(self) -> None:
         engine = self.engine
@@ -441,7 +442,6 @@ class Engine:
         self,
         settings: Settings,
         jobs: JobStore,
-        runs: RunStore,
         shell: Shell,
         gate: AdmissionGate,
         *,
@@ -450,7 +450,6 @@ class Engine:
     ):
         self.settings = settings
         self.jobs = jobs
-        self.runs = runs
         self.shell = shell
         self.gate = gate
         self.clock = clock
@@ -470,8 +469,8 @@ class Engine:
         self.notes[job_id] = {
             "reap": reaped.note,
             "reaped": reaped.reaped,
-            "bundle": str(write.harvest.dir) if write.harvest else "",
-            "missing": list(write.harvest.missing) if write.harvest else [],
+            "bundle": str(write.bundle.dir) if write.bundle else "",
+            "missing": list(write.bundle.missing) if write.bundle else [],
             "notes": write.notes,
         }
 

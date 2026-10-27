@@ -1,16 +1,13 @@
-"""Lock, gate, queue, settings, schema and the ten dead-letter causes."""
+"""Gate, queue, settings, schema and the ten dead-letter causes."""
 
 import dataclasses
 import json
-import multiprocessing
 
 import pytest
-from dispatcher.store.dispatch_state import odoo_dev_dir
-from dispatcher.store.jobs import DeadReason, JobState, JobStore
+from odoo_dev_data.jobs import DeadReason, JobState, JobStore
 
 from dispatcher import deadletter, gates, queue, schema
 from dispatcher.deadletter import Ending, classify
-from dispatcher.lock import AlreadyRunningError, DispatcherLock
 from dispatcher.settings import (
     DEFAULT_ENTRY,
     ConfigResolutionError,
@@ -19,45 +16,6 @@ from dispatcher.settings import (
     normalize_project,
 )
 from .support import GOOD
-
-# -- lock ---------------------------------------------------------------
-
-
-def _try_lock(path, out):
-    try:
-        DispatcherLock(path).acquire()
-        out.put("acquired")
-    except AlreadyRunningError:
-        out.put("refused")
-
-
-def test_lock_refuses_a_second_holder_across_processes(tmp_path):
-    path = tmp_path / "dispatcher.lock"
-    first = DispatcherLock(path).acquire()
-    assert first.held
-    out = multiprocessing.Queue()
-    proc = multiprocessing.Process(target=_try_lock, args=(path, out))
-    proc.start()
-    proc.join(10)
-    assert out.get(timeout=5) == "refused"
-    first.release()
-    assert not first.held
-    with DispatcherLock(path):  # free again once released
-        assert path.read_text().strip().isdigit()
-
-
-def test_lock_is_whole_file_flock_not_record_lock(tmp_path):
-    """A second descriptor closing must not drop the lock (the lockf trap)."""
-    import os
-
-    path = tmp_path / "dispatcher.lock"
-    lock = DispatcherLock(path).acquire()
-    os.close(os.open(path, os.O_RDONLY))  # POSIX record locks would die here
-    with pytest.raises(AlreadyRunningError):
-        DispatcherLock(path).acquire()
-    lock.release()
-    lock.release()  # idempotent
-
 
 # -- gates --------------------------------------------------------------
 
@@ -177,8 +135,8 @@ def test_empty_brief_is_rejected(tmp_path):
         queue.parse_submission(arg)
 
 
-def test_submit_groups_by_project_and_rejects_duplicates(tmp_path):
-    store = JobStore()
+def test_submit_groups_by_project_and_rejects_duplicates(tmp_path, home):
+    store = JobStore(home=home)
     specs = [
         queue.JobSpec("a", "1", "x"),
         queue.JobSpec("b", "2", "x"),
@@ -197,8 +155,8 @@ def test_submit_groups_by_project_and_rejects_duplicates(tmp_path):
     assert [j.job_id for j in queue.pending_jobs(store)] == [j.job_id for j in jobs[:3]]
 
 
-def test_reconcile_orphans_running_jobs():
-    store = JobStore()
+def test_reconcile_orphans_running_jobs(home):
+    store = JobStore(home=home)
     (job,) = queue.submit(store, [queue.JobSpec("a", "1", "x")], "b")
     store.mark_running(job.job_id)
     assert queue.reconcile(store) == [job.job_id]
@@ -233,9 +191,11 @@ def test_settings_from_env(tmp_path):
     assert str(s.workspace("qoc")) == "/r/qoc"
     assert s.config("qoc") == config / "devcontainer.json"
     assert Settings.from_env({**env, "DISPATCH_REPO_OWNER": ""}).owner == ""
-    assert s.repo_map_file == odoo_dev_dir() / "repo-map.json"
-    custom = {**env, "DISPATCH_REPO_MAP_FILE": "/m/map.json"}
-    assert str(Settings.from_env(custom).repo_map_file) == "/m/map.json"
+    assert s.home == tmp_path / "home" / ".config" / "odoo-dev"
+    assert (s.home / "tasks").is_dir()  # from_env ensures the state root
+    other = tmp_path / "other-home"
+    assert Settings.from_env({**env, "ODOO_DEV_HOME": str(other)}).home == other
+    assert (other / "locks").is_dir()
     assert s.invariants_file == str(prompts / "unattended-invariants.md")
     assert s.invariants == "default text"
     assert (s.min_available_gb, s.deadline_s, s.entry) == (
@@ -293,24 +253,6 @@ def test_settings_defaults_and_errors(tmp_path):
     with pytest.raises(SettingsError, match="malformed"):
         Settings.from_env({**env, "DISPATCH_ADMIT_TIMEOUT_S": "soon"})
     assert normalize_project("QOC_Repo.x") == "qoc_repox"
-
-
-def test_settings_refuse_a_bundle_root_the_container_cannot_see(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    invariants = tmp_path / "inv.md"
-    invariants.write_text("host text", "utf-8")
-    env = {
-        "DISPATCH_REPOS_DIR": "/r",
-        "DISPATCH_CONFIG_ROOT": "/c",
-        "DISPATCH_REPO_OWNER": "o",
-        "DISPATCH_INVARIANTS_FILE": str(invariants),
-    }
-    Settings.from_env(env)  # unset: the default sits under the odoo-dev directory
-    inside = str(tmp_path / "home" / ".config" / "odoo-dev" / "x" / "artifacts")
-    Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": inside})
-    with pytest.raises(SettingsError, match="not under") as caught:
-        Settings.from_env({**env, "DISPATCH_ARTIFACTS_DIR": str(tmp_path / "out")})
-    assert "DISPATCH_ARTIFACTS_DIR" in str(caught.value)
 
 
 def _make_config(root, owner, repo):
@@ -447,7 +389,7 @@ def test_detail_carries_everything_seen():
     )
 
 
-def test_brief_with_a_nul_or_too_large_is_rejected_at_submission(tmp_path):
+def test_brief_with_a_nul_or_too_large_is_rejected_at_submission(tmp_path, home):
     nul = _brief(tmp_path, "nul.md", "a\0b")
     big = _brief(tmp_path, "big.md", "x" * (queue.MAX_PROMPT_BYTES + 1))
     for path, needle in ((nul, "NUL"), (big, "too large")):
@@ -456,24 +398,7 @@ def test_brief_with_a_nul_or_too_large_is_rejected_at_submission(tmp_path):
             queue.parse_submission(arg)
     ok = _brief(tmp_path, "ok.md", "x" * (queue.MAX_PROMPT_BYTES - 10))
     queue.parse_submission(json.dumps([{"repo": "a", "task": "1", "brief": ok}]))
-    assert JobStore().list_by_state(JobState.PENDING) == []  # nothing stored
-
-
-def test_lock_error_names_the_holder(tmp_path):
-    import os
-
-    path = tmp_path / "dispatcher.lock"
-    with DispatcherLock(path):
-        with pytest.raises(AlreadyRunningError, match=f"pid {os.getpid()}"):
-            DispatcherLock(path).acquire()
-    path.write_text("not a pid")
-    held = os.open(path, os.O_RDWR)
-    import fcntl
-
-    fcntl.flock(held, fcntl.LOCK_EX)
-    with pytest.raises(AlreadyRunningError, match="pid unknown"):
-        DispatcherLock(path).acquire()
-    os.close(held)
+    assert JobStore(home=home).list_by_state(JobState.PENDING) == []  # nothing stored
 
 
 def test_valid_events_without_a_result_is_missing_not_unreadable():

@@ -6,19 +6,17 @@ from dispatcher.settings import Settings
 
 
 @pytest.fixture(autouse=True)
-def state_root(tmp_path, monkeypatch):
-    root = tmp_path / "state"
-    monkeypatch.setenv("ODOO_DISPATCH_STATE_DIR", str(root))
-    # One mechanism: HOME points into tmp, so the default odoo-dev directory
-    # (~/.config/odoo-dev) and the default bundle root under it stay in tmp.
+def home(tmp_path, monkeypatch):
+    """The one state root of the suite: a temp ``ODOO_DEV_HOME``."""
+    root = tmp_path / "odoo-dev"
+    monkeypatch.setenv("ODOO_DEV_HOME", str(root))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("DISPATCH_ARTIFACTS_DIR", raising=False)
     monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
     return root
 
 
 @pytest.fixture
-def settings(tmp_path):
+def settings(tmp_path, home):
     invariants = tmp_path / "unattended-invariants.md"
     invariants.write_text("Standing line.\nNever ask.\n", "utf-8")
     for repo in ("qoc", "a", "b", "c", "x"):
@@ -27,10 +25,8 @@ def settings(tmp_path):
         ) / "devcontainer.json"
         config.parent.mkdir(parents=True)
         config.write_text("{}", "utf-8")
-    repo_map = tmp_path / "repo-map.json"
-    repo_map.write_text('{"projects": {}}', "utf-8")
     return Settings(
-        repo_map_file=repo_map,
+        home=home,
         repos_dir=tmp_path / "repos",
         config_root=tmp_path / "central",
         owner="acme",
