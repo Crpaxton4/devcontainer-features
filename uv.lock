@@ -19,8 +19,12 @@ prerelease-mode = "allow"
 [manifest]
 members = [
     "dispatcher",
+    "odoo-cli",
     "odoo-client",
+    "odoo-dev-core",
     "odoo-dev-data",
+    "odoo-mcp",
+    "odoo-tui",
     "usage-log",
     "webui",
 ]
@@ -3149,18 +3153,20 @@ wheels = [
 ]
 
 [[package]]
+name = "odoo-cli"
+version = "0.1.0"
+source = { editable = "apps/odoo_cli" }
+dependencies = [
+    { name = "odoo-dev-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "odoo-dev-core", editable = "libraries/odoo_dev_core" }]
+
+[[package]]
 name = "odoo-client"
 version = "8.2.0"
 source = { editable = "libraries/odoo_client" }
-dependencies = [
-    { name = "fastmcp" },
-    { name = "markdown-it-py" },
-    { name = "markitdown", extra = ["docx", "pdf"] },
-    { name = "odoo-dev-data" },
-    { name = "pydantic" },
-    { name = "textual" },
-    { name = "toon-format" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -3204,16 +3210,6 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "fastmcp", specifier = ">=4,<5" },
-    { name = "markdown-it-py", specifier = ">=3.0.0" },
-    { name = "markitdown", extras = ["docx", "pdf"], specifier = ">=0.1.6" },
-    { name = "odoo-dev-data", editable = "libraries/odoo_dev_data" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "textual", specifier = ">=1.0.0" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
-    { name = "toon-format", specifier = ">=0.9.0b1" },
-]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3257,12 +3253,63 @@ test = [
 ]
 
 [[package]]
+name = "odoo-dev-core"
+version = "0.1.0"
+source = { editable = "libraries/odoo_dev_core" }
+dependencies = [
+    { name = "markdown-it-py" },
+    { name = "markitdown", extra = ["docx", "pdf"] },
+    { name = "odoo-client" },
+    { name = "odoo-dev-data" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "markdown-it-py", specifier = ">=3.0.0" },
+    { name = "markitdown", extras = ["docx", "pdf"], specifier = ">=0.1.6" },
+    { name = "odoo-client", editable = "libraries/odoo_client" },
+    { name = "odoo-dev-data", editable = "libraries/odoo_dev_data" },
+]
+
+[[package]]
 name = "odoo-dev-data"
 version = "0.1.0"
 source = { editable = "libraries/odoo_dev_data" }
 
 [package.metadata]
 requires-dist = [{ name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" }]
+
+[[package]]
+name = "odoo-mcp"
+version = "0.1.0"
+source = { editable = "apps/odoo_mcp" }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "odoo-dev-core" },
+    { name = "toon-format" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=4,<5" },
+    { name = "odoo-dev-core", editable = "libraries/odoo_dev_core" },
+    { name = "toon-format", specifier = ">=0.9.0b1" },
+]
+
+[[package]]
+name = "odoo-tui"
+version = "0.1.0"
+source = { editable = "apps/odoo_tui" }
+dependencies = [
+    { name = "odoo-dev-core" },
+    { name = "textual" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "odoo-dev-core", editable = "libraries/odoo_dev_core" },
+    { name = "textual", specifier = ">=1.0.0" },
+]
 
 [[package]]
 name = "onnxruntime"
@@ -5328,7 +5375,7 @@ wheels = [
 [[package]]
 name = "webui"
 version = "0.1.0"
-source = { editable = "libraries/webui" }
+source = { editable = "apps/webui" }
 dependencies = [
     { name = "flask" },
 ]

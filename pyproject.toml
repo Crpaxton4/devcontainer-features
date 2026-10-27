@@ -10,6 +10,10 @@ odoo_client = { workspace = true }
 dispatcher = { workspace = true }
 usage_log = { workspace = true }
 odoo_dev_data = { workspace = true }
+odoo_dev_core = { workspace = true }
+odoo_cli = { workspace = true }
+odoo_mcp = { workspace = true }
+odoo_tui = { workspace = true }
 webui = { workspace = true }
 
 [tool.uv]
@@ -32,16 +36,67 @@ target-version = ["py310"]
 # Cross-package rules (ADR-006): apps import logic only; data imports nothing
 # above it. Members join root_packages as they are created.
 [tool.importlinter]
-root_packages = ["odoo_client", "dispatcher", "usage_log", "odoo_dev_data", "webui"]
+root_packages = [
+    "odoo_client",
+    "odoo_dev_data",
+    "odoo_dev_core",
+    "dispatcher",
+    "usage_log",
+    "odoo_cli",
+    "odoo_mcp",
+    "odoo_tui",
+    "webui",
+]
 
+# Direct imports only: app -> logic -> data chains are the sanctioned path.
+# The bootstrap of each app is the one module that names data constructors.
 [[tool.importlinter.contracts]]
 name = "ADR-006: apps never import a data package"
 type = "forbidden"
-source_modules = ["webui"]
-forbidden_modules = ["usage_log", "odoo_dev_data"]
+source_modules = ["odoo_cli", "odoo_mcp", "odoo_tui", "webui"]
+forbidden_modules = ["odoo_dev_data", "odoo_client", "usage_log"]
+allow_indirect_imports = true
+ignore_imports = [
+    "odoo_cli.bootstrap -> odoo_dev_data.*",
+    "odoo_cli.bootstrap -> odoo_client.*",
+    "odoo_mcp.bootstrap -> odoo_dev_data.*",
+    "odoo_mcp.bootstrap -> odoo_client.*",
+    "odoo_tui.bootstrap -> odoo_dev_data.*",
+    "odoo_tui.bootstrap -> odoo_client.*",
+    # bypass, removed in WS4
+    "odoo_cli.__main__ -> odoo_client._utils",
+    # bypass, removed in WS4
+    "odoo_mcp.server -> odoo_client._utils",
+    # bypass, removed in WS4
+    "odoo_tui.triage -> odoo_dev_data.events",
+    # bypass, removed in WS4
+    "odoo_tui.export -> odoo_dev_data.events",
+    # bypass, removed in WS4
+    "odoo_tui.evidence -> odoo_dev_data.events",
+    # bypass, removed in WS4
+    "odoo_tui.timeline -> odoo_dev_data.events",
+    # bypass, removed in WS4
+    "odoo_tui.app -> odoo_dev_data.events",
+    # bypass, removed in WS4
+    "odoo_tui.app -> odoo_client.errors",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "ADR-006: data never imports logic or apps"
 type = "forbidden"
-source_modules = ["usage_log", "odoo_dev_data"]
-forbidden_modules = ["odoo_client", "dispatcher", "webui"]
+source_modules = ["odoo_dev_data", "odoo_client", "usage_log"]
+forbidden_modules = [
+    "odoo_dev_core",
+    "dispatcher",
+    "odoo_cli",
+    "odoo_mcp",
+    "odoo_tui",
+    "webui",
+]
+
+[[tool.importlinter.contracts]]
+name = "ADR-006: logic never imports apps"
+type = "forbidden"
+source_modules = ["odoo_dev_core", "dispatcher"]
+forbidden_modules = ["odoo_cli", "odoo_mcp", "odoo_tui", "webui"]

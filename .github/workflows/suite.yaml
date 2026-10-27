@@ -33,12 +33,20 @@ jobs:
             dir: libraries/odoo_client
           - name: odoo_dev_data
             dir: libraries/odoo_dev_data
+          - name: odoo_dev_core
+            dir: libraries/odoo_dev_core
           - name: dispatcher
             dir: libraries/dispatcher
           - name: usage_log
             dir: libraries/usage_log
+          - name: odoo_cli
+            dir: apps/odoo_cli
+          - name: odoo_mcp
+            dir: apps/odoo_mcp
+          - name: odoo_tui
+            dir: apps/odoo_tui
           - name: webui
-            dir: libraries/webui
+            dir: apps/webui
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -61,6 +69,6 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages --group dev
       - run: uv run lint-imports
-      - name: ADR-005 contracts (odoo_client, until WS2 deletes them)
+      - name: Layer contract of odoo_client
         working-directory: libraries/odoo_client
         run: uv run lint-imports

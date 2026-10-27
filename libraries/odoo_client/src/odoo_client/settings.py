@@ -1,7 +1,7 @@
 """Connection settings: the shared-kernel value object the transports consume.
 
 This module is dependency-free, so any layer may import it. It does not
-resolve settings. :func:`odoo_client.bootstrap.settings_from_config` turns a
+resolve settings. the ``settings_from_config()`` of each app's ``bootstrap`` module turns a
 :class:`odoo_dev_data.config.LocalConfig` into this value object through
 :func:`build_connection_settings`.
 """

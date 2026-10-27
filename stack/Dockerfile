@@ -57,10 +57,10 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY libraries /src/libraries
 RUN uv pip install --system --no-cache --prerelease=allow /src/libraries/dispatcher
 
-# Only libraries/webui is copied, so a dispatcher change does not rebuild this layer.
+# Only apps/webui is copied, so a dispatcher change does not rebuild this layer.
 # The container user is set by compose (a numeric uid), so no USER line here.
 FROM base AS webui
-COPY libraries/webui /src/libraries/webui
-RUN uv pip install --system --no-cache /src/libraries/webui
+COPY apps/webui /src/apps/webui
+RUN uv pip install --system --no-cache /src/apps/webui
 EXPOSE 8765
 CMD ["python", "-m", "webui"]

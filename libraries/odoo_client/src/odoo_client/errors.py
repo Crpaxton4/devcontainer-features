@@ -5,7 +5,7 @@ taxonomy in :mod:`odoo_client.transport.errors`. Higher layers used to reach the
 ``from odoo_client import ...`` root-imports, which made module import order
 depend on the partially initialized :mod:`odoo_client` package (a cycle that was
 only survivable because of a lazy import in
-:meth:`odoo_client.commands.log_event.LogEventCommand`).
+:meth:`odoo_dev_core.commands.log_event.LogEventCommand`).
 
 This module is the shared-kernel alternative (ADR-005): it re-exports the
 error types from their canonical modules so that any layer — core, surface,

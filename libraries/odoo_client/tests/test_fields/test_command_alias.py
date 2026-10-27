@@ -1,4 +1,3 @@
-import importlib
 import unittest
 import warnings
 
@@ -31,12 +30,6 @@ class TestDeprecatedCommandAlias(unittest.TestCase):
         with self.assertRaises(AttributeError) as ctx:
             fields_pkg.DoesNotExist
         self.assertIn("DoesNotExist", str(ctx.exception))
-
-    def test_registry_command_is_distinct_class(self) -> None:
-        registry_command = importlib.import_module(
-            "odoo_client.commands.command"
-        ).Command
-        self.assertIsNot(registry_command, X2ManyCommand)
 
 
 if __name__ == "__main__":  # pragma: no cover
