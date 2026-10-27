@@ -486,9 +486,9 @@ const fs = require("fs"), path = require("path");
 const agentsDir = process.argv[1];
 
 // The handoff paths, which are the ones that actually get run. A body may name them
-// in prose without the sigil ("unless the machine sets ODOO_DEV_STATE_DIR"); what it
+// in prose without the sigil ("unless the machine sets ODOO_DEV_HOME"); what it
 // may not do is write one as something a shell has to expand.
-const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|CLAUDE_PLUGIN_ROOT|ODOO_DEV_STATE_DIR)\b/;
+const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|CLAUDE_PLUGIN_ROOT|ODOO_DEV_HOME)\b/;
 
 const teach = () => {
   console.log("       A subagent Bash call inherits no environment from the dispatcher and keeps");
@@ -678,8 +678,8 @@ process.exit(bad === 0 ? 0 : 1);
 # substitutes them the same way rather than exporting them, which makes the test
 # strictly harsher than the runtime.
 #
-# Everything runs against a scratch ODOO_DEV_STATE_DIR and a scratch HOME, including
-# one pass with ODOO_DEV_STATE_DIR unset so the `$HOME` default inside every
+# Everything runs against a scratch ODOO_DEV_HOME and a scratch HOME, including
+# one pass with ODOO_DEV_HOME unset so the `$HOME` default inside every
 # injection is exercised too. Afterwards the scratch tree must hold no directory
 # that a well-formed invocation could not have produced, which is how `tasks/Create`
 # gets caught. The last pass then feeds real arguments in, because an injection that
@@ -742,9 +742,9 @@ while IFS=$'\t' read -r cf cl craw; do
         *)       cmd="$(inj_render "$craw" "$v" "$v" "$v")" ;;
       esac
       if [ "$mode" = nostate ]; then
-        out="$(env -u ODOO_DEV_STATE_DIR HOME="$inj_root/home" bash -c "$cmd" </dev/null 2>&1)"
+        out="$(env -u ODOO_DEV_HOME HOME="$inj_root/home" bash -c "$cmd" </dev/null 2>&1)"
       else
-        out="$(env HOME="$inj_root/home" ODOO_DEV_STATE_DIR="$inj_root/state" \
+        out="$(env HOME="$inj_root/home" ODOO_DEV_HOME="$inj_root/state" \
                bash -c "$cmd" </dev/null 2>&1)"
       fi
       rc=$?
@@ -758,7 +758,7 @@ while IFS=$'\t' read -r cf cl craw; do
   done
 done < "$inj_list"
 
-inj_junk_found="$( { inj_junk "$inj_root/state"; inj_junk "$inj_root/home/.local/share/odoo-dev"; } | sort -u)"
+inj_junk_found="$( { inj_junk "$inj_root/state"; inj_junk "$inj_root/home/.config/odoo-dev"; } | sort -u)"
 
 # Real arguments, in their own scratch tree, so that deleting an injection or
 # writing one that can only ever emit its marker cannot pass this gate.
@@ -766,7 +766,7 @@ mkdir -p "$inj_root/live/tasks/30412" "$inj_root/livehome"
 while IFS=$'\t' read -r cf cl craw; do
   [ -n "${cf:-}" ] || continue
   cmd="$(inj_render "$craw" 30412 UAT main)"
-  out="$(env HOME="$inj_root/livehome" ODOO_DEV_STATE_DIR="$inj_root/live" \
+  out="$(env HOME="$inj_root/livehome" ODOO_DEV_HOME="$inj_root/live" \
          bash -c "$cmd" </dev/null 2>&1)"
   rc=$?
   [ "$rc" -eq 0 ] || inj_report="$inj_report
