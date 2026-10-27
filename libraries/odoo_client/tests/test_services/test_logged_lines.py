@@ -8,7 +8,7 @@ the read-only calls issued.
 
 import unittest
 
-from odoo_client.utilities.logged_lines import logged_hours_by_task_day
+from odoo_client.services.logged_lines import logged_hours_by_task_day
 
 
 class FakeClient:

@@ -51,8 +51,8 @@ Two Odoo facts drive the shape of the write path:
   ``ir.model`` read when the map misses: the fallback *is* the bug, and it would
   reintroduce it for precisely the accounts the map exists to serve.
 * ``mail.activity.note`` is an HTML field, so caller-supplied Markdown is
-  rendered with :func:`~odoo_client.utilities.html.markdown_to_html` on the way in
-  and converted back with :func:`~odoo_client.utilities.html.html_to_markdown` on
+  rendered with :func:`~odoo_client._text.markdown_to_html` on the way in
+  and converted back with :func:`~odoo_client._text.html_to_markdown` on
   the way out — the same in/out contract ``task_note`` uses for chatter bodies
   (#324).
 """
@@ -62,7 +62,7 @@ from typing import Any, Optional, Union
 from odoo_client.client import OdooClient
 from odoo_client.state import LocalConfig
 
-from odoo_client.utilities.html import html_to_markdown, markdown_to_html
+from odoo_client._text import html_to_markdown, markdown_to_html
 
 # ``_validate_iso_date`` is the SDK's one ``YYYY-MM-DD`` guard (it rejects the
 # basic-ISO forms ``date.fromisoformat`` accepts but Odoo would mis-compare).

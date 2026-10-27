@@ -33,9 +33,10 @@ from odoo_client.client import OdooClient
 from odoo_client.commands import Registry
 from odoo_client.commands.builtin import register_builtins
 from odoo_client.commands.protocols import RpcClient
-from odoo_client.state import LocalConfig, LocalStateClient
+from odoo_client.state import LocalConfig, LocalStateClient, assert_tracker_db_present
 
 __all__ = [
+    "assert_configured",
     "bootstrap",
     "OdooClient",
     "LocalConfig",
@@ -79,3 +80,22 @@ def bootstrap(
     if config is None:
         config = LocalConfig.load()
     return register_builtins(Registry(client, state_client=state, config=config))
+
+
+def assert_configured() -> None:
+    """Raise if the entrypoint's real preconditions are unmet (#642).
+
+    What the commands need is resolvable Odoo connection settings and the
+    tracker DB, so those are what is checked. Both failures already have a
+    named, actionable error that the MCP boundary
+    (:data:`~odoo_client.mcp.server._BOUNDARY_ERRORS`) renders as a structured
+    payload, so no new exception type is introduced.
+
+    Only the *settings* are resolved — no :class:`~odoo_client.client.OdooClient`
+    is built and no socket is opened — so the lazy-client contract holds.
+
+    :raises ValueError: When required Odoo connection settings are unresolved.
+    :raises TrackerStateMissingError: When the central tracker DB is absent.
+    """
+    LocalConfig.load().connection_settings()
+    assert_tracker_db_present()

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from odoo_client.adapters import (
     event_record_to_raw_event,
+    is_synthetic_tick,
     load_raw_events,
     raw_event_to_event_record,
 )
@@ -146,6 +147,44 @@ class TestLoadRawEvents(unittest.TestCase):
             datetime(2026, 6, 1, 9, 45, tzinfo=UTC),
         )
         self.assertEqual(len(bounded), 2)
+
+
+class TestSyntheticTicks(unittest.TestCase):
+    NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+
+    def _tick(self, minute: int) -> EventRecord:
+        return EventRecord(
+            id=None,
+            source="calendar",
+            timestamp=datetime(2026, 7, 15, 10, minute, tzinfo=UTC),
+            task_ids=["9"],
+            repo="",
+            payload={"synthetic": True},
+            external_id=f"gcal:m:tick:{minute}",
+        )
+
+    def test_is_synthetic_tick_predicate(self):
+        commit = EventRecord(
+            id=None, source="commit", timestamp=self.NOW, task_ids=[], repo=""
+        )
+        self.assertTrue(is_synthetic_tick(self._tick(0)))
+        self.assertFalse(is_synthetic_tick(commit))
+
+    def test_ticks_excluded_from_sweep_population_but_not_derivation(self):
+        db = _tmp_db()
+        for minute in (0, 5, 10):
+            db.add_event(self._tick(minute))
+        db.add_event(
+            EventRecord(
+                id=None,
+                source="commit",
+                timestamp=self.NOW,
+                task_ids=["9"],
+                repo="o/r",
+            )
+        )
+        self.assertEqual(len(load_raw_events(db)), 4)  # 3 ticks + 1 commit
+        self.assertEqual(len(load_raw_events(db, exclude_synthetic=True)), 1)
 
 
 if __name__ == "__main__":

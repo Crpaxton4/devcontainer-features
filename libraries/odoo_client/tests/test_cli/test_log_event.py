@@ -17,12 +17,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from odoo_client.state import LocalStateClient as TaskStateDB
 from odoo_client.state.db import tracker_db_path
 from tests.support import provision_schema
 
-ASSERT_GUARD = "odoo_client.cli.__main__.assert_sdk_configured"
+ASSERT_GUARD = "odoo_client.cli.__main__.assert_configured"
 
 
 def _run(argv: list[str]) -> StringIO:
@@ -170,29 +169,12 @@ class TestLogEvent(unittest.TestCase):
             _run(["log-event", "--source", "claude:SessionStart"])
         mock_assert.assert_not_called()
 
-    def test_attach_active_run_records_runs_without_billing_the_fanout(self) -> None:
-        # #1040: a hook event used to BILL every open run, so one keystroke in an
-        # unrelated repo minted a parallel wall-clock session per forgotten run.
-        # The ids are still recorded as attachment-only provenance (#779), which
-        # is what the reaper's clock reads; they are no longer billable.
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
-        db.create_run(202, "Task B", 1, "Proj")
-        _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
-        event = TaskStateDB().get_events()[0]
-        self.assertEqual(event.task_ids, [])
-        self.assertEqual(
-            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
-        )
-
-    def test_attach_active_run_no_active_runs_yields_empty(self) -> None:
+    def test_attach_flag_without_branch_yields_empty(self) -> None:
         _run(["log-event", "--source", "claude:PreToolUse", "--attach-active-run"])
         events = TaskStateDB().get_events()
         self.assertEqual(events[0].task_ids, [])
 
-    def test_explicit_task_id_overrides_attach_active_run(self) -> None:
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
+    def test_explicit_task_id_overrides_attach_flag(self) -> None:
         _run(
             [
                 "log-event",
@@ -201,14 +183,16 @@ class TestLogEvent(unittest.TestCase):
                 "--attach-active-run",
                 "--task-id",
                 "999",
+                "--branch",
+                "28788-hook-fix",
             ]
         )
         events = TaskStateDB().get_events()
         self.assertEqual(events[0].task_ids, ["999"])
 
-    def test_branch_flag_recovers_task_id_when_no_active_run(self) -> None:
+    def test_branch_flag_recovers_task_id(self) -> None:
         # #574: the shim passes the session's <task-id>-<slug> branch, so a hook
-        # event with no active run attributes to the task instead of triage.
+        # event attributes to the task instead of triage.
         _run(
             [
                 "log-event",
@@ -224,57 +208,30 @@ class TestLogEvent(unittest.TestCase):
         # The stated branch also overrides the cwd-derived provenance column.
         self.assertEqual(events[0].branch, "28788-hook-fix")
 
-    def test_branch_flag_does_not_bill_an_uncorroborated_run(self) -> None:
-        # The active run still wins the resolution — the branch's 28788 never
-        # attributes — but a run the session branch does not corroborate is
-        # attachment-only, so a hook event bills nothing rather than billing the
-        # wrong task (#1040).
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
-        _run(
-            [
-                "log-event",
-                "--source",
-                "claude:PostToolUse",
-                "--attach-active-run",
-                "--branch",
-                "28788-hook-fix",
-            ]
-        )
-        event = TaskStateDB().get_events()[0]
-        self.assertEqual(event.task_ids, [])
-        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["101"])
-
-    def test_branch_corroborated_run_still_bills_and_drops_the_rest(self) -> None:
-        # The session sits on task 28788's own branch, so that run is genuine
-        # attribution and keeps billing; the other open run is the fan-out.
-        db = TaskStateDB()
-        db.create_run(28788, "Task A", 1, "Proj")
-        db.create_run(202, "Task B", 1, "Proj")
-        _run(
-            [
-                "log-event",
-                "--source",
-                "claude:PostToolUse",
-                "--attach-active-run",
-                "--branch",
-                "28788-hook-fix",
-            ]
-        )
-        event = TaskStateDB().get_events()[0]
-        self.assertEqual(event.task_ids, ["28788"])
-        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["202"])
-
-    def test_no_attach_flag_leaves_task_ids_empty(self) -> None:
-        # The attribution policy moved into LogEventCommand (#507), but the flag
-        # still selects it: without --attach-active-run this subcommand keeps
-        # its documented default of leaving the event untargeted, so the hook
-        # shim's contract is unchanged.
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
-        _run(["log-event", "--source", "claude:PreToolUse"])
+    def test_branch_flag_without_attach_flag_leaves_task_ids_empty(self) -> None:
+        # The flag selects the branch fallback: without --attach-active-run this
+        # subcommand keeps its documented default of leaving the event
+        # untargeted, so the hook shim's contract is unchanged.
+        _run(["log-event", "--source", "claude:PreToolUse", "--branch", "28788-x"])
         events = TaskStateDB().get_events()
         self.assertEqual(events[0].task_ids, [])
+        self.assertEqual(events[0].branch, "28788-x")
+
+    def test_event_payload_has_no_attachment_marker(self) -> None:
+        _run(
+            [
+                "log-event",
+                "--source",
+                "claude:PostToolUse",
+                "--attach-active-run",
+                "--branch",
+                "28788-hook-fix",
+                "--payload",
+                '{"k": 1}',
+            ]
+        )
+        events = TaskStateDB().get_events()
+        self.assertEqual(events[0].payload, {"k": 1})
 
 
 class TestLogEventNonGitRepo(unittest.TestCase):

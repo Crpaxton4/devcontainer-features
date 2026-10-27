@@ -102,12 +102,7 @@ class TestErrorsFacadeExports(unittest.TestCase):
         "OdooServerError",
         "DeletionNotSupportedError",
     )
-    STATE_TAXONOMY = (
-        "TrackerStateMissingError",
-        "TaskAlreadyRunningError",
-        "TaskNotRunningError",
-        "InvalidStateTransitionError",
-    )
+    STATE_TAXONOMY = ("TrackerStateMissingError",)
 
     def test_facade_all_is_exactly_the_two_taxonomies(self) -> None:
         facade = importlib.import_module("odoo_client.errors")

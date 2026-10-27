@@ -166,7 +166,7 @@ _READ_METADATA_FIELDS = [
 
 #: One shared converter instance; :class:`MarkItDown` is stateless per call and
 #: constructing it is not free, so it is built once at import (mirrors
-#: :mod:`odoo_client.utilities.html`).
+#: :mod:`odoo_client._text`).
 _md_converter = MarkItDown()
 
 

@@ -13,8 +13,8 @@ write:
   (the ``query_sessions`` derivation) and run through
   :func:`~odoo_client.billing.upload.upload_sessions` in ``dry_run`` mode, so the
   reported hours carry the *exact* billing transform an upload applies — the
-  ``min_session_hours`` floor and ``round_session_hours`` rounding (#355), the
-  aborted-run exclusion (#356), and the non-numeric-task skip. The report
+  ``min_session_hours`` floor and ``round_session_hours`` rounding (#355) and
+  the non-numeric-task skip. The report
   therefore predicts what an upload over the same window would bill, without
   billing anything (``dry_run`` issues no Odoo write).
 * **Logged hours** are read with the same server-side ``read_group`` shape the
@@ -65,7 +65,6 @@ def _session_dict(window: SessionWindow) -> dict[str, Any]:
         "started_at": window.started_at.isoformat(),
         "ended_at": window.ended_at.isoformat(),
         "duration_secs": window.duration_seconds,
-        **({"has_failed_run": True} if window.has_failed else {}),
     }
 
 

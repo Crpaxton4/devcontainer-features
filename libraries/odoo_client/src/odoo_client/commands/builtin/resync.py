@@ -24,59 +24,21 @@ from typing import Any, Callable, Mapping, Optional
 
 # One import per external-system adapter package (#718): each package sits
 # behind a core-owned Protocol in :mod:`odoo_client.commands.protocols`
-# (``GitGateway`` / ``IssueTracker`` / ``CalendarGateway``; the chatter
+# (``GitGateway`` / ``IssueTracker``; the chatter
 # puller rides the existing ``RpcClient`` port), and this module's
 # :data:`_SYNC_DISPATCH` is core's default binding of those ports to the
 # concrete adapters. The names stay module globals so the frozen tests'
 # ``commands.builtin.resync.sync_*`` patch points keep intercepting.
 from odoo_client.adapters.git import sync_git_log
 from odoo_client.adapters.github import sync_github
-from odoo_client.adapters.google import (
-    GoogleAPIError,
-    GoogleAuthError,
-    sync_gmail,
-    sync_google_calendar,
-)
 from odoo_client.adapters.odoo import sync_odoo_chatter
 
 from ..command import Command
 from ._registration import builtin_command
 
-# Note appended to a Google source's summary when an explicit range was given:
-# the Google pullers have no start/end parameters, so silently sweeping their
-# own rolling window while the user believes a backfill ran would be a trap.
-_RANGE_IGNORED_NOTE = (
-    "start/end ignored: this source always sweeps its google_sync_window_days " "window"
-)
-
-
-def _run_google(puller, cmd, ranged: bool) -> dict[str, Any]:
-    """Run one Google puller behind the same guard the CLI applies.
-
-    The pullers raise ``GoogleAuthError``/``GoogleAPIError`` (and ``ValueError``
-    for a rejected tick interval) rather than silently ingesting nothing; at
-    this shared command surface (TUI/MCP) those must degrade to a per-source
-    skip — matching the CLI's ``_resync_google`` — instead of escaping as
-    unhandled exceptions. ``ranged`` appends the range-ignored note so an
-    explicit ``start``/``end`` is never silently discarded.
-    """
-    try:
-        result = puller(cmd.state, cmd.config)
-    except (GoogleAuthError, GoogleAPIError, ValueError) as exc:
-        return {"skipped": str(exc)}
-    if ranged:
-        result = {**result, "note": _RANGE_IGNORED_NOTE}
-    return result
-
-
 # The pullers a resync can run, keyed by source in a stable order; each value
 # runs that source's sync against the command's shared dependencies plus the
-# optional explicit date range. git/github/odoo honor ``start``/``end``; the
-# Google sources ignore them (they keep their own ``google_sync_window_days``
-# window and annotate their summary when a range was requested). ``gcal`` and
-# ``gmail`` reach the Google APIs and require host-provisioned credentials, so
-# they are opt-in: NOT in the default source string, only run when explicitly
-# requested (issue #370).
+# optional explicit date range, which every puller honors.
 _SYNC_DISPATCH = {
     "git": lambda cmd, start, end: sync_git_log(
         cmd.state, cmd.config, cmd._client, start=start, end=end
@@ -87,10 +49,6 @@ _SYNC_DISPATCH = {
     "odoo": lambda cmd, start, end: sync_odoo_chatter(
         cmd._client, cmd.state, cmd.config, start=start, end=end
     ),
-    "gcal": lambda cmd, start, end: _run_google(
-        sync_google_calendar, cmd, bool(start or end)
-    ),
-    "gmail": lambda cmd, start, end: _run_google(sync_gmail, cmd, bool(start or end)),
 }
 _DEFAULT_SOURCES = ("git", "github", "odoo")
 _ALL_SOURCES = tuple(_SYNC_DISPATCH)
@@ -101,8 +59,7 @@ def _parse_sources(sources: str) -> list[str]:
 
     Order follows :data:`_ALL_SOURCES` (not the input order) so the result is
     stable, and unknown tokens are ignored. An empty/blank string selects the
-    DEFAULT sources only (git/github/odoo); the Google sources are opt-in and
-    must be named explicitly, so ``resync`` never reaches the network by default.
+    DEFAULT sources (git/github/odoo).
     """
     requested = {token.strip() for token in sources.split(",") if token.strip()}
     if not requested:
@@ -162,11 +119,9 @@ class ResyncCommand(Command):
         "Manual and idempotent (dedup by external id). A source whose tooling "
         "is entirely unusable reports an 'error' entry; an optional absent "
         "source reports 'skipped'. Optional inclusive 'start'/'end' ISO dates "
-        "bound the git/github/odoo capture window (default: the rolling "
+        "bound the capture window (default: the rolling "
         "resync_window_days). Pass a comma-separated 'sources' subset of "
-        "git,github,odoo,gcal,gmail (default: git,github,odoo). gcal/gmail are "
-        "opt-in Google sources needing host-provisioned credentials and keep "
-        "their own google_sync_window_days window."
+        "git,github,odoo (default: git,github,odoo)."
     )
 
     def execute(
@@ -177,11 +132,10 @@ class ResyncCommand(Command):
     ) -> dict[str, Any]:
         """Run the requested pullers and return a per-source summary.
 
-        :param sources: Comma-separated subset of ``git,github,odoo,gcal,gmail``;
-            blank or unrecognized-only input runs the default git/github/odoo
-            (the Google sources are opt-in and never run by default).
+        :param sources: Comma-separated subset of ``git,github,odoo``;
+            blank or unrecognized-only input runs the default git/github/odoo.
         :param start: Optional inclusive ISO start date (``YYYY-MM-DD``) for
-            the git/github/odoo capture window; gcal/gmail ignore it.
+            the capture window.
         :param end: Optional inclusive ISO end date, same scope as ``start``.
         :return: Mapping of each run source to its puller summary dict
             (``{"inserted": n, ...}``, ``{"skipped": reason}``, or

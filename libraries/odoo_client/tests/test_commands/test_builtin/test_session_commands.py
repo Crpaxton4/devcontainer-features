@@ -115,35 +115,6 @@ class TestQuerySessionsCommand(unittest.TestCase):
             len(self._query(state).execute(strategy_name="development")), 1
         )
 
-    def test_source_is_passed_through_to_the_derivation(self):
-        state = MagicMock()
-        state.derive_sessions_overlapping.return_value = []
-        cmd = QuerySessionsCommand(client=MagicMock(), state=state, config=_config())
-        cmd.execute()
-        self.assertEqual(
-            state.derive_sessions_overlapping.call_args.kwargs["source"], "both"
-        )
-        cmd.execute(source="events")
-        self.assertEqual(
-            state.derive_sessions_overlapping.call_args.kwargs["source"], "events"
-        )
-
-    def test_source_events_reads_the_event_store(self):
-        state = _tmp_state()
-        _commit(state, 0)
-        _commit(state, 20)
-        result = self._query(state).execute(source="events")
-        self.assertEqual(len(result), 1)
-        self.assertEqual(self._query(state).execute(source="runs"), [])
-
-    def test_unknown_source_is_a_clean_command_error(self):
-        state = MagicMock()
-        with self.assertRaisesRegex(
-            ValueError, "source must be one of: events, runs, both"
-        ):
-            self._query(state).execute(source="nope")
-        state.derive_sessions_overlapping.assert_not_called()
-
     def test_no_sessions_returns_empty(self):
         self.assertEqual(self._query(_tmp_state()).execute(), [])
 

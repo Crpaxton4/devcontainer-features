@@ -34,18 +34,12 @@ from odoo_client.services.odoo_helpers import get_employee_id, m2o_id
 # pre-#325 anchor into the upload's reconcile path rather than orphan it.
 ANCHOR_NAME = "[/] Work in progress"
 
-# The name written onto an anchor when a stale orphaned run is aborted across
-# DBs (#331). Distinct from ``ANCHOR_NAME`` so a closed-out orphan is never
-# re-adopted by a later reconcile via :func:`_find_anchor`.
-ABORTED_ANCHOR_NAME = "[/] aborted stale run"
-
 
 def resolve_employee_id(client: OdooClient, state: LocalStateClient) -> int:
     """Return the ``hr.employee`` id for the authenticated user, caching it.
 
-    Moved out of ``start_task`` so the timesheet module (the sole
-    ``account.analytic.line`` writer) can create a fresh session line without
-    reaching back into a command. The id is cached in the local settings on first
+    The timesheet module (the sole ``account.analytic.line`` writer) uses this
+    to create a fresh session line. The id is cached in the local settings on first
     fetch so subsequent calls avoid the Odoo round-trip.
     """
     cached = state.get_setting("employee_id")
@@ -122,10 +116,10 @@ def _find_anchor(client: OdooClient, task_id: int) -> Optional[int]:
     unreconciled anchor is adopted; a reconciled row (real description) is left
     untouched. The lowest id wins so repeated adoption is deterministic.
 
-    As of #325 the FSM no longer *creates* anchors, so this only ever matches a
-    **legacy** row left over from a pre-#325 ``start_task`` — kept so the upload
+    Nothing creates anchors any more, so this only ever matches a
+    **legacy** row left over from before #325 — kept so the upload
     path adopts and closes it out (rather than orphaning it) during the upgrade
-    window; :func:`close_anchor` likewise retires stale legacy anchors on abort.
+    window.
     """
     rows = client.execute(
         "account.analytic.line",
@@ -136,37 +130,6 @@ def _find_anchor(client: OdooClient, task_id: int) -> Optional[int]:
         limit=1,
     )
     return rows[0]["id"] if rows else None
-
-
-def close_anchor(client: OdooClient, timesheet_id: Optional[int]) -> bool:
-    """Close out an orphaned anchor timesheet row after a stale-run abort (#331).
-
-    Reads the ``account.analytic.line`` row and rewrites it to
-    ``{"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0}`` **only** when its name
-    is still the unreconciled :data:`ANCHOR_NAME` marker — a row a human has
-    since edited (any other name) is left untouched, never clobbered. The SDK
-    never deletes records, so the row is retired in place rather than removed.
-
-    :param client: The Odoo API client (the only writer of the timesheet row).
-    :param timesheet_id: The anchor row id to close, or ``None`` for a run that
-        never had one.
-    :return: ``True`` when the row was closed; ``False`` when there is no id, no
-        such row, or the row was already edited/closed.
-    """
-    if timesheet_id is None:
-        return False
-    rows = client.execute(
-        "account.analytic.line", "read", [timesheet_id], fields=["name"]
-    )
-    if not rows or rows[0].get("name") != ANCHOR_NAME:
-        return False
-    client.execute(
-        "account.analytic.line",
-        "write",
-        [timesheet_id],
-        {"name": ABORTED_ANCHOR_NAME, "unit_amount": 0.0},
-    )
-    return True
 
 
 def _write_line(client: OdooClient, timesheet_id: int, vals: dict) -> None:
@@ -252,8 +215,8 @@ def reconcile_session(
     1. **Mapped** — a prior upload for ``session_key`` is recorded; its timesheet
        row is rewritten (hours/description) and the mapping's hours updated.
     2. **Adopt** — no mapping yet, but a legacy unreconciled ``[/] Work in
-       progress`` anchor exists for the task (a 0-hour row a pre-#325
-       ``start_task`` created — the FSM no longer makes these); it is adopted
+       progress`` anchor exists for the task (a 0-hour row created before
+       #325; nothing makes these now); it is adopted
        (hours/description/date written) and the mapping recorded, so upgrade-era
        anchors are closed out rather than orphaned.
     3. **Create** — otherwise (the norm now) a fresh billed line is created (project resolved

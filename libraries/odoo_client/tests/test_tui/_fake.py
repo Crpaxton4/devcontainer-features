@@ -68,13 +68,12 @@ class FakeRegistry:
 def build_fake_store() -> MagicMock:
     """Return a MagicMock store safe for the driver's incidental reads.
 
-    The empty-hint path counts events and runs, triage reads unattributed
+    The empty-hint path counts events, triage reads unattributed
     events, and the shared upload loop's orphan sweep reads the ledger; canned
     empty results keep all of them harmless no-ops.
     """
     store = MagicMock()
     store.count_events.return_value = 0
-    store.get_all_runs.return_value = []
     store.get_unattributed_events.return_value = []
     store.get_events_by_ids.return_value = []
     store.list_session_uploads.return_value = []

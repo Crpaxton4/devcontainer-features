@@ -110,22 +110,4 @@ foreach ($path in $paths) {
     Write-Host "ok  $full"
 }
 
-# Initialize the host-provisioned tracker database schema (#369). The odoo-sdk
-# tracker DB is a single per-user SQLite file bind-mounted into every container;
-# the SDK inside the container deliberately never creates it (a self-created DB
-# would be container-local and discarded on rebuild), so the schema must exist on
-# the host first. The init script is stdlib-only Python - idempotent, safe to
-# re-run - matching setup.sh's host provisioning row-for-row.
-$trackerDb = Join-Path $base '.config/odoo-task-tracker/tracker.db'
-$initScript = Join-Path $PSScriptRoot 'scripts/init_tracker_db.py'
-$python = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $python) {
-    $python = Get-Command python -ErrorAction SilentlyContinue
-}
-if (-not $python) {
-    throw "python3 is required to initialize the tracker database schema at $trackerDb. Install Python 3 and re-run."
-}
-& $python.Source $initScript $trackerDb
-if ($LASTEXITCODE -ne 0) {
-    throw "tracker database schema init failed (exit $LASTEXITCODE)"
-}
+# The host no longer provisions tracker.db; `odoo-dev doctor --migrate` imports it later.

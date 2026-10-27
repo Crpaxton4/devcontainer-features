@@ -5,8 +5,7 @@ explores global sessions over a date window. It receives the same default
 command registry the MCP server uses from the single composition root
 (:func:`odoo_client.bootstrap.bootstrap`, #716) — the client, the local state
 store, and the resolved config are injected once and shared with every command
-the TUI composes (``query_sessions`` for the timeline, ``start_task`` /
-``stop_task`` for upload).
+the TUI composes (``query_sessions`` for the timeline).
 
 Consumers who want a custom command surface should build their own
 :class:`~odoo_client.commands.Registry`, wrap it (with the client, store, and
@@ -14,7 +13,7 @@ config) in a :class:`~odoo_client.tui.app.TuiDeps`, and call
 :func:`odoo_client.tui.app.run` directly instead of using this entry point.
 """
 
-from odoo_client.bootstrap import LocalConfig, OdooClient, bootstrap
+from odoo_client.bootstrap import LocalConfig, OdooClient, assert_configured, bootstrap
 
 from .app import TuiDeps, run
 
@@ -30,6 +29,7 @@ def main() -> None:  # pragma: no cover
     caches the shared store on the registry, so both the driver and the commands
     it dispatches read and write the one store.
     """
+    assert_configured()
     config = LocalConfig.load()
     client = OdooClient()
     registry = bootstrap(client=client, config=config)

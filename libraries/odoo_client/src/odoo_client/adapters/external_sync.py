@@ -3,12 +3,10 @@
 Small, directory-agnostic pullers write into the unified ``events`` table so
 that sessions — derived from events at query time — reflect work that happened
 outside the live hook/agent stream: local git commits, GitHub PRs / reviews /
-comments, Odoo task chatter, and (opt-in) Google Calendar meetings and sent
-Gmail. Three issues drive this surface: **#378** widened resync capture (commits
+comments, and Odoo task chatter. Two issues drive this surface: **#378** widened resync capture (commits
 across all branches, opened as well as merged PRs, reviews on others' PRs, and
 author-wide chatter, with a batched ``project.task`` existence check that keeps
-well-formed-but-nonexistent ids from minting phantom session lanes), **#370**
-added the Google sources, and **#652**/**#653** made capture location-independent:
+well-formed-but-nonexistent ids from minting phantom session lanes), and **#652**/**#653** made capture location-independent:
 the git puller recursively discovers every checkout under the current directory
 (any depth, including the cwd itself), the GitHub puller searches the account
 (``gh search prs --author``) instead of the current repo, and review events
@@ -24,21 +22,16 @@ whose tooling is entirely unusable (no git identity, zero repos, unauthenticated
 gh, a failed account-wide search) returns ``{"error": reason}`` so callers can
 fail loudly, while a partial degradation (one unreadable repo, one missing PR
 detail) is tolerated and reported in the summary counters. ``{"skipped": ...}``
-remains for the genuinely optional paths (an unconfigured Odoo). The Google
-pullers instead raise — they live in :mod:`odoo_client.adapters.google.sync`
-since #718, re-exported here for compatibility.
+remains for the genuinely optional paths (an unconfigured Odoo).
 
 Layout note (#718, ADR-005 amendment): the per-system adapter packages
-(``adapters/git``, ``adapters/github``, ``adapters/odoo``,
-``adapters/google``) are the canonical import surface for these pullers.
+(``adapters/git``, ``adapters/github``, ``adapters/odoo``) are the canonical import surface for these pullers.
 The git/GitHub/Odoo-chatter implementations still live in THIS module
 because the frozen test suite patches their shared seams on this module
 object (``patch.object(external_sync, "_run_capture"/"_gh_json"/
 "_discover_git_repos", ...)``) — relocated code would resolve those names in
 its own globals and escape the patches, so the physical split is deferred
-until the adapter tests are next allowed to move. The Google section, whose
-tests inject transports instead of patching module attributes, has already
-moved.
+until the adapter tests are next allowed to move.
 
 ``merge`` events are stored for audit only: a merge is a point-in-time release
 marker, not a work span, so it is the one ingested source excluded from derived
@@ -64,7 +57,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 # Shared task-id/ISO helpers (relocated to ``adapters/_shared.py`` by #718 so
-# the Google package can use them without a cycle); re-imported here so every
+# adapter packages can use them without a cycle); re-imported here so every
 # historical ``external_sync._extract_task_ids`` read keeps resolving.
 from odoo_client.adapters._shared import (  # noqa: F401
     _LEADING_TASK_ID_PATTERN,
@@ -74,23 +67,6 @@ from odoo_client.adapters._shared import (  # noqa: F401
     _parse_iso_utc,
 )
 
-# The Google Calendar + Gmail pullers moved wholesale to the per-system
-# adapter package ``odoo_client.adapters.google`` (#718). Their public surface
-# and the private names the frozen tests read are re-exported here so every
-# historical ``external_sync`` import keeps working; canonical code lives in
-# :mod:`odoo_client.adapters.google.sync`.
-from odoo_client.adapters.google.sync import (  # noqa: F401
-    GoogleAPIError,
-    GoogleAuthError,
-    GoogleTransport,
-    _expand_ticks,
-    _parse_google_dt,
-    _resolve_google_token_path,
-    _tick_external_id,
-    _urllib_transport,
-    sync_gmail,
-    sync_google_calendar,
-)
 from odoo_client.state import EventRecord, LocalConfig, LocalStateClient
 from odoo_client.state.config import _DEFAULT_RESYNC_WINDOW_DAYS
 from odoo_client.state.db import _derive_repo_label
@@ -1056,7 +1032,7 @@ def _search_chatter(
 # ``<p>a</p><p>b</p>`` would flatten to the single line ``ab``); everything else
 # is then dropped and HTML entities unescaped.
 #
-# NOT ``utilities.html.html_to_markdown``: that renders MARKDOWN (``**bold**``,
+# NOT ``_text.html_to_markdown``: that renders MARKDOWN (``**bold**``,
 # ``[text](url)``) through a MarkItDown stream conversion per call, which is both
 # the wrong output — this wants a plain index line, not marked-up text — and a
 # disproportionate cost inside a per-message resync loop.

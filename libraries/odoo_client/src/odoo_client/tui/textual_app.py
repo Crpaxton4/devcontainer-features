@@ -62,7 +62,7 @@ from .triage import triage_body_lines
 from .window import WINDOW_ACTIONS, DateWindow
 
 # Shown under the empty-state hint so a blank window always names a next step.
-_EMPTY_GUIDANCE = "log events via start_task / odoo-sdk log-event, or widen the window"
+_EMPTY_GUIDANCE = "log events via odoo-sdk log-event, or widen the window"
 
 # The utilization meters render at a fixed width; the stats panel scrolls/clips.
 _METER_WIDTH = 24

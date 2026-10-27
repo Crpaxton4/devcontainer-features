@@ -5,11 +5,10 @@ transition path end to end: a fixture central DB holding a 13-tick calendar
 series (one row) plus a lone unattributed event, opened via triage, assigned to a
 task in one transaction, and then re-derived as a billable session.
 
-Every tick external id here comes from the REAL ingestion producer
-(``_tick_external_id``/``_expand_ticks``) rather than a fabricated
-``:tick:<index>`` string. Fabricated numeric ids collapse to one row under any
-regex and so hid a producer/consumer format mismatch (issues #517, #526); driving
-the tests through the producer makes this file the contract test for that seam.
+Every tick external id here is built by ``_tick_external_id`` in this file in the
+format stored events carry (``<series>:tick:<ISO timestamp>``) rather than a
+fabricated ``:tick:<index>`` string. Fabricated numeric ids collapse to one row
+under any regex and so hid a format mismatch (issues #517, #526).
 """
 
 import tempfile
@@ -17,7 +16,6 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from odoo_client.adapters.external_sync import _expand_ticks, _tick_external_id
 from odoo_client.commands.builtin import AssignEventCommand
 from odoo_client.state import EventRecord
 from odoo_client.tui.app import (
@@ -48,17 +46,32 @@ MEETING_END = MEETING_START + timedelta(hours=1)
 TICK_MINS = 5
 
 
+def _expand_ticks(start, end, tick_mins):
+    """Return tick timestamps every ``tick_mins`` from ``start``, ending on ``end``."""
+    step = timedelta(minutes=tick_mins)
+    ticks = []
+    moment = start
+    while moment < end:
+        ticks.append(moment)
+        moment += step
+    ticks.append(end)
+    return ticks
+
+
+def _tick_external_id(series_id, moment):
+    """Return the stored tick external id: ``<series>:tick:<UTC ISO timestamp>``."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return f"{series_id}:tick:{moment.astimezone(UTC).isoformat()}"
+
+
 def _tick_moments(start=MEETING_START, end=MEETING_END, tick_mins=TICK_MINS):
     """Return the tick timestamps ingestion expands a meeting into."""
     return _expand_ticks(start, end, tick_mins)
 
 
 def _tick_ids(series_id="gcal:evt-9", **kwargs):
-    """Return the tick external ids ingestion writes for one meeting.
-
-    Built by the production producer, so the keys under test are byte-identical
-    to what the calendar resync stores.
-    """
+    """Return the tick external ids stored for one meeting."""
     return [_tick_external_id(series_id, moment) for moment in _tick_moments(**kwargs)]
 
 

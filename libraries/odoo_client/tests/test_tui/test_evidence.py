@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime, timezone
 
 from odoo_client.commands.dispatch_telemetry import READ_TASK_IDS_PAYLOAD_KEY
-from odoo_client.state import ATTACHED_TASK_IDS_PAYLOAD_KEY, EventRecord
+from odoo_client.state import EventRecord
 from odoo_client.tui import evidence as evidence_mod
 from odoo_client.tui.evidence import (
     STRONG,
@@ -67,7 +67,7 @@ def _attached_event(event_id, task_id="24648"):
     return _event(
         event_id,
         source="claude:PreToolUse",
-        payload={ATTACHED_TASK_IDS_PAYLOAD_KEY: [task_id]},
+        payload={evidence_mod._ATTACHED_KEY: [task_id]},
     )
 
 
@@ -295,9 +295,6 @@ class TestPayloadKeyParity(unittest.TestCase):
 
     def test_read_key_matches_the_dispatch_emitter(self):
         self.assertEqual(evidence_mod._READ_KEY, READ_TASK_IDS_PAYLOAD_KEY)
-
-    def test_attached_key_matches_the_state_layer(self):
-        self.assertEqual(evidence_mod._ATTACHED_KEY, ATTACHED_TASK_IDS_PAYLOAD_KEY)
 
 
 class TestEventIsReadOnly(unittest.TestCase):

@@ -8,7 +8,6 @@ from odoo_client.state import (
     LocalConfig,
     LocalStateClient,
 )
-from odoo_client.tracking.models import TaskRun
 
 from .protocols import RpcClient, StateStore
 
@@ -18,9 +17,8 @@ from .protocols import RpcClient, StateStore
 #:
 #: Scope (maintainer decision, #626): this cap applies ONLY to chatter bodies
 #: posted to Odoo (``task_note`` / ``task_question``). Internal/local text —
-#: derived run summaries, event payloads, timesheet entry names, and interim
-#: (``interim=True``) ``task_note`` bodies, which never reach the chatter —
-#: carries NO length limit and must never be routed through
+#: event payloads and timesheet entry names, which never reach the
+#: chatter — carry NO length limit and must never be routed through
 #: :func:`enforce_chatter_body_limit`.
 #:
 #: Raised 300 -> 500 by #901: a run now posts ONE consolidated chatter note
@@ -47,18 +45,6 @@ def enforce_chatter_body_limit(body: str, label: str) -> None:
             f"{MAX_CHATTER_BODY_CHARS}-character limit for posted chatter "
             "content. Shorten the message: keep notes simple, direct, plain."
         )
-
-
-def require_active_run(db: StateStore, task_id: int) -> TaskRun:
-    """Return the active run for ``task_id`` or raise ``TaskNotRunningError``.
-
-    Shared by the session-mutating builtin commands (``task_question``,
-    ``task_note``, ``abort_task``, ``stop_task``). A thin delegate to
-    :meth:`LocalStateClient.require_active_run` — the ONE guard implementation
-    and message (#627) — kept here so the command layer retains a single,
-    stable import site for the precondition.
-    """
-    return db.require_active_run(task_id)
 
 
 class Command(ABC):

@@ -19,13 +19,13 @@ from odoo_client.commands.builtin.get_mail_status import GetMailStatusCommand
 from odoo_client.transport.errors import OdooAccessError
 from odoo_client.transport.executor import OdooExecutor
 from odoo_client.transport.errors import OdooError
-from odoo_client.utilities.mail_status import (
+from odoo_client.services.mail_status import (
     MAIL_ACCESS_DENIED_MESSAGE,
     _recipient_names,
     _summarize_recipients,
     get_mail_status,
 )
-from odoo_client.utilities.odoo_helpers import m2o_id
+from odoo_client.services.odoo_helpers import m2o_id
 
 _MESSAGE_FIELDS = ["id", "date", "subject"]
 _MAIL_BASE_FIELDS = [

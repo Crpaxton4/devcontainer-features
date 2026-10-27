@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from odoo_client.utilities.attachments import (
+from odoo_client.services.attachments import (
     create_attachment,
     create_attachments,
     get_task_attachments,

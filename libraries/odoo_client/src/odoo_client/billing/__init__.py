@@ -15,10 +15,8 @@ turns tracked work into billed Odoo timesheet rows — into one place:
 """
 
 from .timesheet import (
-    ABORTED_ANCHOR_NAME,
     ANCHOR_NAME,
     ORPHANED_UPLOAD_NAME,
-    close_anchor,
     merge_timesheets,
     reconcile_session,
     resolve_employee_id,
@@ -31,9 +29,7 @@ from .unlogged_time import unlogged_time_report
 
 __all__ = [
     "ANCHOR_NAME",
-    "ABORTED_ANCHOR_NAME",
     "ORPHANED_UPLOAD_NAME",
-    "close_anchor",
     "merge_timesheets",
     "reconcile_session",
     "resolve_employee_id",

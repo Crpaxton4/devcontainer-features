@@ -17,10 +17,8 @@ import unittest
 
 from odoo_client.adapters import git as git_adapter
 from odoo_client.adapters import github as github_adapter
-from odoo_client.adapters import google as google_adapter
 from odoo_client.client import OdooClient
 from odoo_client.commands.protocols import (
-    CalendarGateway,
     GitGateway,
     IssueTracker,
     RpcClient,
@@ -86,13 +84,11 @@ class TestStateStorePort(_ConformanceAssertions):
             "add_event_dedup",
             "get_event",
             "get_events",
-            "update_timesheet_id",
         ):
             self.assertNotIn(absent, declared)
         # Spot-check the members every consumer group leans on.
         for present in (
-            "require_active_run",
-            "create_run",
+            "get_chatter_dedupe",
             "derive_sessions_overlapping",
             "get_unattributed_events",
             "record_session_upload",
@@ -107,9 +103,6 @@ class TestGatewayPorts(_ConformanceAssertions):
 
     def test_github_adapter_package_satisfies_issue_tracker(self):
         self.assert_module_implements(github_adapter, IssueTracker)
-
-    def test_google_adapter_package_satisfies_calendar_gateway(self):
-        self.assert_module_implements(google_adapter, CalendarGateway)
 
 
 class TestRpcClientPort(_ConformanceAssertions):

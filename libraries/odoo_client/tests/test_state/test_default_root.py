@@ -97,7 +97,7 @@ class TestLocalStateClientNeverCreates(unittest.TestCase):
             expected = Path(root) / "tracker.db"
             self.assertEqual(client._db_path, expected)
             with self.assertRaises(TrackerStateMissingError):
-                client.get_all_active_runs()
+                client.get_task_events("1")
             self.assertFalse(expected.exists())  # nothing was created
 
     def test_default_client_reads_a_host_provisioned_central_db(self):
@@ -109,7 +109,7 @@ class TestLocalStateClientNeverCreates(unittest.TestCase):
         ):
             provision_schema(Path(root) / "tracker.db")
             client = LocalStateClient()
-            self.assertEqual(client.get_all_active_runs(), [])
+            self.assertEqual(client.get_task_events("1"), [])
 
 
 if __name__ == "__main__":

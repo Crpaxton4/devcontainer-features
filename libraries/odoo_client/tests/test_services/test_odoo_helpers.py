@@ -4,11 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.odoo_helpers import (
+from odoo_client.services.odoo_helpers import (
     _task_related_stages,
     _task_subtasks,
     _task_timesheets,
-    count_chatter_messages_after,
     get_employee_id,
     get_task_chatter,
     get_task_detail,
@@ -510,7 +509,7 @@ class TestGetTaskChatter(unittest.TestCase):
         client = _client()
         client.execute.return_value = [self._make_message()]
         with patch(
-            "odoo_client.utilities.odoo_helpers._html_to_markdown", return_value="Hello"
+            "odoo_client.services.odoo_helpers._html_to_markdown", return_value="Hello"
         ):
             result = get_task_chatter(client, task_id=1)
         self.assertEqual(result[0]["author"], "Jane Smith")
@@ -534,32 +533,6 @@ class TestGetTaskChatter(unittest.TestCase):
         client = _client()
         client.execute.return_value = []
         self.assertEqual(get_task_chatter(client, task_id=99), [])
-
-
-class TestCountChatterMessagesAfter(unittest.TestCase):
-    """The answer-watermark count primitive (#625)."""
-
-    def test_counts_messages_with_id_above_watermark(self):
-        client = _client()
-        client.execute.return_value = 3
-        result = count_chatter_messages_after(client, task_id=42, message_id=77)
-        self.assertEqual(result, 3)
-        client.execute.assert_called_once_with(
-            "mail.message",
-            "search_count",
-            [
-                ("model", "=", "project.task"),
-                ("res_id", "=", 42),
-                ("id", ">", 77),
-            ],
-        )
-
-    def test_zero_when_nothing_newer(self):
-        client = _client()
-        client.execute.return_value = 0
-        self.assertEqual(
-            count_chatter_messages_after(client, task_id=1, message_id=99), 0
-        )
 
 
 class TestGetTaskDetail(unittest.TestCase):
@@ -725,7 +698,7 @@ class TestGetTaskDetail(unittest.TestCase):
         client = _client()
         client.execute.return_value = [self._make_record()]
         with patch(
-            "odoo_client.utilities.odoo_helpers._html_to_markdown", return_value="desc"
+            "odoo_client.services.odoo_helpers._html_to_markdown", return_value="desc"
         ):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["project"], "My Project")
@@ -742,7 +715,7 @@ class TestGetTaskDetail(unittest.TestCase):
         client = _client()
         client.execute.return_value = [self._make_record()]
         with patch(
-            "odoo_client.utilities.odoo_helpers._html_to_markdown", return_value=""
+            "odoo_client.services.odoo_helpers._html_to_markdown", return_value=""
         ):
             result = get_task_detail(client, task_id=42)
         self.assertEqual(result["task_id"], 42)

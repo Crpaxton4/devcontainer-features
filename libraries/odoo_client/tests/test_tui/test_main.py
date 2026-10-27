@@ -13,6 +13,21 @@ from odoo_client.tui import __main__ as entry
 
 
 class TestMainEntryPoint(unittest.TestCase):
+    def setUp(self):
+        guard = patch("odoo_client.tui.__main__.assert_configured")
+        self.guard = guard.start()
+        self.addCleanup(guard.stop)
+
+    def test_main_checks_the_configuration_first(self):
+        with (
+            patch("odoo_client.tui.__main__.OdooClient"),
+            patch("odoo_client.tui.__main__.run"),
+            patch("odoo_client.tui.__main__.LocalConfig"),
+        ):
+            entry.main()
+
+        self.guard.assert_called_once_with()
+
     def test_main_builds_default_registry_and_runs(self):
         with (
             patch("odoo_client.tui.__main__.OdooClient") as MockClient,

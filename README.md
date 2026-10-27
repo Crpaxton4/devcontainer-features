@@ -88,11 +88,11 @@ The complete map of `src/odoo_client/` — detail lives in the Sphinx docs.
 | `tui` | Terminal UI that explores sessions over a date window as per-lane timeline bars. |
 | `transport` | XML-RPC / JSON-RPC transport and the SDK's error hierarchy. |
 | `env` | Metadata cache for Odoo model schema. |
-| `state` | `LocalStateClient` (SQLite task-session FSM), `LocalConfig` (File > Env > Default settings), and the dispatcher's stores: the job store (`jobs.py`), the run record (`runs_store.py`), artifacts (`artifacts.py`), migrations (`migrations.py`), dispatch state (`dispatch_state.py`) and run sessionization (`run_sessions.py`). |
-| `sessionization` | Pure Transform + Load core that derives sessions from tracked events; unaware of SQLite, git, and MCP. The run record is also a source (#1071, breaking): `run_sessions.py` folds each run's measured interval into the derived windows. |
-| `adapters` | Bridge the pure `sessionization` core to stateful edges — the SQLite `events` table, the run record (#1071, breaking) and external systems. |
+| `state` | `LocalStateClient` (SQLite event store), `LocalConfig` (File > Env > Default settings), and the dispatcher's stores: the job store (`jobs.py`), the run record (`runs_store.py`), artifacts (`artifacts.py`), migrations (`migrations.py`) and dispatch state (`dispatch_state.py`). |
+| `sessionization` | Pure Transform + Load core that derives sessions from tracked events; unaware of SQLite, git, and MCP. |
+| `adapters` | Bridge the pure `sessionization` core to stateful edges — the SQLite `events` table and external systems. |
 | `billing` | Turns tracked work into billed Odoo timesheet rows (`account.analytic.line`). |
-| `utilities` | Reusable pure helpers and thin single-call Odoo wrappers that commands compose. |
+| `services` | Thin single-call Odoo wrappers that commands compose. |
 
 ### Quickstart
 
@@ -302,7 +302,7 @@ The packages sit under `devcontainer-features/` and `libraries/`, the plugins un
 │   └── test/                      # feature test scenarios, one dir per Feature
 ├── libraries
 │   ├── odoo_client/                  # owns src/, tests/, docs/, examples/, tools/ directly
-│   │   ├── src/odoo_client/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, state, transport, tui, utilities
+│   │   ├── src/odoo_client/          # adapters, billing, cli, client, commands, env, fields, mcp, query, records, sessionization, services, state, tracking, transport, tui
 │   │   ├── tests/                 # one test_<pkg>/ per subpackage
 │   │   ├── docs/source/           # Sphinx docs
 │   │   ├── examples/, tools/
@@ -312,7 +312,7 @@ The packages sit under `devcontainer-features/` and `libraries/`, the plugins un
 │   ├── odoo-dev/                  # Claude Code plugin — agents/, commands/, hooks/, prompts/, scripts/, skills/, evals/
 │   └── odoo-orchestrator/         # Claude Code plugin — commands/run.md, scripts/ (dispatch.sh, orchestrator.py, validate.sh, tests/)
 ├── docs/design/                   # devcontainer-task-orchestrator.html — the master design of the orchestrator stack
-└── scripts/                       # google_oauth_setup.py, init_tracker_db.py
+└── scripts/                       # google_oauth_setup.py
 ```
 
 Feature documentation lives in `devcontainer-features/src/<feature>/NOTES.md`, next to the code it describes. Nothing generates a README from it, and this file at the root is the repo's only `README.md`.

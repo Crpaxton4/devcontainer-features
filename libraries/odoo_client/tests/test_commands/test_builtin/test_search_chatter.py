@@ -14,7 +14,7 @@ from odoo_client.client import OdooClient
 from odoo_client.commands.builtin import BUILTIN_COMMANDS
 from odoo_client.commands.builtin.search_chatter import SearchChatterCommand
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.odoo_helpers import search_chatter, shape_chatter_message
+from odoo_client.services.odoo_helpers import search_chatter, shape_chatter_message
 
 _SEARCH_FIELDS = [
     "id",

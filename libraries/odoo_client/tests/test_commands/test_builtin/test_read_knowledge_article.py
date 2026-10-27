@@ -27,7 +27,7 @@ from odoo_client.transport.errors import (
     OdooServerError,
 )
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.knowledge import (
+from odoo_client.services.knowledge import (
     BODY_CHAR_CAP,
     KNOWLEDGE_UNAVAILABLE_MESSAGE,
     _is_missing_model_error,
@@ -237,7 +237,7 @@ class TestReadKnowledgeArticleShaping(unittest.TestCase):
         self.assertFalse(result["truncated"])
 
     def test_body_converted_html_to_markdown(self):
-        from odoo_client.utilities.html import html_to_markdown
+        from odoo_client._text import html_to_markdown
 
         body_html = "<p>Hello <b>world</b></p>"
         client, _ = _client([_article(body=body_html)])

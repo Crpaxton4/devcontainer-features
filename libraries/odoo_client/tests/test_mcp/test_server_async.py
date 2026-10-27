@@ -1,7 +1,7 @@
 """Integration tests: build_explicit_tools wired into OdooMCPServer.
 
 Verifies the full builtin tool surface is registered explicitly (no
-auto-reflection) and that composition tools remain async.
+auto-reflection).
 """
 
 import asyncio
@@ -18,10 +18,8 @@ from odoo_client.mcp.tools import build_explicit_tools
 #: nothing about the layers above it, and MCP names its tools explicitly in
 #: ``TOOL_FACTORIES``, so registering a builtin does not expose it as a tool.
 #: ``get_employee_id`` is only needed by the unattended timesheet-export path,
-#: which runs with no LLM in the loop; ``close_task`` moves a run to the terminal
-#: CLOSED state and is CLI-only by design (#504) — the agent must never see or
-#: reach it.
-NON_MCP_BUILTINS = {"get_employee_id", "close_task"}
+#: which runs with no LLM in the loop.
+NON_MCP_BUILTINS = {"get_employee_id"}
 
 
 def _mcp_tool_names() -> set:
@@ -66,13 +64,6 @@ class TestFullToolSurface(unittest.TestCase):
         for name in NON_MCP_BUILTINS:
             self.assertIn(name, BUILTIN_COMMANDS)
             self.assertNotIn(name, tools)
-
-    def test_composition_tools_are_async(self):
-        registry = _full_registry()
-        added = _build(registry, build_explicit_tools(registry))
-        by_name = {t.name: t for t in added}
-        self.assertTrue(asyncio.iscoroutinefunction(by_name["start_task"].fn))
-        self.assertTrue(asyncio.iscoroutinefunction(by_name["stop_task"].fn))
 
     def test_atomic_tools_are_sync(self):
         registry = _full_registry()

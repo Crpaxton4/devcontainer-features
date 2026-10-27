@@ -16,7 +16,7 @@ from unittest.mock import patch
 from odoo_client.client import OdooClient
 from odoo_client.commands.builtin import UnbilledHoursCommand
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.odoo_helpers import (
+from odoo_client.services.odoo_helpers import (
     MISSING_UNBILLED_CAPABILITY_MESSAGE,
     get_unbilled_hours,
 )

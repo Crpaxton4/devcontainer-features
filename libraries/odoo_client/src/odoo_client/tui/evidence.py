@@ -56,9 +56,9 @@ _UNVALIDATED_KEY = "unvalidated_task_ids"
 # event is an investigation read, not work on the task.
 _READ_KEY = "read_task_ids"
 
-# The key :func:`odoo_client.commands.log_event.mark_attached_attribution` stamps
-# with the ids an event names only because their run was open (#779). An event
-# whose attachment-only list covers this card's task is ambient container
+# The key old events carry for the ids they named only because a run was open
+# (#779). Nothing writes it any more, but already-stored events still hold it. An
+# event whose attachment-only list covers this card's task is ambient container
 # traffic, not evidence of work on it.
 _ATTACHED_KEY = "attached_run_task_ids"
 

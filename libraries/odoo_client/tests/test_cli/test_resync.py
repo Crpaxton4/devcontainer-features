@@ -49,7 +49,7 @@ class TestCmdResync(unittest.TestCase):
             sync_git_log=MagicMock(return_value={"inserted": 2}),
             sync_github=MagicMock(return_value={"inserted": 1}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 3}),
-            assert_sdk_configured=MagicMock(),
+            assert_configured=MagicMock(),
             OdooClient=MagicMock(),
         )
         self.assertIn("git: inserted 2", out)
@@ -71,7 +71,7 @@ class TestCmdResync(unittest.TestCase):
         out = self._run(
             ["resync", "--sources", "odoo"],
             sync_odoo_chatter=odoo,
-            assert_sdk_configured=MagicMock(
+            assert_configured=MagicMock(
                 side_effect=TrackerStateMissingError("no tracker database")
             ),
         )
@@ -85,7 +85,7 @@ class TestCmdResync(unittest.TestCase):
         out = self._run(
             ["resync", "--sources", "odoo"],
             sync_odoo_chatter=odoo,
-            assert_sdk_configured=MagicMock(
+            assert_configured=MagicMock(
                 side_effect=ValueError("Missing Odoo connection settings: url")
             ),
         )
@@ -103,57 +103,6 @@ class TestCmdResync(unittest.TestCase):
         # resync must skip the global capability assert so git/github work on an
         # unconfigured SDK; the guard lives in the odoo path only.
         self.assertIn("resync", cli._LOCAL_ONLY)
-
-    def test_google_sources_opt_in_only(self):
-        # gcal/gmail are never reached by the default source string.
-        git = MagicMock(return_value={"inserted": 0})
-        cal = MagicMock()
-        out = self._run(
-            ["resync"],
-            sync_git_log=git,
-            sync_github=MagicMock(return_value={"inserted": 0}),
-            sync_odoo_chatter=MagicMock(return_value={"inserted": 0}),
-            assert_sdk_configured=MagicMock(),
-            OdooClient=MagicMock(),
-            sync_google_calendar=cal,
-        )
-        cal.assert_not_called()
-        self.assertNotIn("gcal", out)
-
-    def test_gcal_runs_when_requested(self):
-        cal = MagicMock(return_value={"inserted": 13})
-        out = self._run(
-            ["resync", "--sources", "gcal"],
-            sync_google_calendar=cal,
-            LocalConfig=MagicMock(),
-        )
-        cal.assert_called_once()
-        self.assertEqual(out.strip(), "gcal: inserted 13")
-
-    def test_google_auth_error_surfaces_as_skip_line(self):
-        # A missing/expired credential raises; the CLI shows the actionable
-        # message as this source's skip reason instead of aborting the resync.
-        from odoo_client.adapters import GoogleAuthError
-
-        cal = MagicMock(side_effect=GoogleAuthError("no token at /x; re-run helper"))
-        out = self._run(
-            ["resync", "--sources", "gcal"],
-            sync_google_calendar=cal,
-            LocalConfig=MagicMock(),
-        )
-        self.assertIn("gcal: skipped (no token at /x; re-run helper)", out)
-
-    def test_google_api_error_surfaces_as_skip_line(self):
-        # A transient REST failure must not abort the whole resync either.
-        from odoo_client.adapters import GoogleAPIError
-
-        mail = MagicMock(side_effect=GoogleAPIError("GET ... failed: timeout"))
-        out = self._run(
-            ["resync", "--sources", "gmail"],
-            sync_gmail=mail,
-            LocalConfig=MagicMock(),
-        )
-        self.assertIn("gmail: skipped (GET ... failed: timeout)", out)
 
     def test_start_end_thread_date_objects_into_pullers(self):
         git = MagicMock(return_value={"inserted": 0, "found": 0, "repos": 1})
@@ -238,16 +187,6 @@ class TestCmdResync(unittest.TestCase):
             "WARNING: authored-PR (octocat) search hit its 200-item cap",
             out,
         )
-
-    def test_google_range_ignored_note_rendered(self):
-        # gcal/gmail have no start/end; an explicit range must not be silently
-        # discarded — the line says which window actually applied.
-        out = self._run(
-            ["resync", "--sources", "gcal", "--start", "2026-07-01"],
-            sync_google_calendar=MagicMock(return_value={"inserted": 2}),
-            LocalConfig=MagicMock(),
-        )
-        self.assertIn("gcal: inserted 2; note: start/end ignored", out)
 
     def test_error_result_exits_nonzero_after_all_lines_print(self):
         # An error source fails the command (#652) — but only after every

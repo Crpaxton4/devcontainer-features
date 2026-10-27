@@ -151,19 +151,14 @@ def _empty_hint(deps: TuiDeps, window: DateWindow) -> str:
     """Return a diagnostic line for a window that derived no sessions.
 
     Reports how many events fall inside the queried window (``0`` means nothing
-    happened; ``N>0`` means data exists but does not sessionize here), how many
-    task runs are on record overall (terminal ``CLOSED`` runs are excluded, #504),
-    and the session gap the deriver uses.
+    happened; ``N>0`` means data exists but does not sessionize here) and the
+    session gap the deriver uses.
     """
     store = deps.store
     lo, hi = range_bounds(window.start_iso(), window.end_iso())
     events = store.count_events(lo, hi)
-    runs = len(store.get_all_runs())
     gap = deps.config.session_gap_mins
-    return (
-        f"no sessions derivable — {events} events in window, "
-        f"{runs} runs recorded, gap={gap}m"
-    )
+    return f"no sessions derivable — {events} events in window, gap={gap}m"
 
 
 def move_window(deps: TuiDeps, state: AppState, action: str) -> AppState:

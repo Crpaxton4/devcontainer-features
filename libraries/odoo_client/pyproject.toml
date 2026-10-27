@@ -112,17 +112,9 @@ output = "reports/complexipy/"
 # `unmatched_ignore_imports_alerting = "error"` means the lists can only
 # shrink. Adding a NEW entry requires an ADR-005 amendment in the same PR.
 #
-# Shim modules are EXCLUDED from every contract list by design:
-# `odoo_client.utilities` (per-module aliasing shims + the genuinely shared
-# `utilities.html`), `odoo_client.reap`, `odoo_client.prune` (#717), and
-# `odoo_client.adapters.state_persistence` (#718) re-export their relocated
-# modules across layers on purpose (a shim preserves the OLD import graph),
-# so listing them would only force ignore entries that restate the shim's
-# job. The canonical homes (`services`, `tracking`, `mcp.prompts`,
-# `settings`, `adapters.state`) ARE listed and enforced. The
-# `odoo_client.state.models` alias (#718) is the one shim that cannot be
-# unlisted (it lives inside the listed `state` package), so its single
-# re-export edge is an explicit permanent ignore instead.
+# The `odoo_client.state.models` alias (#718) is the one shim left; it cannot
+# be unlisted (it lives inside the listed `state` package), so its single
+# re-export edge is an explicit permanent ignore.
 [tool.importlinter]
 root_packages = ["odoo_client"]
 
@@ -195,7 +187,6 @@ ignore_imports = [
     # vocabulary (pure frozen models), not behaviour. (Paths updated by
     # #718's per-system adapter packages.)
     "odoo_client.adapters.state.persistence -> odoo_client.sessionization",
-    "odoo_client.adapters.google.sync -> odoo_client.sessionization.config",
     # permanent (ADR-005 amendment, #718): the client is the adapter behind
     # the RpcClient port, and OdooRecordset is that port's return type — an
     # adapter naming the domain type it produces is the sanctioned
@@ -303,23 +294,18 @@ exhaustive_ignores = [
     # design (ADR-005): listing it in the kernel layer would only restate
     # its job as ignores.
     "errors",
-    # deprecation shims (#717) + the genuinely shared utilities.html.
-    "utilities",
-    "prune",
-    "reap",
 ]
 layers = [
     "cli : mcp : tui",
     "commands : billing : sessionization : tracking : records : query",
     "transport : client : fields : env : state : adapters : services",
-    "_utils : settings",
+    "_utils : settings : _text",
 ]
 ignore_imports = [
     # permanent (ADR-005): the sessionization event vocabulary borrowed by
-    # the persistence/google adapters (rule 3's entries, restated for this
+    # the persistence adapter (rule 3's entries, restated for this
     # contract's lens).
     "odoo_client.adapters.state.persistence -> odoo_client.sessionization",
-    "odoo_client.adapters.google.sync -> odoo_client.sessionization.config",
     # permanent (ADR-005 amendment, #718): adapter names the domain type its
     # port returns.
     "odoo_client.client.client -> odoo_client.records.recordset",
