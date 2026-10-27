@@ -8,7 +8,7 @@
 # Why it exists: a fresh machine or a rebuilt container used to fail late and
 # cryptically. The review agent finds no `coderabbit` on PATH and comes back with
 # a review that never ran, tours silently skip because no browser is present, and
-# repo-map.sh reads a state dir nobody ever created. Every one of those is knowable up front.
+# the odoo-dev CLI is missing or its state dir was never set up. Every one of those is knowable up front.
 #
 # It NEVER performs an interactive login itself. Device-flow and browser auth
 # cannot be driven from a script without hanging, so this script detects what is
@@ -26,7 +26,7 @@
 #            status`, `coderabbit auth status` — because that is the only way to
 #            answer the question, and those CLIs write their own machine-id,
 #            device-id and log files under HOME when asked. Measured on a fresh
-#            HOME: 8 files, none of them ours. Nothing under ODOO_DEV_STATE_DIR
+#            HOME: 8 files, none of them ours. Nothing under ODOO_DEV_HOME
 #            and nothing in the plugin tree is touched.
 #   --yes    also take the one heavy unattended step: fetch the headless browser
 #            (~100 MB, network). Without it the browser is left as a manual step,
@@ -65,8 +65,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$HERE/.." && pwd)"
 PREFLIGHT="$PLUGIN_ROOT/skills/odoo-task-env/scripts/preflight.sh"
 BROWSER_ENSURE="$PLUGIN_ROOT/skills/odoo-test-run/scripts/browser-ensure.sh"
-BOOTSTRAP="$HERE/bootstrap-state.sh"
-STATE_DIR="$("$HERE/state-dir.sh")"   # the one definition of the state dir (#884)
+STATE_DIR="$("$HERE/state-dir.sh")"   # the one definition of the state dir
 BOUND_S="${SETUP_TIMEOUT_S:-20}"
 PREFLIGHT_S="${SETUP_PREFLIGHT_TIMEOUT_S:-90}"
 BROWSER_INSTALL_S="${SETUP_BROWSER_TIMEOUT_S:-600}"
@@ -289,23 +288,25 @@ else
 fi
 
 # --- state dir ---------------------------------------------------------------------
-# Lives outside the plugin tree, so a fresh machine or a skipped bootstrap leaves
-# it missing and repo-map.sh reports a bogus "project unmapped" from a file that
-# was never there. bootstrap-state.sh is idempotent; it is called, never reimplemented.
-if [ -f "$STATE_DIR/repo-map.json" ]; then
+# Lives outside the plugin tree. This script never creates it: the odoo-dev CLI
+# creates the directory on first use, and `odoo-dev doctor --migrate` sets it up
+# once on the host. The repo map inside is created by the first `repo-map set`.
+if [ -d "$STATE_DIR" ]; then
   pass state-dir "$STATE_DIR"
-elif [ "$CHECK" -eq 1 ]; then
-  fail state-dir "$STATE_DIR/repo-map.json is absent" "$BOOTSTRAP"
-elif ! have node; then
-  fail state-dir "$STATE_DIR/repo-map.json is absent, and bootstrap-state.sh needs node" "$BOOTSTRAP"
 else
-  boot_out="$(bounded "$BOUND_S" bash "$BOOTSTRAP" 2>/dev/null | tail -1)"
-  if [ -f "$STATE_DIR/repo-map.json" ]; then
-    pass state-dir "$STATE_DIR"
-    case "$boot_out" in *'"created":[]'*) ;; *) installed+=("state-dir") ;; esac
-  else
-    fail state-dir "bootstrap-state.sh did not produce $STATE_DIR/repo-map.json" "$BOOTSTRAP"
-  fi
+  fail state-dir "$STATE_DIR does not exist" "run \`odoo-dev doctor --migrate\` once on the host"
+fi
+
+# --- the odoo-dev CLI ----------------------------------------------------------------
+# The repo-map scripts are wrappers over it.
+odoo_dev_version="$(bounded "$BOUND_S" odoo-dev --version 2>/dev/null || true)"
+odoo_dev_version="${odoo_dev_version#odoo-dev }"
+# plugin.json requires odoo-dev >=9
+if [ "${odoo_dev_version%%.*}" -ge 9 ] 2>/dev/null; then
+  pass odoo-dev "$odoo_dev_version"
+else
+  fail odoo-dev "odoo-dev ${odoo_dev_version:-is not on PATH}; version 9 or newer is required" \
+    "install the odoo-dev CLI, version 9 or newer"
 fi
 
 # --- preflight: the context answer, and the readiness pass ---------------------------

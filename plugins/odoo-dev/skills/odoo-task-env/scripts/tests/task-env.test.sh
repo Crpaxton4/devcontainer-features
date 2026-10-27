@@ -286,16 +286,32 @@ out="$(ODOO_ENTERPRISE_ROOT="$work/ent" PATH="$work/pfcl" "$work/pfcl/bash" "$SC
 node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.some(x=>x.startsWith("import ")||x.startsWith("closure:"))?1:0)' "$out"
 expect_exit "an importable enterprise closure raises no failure" 0 $?
 
-# The state-dir check resolves through state-dir.sh (#1251): with ODOO_DEV_STATE_DIR
-# unset, a repo-map.json under $HOME/.config/odoo-dev satisfies it.
+# The state-dir check resolves through state-dir.sh: with ODOO_DEV_HOME unset, the
+# directory $HOME/.config/odoo-dev satisfies it. The map file inside is not needed.
 mkdir -p "$work/pfhome/.config/odoo-dev"
-echo '{}' > "$work/pfhome/.config/odoo-dev/repo-map.json"
-out="$(env -u ODOO_DEV_STATE_DIR HOME="$work/pfhome" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+out="$(env -u ODOO_DEV_HOME HOME="$work/pfhome" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
 node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("state-dir")?1:0)' "$out"
 expect_exit "state-dir check passes through the host default" 0 $?
-out="$(env -u ODOO_DEV_STATE_DIR HOME="$work/pfempty" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+out="$(env -u ODOO_DEV_HOME HOME="$work/pfempty" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
 node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("state-dir")?0:1)' "$out"
-expect_exit "state-dir check fails when no map is at the default" 0 $?
+expect_exit "state-dir check fails when the default dir is missing" 0 $?
+out="$(env ODOO_DEV_HOME="$work/pfelsewhere" PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("state-dir")?0:1)' "$out"
+expect_exit "state-dir check follows ODOO_DEV_HOME" 0 $?
+
+# The odoo-dev CLI check compares the major version against 9.
+mkdir -p "$work/pfcli"
+for b in bash dirname node free awk ls wc; do ln -sf "$(command -v $b)" "$work/pfcli/$b"; done
+for v in 9.0.1 0.1.0; do
+  printf '#!/bin/sh\necho "odoo-dev %s"\n' "$v" > "$work/pfcli/odoo-dev"; chmod +x "$work/pfcli/odoo-dev"
+  out="$(PATH="$work/pfcli" "$work/pfcli/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+  got="$(node -e 'console.log(JSON.parse(process.argv[1]).failures.includes("odoo-dev-cli"))' "$out")"
+  case "$v" in 9*) want=false ;; *) want=true ;; esac
+  expect "odoo-dev $v: cli check fails" "$got" "$want"
+done
+out="$(PATH="$work/nodeps" "$work/nodeps/bash" "$SCRIPTS/preflight.sh" --soft 2>/dev/null | tail -1)"
+node -e 'const f=JSON.parse(process.argv[1]).failures;process.exit(f.includes("odoo-dev-cli")?0:1)' "$out"
+expect_exit "a missing odoo-dev is named in failures" 0 $?
 
 echo "{\"passed\": $pass, \"failed\": $fail}"
 [ "$fail" -eq 0 ]

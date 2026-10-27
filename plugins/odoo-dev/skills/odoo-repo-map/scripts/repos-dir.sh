@@ -25,8 +25,8 @@
 # directory whose immediate subdirectory names equal the `repo` field, and a
 # bind mount (the Odoo devcontainer's /mnt/extra-addons) has a name fixed by the
 # addons path that can never equal one. That case is answered per project rather
-# than per machine: an absolute `repo_path` on the repo-map.json entry overrides
-# $REPOS_DIR/$repo, and a project carrying one never reaches this script at all.
+# than per machine: an absolute `repo` on the repo-map.json entry overrides
+# $REPOS_DIR/<folder>, and a project carrying one never reaches this script at all.
 # Failing here is therefore not fatal to a lookup — callers treat it as "no tree
 # on this machine" and fall back to whatever the map recorded.
 #
@@ -84,6 +84,6 @@ checkout; declare it once instead, and the sweep will find it from then on:
 If the checkout is not under a flat repos tree at all — a bind mount whose folder
 name cannot match the repo field, as in the Odoo devcontainer — record the path on
 the project instead, which bypasses this resolver entirely:
-  repo-map.sh add "<project>" <repo> --repo-path /abs/path/to/checkout
+  repo-map.sh add "<project>" /abs/path/to/checkout --odoo-version NN.0
 MSG
 exit 1

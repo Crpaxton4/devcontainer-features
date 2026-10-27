@@ -11,8 +11,9 @@ Three questions, in this order, each answered by one script:
 2. Do the worktree and the branch exist? (create or reuse, never a second one)
 3. Is an Odoo stack running? (reuse, restart or create, never a second one)
 
-Inputs: `repo`, `default_branch` and `odoo_version` from the resolved project; the
-`task_id`; a `slug` from the task name. `default_branch` is the base for every step.
+Inputs: `repo`, `base_branch` and `odoo_version` from the resolved project; the
+`task_id`; a `slug` from the task name. `base_branch` is the base for every step. It is
+the `<default_branch>` argument of the scripts below.
 
 ## Where this runs
 

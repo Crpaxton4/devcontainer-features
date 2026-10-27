@@ -110,7 +110,7 @@ check_eq "json-mode-shape" "{\"repos_dir\": \"$TMP/two\"}" "$out"
 
 out="$(run "$TMP/neutral" "$NONE" --raw 2>&1)"; check "unresolvable-exit" 1 $?
 check_contains "unresolvable-mentions-repos-dir" "set REPOS_DIR explicitly" "$out"
-check_contains "unresolvable-mentions-repo-path" "--repo-path" "$out"
+check_contains "unresolvable-mentions-absolute-repo" "/abs/path/to/checkout" "$out"
 
 out="$(run "$TMP/neutral" "$TMP/two" --bogus 2>&1)"; check "bad-flag" 2 $?
 check_contains "bad-flag-usage" "usage: repos-dir.sh" "$out"
