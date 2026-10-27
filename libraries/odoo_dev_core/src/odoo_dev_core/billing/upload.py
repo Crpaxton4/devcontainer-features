@@ -30,8 +30,7 @@ from typing import Any, Optional
 
 from odoo_client._utils import as_utc
 from odoo_client.client import OdooClient
-from odoo_dev_data.config import LocalConfig
-from odoo_dev_data.events import EventStore
+from odoo_dev_core.ports import SettingsView, StateStore
 from odoo_dev_core.billing.summary import (
     summarize_run_activity,
     summarize_session_context,
@@ -132,7 +131,7 @@ def _compose_description(headline: str, detail: str) -> str:
 
 
 def _derived_description(
-    state: EventStore, task_id: int, session: dict[str, Any]
+    state: StateStore, task_id: int, session: dict[str, Any]
 ) -> str:
     """Derive the timesheet entry's description for one session (#626, #710).
 
@@ -167,7 +166,7 @@ def _derived_description(
 
 def _upload_one(
     client: OdooClient,
-    state: EventStore,
+    state: StateStore,
     task_id: int,
     session: dict[str, Any],
     dry_run: bool,
@@ -235,13 +234,13 @@ def _failure_row(
 
 def upload_sessions(
     client: OdooClient,
-    state: EventStore,
+    state: StateStore,
     sessions: list[dict[str, Any]],
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     dry_run: bool = False,
-    config: LocalConfig,
+    config: SettingsView,
 ) -> dict[str, Any]:
     """Bill each derived session, then sweep orphaned upload mappings.
 

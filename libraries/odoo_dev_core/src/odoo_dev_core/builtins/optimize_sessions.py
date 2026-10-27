@@ -2,7 +2,7 @@
 
 Session identity is fixed by the configured gap and sessions are derived from the
 ``events`` timeseries at query time (see
-:meth:`odoo_dev_data.events.EventStore.derive_sessions_overlapping`). The gap
+:meth:`~odoo_dev_core.ports.StateStore.derive_sessions_overlapping`). The gap
 sweep here is a decoupled, analysis-only reporting concern: it explores what
 utilisation *would* result at each candidate gap to recommend one, but it never
 materializes or mutates any session state, so it cannot shift the identity of

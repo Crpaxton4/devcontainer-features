@@ -383,7 +383,8 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(helper.call_args.args[3:], ("2026-07-01", "2026-07-15"))
         self.assertEqual(
-            helper.call_args.kwargs, {"only_mine": False, "include_all": True}
+            helper.call_args.kwargs,
+            {"only_mine": False, "include_all": True, "jobs": None},
         )
 
 

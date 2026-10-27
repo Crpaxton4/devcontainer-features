@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import itertools
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
+from typing import Optional
 
 from .config import SessionizationConfig
 from .formatting import (
@@ -20,12 +21,12 @@ from .formatting import (
     is_numeric_id,
     md_table_header,
 )
-from .models import ET, RawEvent, SweepResults, TimeEntry, TransformResult
+from .models import RawEvent, SweepResults, TimeEntry, TransformResult
 from .scoring import score_gap
 from .transform import target_day_totals
 
 
-def _final_table(entries: list[TimeEntry]) -> list[str]:
+def _final_table(entries: list[TimeEntry], tz: tzinfo) -> list[str]:
     """Return the chronological final time-entry table lines."""
     lines = ["", "## Final Time Entries", ""]
     cols = [("REPO", 38), ("TASK", 5), ("START", 20), ("END", 20), ("DURATION", 8)]
@@ -35,8 +36,8 @@ def _final_table(entries: list[TimeEntry]) -> list[str]:
         dur = entry.duration_secs
         total_secs += dur
         lines.append(
-            f"| {entry.repo:<38} | {entry.task_id:<5} | {fmt_et(entry.start):<20} | "
-            f"{fmt_et(entry.end):<20} | {fmt_duration(dur):<8} |"
+            f"| {entry.repo:<38} | {entry.task_id:<5} | {fmt_et(entry.start, tz):<20} | "
+            f"{fmt_et(entry.end, tz):<20} | {fmt_duration(dur):<8} |"
         )
     total = "**" + fmt_duration(total_secs) + "**"
     lines.append(f"| {'**TOTAL**':<38} | {'':<5} | {'':<20} | {'':<20} | {total:<8} |")
@@ -178,7 +179,7 @@ def _unknown_events(events: list[RawEvent]) -> list[RawEvent]:
     )
 
 
-def _unknown_sources(result: TransformResult) -> list[str]:
+def _unknown_sources(result: TransformResult, tz: tzinfo) -> list[str]:
     """Return the unresolved-source audit table lines."""
     unknown = _unknown_events(result.raw_events)
     lines = ["", "## Unresolved Task Sources", ""]
@@ -198,7 +199,7 @@ def _unknown_sources(result: TransformResult) -> list[str]:
         source = f"PR #{event.pr_num}" if event.pr_num else "local git"
         branch = event.branch or "(empty)"
         lines.append(
-            f"| {fmt_et(event.timestamp):<20} | {event.repo:<32} | "
+            f"| {fmt_et(event.timestamp, tz):<20} | {event.repo:<32} | "
             f"{source:<14} | {branch:<28} | "
             f"{event.event_type.name.lower():<8} | excluded from billing output   |"
         )
@@ -211,9 +212,9 @@ def _mermaid_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip() or "entry"
 
 
-def _mermaid_datetime(ts: datetime) -> str:
+def _mermaid_datetime(ts: datetime, tz: tzinfo) -> str:
     """Format a timestamp for Mermaid Gantt using local day-bucket clock time."""
-    return ts.astimezone(ET).strftime("%Y-%m-%d %H:%M")
+    return ts.astimezone(tz).strftime("%Y-%m-%d %H:%M")
 
 
 def _entries_by_task(entries: list[TimeEntry]) -> dict[str, list[TimeEntry]]:
@@ -224,7 +225,7 @@ def _entries_by_task(entries: list[TimeEntry]) -> dict[str, list[TimeEntry]]:
     return by_task
 
 
-def _mermaid_gantt(title: str, entries: list[TimeEntry]) -> list[str]:
+def _mermaid_gantt(title: str, entries: list[TimeEntry], tz: tzinfo) -> list[str]:
     """Return a Mermaid Gantt chart for entry windows grouped by task."""
     lines = [
         "",
@@ -245,26 +246,36 @@ def _mermaid_gantt(title: str, entries: list[TimeEntry]) -> list[str]:
             entry_id = f"entry_{entry_num:04d}"
             lines.append(
                 f"    . :{entry_id}, "
-                f"{_mermaid_datetime(entry.start)}, {_mermaid_datetime(entry.end)}"
+                f"{_mermaid_datetime(entry.start, tz)}, {_mermaid_datetime(entry.end, tz)}"
             )
             entry_num += 1
     lines.append("```")
     return lines
 
 
-def render_markdown(result: TransformResult, config: SessionizationConfig) -> str:
-    """Assemble the full markdown diagnostics document as a string."""
+def render_markdown(
+    result: TransformResult,
+    config: SessionizationConfig,
+    tz: Optional[tzinfo] = None,
+) -> str:
+    """Assemble the full markdown diagnostics document as a string.
+
+    ``tz`` is the zone the timestamps print in; ``None`` selects the config's
+    ``day_bucket_tz``.
+    """
+    tz = tz or config.day_bucket_tz
     lines: list[str] = []
     lines.extend(_sweep_tables(result.sweep, config))
     lines.extend(_sweep_summary(result.sweep, config))
     lines.extend(_audit_warnings(result, config))
-    lines.extend(_final_table(result.best_gap_entries))
+    lines.extend(_final_table(result.best_gap_entries, tz))
     lines.extend(
         _mermaid_gantt(
             f"Final Window Diagram (gap = {result.sweep.best_gap}m)",
             result.best_gap_entries,
+            tz,
         )
     )
-    lines.extend(_unknown_sources(result))
+    lines.extend(_unknown_sources(result, tz))
     lines.append("")
     return "\n".join(lines) + "\n"

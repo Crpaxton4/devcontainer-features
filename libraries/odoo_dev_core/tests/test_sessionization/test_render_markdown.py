@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from zoneinfo import ZoneInfo
 
 from odoo_dev_core.sessionization import EventType, render_markdown, transform
 
@@ -30,6 +31,16 @@ class TestRenderMarkdown(unittest.TestCase):
             "```mermaid",
         ):
             self.assertIn(section, md)
+
+    def test_timestamps_print_in_the_configs_zone_by_default(self):
+        result, cfg = _result(day_bucket_tz=ZoneInfo("UTC"))
+        self.assertIn("2026-06-01 09:00 UTC", render_markdown(result, cfg))
+
+    def test_an_explicit_zone_overrides_the_config(self):
+        result, cfg = _result(day_bucket_tz=ZoneInfo("UTC"))
+        md = render_markdown(result, cfg, ZoneInfo("America/Chicago"))
+        self.assertIn("2026-06-01 04:00 CDT", md)
+        self.assertNotIn("09:00 UTC", md)
 
     def test_unresolved_sources_listed(self):
         result, cfg = _result()

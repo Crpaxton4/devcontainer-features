@@ -50,4 +50,5 @@ def handle(services: Services, args: Args) -> dict[str, Any]:
         args.end_date,
         only_mine=args.only_mine,
         include_all=args.include_all,
+        jobs=services.jobs,
     )

@@ -185,13 +185,14 @@ def do_export(
         path (or label) written, injected so the pure path stays testable.
     :return: The state with a status line describing the export.
     """
-    store = deps.store
+    store, settings = deps.store, deps.config
+    jobs = deps.service.services.jobs
     start, end = state.window.start, state.window.end
     if kind == "csv":
-        content = export_csv(store, start, end)
+        content = export_csv(store, settings, start, end, jobs=jobs)
         name = f"timelog_{start.isoformat()}_{end.isoformat()}.csv"
     else:
-        content = export_markdown(store, start, end)
+        content = export_markdown(store, settings, start, end, jobs=jobs)
         name = f"timelog_{start.isoformat()}_{end.isoformat()}.md"
     where = writer(content, name)
     return replace(state, status=f"exported {kind} -> {where}", pending_upload=False)

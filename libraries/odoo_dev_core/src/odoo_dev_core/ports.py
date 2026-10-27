@@ -7,16 +7,16 @@ port and hands them to core in a :class:`Services` bundle.
 ========================  ===========================  ================================
 Port                      Concrete adapter             Adapter module
 ========================  ===========================  ================================
-:class:`RpcClient`        ``OdooClient``               ``odoo_client``
-:class:`StateStore`       ``EventStore``               ``odoo_dev_data.events``
+:class:`RpcClient`        the Odoo client              ``odoo_client``
+:class:`StateStore`       the event store              ``odoo_dev_data.events``
 :class:`GitGateway`       the ``git`` module           ``odoo_dev_data.adapters.git``
 :class:`IssueTracker`     the ``github`` module        ``odoo_dev_data.adapters.github``
 :class:`ChatterGateway`   the ``odoo`` module          ``odoo_dev_data.adapters.odoo``
-:class:`SettingsView`     ``LocalConfig``              ``odoo_dev_data.config``
-:class:`JobsPort`         ``JobStore``                 ``odoo_dev_data.jobs``
-:class:`RepoMapPort`      ``RepoMapStore``             the app bootstrap
-:class:`TaskRecords`      ``TaskStore``                the app bootstrap
-:class:`Clock`            ``SystemClock``              the app bootstrap
+:class:`SettingsView`     the local config             ``odoo_dev_data.config``
+:class:`JobsPort`         the job ledger               ``odoo_dev_data.jobs``
+:class:`RepoMapPort`      the repo map store           the app bootstrap
+:class:`TaskRecords`      the task record store        the app bootstrap
+:class:`Clock`            the system clock             the app bootstrap
 ========================  ===========================  ================================
 
 Every member is derived from what the handlers call. The gateway ports are
@@ -44,7 +44,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from zoneinfo import ZoneInfo
 
     from odoo_client.records.recordset import OdooRecordset
-    from odoo_dev_data.config import LocalConfig
     from odoo_dev_data.repo_map import RepoMap, Resolved
     from odoo_dev_data.tasks import TaskRecord
 
@@ -70,9 +69,9 @@ class RpcClient(Protocol):
 class StateStore(Protocol):
     """Structural contract for the local task-tracker store core drives.
 
-    ``EventStore`` satisfies it. The store's ingest-only members
-    (``add_event_dedup``, ``get_event``, ``get_events``) are absent: only the
-    data-side resync adapters use them.
+    The event store satisfies it. The store's ingest-only members
+    (``add_event_dedup``, ``get_event``) are absent: only the data-side resync
+    adapters use them.
     """
 
     # chatter bookkeeping
@@ -84,6 +83,12 @@ class StateStore(Protocol):
 
     # events timeseries
     def add_event(self, event: EventRecord) -> EventRecord: ...
+
+    def get_events(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[EventRecord]: ...
 
     def get_task_events(
         self,
@@ -145,7 +150,7 @@ class GitGateway(Protocol):
     def sync_git_log(
         self,
         state: StateStore,
-        config: Optional["LocalConfig"] = None,
+        config: Optional["SettingsView"] = None,
         client: Any = None,
         *,
         root: Optional[Path] = None,
@@ -162,7 +167,7 @@ class IssueTracker(Protocol):
     def sync_github(
         self,
         state: StateStore,
-        config: Optional["LocalConfig"] = None,
+        config: Optional["SettingsView"] = None,
         client: Any = None,
         *,
         now: Optional[datetime] = None,
@@ -179,7 +184,7 @@ class ChatterGateway(Protocol):
         self,
         client: Any,
         state: StateStore,
-        config: Optional["LocalConfig"] = None,
+        config: Optional["SettingsView"] = None,
         *,
         now: Optional[datetime] = None,
         start: Optional[date] = None,
@@ -191,7 +196,7 @@ class ChatterGateway(Protocol):
 class SettingsView(Protocol):
     """Read and model-id write surface of the resolved SDK settings.
 
-    ``LocalConfig`` satisfies it. Every member is read by a handler, a
+    The local config satisfies it. Every member is read by a handler, a
     billing helper or an app driver.
     """
 

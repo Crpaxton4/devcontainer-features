@@ -7,6 +7,7 @@ builds a full :class:`~odoo_dev_core.ports.Services` bundle: a real
 ``config``, unless the caller overrides them.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -84,18 +85,40 @@ class FakeChatter(_FakeGateway):
         return self._record(client, state, config, **kwargs)
 
 
-class FakeJobs:
-    """A job ledger that counts ``increment_questions`` calls per job id."""
+@dataclass
+class FakeJob:
+    """The job columns the sessionization and billing paths read."""
 
-    def __init__(self) -> None:
+    task_id: str
+    started_us: Optional[int]
+    ended_us: Optional[int]
+    session_id: str = ""
+    repo: str = ""
+    pr_num: int = 0
+    state: str = "DONE"
+    outcome: str = "SUCCESS"
+
+
+class FakeJobs:
+    """A job ledger: counts ``increment_questions`` calls, lists set jobs."""
+
+    def __init__(self, finished: Optional[list[FakeJob]] = None) -> None:
         self.questions: dict[str, int] = {}
+        self.finished = finished or []
+        self.list_calls: list[dict[str, Optional[int]]] = []
 
     def increment_questions(self, job_id: str) -> int:
         self.questions[job_id] = self.questions.get(job_id, 0) + 1
         return self.questions[job_id]
 
     def list_finished(self, *, start_us=None, end_us=None) -> list:
-        return []
+        self.list_calls.append({"start_us": start_us, "end_us": end_us})
+        return [
+            job
+            for job in self.finished
+            if (end_us is None or job.started_us < end_us)
+            and (start_us is None or job.ended_us > start_us)
+        ]
 
 
 class FakeRepoMap:

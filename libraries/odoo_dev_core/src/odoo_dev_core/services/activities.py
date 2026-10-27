@@ -39,8 +39,8 @@ Two Odoo facts drive the shape of the write path:
   privilege escalation the constraint exists to prevent.
 
   So :func:`_res_model_id` reads the hand-managed ``[model_ids]`` map instead,
-  via :meth:`~odoo_dev_data.config.LocalConfig.require_model_id`. The
-  :class:`~odoo_dev_data.config.LocalConfig` is threaded in from the command
+  via :meth:`~odoo_dev_core.ports.SettingsView.require_model_id`. The
+  :class:`~odoo_dev_core.ports.SettingsView` is threaded in from the command
   layer (every handler receives it as ``services.config``) rather than loaded inside this module, so the
   dependency is explicit at the call site and a test can supply its own map
   without reaching for the developer's real config file. A model absent from the
@@ -59,7 +59,7 @@ Two Odoo facts drive the shape of the write path:
 from typing import Any, Optional, Union
 
 from odoo_client.client import OdooClient
-from odoo_dev_data.config import LocalConfig
+from odoo_dev_core.ports import SettingsView
 
 from odoo_dev_core._text import html_to_markdown, markdown_to_html
 
@@ -269,7 +269,7 @@ def resolve_activity_type_id(
     return matches[0]["id"]
 
 
-def _res_model_id(config: LocalConfig, res_model: str) -> int:
+def _res_model_id(config: SettingsView, res_model: str) -> int:
     """Resolve a model name to its ``ir.model`` id for ``res_model_id``.
 
     The id is read from the hand-managed ``[model_ids]`` config map and never
@@ -292,7 +292,7 @@ def _res_model_id(config: LocalConfig, res_model: str) -> int:
 
 def _schedule_values(
     client: OdooClient,
-    config: LocalConfig,
+    config: SettingsView,
     res_model: str,
     res_id: int,
     activity_type: Optional[Union[int, str]],
@@ -345,7 +345,7 @@ def schedule_activity(
     date_deadline: Optional[str] = None,
     user_id: Optional[int] = None,
     *,
-    config: LocalConfig,
+    config: SettingsView,
 ) -> dict[str, Any]:
     """Schedule one ``mail.activity`` on a record and return the created entry.
 

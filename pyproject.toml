@@ -110,3 +110,32 @@ name = "ADR-006: logic never imports apps"
 type = "forbidden"
 source_modules = ["odoo_dev_core", "dispatcher"]
 forbidden_modules = ["odoo_cli", "odoo_mcp", "odoo_tui", "webui"]
+
+# Core reaches data only through ports. The vocabulary modules
+# (odoo_dev_data.events, odoo_dev_data.home) stay allowed.
+[[tool.importlinter.contracts]]
+name = "ADR-006: logic names no data constructor"
+type = "forbidden"
+source_modules = ["odoo_dev_core"]
+forbidden_modules = [
+    "odoo_dev_data.config",
+    "odoo_dev_data.jobs",
+    "odoo_dev_data.db",
+    "odoo_dev_data.repo_map",
+    "odoo_dev_data.tasks",
+    "odoo_dev_data.locks",
+    "odoo_dev_data.adapters",
+    "odoo_dev_data.migrate",
+    "odoo_dev_data.doctor",
+]
+allow_indirect_imports = true
+ignore_imports = [
+    # bypass: type-only vocabulary of the repo-map and task-record ports
+    "odoo_dev_core.ports -> odoo_dev_data.repo_map",
+    "odoo_dev_core.ports -> odoo_dev_data.tasks",
+    # bypass: the exception set_model_id raises, caught by get_models
+    "odoo_dev_core.builtins.get_models -> odoo_dev_data.config",
+    # bypass: the git remote label helpers, used to stamp event provenance
+    "odoo_dev_core.attribution -> odoo_dev_data.adapters.git",
+    "odoo_dev_core.builtins.log_event -> odoo_dev_data.adapters.git",
+]

@@ -1,16 +1,11 @@
 """Reconcile local event state against external history.
 
-``resync`` is a manual reconciliation utility (no background trigger): it runs
-the idempotent git, GitHub and Odoo-chatter pullers and writes any missing
-events. The surface is directory-agnostic: the ``git`` puller recursively
-discovers every checkout under the current directory and the ``github`` puller
-searches the authenticated account across all repos. Sessions are derived from
-events at query time, so a resync needs only to write events.
-
-The ``git`` and ``github`` pullers are purely local and never touch Odoo; only
-the ``odoo`` puller uses the client. Each puller is idempotent. A source whose
-tooling is entirely unusable reports an ``error`` entry (callers decide whether
-that is fatal); a genuinely optional absence reports ``skipped``.
+A thin handler over :func:`odoo_dev_core.workflows.resync.run_resync`, which
+owns the dispatch to the git, GitHub and Odoo-chatter pullers. The surface is
+directory-agnostic: the ``git`` puller recursively discovers every checkout under
+the current directory and the ``github`` puller searches the authenticated
+account across all repos. Sessions are derived from events at query time, so a
+resync needs only to write events.
 """
 
 from __future__ import annotations
@@ -21,8 +16,7 @@ from typing import Any, Optional
 
 from ..ports import Services
 from ..registry import command
-
-_DEFAULT_SOURCES = ("git", "github", "odoo")
+from ..workflows.resync import parse_sources, run_resync
 
 
 @dataclass(frozen=True)
@@ -32,19 +26,6 @@ class Args:
     end: Optional[str] = None
 
 
-def _parse_sources(sources: str) -> list[str]:
-    """Return the requested pullers from a comma-separated ``sources`` string.
-
-    Order follows ``_DEFAULT_SOURCES`` (not the input order) so the result is
-    stable, and unknown tokens are ignored. An empty/blank string selects the
-    default sources (git/github/odoo).
-    """
-    requested = {token.strip() for token in sources.split(",") if token.strip()}
-    if not requested:
-        return list(_DEFAULT_SOURCES)
-    return [source for source in _DEFAULT_SOURCES if source in requested]
-
-
 def _parse_range_date(value: Optional[str]) -> Optional[date]:
     """Parse one optional inclusive ISO date bound.
 
@@ -52,20 +33,6 @@ def _parse_range_date(value: Optional[str]) -> Optional[date]:
         malformed range fails loudly before any puller runs.
     """
     return date.fromisoformat(value) if value else None
-
-
-def _run_puller(
-    services: Services, source: str, start: Optional[date], end: Optional[date]
-) -> dict[str, Any]:
-    """Run one source's puller against the shared ports over ``[start, end]``."""
-    client, events, config = services.client, services.events, services.config
-    if source == "git":
-        return services.git.sync_git_log(events, config, client, start=start, end=end)
-    if source == "github":
-        return services.github.sync_github(events, config, client, start=start, end=end)
-    return services.chatter.sync_odoo_chatter(
-        client, events, config, start=start, end=end
-    )
 
 
 @command(
@@ -99,7 +66,7 @@ def handle(services: Services, args: Args) -> dict[str, Any]:
     """
     start = _parse_range_date(args.start)
     end = _parse_range_date(args.end)
-    return {
-        source: _run_puller(services, source, start, end)
-        for source in _parse_sources(args.sources)
-    }
+    report = run_resync(
+        services, sources=parse_sources(args.sources), start=start, end=end
+    )
+    return report.results

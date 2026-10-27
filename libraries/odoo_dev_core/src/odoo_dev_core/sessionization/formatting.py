@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-
-from .models import ET
+from datetime import datetime, tzinfo
 
 
-def fmt_et(ts: datetime) -> str:
-    """Format a tz-aware timestamp in the day-bucketing zone (issue #378 item 11).
+def fmt_et(ts: datetime, tz: tzinfo) -> str:
+    """Format a tz-aware timestamp in the day-bucketing zone ``tz`` (issue #378 item 11).
 
     The trailing token is the resolved zone's abbreviation (``%Z``, e.g. ``CDT``)
     rather than a hardcoded ``ET`` — the zone is config-driven and no longer
     necessarily Eastern, so a fixed label would misreport the clock.
     """
-    return ts.astimezone(ET).strftime("%Y-%m-%d %H:%M %Z")
+    return ts.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def fmt_duration(secs: int) -> str:

@@ -29,6 +29,7 @@ from odoo_dev_core.sessionization.persistence import (
     UnknownEventSourceError,
     source_to_event_type,
 )
+from odoo_dev_core.workflows.resync import format_resync_line
 from odoo_dev_core.telemetry import (
     BOUNDARY_ERRORS,
     emit_tool_event,
@@ -207,44 +208,6 @@ def _odoo_configured() -> bool:
     return True
 
 
-def _found_suffix(result: dict) -> str:
-    """Render a success line's coverage parenthetical from the summary counters."""
-    if "found" not in result:
-        return ""
-    suffix = f"found {result['found']}"
-    if "repos" in result:
-        suffix += f" in {result['repos']} repos"
-    if result.get("failed_repos"):
-        suffix += f"; {result['failed_repos']} failed"
-    return suffix
-
-
-def _format_resync_line(source: str, result: dict) -> str:
-    """Format one per-source resync result line for the CLI.
-
-    ``error`` (tooling entirely unusable, #652) and ``skipped`` (optional source
-    absent) render distinctly; a success line carries the per-source coverage
-    counters, flags newly stored reviews that resolved no task id (#653), any
-    search-truncation warnings, and a range-ignored note.
-    """
-    if "error" in result:
-        return f"{source}: error ({result['error']})"
-    if "skipped" in result:
-        return f"{source}: skipped ({result['skipped']})"
-    line = f"{source}: inserted {result['inserted']}"
-    suffix = _found_suffix(result)
-    if suffix:
-        line += f" ({suffix})"
-    unattributed = result.get("unattributed_reviews") or []
-    if unattributed:
-        line += f"; WARNING: {len(unattributed)} review event(s) resolved no task id"
-    for warning in result.get("warnings", []):
-        line += f"; WARNING: {warning}"
-    if result.get("note"):
-        line += f"; note: {result['note']}"
-    return line
-
-
 def cmd_resync(service: CommandService, args: argparse.Namespace) -> None:
     """Reconcile local event state against git/GitHub/Odoo, directory-agnostic.
 
@@ -267,7 +230,7 @@ def cmd_resync(service: CommandService, args: argparse.Namespace) -> None:
         summary["odoo"] = {"skipped": "odoo sdk not configured"}
     failed = False
     for source, result in summary.items():
-        print(_format_resync_line(source, result))
+        print(format_resync_line(source, result))
         for label in result.get("unattributed_reviews", []):
             print(f"unattributed review: {label}", file=sys.stderr)
         failed = failed or "error" in result

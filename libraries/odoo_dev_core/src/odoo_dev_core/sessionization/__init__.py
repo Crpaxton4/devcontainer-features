@@ -25,7 +25,6 @@ SQL derivation by a parity test.
 
 from .config import SessionizationConfig
 from .models import (
-    ET,
     EventType,
     RawEvent,
     SweepResults,
@@ -45,7 +44,6 @@ from .transform import (
 from .windows import billable_seconds, compute_windows
 
 __all__ = [
-    "ET",
     "EventType",
     "RawEvent",
     "TimeEntry",

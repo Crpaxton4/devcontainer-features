@@ -26,7 +26,8 @@ from typing import Any, Optional
 
 from odoo_client._utils import as_utc
 from odoo_client.client import OdooClient
-from odoo_dev_data.events import EventRecord, EventStore
+from odoo_dev_core.ports import StateStore
+from odoo_dev_data.events import EventRecord
 from odoo_dev_core.services.odoo_helpers import get_employee_id, m2o_id
 
 # The marker a legacy anchor row carries. The FSM no longer creates anchors
@@ -35,7 +36,7 @@ from odoo_dev_core.services.odoo_helpers import get_employee_id, m2o_id
 ANCHOR_NAME = "[/] Work in progress"
 
 
-def resolve_employee_id(client: OdooClient, state: EventStore) -> int:
+def resolve_employee_id(client: OdooClient, state: StateStore) -> int:
     """Return the ``hr.employee`` id for the authenticated user, caching it.
 
     The timesheet module (the sole ``account.analytic.line`` writer) uses this
@@ -51,7 +52,7 @@ def resolve_employee_id(client: OdooClient, state: EventStore) -> int:
 
 
 def emit_agent_event(
-    state: EventStore,
+    state: StateStore,
     task_id: int,
     subject: str,
     *,
@@ -145,7 +146,7 @@ def _project_id_for(client: OdooClient, task_id: int) -> int:
 
 def _create_session_line(
     client: OdooClient,
-    state: EventStore,
+    state: StateStore,
     task_id: int,
     description: str,
     hours: float,
@@ -164,7 +165,7 @@ def _create_session_line(
 
 
 def _record_upload(
-    state: EventStore,
+    state: StateStore,
     session_key: str,
     timesheet_id: int,
     hours: float,
@@ -198,7 +199,7 @@ ORPHANED_UPLOAD_NAME = "[x] session superseded (merged into another session)"
 
 def reconcile_session(
     client: OdooClient,
-    state: EventStore,
+    state: StateStore,
     task_id: int,
     session_key: str,
     description: str,
@@ -293,7 +294,7 @@ def _mapping_is_window_orphan(
 
 def sweep_orphaned_uploads(
     client: OdooClient,
-    state: EventStore,
+    state: StateStore,
     *,
     derived_keys: set[str],
     derived_task_ids: set[str],

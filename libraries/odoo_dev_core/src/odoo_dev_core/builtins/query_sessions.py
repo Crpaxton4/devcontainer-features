@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from odoo_dev_data.events import SessionWindow, session_key
 from odoo_dev_core.billing.upload import range_bounds
+from odoo_dev_core.sessionization.jobs import derive_windows
 
 from ..ports import Services
 from ..registry import command
@@ -92,7 +93,9 @@ def handle(services: Services, args: Args) -> list[dict[str, Any]]:
     """Return overlapping sessions as summary dicts.
 
     Boundaries are never recomputed by the query: sessions are returned whole,
-    at their true global bounds.
+    at their true global bounds. Finished dispatcher jobs, when the job port is
+    present, fold into the event-derived sessions (see
+    :mod:`odoo_dev_core.sessionization.jobs`).
 
     :param start_date: Inclusive ISO start date (``YYYY-MM-DD``), or None.
     :param end_date: Inclusive ISO end date (``YYYY-MM-DD``), or None.
@@ -107,7 +110,9 @@ def handle(services: Services, args: Args) -> list[dict[str, Any]]:
     # The shared range_bounds keeps the query window and the upload path's
     # orphan-sweep window on one inclusive-date semantic (see #354).
     lo, hi = range_bounds(args.start_date, args.end_date)
-    sessions = services.events.derive_sessions_overlapping(
+    sessions = derive_windows(
+        services.events,
+        services.jobs,
         lo,
         hi,
         gap_secs=services.config.session_gap_secs,
