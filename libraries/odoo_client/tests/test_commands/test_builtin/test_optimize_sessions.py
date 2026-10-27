@@ -1,24 +1,20 @@
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from odoo_client.commands.builtin import OptimizeSessionsCommand
 from odoo_client.commands.builtin.optimize_sessions import _build_config, _parse_date
-from odoo_client.state import EventRecord, LocalStateClient
-from tests.support import make_state_db
+from odoo_dev_data.events import EventRecord, EventStore
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_state() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_state() -> EventStore:
+    return make_event_store()
 
 
-def _seed(state: LocalStateClient) -> None:
+def _seed(state: EventStore) -> None:
     for minute in (0, 20, 40):
         state.add_event(
             EventRecord(

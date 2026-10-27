@@ -6,7 +6,7 @@ from http.client import HTTPMessage
 from io import BytesIO
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_client.state.config import OdooConnectionSettings
+from odoo_client.settings import OdooConnectionSettings
 from odoo_client.transport.errors import (
     OdooAccessError,
     OdooAuthenticationError,

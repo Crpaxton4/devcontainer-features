@@ -9,7 +9,7 @@ Strictly a composition of existing pieces — it adds no storage and issues no
 write:
 
 * **Derived hours** come from the same path the upload takes. Sessions are
-  derived with :meth:`~odoo_client.state.LocalStateClient.derive_sessions_overlapping`
+  derived with :meth:`~odoo_dev_data.events.EventStore.derive_sessions_overlapping`
   (the ``query_sessions`` derivation) and run through
   :func:`~odoo_client.billing.upload.upload_sessions` in ``dry_run`` mode, so the
   reported hours carry the *exact* billing transform an upload applies — the
@@ -38,7 +38,8 @@ from datetime import date
 from typing import Any, Optional
 
 from odoo_client.errors import OdooTransportError
-from odoo_client.state import LocalConfig, LocalStateClient, SessionWindow, session_key
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore, SessionWindow, session_key
 from odoo_client.services.odoo_helpers import get_employee_id, m2o_id, resolve_many2one
 
 from .timesheet_reports import day_label, parse_date, row_hours
@@ -70,7 +71,7 @@ def _session_dict(window: SessionWindow) -> dict[str, Any]:
 
 def _derived_hours_by_day_task(
     client: Any,
-    state: LocalStateClient,
+    state: EventStore,
     config: LocalConfig,
     start: date,
     end: date,
@@ -274,7 +275,7 @@ def _group_by_day(
 
 def unlogged_time_report(
     client: Any,
-    state: LocalStateClient,
+    state: EventStore,
     config: LocalConfig,
     start_date: str,
     end_date: str,

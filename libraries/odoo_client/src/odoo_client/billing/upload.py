@@ -30,8 +30,12 @@ from typing import Any, Optional
 
 from odoo_client._utils import as_utc
 from odoo_client.client import OdooClient
-from odoo_client.state import LocalConfig, LocalStateClient
-from odoo_client.state.summary import summarize_run_activity, summarize_session_context
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
+from odoo_client.billing.summary import (
+    summarize_run_activity,
+    summarize_session_context,
+)
 from odoo_client.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
@@ -128,7 +132,7 @@ def _compose_description(headline: str, detail: str) -> str:
 
 
 def _derived_description(
-    state: LocalStateClient, task_id: int, session: dict[str, Any]
+    state: EventStore, task_id: int, session: dict[str, Any]
 ) -> str:
     """Derive the timesheet entry's description for one session (#626, #710).
 
@@ -163,7 +167,7 @@ def _derived_description(
 
 def _upload_one(
     client: OdooClient,
-    state: LocalStateClient,
+    state: EventStore,
     task_id: int,
     session: dict[str, Any],
     dry_run: bool,
@@ -231,7 +235,7 @@ def _failure_row(
 
 def upload_sessions(
     client: OdooClient,
-    state: LocalStateClient,
+    state: EventStore,
     sessions: list[dict[str, Any]],
     *,
     start_date: Optional[str] = None,

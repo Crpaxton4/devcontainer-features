@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from odoo_client.commands.dispatch_telemetry import _is_dispatched_run
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 
 class TestAgentEmission:
@@ -44,7 +44,7 @@ class TestAgentEmission:
         from odoo_client.commands import Registry
         from odoo_client.mcp.server import _event_emitting
 
-        db = make_state_db(tmp_path / "t.db")
+        db = make_event_store(tmp_path)
         tool = _event_emitting(
             lambda task_id: {"task_id": task_id}, "t", Registry(Mock(), state_client=db)
         )

@@ -1,17 +1,14 @@
 import unittest
 from collections.abc import Mapping
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import Mock, patch
 
 from hypothesis import given, strategies
 
 from odoo_client.client.client import OdooClient
-from odoo_client.state.config import OdooConnectionSettings
+from odoo_client.settings import OdooConnectionSettings, build_connection_settings
 from odoo_client.records.recordset import OdooRecordset
 from odoo_client.transport.errors import OdooAuthenticationError, OdooServerError
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.transport.json2 import OdooJson2Executor
 from odoo_client.transport.rpc import OdooRpcExecutor
 
 
@@ -52,12 +49,9 @@ class TestOdooClientContract(unittest.TestCase):
             attributes=["type"],
         )
 
-    @given(strategies.text(), strategies.text(), strategies.text(), strategies.text())
-    def test_client_is_not_a_mapping_or_iterable(
-        self, url: str, db: str, username: str, password: str
-    ) -> None:
+    def test_client_is_not_a_mapping_or_iterable(self) -> None:
         executor = Mock(spec=OdooExecutor)
-        client = OdooClient(url, db, username, password, executor=executor)
+        client = OdooClient(executor=executor)
 
         self.assertNotIsInstance(client, Mapping)
         with self.assertRaises(TypeError):
@@ -70,13 +64,7 @@ class TestOdooClientContract(unittest.TestCase):
         executor = Mock(spec=OdooExecutor)
         executor.execute.return_value = [{"id": 1, "name": "Test"}]
 
-        client = OdooClient(
-            "https://example.com",
-            "db",
-            "user",
-            "pw",
-            executor=executor,
-        )
+        client = OdooClient(executor=executor)
 
         result = client[model_name].browse([1]).read(["name"])
 
@@ -179,10 +167,8 @@ class TestOdooClientContract(unittest.TestCase):
             _ = client.uid
 
     @patch("odoo_client.client.client.OdooRpcExecutor")
-    @patch("odoo_client.client.client.OdooConnectionSettings.from_sources")
-    def test_client_builds_rpc_executor_from_resolved_settings(
+    def test_client_builds_rpc_executor_from_settings(
         self,
-        mock_from_sources: Mock,
         mock_rpc_executor: Mock,
     ) -> None:
         settings = OdooConnectionSettings(
@@ -192,231 +178,68 @@ class TestOdooClientContract(unittest.TestCase):
             password="example-password",
         )
         built_executor = Mock(spec=OdooExecutor)
-        mock_from_sources.return_value = settings
         mock_rpc_executor.return_value = built_executor
 
-        client = OdooClient(
-            url="https://ignored.example.com",
-            db="ignored-db",
-            username="ignored-user",
-            password="ignored-password",
-            config_path="ignored.ini",
-        )
+        client = OdooClient.from_settings(settings)
 
         self.assertIs(client._executor, built_executor)
-        mock_from_sources.assert_called_once_with(
-            url="https://ignored.example.com",
-            db="ignored-db",
-            username="ignored-user",
-            password="ignored-password",
-            config_path="ignored.ini",
-        )
         mock_rpc_executor.assert_called_once_with(
             settings.url,
             settings.db,
             settings.username,
             settings.password,
             timeout=settings.timeout,
-            credentials_refresh=ANY,
+            credentials_refresh=None,
         )
 
-    def test_client_uses_ini_configuration_when_values_omitted(self) -> None:
+    def test_client_requires_an_executor_or_settings(self) -> None:
+        with self.assertRaisesRegex(ValueError, "executor or settings"):
+            OdooClient()
+
+    def test_injected_executor_wins_over_settings(self) -> None:
         executor = Mock(spec=OdooExecutor)
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
+        settings = OdooConnectionSettings(
+            url="https://example.com", db="d", username="u", password="p"
+        )
 
-            client = OdooClient(executor=executor, config_path=str(config_path))
+        client = OdooClient(executor, settings=settings)
 
-        self.assertIsInstance(client, OdooClient)
+        self.assertIs(client._executor, executor)
 
 
-class TestOdooConnectionSettings(unittest.TestCase):
-    def test_explicit_values_override_file_values_individually(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
+_REQUIRED = {
+    "url": "https://example.com",
+    "db": "db",
+    "username": "user",
+    "password": "pw",
+}
 
-            settings = OdooConnectionSettings.from_sources(
-                url="https://explicit.example.com",
-                db="explicit-db",
-                config_path=str(config_path),
-            )
 
-        self.assertEqual(settings.url, "https://explicit.example.com")
-        self.assertEqual(settings.db, "explicit-db")
-        self.assertEqual(settings.username, "file-user")
-        self.assertEqual(settings.password, "file-password")
+class TestBuildConnectionSettings(unittest.TestCase):
+    def test_builds_settings_from_a_resolved_mapping(self) -> None:
+        settings = build_connection_settings(_REQUIRED)
 
-    def test_reads_ini_file_when_environment_is_not_set(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
-
-            settings = OdooConnectionSettings.from_sources(config_path=str(config_path))
-
-        self.assertEqual(settings.url, "https://from-file.example.com")
-        self.assertEqual(settings.db, "file-db")
-        self.assertEqual(settings.username, "file-user")
-        self.assertEqual(settings.password, "file-password")
+        self.assertEqual(settings.url, "https://example.com")
+        self.assertEqual(settings.db, "db")
+        self.assertEqual(settings.username, "user")
+        self.assertEqual(settings.password, "pw")
+        self.assertEqual(settings.transport, "xmlrpc")
 
     def test_raises_for_missing_configuration(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            with patch(
-                "odoo_client.state.config._resolve_local_config_path",
-                return_value=None,
-            ):
-                with self.assertRaisesRegex(
-                    ValueError, "Missing Odoo connection settings"
-                ):
-                    OdooConnectionSettings.from_sources()
+        with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+            build_connection_settings({})
 
-    def test_uses_config_path_from_environment_when_present(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(
-                "os.environ", {"ODOO_SDK_CONFIG": str(config_path)}, clear=True
-            ):
-                settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.url, "https://from-file.example.com")
-        self.assertEqual(settings.db, "file-db")
-        self.assertEqual(settings.username, "file-user")
-        self.assertEqual(settings.password, "file-password")
-
-    def test_reads_connection_values_from_environment_when_present(self) -> None:
-        with patch.dict(
-            "os.environ",
+    def test_api_key_and_transport_are_kept(self) -> None:
+        settings = build_connection_settings(
             {
-                # Point discovery at a nonexistent file so only env applies.
-                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-                "ODOO_URL": "https://from-environment.example.com",
-                "ODOO_DB": "environment-db",
-                "ODOO_USERNAME": "environment-user",
-                "ODOO_PASSWORD": "environment-password",
-            },
-            clear=True,
-        ):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.url, "https://from-environment.example.com")
-        self.assertEqual(settings.db, "environment-db")
-        self.assertEqual(settings.username, "environment-user")
-        self.assertEqual(settings.password, "environment-password")
-
-    def test_file_values_override_environment_values(self) -> None:
-        # Consolidated precedence is File > Environment > Default (the single
-        # LocalConfig resolver), so a file value wins over the matching env var.
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(
-                "os.environ",
-                {
-                    "ODOO_URL": "https://from-environment.example.com",
-                    "ODOO_PASSWORD": "environment-password",
-                },
-                clear=True,
-            ):
-                settings = OdooConnectionSettings.from_sources(
-                    config_path=str(config_path)
-                )
-
-        # File wins over env for keys present in the file; env fills only the
-        # keys the file omits (none here).
-        self.assertEqual(settings.url, "https://from-file.example.com")
-        self.assertEqual(settings.db, "file-db")
-        self.assertEqual(settings.username, "file-user")
-        self.assertEqual(settings.password, "file-password")
-
-    def test_directory_config_path_probed_for_config_file(self) -> None:
-        # A config_path naming a DIRECTORY is probed for config.toml / config.ini
-        # so the feature's directory-form ODOO_SDK_CONFIG resolves through
-        # from_sources regardless of which file the user created.
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "config.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict("os.environ", {}, clear=True):
-                settings = OdooConnectionSettings.from_sources(config_path=temp_dir)
-
-        self.assertEqual(settings.url, "https://from-file.example.com")
-
-    def test_api_key_resolved_from_environment_variable(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-                "ODOO_URL": "https://example.com",
-                "ODOO_DB": "mydb",
-                "ODOO_API_KEY": "secret-key",
-                "ODOO_TRANSPORT": "json2",
-            },
-            clear=True,
-        ):
-            settings = OdooConnectionSettings.from_sources()
+                "url": "https://example.com",
+                "db": "mydb",
+                "api_key": "secret-key",
+                "transport": "json2",
+            }
+        )
 
         self.assertEqual(settings.api_key, "secret-key")
-
-    def test_transport_resolved_from_environment_variable(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-                "ODOO_URL": "https://example.com",
-                "ODOO_DB": "mydb",
-                "ODOO_API_KEY": "secret-key",
-                "ODOO_TRANSPORT": "json2",
-            },
-            clear=True,
-        ):
-            settings = OdooConnectionSettings.from_sources()
-
         self.assertEqual(settings.transport, "json2")
 
     def test_api_key_absent_from_repr(self) -> None:
@@ -428,185 +251,56 @@ class TestOdooConnectionSettings(unittest.TestCase):
 
         self.assertNotIn("super-secret", repr(settings))
 
-    def test_ini_file_api_key_and_transport_parsed(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "transport=json2\n"
-                "api_key=ini-api-key\n",
-                encoding="utf-8",
-            )
-
-            settings = OdooConnectionSettings.from_sources(config_path=str(config_path))
-
-        self.assertEqual(settings.transport, "json2")
-        self.assertEqual(settings.api_key, "ini-api-key")
-
     def test_json2_transport_raises_without_api_key(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-                "ODOO_URL": "https://example.com",
-                "ODOO_DB": "mydb",
-                "ODOO_TRANSPORT": "json2",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
-                OdooConnectionSettings.from_sources()
+        with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+            build_connection_settings(
+                {"url": "https://example.com", "db": "mydb", "transport": "json2"}
+            )
 
     def test_xmlrpc_transport_raises_without_username_password(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "ODOO_URL": "https://example.com",
-                "ODOO_DB": "mydb",
-            },
-            clear=True,
-        ):
-            with patch(
-                "odoo_client.state.config._resolve_local_config_path",
-                return_value=None,
-            ):
-                with self.assertRaisesRegex(
-                    ValueError, "Missing Odoo connection settings"
-                ):
-                    OdooConnectionSettings.from_sources()
+        with self.assertRaisesRegex(ValueError, "Missing Odoo connection settings"):
+            build_connection_settings({"url": "https://example.com", "db": "mydb"})
 
 
-class TestOdooConnectionSettingsTimeout(unittest.TestCase):
-    _REQUIRED_ENV = {
-        # Point discovery at a nonexistent file so these env-only timeout cases
-        # are independent of any real config on the host.
-        "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-        "ODOO_URL": "https://example.com",
-        "ODOO_DB": "db",
-        "ODOO_USERNAME": "user",
-        "ODOO_PASSWORD": "pw",
-    }
+class TestConnectionSettingsTimeout(unittest.TestCase):
+    def _timeout(self, value: object) -> float:
+        return build_connection_settings({**_REQUIRED, "timeout": value}).timeout
 
     def test_timeout_defaults_to_thirty_seconds(self) -> None:
-        with patch.dict("os.environ", dict(self._REQUIRED_ENV), clear=True):
-            settings = OdooConnectionSettings.from_sources()
+        self.assertEqual(build_connection_settings(_REQUIRED).timeout, 30.0)
 
-        self.assertEqual(settings.timeout, 30.0)
+    def test_numeric_string_timeout_parsed_as_float(self) -> None:
+        self.assertEqual(self._timeout("12.5"), 12.5)
 
-    def test_explicit_timeout_overrides_environment(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "5"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources(timeout=45.0)
-
-        self.assertEqual(settings.timeout, 45.0)
-
-    def test_environment_timeout_parsed_as_float(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "12.5"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.timeout, 12.5)
-
-    def test_file_timeout_used_when_environment_absent(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n"
-                "timeout=20\n",
-                encoding="utf-8",
-            )
-            with patch.dict("os.environ", {}, clear=True):
-                settings = OdooConnectionSettings.from_sources(
-                    config_path=str(config_path)
-                )
-
-        self.assertEqual(settings.timeout, 20.0)
-
-    def test_file_timeout_overrides_environment(self) -> None:
-        # Consolidated precedence is File > Environment > Default, so a file
-        # timeout wins over ODOO_TIMEOUT.
-        with TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "odoo.ini"
-            config_path.write_text(
-                "[odoo]\n"
-                "url=https://from-file.example.com\n"
-                "db=file-db\n"
-                "username=file-user\n"
-                "password=file-password\n"
-                "timeout=20\n",
-                encoding="utf-8",
-            )
-            with patch.dict("os.environ", {"ODOO_TIMEOUT": "8"}, clear=True):
-                settings = OdooConnectionSettings.from_sources(
-                    config_path=str(config_path)
-                )
-
-        self.assertEqual(settings.timeout, 20.0)
+    def test_float_timeout_is_kept(self) -> None:
+        self.assertEqual(self._timeout(45.0), 45.0)
 
     def test_non_numeric_timeout_falls_back_to_default(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "not-a-number"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.timeout, 30.0)
+        self.assertEqual(self._timeout("not-a-number"), 30.0)
 
     def test_zero_timeout_falls_back_to_default(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "0"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.timeout, 30.0)
+        self.assertEqual(self._timeout("0"), 30.0)
 
     def test_negative_timeout_falls_back_to_default(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "-3"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.timeout, 30.0)
+        self.assertEqual(self._timeout("-3"), 30.0)
 
     def test_infinite_timeout_falls_back_to_default(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "inf"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
-
-        self.assertEqual(settings.timeout, 30.0)
+        self.assertEqual(self._timeout("inf"), 30.0)
 
     def test_nan_timeout_falls_back_to_default(self) -> None:
-        env = {**self._REQUIRED_ENV, "ODOO_TIMEOUT": "nan"}
-        with patch.dict("os.environ", env, clear=True):
-            settings = OdooConnectionSettings.from_sources()
+        self.assertEqual(self._timeout("nan"), 30.0)
 
-        self.assertEqual(settings.timeout, 30.0)
-
-    def test_boolean_explicit_timeout_falls_back_to_default(self) -> None:
-        with patch.dict("os.environ", dict(self._REQUIRED_ENV), clear=True):
-            settings = OdooConnectionSettings.from_sources(
-                timeout=True,  # type: ignore[arg-type]
-            )
-
-        self.assertEqual(settings.timeout, 30.0)
+    def test_boolean_timeout_falls_back_to_default(self) -> None:
+        self.assertEqual(self._timeout(True), 30.0)
 
 
 class TestOdooClientTimeoutThreading(unittest.TestCase):
     @patch("odoo_client.client.client.OdooRpcExecutor")
-    def test_env_timeout_reaches_rpc_executor(self, mock_rpc: Mock) -> None:
+    def test_timeout_reaches_rpc_executor(self, mock_rpc: Mock) -> None:
         mock_rpc.return_value = Mock(spec=OdooExecutor)
-        env = {
-            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-            "ODOO_URL": "https://example.com",
-            "ODOO_DB": "db",
-            "ODOO_USERNAME": "user",
-            "ODOO_PASSWORD": "pw",
-            "ODOO_TIMEOUT": "45.5",
-        }
-        with patch.dict("os.environ", env, clear=True):
-            OdooClient()
+        settings = build_connection_settings({**_REQUIRED, "timeout": "45.5"})
+
+        OdooClient.from_settings(settings)
 
         mock_rpc.assert_called_once_with(
             "https://example.com",
@@ -614,46 +308,38 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
             "user",
             "pw",
             timeout=45.5,
-            credentials_refresh=ANY,
+            credentials_refresh=None,
         )
 
     @patch("odoo_client.client.client.OdooJson2Executor")
-    def test_env_timeout_reaches_json2_executor(self, mock_json2: Mock) -> None:
+    def test_timeout_reaches_json2_executor(self, mock_json2: Mock) -> None:
         mock_json2.return_value = Mock(spec=OdooExecutor)
-        env = {
-            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-            "ODOO_URL": "https://example.com",
-            "ODOO_DB": "db",
-            "ODOO_API_KEY": "key",
-            "ODOO_TRANSPORT": "json2",
-            "ODOO_TIMEOUT": "7",
-        }
-        with patch.dict("os.environ", env, clear=True):
-            OdooClient()
+        settings = build_connection_settings(
+            {
+                "url": "https://example.com",
+                "db": "db",
+                "api_key": "key",
+                "transport": "json2",
+                "timeout": "7",
+            }
+        )
+
+        OdooClient.from_settings(settings)
 
         mock_json2.assert_called_once_with(
             "https://example.com",
             "db",
             "key",
             timeout=7.0,
-            credentials_refresh=ANY,
+            credentials_refresh=None,
         )
 
     @patch("odoo_client.client.client.OdooRpcExecutor")
-    def test_garbage_env_timeout_reaches_executor_as_default(
-        self, mock_rpc: Mock
-    ) -> None:
+    def test_garbage_timeout_reaches_executor_as_default(self, mock_rpc: Mock) -> None:
         mock_rpc.return_value = Mock(spec=OdooExecutor)
-        env = {
-            "ODOO_SDK_CONFIG": "/nonexistent/config.toml",
-            "ODOO_URL": "https://example.com",
-            "ODOO_DB": "db",
-            "ODOO_USERNAME": "user",
-            "ODOO_PASSWORD": "pw",
-            "ODOO_TIMEOUT": "banana",
-        }
-        with patch.dict("os.environ", env, clear=True):
-            OdooClient()
+        settings = build_connection_settings({**_REQUIRED, "timeout": "banana"})
+
+        OdooClient.from_settings(settings)
 
         mock_rpc.assert_called_once_with(
             "https://example.com",
@@ -661,7 +347,7 @@ class TestOdooClientTimeoutThreading(unittest.TestCase):
             "user",
             "pw",
             timeout=30.0,
-            credentials_refresh=ANY,
+            credentials_refresh=None,
         )
 
 
@@ -689,10 +375,8 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
         self.assertIs(client._executor, mock_executor)
 
     @patch("odoo_client.client.client.OdooJson2Executor")
-    @patch("odoo_client.client.client.OdooConnectionSettings.from_sources")
-    def test_client_init_uses_json2_executor_when_transport_is_json2(
+    def test_from_settings_uses_json2_executor_when_transport_is_json2(
         self,
-        mock_from_sources: Mock,
         mock_json2: Mock,
     ) -> None:
         settings = OdooConnectionSettings(
@@ -702,10 +386,9 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
             api_key="my-api-key",
         )
         built_executor = Mock(spec=OdooExecutor)
-        mock_from_sources.return_value = settings
         mock_json2.return_value = built_executor
 
-        client = OdooClient(url="https://example.com", db="mydb")
+        client = OdooClient.from_settings(settings)
 
         self.assertIs(client._executor, built_executor)
         mock_json2.assert_called_once_with(
@@ -713,121 +396,43 @@ class TestOdooClientFactoryMethods(unittest.TestCase):
             settings.db,
             settings.api_key,
             timeout=settings.timeout,
-            credentials_refresh=ANY,
-        )
-
-
-class TestOdooClientFromConfig(unittest.TestCase):
-    @patch("odoo_client.client.client.OdooRpcExecutor")
-    def test_from_config_builds_executor_from_local_config(
-        self, mock_rpc: Mock
-    ) -> None:
-        from odoo_client.state.config import LocalConfig
-
-        built = Mock(spec=OdooExecutor)
-        mock_rpc.return_value = built
-        config = LocalConfig(
-            connection={
-                "url": "https://cfg.example.com",
-                "db": "cfg-db",
-                "username": "cfg-user",
-                "password": "cfg-pass",
-            }
-        )
-
-        client = OdooClient.from_config(config)
-
-        self.assertIs(client._executor, built)
-        mock_rpc.assert_called_once_with(
-            "https://cfg.example.com",
-            "cfg-db",
-            "cfg-user",
-            "cfg-pass",
-            timeout=30.0,
-            credentials_refresh=ANY,
-        )
-
-    @patch("odoo_client.client.client.OdooJson2Executor")
-    def test_config_kwarg_selects_json2_transport(self, mock_json2: Mock) -> None:
-        from odoo_client.state.config import LocalConfig
-
-        built = Mock(spec=OdooExecutor)
-        mock_json2.return_value = built
-        config = LocalConfig(
-            connection={
-                "url": "https://cfg.example.com",
-                "db": "cfg-db",
-                "api_key": "cfg-key",
-                "transport": "json2",
-            }
-        )
-
-        client = OdooClient(config=config)
-
-        self.assertIs(client._executor, built)
-        mock_json2.assert_called_once_with(
-            "https://cfg.example.com",
-            "cfg-db",
-            "cfg-key",
-            timeout=30.0,
-            credentials_refresh=ANY,
+            credentials_refresh=None,
         )
 
 
 class TestOdooClientCredentialRefresh(unittest.TestCase):
     @patch("odoo_client.client.client.OdooRpcExecutor")
-    @patch("odoo_client.client.client.OdooConnectionSettings.from_sources")
-    def test_client_injects_refresh_that_re_resolves_same_sources(
-        self,
-        mock_from_sources: Mock,
-        mock_rpc_executor: Mock,
-    ) -> None:
-        settings = OdooConnectionSettings(
-            url="https://example.com",
-            db="example-db",
-            username="example-user",
-            password="example-password",
-        )
-        mock_from_sources.return_value = settings
-        mock_rpc_executor.return_value = Mock(spec=OdooExecutor)
-
-        OdooClient(
-            url="https://example.com",
-            db="example-db",
-            username="example-user",
-            password="example-password",
-            config_path="example.ini",
-        )
-
-        refresh = mock_rpc_executor.call_args.kwargs["credentials_refresh"]
-        self.assertEqual(mock_from_sources.call_count, 1)
-        self.assertIs(refresh(), settings)
-        self.assertEqual(mock_from_sources.call_count, 2)
-        self.assertEqual(
-            mock_from_sources.call_args_list[0],
-            mock_from_sources.call_args_list[1],
-        )
-
-    @patch("odoo_client.client.client.OdooRpcExecutor")
-    def test_from_config_injects_refresh_that_calls_connection_settings(
+    def test_from_settings_passes_the_refresh_hook_to_the_executor(
         self, mock_rpc_executor: Mock
     ) -> None:
         settings = OdooConnectionSettings(
-            url="https://cfg.example.com",
-            db="cfg-db",
-            username="cfg-user",
-            password="cfg-pass",
+            url="https://example.com",
+            db="example-db",
+            username="example-user",
+            password="example-password",
         )
-        cfg = Mock()
-        cfg.connection_settings.return_value = settings
+        refresh = Mock(return_value=settings)
         mock_rpc_executor.return_value = Mock(spec=OdooExecutor)
 
-        OdooClient.from_config(cfg)
+        OdooClient.from_settings(settings, credentials_refresh=refresh)
 
-        refresh = mock_rpc_executor.call_args.kwargs["credentials_refresh"]
-        self.assertEqual(cfg.connection_settings.call_count, 1)
-        self.assertIs(refresh(), settings)
-        self.assertEqual(cfg.connection_settings.call_count, 2)
+        self.assertIs(
+            mock_rpc_executor.call_args.kwargs["credentials_refresh"], refresh
+        )
+
+    @patch("odoo_client.client.client.OdooJson2Executor")
+    def test_from_settings_passes_the_refresh_hook_to_the_json2_executor(
+        self, mock_json2: Mock
+    ) -> None:
+        settings = OdooConnectionSettings(
+            url="https://example.com", db="d", transport="json2", api_key="k"
+        )
+        refresh = Mock(return_value=settings)
+        mock_json2.return_value = Mock(spec=OdooExecutor)
+
+        OdooClient.from_settings(settings, credentials_refresh=refresh)
+
+        self.assertIs(mock_json2.call_args.kwargs["credentials_refresh"], refresh)
 
     @patch("odoo_client.client.client.OdooRpcExecutor")
     def test_from_xml_rpc_passes_no_refresh_hook(self, mock_rpc: Mock) -> None:

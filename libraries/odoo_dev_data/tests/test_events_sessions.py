@@ -12,7 +12,7 @@ from odoo_dev_data.events import (
     EventRecord,
     _DERIVE_SESSIONS_SQL,
     _derivation_margin,
-    _normalize_utc_isoformat,
+    normalize_utc_isoformat,
     _widen,
     format_repo_label,
     session_key,
@@ -385,10 +385,10 @@ class TestDerivationPrefilter:
         params = {
             "agentless": AGENTLESS_REPO,
             "gap_secs": GAP,
-            "start": _normalize_utc_isoformat(lo),
-            "end": _normalize_utc_isoformat(hi),
-            "wstart": _normalize_utc_isoformat(_widen(lo, -margin)),
-            "wend": _normalize_utc_isoformat(_widen(hi, margin)),
+            "start": normalize_utc_isoformat(lo),
+            "end": normalize_utc_isoformat(hi),
+            "wstart": normalize_utc_isoformat(_widen(lo, -margin)),
+            "wend": normalize_utc_isoformat(_widen(hi, margin)),
         }
         sql = "EXPLAIN QUERY PLAN " + _DERIVE_SESSIONS_SQL.format(extra="")
         plan = "\n".join(str(row[3]) for row in store._conn.execute(sql, params))
@@ -400,23 +400,23 @@ class TestBoundFormatting:
 
     def test_naive_bound_gets_utc_suffix(self):
         naive = datetime(2026, 6, 1, 0, 0, 0)
-        assert _normalize_utc_isoformat(naive) == "2026-06-01T00:00:00+00:00"
+        assert normalize_utc_isoformat(naive) == "2026-06-01T00:00:00+00:00"
 
     def test_naive_bound_matches_stored_event_timestamp(self, store):
         instant = datetime(2026, 6, 1, 0, 0, 0)
         stored = _event(store, ts=instant)
         assert (
-            _normalize_utc_isoformat(instant)
+            normalize_utc_isoformat(instant)
             == store.get_event(stored.id).timestamp.isoformat()
         )
 
     def test_aware_non_utc_bound_converted_to_utc(self):
         aware = datetime(2026, 6, 1, 8, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
-        assert _normalize_utc_isoformat(aware) == "2026-06-01T12:00:00+00:00"
+        assert normalize_utc_isoformat(aware) == "2026-06-01T12:00:00+00:00"
 
     def test_open_range_sentinels_still_sort_past_every_row(self):
-        assert _normalize_utc_isoformat(datetime.min) < "2026-06-01T00:00:00+00:00"
-        assert _normalize_utc_isoformat(datetime.max) > "9998-01-01T00:00:00+00:00"
+        assert normalize_utc_isoformat(datetime.min) < "2026-06-01T00:00:00+00:00"
+        assert normalize_utc_isoformat(datetime.max) > "9998-01-01T00:00:00+00:00"
 
 
 class TestLowerBoundEdge:

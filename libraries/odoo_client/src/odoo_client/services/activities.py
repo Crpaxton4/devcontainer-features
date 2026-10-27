@@ -39,8 +39,8 @@ Two Odoo facts drive the shape of the write path:
   privilege escalation the constraint exists to prevent.
 
   So :func:`_res_model_id` reads the hand-managed ``[model_ids]`` map instead,
-  via :meth:`~odoo_client.state.config.LocalConfig.require_model_id`. The
-  :class:`~odoo_client.state.config.LocalConfig` is threaded in from the command
+  via :meth:`~odoo_dev_data.config.LocalConfig.require_model_id`. The
+  :class:`~odoo_dev_data.config.LocalConfig` is threaded in from the command
   layer (every :class:`~odoo_client.commands.command.Command` already exposes a
   lazily-resolved ``self.config``) rather than loaded inside this module, so the
   dependency is explicit at the call site and a test can supply its own map
@@ -60,7 +60,7 @@ Two Odoo facts drive the shape of the write path:
 from typing import Any, Optional, Union
 
 from odoo_client.client import OdooClient
-from odoo_client.state import LocalConfig
+from odoo_dev_data.config import LocalConfig
 
 from odoo_client._text import html_to_markdown, markdown_to_html
 

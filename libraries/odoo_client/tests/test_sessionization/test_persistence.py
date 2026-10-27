@@ -1,25 +1,21 @@
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 
-from odoo_client.adapters import (
+from odoo_client.sessionization.persistence import (
     event_record_to_raw_event,
     is_synthetic_tick,
     load_raw_events,
     raw_event_to_event_record,
 )
 from odoo_client.sessionization import EventType, RawEvent
-from odoo_client.state import EventRecord, LocalStateClient
-from tests.support import make_state_db
+from odoo_dev_data.events import EventRecord, EventStore
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_db() -> EventStore:
+    return make_event_store()
 
 
 class TestEventConversion(unittest.TestCase):
@@ -79,7 +75,7 @@ class TestEventConversion(unittest.TestCase):
     def test_unknown_source_raises(self):
         # Unknown sources must fail loudly rather than silently masquerading as
         # commits, which would corrupt sessionization.
-        from odoo_client.adapters import UnknownEventSourceError
+        from odoo_client.sessionization.persistence import UnknownEventSourceError
 
         rec = EventRecord(
             id=1,

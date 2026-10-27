@@ -13,7 +13,12 @@ config) in a :class:`~odoo_client.tui.app.TuiDeps`, and call
 :func:`odoo_client.tui.app.run` directly instead of using this entry point.
 """
 
-from odoo_client.bootstrap import LocalConfig, OdooClient, assert_configured, bootstrap
+from odoo_client.bootstrap import (
+    LocalConfig,
+    assert_configured,
+    bootstrap,
+    build_client,
+)
 
 from .app import TuiDeps, run
 
@@ -31,7 +36,7 @@ def main() -> None:  # pragma: no cover
     """
     assert_configured()
     config = LocalConfig.load()
-    client = OdooClient()
+    client = build_client(config)
     registry = bootstrap(client=client, config=config)
     deps = TuiDeps(
         registry=registry,

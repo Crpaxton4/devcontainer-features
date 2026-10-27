@@ -24,14 +24,12 @@ import subprocess
 from typing import Any, Optional, Tuple
 
 from odoo_client.errors import OdooError
-from odoo_client.tracking.models import TrackerStateMissingError
 
 from .log_event import LogEventCommand, normalize_task_ids
 
 #: Exceptions the dispatch error boundary renders as a structured payload.
 #: Every entry is a caller-actionable failure — a classified Odoo fault
-#: (:class:`~odoo_client.transport.errors.OdooError` and its subclasses), an
-#: absent tracker DB, a failed git
+#: (:class:`~odoo_client.transport.errors.OdooError` and its subclasses), a failed git
 #: invocation (``subprocess.CalledProcessError``, #541 — it used to escape as a
 #: stack trace), or invalid input (``ValueError``) — a shape an LLM can reason about
 #: and retry. Anything not listed (``KeyError``, ``AttributeError``, ...) is a
@@ -40,7 +38,6 @@ from .log_event import LogEventCommand, normalize_task_ids
 #: dispatcher (#713) so both surfaces classify failures identically.
 _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     OdooError,
-    TrackerStateMissingError,
     subprocess.CalledProcessError,
     ValueError,
 )

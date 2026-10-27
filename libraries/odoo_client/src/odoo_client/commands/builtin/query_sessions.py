@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from odoo_client.state import SessionWindow, session_key
+from odoo_dev_data.events import SessionWindow, session_key
 from odoo_client.billing.upload import range_bounds
 
 from ..command import Command
@@ -81,7 +81,7 @@ class QuerySessionsCommand(Command):
         session (#508) — an absent value rather than an in-band sentinel, so no
         control character can reach a JSON or MCP consumer. Presentation layers
         that need a printable stand-in call
-        :func:`~odoo_client.state.db.format_repo_label` rather than masking locally.
+        :func:`~odoo_dev_data.events.format_repo_label` rather than masking locally.
         """
         summary: dict[str, Any] = {
             "session_id": session.id,

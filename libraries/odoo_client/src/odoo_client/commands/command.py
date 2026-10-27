@@ -4,10 +4,8 @@ from typing import Any, Optional
 # The concrete constructors are still needed for the lazy fallbacks below;
 # the *annotations* are the consumer-side ports (#718), so any structural
 # stand-in can drive a command.
-from odoo_client.state import (
-    LocalConfig,
-    LocalStateClient,
-)
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
 
 from .protocols import RpcClient, StateStore
 
@@ -59,7 +57,7 @@ class Command(ABC):
 
     * ``client`` — any :class:`RpcClient` (the :class:`OdooClient` in
       production; a structural fake in tests).
-    * ``state`` — any :class:`StateStore` (the :class:`LocalStateClient`
+    * ``state`` — any :class:`StateStore` (the :class:`EventStore`
       SQLite session FSM in production; a structural fake in tests).
     * ``config`` — the :class:`LocalConfig` (resolved SDK settings).
 
@@ -97,11 +95,11 @@ class Command(ABC):
 
         Typed against the consumer-side :class:`StateStore` port (#718); the
         lazy fallback constructs the concrete
-        :class:`~odoo_client.state.LocalStateClient`, which satisfies the port
+        :class:`~odoo_dev_data.events.EventStore`, which satisfies the port
         structurally.
         """
         if self._injected_state is None:
-            self._injected_state = LocalStateClient()
+            self._injected_state = EventStore()
         return self._injected_state
 
     @property

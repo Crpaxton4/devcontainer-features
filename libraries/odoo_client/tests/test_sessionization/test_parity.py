@@ -10,15 +10,15 @@ each task exactly what the SQL derivation + the upload billing policy bill.
 import unittest
 from datetime import date, datetime, timezone
 
-from odoo_client.adapters import load_raw_events
+from odoo_client.sessionization.persistence import load_raw_events
 from odoo_client.sessionization import (
     SessionizationConfig,
     billable_events,
     build_window_entries,
 )
-from odoo_client.state import EventRecord
+from odoo_dev_data.events import EventRecord
 from odoo_client.billing.upload import _billable_hours
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
@@ -68,7 +68,7 @@ def _python_billed_secs_per_task(db, config):
 
 class TestSessionizationParity(unittest.TestCase):
     def setUp(self):
-        self.db = make_state_db()
+        self.db = make_event_store()
         # Task 101: a development gap-chain (commits + an agent event).
         _event(self.db, "commit", 9, 0, "101")
         _event(self.db, "commit", 9, 20, "101")
@@ -194,7 +194,7 @@ class TestAttributionFilterParity(unittest.TestCase):
     """
 
     def setUp(self):
-        self.db = make_state_db()
+        self.db = make_event_store()
         self.config = SessionizationConfig(
             start_date=date(2026, 6, 1), end_date=date(2026, 6, 1)
         )

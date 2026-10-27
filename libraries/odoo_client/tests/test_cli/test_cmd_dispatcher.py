@@ -14,11 +14,9 @@ dispatch without an Odoo client or env config ever being touched.
 import json
 import subprocess
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import odoo_client.cli.__main__ as cli
@@ -29,18 +27,15 @@ from odoo_client.commands.dispatch_telemetry import (
     _BOUNDARY_ERRORS,
 )
 from odoo_client.errors import OdooError
-from odoo_client.state import LocalStateClient
-from odoo_client.state.models import TrackerStateMissingError
-from tests.support import make_state_db
+from odoo_dev_data.events import EventStore
+from tests.support import make_event_store
 
 BUILD_REGISTRY = "odoo_client.cli.__main__._build_registry"
 ASSERT_GUARD = "odoo_client.cli.__main__.assert_configured"
 
 
-def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_db() -> EventStore:
+    return make_event_store()
 
 
 def _run_cli(*argv: str) -> tuple[int, str]:
@@ -212,7 +207,6 @@ class TestCmdDispatchSuccess(unittest.TestCase):
 class TestCmdBoundaryErrors(unittest.TestCase):
     BOUNDARY_INSTANCES = [
         OdooError("odoo unreachable"),
-        TrackerStateMissingError("no tracker database"),
         subprocess.CalledProcessError(1, ["git", "switch"]),
         ValueError("bad input"),
     ]

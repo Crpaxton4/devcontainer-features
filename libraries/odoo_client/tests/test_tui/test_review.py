@@ -13,7 +13,7 @@ or uploads.
 import unittest
 from datetime import date, datetime, timezone
 
-from odoo_client.state import EventRecord
+from odoo_dev_data.events import EventRecord
 from odoo_client.tui.app import (
     AppState,
     TuiDeps,
@@ -25,7 +25,7 @@ from odoo_client.tui.app import (
 from odoo_client.tui.evidence import STRONG, WEAK, Overlap, ReviewCard
 from odoo_client.tui.review import review_body_lines
 from odoo_client.tui.window import DateWindow
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
@@ -102,7 +102,7 @@ def _fixture():
     S2 (55555): single chatter event → WEAK.
     S3 (70001) / S4 (70002): overlap 40m on the next day → both WEAK, badge peers.
     """
-    store = make_state_db()
+    store = make_event_store()
     d1 = datetime(2026, 7, 1, tzinfo=UTC)
     d2 = datetime(2026, 7, 2, tzinfo=UTC)
     e_commit = _add(

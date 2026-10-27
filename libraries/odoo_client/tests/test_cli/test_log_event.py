@@ -1,7 +1,7 @@
 """Tests for the ``odoo-sdk log-event`` subcommand.
 
 Events land in the one host-provisioned central tracker DB
-(``$ODOO_TASK_TRACKER_DIR/tracker.db``, #369) regardless of the cwd's repo. The
+(``$ODOO_DEV_HOME/state.db``, #369) regardless of the cwd's repo. The
 cwd's git remote only supplies the event's display ``repo`` label; a non-git cwd
 logs fine with ``repo=""``. A missing central DB is a hard error, never a silent
 skip or an auto-created empty DB.
@@ -13,13 +13,10 @@ import subprocess
 import tempfile
 import unittest
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import LocalStateClient as TaskStateDB
-from odoo_client.state.db import tracker_db_path
-from tests.support import provision_schema
+from odoo_dev_data.events import EventStore as TaskStateDB
 
 ASSERT_GUARD = "odoo_client.cli.__main__.assert_configured"
 
@@ -48,14 +45,12 @@ class TestLogEvent(unittest.TestCase):
             check=True,
             capture_output=True,
         )
-        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
-        # The central DB is host-provisioned; the SDK never creates it.
-        provision_schema(tracker_db_path(self._state))
+        os.environ["ODOO_DEV_HOME"] = self._state
         os.chdir(self._repo)
 
     def tearDown(self) -> None:
         os.chdir(self._cwd)
-        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        os.environ.pop("ODOO_DEV_HOME", None)
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._repo, ignore_errors=True)
 
@@ -242,13 +237,12 @@ class TestLogEventNonGitRepo(unittest.TestCase):
         self._cwd = os.getcwd()
         self._state = tempfile.mkdtemp()
         self._nongit = tempfile.mkdtemp()
-        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
-        provision_schema(tracker_db_path(self._state))
+        os.environ["ODOO_DEV_HOME"] = self._state
         os.chdir(self._nongit)
 
     def tearDown(self) -> None:
         os.chdir(self._cwd)
-        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        os.environ.pop("ODOO_DEV_HOME", None)
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._nongit, ignore_errors=True)
 
@@ -260,38 +254,6 @@ class TestLogEventNonGitRepo(unittest.TestCase):
         # Branch resolution is best-effort on the same terms (#509): no repo
         # means no branch, not a failed write.
         self.assertEqual(events[0].branch, "")
-
-
-class TestLogEventMissingDb(unittest.TestCase):
-    """With no host-provisioned central DB, log-event fails hard (#369, accept. 4)."""
-
-    def setUp(self) -> None:
-        self._cwd = os.getcwd()
-        self._state = tempfile.mkdtemp()  # empty: no tracker.db provisioned
-        self._nongit = tempfile.mkdtemp()
-        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
-        os.chdir(self._nongit)
-
-    def tearDown(self) -> None:
-        os.chdir(self._cwd)
-        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
-        shutil.rmtree(self._state, ignore_errors=True)
-        shutil.rmtree(self._nongit, ignore_errors=True)
-
-    def test_missing_db_exits_1_and_names_path(self) -> None:
-        stderr = StringIO()
-        with self.assertRaises(SystemExit) as ctx:
-            with patch("sys.stderr", stderr), patch("sys.stdout", StringIO()):
-                with patch(
-                    "sys.argv",
-                    ["odoo-sdk", "log-event", "--source", "claude:SessionStart"],
-                ):
-                    cli.main()
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn(str(tracker_db_path(self._state)), stderr.getvalue())
-        # The SDK must NOT have created a DB as a side effect.
-        self.assertFalse(tracker_db_path(self._state).exists())
-        self.assertEqual(list(Path(self._state).rglob("*.db")), [])
 
 
 if __name__ == "__main__":

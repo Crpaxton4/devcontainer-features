@@ -12,7 +12,7 @@ Consumers who want to expose custom commands should build their own
 :class:`OdooMCPServer` from their own script instead of using this entry point.
 """
 
-from odoo_client.bootstrap import LocalConfig, OdooClient, assert_configured, bootstrap
+from odoo_client.bootstrap import LocalConfig, assert_configured, bootstrap
 from odoo_client.mcp.server import OdooMCPServer
 from odoo_client.mcp.tools import build_explicit_tools
 
@@ -32,7 +32,7 @@ def main() -> None:
 
     assert_configured()
     config = LocalConfig.load()
-    registry = bootstrap(client=OdooClient(), config=config)
+    registry = bootstrap(config=config)
     OdooMCPServer(
         registry,
         explicit_tools=build_explicit_tools(registry),

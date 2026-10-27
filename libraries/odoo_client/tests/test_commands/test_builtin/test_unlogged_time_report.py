@@ -16,9 +16,10 @@ from odoo_client.commands.builtin import BUILTIN_COMMANDS, UnloggedTimeReportCom
 from odoo_client.commands.command_registry import Registry
 from odoo_client.mcp.tools import build_explicit_tools
 from odoo_client.mcp.tools.atomic import make_unlogged_time_report_tool
-from odoo_client.state import EventRecord, LocalConfig
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventRecord
 from odoo_client.transport.errors import OdooTransportError
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 _HELPER = "odoo_client.commands.builtin.unlogged_time_report.unlogged_time_report"
@@ -108,7 +109,7 @@ def _state_with_sessions():
     * task 202 (July 1): commits 09:00, 09:30 -> a 0.5h session.
     * task 303 (July 2): one commit -> a single-event session (0.0h wall).
     """
-    state = make_state_db()
+    state = make_event_store()
     for hour in (9, 10, 11, 12):
         _commit(state, hour, task="101")
     _commit(state, 9, minute=0, task="202")
@@ -203,7 +204,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(july1_tasks[202]["derived_hours"], 0.5)
 
     def test_empty_window_is_an_empty_report_not_an_error(self):
-        state = make_state_db()  # no events
+        state = make_event_store()  # no events
         client = _FakeClient([])
         report = _run(state, client)
         self.assertEqual(report["days"], [])
@@ -211,14 +212,14 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(report["total_derived_hours"], 0.0)
 
     def test_only_mine_false_skips_the_employee_lookup(self):
-        state = make_state_db()
+        state = make_event_store()
         client = _FakeClient([])
         _run(state, client, only_mine=False)
         self.assertNotIn(("hr.employee", "search_read"), client.calls)
         self.assertIn(("account.analytic.line", "read_group"), client.calls)
 
     def test_only_mine_true_scopes_to_the_employee(self):
-        state = make_state_db()
+        state = make_event_store()
         client = _FakeClient([])
         _run(state, client, only_mine=True)
         self.assertIn(("hr.employee", "search_read"), client.calls)
@@ -249,7 +250,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertIn(("account.analytic.line", "read_group"), client.calls)
 
     def test_taskless_logged_lines_are_ignored(self):
-        state = make_state_db()  # no derived sessions
+        state = make_event_store()  # no derived sessions
         client = _FakeClient(
             [
                 {
@@ -266,7 +267,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(report["total_logged_hours"], 0.0)
 
     def test_session_starting_before_window_is_excluded(self):
-        state = make_state_db()
+        state = make_event_store()
         # A session whose commits begin June 30 (start day outside the window)
         # but which overlaps the window is dropped from the day-bucketed report.
         state.add_event(
@@ -293,7 +294,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(report["total_derived_hours"], 0.0)
 
     def test_fully_reconciled_day_is_omitted(self):
-        state = make_state_db()
+        state = make_event_store()
         _commit(state, 9, minute=0, day=2, task="202")
         _commit(state, 9, minute=30, day=2, task="202")  # a 0.5h session
         client = _FakeClient([_logged_row(202, "Task B", "2026-07-02", 0.5)])
@@ -338,7 +339,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
         self.assertEqual(names[303], "Task C")
 
     def test_fully_logged_window_issues_no_name_read(self):
-        state = make_state_db()
+        state = make_event_store()
         _commit(state, 9, minute=0, day=2, task="202")
         _commit(state, 9, minute=30, day=2, task="202")
         client = _FakeClient(

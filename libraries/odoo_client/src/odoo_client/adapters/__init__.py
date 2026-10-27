@@ -8,8 +8,6 @@ sits behind a core-owned consumer-side Protocol
 * :mod:`.git` — local git checkouts (``GitGateway``).
 * :mod:`.github` — the ``gh``-authenticated GitHub account (``IssueTracker``).
 * :mod:`.odoo` — Odoo task chatter, over the existing ``RpcClient`` port.
-* :mod:`.state` — the local SQLite events store (``StateStore``); the
-  persistence bridge to the pure sessionization vocabulary lives here.
 
 All coupling to persistence and external processes lives in these packages,
 never in core. The package-level re-exports below are the historical flat
@@ -21,22 +19,8 @@ its layout note for why the frozen test seams pin the code there).
 from .git import sync_git_log
 from .github import sync_github
 from .odoo import sync_odoo_chatter
-from .state import (
-    UnknownEventSourceError,
-    event_record_to_raw_event,
-    is_synthetic_tick,
-    load_raw_events,
-    raw_event_to_event_record,
-    source_to_event_type,
-)
 
 __all__ = [
-    "event_record_to_raw_event",
-    "raw_event_to_event_record",
-    "source_to_event_type",
-    "is_synthetic_tick",
-    "UnknownEventSourceError",
-    "load_raw_events",
     "sync_git_log",
     "sync_github",
     "sync_odoo_chatter",

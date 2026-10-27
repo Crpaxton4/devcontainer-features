@@ -5,7 +5,7 @@ raw wall-clock span with the single upload billing rule (half-up rounding to the
 configured step, then a per-session minimum floor).
 
 This is the only in-Python re-windowing that survives issue #404: the SQL CTE
-(:meth:`odoo_client.state.LocalStateClient.derive_sessions_overlapping`) is the live
+(:meth:`odoo_dev_data.events.EventStore.derive_sessions_overlapping`) is the live
 billing algorithm, and :func:`compute_windows` exists solely so the diagnostic
 gap-sweep can re-window across a grid of candidate gaps. A parity test pins this
 function to the SQL derivation at the production gap so the two never drift.

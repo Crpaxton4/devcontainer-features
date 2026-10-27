@@ -2,7 +2,7 @@
 
 import unittest
 
-from odoo_client.tracking.stats import compute_stats
+from odoo_client.sessionization.stats import compute_stats
 
 
 def _session(sid, task, start, end, secs, *, repo="acme/web", events=None):

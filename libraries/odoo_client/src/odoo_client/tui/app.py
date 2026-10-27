@@ -38,7 +38,7 @@ from odoo_client.billing.upload import range_bounds, upload_sessions
 from odoo_client.commands import Registry
 from odoo_client.commands.protocols import RpcClient, SettingsView, StateStore
 from odoo_client.errors import OdooError
-from odoo_client.tracking.models import EventRecord
+from odoo_dev_data.events import EventRecord
 
 from .evidence import ReviewCard, build_review_cards, compute_overlaps
 from .export import export_csv, export_markdown
@@ -67,7 +67,7 @@ class TuiDeps:
     (e.g. ``assign_event``) is immediately visible to the driver's own reads.
 
     Each peer is typed against its consumer-side port (#718) — the concrete
-    ``OdooClient`` / ``LocalStateClient`` / ``LocalConfig`` the entrypoint
+    ``OdooClient`` / ``EventStore`` / ``LocalConfig`` the entrypoint
     injects satisfy them structurally, and the driver names no data-layer
     type.
 

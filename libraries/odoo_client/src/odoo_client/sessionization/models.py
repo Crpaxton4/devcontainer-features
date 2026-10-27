@@ -22,7 +22,7 @@ def resolve_day_bucket_tz() -> tzinfo:
     layer and so each call re-resolves the current config (a test can move the
     zone via an environment variable and see the new bucketing immediately).
     """
-    from odoo_client.state.config import LocalConfig
+    from odoo_dev_data.config import LocalConfig
 
     return LocalConfig.load().day_bucket_tz
 
@@ -36,7 +36,7 @@ def resolve_session_gap_secs() -> int:
     The import is local so this state-agnostic module carries no import-time
     dependency on the state layer and each call re-resolves the current config.
     """
-    from odoo_client.state.config import LocalConfig
+    from odoo_dev_data.config import LocalConfig
 
     return LocalConfig.load().session_gap_secs
 
@@ -48,7 +48,7 @@ def resolve_min_session_hours() -> float:
     knob the upload path bills with, so the diagnostic gap-sweep and export
     round identically to what an upload writes. Resolved lazily per call.
     """
-    from odoo_client.state.config import LocalConfig
+    from odoo_dev_data.config import LocalConfig
 
     return LocalConfig.load().min_session_hours
 
@@ -60,7 +60,7 @@ def resolve_round_session_hours() -> float:
     knob the upload path bills with (half-up rounding), so the diagnostic
     gap-sweep and export never report hours an upload would not write.
     """
-    from odoo_client.state.config import LocalConfig
+    from odoo_dev_data.config import LocalConfig
 
     return LocalConfig.load().round_session_hours
 

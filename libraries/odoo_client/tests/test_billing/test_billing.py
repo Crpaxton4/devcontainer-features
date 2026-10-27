@@ -18,23 +18,21 @@ The suite has three layers:
 """
 
 import os
-import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import EventRecord, LocalStateClient
-from odoo_client.state.config import LocalConfig
+from odoo_dev_data.events import EventRecord, EventStore
+from odoo_dev_data.config import LocalConfig
 from odoo_client.billing.upload import (
     _billable_hours,
     _round_to_step,
     upload_sessions,
 )
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
@@ -145,16 +143,14 @@ class TestBillingConfigResolution(unittest.TestCase):
 _MOD = "odoo_client.cli.__main__"
 
 
-def _seed_db() -> LocalStateClient:
+def _seed_db() -> EventStore:
     """Seed a temp DB with a single-event session and a 1.87h session.
 
     * task ``101`` — one lone event -> a zero-span single-event session.
     * task ``202`` — two events ``6732s`` (1.87h) apart -> one 1.87h session
       (the wide session gap keeps them from splitting).
     """
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    db = make_state_db(Path(tmp.name))
+    db = make_event_store()
     base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
 
     db.add_event(
@@ -224,7 +220,7 @@ def _config(**overrides: Any) -> MagicMock:
 
 def _run_cli(
     argv: list[str],
-    db: LocalStateClient,
+    db: EventStore,
     client: _RecordingOdooClient,
     config: MagicMock,
 ) -> str:
@@ -233,7 +229,7 @@ def _run_cli(
     with (
         patch(f"{_MOD}.TaskStateDB", return_value=db),
         patch(f"{_MOD}._assert_env"),
-        patch(f"{_MOD}.OdooClient", return_value=client),
+        patch(f"{_MOD}.build_client", return_value=client),
         patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-sdk", *argv]),
@@ -244,7 +240,7 @@ def _run_cli(
 
 
 def _run_tui(
-    db: LocalStateClient, client: _RecordingOdooClient, config: MagicMock
+    db: EventStore, client: _RecordingOdooClient, config: MagicMock
 ) -> tuple[int, int]:
     """Drive the seeded DB through the TUI ``u`` upload helper.
 

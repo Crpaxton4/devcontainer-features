@@ -102,28 +102,16 @@ class TestErrorsFacadeExports(unittest.TestCase):
         "OdooServerError",
         "DeletionNotSupportedError",
     )
-    STATE_TAXONOMY = ("TrackerStateMissingError",)
 
-    def test_facade_all_is_exactly_the_two_taxonomies(self) -> None:
+    def test_facade_all_is_exactly_the_transport_taxonomy(self) -> None:
         facade = importlib.import_module("odoo_client.errors")
 
-        self.assertEqual(
-            set(facade.__all__),
-            set(self.TRANSPORT_TAXONOMY) | set(self.STATE_TAXONOMY),
-        )
+        self.assertEqual(set(facade.__all__), set(self.TRANSPORT_TAXONOMY))
 
     def test_facade_reexports_canonical_transport_errors(self) -> None:
         facade = importlib.import_module("odoo_client.errors")
         canonical = importlib.import_module("odoo_client.transport.errors")
 
         for name in self.TRANSPORT_TAXONOMY:
-            self.assertIn(name, facade.__all__)
-            self.assertIs(getattr(facade, name), getattr(canonical, name))
-
-    def test_facade_reexports_canonical_state_errors(self) -> None:
-        facade = importlib.import_module("odoo_client.errors")
-        canonical = importlib.import_module("odoo_client.state.models")
-
-        for name in self.STATE_TAXONOMY:
             self.assertIn(name, facade.__all__)
             self.assertIs(getattr(facade, name), getattr(canonical, name))

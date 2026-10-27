@@ -38,7 +38,7 @@ from odoo_client.commands.builtin.schedule_activity import ScheduleActivityComma
 from odoo_client.commands.builtin.search_activity_types import (
     SearchActivityTypesCommand,
 )
-from odoo_client.state import LocalConfig
+from odoo_dev_data.config import LocalConfig
 from odoo_client.transport.executor import OdooExecutor
 from odoo_client.services.activities import (
     DEFAULT_ACTIVITY_RES_MODEL,
@@ -469,7 +469,7 @@ class TestGetModelsFillsTheSchedulingEntryIn(unittest.TestCase):
             # [model_ids] section at all.
             path.write_text('[connection]\nurl = "https://x"\n', encoding="utf-8")
             with patch.dict("os.environ", {}, clear=True):
-                config = LocalConfig.load(config_path=str(path))
+                config = LocalConfig.load(path)
 
                 client, before = _client(type_rows=[[{"id": 4, "name": "To Do"}]])
                 with self.assertRaises(ValueError):
@@ -502,7 +502,7 @@ class TestGetModelsFillsTheSchedulingEntryIn(unittest.TestCase):
 
             # The entry outlives the process: it was written to the file.
             with patch.dict("os.environ", {}, clear=True):
-                reloaded = LocalConfig.load(config_path=str(path))
+                reloaded = LocalConfig.load(path)
             self.assertEqual(reloaded.model_id("project.task"), 71)
             self.assertEqual(reloaded.connection["url"], "https://x")
 

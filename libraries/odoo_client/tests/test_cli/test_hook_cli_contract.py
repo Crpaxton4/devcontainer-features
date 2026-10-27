@@ -35,11 +35,10 @@ from typing import Optional
 from unittest.mock import patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.adapters.state.persistence import _CLAUDE_SOURCE_PREFIX
-from odoo_client.state import LocalStateClient as TaskStateDB
-from odoo_client.state.db import _DEVELOPMENT_SOURCE_PREDICATE, tracker_db_path
-from odoo_client.state.summary import _CWD_KEY, _PROMPT_KEY, summarize_session_context
-from tests.support import provision_schema
+from odoo_client.sessionization.persistence import _CLAUDE_SOURCE_PREFIX
+from odoo_dev_data.events import EventStore as TaskStateDB
+from odoo_dev_data.events import _DEVELOPMENT_SOURCE_PREDICATE
+from odoo_client.billing.summary import _CWD_KEY, _PROMPT_KEY, summarize_session_context
 
 # Repo root is four parents up from tests/test_cli/<this file> (mirrors the path
 # math in test_init_script_parity.py, which reaches sibling top-level dirs).
@@ -169,13 +168,12 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         self._cwd = os.getcwd()
         self._state = tempfile.mkdtemp()
         self._nongit = tempfile.mkdtemp()
-        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
-        provision_schema(tracker_db_path(self._state))
+        os.environ["ODOO_DEV_HOME"] = self._state
         os.chdir(self._nongit)
 
     def tearDown(self) -> None:
         os.chdir(self._cwd)
-        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        os.environ.pop("ODOO_DEV_HOME", None)
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._nongit, ignore_errors=True)
 
@@ -210,7 +208,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
 
     def _predicate_matches(self) -> int:
         """Rows in the real table matching the real billing predicate."""
-        conn = sqlite3.connect(str(tracker_db_path(self._state)))
+        conn = sqlite3.connect(str((Path(self._state) / "state.db")))
         try:
             (count,) = conn.execute(
                 f"SELECT COUNT(*) FROM events WHERE {_DEVELOPMENT_SOURCE_PREDICATE}"

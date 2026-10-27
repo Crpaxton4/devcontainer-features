@@ -2,7 +2,7 @@
 append write (issue #407).
 
 The command is the single place an ``EventRecord`` is constructed and handed to
-:meth:`LocalStateClient.add_event`; the CLI ``log-event`` subcommand and the MCP
+:meth:`EventStore.add_event`; the CLI ``log-event`` subcommand and the MCP
 dispatch-event wrapper both route their writes through it. These tests drive the
 command directly against a schema-provisioned temp DB and assert the persisted
 row, so the shared write contract is pinned in one place.
@@ -22,7 +22,7 @@ from odoo_client.commands.log_event import (
     normalize_task_ids,
     task_ids_from_branch,
 )
-from tests.support import make_state_db, make_state_db_path
+from tests.support import make_event_store
 
 #: Patch targets for the two best-effort git lookups the command performs. Every
 #: test that is not specifically about provenance stubs both, so the suite never
@@ -33,7 +33,7 @@ BRANCH_LABEL = "odoo_client.commands.log_event.current_branch_label"
 
 class TestLogEventCommand(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = make_state_db()
+        self.db = make_event_store()
         for target in (REPO_LABEL, BRANCH_LABEL):
             patcher = patch(target, return_value="")
             patcher.start()
@@ -241,8 +241,7 @@ class TestAttributionPolicy(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.db_path = make_state_db_path()
-        self.db = make_state_db(self.db_path)
+        self.db = make_event_store()
         self.command = LogEventCommand(state=self.db)
         for target in (REPO_LABEL, BRANCH_LABEL):
             patcher = patch(target, return_value="")
@@ -318,7 +317,7 @@ class TestProvenanceResolution(unittest.TestCase):
     """``repo`` / ``branch`` are resolved by the command, not by the caller (#509)."""
 
     def setUp(self) -> None:
-        self.db = make_state_db()
+        self.db = make_event_store()
 
     def _execute(self, **kwargs) -> None:
         with (
