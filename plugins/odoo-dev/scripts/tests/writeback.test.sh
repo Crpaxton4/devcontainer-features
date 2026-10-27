@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # writeback.test.sh — offline tests for scripts/writeback.sh.
 #
-# No network, no Odoo, no SDK install: `odoo-sdk` is a stub on PATH that logs
+# No network, no Odoo, no suite install: `odoo-dev` is a stub on PATH that logs
 # every dispatch (name + --args JSON) and replays canned stdout/exit codes from
 # a per-command fixture directory. What is asserted is the script's contract:
 # argument validation, the 500-character pre-check (client-side UX only — the
@@ -9,8 +9,8 @@
 # passthrough of the CLI's JSON error envelope with a non-zero exit.
 #
 # Two regression shapes come from #902 / #889 and the stub serves them:
-# STUB_NO_CMD=1 makes it an odoo-sdk from before #727 (no `cmd` subcommand, an
-# argparse usage dump on stderr), and a `<name>.json` fixture holding non-JSON
+# STUB_OLD=1 makes it an odoo-dev older than the plugin requires (version 8.9.0,
+# and no `cmd` subcommand), and a `<name>.json` fixture holding non-JSON
 # text with a `<name>.err` beside it is a child that printed garbage.
 set -uo pipefail
 
@@ -30,24 +30,23 @@ expect_contains() { # expect_contains <label> <haystack> <needle>
   case "$2" in *"$3"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL $1: '$3' not in '$2'" >&2 ;; esac
 }
 
-# ---------- the odoo-sdk stub ---------------------------------------------------
+# ---------- the odoo-dev stub ---------------------------------------------------
 # Logs "<name>|<args json>" per dispatch; replays $STUB_DIR/<name>.json (stdout),
 # $STUB_DIR/<name>.err (stderr) and $STUB_DIR/<name>.rc. Unconfigured commands
-# answer {} with exit 0. The `cmd --help` preflight probe is answered but never
-# logged, so a dispatch count stays a count of real dispatches. With STUB_NO_CMD
-# set, the stub is an odoo-sdk from before #727: no `cmd` at all.
+# answer {} with exit 0. The `--version` preflight probe is answered but never
+# logged, so a dispatch count stays a count of real dispatches. With STUB_OLD
+# set, the stub is an odoo-dev older than the plugin requires.
 stubbin="$work/bin"; STUB_DIR="$work/responses"; STUB_LOG="$work/calls.log"
 mkdir -p "$stubbin" "$STUB_DIR"
-cat > "$stubbin/odoo-sdk" <<'EOF'
+cat > "$stubbin/odoo-dev" <<'EOF'
 #!/usr/bin/env bash
-if [ -n "${STUB_NO_CMD:-}" ]; then
-  echo "usage: python -m odoo_client.cli [-h] {list,stop,report,prune} ..." >&2
-  echo "python -m odoo_client.cli: error: argument command: invalid choice: 'cmd'" >&2
-  exit 2
-fi
-if [ "${1:-}" = "cmd" ] && [ "${2:-}" = "--help" ]; then
-  echo "usage: odoo-sdk cmd [-h] [--args ARGS] [--list] [name]"
+if [ "${1:-}" = "--version" ]; then
+  if [ -n "${STUB_OLD:-}" ]; then echo "odoo-dev 8.9.0"; else echo "odoo-dev 9.0.0"; fi
   exit 0
+fi
+if [ -n "${STUB_OLD:-}" ]; then
+  echo "odoo-dev: error: argument command: invalid choice: 'cmd'" >&2
+  exit 2
 fi
 name="${2:-}"
 args=""
@@ -59,7 +58,7 @@ rc=0
 if [ -f "$STUB_DIR/$name.json" ]; then cat "$STUB_DIR/$name.json"; else echo '{}'; fi
 exit "$rc"
 EOF
-chmod +x "$stubbin/odoo-sdk"
+chmod +x "$stubbin/odoo-dev"
 export STUB_DIR STUB_LOG
 PATH="$stubbin:$PATH"
 reset_stub() { rm -f "$STUB_LOG" "$STUB_DIR"/*; : > "$STUB_LOG"; }
@@ -80,25 +79,25 @@ bash "$SUT" activity 42 >/dev/null 2>&1;              expect_exit "activity with
 bash "$SUT" "done" 42 >/dev/null 2>&1;                  expect_exit "done without --match"        2 $?
 bash "$SUT" note 42 hi --bogus x >/dev/null 2>&1;     expect_exit "unknown option is usage"     2 $?
 
-# ---------- odoo-sdk absent ------------------------------------------------------
-# A PATH carrying what the script itself needs and no odoo-sdk: the error is the
+# ---------- odoo-dev absent ------------------------------------------------------
+# A PATH carrying what the script itself needs and no odoo-dev: the error is the
 # CLI envelope shape with a distinct exit code, not a bash command-not-found.
-mkdir -p "$work/nosdk"
-for b in bash node cat dirname grep; do ln -sf "$(command -v $b)" "$work/nosdk/$b"; done
-out="$(PATH="$work/nosdk" "$work/nosdk/bash" "$SUT" note 42 "hello" 2>/dev/null)"
+mkdir -p "$work/nocli"
+for b in bash node cat dirname grep; do ln -sf "$(command -v $b)" "$work/nocli/$b"; done
+out="$(PATH="$work/nocli" "$work/nocli/bash" "$SUT" note 42 "hello" 2>/dev/null)"
 rc=$?
 expect_exit "missing CLI exits 4" 4 $rc
 expect_contains "missing CLI names MissingCLI" "$out" '"type":"MissingCLI"'
 
-# ---------- odoo-sdk too old to serve `cmd` (#902 #889) --------------------------
-# The binary is on PATH but predates #727, so `cmd` is not a choice argparse
-# accepts. The preflight probe must catch that before any verb dispatches.
+# ---------- odoo-dev older than the plugin requires (#902 #889) ------------------
+# The binary is on PATH but its major is below the "requires" field of
+# plugin.json. The preflight probe must catch that before any verb dispatches.
 reset_stub
-out="$(STUB_NO_CMD=1 bash "$SUT" note 42 "hello" 2>/dev/null)"; rc=$?
-expect_exit "odoo-sdk without cmd exits 4" 4 $rc
+out="$(STUB_OLD=1 bash "$SUT" note 42 "hello" 2>/dev/null)"; rc=$?
+expect_exit "odoo-dev older than required exits 4" 4 $rc
 expect_contains "old CLI names MissingCLI" "$out" '"type":"MissingCLI"'
-expect_contains "old CLI names the cmd subcommand" "$out" "odoo-sdk cmd"
-expect_contains "old CLI names the upgrade" "$out" "pip install"
+expect_contains "old CLI names odoo-dev" "$out" "odoo-dev"
+expect_contains "old CLI names the upgrade" "$out" "uv sync"
 expect "old CLI never dispatches a writeback" "$(wc -l < "$STUB_LOG" | tr -d ' ')" "0"
 
 # ---------- non-JSON child output is wrapped, never leaked (#902 #889) -----------

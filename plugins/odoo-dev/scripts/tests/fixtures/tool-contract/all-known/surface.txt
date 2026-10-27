@@ -1,4 +1,4 @@
-# fixture surface: what `odoo-sdk cmd --list --json` would serve
+# fixture surface: what `odoo-dev cmd --list --json` would serve
 task_note
-start_task
+get_task
 timesheet_summary

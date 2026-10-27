@@ -64,6 +64,9 @@ Record each choice as three parts: the question, the assumption you made, and th
 reason. The alternative you did not take is a fourth part when it helps. A question
 never travels alone. Put the records in the pull request body, next to the diff they
 changed. Give the count of open questions in your status.
+Post each question to the task chatter too, one call each:
+`odoo-dev cmd task_question --args '{"task_id":N,"question":TEXT}'`. The call adds
+one to the question count of the job row when `ODOO_JOB_ID` is set.
 
 A real stop is an environment failure. The project does not resolve. The stack does
 not come up. The repository is not there. Every option would be a guess. "I want this

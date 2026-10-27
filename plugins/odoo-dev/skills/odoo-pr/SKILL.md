@@ -121,7 +121,7 @@ Then stop. Nothing polls the PR after it opens.
 <plugin root>/scripts/writeback.sh activity <task_id> --summary "Review requested: <pr_url>"
 ```
 
-- Both wrap `odoo-sdk cmd task_note` and the activity commands. The note needs no prior
+- Both wrap `odoo-dev cmd task_note` and the activity commands. The note needs no prior
   session start.
 - Schedule the activity only when `pr-open.sh` said `"action": "created"`. Close a stale
   request with `writeback.sh done <task_id> --match "<old pr_url>"`.

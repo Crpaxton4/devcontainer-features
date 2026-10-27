@@ -124,7 +124,7 @@ The noteable set is `tasks[]` minus `inferred_task_ids[]` minus every id in
 The note says queued and draft, because nothing has merged. The 500-character cap is a
 hard reject: fall back to `Draft release <release_pr_url>`. `--dedupe-key` makes a
 re-run post once. A failed writeback passes the CLI's error envelope through with a
-non-zero exit → report it. Both wrap `odoo-sdk cmd task_note` and the activity commands.
+non-zero exit → report it. Both wrap `odoo-dev cmd task_note` and the activity commands.
 
 ## 7. Report and stop
 
