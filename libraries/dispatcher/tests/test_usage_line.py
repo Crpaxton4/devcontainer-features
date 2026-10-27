@@ -9,7 +9,7 @@ import pytest
 from dispatcher import queue
 from dispatcher.collect import StreamParser
 from dispatcher.engine import job_usage_context
-from odoo_client.state.jobs import JobState
+from dispatcher.store.jobs import JobState
 from support import GOOD, FakeProc, stream
 from test_engine_cli import _submit, world  # noqa: F401  (the engine fixture)
 

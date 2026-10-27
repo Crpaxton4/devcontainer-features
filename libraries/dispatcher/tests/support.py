@@ -5,8 +5,8 @@ import json
 import signal
 import threading
 
-from odoo_client.state.artifacts import task_record_path
-from odoo_client.state.dispatch_state import bundle_dir
+from dispatcher.store.artifacts import task_record_path
+from dispatcher.store.dispatch_state import bundle_dir
 
 from dispatcher.lifecycle import Completed
 

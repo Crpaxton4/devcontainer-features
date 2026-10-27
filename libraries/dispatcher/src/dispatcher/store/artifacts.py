@@ -10,7 +10,7 @@ Layout, keyed by job and never by session::
         harvest.json     what was collected, what was not, and why
 
 The collector is the subordinate write. Call it **after**
-:meth:`odoo_client.state.runs_store.RunStore.record_run` has committed, and before
+:meth:`dispatcher.store.runs_store.RunStore.record_run` has committed, and before
 the idle-container check. :func:`collect_artifacts` never raises: every absent,
 unreadable or half-written item is recorded in ``missing`` and changes nothing
 else. ``bytes`` sums the sizes of the three collected files (``harvest.json``

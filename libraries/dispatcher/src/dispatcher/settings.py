@@ -52,7 +52,7 @@ Variables (all optional unless marked required):
     container that the dispatcher creates cold.
 ``DISPATCH_ARTIFACTS_DIR``
     The bundle root on the HOST (default ``~/.config/odoo-dev/dispatch/artifacts``),
-    read by :func:`odoo_client.state.dispatch_state.artifacts_root`. The container
+    read by :func:`dispatcher.store.dispatch_state.artifacts_root`. The container
     sees it at ``/usr/local/share/odoo-dev/dispatch/artifacts`` through the bind
     that the Feature makes of ``~/.config/odoo-dev``. A value outside that
     directory is a settings error (exit 2), because the container cannot see it.
@@ -69,7 +69,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from odoo_client.state.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
+from dispatcher.store.dispatch_state import DISPATCH_ARTIFACTS_DIR_ENV, odoo_dev_dir
 
 DEFAULT_ENTRY = "/odoo-dev:implement"
 #: The entries that a submitted job may name for itself (its ``entry`` key).

@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_client.state.jobs import (
+from dispatcher.store.jobs import (
     DeadReason,
     DuplicateTaskInFlightError,
     Job,
@@ -27,8 +27,8 @@ from odoo_client.state.jobs import (
     JobStore,
 )
 
-from odoo_client.state.dispatch_state import resolve_now_us
-from odoo_client.state.runs_store import RunStore
+from dispatcher.store.dispatch_state import resolve_now_us
+from dispatcher.store.runs_store import RunStore
 
 from .collect import StreamParser, read_task_record, record_then_collect, worktree_of
 from .deadletter import STATEMENTS

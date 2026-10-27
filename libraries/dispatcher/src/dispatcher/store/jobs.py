@@ -2,7 +2,7 @@
 
 Written by two processes: the dispatcher, and ``dispatch submit``, which inserts
 PENDING rows without the dispatcher lock. WAL mode and ``busy_timeout=5000``
-(see :mod:`odoo_client.state.migrations`) cover the second writer. Regenerable, and
+(see :mod:`dispatcher.store.migrations`) cover the second writer. Regenerable, and
 safe to delete after a quiet week without losing history (the run record is in
 ``runs.db``). Callers use :class:`JobStore` and never see SQL.
 
@@ -14,7 +14,7 @@ first. Use :meth:`JobStore.reject_duplicate` to record the resulting
 ``DUPLICATE_TASK_IN_FLIGHT`` dead letter.
 
 All time is integer microseconds UTC. ``jobs.outcome`` holds the *stored*
-run outcome (see :mod:`odoo_client.state.runs_store`) of a DONE job.
+run outcome (see :mod:`dispatcher.store.runs_store`) of a DONE job.
 """
 
 import sqlite3
