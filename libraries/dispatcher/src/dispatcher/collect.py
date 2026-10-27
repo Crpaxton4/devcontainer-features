@@ -10,8 +10,9 @@ The order is the point, and it is the order of design sections 7, 10 and 17:
    stops takes the transcript with it.
 
 The job row is the only run record. Its ``started_us``/``ended_us`` window is
-the billable one: ``started_us`` is set by ``mark_running`` at admission, and
-this module never moves it, even when the session spawned later.
+the billable one: ``mark_running`` opens the row at admission and
+``mark_spawned`` moves ``started_us`` to the moment the session came up, so a
+cold container start is never billed. This module never moves it again.
 
 Absence of an artifact is recorded in ``missing`` and changes nothing else; a
 collection failure cannot touch what was already recorded.
