@@ -1,7 +1,7 @@
 """Built-in command that reconciles local event state against external history.
 
 ``resync`` is a manual reconciliation utility (no background trigger): it runs
-the idempotent :mod:`odoo_client.adapters.external_sync` pullers and writes any
+the idempotent :mod:`odoo_dev_data.adapters` pullers and writes any
 missing events. Since #652 the surface is directory-agnostic: the ``git``
 puller recursively discovers every checkout under the current directory and the
 ``github`` puller searches the authenticated account across all repos, so the
@@ -22,16 +22,14 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Callable, Mapping, Optional
 
-# One import per external-system adapter package (#718): each package sits
-# behind a core-owned Protocol in :mod:`odoo_client.commands.protocols`
+# The pullers live in :mod:`odoo_dev_data.adapters`. Each sits behind a
+# core-owned Protocol in :mod:`odoo_client.commands.protocols`
 # (``GitGateway`` / ``IssueTracker``; the chatter
 # puller rides the existing ``RpcClient`` port), and this module's
 # :data:`_SYNC_DISPATCH` is core's default binding of those ports to the
 # concrete adapters. The names stay module globals so the frozen tests'
 # ``commands.builtin.resync.sync_*`` patch points keep intercepting.
-from odoo_client.adapters.git import sync_git_log
-from odoo_client.adapters.github import sync_github
-from odoo_client.adapters.odoo import sync_odoo_chatter
+from odoo_dev_data.adapters import sync_git_log, sync_github, sync_odoo_chatter
 
 from ..command import Command
 from ._registration import builtin_command

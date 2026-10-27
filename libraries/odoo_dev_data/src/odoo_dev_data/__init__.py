@@ -1,5 +1,6 @@
 """Data layer of the odoo-dev suite: the ODOO_DEV_HOME state root and the stores on it."""
 
+from odoo_dev_data.adapters import sync_git_log, sync_github, sync_odoo_chatter
 from odoo_dev_data.config import ConnectionValues, LocalConfig, connection_values
 from odoo_dev_data.db import connect, schema_version
 from odoo_dev_data.doctor import DoctorReport
@@ -58,6 +59,9 @@ __all__ = [
     "save_repo_map",
     "schema_version",
     "session_key",
+    "sync_git_log",
+    "sync_github",
+    "sync_odoo_chatter",
     "task_dir",
     "write_task",
 ]

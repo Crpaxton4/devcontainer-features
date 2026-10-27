@@ -17,18 +17,19 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from odoo_client.adapters import external_sync as ex
+from odoo_dev_data.adapters import _common as common
+from odoo_dev_data.adapters import git as gitmod
+from odoo_dev_data.adapters import github as ghmod
+from odoo_dev_data.adapters import odoo as odoomod
 from odoo_dev_data.config import LocalConfig
-from odoo_dev_data.events import EventStore
-from odoo_client.transport.errors import OdooError
-from tests.support import make_event_store
+from odoo_dev_data.events import EventRecord, EventStore
 
 _SEP = "\x1f"
 _NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)  # pins the resync window in tests
 
 
 def _tmp_state() -> EventStore:
-    return make_event_store()
+    return EventStore(home=Path(tempfile.mkdtemp()))
 
 
 def _config(**behavior) -> LocalConfig:
@@ -128,7 +129,7 @@ class TestExtractTaskIds(unittest.TestCase):
         ]
         for subject, branch, expected in cases:
             with self.subTest(subject=subject, branch=branch):
-                self.assertEqual(ex._extract_task_ids(subject, branch), expected)
+                self.assertEqual(common._extract_task_ids(subject, branch), expected)
 
     def test_leading_id_extraction_table(self) -> None:
         """The gated bare-leading-id form (issue #654) — git/GitHub paths only."""
@@ -149,7 +150,7 @@ class TestExtractTaskIds(unittest.TestCase):
         for subject, branch, expected in cases:
             with self.subTest(subject=subject, branch=branch):
                 self.assertEqual(
-                    ex._extract_task_ids(subject, branch, allow_leading_id=True),
+                    common._extract_task_ids(subject, branch, allow_leading_id=True),
                     expected,
                 )
 
@@ -159,44 +160,46 @@ class TestTaskIdValidation(unittest.TestCase):
 
     def test_validate_returns_existing_subset(self) -> None:
         client = _TaskValidator([24648])
-        self.assertEqual(ex._validate_task_ids(client, {"24648", "99999"}), {"24648"})
+        self.assertEqual(
+            common._validate_task_ids(client, {"24648", "99999"}), {"24648"}
+        )
         self.assertEqual(client.calls, 1)
 
     def test_validate_without_client_returns_none(self) -> None:
-        self.assertIsNone(ex._validate_task_ids(None, {"24648"}))
+        self.assertIsNone(common._validate_task_ids(None, {"24648"}))
 
     def test_validate_no_numeric_ids_returns_empty(self) -> None:
         client = _TaskValidator([24648])
-        self.assertEqual(ex._validate_task_ids(client, set()), set())
+        self.assertEqual(common._validate_task_ids(client, set()), set())
 
     def test_validate_odoo_error_returns_none(self) -> None:
         class _Boom:
             def execute(self, *a, **k):
-                raise OdooError("down")
+                raise RuntimeError("down")
 
-        self.assertIsNone(ex._validate_task_ids(_Boom(), {"24648"}))
+        self.assertIsNone(common._validate_task_ids(_Boom(), {"24648"}))
 
     def test_finalize_flags_unknown_ids_out_of_task_ids(self) -> None:
-        event = ex.EventRecord(
+        event = EventRecord(
             id=None,
             source="commit",
             timestamp=_NOW,
             task_ids=["24648", "99999"],
             repo="o/r",
         )
-        ex._finalize_task_attribution(event, {"24648"})
+        common._finalize_task_attribution(event, {"24648"})
         self.assertEqual(event.task_ids, ["24648"])
         self.assertEqual(event.payload, {"unvalidated_task_ids": ["99999"]})
 
     def test_finalize_no_validation_keeps_ids(self) -> None:
-        event = ex.EventRecord(
+        event = EventRecord(
             id=None,
             source="commit",
             timestamp=_NOW,
             task_ids=["99999"],
             repo="o/r",
         )
-        ex._finalize_task_attribution(event, None)  # validation did not run
+        common._finalize_task_attribution(event, None)  # validation did not run
         self.assertEqual(event.task_ids, ["99999"])
         self.assertIsNone(event.payload)
 
@@ -218,7 +221,7 @@ class TestDiscoverGitRepos(unittest.TestCase):
             # A nested checkout BELOW another repo root is still found.
             (root / "a" / "proj1" / "vendor" / "sub" / ".git").mkdir(parents=True)
 
-            repos = ex._discover_git_repos(root)
+            repos = gitmod._discover_git_repos(root)
 
             self.assertEqual(
                 repos,
@@ -239,11 +242,11 @@ class TestDiscoverGitRepos(unittest.TestCase):
             root = Path(tmp)
             (root / ".git").mkdir()
             (root / "src").mkdir()
-            self.assertEqual(ex._discover_git_repos(root), [root])
+            self.assertEqual(gitmod._discover_git_repos(root), [root])
 
     def test_no_repos_yields_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(ex._discover_git_repos(Path(tmp)), [])
+            self.assertEqual(gitmod._discover_git_repos(Path(tmp)), [])
 
 
 class TestSyncGitLog(unittest.TestCase):
@@ -266,15 +269,15 @@ class TestSyncGitLog(unittest.TestCase):
         ]
 
     def _one_repo(self):
-        return patch.object(ex, "_discover_git_repos", return_value=[Path("/repo")])
+        return patch.object(gitmod, "_discover_git_repos", return_value=[Path("/repo")])
 
     def test_happy_path_inserts_commit_events(self) -> None:
         state = _tmp_state()
         with (
-            patch.object(ex.subprocess, "run", _fake_run(self._routes())),
+            patch.object(subprocess, "run", _fake_run(self._routes())),
             self._one_repo(),
         ):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 1})
         events = state.get_events()
         self.assertEqual([e.source for e in events], ["commit", "commit"])
@@ -294,8 +297,8 @@ class TestSyncGitLog(unittest.TestCase):
                 "remote" if "remote" in cmd else "config"
             ]
 
-        with patch.object(ex, "_run_capture", _capture), self._one_repo():
-            ex.sync_git_log(state=_tmp_state(), config=config, now=_NOW, **kwargs)
+        with patch.object(gitmod, "_run_capture", _capture), self._one_repo():
+            gitmod.sync_git_log(state=_tmp_state(), config=config, now=_NOW, **kwargs)
         return captured["cmd"]
 
     def test_log_command_scopes_repo_with_full_iso_window(self) -> None:
@@ -326,12 +329,12 @@ class TestSyncGitLog(unittest.TestCase):
             (_repo_cmd("/b", "remote"), "git@github.com:acme/beta.git"),
         ]
         with (
-            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(subprocess, "run", _fake_run(routes)),
             patch.object(
-                ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+                gitmod, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
             ),
         ):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2, "found": 2, "repos": 2})
         labels = {e.external_id: e.repo for e in state.get_events()}
         self.assertEqual(labels, {"git:shaA": "acme/alpha", "git:shaB": "acme/beta"})
@@ -346,8 +349,8 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("remote", "get-url"), None),
         ]
         cfg = _config(resync_authors="a@x.com, b@y.com")
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
-            result = ex.sync_git_log(state, cfg, now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)), self._one_repo():
+            result = gitmod.sync_git_log(state, cfg, now=_NOW)
         self.assertEqual(result["inserted"], 2)
 
     def test_validation_flags_unknown_task_id(self) -> None:
@@ -360,10 +363,10 @@ class TestSyncGitLog(unittest.TestCase):
         )
         client = _TaskValidator([24648])
         with (
-            patch.object(ex.subprocess, "run", _fake_run(self._routes(log=log))),
+            patch.object(subprocess, "run", _fake_run(self._routes(log=log))),
             self._one_repo(),
         ):
-            result = ex.sync_git_log(state, _config(), client, now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), client, now=_NOW)
         self.assertEqual(result["inserted"], 2)
         by_ext = {e.external_id: e for e in state.get_events()}
         self.assertEqual(by_ext["git:shaA"].task_ids, ["24648"])
@@ -377,11 +380,11 @@ class TestSyncGitLog(unittest.TestCase):
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
         with (
-            patch.object(ex.subprocess, "run", _fake_run(self._routes())),
+            patch.object(subprocess, "run", _fake_run(self._routes())),
             self._one_repo(),
         ):
-            ex.sync_git_log(state, _config(), now=_NOW)
-            second = ex.sync_git_log(state, _config(), now=_NOW)
+            gitmod.sync_git_log(state, _config(), now=_NOW)
+            second = gitmod.sync_git_log(state, _config(), now=_NOW)
         # found stays 2 (the commits are still in the window); inserted drops
         # to 0 — the counters distinguish "nothing new" from "nothing found".
         self.assertEqual(second, {"inserted": 0, "found": 2, "repos": 1})
@@ -389,19 +392,27 @@ class TestSyncGitLog(unittest.TestCase):
 
     def test_git_missing_is_error(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run([], missing=("git",))):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([], missing=("git",))):
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"error": "git unavailable or user.email unset"})
 
     def test_zero_repos_is_error(self) -> None:
         state = _tmp_state()
         routes = [(_has("config", "user.email"), "dev@example.com")]
         with (
-            patch.object(ex.subprocess, "run", _fake_run(routes)),
-            patch.object(ex, "_discover_git_repos", return_value=[]),
+            patch.object(subprocess, "run", _fake_run(routes)),
+            patch.object(gitmod, "_discover_git_repos", return_value=[]),
         ):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertTrue(result["error"].startswith("no git repositories under "))
+
+    def test_root_overrides_the_cwd(self) -> None:
+        state = _tmp_state()
+        root = Path(tempfile.mkdtemp())
+        routes = [(_has("config", "user.email"), "dev@example.com")]
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = gitmod.sync_git_log(state, _config(), root=root, now=_NOW)
+        self.assertEqual(result, {"error": f"no git repositories under {root}"})
 
     def test_all_repos_failing_is_error(self) -> None:
         state = _tmp_state()
@@ -409,8 +420,8 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("config", "user.email"), "dev@example.com"),
             (_has("log"), None),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)), self._one_repo():
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(result, {"error": "git log failed in all 1 repositories"})
 
     def test_one_failing_repo_only_counts_as_failed(self) -> None:
@@ -423,12 +434,12 @@ class TestSyncGitLog(unittest.TestCase):
             (_repo_cmd("/a", "remote"), "git@github.com:acme/alpha.git"),
         ]
         with (
-            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(subprocess, "run", _fake_run(routes)),
             patch.object(
-                ex, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
+                gitmod, "_discover_git_repos", return_value=[Path("/a"), Path("/b")]
             ),
         ):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(
             result, {"inserted": 1, "found": 1, "repos": 2, "failed_repos": 1}
         )
@@ -440,15 +451,17 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("log"), self._log()),
             (_has("remote", "get-url"), None),  # no origin remote
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
-            ex.sync_git_log(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)), self._one_repo():
+            gitmod.sync_git_log(state, _config(), now=_NOW)
         self.assertEqual(state.get_events()[0].repo, "")
 
     def test_inverted_window_is_error(self) -> None:
         state = _tmp_state()
         routes = [(_has("config", "user.email"), "dev@example.com")]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)), self._one_repo():
-            result = ex.sync_git_log(state, _config(), now=_NOW, end=date(2026, 1, 31))
+        with patch.object(subprocess, "run", _fake_run(routes)), self._one_repo():
+            result = gitmod.sync_git_log(
+                state, _config(), now=_NOW, end=date(2026, 1, 31)
+            )
         self.assertIn("empty resync window", result["error"])
 
     def test_linked_worktrees_collapse_to_one_repo(self) -> None:
@@ -464,14 +477,14 @@ class TestSyncGitLog(unittest.TestCase):
             (_has("remote", "get-url"), "git@github.com:o/r.git"),
         ]
         with (
-            patch.object(ex.subprocess, "run", _fake_run(routes)),
+            patch.object(subprocess, "run", _fake_run(routes)),
             patch.object(
-                ex,
+                gitmod,
                 "_discover_git_repos",
                 return_value=[Path("/main"), Path("/main/wt"), Path("/sub")],
             ),
         ):
-            result = ex.sync_git_log(state, _config(), now=_NOW)
+            result = gitmod.sync_git_log(state, _config(), now=_NOW)
         # The worktree is collapsed; the submodule keeps its own store.
         self.assertEqual(result["repos"], 2)
 
@@ -499,7 +512,7 @@ class TestGitAllFlagIntegration(unittest.TestCase):
         prev = os.getcwd()
         os.chdir(directory)
         try:
-            return ex.sync_git_log(state, config), state
+            return gitmod.sync_git_log(state, config), state
         finally:
             os.chdir(prev)
 
@@ -598,8 +611,8 @@ class TestSyncGithub(unittest.TestCase):
 
     def test_captures_prs_reviews_and_comments(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(self._routes())):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         # opened(7) + merge(7) + opened(8) + own review(55) + others review(77)
         # + comment(111). PR 8 is unmerged, so it mints NO merge event (#656).
         self.assertEqual(result, {"inserted": 6, "found": 6})
@@ -649,8 +662,8 @@ class TestSyncGithub(unittest.TestCase):
             captured.append(cmd)
             return "octocat" if cmd[:3] == ["gh", "api", "user"] else "[]"
 
-        with patch.object(ex, "_run_capture", _capture):
-            ex.sync_github(_tmp_state(), _config(resync_window_days=14), now=_NOW)
+        with patch.object(ghmod, "_run_capture", _capture):
+            ghmod.sync_github(_tmp_state(), _config(resync_window_days=14), now=_NOW)
         authored = next(c for c in captured if "--author" in c)
         # Account-wide search (no repo scope), server-side --updated bound: a
         # PR created before the window but merged inside it is still returned
@@ -667,9 +680,9 @@ class TestSyncGithub(unittest.TestCase):
 
     def test_out_of_window_events_skipped(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
+        with patch.object(subprocess, "run", _fake_run(self._routes())):
             # A 3-day window ends before every July artifact here.
-            result = ex.sync_github(state, _config(resync_window_days=3), now=_NOW)
+            result = ghmod.sync_github(state, _config(resync_window_days=3), now=_NOW)
         self.assertEqual(result, {"inserted": 0, "found": 0})
 
     def test_review_on_id_less_title_attributes_via_fetched_branch(self) -> None:
@@ -694,8 +707,8 @@ class TestSyncGithub(unittest.TestCase):
             (lambda c: c[-1] == "repos/other/repo/pulls/12/reviews", reviews),
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 1, "found": 1})
         event = state.get_events()[0]
         self.assertEqual(event.source, "review")
@@ -723,9 +736,9 @@ class TestSyncGithub(unittest.TestCase):
             (lambda c: c[-1] == "repos/other/repo/pulls/5/reviews", reviews),
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
-            second = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
+            second = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(
             result,
             {"inserted": 1, "found": 1, "unattributed_reviews": ["other/repo#5"]},
@@ -751,8 +764,8 @@ class TestSyncGithub(unittest.TestCase):
             (_has("search", "prs", "--reviewed-by"), "[]"),
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         # The PR is unmerged (and its mergedAt unreadable), so only the
         # billable pr_opened event mints (#656).
         self.assertEqual(result, {"inserted": 1, "found": 1})
@@ -785,8 +798,8 @@ class TestSyncGithub(unittest.TestCase):
             (_has("search", "prs", "--reviewed-by"), "[]"),
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            ghmod.sync_github(state, _config(), now=_NOW)
         by_ext = {e.external_id: e for e in state.get_events()}
         opened = by_ext["gh:pr:o/r:21:opened"]
         self.assertEqual(opened.source, "pr_opened")
@@ -812,8 +825,8 @@ class TestSyncGithub(unittest.TestCase):
             (_has("search", "prs", "--reviewed-by"), own_pr),  # same PR again
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         # opened(7) + merge(7) + ONE review(55) — not two copies of the
         # self-review (the authored PR itself mints both #656 events).
         self.assertEqual(result, {"inserted": 3, "found": 3})
@@ -831,7 +844,7 @@ class TestSyncGithub(unittest.TestCase):
                     "createdAt": "2026-07-03T09:00:00Z",
                     "repository": {"nameWithOwner": "o/r"},
                 }
-                for n in range(1, ex._AUTHORED_SEARCH_LIMIT + 1)
+                for n in range(1, ghmod._AUTHORED_SEARCH_LIMIT + 1)
             ]
         )
         routes = [
@@ -842,9 +855,9 @@ class TestSyncGithub(unittest.TestCase):
             (_has("search", "prs", "--reviewed-by"), "[]"),
             (_has("search", "issues"), "[]"),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
-        self.assertEqual(result["found"], ex._AUTHORED_SEARCH_LIMIT)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
+        self.assertEqual(result["found"], ghmod._AUTHORED_SEARCH_LIMIT)
         self.assertEqual(len(result["warnings"]), 1)
         self.assertIn("authored-PR (octocat)", result["warnings"][0])
         self.assertIn("truncated", result["warnings"][0])
@@ -857,14 +870,14 @@ class TestSyncGithub(unittest.TestCase):
             captured.append(cmd)
             return []
 
-        window = ex._Window(datetime(2026, 7, 1, tzinfo=timezone.utc), _NOW)
-        with patch.object(ex, "_gh_json", fake_gh_json):
-            ex._collect_review_family(
+        window = common._Window(datetime(2026, 7, 1, tzinfo=timezone.utc), _NOW)
+        with patch.object(ghmod, "_gh_json", fake_gh_json):
+            ghmod._collect_review_family(
                 [({"number": 1}, "o/r", "o/r")],
                 "octocat",
                 window,
-                ex._reviews_path,
-                ex._review_event,
+                ghmod._reviews_path,
+                ghmod._review_event,
             )
         self.assertEqual(
             captured[0], ["gh", "api", "--paginate", "repos/o/r/pulls/1/reviews"]
@@ -875,8 +888,10 @@ class TestSyncGithub(unittest.TestCase):
         # silently sweep nothing (#652 error contract).
         state = _tmp_state()
         routes = [(_has("api", "user"), "octocat")]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW, end=date(2026, 1, 31))
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(
+                state, _config(), now=_NOW, end=date(2026, 1, 31)
+            )
         self.assertIn("empty resync window", result["error"])
 
     def test_two_identities_both_captured(self) -> None:
@@ -906,8 +921,8 @@ class TestSyncGithub(unittest.TestCase):
             (_has("search", "issues"), "[]"),
         ]
         cfg = _config(resync_authors="octo-a octo-b")
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, cfg, now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, cfg, now=_NOW)
         # Each identity's merged PR mints an opened AND a merge event (#656),
         # both under repo-qualified ids (#652).
         self.assertEqual(result, {"inserted": 4, "found": 4})
@@ -935,21 +950,21 @@ class TestSyncGithub(unittest.TestCase):
             ),
             (_has("search", "issues"), '[{"number": 9, "title": "no repo"}]'),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 0, "found": 0})
 
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run(self._routes())):
-            ex.sync_github(state, _config(), now=_NOW)
-            second = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(self._routes())):
+            ghmod.sync_github(state, _config(), now=_NOW)
+            second = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(second, {"inserted": 0, "found": 6})
 
     def test_gh_missing_is_error(self) -> None:
         state = _tmp_state()
-        with patch.object(ex.subprocess, "run", _fake_run([], missing=("gh",))):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([], missing=("gh",))):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(result, {"error": "gh unavailable or not authenticated"})
 
     def test_authored_search_failure_is_error(self) -> None:
@@ -958,8 +973,8 @@ class TestSyncGithub(unittest.TestCase):
             (_has("api", "user"), "octocat"),
             (_has("search", "prs", "--author"), None),
         ]
-        with patch.object(ex.subprocess, "run", _fake_run(routes)):
-            result = ex.sync_github(state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run(routes)):
+            result = ghmod.sync_github(state, _config(), now=_NOW)
         self.assertEqual(result, {"error": "gh search prs failed"})
 
 
@@ -976,7 +991,7 @@ class _FakeClient:
     def execute(self, model, method, *args, **kwargs):
         self.calls.append((model, method, args, kwargs))
         if self._error:
-            raise OdooError("odoo down")
+            raise RuntimeError("odoo down")
         if model == "res.users":
             return [{"partner_id": [self._partner, "Dev"]}]
         return self._messages
@@ -999,8 +1014,8 @@ class TestSyncOdooChatter(unittest.TestCase):
         # tasks never started locally (issue #378 item 5).
         state = _tmp_state()
         client = _FakeClient(messages=self._messages())
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 2})
         events = state.get_events()
         self.assertEqual(
@@ -1018,24 +1033,24 @@ class TestSyncOdooChatter(unittest.TestCase):
     def test_second_run_is_idempotent(self) -> None:
         state = _tmp_state()
         client = _FakeClient(messages=self._messages())
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
-            second = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
+            second = odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(second, {"inserted": 0})
 
     def test_odoo_error_skips(self) -> None:
         state = _tmp_state()
         client = _FakeClient(error=True)
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
-        self.assertEqual(result, {"skipped": "odoo unavailable"})
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        self.assertEqual(result, {"skipped": "odoo unavailable: odoo down"})
 
     def test_search_reads_the_tracking_fields(self) -> None:
         # #1040: the puller cannot tell a stage flip from a note without them.
         state = _tmp_state()
         client = _FakeClient(messages=self._messages())
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
         search = next(c for c in client.calls if c[0] == "mail.message")
         for field in ("message_type", "subtype_id", "tracking_value_ids"):
             self.assertIn(field, search[3]["fields"], field)
@@ -1058,8 +1073,8 @@ class TestSyncOdooChatter(unittest.TestCase):
                 }
             ]
         )
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 0})
         self.assertEqual(state.get_events(), [])
 
@@ -1081,8 +1096,8 @@ class TestSyncOdooChatter(unittest.TestCase):
                 }
             ]
         )
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("remote"), None)])):
-            result = ex.sync_odoo_chatter(client, state, _config(), now=_NOW)
+        with patch.object(subprocess, "run", _fake_run([(_has("remote"), None)])):
+            result = odoomod.sync_odoo_chatter(client, state, _config(), now=_NOW)
         self.assertEqual(result, {"inserted": 1})
         self.assertEqual(
             state.get_events()[0].subject, "Refactored the kiosk controller"
@@ -1105,7 +1120,7 @@ class TestTrackingOnlyChatter(unittest.TestCase):
 
     def test_bodyless_notification_with_tracking_values_is_tracking_only(self) -> None:
         self.assertTrue(
-            ex._is_tracking_only_message(
+            odoomod._is_tracking_only_message(
                 self._message(message_type="notification", tracking_value_ids=[7])
             )
         )
@@ -1114,7 +1129,7 @@ class TestTrackingOnlyChatter(unittest.TestCase):
         # Odoo returns a many2one as [id, display_name], so the subtype's own
         # name is already in hand — no extra RPC to classify it.
         self.assertTrue(
-            ex._is_tracking_only_message(
+            odoomod._is_tracking_only_message(
                 self._message(
                     message_type="notification", subtype_id=[3, "Task Stage Changed"]
                 )
@@ -1124,12 +1139,14 @@ class TestTrackingOnlyChatter(unittest.TestCase):
     def test_bodyless_notification_without_tracking_is_kept(self) -> None:
         # A bare notification with nothing tracked is not evidence either way.
         self.assertFalse(
-            ex._is_tracking_only_message(self._message(message_type="notification"))
+            odoomod._is_tracking_only_message(
+                self._message(message_type="notification")
+            )
         )
 
     def test_a_posted_comment_is_never_tracking_only(self) -> None:
         self.assertFalse(
-            ex._is_tracking_only_message(
+            odoomod._is_tracking_only_message(
                 self._message(
                     message_type="comment",
                     body="<p>Done</p>",
@@ -1146,7 +1163,7 @@ class TestTrackingOnlyChatter(unittest.TestCase):
             "<p>stage from In Progress to Done</p>",
         ):
             self.assertTrue(
-                ex._is_tracking_only_message(self._message(body=body)), body
+                odoomod._is_tracking_only_message(self._message(body=body)), body
             )
 
     def test_a_note_that_merely_mentions_a_stage_is_kept(self) -> None:
@@ -1155,32 +1172,34 @@ class TestTrackingOnlyChatter(unittest.TestCase):
             "<p>Moving out of done to correct time sheets</p>",
         ):
             self.assertFalse(
-                ex._is_tracking_only_message(self._message(body=body)), body
+                odoomod._is_tracking_only_message(self._message(body=body)), body
             )
 
     def test_absent_tracking_fields_are_no_signal(self) -> None:
         # Pre-#1040 rows (and the legacy fixture shape) read as authored notes.
-        self.assertFalse(ex._is_tracking_only_message(self._message(subject="note")))
+        self.assertFalse(
+            odoomod._is_tracking_only_message(self._message(subject="note"))
+        )
 
     def test_subtype_shapes_that_are_not_a_pair_are_no_signal(self) -> None:
         for subtype in (False, 3, [], [3]):
-            self.assertFalse(ex._is_stage_subtype(subtype), subtype)
+            self.assertFalse(odoomod._is_stage_subtype(subtype), subtype)
 
 
 class TestParsingAndGuards(unittest.TestCase):
     """Direct coverage of the small parsing/guard helpers, both branches."""
 
     def test_parse_iso_utc_naive_treated_as_utc(self) -> None:
-        parsed = ex._parse_iso_utc("2026-07-01T10:00:00")  # no offset
+        parsed = common._parse_iso_utc("2026-07-01T10:00:00")  # no offset
         self.assertEqual(parsed.tzinfo, timezone.utc)
         self.assertEqual(parsed.hour, 10)
 
     def test_parse_iso_utc_offset_converted_to_utc(self) -> None:
-        parsed = ex._parse_iso_utc("2026-07-01T10:00:00-04:00")
+        parsed = common._parse_iso_utc("2026-07-01T10:00:00-04:00")
         self.assertEqual(parsed.hour, 14)  # +4 to UTC
 
     def test_build_commit_event_skips_malformed_line(self) -> None:
-        self.assertIsNone(ex._build_commit_event("just-a-sha", "o/r"))
+        self.assertIsNone(gitmod._build_commit_event("just-a-sha", "o/r"))
 
     def test_ref_decorations_never_attribute_a_commit(self) -> None:
         # #1040: a merge commit on ``main`` was billed to a task purely because
@@ -1194,7 +1213,7 @@ class TestParsingAndGuards(unittest.TestCase):
                 "HEAD -> 24648-kiosk-fix, origin/main, origin/HEAD",
             ]
         )
-        event = ex._build_commit_event(line, "o/r")
+        event = gitmod._build_commit_event(line, "o/r")
         self.assertIsNotNone(event)
         self.assertEqual(event.task_ids, [])
         # The decoration string is no longer recorded as a branch either: it
@@ -1203,7 +1222,7 @@ class TestParsingAndGuards(unittest.TestCase):
 
     def test_subject_task_id_still_attributes(self) -> None:
         line = _SEP.join(["sha8", "2026-07-01T10:00:00Z", "fix kiosk (task 24648)"])
-        event = ex._build_commit_event(line, "o/r")
+        event = gitmod._build_commit_event(line, "o/r")
         self.assertEqual(event.task_ids, ["24648"])
 
     def test_git_log_no_longer_asks_for_ref_decorations(self) -> None:
@@ -1214,8 +1233,8 @@ class TestParsingAndGuards(unittest.TestCase):
             captured.append(cmd)
             return None
 
-        with patch.object(ex, "_run_capture", _capture):
-            ex._git_log(Path("/repo"), ["dev@example.com"], _NOW, _NOW)
+        with patch.object(gitmod, "_run_capture", _capture):
+            gitmod._git_log(Path("/repo"), ["dev@example.com"], _NOW, _NOW)
         pretty = next(a for a in captured[0] if a.startswith("--pretty="))
         self.assertNotIn("%D", pretty)
         self.assertIn("%s", pretty)
@@ -1224,16 +1243,18 @@ class TestParsingAndGuards(unittest.TestCase):
         since = datetime(2026, 7, 1, tzinfo=timezone.utc)
         until = datetime(2026, 7, 10, tzinfo=timezone.utc)
         self.assertEqual(
-            ex._ts_in_window("2026-07-02T00:00:00Z", since, until),
+            ghmod._ts_in_window("2026-07-02T00:00:00Z", since, until),
             datetime(2026, 7, 2, tzinfo=timezone.utc),
         )
         # The lower bound is inclusive; the upper bound is exclusive.
-        self.assertEqual(ex._ts_in_window("2026-07-01T00:00:00Z", since, until), since)
-        self.assertIsNone(ex._ts_in_window("2026-07-10T00:00:00Z", since, until))
-        self.assertIsNone(ex._ts_in_window("2026-07-11T00:00:00Z", since, until))
-        self.assertIsNone(ex._ts_in_window("2026-06-30T00:00:00Z", since, until))
-        self.assertIsNone(ex._ts_in_window(None, since, until))
-        self.assertIsNone(ex._ts_in_window("not-a-date", since, until))
+        self.assertEqual(
+            ghmod._ts_in_window("2026-07-01T00:00:00Z", since, until), since
+        )
+        self.assertIsNone(ghmod._ts_in_window("2026-07-10T00:00:00Z", since, until))
+        self.assertIsNone(ghmod._ts_in_window("2026-07-11T00:00:00Z", since, until))
+        self.assertIsNone(ghmod._ts_in_window("2026-06-30T00:00:00Z", since, until))
+        self.assertIsNone(ghmod._ts_in_window(None, since, until))
+        self.assertIsNone(ghmod._ts_in_window("not-a-date", since, until))
 
     def test_window_bounds_defaults_and_explicit_range(self) -> None:
         cases = [
@@ -1257,7 +1278,7 @@ class TestParsingAndGuards(unittest.TestCase):
         for start, end, since, until in cases:
             with self.subTest(start=start, end=end):
                 self.assertEqual(
-                    ex._window_bounds(config, _NOW, start, end), (since, until)
+                    common._window_bounds(config, _NOW, start, end), (since, until)
                 )
 
     def test_window_bounds_rejects_empty_or_inverted_ranges(self) -> None:
@@ -1269,43 +1290,43 @@ class TestParsingAndGuards(unittest.TestCase):
         for start, end in cases:
             with self.subTest(start=start, end=end):
                 with self.assertRaises(ValueError):
-                    ex._window_bounds(config, _NOW, start, end)
+                    common._window_bounds(config, _NOW, start, end)
 
     def test_gh_json_returns_none_on_bad_json(self) -> None:
-        with patch.object(ex.subprocess, "run", _fake_run([(_has("api"), "not json")])):
-            self.assertIsNone(ex._gh_json(["gh", "api", "x"]))
+        with patch.object(subprocess, "run", _fake_run([(_has("api"), "not json")])):
+            self.assertIsNone(ghmod._gh_json(["gh", "api", "x"]))
 
     def test_pr_opened_event_skips_without_created_at_or_repo(self) -> None:
-        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        window = common._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
         with_repo = {
             "number": 1,
             "repository": {"nameWithOwner": "o/r"},
             "createdAt": None,
         }
-        self.assertIsNone(ex._pr_opened_event(with_repo, window))
+        self.assertIsNone(ghmod._pr_opened_event(with_repo, window))
         no_repo = {"number": 1, "createdAt": "2026-07-01T09:00:00Z"}
-        self.assertIsNone(ex._pr_opened_event(no_repo, window))
+        self.assertIsNone(ghmod._pr_opened_event(no_repo, window))
 
     def test_pr_merged_event_skips_unmerged_pr_or_repoless_item(self) -> None:
         # An unmerged PR mints NO merge event — createdAt is no fallback (#656);
         # the creation is captured by _pr_opened_event instead.
-        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        window = common._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
         with_repo = {
             "number": 1,
             "repository": {"nameWithOwner": "o/r"},
             "mergedAt": None,
             "createdAt": "2026-07-01T09:00:00Z",
         }
-        self.assertIsNone(ex._pr_merged_event(with_repo, window))
+        self.assertIsNone(ghmod._pr_merged_event(with_repo, window))
         no_repo = {"number": 1, "mergedAt": "2026-07-02T09:00:00Z"}
-        self.assertIsNone(ex._pr_merged_event(no_repo, window))
+        self.assertIsNone(ghmod._pr_merged_event(no_repo, window))
 
     def test_pr_created_in_window_but_merged_after_still_mints(self) -> None:
         # An explicit backfill range: created inside it, merged after it — the
         # PR must still be captured (not vanish entirely). Since #656 split the
         # combined event, the creation is carried by the pr_opened event rather
         # than by a createdAt fallback on the merge event.
-        window = ex._Window(
+        window = common._Window(
             datetime(2026, 7, 1, tzinfo=timezone.utc),
             datetime(2026, 8, 1, tzinfo=timezone.utc),
         )
@@ -1316,20 +1337,20 @@ class TestParsingAndGuards(unittest.TestCase):
             "createdAt": "2026-07-20T09:00:00Z",
             "mergedAt": "2026-08-03T09:00:00Z",  # outside the window
         }
-        opened = ex._pr_opened_event(pr, window)
+        opened = ghmod._pr_opened_event(pr, window)
         self.assertIsNotNone(opened)
         self.assertEqual(
             opened.timestamp, datetime(2026, 7, 20, 9, tzinfo=timezone.utc)
         )
         self.assertEqual(opened.external_id, "gh:pr:o/r:4:opened")
         # The out-of-window merge itself is not backdated into the range.
-        self.assertIsNone(ex._pr_merged_event(pr, window))
+        self.assertIsNone(ghmod._pr_merged_event(pr, window))
 
     def test_review_event_skips_without_submitted_at(self) -> None:
         pr = {"number": 1, "title": "t", "headRefName": "b"}
         review = {"id": 9, "submitted_at": None}
-        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
-        self.assertIsNone(ex._review_event(review, pr, "o/r", window))
+        window = common._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        self.assertIsNone(ghmod._review_event(review, pr, "o/r", window))
 
     def test_review_event_records_its_state_in_the_payload(self) -> None:
         # #710: the billing narrative says "PR #n reviewed (APPROVED)", which
@@ -1337,28 +1358,28 @@ class TestParsingAndGuards(unittest.TestCase):
         # so no schema change is involved.
         pr = {"number": 1, "title": "t", "headRefName": "b"}
         review = {"id": 9, "submitted_at": "2026-07-01T10:00:00Z", "state": "APPROVED"}
-        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
-        event = ex._review_event(review, pr, "o/r", window)
+        window = common._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        event = ghmod._review_event(review, pr, "o/r", window)
         self.assertEqual(event.payload, {"review_state": "APPROVED"})
 
     def test_review_event_without_a_state_records_no_payload(self) -> None:
         pr = {"number": 1, "title": "t", "headRefName": "b"}
         review = {"id": 9, "submitted_at": "2026-07-01T10:00:00Z"}
-        window = ex._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
-        self.assertIsNone(ex._review_event(review, pr, "o/r", window).payload)
+        window = common._Window(datetime(2026, 1, 1, tzinfo=timezone.utc), _NOW)
+        self.assertIsNone(ghmod._review_event(review, pr, "o/r", window).payload)
 
     def test_current_partner_id_raises_on_empty_read(self) -> None:
         class _Empty(_FakeClient):
             def execute(self, model, method, *a, **k):
                 return []  # res.users read returns nothing
 
-        with self.assertRaises(OdooError):
-            ex._current_partner_id(_Empty())
+        with self.assertRaises(RuntimeError):
+            odoomod._current_partner_id(_Empty())
 
     def test_store_message_skips_falsy_date(self) -> None:
         state = _tmp_state()
         message = {"id": 1, "res_id": 5, "date": False, "subject": "x"}
-        self.assertEqual(ex._store_message(state, message, "o/r"), 0)
+        self.assertEqual(odoomod._store_message(state, message, "o/r"), 0)
         self.assertEqual(state.count_events(), 0)
 
     def test_chatter_body_supplies_the_subject_when_there_is_none(self) -> None:
@@ -1373,7 +1394,7 @@ class TestParsingAndGuards(unittest.TestCase):
             "subject": False,
             "body": "<p>Reconciled the July VAT postings</p><p>Second paragraph</p>",
         }
-        self.assertEqual(ex._store_message(state, message, "o/r"), 1)
+        self.assertEqual(odoomod._store_message(state, message, "o/r"), 1)
         self.assertEqual(
             state.get_events()[0].subject, "Reconciled the July VAT postings"
         )
@@ -1387,27 +1408,29 @@ class TestParsingAndGuards(unittest.TestCase):
             "subject": "Status update",
             "body": "<p>ignored</p>",
         }
-        ex._store_message(state, message, "o/r")
+        odoomod._store_message(state, message, "o/r")
         self.assertEqual(state.get_events()[0].subject, "Status update")
 
     def test_chatter_headline_unescapes_and_breaks_on_block_tags(self) -> None:
         self.assertEqual(
-            ex._chatter_headline("<div>A &amp; B<br>next line</div>"), "A & B"
+            odoomod._chatter_headline("<div>A &amp; B<br>next line</div>"), "A & B"
         )
 
     def test_chatter_headline_tolerates_missing_or_markup_only_bodies(self) -> None:
         # Odoo returns False for an empty body; a markup-only body has no line.
-        self.assertEqual(ex._chatter_headline(False), "")
-        self.assertEqual(ex._chatter_headline(None), "")
-        self.assertEqual(ex._chatter_headline("<p></p><br>"), "")
+        self.assertEqual(odoomod._chatter_headline(False), "")
+        self.assertEqual(odoomod._chatter_headline(None), "")
+        self.assertEqual(odoomod._chatter_headline("<p></p><br>"), "")
 
     def test_chatter_headline_is_capped(self) -> None:
         body = "<p>" + "x" * 5000 + "</p>"
-        self.assertEqual(len(ex._chatter_headline(body)), ex._CHATTER_SUBJECT_CHARS)
+        self.assertEqual(
+            len(odoomod._chatter_headline(body)), odoomod._CHATTER_SUBJECT_CHARS
+        )
 
     def test_chatter_search_reads_the_body_field(self) -> None:
         client = _FakeClient(messages=[])
-        ex._search_chatter(client, 42, _NOW, _NOW)
+        odoomod._search_chatter(client, 42, _NOW, _NOW)
         self.assertIn("body", client.calls[0][3]["fields"])
 
 
@@ -1416,8 +1439,8 @@ class TestRepoLabel(unittest.TestCase):
         state = _tmp_state()
         state.set_setting("repo_label", "acme/widgets")
         # subprocess must never be consulted when the label is on record.
-        with patch.object(ex.subprocess, "run", _fake_run([])):
-            self.assertEqual(ex._current_repo_label(state), "acme/widgets")
+        with patch.object(subprocess, "run", _fake_run([])):
+            self.assertEqual(odoomod._current_repo_label(state), "acme/widgets")
 
 
 if __name__ == "__main__":
