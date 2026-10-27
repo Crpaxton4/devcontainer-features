@@ -12,7 +12,7 @@ synthesised, nothing is retried.
 import json
 from dataclasses import dataclass
 
-from dispatcher.store.jobs import DeadReason
+from odoo_dev_data.jobs import DeadReason
 
 from .schema import usable_structured
 

@@ -96,6 +96,19 @@ def test_job_lifecycle(jobs):
     assert jobs.running_task_ids() == set()
 
 
+def test_mark_spawned_replaces_the_admit_time(jobs):
+    submit(jobs)
+    with pytest.raises(InvalidJobTransitionError):
+        jobs.mark_spawned("j1")  # PENDING
+    jobs.mark_running("j1", now_us=T0 + 5)
+    job = jobs.mark_spawned("j1", now_us=T0 + 50)
+    assert (job.state, job.started_us) == (JobState.RUNNING, T0 + 50)
+    done = jobs.record_result("j1", outcome="COMPLETED", now_us=T0 + 90)
+    assert done.billable_window == (T0 + 50, T0 + 90)
+    with pytest.raises(InvalidJobTransitionError):
+        jobs.mark_spawned("j1")  # DONE
+
+
 def test_defaults_use_the_clock(jobs):
     job = jobs.submit(job_id="j", batch_id="b", task_id="1", repo="r", brief="x")
     assert job.submitted_us > T0

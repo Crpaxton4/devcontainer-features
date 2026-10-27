@@ -364,6 +364,20 @@ class JobStore:
             "start a job that is not PENDING",
         )
 
+    def mark_spawned(self, job_id: str, *, now_us: int | None = None) -> Job:
+        """Move ``started_us`` of a RUNNING job to the session spawn time.
+
+        The admit time that :meth:`mark_running` stored is replaced: the
+        billable window starts when the session process starts, not when the
+        container came up. ``mark_running`` only opens the row.
+        """
+        return self._transition(
+            "UPDATE jobs SET started_us=? WHERE job_id=? AND state='RUNNING'",
+            (resolve_now_us(now_us), job_id),
+            job_id,
+            "mark a job spawned that is not RUNNING",
+        )
+
     def set_session(self, job_id: str, session_id: str) -> Job:
         """Record the session id of a RUNNING job (known after the first event)."""
         return self._transition(

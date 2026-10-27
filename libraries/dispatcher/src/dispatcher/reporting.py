@@ -1,0 +1,147 @@
+"""The read-only reporting API of the dispatcher.
+
+``dispatch report|dead-letters``, the orchestrator and the web UI read the job
+rows through these functions. Nothing here writes a job row: each call opens
+``state.db`` through :class:`odoo_dev_data.jobs.JobStore`, reads, and closes.
+``usage.db`` is opened read-only (``mode=ro``).
+"""
+
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from odoo_dev_data.home import paths
+from odoo_dev_data.jobs import Job, JobState, JobStore
+
+
+def jobs(
+    home: Path,
+    *,
+    state: JobState | None = None,
+    batch_id: str | None = None,
+    task_id: str | None = None,
+) -> list[Job]:
+    """Jobs filtered by state, batch and task id, oldest submission first."""
+    with JobStore(home=home) as store:
+        if batch_id is not None:
+            found = store.list_by_batch(batch_id)
+        elif state is not None:
+            found = store.list_by_state(state)
+        else:
+            found = [j for s in JobState for j in store.list_by_state(s)]
+    if state is not None:
+        found = [j for j in found if j.state == state]
+    if task_id is not None:
+        found = [j for j in found if j.task_id == str(task_id)]
+    if batch_id is not None:
+        return found  # the store's insertion order
+    return sorted(found, key=lambda j: (j.submitted_us, j.job_id))
+
+
+def queue(home: Path) -> list[Job]:
+    """PENDING jobs, then RUNNING jobs, each oldest first."""
+    with JobStore(home=home) as store:
+        return store.list_by_state(JobState.PENDING) + store.list_by_state(
+            JobState.RUNNING
+        )
+
+
+def dead_letters(home: Path) -> list[Job]:
+    """The dead letter list."""
+    with JobStore(home=home) as store:
+        return store.dead_letters()
+
+
+def batches_pending_report(home: Path) -> list[str]:
+    """Batches that are all finished and have a job not yet reported."""
+    with JobStore(home=home) as store:
+        return store.list_batches_pending_report()
+
+
+def _seconds(job: Job) -> float | None:
+    window = job.billable_window
+    return None if window is None else (window[1] - window[0]) / 1_000_000
+
+
+def _iso(us: int | None) -> str | None:
+    if us is None:
+        return None
+    return datetime.fromtimestamp(us / 1_000_000, timezone.utc).isoformat()
+
+
+def _structured(job: Job) -> dict | None:
+    try:
+        envelope = job.envelope_json()
+    except ValueError:
+        return None
+    value = envelope.get("structured_output") if isinstance(envelope, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def job_entry(job: Job) -> dict:
+    """One job of a batch report."""
+    return {
+        "job_id": job.job_id,
+        "task": job.task_id,
+        "state": job.state.value,
+        "outcome": job.outcome,
+        "dead_reason": job.dead_reason,
+        "detail": job.detail,
+        "started_at": _iso(job.started_us),
+        "ended_at": _iso(job.ended_us),
+        "duration_s": _seconds(job),
+        "branch": job.branch,
+        "pr_num": job.pr_num,
+        "bundle": job.bundle_dir or None,
+        "question_count": job.question_count,
+        "input_tokens": job.input_tokens,
+        "output_tokens": job.output_tokens,
+        "cost_usd": job.cost_usd,
+        "structured": _structured(job),
+        "reported": job.reported_us is not None,
+    }
+
+
+def batch_report(home: Path, batch_id: str) -> dict:
+    """One batch as the orchestrator reads it: its jobs and their totals."""
+    entries = [job_entry(job) for job in jobs(home, batch_id=batch_id)]
+    return {
+        "batch_id": batch_id,
+        "jobs": entries,
+        "totals": {
+            "jobs": len(entries),
+            "done": sum(e["state"] == JobState.DONE.value for e in entries),
+            "dead": sum(e["state"] == JobState.DEAD_LETTER.value for e in entries),
+            "cost_usd": sum(e["cost_usd"] for e in entries),
+            "questions": sum(e["question_count"] for e in entries),
+        },
+    }
+
+
+def usage_summary(home: Path, *, since_days: int = 30) -> list[dict]:
+    """Usage lines of the last ``since_days`` days grouped by ``kind, name``.
+
+    Each item has ``kind``, ``name``, ``count`` and ``last_used``. The list is
+    empty when ``usage.db`` does not exist.
+    """
+    path = paths(home).usage_db
+    if not path.is_file():
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat(
+        timespec="milliseconds"
+    )
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT kind, name, COUNT(*), MAX(ts) FROM usage WHERE ts >= ? "
+            "GROUP BY kind, name ORDER BY COUNT(*) DESC, kind, name",
+            (cutoff,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+    return [
+        {"kind": kind, "name": name, "count": count, "last_used": last}
+        for kind, name, count, last in rows
+    ]

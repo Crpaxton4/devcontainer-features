@@ -19,7 +19,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from dispatcher.store.jobs import (
+from odoo_dev_data.db import resolve_now_us
+from odoo_dev_data.jobs import (
     DeadReason,
     DuplicateTaskInFlightError,
     Job,
@@ -27,10 +28,13 @@ from dispatcher.store.jobs import (
     JobStore,
 )
 
-from dispatcher.store.dispatch_state import resolve_now_us
-from dispatcher.store.runs_store import RunStore
-
-from .collect import StreamParser, read_task_record, record_then_collect, worktree_of
+from .collect import (
+    StreamParser,
+    index_collected,
+    read_task_record,
+    record_then_collect,
+    worktree_of,
+)
 from .deadletter import STATEMENTS
 from .settings import ALLOWED_ENTRIES
 from .lifecycle import INSPECT_TIMEOUT_S, container_name, transcript_path
@@ -197,7 +201,6 @@ def _orphan_facts(job: Job, record: dict, shell, settings, env) -> list[str]:
 
 def reconcile(
     store: JobStore,
-    runs: RunStore | None = None,
     shell=None,
     settings=None,
     env: dict[str, str] | None = None,
@@ -206,52 +209,48 @@ def reconcile(
 
     Runs before anything is admitted, or the duplicate gate would block those
     tasks forever. Each orphan's container and worktree are inspected where
-    possible and what could not be seen is said so. An orphan that had a
-    session id gets a FAILED run row (that time was really spent), and every
-    orphan gets a bundle. Nothing here stops a container or removes a worktree.
+    possible and what could not be seen is said so. When ``settings`` is given,
+    every orphan also gets a bundle, indexed on its job row after the dead
+    letter. Nothing here stops a container or removes a worktree.
     """
     ids = []
     for job in store.list_by_state(JobState.RUNNING):
-        record = read_task_record(job.job_id, job.task_id)
+        record = read_task_record(job.task_id, settings.home) if settings else {}
         facts = _orphan_facts(job, record, shell, settings, env)
-        if runs is not None:
-            facts.append(_record_orphan(runs, job, record, settings))
+        ended = max(resolve_now_us(None), job.started_us or 0)
+        write = _collect_orphan(store, job, record, settings, ended)
         detail = " ".join(
             [STATEMENTS[DeadReason.ORPHANED_BY_RESTART], "; ".join(facts) + "."]
         )
-        ended = max(resolve_now_us(None), job.started_us or 0)
         store.dead_letter(
             job.job_id, DeadReason.ORPHANED_BY_RESTART, detail=detail, now_us=ended
         )
+        if write is not None:
+            index_collected(store, job.job_id, write)
         ids.append(job.job_id)
     return ids
 
 
-def _record_orphan(runs: RunStore, job: Job, record: dict, settings) -> str:
+def _collect_orphan(store: JobStore, job: Job, record: dict, settings, ended: int):
+    """Write the orphan's bundle files (a failed run). None when not collected."""
+    if settings is None:
+        return None
     parser = StreamParser()
     parser.session_id = job.session_id
-    transcript = transcript_path(settings, job.session_id) if settings else None
     try:
-        write = record_then_collect(
-            runs,
+        return record_then_collect(
+            store,
             parser=parser,
             job=job,
             started_us=job.started_us or 0,
-            ended_us=max(resolve_now_us(None), job.started_us or 0),
+            ended_us=ended,
             failed=True,
-            transcript=transcript,
+            transcript=transcript_path(settings, job.session_id),
             record=record,
+            home=settings.home,
         )
-    except Exception as exc:  # reconcile must always finish
-        return f"the run could not be recorded: {exc}"
-    if write.record_error is not None:
-        return f"the run row could not be written: {write.record_error}"
-    return (
-        "a FAILED run row was written, timed from the admit time "
-        "because no spawn time survives a restart"
-        if write.recorded
-        else "no run row was written (no session id, or already recorded)"
-    )
+    except Exception:  # reconcile must always finish
+        return None
 
 
 def pending_jobs(store: JobStore) -> list[Job]:

@@ -32,7 +32,6 @@ here builds a container. Non-negotiable points, each with its reason:
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import time
@@ -40,13 +39,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from dispatcher.store.dispatch_state import artifacts_root, odoo_dev_dir
+from odoo_dev_data.home import CONTAINER_HOME
 
 from .schema import schema_argument
 from .settings import (
-    ARTIFACTS_TARGET,
     DEFAULT_ENTRY,
-    ODOO_DEV_MOUNT_TARGET,
     ConfigResolutionError,
     Settings,
     WORKSPACE_TARGET,
@@ -57,9 +54,8 @@ from .settings import (
 #: A rule path starting with ``//`` is absolute, so it names this directory and
 #: not a path under the project.
 CONTAINER_CLAUDE_HOME = "/usr/local/share/claude-home"
-#: Docker (accident prevention, design section 6), the configuration directory
-#: (an unattended session must not edit the settings that govern it) and the two
-#: task tracking tools (the run record, not the agent, measures the time).
+#: Docker (accident prevention, design section 6) and the configuration
+#: directory (an unattended session must not edit the settings that govern it).
 #: ``render_exec`` passes each rule as its own ``--disallowedTools`` argument.
 #: Bash redirects into the directory cannot be matched by a rule; the guard hook
 #: covers those.
@@ -67,11 +63,9 @@ DISALLOWED_TOOLS = (
     "Bash(docker:*)",
     f"Edit(/{CONTAINER_CLAUDE_HOME}/**)",
     f"Write(/{CONTAINER_CLAUDE_HOME}/**)",
-    "mcp__odoo-mcp__start_task",
-    "mcp__odoo-mcp__stop_task",
 )
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
-STATE_DIR_VARIABLE = "ODOO_DEV_STATE_DIR"
+HOME_VARIABLE = "ODOO_DEV_HOME"
 JOB_ID_VARIABLE = "ODOO_JOB_ID"
 #: Admission holds the single admission thread, and the per-job deadline does
 #: not cover it, so every call made while admitting has its own timeout.
@@ -113,22 +107,6 @@ def resolve_config(settings: Settings, repo: str) -> Path:
         return settings.config(repo)
     except ConfigResolutionError as exc:
         raise ContainerStartError(exc.detail) from exc
-
-
-def seed_repo_map(settings: Settings, bundle: Path) -> Path:
-    """Copy the shared repo map into the job bundle, which is ``ODOO_DEV_STATE_DIR``.
-
-    A missing or unreadable map is a per-job :class:`ContainerStartError`, so
-    ``JobRun.admit`` dead-letters that one job and the run continues.
-    """
-    target = bundle / "repo-map.json"
-    try:
-        shutil.copyfile(settings.repo_map_file, target)
-    except OSError as exc:
-        raise ContainerStartError(
-            f"cannot copy the repo map {settings.repo_map_file} into {bundle}: {exc}"
-        ) from exc
-    return target
 
 
 @dataclass(frozen=True)
@@ -197,10 +175,9 @@ def render_up(settings: Settings, repo: str) -> list[str]:
 
     No ``--mount`` is passed. ``devcontainer up`` on a running container ignores
     it, and a container that VS Code made is the normal state. The Feature binds
-    the host ``~/.config/odoo-dev`` at ``/usr/local/share/odoo-dev`` in every
-    container, and the bundle root lives under that bind. One container serves
-    several jobs of a project; each job points ``ODOO_DEV_STATE_DIR`` at its own
-    subdirectory of the bundle root.
+    the host state root (``settings.home``) at ``CONTAINER_HOME`` in every
+    container. One container serves several jobs of a project; they share that
+    one mount and tell each other apart by ``ODOO_JOB_ID``.
     """
     argv = [
         "devcontainer",
@@ -266,7 +243,7 @@ def render_exec(
     return [
         *render_exec_prefix(settings, repo),
         "--remote-env",
-        f"{STATE_DIR_VARIABLE}={ARTIFACTS_TARGET}/{job_id}",
+        f"{HOME_VARIABLE}={CONTAINER_HOME}",
         "--remote-env",
         f"{UNATTENDED_VARIABLE}=1",
         "--remote-env",
@@ -479,8 +456,8 @@ def assert_mounts(
     The bind at ``/mnt/extra-addons`` (where the config declares the workspace
     and where ``reap`` assumes it) must have the real ``--workspace-folder`` as
     its source, by exact equality so a parent-directory bind is rejected too.
-    The ``/usr/local/share/odoo-dev`` bind (the Feature's) must have the host
-    odoo-dev directory as its source, and the bundle root must lie under it.
+    The ``CONTAINER_HOME`` bind (the Feature's) must have ``settings.home``,
+    the host state root, as its source.
     Anything else, or no bind at all, is wrong. This checks paths only and cannot see whether the
     source holds the repo; :func:`require_workspace` covers that before ``up``.
     Asserted, never created.
@@ -498,24 +475,19 @@ def assert_mounts(
         raise MountInvalidError(f"docker inspect output is not JSON: {exc}")
     binds = _bind_sources(mounts or [])
     wanted_workspace = os.path.realpath(settings.workspace(repo))
-    wanted_odoo_dev = os.path.realpath(odoo_dev_dir())
+    wanted_home = os.path.realpath(settings.home)
     problems = []
     if binds.get(WORKSPACE_TARGET) != wanted_workspace:
         problems.append(
             f"{WORKSPACE_TARGET} is not a bind of {wanted_workspace} "
             f"(the --workspace-folder; found {binds.get(WORKSPACE_TARGET)!r})"
         )
-    if binds.get(ODOO_DEV_MOUNT_TARGET) != wanted_odoo_dev:
+    if binds.get(CONTAINER_HOME) != wanted_home:
         problems.append(
-            f"{ODOO_DEV_MOUNT_TARGET} is not a bind of {wanted_odoo_dev} "
-            f"(found {binds.get(ODOO_DEV_MOUNT_TARGET)!r}); the container was "
+            f"{CONTAINER_HOME} is not a bind of {wanted_home} "
+            f"(found {binds.get(CONTAINER_HOME)!r}); the container was "
             "created without the personal-features Feature: stop it and let "
             "the dispatcher create it"
-        )
-    elif not Path(os.path.realpath(artifacts_root())).is_relative_to(wanted_odoo_dev):
-        problems.append(
-            f"the bundle root {artifacts_root()} is not under {wanted_odoo_dev}, "
-            f"so the container cannot see it at {ARTIFACTS_TARGET}"
         )
     if problems:
         raise MountInvalidError("; ".join(problems) + f"; binds={binds}")
