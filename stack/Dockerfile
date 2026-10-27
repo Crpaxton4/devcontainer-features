@@ -4,8 +4,8 @@
 #   dispatcher the dispatcher plus the tools it runs: devcontainer CLI, docker
 #              CLI with the compose plugin, git and gh. It has no ENTRYPOINT,
 #              so a service chooses its own command.
-#   webui      the read-only web interface. Flask only: no Node, docker or
-#              devcontainer CLI.
+#   webui      the read-only web interface. Flask and the dispatcher library: no
+#              Node, docker or devcontainer CLI.
 
 ARG PYTHON_VERSION=3.12
 ARG NODE_VERSION=22
@@ -51,15 +51,20 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && npm install -g "@devcontainers/cli@${DEVCONTAINERS_CLI_VERSION}" \
     && npm cache clean --force
 
-# Copy all of libraries/ so every [tool.uv.sources] path dependency of the
-# dispatcher resolves. uv pip honours those sources; plain pip would not.
-# --prerelease=allow mirrors [tool.uv] in the dispatcher pyproject (toon-format).
+# The dispatcher depends on odoo_dev_data and usage_log by name. Naming the three
+# paths together lets uv resolve those names to the local copies. The orchestrator
+# service runs from this stage too: it imports odoo_dev_data and dispatcher.reporting.
 COPY libraries /src/libraries
-RUN uv pip install --system --no-cache --prerelease=allow /src/libraries/dispatcher
+RUN uv pip install --system --no-cache \
+    /src/libraries/odoo_dev_data /src/libraries/usage_log /src/libraries/dispatcher
 
-# Only apps/webui is copied, so a dispatcher change does not rebuild this layer.
+# The web UI reads the job rows through dispatcher.reporting, so it installs
+# odoo_dev_data, usage_log and dispatcher first, then apps/webui.
 # The container user is set by compose (a numeric uid), so no USER line here.
 FROM base AS webui
+COPY libraries /src/libraries
+RUN uv pip install --system --no-cache \
+    /src/libraries/odoo_dev_data /src/libraries/usage_log /src/libraries/dispatcher
 COPY apps/webui /src/apps/webui
 RUN uv pip install --system --no-cache /src/apps/webui
 EXPOSE 8765

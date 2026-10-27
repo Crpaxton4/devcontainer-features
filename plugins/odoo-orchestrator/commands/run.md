@@ -15,8 +15,9 @@ Every Bash call uses an absolute path and carries no state from the call before.
 These are the only two programs you call:
 
 - `${CLAUDE_PLUGIN_ROOT}/scripts/dispatch.sh`, the dispatcher.
-- `${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.sh`, which keeps drafts, approvals,
-  friction, the handled dead letters and the list of submitted batches.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.sh`, which keeps the brief drafts and
+  approvals of each task and records friction, handled dead letters and reported
+  batches on the job rows.
 
 This command has two uses. With task ids, it does steps 1 to 4 and ends when the
 jobs are queued. With no task ids, it does only step 5, the results of the batches
@@ -84,8 +85,8 @@ still be wrong.
 
 ## 1. Read the dead letters first
 
-Run `dispatch.sh dead-letters`, give the JSON to `orchestrator.sh unhandled` on
-standard input, and read what is left. Each entry is a task that owes a result. For
+Run `orchestrator.sh unhandled`. It prints the dead letters that are not yet
+handled. Read what it prints. Each entry is a task that owes a result. For
 each one, decide with the user, one at a time: re-queue unchanged, amend the brief
 and re-queue, or drop it. A dead letter never retries itself.
 
@@ -107,8 +108,8 @@ connector.
 The array needs a repo for each task. Use the `<repo>:` prefix when given. If it
 is missing, ask the user for the repo name once per task. Do not guess it. A repo
 name is one plain name of letters, digits, dot, dash or underscore. It may start
-with a dot (such as `.github`), but it is never `.` or `..`. A task id is the same
-plain name and never starts with a dot.
+with a dot (such as `.github`), but it is never `.` or `..`. A task id is digits
+only (the task's folder is named after it).
 
 Write the brief with these parts, all as behaviour:
 
@@ -118,8 +119,8 @@ Write the brief with these parts, all as behaviour:
 - The approach, as the behaviour and design intent the solution must have.
 - What is out of scope, and the risks the container must know.
 
-Run `orchestrator.sh plan-path <task>`. It creates a new draft file and prints its
-path, and it never reuses a name. Write the brief to that path, then apply the
+Run `orchestrator.sh plan <task>`. It creates a new draft file under the task and
+prints its path, and it never reuses a name. Write the brief to that path, then apply the
 reread rule from the requirement line. Then run `orchestrator.sh lint <path>`. A
 hit means rewrite the sentence. A silent lint is not approval of the brief. The
 dispatcher also refuses a brief of more than about 100 KB.
@@ -134,9 +135,10 @@ hardened problem statement, the acceptance criteria, the approach, your
 assumptions, and the brief path. Then ask the user, with AskUserQuestion, to
 choose one of:
 
-- Approve: run `orchestrator.sh approve <task> <path>`. The task joins the set with
-  that path.
-- Revise: translate the feedback into behaviour, write a new draft with `plan-path`,
+- Approve: run `orchestrator.sh approve <task> <path>`. It copies the draft onto the
+  task's `brief.md` and prints that path. The task joins the set with the printed
+  path.
+- Revise: translate the feedback into behaviour, write a new draft with `plan`,
   and show the same task again. Nothing is dispatched.
 - Skip: the task leaves the set. The other tasks go on.
 
@@ -163,8 +165,8 @@ on this host.
 
 When `add` exits 0:
 
-1. Run `orchestrator.sh batch-add <batch_id>` with the `batch_id` it printed. This
-   lets step 5 find the batch later.
+1. Run `orchestrator.sh approve-job <job_id> ...` for the `job_id`s it printed. This
+   stamps each job's brief as approved. Step 5 finds the batch by itself.
 2. Run `orchestrator.sh handled <job_id> ...` for the old dead letter `job_id`s
    whose tasks were in the array you just submitted.
 3. Tell the user the batch id, each job id and `http://127.0.0.1:8765`, where the
@@ -176,7 +178,7 @@ Exit codes of `dispatch.sh add`:
 - 0: the jobs are queued. Do the three actions above.
 - 1: docker compose could not start the containers, or the dispatcher raised an
   error. Show the stderr text. Mark nothing handled. If the jobs were already
-  queued, run `batch-add` for the printed `batch_id`.
+  queued, run `approve-job` for the printed `job_id`s.
 - 2: nothing was queued: the array was rejected (bad array, a task that already
   has a live job, a task named twice, or a repo with no checkout or no central
   config), or `add` got no argument. Show the
@@ -195,7 +197,7 @@ against a container. The dispatcher is the only thing that does.
 
 Run this step when the request has no task ids. It never waits for a job.
 
-Run `orchestrator.sh batches`. It prints the ids of the batches that `add` queued
+Run `orchestrator.sh batches`. It prints the ids of the batches that are finished
 and that you have not processed, one per line. If it prints nothing, tell the user
 there is nothing to read and end. For each batch id, in order:
 
@@ -208,16 +210,15 @@ there is nothing to read and end. For each batch id, in order:
 - Otherwise every job is `DONE` or `DEAD_LETTER`. Process the batch with the
   actions below, then run `orchestrator.sh batch-done <batch_id>`.
 
-Actions for a finished batch. Give the `dispatch.sh report <batch_id>` JSON to
-`friction` and `records` on standard input, as in step 1. `report` only reads, so
-run it again for each helper.
+Actions for a finished batch. Pass the batch id to `friction` and `records`. They
+read the job rows themselves.
 
-1. `orchestrator.sh friction` appends friction entries not yet
-   written to the dated friction file and prints how many. It is safe to run
+1. `orchestrator.sh friction <batch_id>` records the friction entries not yet
+   recorded in the task's record and prints how many. It is safe to run
    twice. Tell the user the count. An empty report is the normal result.
-2. `orchestrator.sh records` prints the table. Show it. These are the
+2. `orchestrator.sh records <batch_id>` prints the table. Show it. These are the
    batch's records for import. Write nothing to a timesheet. A job with no
-   `bundle` has blank figures.
+   envelope has a blank summary.
 3. For each job in state `DEAD_LETTER`, show `dead_reason` and `detail`, and
    decide as in step 1. Do not hide a dead letter behind a summary.
 4. For each `DONE` job, read the questions in the job's bundle (the
@@ -225,7 +226,7 @@ run it again for each helper.
    assumption made in its absence. The user answers on the draft pull request or
    here.
 5. Turn the answers into a new brief of behaviour, as the requirement line says,
-   with `plan-path`. Take the user's approval for that task as in step 3, then
+   with `plan`. Take the user's approval for that task as in step 3, then
    submit it with `dispatch.sh add` as in step 4 at `round` plus 1. A task with no
    answers needs nothing more.
 

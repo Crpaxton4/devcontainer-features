@@ -1,56 +1,100 @@
-"""Tests for orchestrator.py. Run: python3 -m unittest discover -s plugins/odoo-orchestrator/scripts/tests"""
+"""Tests for orchestrator.py. Run: uv run python -m unittest discover -s plugins/odoo-orchestrator/scripts/tests"""
 
-import json
+import contextlib
+import io
 import os
-import stat
 import sys
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
+
+from odoo_dev_data.jobs import DeadReason, JobStore
+from odoo_dev_data.tasks import read_task
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import orchestrator as orch  # noqa: E402
+
+A, B = "a" * 32, "b" * 32
 
 
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        os.environ["ODOO_ORCHESTRATOR_HOME"] = self.tmp.name
-        self.addCleanup(os.environ.pop, "ODOO_ORCHESTRATOR_HOME")
+        self.home = Path(self.tmp.name)
+        os.environ["ODOO_DEV_HOME"] = self.tmp.name
+        self.addCleanup(os.environ.pop, "ODOO_DEV_HOME")
+
+    def submit(self, job_id, task, batch=A, repo="r"):
+        with JobStore(home=self.home) as store:
+            store.submit(
+                job_id=job_id, batch_id=batch, task_id=task, repo=repo, brief="b"
+            )
+
+    def finish(self, job_id, envelope=None):
+        with JobStore(home=self.home) as store:
+            store.mark_running(job_id)
+            store.record_result(
+                job_id, outcome="COMPLETED", envelope=envelope, cost_usd=1.5
+            )
+
+    def kill(self, job_id):
+        with JobStore(home=self.home) as store:
+            store.dead_letter(job_id, DeadReason.KILLED_BY_DEADLINE, detail="late")
+
+    def job(self, job_id):
+        with JobStore(home=self.home) as store:
+            return store.get(job_id)
+
+    def run_main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = orch.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
 
 
-class PlanPath(Base):
-    def test_drafts_are_numbered_and_never_overwritten(self):
-        first = orch.plan_path("42")
+class Briefs(Base):
+    def test_drafts_are_numbered_under_the_task_and_never_overwritten(self):
+        code, out, _ = self.run_main("plan", "42")
+        first = Path(out.strip())
         first.write_text("draft one")
-        second = orch.plan_path("42")
-        self.assertEqual(first, Path(self.tmp.name) / "briefs/42/draft-1.md")
+        second = Path(self.run_main("plan", "42")[1].strip())
+        self.assertEqual(code, 0)
+        self.assertEqual(first, self.home / "tasks/42/draft-1.md")
         self.assertEqual(second.name, "draft-2.md")
         self.assertEqual(first.read_text(), "draft one")
 
-    def test_rejects_traversal(self):
-        for task in ("../x", "a/b", ""):
-            with self.assertRaises(ValueError):
-                orch.plan_path(task)
-
-    def test_relative_home_becomes_absolute(self):
-        os.environ["ODOO_ORCHESTRATOR_HOME"] = "rel/home"
-        self.assertTrue(orch.home().is_absolute())
-
-    def test_unwritable_home_is_a_clean_error(self):
-        locked = Path(self.tmp.name) / "locked"
-        locked.mkdir()
-        locked.chmod(stat.S_IREAD | stat.S_IEXEC)
-        self.addCleanup(locked.chmod, stat.S_IRWXU)
-        os.environ["ODOO_ORCHESTRATOR_HOME"] = str(locked / "home")
-        if os.access(locked, os.W_OK):
-            self.skipTest("running as a user who ignores permissions")
-        self.assertEqual(orch.main(["plan-path", "7"]), 2)
-
     def test_bad_task_is_a_clean_error(self):
-        self.assertEqual(orch.main(["plan-path", "a/b"]), 2)
+        for task in ("../x", "a/b", "abc"):
+            self.assertEqual(self.run_main("plan", task)[0], 2, task)
+
+    def test_approve_writes_brief_md_and_approved_prints_it(self):
+        self.assertEqual(self.run_main("approved", "7")[1].strip(), "")
+        drafts = [Path(self.run_main("plan", "7")[1].strip()) for _ in range(3)]
+        for index, path in enumerate(drafts, 1):
+            path.write_text(f"draft {index}")
+        code, out, _ = self.run_main("approve", "7", str(drafts[0]))
+        brief = self.home / "tasks/7/brief.md"
+        self.assertEqual((code, out.strip()), (0, str(brief)))
+        self.assertEqual(brief.read_text(), "draft 1")
+        self.assertEqual(self.run_main("approved", "7")[1].strip(), str(brief))
+
+    def test_approve_rejects_outside_other_and_empty_drafts(self):
+        outside = self.home / "other.md"
+        outside.write_text("text")
+        other = Path(self.run_main("plan", "8")[1].strip())
+        other.write_text("text")
+        empty = Path(self.run_main("plan", "7")[1].strip())
+        for path in (outside, other, empty, "/nonexistent/brief.md"):
+            self.assertEqual(self.run_main("approve", "7", str(path))[0], 2, path)
+        self.assertFalse((self.home / "tasks/7/brief.md").exists())
+
+    def test_approve_job_stamps_the_row(self):
+        self.submit("j1", "7")
+        self.assertIsNone(self.job("j1").approved_us)
+        self.assertEqual(self.run_main("approve-job", "j1")[0], 0)
+        self.assertIsNotNone(self.job("j1").approved_us)
+        self.assertEqual(self.run_main("approve-job", "nope")[0], 2)
 
 
 class Lint(unittest.TestCase):
@@ -59,7 +103,12 @@ class Lint(unittest.TestCase):
         self.assertEqual(orch.lint(text), [])
 
     def test_headings_and_plain_words_are_not_flagged(self):
-        for text in ("# Problem", "e.g. totals.csv export", "README.md?", "node.js 3.1"):
+        for text in (
+            "# Problem",
+            "e.g. totals.csv export",
+            "README.md?",
+            "node.js 3.1",
+        ):
             self.assertEqual(orch.lint(text), [], text)
 
     def test_flags_files_commands_sql_xpath_and_blocks(self):
@@ -98,152 +147,108 @@ class Lint(unittest.TestCase):
         self.assertTrue(orch.lint("a" * 100_001))
 
 
-class Approval(Base):
-    def test_requeue_uses_the_approved_brief_not_the_highest_draft(self):
-        drafts = [orch.plan_path("7") for _ in range(3)]
-        for index, path in enumerate(drafts, 1):
-            path.write_text(f"draft {index}")
-        orch.approve("7", str(drafts[0]))
-        out = orch.unhandled([{"job_id": "a", "task": "7"}])
-        self.assertTrue(out[0]["approved_brief"].endswith("briefs/7/draft-1.md"))
-
-    def test_no_approval_means_no_brief(self):
-        orch.plan_path("9").write_text("never approved")
-        self.assertEqual(orch.unhandled([{"job_id": "a", "task": "9"}])[0]["approved_brief"], "")
-
-    def test_approve_rejects_a_missing_file(self):
-        with self.assertRaises(ValueError):
-            orch.approve("7", "/nonexistent/brief.md")
-
-    def test_approve_rejects_a_file_outside_the_drafts(self):
-        outside = Path(self.tmp.name) / "other.md"
-        outside.write_text("text")
-        with self.assertRaises(ValueError):
-            orch.approve("7", str(outside))
-        with self.assertRaises(ValueError):
-            orch.approve("7", "/etc/passwd")
-
-    def test_approve_rejects_another_tasks_draft_and_an_empty_draft(self):
-        other = orch.plan_path("8")
-        other.write_text("text")
-        with self.assertRaises(ValueError):
-            orch.approve("7", str(other))
-        empty = orch.plan_path("7")  # plan-path creates an empty file
-        with self.assertRaises(ValueError):
-            orch.approve("7", str(empty))
-
-
 class DeadLetters(Base):
+    def listed(self):
+        import json
+
+        return json.loads(self.run_main("unhandled")[1])
+
     def test_letter_stays_until_handled(self):
-        letters = [{"job_id": "a", "task": "7"}]
-        self.assertEqual(len(orch.unhandled(letters)), 1)
-        self.assertEqual(len(orch.unhandled(letters)), 1)  # a failed or skipped run marks nothing
-        orch.mark_handled(["a"])
-        self.assertEqual(orch.unhandled(letters), [])
+        self.submit("a", "7")
+        self.kill("a")
+        self.assertEqual([x["job_id"] for x in self.listed()], ["a"])
+        self.assertEqual(len(self.listed()), 1)  # a failed or skipped run marks nothing
+        self.assertEqual(self.run_main("handled", "a")[0], 0)
+        self.assertEqual(self.listed(), [])
 
     def test_repeat_failure_reappears_under_a_new_job_id(self):
-        orch.mark_handled(["a"])
-        out = orch.unhandled([{"job_id": "a", "task": "7"}, {"job_id": "b", "task": "7"}])
-        self.assertEqual([x["job_id"] for x in out], ["b"])
+        self.submit("a", "7")
+        self.kill("a")
+        self.run_main("handled", "a")
+        self.submit("b", "7")
+        self.kill("b")
+        self.assertEqual([x["job_id"] for x in self.listed()], ["b"])
 
-    def test_ledger_tolerates_a_non_utf8_byte(self):
-        (Path(self.tmp.name) / "handled.txt").write_bytes(b"a\n\xff\xfe\nb\n")
-        out = orch.unhandled([{"job_id": "a", "task": "1"}, {"job_id": "c", "task": "1"}])
-        self.assertEqual([x["job_id"] for x in out], ["c"])
+    def test_requeue_uses_the_approved_brief(self):
+        self.submit("a", "7")
+        self.kill("a")
+        self.submit("c", "9")
+        self.kill("c")
+        draft = Path(self.run_main("plan", "7")[1].strip())
+        draft.write_text("draft")
+        self.run_main("approve", "7", str(draft))
+        by_id = {x["job_id"]: x for x in self.listed()}
+        self.assertTrue(by_id["a"]["approved_brief"].endswith("tasks/7/brief.md"))
+        self.assertEqual(by_id["c"]["approved_brief"], "")
+        self.assertEqual((by_id["a"]["repo"], by_id["a"]["round"]), ("r", 1))
 
 
 class Reports(Base):
-    def report(self):
-        bundle = Path(self.tmp.name) / "bundle"
-        bundle.mkdir()
-        envelope = {
-            "duration_ms": 61000,
-            "num_turns": 12,
-            "total_cost_usd": 1.5,
-            "structured_output": {
-                "summary": "Added the PO field | done",
-                "friction": [{"tool": "t", "expected": "e", "observed": "o", "did": "d"}],
-            },
+    ENVELOPE = {
+        "structured_output": {
+            "summary": "Added the PO field | done",
+            "friction": [{"tool": "t", "expected": "e", "observed": "o", "did": "d"}],
         }
-        (bundle / "envelope.json").write_text(json.dumps(envelope))
-        job = {"task": "7", "repo": "r", "round": 1, "state": "DONE",
-               "outcome": "DONE", "session_id": "s1", "job_id": "j1",
-               "bundle": str(bundle)}
-        dead = {"task": "8", "repo": "r", "round": 1, "state": "DEAD_LETTER",
-                "dead_reason": "KILLED_BY_DEADLINE", "job_id": "j2"}
-        return {"batch_id": "b", "jobs": [job, dead]}
+    }
 
-    def test_friction_appends_dated_file(self):
-        self.assertEqual(orch.friction(self.report(), today=date(2026, 10, 16)), 1)
-        text = (Path(self.tmp.name) / "friction/2026-10-16.md").read_text()
-        self.assertIn("task 7 job j1", text)
-        self.assertIn("- observed: o", text)
+    def seed(self):
+        self.submit("j1", "7")
+        self.submit("j2", "8")
+        self.finish("j1", self.ENVELOPE)
+        self.kill("j2")
 
-    def test_friction_is_idempotent(self):
-        report = self.report()
-        self.assertEqual(orch.friction(report, today=date(2026, 10, 16)), 1)
-        self.assertEqual(orch.friction(report, today=date(2026, 10, 16)), 0)
-        text = (Path(self.tmp.name) / "friction/2026-10-16.md").read_text()
-        self.assertEqual(text.count("## task 7"), 1)
+    def test_friction_lands_in_task_json_once(self):
+        self.seed()
+        self.assertEqual(self.run_main("friction", A)[1].strip(), "1")
+        entries = read_task(7, self.home).friction
+        self.assertEqual([(e["observed"], e["job_id"]) for e in entries], [("o", "j1")])
+        self.assertIsNotNone(self.job("j1").friction_recorded_us)
+        self.assertEqual(self.run_main("friction", A)[1].strip(), "0")
+        self.assertEqual(len(read_task(7, self.home).friction), 1)
 
-    def test_no_friction_writes_nothing(self):
-        report = {"jobs": [{"task": "1", "job_id": "x", "bundle": "/nonexistent"}]}
-        self.assertEqual(orch.friction(report), 0)
-        self.assertFalse((Path(self.tmp.name) / "friction").exists())
+    def test_no_friction_marks_and_writes_nothing(self):
+        self.submit("j1", "7")
+        self.finish("j1", {"structured_output": {"summary": "x", "friction": []}})
+        self.assertEqual(self.run_main("friction", A)[1].strip(), "0")
+        self.assertIsNone(self.job("j1").friction_recorded_us)
+        self.assertFalse((self.home / "tasks/7/task.json").exists())
 
     def test_records_table(self):
-        rows = orch.records(self.report()).splitlines()
+        self.seed()
+        rows = self.run_main("records", A)[1].splitlines()
         self.assertEqual(len(rows), 4)
-        self.assertIn("| 61 | 12 | 1.5 |", rows[2])
-        self.assertIn("KILLED_BY_DEADLINE", rows[3])
+        self.assertIn("| 7 | j1 | DONE | COMPLETED |", rows[2])
+        self.assertIn("| 1.5 |", rows[2])
         self.assertNotIn("PO field | done", rows[2])
+        self.assertIn("KILLED_BY_DEADLINE", rows[3])
 
-    def test_records_with_a_missing_envelope(self):
-        job = {"task": "7", "repo": "r", "round": 1, "state": "DONE", "bundle": "/nonexistent"}
-        rows = orch.records({"jobs": [job]}).splitlines()
-        self.assertEqual(len(rows), 3)
-        self.assertIn("| 7 | r | 1 | DONE |", rows[2])
+    def test_records_with_no_envelope_has_blank_summary(self):
+        self.submit("j1", "7")
+        self.finish("j1")
+        self.assertTrue(self.run_main("records", A)[1].splitlines()[2].endswith("|  |"))
 
-    def test_report_without_bundle_has_no_friction_and_blank_figures(self):
-        self.addCleanup(os.chdir, os.getcwd())
-        os.chdir(self.tmp.name)  # a stray envelope.json in the cwd must not be read
-        Path("envelope.json").write_text(json.dumps({"num_turns": 99}))
-        job = {"task": "7", "repo": "r", "round": 1, "state": "DONE", "job_id": "j9"}
-        self.assertEqual(orch.friction({"jobs": [job]}), 0)
-        row = orch.records({"jobs": [job]}).splitlines()[2]
-        self.assertIn("|  |  |  |  |", row)
-        self.assertNotIn("99", row)
-
-    def test_report_is_read_from_a_file(self):
-        path = Path(self.tmp.name) / "run.json"
-        path.write_text(json.dumps(self.report()))
-        self.assertEqual(orch.main(["records", str(path)]), 0)
-        self.assertEqual(orch.main(["records", str(path) + ".missing"]), 2)
+    def test_bad_batch_id_is_a_clean_error(self):
+        for verb in ("friction", "records", "batch-done"):
+            self.assertEqual(self.run_main(verb, "../x")[0], 2, verb)
 
 
 class Batches(Base):
-    A, B = "a" * 32, "b" * 32
+    def test_batch_is_listed_when_finished_until_done(self):
+        self.submit("a", "1", batch=A)
+        self.submit("b", "2", batch=B)
+        self.assertEqual(self.run_main("batches")[1].strip(), "")  # still PENDING
+        self.finish_pair()
+        self.assertEqual(self.run_main("batches")[1].split(), [A, B])
+        self.assertEqual(self.run_main("batch-done", A)[0], 0)
+        self.assertEqual(self.run_main("batches")[1].split(), [B])
+        self.assertIsNotNone(self.job("a").reported_us)
 
-    def test_batch_stays_listed_until_done_in_submit_order(self):
-        self.assertEqual(orch.batches(), [])
-        orch.batch_add(self.A)
-        orch.batch_add(self.B)
-        orch.batch_add(self.A)
-        self.assertEqual(orch.batches(), [self.A, self.B])
-        orch.batch_done(self.A)
-        self.assertEqual(orch.batches(), [self.B])
+    def finish_pair(self):
+        self.finish("a")
+        self.kill("b")
 
-    def test_bad_batch_id_is_a_clean_error(self):
-        self.assertEqual(orch.main(["batch-add", "../x"]), 2)
-        self.assertEqual(orch.main(["batch-done", "short"]), 2)
-        self.assertFalse((Path(self.tmp.name) / "batches.txt").exists())
-
-    def test_cli_round_trip(self):
-        self.assertEqual(orch.main(["batch-add", self.A]), 0)
-        self.assertEqual(orch.main(["batches"]), 0)
-        self.assertEqual(orch.main(["batch-done", self.A]), 0)
-        self.assertEqual(orch.batches(), [])
-        self.assertEqual(orch.main(["batches", "x"]), 2)
+    def test_extra_argument_is_usage_error(self):
+        self.assertEqual(self.run_main("batches", "x")[0], 2)
 
 
 if __name__ == "__main__":
