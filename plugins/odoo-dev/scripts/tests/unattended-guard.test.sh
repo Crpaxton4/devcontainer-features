@@ -28,7 +28,7 @@ OUTSIDE="$TMP/outside"
 mkdir -p "$REPO" "$OUTSIDE"
 # The run trigger must come from each case, never from the caller's environment, and
 # HOME must resolve outside any git tree so the ~ and $HOME cases are about the guard.
-unset ODOO_UNATTENDED CLAUDE_CONFIG_DIR
+unset ODOO_UNATTENDED CLAUDE_CONFIG_DIR ODOO_DEV_HOME ODOO_JOB_ID
 export HOME="$OUTSIDE"
 gitq() { git -C "$REPO" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
 gitq init -q -b main
@@ -459,9 +459,17 @@ allowed "install_all.sh is its own head" "install_all.sh --db x --addons-path=/x
 allowed "odoo-bin shell" "odoo-bin shell -d db"
 
 allowed "odoo-bin upgrade_code" "odoo-bin upgrade_code --from 17.0 --to 19.0" "$UPG"
-denied_as "odoo-bin -i for the upgrader" "$UPG" "odoo-bin -d db -i x"
-denied_as "odoo17-bin --update for the upgrader" "$UPG" "odoo17-bin --update=x"
-denied_as "odoo -u for the namespaced upgrader" "odoo-dev:$UPG" "odoo -u x"
+# A direct install is advisory for the upgrader: a warning on stderr, never a deny.
+advisory() { # advisory <label> <agent> <command>
+  local err
+  err="$(payload "$2" "$3" "$REPO" | bash "$GUARD" 2>&1 >"$TMP/adv.out")"; RC=$?
+  OUT="$(cat "$TMP/adv.out")"
+  if [ "$RC" -eq 0 ] && [ -z "$OUT" ] && printf '%s' "$err" | grep -qF "advisory"; then ok "$1 -> advisory on stderr, allowed"
+  else bad "$1: expected an advisory on stderr and empty stdout, rc=$RC out=${OUT:-<silence>} err=${err:-<none>}"; fi
+}
+advisory "odoo-bin -i for the upgrader" "$UPG" "odoo-bin -d db -i x"
+advisory "odoo17-bin --update for the upgrader" "$UPG" "odoo17-bin --update=x"
+advisory "odoo -u for the namespaced upgrader" "odoo-dev:$UPG" "odoo -u x"
 allowed "odoo-bin -i x for the builder" "odoo-bin -d db -i x" "$BLD"
 allowed "odoo-bin upgrade_code for the upgrader" "odoo-bin upgrade_code -d db" "$UPG"
 
@@ -481,7 +489,7 @@ denied "ssh true chained" "database upgrade" "ssh h 'true; rm -rf /'"
 STATE="$TMP/state"
 mkdir -p "$STATE"
 wr() { # wr <label> <allow|deny> <tool> <tool_input JSON> [<agent>]
-  ODOO_DEV_STATE_DIR="$STATE" run "${5-$AGENT}" "" "$REPO" "$3" "$4"
+  ODOO_DEV_HOME="$STATE" run "${5-$AGENT}" "" "$REPO" "$3" "$4"
   if [ "$2" = deny ]; then
     if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "write outside scope"; then ok "$1 -> denied"
     else bad "$1: expected a deny, got: ${OUT:-<silence>}"; fi
@@ -496,11 +504,14 @@ wr "Write /tmp/inventory.json" deny Write '{"file_path":"/tmp/inventory.json"}'
 wr "NotebookEdit outside" deny NotebookEdit '{"notebook_path":"/tmp/n.ipynb"}'
 wr "Edit by a main session" allow Edit '{"file_path":"/tmp/inventory.json"}' ""
 
-# --- a STOP file kills the run -------------------------------------------------------
+# --- a STOP file kills the run of its own job only -----------------------------------
+# Layout: $ODOO_DEV_HOME/tasks/<task>/jobs/<job>/STOP. The guard looks only for the job
+# named by ODOO_JOB_ID, and does nothing when ODOO_JOB_ID is unset.
 KSTATE="$TMP/kstate"
-mkdir -p "$KSTATE/tasks/1"
+mkdir -p "$KSTATE/tasks/1/jobs/job-a" "$KSTATE/tasks/2/jobs/job-b"
+JOB=job-a
 kill_case() { # kill_case <label> <allow|deny> <tool> <tool_input JSON> <command>
-  ODOO_DEV_STATE_DIR="$KSTATE" run "$AGENT" "$5" "$REPO" "$3" "$4"
+  ODOO_DEV_HOME="$KSTATE" ODOO_JOB_ID="$JOB" run "$AGENT" "$5" "$REPO" "$3" "$4"
   if [ "$2" = deny ]; then
     if printf '%s' "$OUT" | grep -q '"permissionDecision":"deny"' && printf '%s' "$OUT" | grep -qF "the run is killed"; then ok "$1 -> denied"
     else bad "$1: expected a kill deny, got: ${OUT:-<silence>}"; fi
@@ -509,12 +520,36 @@ kill_case() { # kill_case <label> <allow|deny> <tool> <tool_input JSON> <command
 }
 kill_case "no STOP: Edit" allow Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
 kill_case "no STOP: Bash ls" allow Bash '{}' "ls"
-: > "$KSTATE/tasks/1/STOP"
+: > "$KSTATE/tasks/1/jobs/job-a/STOP"
 kill_case "STOP: Edit" deny Edit "{\"file_path\":\"$REPO/tracked.txt\"}" ""
 kill_case "STOP: Bash ls" deny Bash '{}' "ls"
 kill_case "STOP: upgrade-state.sh next" allow Bash '{}' "bash /p/skills/odoo-upgrade/scripts/upgrade-state.sh /arts next"
 kill_case "STOP: upgrade-state.sh chained" deny Bash '{}' "upgrade-state.sh /arts next; ls"
 kill_case "STOP: Read" allow Read '{"file_path":"/x"}' ""
+JOB=job-b
+kill_case "STOP of another job: Bash ls" allow Bash '{}' "ls"
+JOB=job-c
+kill_case "STOP: a job with no directory: Bash ls" allow Bash '{}' "ls"
+# No ODOO_JOB_ID: no STOP check at all, even with a STOP file on disk.
+ODOO_DEV_HOME="$KSTATE" run "$AGENT" "ls" "$REPO" "Bash" ""
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "STOP present, ODOO_JOB_ID unset -> allowed"
+else bad "STOP present, ODOO_JOB_ID unset: rc=$RC out=${OUT:-<silence>}"; fi
+
+# --- latency: one engaged call must answer in well under 100 ms -----------------------
+# A cold machine or a loaded CI runner can miss the bound, so the check is a best of
+# five and it skips (with the number) when even the best run is 150 ms or more
+# (a loaded machine; a node start alone can take 100 ms there).
+best=999999
+for _ in 1 2 3 4 5; do
+  pl="$(payload "$AGENT" "git status --short" "$REPO")"
+  t0="$(date +%s%N)"
+  printf '%s' "$pl" | bash "$GUARD" >/dev/null 2>&1
+  ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  [ "$ms" -lt "$best" ] && best="$ms"
+done
+if [ "$best" -lt 100 ]; then ok "latency: best of five engaged calls ${best} ms (< 100 ms)"
+elif [ "$best" -ge 150 ]; then echo "SKIP latency: machine too slow, best of five ${best} ms"
+else bad "latency: best of five engaged calls ${best} ms (limit 100 ms)"; fi
 
 echo
 echo "unattended-guard.test.sh:$pass passed, $fail failed"

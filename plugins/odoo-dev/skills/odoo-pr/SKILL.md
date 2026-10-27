@@ -38,8 +38,12 @@ that ships no tests → report it and carry on.
 Commits are conventional, scope = module name, per `odoo-devcontainer/references/commits.md`.
 Tidy the history before the PR exists.
 
-The manifest version is bumped once per PR for every changed module. On odoo.sh a module
-is only updated when the commit bumps `__manifest__.py`.
+The manifest version is bumped once per PR for every changed module. `pr-open.sh` does it
+before the push, in one `chore(<modules>): bump manifest versions` commit, for each module
+whose version has not moved since the merge-base. Commits on the branch need no bump. On
+odoo.sh a module is only updated when the PR bumps `__manifest__.py`. `--no-bump` skips it.
+A module deleted without a `dropped` entry in the upgrade state adds a `> Warning:` line to
+the PR body.
 
 Size: best under 500 changed lines, acceptable under 1000. Past that, split into stacked
 pull requests.

@@ -88,6 +88,79 @@ if called "pr ready"; then fail=$((fail+1)); echo "FAIL must never mark a PR rea
 out="$(run yes --draft)"
 if called "pr ready"; then fail=$((fail+1)); echo "FAIL --draft must not drag a ready PR back" >&2; else pass=$((pass+1)); fi
 
+# ---------- manifest bump, once per PR ----------------------------------------
+# A module repo with base branch `main`. gitq runs git with local hooks disabled.
+mrepo="$work/mrepo"
+git init --quiet -b main "$mrepo"
+gitq() { git -C "$mrepo" -c core.hooksPath="$work/no-hooks" -c user.email=t@e.invalid -c user.name=t "$@" >/dev/null 2>&1; }
+manifest() { printf "{\n    'name': 'fixture',\n    'version': '%s',\n}\n" "$2" > "$1"; }
+mkdir -p "$mrepo/m1" "$mrepo/m2"
+manifest "$mrepo/m1/__manifest__.py" 17.0.1.0.0
+manifest "$mrepo/m2/__manifest__.py" 17.0.1.0.0
+echo a > "$mrepo/m1/a.py"; echo a > "$mrepo/m2/a.py"; echo a > "$mrepo/README"
+gitq add -A; gitq commit -q -m "chore: fixture"
+version() { sed -n -E "s/.*'version': '([^']+)'.*/\1/p" "$mrepo/$1/__manifest__.py"; }
+commits() { git -C "$mrepo" rev-list --count main..HEAD; }
+bump_commits() { git -C "$mrepo" log main..HEAD --format=%s | grep -c '^chore(.*): bump manifest versions$' || true; }
+runm() { # runm <extra args...> — pr-open on mrepo against main, stdout discarded
+  : > "$work/gh-calls"; rm -f "$work/gh-calls.created"
+  PATH="$bin:$PATH" GH_CALLS="$work/gh-calls" GH_EXISTING=no \
+    bash "$SUT" "$mrepo" o/r main --title "fix(m1): x" --body-file "$work/mbody.md" --no-push "$@" >/dev/null 2>&1
+}
+
+gitq checkout -q -b 5-two-commits
+echo b >> "$mrepo/m1/a.py"; gitq commit -q -am "fix(m1): one"
+echo c >> "$mrepo/m1/a.py"; gitq commit -q -am "fix(m1): two"
+printf '## body\n' > "$work/mbody.md"
+runm
+expect "bump: two commits on one module -> one bump commit" "$(bump_commits)" "1"
+expect "bump: the branch gained exactly that one commit"    "$(commits)" "3"
+expect "bump: m1 patch version moved"                       "$(version m1)" "17.0.1.0.1"
+expect "bump: untouched m2 stays put"                       "$(version m2)" "17.0.1.0.0"
+runm
+expect "bump: a rerun adds no second bump (version already moved)" "$(commits)" "3"
+
+# A hand-bumped version is a bump too: nothing is added on top.
+gitq checkout -q main; gitq checkout -q -b 6-hand-bumped
+echo b >> "$mrepo/m2/a.py"; manifest "$mrepo/m2/__manifest__.py" 17.0.2.0.0
+gitq commit -q -am "feat(m2): hand bump"
+runm
+expect "bump: no bump when the version already moved vs the base" "$(commits)" "1"
+expect "bump: the hand-bumped version is untouched"                "$(version m2)" "17.0.2.0.0"
+
+# A change outside every module needs no bump.
+gitq checkout -q main; gitq checkout -q -b 7-readme
+echo more >> "$mrepo/README"; gitq commit -q -am "docs: readme"
+runm
+expect "bump: a change outside every module bumps nothing" "$(commits)" "1"
+
+# --no-bump skips the step.
+gitq checkout -q main; gitq checkout -q -b 8-no-bump
+echo b >> "$mrepo/m1/a.py"; gitq commit -q -am "fix(m1): x"
+runm --no-bump
+expect "bump: --no-bump adds no commit" "$(commits)" "1"
+expect "bump: --no-bump leaves the version" "$(version m1)" "17.0.1.0.0"
+
+# A module deleted whole: never bumped; a warning line in the body unless the upgrade
+# state marks it dropped. No upgrade section at all: nothing is said.
+gitq checkout -q main; gitq checkout -q -b 9-delete
+gitq rm -r -q m2; gitq commit -q -m "chore(m2): remove"
+state="$work/state"; mkdir -p "$state"
+WARN='> Warning: m2 deleted without a dropped entry in the upgrade state'
+runw() { printf '## body\n' > "$work/mbody.md"; ODOO_DEV_TASK_ARTIFACTS="$state" runm; }
+printf '{"upgrade":{"inputs":{"worktree":"x"},"modules":{"m2":{"status":"ported"}}}}\n' > "$state/task.json"
+runw
+grep -qxF "$WARN" "$work/mbody.md"; expect "warning: deleted module not marked dropped warns in the body" "$?" "0"
+expect "warning: a deleted module is not bumped, the PR still goes ahead" "$(commits)" "1"
+runm
+expect "warning: a rerun does not repeat the line" "$(grep -cxF "$WARN" "$work/mbody.md")" "1"
+printf '{"upgrade":{"inputs":{"worktree":"x"},"modules":{"m2":{"status":"dropped"}}}}\n' > "$state/task.json"
+runw
+grep -qF "Warning" "$work/mbody.md"; expect "warning: a dropped module adds no line" "$?" "1"
+printf '{"title":"x"}\n' > "$state/task.json"
+runw
+grep -qF "Warning" "$work/mbody.md"; expect "warning: no upgrade section adds no line" "$?" "1"
+
 # ---------- guards -------------------------------------------------------------
 guard() { PATH="$bin:$PATH" GH_CALLS="$work/gh-calls" GH_EXISTING=no bash "$SUT" "$@" >/dev/null 2>&1; echo $?; }
 expect "missing body file is 5" "$(guard "$repo" o/r UAT --title T --body-file "$work/nope.md" --no-push)" "5"

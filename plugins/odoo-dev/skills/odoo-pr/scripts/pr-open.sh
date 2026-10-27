@@ -2,7 +2,15 @@
 # pr-open.sh — push a task branch and open (or update) its pull request.
 #
 # Usage: pr-open.sh <worktree> <owner/repo> <base> --title T --body-file F
-#                   [--assign-me] [--no-push]
+#                   [--assign-me] [--no-push] [--no-bump]
+#
+# Before the push it bumps the manifest version ONCE PER PR (there is no per-commit
+# hook). Every module that <base>...HEAD touches and whose version has not moved since
+# the merge-base is bumped with bump_manifest_version.py, and one commit
+# `chore(<modules>): bump manifest versions` carries the bumps. --no-bump skips this.
+# A module whose files are all deleted is never bumped. When the task's upgrade state
+# (task.json) does not mark it `dropped`, a `> Warning:` line is appended to the body
+# file instead; it never refuses.
 #
 # Rerun-safe by construction: it asks GitHub for an existing PR on this head
 # FIRST and edits that one rather than opening a second. A task that gets a
@@ -19,13 +27,17 @@
 #
 # Last stdout line: {"pr_url","pr_number","action":"created"|"updated","draft",
 #                    "base","head","assigned"}
-# Exit codes: 0 ok | 2 usage | 5 body file missing or empty
+# Exit codes: 0 ok | 2 usage | 3 manifest bump failed | 5 body file missing or empty
 set -euo pipefail
 
-[ $# -ge 3 ] || { echo "usage: pr-open.sh <worktree> <owner/repo> <base> --title T --body-file F [--assign-me] [--no-push]" >&2; exit 2; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUMP_PY="$HERE/../../odoo-devcontainer/scripts/bump_manifest_version.py"
+JSON_GET="$HERE/../../../scripts/json-get.sh"
+
+[ $# -ge 3 ] || { echo "usage: pr-open.sh <worktree> <owner/repo> <base> --title T --body-file F [--assign-me] [--no-push] [--no-bump]" >&2; exit 2; }
 worktree="$1"; slug="$2"; base="$3"; shift 3
 
-title=""; body_file=""; assign_me=false; do_push=true
+title=""; body_file=""; assign_me=false; do_push=true; do_bump=true
 while [ $# -gt 0 ]; do
   case "$1" in
     --title)     title="${2:?}"; shift 2 ;;
@@ -35,6 +47,7 @@ while [ $# -gt 0 ]; do
     --draft)     shift ;;
     --assign-me) assign_me=true; shift ;;
     --no-push)   do_push=false; shift ;;
+    --no-bump)   do_bump=false; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +63,79 @@ command -v gh >/dev/null 2>&1 || { echo "gh is not installed" >&2; exit 2; }
 head="$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
 [ "$head" != "HEAD" ] || { echo "worktree is in detached HEAD state: $worktree" >&2; exit 2; }
 [ "$head" != "$base" ] || { echo "refusing: head and base are both '$base' — a PR needs two different branches" >&2; exit 2; }
+
+# manifest_version — the version string of an Odoo manifest read on stdin, or nothing.
+# Both quote styles appear in the wild; the first `version` key wins.
+manifest_version() {
+  sed -n -E "s/.*['\"]version['\"][[:space:]]*:[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" | head -1 || true
+}
+
+# upgrade_status <module> — the module's status in the upgrade section of the task
+# state, or nothing when no task.json carries an upgrade section for this worktree.
+# The state is $ODOO_DEV_TASK_ARTIFACTS/task.json when set, else the task.json under
+# ${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}/tasks whose upgrade.inputs.worktree matches.
+upgrade_status() {
+  local wt_real f out files=()
+  wt_real="$(cd "$worktree" && pwd -P)"
+  if [ -n "${ODOO_DEV_TASK_ARTIFACTS:-}" ]; then
+    files=("$ODOO_DEV_TASK_ARTIFACTS/task.json"); wt_real=""
+  else
+    for f in "${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}"/tasks/*/task.json; do files+=("$f"); done
+  fi
+  for f in "${files[@]}"; do
+    [ -f "$f" ] || continue
+    out="$(bash "$JSON_GET" '(d.upgrade && d.upgrade.inputs && (a.wt === "" || d.upgrade.inputs.worktree === a.wt)) ? String(((d.upgrade.modules || {})[a.m] || {}).status || "unknown") : null' \
+      "m=$1" "wt=$wt_real" < "$f" 2>/dev/null || true)"
+    if [ -n "$out" ]; then printf '%s' "$out"; return; fi
+  done
+}
+
+# bump_manifests — once per PR: bump each touched module whose version has not moved
+# since the merge-base, make one commit, and warn in the body about a module deleted
+# without a dropped entry. Silent when base...HEAD touches no module, or base is unknown.
+bump_manifests() {
+  local ref="" r mb path dir mod modules="" bumped=() scopes="" v_base v_head status
+  for r in "origin/$base" "$base"; do
+    if git -C "$worktree" rev-parse --verify -q "$r^{commit}" >/dev/null 2>&1; then ref="$r"; break; fi
+  done
+  [ -n "$ref" ] || return 0
+  mb="$(git -C "$worktree" merge-base "$ref" HEAD 2>/dev/null)" || return 0
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    dir="$(dirname "$path")"
+    while [ "$dir" != "." ] && [ "$dir" != "/" ]; do
+      if git -C "$worktree" cat-file -e "HEAD:$dir/__manifest__.py" 2>/dev/null \
+         || git -C "$worktree" cat-file -e "$mb:$dir/__manifest__.py" 2>/dev/null; then
+        modules="$modules$dir"$'\n'; break
+      fi
+      dir="$(dirname "$dir")"
+    done
+  done < <(git -C "$worktree" diff --name-only "$ref...HEAD")
+  modules="$(printf '%s' "$modules" | sed '/^$/d' | sort -u)"
+  [ -n "$modules" ] || return 0
+
+  while IFS= read -r mod; do
+    v_base="$(git -C "$worktree" show "$mb:$mod/__manifest__.py" 2>/dev/null | manifest_version)"
+    [ -n "$v_base" ] || continue                       # a new module has nothing to move away from
+    if [ -z "$(git -C "$worktree" ls-tree -r --name-only HEAD -- "$mod")" ]; then
+      status="$(upgrade_status "$mod")"
+      if [ -n "$status" ] && [ "$status" != dropped ]; then
+        printf '\n> Warning: %s deleted without a dropped entry in the upgrade state\n' "$mod" >> "$body_file"
+      fi
+      continue
+    fi
+    v_head="$(git -C "$worktree" show "HEAD:$mod/__manifest__.py" 2>/dev/null | manifest_version)"
+    [ "$v_head" = "$v_base" ] || continue              # the version already moved (or is unreadable)
+    python3 "$BUMP_PY" "$worktree/$mod" >&2 || { echo "manifest bump failed for $mod" >&2; exit 3; }
+    git -C "$worktree" add -- "$mod/__manifest__.py"
+    bumped+=("$mod"); scopes="${scopes:+$scopes,}$(basename "$mod")"
+  done <<EOF
+$modules
+EOF
+  [ "${#bumped[@]}" -eq 0 ] || git -C "$worktree" commit -q -m "chore($scopes): bump manifest versions" >&2
+}
+
+[ "$do_bump" = false ] || bump_manifests
 
 if [ "$do_push" = true ]; then
   # -u so later pushes from this worktree need no arguments, and so `gh pr list

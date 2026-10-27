@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# hooks.test.sh — the two PreToolUse hooks, driven by synthetic payloads on stdin.
+# hooks.test.sh — the tester allowlist hook (bash-allowlist.sh over lib/bash-allowlist.js),
+# driven by synthetic payloads on stdin.
 #
-# Offline: no network, no docker, no Odoo, no repos tree. The only thing built here
-# is a handful of throwaway git repos and artifact dirs under mktemp.
+# Offline: no network, no docker, no Odoo, no repos tree.
 #
 # Every case asserts the DECISION and, when it denies, a substring of the reason —
 # because "exits 0 with a deny" would stay green if the hook started denying for
@@ -10,18 +10,13 @@
 # has. The `existing-work.sh ... 2>/dev/null` case is the sharp one: it must be
 # denied for not being on the allowlist, and specifically NOT for containing `>`.
 #
-# Part (b) is the commit hook, which has exactly one shape since the PR and release
-# gates were removed in #904. It is judged on a repository rather than on an
-# artifacts dir, so it builds its own fixture repo with two modules and moves the
-# index or the work tree before each case. Its allowed cases matter as much as its
-# denied ones: this shape fires on a command every repository on the machine runs,
-# so each thing the hook declines to decide is asserted by name.
+# The commit hook is gone: the manifest bump runs once per PR in pr-open.sh, and
+# pr-open.test.sh covers it. The unattended guard has its own suite.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ALLOWLIST="$ROOT/hooks/bash-allowlist.sh"
-COMMITHOOK="$ROOT/hooks/commit-hook.sh"
 
 pass=0; fail=0
 ok()  { echo "PASS $*"; pass=$((pass + 1)); }
@@ -75,7 +70,7 @@ denied() {
   ok "$label -> denied ($want)"
 }
 
-# --- part (a): the read-only tester ---------------------------------------------
+# --- the read-only tester ---------------------------------------------------------
 
 TESTER=odoo-dev-tester
 
@@ -130,8 +125,8 @@ fi
 denied "$ALLOWLIST" "tester: bash -c with a real redirect" "redirects somewhere other than /dev/null" \
   "$TESTER" "bash -c 'echo x > /tmp/f'"
 # The case a write-pattern blocklist misses entirely: nothing here looks like a write.
-denied "$ALLOWLIST" "tester: python -c open(f,w)" "not on the odoo-dev-tester allowlist" \
-  "$TESTER" 'python -c "open(\"/tmp/f\",\"w\").write(\"x\")"'
+denied "$ALLOWLIST" "tester: an interpreter one-liner that writes a file" "not on the odoo-dev-tester allowlist" \
+  "$TESTER" 'perl -e "unlink q(/tmp/f)"'
 denied "$ALLOWLIST" "tester: chaining behind an allowlisted first token" "contains ;" \
   "$TESTER" "artifact.sh set x; rm -rf /tmp/y"
 denied "$ALLOWLIST" "tester: && chaining" "contains &" \
@@ -196,284 +191,12 @@ else
   bad "unparseable payload naming the tester: rc=$RC out=$OUT"
 fi
 
-# --- part (b): the commit hook -----------------------------------------------------
-# One shape, `git commit`, judged on the repository rather than on any artifact.
-# The PR and release gates that used to live here went out with gate.sh in #904, so
-# there is nothing left to build an artifacts dir for.
-
-WT="$(mktemp -d)"
-# mkwt <branch> <name> — a worktree is only ever read here, never checked out over.
-# Local hooks are disabled so a machine with a global commit-msg policy still runs
-# this suite.
-mkwt() {
-  local branch="$1" d="$WT/$2"
-  mkdir -p "$d"
-  git init -q -b "$branch" "$d" 2>/dev/null \
-    || { git init -q "$d"; git -C "$d" symbolic-ref HEAD "refs/heads/$branch"; }
-  git -C "$d" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t \
-      commit -q --allow-empty --no-verify -m "chore: fixture"
-  echo "$d"
-}
-# A git repository with no Odoo module anywhere in it, a plain directory with no
-# repository above it, and a path that does not exist at all.
-NOMOD="$(mkwt 30999-no-modules nomod)"
-PLAIN="$WT/not-a-repo"; mkdir -p "$PLAIN"
-GONE="$WT/no-such-worktree"
-
-# The commit hook is not the tester hook, and it is no longer the PR hook either:
-# it engages on `git commit` and says nothing about anything else. The three calls
-# it used to hold against gate.sh are asserted here by name, so that removing the
-# gate is a property of the suite rather than an absence in it.
-allowed "$COMMITHOOK" "commit: an unrelated command" odoo-dev-pr "echo hello" "$NOMOD"
-allowed "$COMMITHOOK" "commit: gh pr create is no longer gated" \
-  odoo-dev-pr "gh pr create --draft --title T --body-file /tmp/body.md" "$NOMOD"
-allowed "$COMMITHOOK" "commit: pr-open.sh is no longer gated" \
-  odoo-dev-pr "bash /plugin/skills/odoo-pr/scripts/pr-open.sh $NOMOD acme/erp staging --title T"
-allowed "$COMMITHOOK" "commit: release-pr.sh is no longer gated" \
-  odoo-dev-pr "bash /plugin/skills/odoo-release/scripts/release-pr.sh acme/erp UAT main"
-allowed "$COMMITHOOK" "commit: main session, unrelated command" "" "ls -la" "$NOMOD"
-
-# No cwd in the payload at all: there is no repository to read, so the call passes.
-OUT="$(node -e 'process.stdout.write(JSON.stringify({hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"git commit -m x"}}))' \
-       | bash "$COMMITHOOK" 2>/dev/null)"; RC=$?
-if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "commit: git commit with no cwd in the payload -> allowed"
-else bad "commit: git commit with no cwd in the payload: rc=$RC out=$OUT"; fi
-
-
-# --- the manifest version bump ---------------------------------------------------
-# The hook engages on the change set a commit would carry, so every case below moves
-# the index or the work tree first and then asserts what the hook says about the
-# commit that would follow. The evidence for this shape is the repository, and
-# nothing else: no artifact, no state dir, no task id.
-
-MOD="$WT/modrepo"
-mkdir -p "$MOD/stockflow_sync/models" "$MOD/addons/nested_mod"
-git init -q -b main "$MOD" 2>/dev/null \
-  || { git init -q "$MOD"; git -C "$MOD" symbolic-ref HEAD refs/heads/main; }
-# gitq — the fixture's own git, never the hook's. Local hooks are disabled so a
-# machine with a global commit-msg policy still runs this suite.
-gitq() { git -C "$MOD" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
-# manifest <path> <version> — the smallest thing module-classify.sh's version
-# expression, and therefore the hook's, will read.
-manifest() { printf "{\n    'name': 'fixture',\n    'version': '%s',\n}\n" "$2" > "$1"; }
-
-manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.0.0
-manifest "$MOD/addons/nested_mod/__manifest__.py" 17.0.2.0.0
-printf '# base\n' > "$MOD/stockflow_sync/models/sale.py"
-printf '# base\n' > "$MOD/addons/nested_mod/api.py"
-printf '# readme\n' > "$MOD/README.md"
-gitq add -A
-gitq commit -q --no-verify -m "chore: fixture modules"
-
-# (1) A module changed, the manifest standing still. The reason must name the
-# module and the version it is stuck on, because "denied" alone would stay green
-# if the hook started denying every commit.
-printf '# changed\n' >> "$MOD/stockflow_sync/models/sale.py"
-gitq add stockflow_sync/models/sale.py
-denied "$COMMITHOOK" "commit: git commit touching a module with no manifest bump" \
-  "without moving the manifest version" \
-  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
-denied "$COMMITHOOK" "commit: the deny names the module and its stuck version" \
-  "stockflow_sync (still 17.0.1.0.0)" \
-  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
-
-# (1b) The mechanical rewrite of a port (#1168): the subject `chore(<module>):
-# upgrade_code <NN>.0` exempts that one module from the bump.
-allowed "$COMMITHOOK" "commit: upgrade_code subject needs no bump for its module" \
-  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
-allowed "$COMMITHOOK" "commit: upgrade_code subject with a second -m body" \
-  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0" -m "upgrade_code rc=0, 1 files"' "$MOD"
-printf 'chore(stockflow_sync): upgrade_code 19.0\n\nbody\n' > "$WT/uc-msg.txt"
-allowed "$COMMITHOOK" "commit: upgrade_code subject read from the -F file" \
-  odoo-dev-builder "git commit -F $WT/uc-msg.txt" "$MOD"
-denied "$COMMITHOOK" "commit: upgrade_code subject naming another module" \
-  "stockflow_sync (still 17.0.1.0.0)" \
-  odoo-dev-builder 'git commit -m "chore(nested_mod): upgrade_code 19.0"' "$MOD"
-denied "$COMMITHOOK" "commit: a plain chore subject needs a bump" \
-  "stockflow_sync (still 17.0.1.0.0)" \
-  odoo-dev-builder 'git commit -m "chore(stockflow_sync): tidy"' "$MOD"
-printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
-gitq add addons/nested_mod/api.py
-denied "$COMMITHOOK" "commit: upgrade_code subject still checks a second module" \
-  "addons/nested_mod (still 17.0.2.0.0)" \
-  odoo-dev-builder 'git commit -m "chore(stockflow_sync): upgrade_code 19.0"' "$MOD"
-gitq reset -q HEAD -- addons/nested_mod/api.py
-git -C "$MOD" checkout -q -- addons/nested_mod/api.py
-
-# The repository is the payload cwd unless `-C` moves it, and the same commit
-# denies from an unrelated cwd when it does.
-denied "$COMMITHOOK" "commit: git -C into the module repo from elsewhere" \
-  "without moving the manifest version" \
-  odoo-dev-builder "git -C $MOD commit -m \"feat: sync stock\"" "$PLAIN"
-# --git-dir moves the repository somewhere the hook does not follow.
-allowed "$COMMITHOOK" "commit: git --git-dir is not followed" \
-  odoo-dev-builder "git --git-dir=$MOD/.git commit -m x" "$PLAIN"
-# An explicit pathspec narrows the commit to a subset the hook does not
-# reconstruct. This is the documented bypass, asserted so nobody removes it by
-# accident and nobody adds it back by accident either.
-allowed "$COMMITHOOK" "commit: git commit with an explicit pathspec" \
-  odoo-dev-builder 'git commit -m "feat: sync stock" stockflow_sync' "$MOD"
-allowed "$COMMITHOOK" "commit: git commit with a pathspec after --" \
-  odoo-dev-builder 'git commit -m "feat: sync stock" -- stockflow_sync' "$MOD"
-
-# (2) The same change with the version moved. The hook asks whether the version
-# differs from the base, not whether bump_manifest_version.py is what moved it —
-# a hand edit is a bump.
-manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
-gitq add stockflow_sync/__manifest__.py
-allowed "$COMMITHOOK" "commit: git commit with the manifest version moved" \
-  odoo-dev-builder 'git commit -m "feat: sync stock"' "$MOD"
-gitq commit -q --no-verify -m "feat: sync stock"
-
-# (3) A file outside every module is not a module change.
-printf '# more\n' >> "$MOD/README.md"
-gitq add README.md
-allowed "$COMMITHOOK" "commit: git commit touching no module" \
-  odoo-dev-builder 'git commit -m "docs: readme"' "$MOD"
-gitq commit -q --no-verify -m "docs: readme"
-
-# (4) A nested module is found by walking up to the nearest __manifest__.py, so a
-# repo that keeps its addons under addons/ is gated like a flat one.
-printf '# changed\n' >> "$MOD/addons/nested_mod/api.py"
-gitq add addons/nested_mod/api.py
-denied "$COMMITHOOK" "commit: a nested module is found by walking up" \
-  "addons/nested_mod (still 17.0.2.0.0)" \
-  odoo-dev-builder 'git commit -m "fix: api"' "$MOD"
-gitq reset -q --hard HEAD
-
-# (5) The first commit of a new module has no earlier version to move away from.
-mkdir -p "$MOD/brand_new"
-manifest "$MOD/brand_new/__manifest__.py" 17.0.1.0.0
-printf '# new\n' > "$MOD/brand_new/models.py"
-gitq add brand_new
-allowed "$COMMITHOOK" "commit: the first commit of a new module" \
-  odoo-dev-builder 'git commit -m "feat: brand_new"' "$MOD"
-gitq commit -q --no-verify -m "feat: brand_new"
-
-# (6) Deleting a module removes code and bumps nothing.
-gitq rm -r -q brand_new
-allowed "$COMMITHOOK" "commit: removing a module" \
-  odoo-dev-builder 'git commit -m "chore: drop brand_new"' "$MOD"
-gitq commit -q --no-verify -m "chore: drop brand_new"
-
-# (6b) With an upgrade section for this repository, a whole-module deletion needs a
-# dropped entry. No upgrade section: nothing is policed (case 6 above).
-UPST="$WT/upstate"; mkdir -p "$UPST/tasks/9"
-mkdir -p "$MOD/gone_mod"; manifest "$MOD/gone_mod/__manifest__.py" 17.0.1.0.0
-gitq add gone_mod; gitq commit -q --no-verify -m "feat: gone_mod"
-gitq rm -r -q gone_mod
-printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"ported"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
-export ODOO_DEV_STATE_DIR="$UPST"
-denied "$COMMITHOOK" "commit: deleting a module not marked dropped" "deleted without a dropped entry" \
-  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
-printf '{"upgrade":{"inputs":{"worktree":"%s"},"modules":{"gone_mod":{"status":"dropped"}}}}\n' "$MOD" > "$UPST/tasks/9/task.json"
-allowed "$COMMITHOOK" "commit: deleting a module marked dropped" \
-  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
-printf '{"title":"x"}\n' > "$UPST/tasks/9/task.json"
-allowed "$COMMITHOOK" "commit: deleting a module, no upgrade section" \
-  odoo-dev-builder 'git commit -m "chore: drop gone_mod"' "$MOD"
-unset ODOO_DEV_STATE_DIR
-gitq commit -q --no-verify -m "chore: drop gone_mod"
-
-# (7) -a widens the commit to tracked work-tree changes, and the two forms must
-# disagree on the same state: nothing is staged, so a plain commit carries no
-# module and passes, while -a carries the module and is denied.
-printf '# unstaged\n' >> "$MOD/stockflow_sync/models/sale.py"
-allowed "$COMMITHOOK" "commit: an unstaged module change, committed without -a" \
-  odoo-dev-builder 'git commit -m "feat: more sync"' "$MOD"
-denied "$COMMITHOOK" "commit: an unstaged module change, committed with -am" \
-  "stockflow_sync (still 17.0.1.1.0)" \
-  odoo-dev-builder 'git commit -am "feat: more sync"' "$MOD"
-# `-ma` is `-m a`, not `-m` plus `-a`: the letters after a value-taking one are
-# its value. Read as `-a` it would pick up the work-tree change above and deny,
-# so this is the same state as the two cases above and the parse is what decides.
-allowed "$COMMITHOOK" "commit: -ma is -m a and carries no -a" \
-  odoo-dev-builder 'git commit -ma' "$MOD"
-gitq checkout -- stockflow_sync/models/sale.py
-
-# (8) --amend rewrites the tip, so the comparison base is the tip's parent. The
-# bump in the commit being amended still counts, and reverting it is caught.
-printf '# amended\n' >> "$MOD/stockflow_sync/models/sale.py"
-manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.2.0
-gitq add -A
-gitq commit -q --no-verify -m "feat: amendable"
-printf '# amended twice\n' >> "$MOD/stockflow_sync/models/sale.py"
-gitq add stockflow_sync/models/sale.py
-allowed "$COMMITHOOK" "commit: --amend over a commit that already bumped" \
-  odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
-manifest "$MOD/stockflow_sync/__manifest__.py" 17.0.1.1.0
-gitq add stockflow_sync/__manifest__.py
-denied "$COMMITHOOK" "commit: --amend that puts the version back" \
-  "without moving the manifest version" \
-  odoo-dev-builder 'git commit --amend --no-edit' "$MOD"
-gitq reset -q --hard HEAD
-
-# (9) A merge in progress is not somebody editing a module.
-printf '# merged\n' >> "$MOD/stockflow_sync/models/sale.py"
-gitq add stockflow_sync/models/sale.py
-: > "$MOD/.git/MERGE_HEAD"
-allowed "$COMMITHOOK" "commit: a commit with a merge in progress" \
-  odoo-dev-builder 'git commit --no-edit' "$MOD"
-rm -f "$MOD/.git/MERGE_HEAD"
-denied "$COMMITHOOK" "commit: the same commit once the merge marker is gone" \
-  "without moving the manifest version" \
-  odoo-dev-builder 'git commit --no-edit' "$MOD"
-gitq reset -q --hard HEAD
-
-# (10) Everything the hook cannot decide passes in silence, because `git commit`
-# is an ordinary command in every repository on the machine.
-allowed "$COMMITHOOK" "commit: git commit in a repo with no modules" \
-  odoo-dev-builder 'git commit -m "chore: whatever"' "$NOMOD"
-allowed "$COMMITHOOK" "commit: git commit outside any git repository" \
-  odoo-dev-builder 'git commit -m "chore: whatever"' "$PLAIN"
-allowed "$COMMITHOOK" "commit: git commit with no cwd to resolve" \
-  odoo-dev-builder 'git commit -m "chore: whatever"' "$GONE"
-allowed "$COMMITHOOK" "commit: a read-only git subcommand" \
-  odoo-dev-builder 'git status --short' "$MOD"
-allowed "$COMMITHOOK" "commit: the word commit as an argument, not a subcommand" \
-  odoo-dev-builder 'git log --format=%s -1 commit' "$MOD"
-# A mention is not an invocation here either: the name of the rule inside a
-# message is prose, and the heredoc body is data.
-printf '# mentioned\n' >> "$MOD/stockflow_sync/models/sale.py"
-gitq add stockflow_sync/models/sale.py
-allowed "$COMMITHOOK" "commit: git commit named inside a heredoc body" \
-  odoo-dev-builder "$(printf '%s\n' "cat <<'EOF'" "git commit -m x" "EOF")" "$MOD"
-allowed "$COMMITHOOK" "commit: grep for the word" \
-  odoo-dev-builder 'grep -rn "git commit" docs/' "$MOD"
-gitq reset -q --hard HEAD
-
-# (11) A port moves the series prefix once. With a default branch to compare with,
-# a prefix that differs from the merge-base counts as bumped on this branch, so a
-# second commit on the module needs no further bump. An unchanged prefix denies.
-PORT="$WT/portrepo"
-mkdir -p "$PORT/ported_mod" "$PORT/other_mod"
-git init -q -b main "$PORT" 2>/dev/null \
-  || { git init -q "$PORT"; git -C "$PORT" symbolic-ref HEAD refs/heads/main; }
-portq() { git -C "$PORT" -c core.hooksPath=/dev/null -c user.email=t@example.com -c user.name=t "$@" >/dev/null 2>&1; }
-manifest "$PORT/ported_mod/__manifest__.py" 17.0.1.0.0
-manifest "$PORT/other_mod/__manifest__.py" 17.0.1.0.0
-printf '# base\n' > "$PORT/ported_mod/a.py"
-printf '# base\n' > "$PORT/other_mod/a.py"
-portq add -A
-portq commit -q --no-verify -m "chore: fixture"
-portq update-ref refs/remotes/origin/main HEAD
-portq symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-portq checkout -q -b port-19
-manifest "$PORT/ported_mod/__manifest__.py" 19.0.1.0.0
-printf '# ported\n' >> "$PORT/ported_mod/a.py"
-portq add -A
-portq commit -q --no-verify -m "feat: port ported_mod"
-printf '# more\n' >> "$PORT/ported_mod/a.py"
-portq add ported_mod/a.py
-allowed "$COMMITHOOK" "commit: a second commit on a module whose prefix moved on the branch" \
-  odoo-dev-builder 'git commit -m "fix: more port work"' "$PORT"
-printf '# changed\n' >> "$PORT/other_mod/a.py"
-portq add other_mod/a.py
-denied "$COMMITHOOK" "commit: a module whose prefix is unchanged still needs a bump" \
-  "other_mod (still 17.0.1.0.0)" \
-  odoo-dev-builder 'git commit -m "fix: other"' "$PORT"
-
-rm -rf "$WT"
+# --- the commit hook is gone -------------------------------------------------------
+if [ ! -e "$ROOT/hooks/commit-hook.sh" ] && ! grep -q 'commit-hook' "$ROOT/hooks/hooks.json"; then
+  ok "commit-hook.sh is deleted and not registered"
+else
+  bad "commit-hook.sh still exists or is registered in hooks.json"
+fi
 
 echo
 echo "hooks.test.sh: $pass passed, $fail failed"
