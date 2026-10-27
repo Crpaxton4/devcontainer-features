@@ -19,10 +19,11 @@ import unittest
 from io import StringIO
 from unittest.mock import patch
 
-import odoo_cli.__main__ as cli
 from odoo_dev_core import attribution
 from odoo_dev_data.adapters import git as git_adapter
 from odoo_dev_data.events import EventStore as TaskStateDB
+
+from ..support import invoke
 
 
 def normalize_repo_label(value):
@@ -31,13 +32,13 @@ def normalize_repo_label(value):
 
 
 def _run(argv: list[str]) -> None:
-    """Invoke ``cli.main`` with ``argv``, swallowing its stdio."""
+    """Invoke ``main`` with ``argv``, swallowing its stdio."""
     with (
         patch("sys.argv", ["odoo-dev", *argv]),
         patch("sys.stderr", StringIO()),
         patch("sys.stdout", StringIO()),
     ):
-        cli.main()
+        invoke()
 
 
 class TestNormalizeRepoLabel(unittest.TestCase):

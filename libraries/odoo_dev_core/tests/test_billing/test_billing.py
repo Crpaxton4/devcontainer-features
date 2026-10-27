@@ -24,7 +24,7 @@ from io import StringIO
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import odoo_cli.__main__ as cli
+from odoo_cli.__main__ import main as cli_main
 from odoo_dev_data.events import EventRecord, EventStore
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_core.billing.upload import (
@@ -141,7 +141,7 @@ class TestBillingConfigResolution(unittest.TestCase):
 
 # ── End-to-end: both entry paths against a mocked Odoo transport ────────────────
 
-_MOD = "odoo_cli.__main__"
+_MOD = "odoo_cli.commands"
 
 
 def _seed_db() -> EventStore:
@@ -213,6 +213,12 @@ class _RecordingOdooClient:
 
 def _config(**overrides: Any) -> MagicMock:
     config = MagicMock()
+    config.connection = {
+        "url": "https://example.odoo.com",
+        "db": "example",
+        "username": "bot",
+        "password": "secret",
+    }
     config.session_gap_secs = _WIDE_GAP
     config.min_session_hours = overrides.get("min_session_hours", 0.25)
     config.round_session_hours = overrides.get("round_session_hours", 0.05)
@@ -229,14 +235,13 @@ def _run_cli(
     out = StringIO()
     with (
         patch(
-            f"{_MOD}._build_service",
+            f"{_MOD}.bootstrap",
             return_value=service(client=client, events=db, config=config),
         ),
-        patch(f"{_MOD}._assert_env"),
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-dev", *argv]),
     ):
-        cli.main()
+        assert cli_main() == 0
     return out.getvalue()
 
 

@@ -77,12 +77,12 @@ class TestUnattendedRule:
     def test_cli_cmd_emits_for_interactive_and_not_for_dispatched(self):
         pytest.importorskip("fastmcp")
         pytest.importorskip("markdown_it")
-        from odoo_cli import __main__ as cli
+        from odoo_cli import commands as cli
 
         with patch.object(cli, "emit_tool_event") as emit:
-            cli._emit_cmd_event(service(env={}), "x", {}, {})
+            cli._emit_event(service(env={}), "x", {}, {})
             assert emit.call_count == 1
-            cli._emit_cmd_event(service(env={"ODOO_UNATTENDED": "1"}), "x", {}, {})
+            cli._emit_event(service(env={"ODOO_UNATTENDED": "1"}), "x", {}, {})
             assert emit.call_count == 1
 
     def test_mcp_wrapper_emits_for_interactive_and_not_for_dispatched(self, tmp_path):

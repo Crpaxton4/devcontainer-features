@@ -35,6 +35,7 @@ from typing import Optional
 from unittest.mock import patch
 
 import odoo_cli.__main__ as cli
+from ..support import invoke
 from odoo_dev_core.sessionization.persistence import _CLAUDE_SOURCE_PREFIX
 from odoo_dev_data.events import EventStore as TaskStateDB
 from odoo_dev_data.events import _DEVELOPMENT_SOURCE_PREDICATE
@@ -208,7 +209,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             patch("sys.stderr", StringIO()),
             patch("sys.stdout", StringIO()),
         ):
-            cli.main()
+            invoke()
 
     def _predicate_matches(self) -> int:
         """Rows in the real table matching the real billing predicate."""
@@ -294,7 +295,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             patch("sys.stderr", StringIO()),
             patch("sys.stdout", StringIO()),
         ):
-            cli.main()
+            invoke()
 
         events = TaskStateDB().get_events()
         self.assertEqual(len(events), 1)

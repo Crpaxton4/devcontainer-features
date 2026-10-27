@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-import odoo_cli.__main__ as cli
+from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventStore as TaskStateDB
-from ..support import make_event_store, make_service
 
-ASSERT_GUARD = "odoo_cli.__main__.assert_configured"
+from odoo_cli.__main__ import main
+from odoo_cli.commands import run_get_employee_id, run_normalize
+
+from ..support import invoke, make_event_store, make_service, serving
 
 
 def _tmp_db() -> TaskStateDB:
@@ -40,41 +42,22 @@ def _record_upload(db: TaskStateDB, key: str, timesheet_id: int, hour: int) -> N
 NORMALIZE_MERGE = "odoo_dev_core.builtins.normalize_timesheets.merge_timesheets"
 
 
-# ── _assert_env ───────────────────────────────────────────────────────────────
+# ── the Odoo configuration guard ──────────────────────────────────────────────
 
 
-class TestAssertEnv(unittest.TestCase):
+class TestOdooGuard(unittest.TestCase):
     def test_exits_when_connection_settings_missing(self):
-        # The guard's second failure mode (#642) must exit 1 the same way.
-        with patch(ASSERT_GUARD, side_effect=ValueError("Missing Odoo connection")):
-            with self.assertRaises(SystemExit) as ctx:
-                cli._assert_env()
-        self.assertEqual(ctx.exception.code, 1)
+        # The guard's failure (#642) is a one-line error on stderr and exit 1.
+        err = StringIO()
+        service = make_service(config=LocalConfig())
+        with serving(service), patch("sys.stderr", err):
+            code = main(["normalize"])
+        self.assertEqual(code, 1)
+        self.assertIn("Missing Odoo connection settings", err.getvalue())
 
     def test_passes_when_sdk_configured(self):
-        with patch(ASSERT_GUARD):
-            cli._assert_env()  # must not raise
-
-
-# ── _LazyOdooClient ───────────────────────────────────────────────────────────
-
-
-class TestLazyOdooClient(unittest.TestCase):
-    def test_defers_construction_until_first_use(self):
-        with patch("odoo_cli.__main__.build_client") as make_client:
-            lazy = cli._LazyOdooClient()
-            make_client.assert_not_called()  # construction is deferred
-            real = make_client.return_value
-            real.uid = 7
-            real.__getitem__.return_value = "recordset"
-            real.execute.return_value = "ok"
-
-            self.assertEqual(lazy.uid, 7)
-            self.assertEqual(lazy.execute("m", "read", 1), "ok")
-            self.assertEqual(lazy["m"], "recordset")
-        # Built exactly once and cached across every member access.
-        make_client.assert_called_once_with()
-        real.execute.assert_called_once_with("m", "read", 1)
+        with serving(_service(_tmp_db())), patch("sys.stdout", StringIO()):
+            self.assertEqual(main(["normalize"]), 0)
 
 
 # ── cmd_normalize ─────────────────────────────────────────────────────────────
@@ -86,7 +69,7 @@ class TestCmdNormalize(unittest.TestCase):
         args = MagicMock(apply=False)
         captured = StringIO()
         with patch("sys.stdout", captured):
-            cli.cmd_normalize(_service(db, _client()), args)
+            run_normalize(_service(db, _client()), args)
         self.assertIn("No duplicate", captured.getvalue())
 
     def test_dry_run_reports_without_merging(self):
@@ -99,7 +82,7 @@ class TestCmdNormalize(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(_service(db, _client()), args)
+            run_normalize(_service(db, _client()), args)
         mock_merge.assert_not_called()
         output = captured.getvalue()
         self.assertIn("Dry run", output)
@@ -115,7 +98,7 @@ class TestCmdNormalize(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(NORMALIZE_MERGE) as mock_merge,
         ):
-            cli.cmd_normalize(_service(db, _client()), args)
+            run_normalize(_service(db, _client()), args)
         mock_merge.assert_called_once()
         self.assertIn("Merged", captured.getvalue())
         # The upload ledger now maps both sessions onto the primary timesheet.
@@ -138,7 +121,7 @@ class TestCmdGetEmployeeId(unittest.TestCase):
             patch("sys.stdout", captured),
             patch(_RESOLVE_EMP, return_value=77),
         ):
-            cli.cmd_get_employee_id(service, MagicMock())
+            run_get_employee_id(service, MagicMock())
         self.assertIn("employee_id=77", captured.getvalue())
 
 
@@ -149,12 +132,8 @@ class TestMain(unittest.TestCase):
     def _run_main(self, argv, db=None):
         if db is None:
             db = _tmp_db()
-        with (
-            patch(ASSERT_GUARD),
-            patch("odoo_cli.__main__._build_service", return_value=_service(db)),
-            patch("sys.argv", ["odoo_cli"] + argv),
-        ):
-            cli.main()
+        with serving(_service(db)), patch("sys.argv", ["odoo_cli"] + argv):
+            invoke()
 
     def test_no_command_prints_help_and_exits(self):
         captured = StringIO()
@@ -174,27 +153,22 @@ class TestMain(unittest.TestCase):
 
     def test_normalize_command(self):
         captured = StringIO()
-        with (
-            patch("sys.stdout", captured),
-            patch("odoo_cli.__main__.build_client"),
-        ):
+        with patch("sys.stdout", captured):
             self._run_main(["normalize"])
         self.assertIn("No duplicate", captured.getvalue())
 
     def test_get_employee_id_command(self):
         # get-employee-id needs Odoo; the resolver is stubbed so no RPC happens.
-        db = _tmp_db()
         captured = StringIO()
-        with (
-            patch("sys.stdout", captured),
-            patch(ASSERT_GUARD),
-            patch("odoo_cli.__main__.build_client"),
-            patch("odoo_cli.__main__._build_service", return_value=_service(db)),
-            patch(_RESOLVE_EMP, return_value=77),
-            patch("sys.argv", ["odoo_cli", "get-employee-id"]),
-        ):
-            cli.main()
+        with patch("sys.stdout", captured), patch(_RESOLVE_EMP, return_value=77):
+            self._run_main(["get-employee-id"])
         self.assertIn("employee_id=77", captured.getvalue())
+
+    def test_version_prints_the_distribution_version(self):
+        captured = StringIO()
+        with patch("sys.stdout", captured):
+            self.assertEqual(main(["--version"]), 0)
+        self.assertRegex(captured.getvalue(), r"^odoo-dev \d+\.\d+")
 
 
 if __name__ == "__main__":
