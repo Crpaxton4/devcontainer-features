@@ -14,7 +14,7 @@ event per tick, every tick sharing a parent external-id prefix of the shape
 ``<parent>:tick:<iso>``, where ``<iso>`` is the tick's UTC ISO-8601 timestamp
 (e.g. ``gcal:<event-id>:tick:2026-06-01T09:00:00+00:00``). That timestamp form is
 canonical: the ingestion producer (``_tick_external_id`` in
-:mod:`~odoo_dev_data.adapters`) writes it so a moved or resized meeting
+the ingestion adapters) writes it so a moved or resized meeting
 yields a different id set, and this consumer matches what the producer emits.
 Triage displays ONE row per series and assignment updates ``task_ids`` on EVERY
 event of the series, so a whole meeting is attributed in a single action and the
@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from odoo_dev_data.events import EventRecord
+from odoo_dev_core.ports import EventRecord
 
 # A tick-series member's external id is ``<parent>:tick:<iso>`` where ``<iso>`` is
 # the tick's UTC ISO-8601 timestamp — exactly what the ingestion producer emits.

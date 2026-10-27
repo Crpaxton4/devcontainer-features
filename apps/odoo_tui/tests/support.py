@@ -40,7 +40,7 @@ def make_service(
     """
     built = bootstrap(
         env={} if env is None else env,
-        client=client if client is not None else object(),
+        odoo=client if client is not None else object(),
         events=events if events is not None else make_event_store(),
         config=config if config is not None else LocalConfig(),
     )

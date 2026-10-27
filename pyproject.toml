@@ -73,18 +73,6 @@ ignore_imports = [
     "odoo_mcp.bootstrap -> odoo_client.*",
     "odoo_tui.bootstrap -> odoo_dev_data.*",
     "odoo_tui.bootstrap -> odoo_client.*",
-    # bypass, removed in WS4
-    "odoo_tui.triage -> odoo_dev_data.events",
-    # bypass, removed in WS4
-    "odoo_tui.export -> odoo_dev_data.events",
-    # bypass, removed in WS4
-    "odoo_tui.evidence -> odoo_dev_data.events",
-    # bypass, removed in WS4
-    "odoo_tui.timeline -> odoo_dev_data.events",
-    # bypass, removed in WS4
-    "odoo_tui.app -> odoo_dev_data.events",
-    # bypass, removed in WS4
-    "odoo_tui.app -> odoo_client.errors",
 ]
 unmatched_ignore_imports_alerting = "error"
 
