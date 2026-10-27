@@ -46,7 +46,6 @@ services:
       DISPATCH_ENTRY:
       DISPATCH_ADDITIONAL_FEATURES:
       DISPATCH_REPO_OWNER:
-      DISPATCH_REPO_MAP_FILE:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${ODOO_ORCHESTRATOR_CHECKOUT:?set ODOO_ORCHESTRATOR_CHECKOUT}:${ODOO_ORCHESTRATOR_CHECKOUT}:ro"
