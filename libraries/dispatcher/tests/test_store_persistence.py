@@ -11,14 +11,14 @@ from unittest.mock import patch
 
 import pytest
 
-from odoo_client.state import dispatch_state
-from odoo_client.state.artifacts import (
+from dispatcher.store import dispatch_state
+from dispatcher.store.artifacts import (
     BUNDLE_FILES,
     collect_artifacts,
     ensure_bundle_dir,
     task_record_path,
 )
-from odoo_client.state.jobs import (
+from dispatcher.store.jobs import (
     DeadReason,
     DuplicateTaskInFlightError,
     JOBS_MIGRATIONS,
@@ -26,13 +26,13 @@ from odoo_client.state.jobs import (
     JobState,
     JobStore,
 )
-from odoo_client.state.migrations import (
+from dispatcher.store.migrations import (
     Migration,
     MigrationError,
     apply_migrations,
     open_store,
 )
-from odoo_client.state.runs_store import RunOutcome, RunStore, map_reported_outcome
+from dispatcher.store.runs_store import RunOutcome, RunStore, map_reported_outcome
 
 T0 = 1_760_000_000_000_000  # 2025-10-09T08:53:20Z
 TASK = "42"
@@ -163,7 +163,7 @@ def test_failed_migration_rolls_back_and_is_not_recorded(tmp_path):
 def test_migration_already_recorded_by_a_racing_process_is_skipped(tmp_path):
     conn = open_store(tmp_path / "m.db", (), synchronous="NORMAL", now_us=T0)
     conn.execute("INSERT INTO schema_migrations VALUES (1, 'a', 1)")
-    from odoo_client.state import migrations as m
+    from dispatcher.store import migrations as m
 
     # Simulate losing the race: the ledger read before the lock was stale.
     m._apply_one(conn, Migration(1, "a", ("CREATE TABLE a (x INTEGER) STRICT",)), T0)
@@ -206,7 +206,7 @@ def test_open_store_asserts_wal(tmp_path):
             self.inner.row_factory = value
 
     with patch(
-        "odoo_client.state.migrations.sqlite3.connect",
+        "dispatcher.store.migrations.sqlite3.connect",
         lambda *a, **k: Conn(real(*a, **k)),
     ):
         with pytest.raises(sqlite3.OperationalError, match="not 'wal'"):
@@ -811,7 +811,7 @@ def test_index_failure_is_swallowed(tmp_path):
 def test_envelope_write_failure_is_recorded(tmp_path):
     ensure_bundle_dir("j1", tmp_path)
     with patch(
-        "odoo_client.state.artifacts._replace_atomically", side_effect=OSError("full")
+        "dispatcher.store.artifacts._replace_atomically", side_effect=OSError("full")
     ):
         h = collect_artifacts("j1", TASK, envelope="{}", root=tmp_path, now_us=T0)
     assert not h.has_envelope
@@ -970,7 +970,7 @@ def test_open_store_closes_the_connection_when_migration_fails(tmp_path):
         return conn
 
     bad = (Migration(1, "bad", ("BOGUS SQL",)),)
-    with patch("odoo_client.state.migrations.sqlite3.connect", spy):
+    with patch("dispatcher.store.migrations.sqlite3.connect", spy):
         with pytest.raises(sqlite3.OperationalError):
             open_store(tmp_path / "m.db", bad, synchronous="NORMAL", now_us=T0)
     with pytest.raises(sqlite3.ProgrammingError):
