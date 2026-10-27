@@ -326,20 +326,6 @@ class TestReadAttachmentCommand(unittest.TestCase):
         self.assertIn("datas", kwargs["fields"])
 
 
-class TestReadAttachmentToonEncoding(unittest.TestCase):
-    """The result dict encodes cleanly under the TOON output flag."""
-
-    def test_result_toon_encodes(self):
-        from odoo_mcp.server import TOON_OUTPUT_ENV, _to_toon
-
-        client, _ = _client([_attach(datas=_b64(b"a,b\n1,2\n"))])
-        result = read_attachment(client, 7, mode="text")
-        with patch.dict("os.environ", {TOON_OUTPUT_ENV: "1"}):
-            out = _to_toon(result)
-        self.assertIsInstance(out, str)
-        self.assertIn("report.csv", out)
-
-
 class TestReadAttachmentCap(unittest.TestCase):
     def test_default_cap_is_documented_ten_mib(self):
         self.assertEqual(MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024)

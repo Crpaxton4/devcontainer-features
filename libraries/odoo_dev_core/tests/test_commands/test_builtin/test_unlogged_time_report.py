@@ -12,8 +12,6 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from odoo_mcp.tools import build_explicit_tools
-from odoo_mcp.tools.atomic import make_unlogged_time_report_tool
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord
 from odoo_client.transport.errors import OdooTransportError
@@ -388,12 +386,8 @@ class TestUnloggedTimeReport(unittest.TestCase):
         )
 
 
-class TestUnloggedTimeReportMcpTool(unittest.TestCase):
-    def test_registered_in_the_explicit_tool_surface(self):
-        tools = build_explicit_tools(service(client=MagicMock()))
-        self.assertIn("unlogged_time_report", tools)
-
-    def test_tool_routes_to_the_command(self):
+class TestUnloggedTimeReportExecute(unittest.TestCase):
+    def test_execute_routes_to_the_command(self):
         state = _state_with_sessions()
         client = _FakeClient(
             [
@@ -402,10 +396,9 @@ class TestUnloggedTimeReportMcpTool(unittest.TestCase):
             ]
         )
 
-        tool = make_unlogged_time_report_tool(
-            service(client=client, events=state, config=_config())
+        report = service(client=client, events=state, config=_config()).execute(
+            "unlogged_time_report", start_date="2026-07-01", end_date="2026-07-02"
         )
-        report = tool("2026-07-01", "2026-07-02")
         self.assertEqual(report["start_date"], "2026-07-01")
         self.assertEqual(report["total_delta_hours"], 2.25)
 
