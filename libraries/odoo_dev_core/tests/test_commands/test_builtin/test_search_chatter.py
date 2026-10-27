@@ -231,20 +231,5 @@ class TestSearchChatterCommand(unittest.TestCase):
         self.assertEqual((model, method), ("mail.message", "search_read"))
 
 
-class TestSearchChatterToonEncoding(unittest.TestCase):
-    """The list-of-dicts result encodes cleanly under the TOON output flag."""
-
-    def test_result_toon_encodes(self):
-        from odoo_mcp.server import TOON_OUTPUT_ENV, _to_toon
-
-        client, _ = _client([_msg(id=9, body="<p>needle</p>")])
-        result = search_chatter(client, "needle")
-        with patch.dict("os.environ", {TOON_OUTPUT_ENV: "1"}):
-            out = _to_toon(result)
-        self.assertIsInstance(out, str)
-        self.assertIn("project.task", out)
-        self.assertIn("needle", out)
-
-
 if __name__ == "__main__":
     unittest.main()

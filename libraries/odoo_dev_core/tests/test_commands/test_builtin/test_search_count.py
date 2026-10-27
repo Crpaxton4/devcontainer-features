@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
 from odoo_dev_core import default_registry
-from odoo_mcp.tools.atomic import make_search_count_tool
 from odoo_client.transport.executor import OdooExecutor
 from ...fakes import service
 
@@ -76,52 +75,17 @@ class TestSearchCountCommand(unittest.TestCase):
 
 
 class TestSearchCountToolInvocation(unittest.TestCase):
-    """The atomic tool delegates to the ``search_count`` command."""
+    """The ``search_count`` command runs through the command service."""
 
-    def test_tool_routes_model_and_domain_to_command(self):
-        captured: dict[str, Any] = {}
-
-        class _Service:
-            def execute(self, name, /, **kwargs):
-                captured["name"] = name
-                captured["model"] = kwargs["model"]
-                captured["domain"] = kwargs["domain"]
-                return 42
-
-        tool = make_search_count_tool(_Service())
-        result = tool("project.task", [("active", "=", True)])
-        self.assertEqual(result, 42)
-        self.assertEqual(captured["name"], "search_count")
-        self.assertEqual(captured["model"], "project.task")
-        self.assertEqual(captured["domain"], [("active", "=", True)])
-
-    def test_tool_end_to_end_through_client(self):
+    def test_command_end_to_end_through_client(self):
         client, executor = _client(count=9001)
-        tool = make_search_count_tool(service(client=client))
-        result = tool("project.task", [("stage_id", "!=", False)])
+        result = service(client=client).execute(
+            "search_count", model="project.task", domain=[("stage_id", "!=", False)]
+        )
         self.assertEqual(result, 9001)
         model, method, args, _ = executor.calls[0]
         self.assertEqual((model, method), ("project.task", "search_count"))
         self.assertEqual(args[0], [("stage_id", "!=", False)])
-
-
-class TestSearchCountToolListing(unittest.TestCase):
-    """The tool is registered on the MCP server's tool surface (issue #445)."""
-
-    def test_tool_appears_in_server_listing(self):
-        from odoo_mcp.server import OdooMCPServer
-        from odoo_mcp.tools import build_explicit_tools
-
-        command_service = service(client=MagicMock())
-        tools = build_explicit_tools(command_service)
-        self.assertIn("search_count", tools)
-
-        added: list[Any] = []
-        mock_mcp = MagicMock()
-        mock_mcp.add_tool.side_effect = added.append
-        with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-            OdooMCPServer(command_service, explicit_tools=tools)
-        self.assertIn("search_count", {tool.name for tool in added})
 
 
 if __name__ == "__main__":

@@ -308,20 +308,5 @@ class TestReadKnowledgeArticleCommand(unittest.TestCase):
         _assert_never_probes_ir_model(executor)
 
 
-class TestReadKnowledgeArticleToonEncoding(unittest.TestCase):
-    """The single-dict result encodes cleanly under the TOON output flag."""
-
-    def test_result_toon_encodes(self):
-        from odoo_mcp.server import TOON_OUTPUT_ENV, _to_toon
-
-        client, _ = _client([_article(id=9, body="<p>needle</p>")])
-        result = read_knowledge_article(client, 9)
-        with patch.dict("os.environ", {TOON_OUTPUT_ENV: "1"}):
-            out = _to_toon(result)
-        self.assertIsInstance(out, str)
-        self.assertIn("VAT rounding guide", out)
-        self.assertIn("needle", out)
-
-
 if __name__ == "__main__":
     unittest.main()

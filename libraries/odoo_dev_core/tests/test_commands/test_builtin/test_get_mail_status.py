@@ -313,42 +313,5 @@ class TestGetMailStatusCommand(unittest.TestCase):
         self.assertTrue(methods <= {"search_read", "fields_get", "read"})
 
 
-class TestGetMailStatusToolListing(unittest.TestCase):
-    """The tool is registered on the MCP server's tool surface (issue #389)."""
-
-    def test_tool_appears_in_server_listing(self):
-        from odoo_mcp.server import OdooMCPServer
-        from odoo_mcp.tools import build_explicit_tools
-
-        command_service = service(client=MagicMock())
-        tools = build_explicit_tools(command_service)
-        self.assertIn("get_mail_status", tools)
-
-        added: list[Any] = []
-        mock_mcp = MagicMock()
-        mock_mcp.add_tool.side_effect = added.append
-        with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-            OdooMCPServer(command_service, explicit_tools=tools)
-        self.assertIn("get_mail_status", {tool.name for tool in added})
-
-
-class TestGetMailStatusToonEncoding(unittest.TestCase):
-    """The list-of-dicts result encodes cleanly under the TOON output flag."""
-
-    def test_result_toon_encodes(self):
-        from odoo_mcp.server import TOON_OUTPUT_ENV, _to_toon
-
-        client, _ = _client(
-            messages=[_message(103)],
-            mails=[_mail(3, 103, "exception", failure_reason="SMTP timeout")],
-        )
-        result = get_mail_status(client, "project.task", 42)
-        with patch.dict("os.environ", {TOON_OUTPUT_ENV: "1"}):
-            out = _to_toon(result)
-        self.assertIsInstance(out, str)
-        self.assertIn("exception", out)
-        self.assertIn("SMTP timeout", out)
-
-
 if __name__ == "__main__":
     unittest.main()

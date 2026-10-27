@@ -11,17 +11,11 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from odoo_dev_core import telemetry
-from odoo_mcp.server import OdooMCPServer
-from ..support import make_service
+from ..support import make_service, wire_tools
 
 
-def _tools(explicit_tools):
-    mock_mcp = MagicMock()
-    added = []
-    mock_mcp.add_tool.side_effect = added.append
-    with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(make_service(Mock(), Mock()), explicit_tools=explicit_tools)
-    return {t.name: t for t in added}
+def _tools(fake_tools):
+    return wire_tools(make_service(Mock(), Mock()), fake_tools)
 
 
 class TestMcpUsageLine(unittest.TestCase):
@@ -61,25 +55,24 @@ class TestMcpUsageLine(unittest.TestCase):
         self.assertEqual(record.call_args.args, ("mcp_tool", "aping"))
 
     def test_declarations_only_when_the_log_is_on(self):
-        def ping() -> dict:
-            """Fake tool."""
-            return {}
-
         with patch("odoo_mcp.server.declare_usage") as declare:
             with patch.dict("os.environ", {"USAGE_LOG_DIR": ""}):
-                _tools({"ping": ping})
+                _tools({})
             declare.assert_not_called()
             with patch.dict("os.environ", {"USAGE_LOG_DIR": "/x"}):
-                _tools({"ping": ping})
+                _tools({})
         (items,) = declare.call_args.args
+        declared = {i["name"] for i in items if i["kind"] == "mcp_tool"}
         self.assertIn(
             {
                 "kind": "mcp_tool",
-                "name": "ping",
+                "name": "get_uid",
                 "context": {"source": "odoo_client"},
             },
             items,
         )
+        self.assertNotIn("log_event", declared)
+        self.assertEqual(len(declared), 32)
 
 
 class TestUtilsHelpers(unittest.TestCase):

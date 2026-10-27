@@ -1,39 +1,25 @@
-"""Console entry point for the standalone Odoo MCP server.
+"""Console entry point of the Odoo MCP server (``odoo-mcp`` or ``python -m odoo_mcp``)."""
 
-Running ``odoo-mcp`` or ``python -m odoo_mcp`` starts a server exposing the
-SDK's built-in commands. Settings are resolved once from the local config file
-(File > Env > Default) into a :class:`LocalConfig`, and the object graph is
-assembled by the single composition root
-(:func:`odoo_mcp.bootstrap.bootstrap`, #716), which returns the
-:class:`~odoo_dev_core.registry.CommandService` the tools execute through.
-"""
+import argparse
+from typing import Optional, Sequence
 
-from .bootstrap import LocalConfig, assert_configured, bootstrap
+from odoo_mcp.bootstrap import LocalConfig, assert_configured, bootstrap
 from odoo_mcp.server import OdooMCPServer
-from odoo_mcp.tools import build_explicit_tools
 
 
-def main() -> None:
-    """Bootstrap the default command service and run the MCP server over stdio.
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Parse the flags, bootstrap the command service and run the server on stdio.
 
-    Per-call profiling is resolved from the ``[behavior] profiling`` config
-    setting and the ``ODOO_PROFILING`` environment variable (File > Env >
-    Default) via :class:`LocalConfig`, then passed to the server.
-
-    The server exposes every explicit tool.
-
-    :return: None.
-    :rtype: None
+    Per-call profiling comes from ``[behavior] profiling`` or ``ODOO_PROFILING``
+    unless ``--profiling`` is given.
     """
-
-    assert_configured()
+    parser = argparse.ArgumentParser(prog="odoo-mcp", description="Odoo MCP server")
+    parser.add_argument("--profiling", action="store_true", help="profile each call")
+    flags = parser.parse_args(argv)
     config = LocalConfig.load()
+    assert_configured(config)
     service = bootstrap(config=config)
-    OdooMCPServer(
-        service,
-        explicit_tools=build_explicit_tools(service),
-        profiling=config.profiling,
-    ).run()
+    OdooMCPServer(service, profiling=flags.profiling or config.profiling).run()
 
 
 if __name__ == "__main__":

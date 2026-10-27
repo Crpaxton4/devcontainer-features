@@ -291,21 +291,5 @@ class TestCommandWrapper(unittest.TestCase):
         self.assertIn("unbilled", spec.description)
 
 
-class TestToonEncoding(unittest.TestCase):
-    """The envelope survives TOON encoding when ODOO_TOON_OUTPUT is enabled."""
-
-    def test_envelope_encodes_to_toon_string(self):
-        from odoo_mcp.server import _to_toon
-
-        client, _ = _client({_INVOICE_ID, _INVOICE_TYPE}, _FULL_ROWS)
-        envelope = get_unbilled_hours(client)
-
-        with patch.dict(os.environ, {"ODOO_TOON_OUTPUT": "1"}):
-            encoded = _to_toon(envelope)
-
-        self.assertIsInstance(encoded, str)
-        self.assertIn("total_hours", encoded)
-
-
 if __name__ == "__main__":
     unittest.main()

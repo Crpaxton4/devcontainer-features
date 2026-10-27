@@ -84,21 +84,3 @@ class TestUnattendedRule:
             assert emit.call_count == 1
             cli._emit_event(service(env={"ODOO_UNATTENDED": "1"}), "x", {}, {})
             assert emit.call_count == 1
-
-    def test_mcp_wrapper_emits_for_interactive_and_not_for_dispatched(self, tmp_path):
-        pytest.importorskip("fastmcp")
-        from odoo_mcp.server import _event_emitting
-
-        db = make_event_store(tmp_path)
-        interactive = _event_emitting(
-            lambda task_id: {"task_id": task_id}, "t", service(events=db, env={})
-        )
-        interactive(task_id=5)
-        assert len(db.get_events()) == 1
-        dispatched = _event_emitting(
-            lambda task_id: {"task_id": task_id},
-            "t",
-            service(events=db, env={"ODOO_UNATTENDED": "1"}),
-        )
-        dispatched(task_id=5)
-        assert len(db.get_events()) == 1

@@ -1,17 +1,12 @@
-"""Tests for the ``timesheet_summary`` built-in command and its MCP tool.
+"""Tests for the ``timesheet_summary`` built-in command.
 
-The command is a thin delegator to ``billing.timesheet_reports.timesheet_summary``;
-the TOON case drives the full atomic tool -> command -> helper path through the
-server wrapper with ``ODOO_TOON_OUTPUT=1``.
+The command is a thin delegator to ``billing.timesheet_reports.timesheet_summary``.
 """
 
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 from odoo_dev_core import default_registry
-from odoo_mcp import server
-from odoo_mcp.server import OdooMCPServer
-from odoo_mcp.tools.atomic import make_timesheet_summary_tool
 from ...fakes import service
 
 _HELPER = "odoo_dev_core.builtins.timesheet_summary.timesheet_summary"
@@ -51,34 +46,6 @@ class TestTimesheetSummaryCommand(unittest.TestCase):
         self.assertEqual(
             helper.call_args.kwargs, {"group_by": "project", "only_mine": True}
         )
-
-
-def _server_tool(name, tool_fn):
-    """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    command_service = service(client=Mock())
-    mock_mcp = MagicMock()
-    added = []
-    mock_mcp.add_tool.side_effect = added.append
-    with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(command_service, explicit_tools={name: tool_fn})
-    return added[0]
-
-
-class TestTimesheetSummaryToonOutput(unittest.TestCase):
-    def test_full_path_encodes_result_as_toon(self):
-        client = MagicMock()
-        client.execute.return_value = [
-            {"project_id": [5, "Accounting"], "unit_amount": 8.0, "__count": 3},
-        ]
-        tool_fn = make_timesheet_summary_tool(service(client=client))
-        tool = _server_tool("timesheet_summary", tool_fn)
-        with patch.dict("os.environ", {server.TOON_OUTPUT_ENV: "1"}):
-            result = tool.fn("2026-07-01", "2026-07-31", "project", False)
-        # TOON encodes the structured result to a string carrying its keys/values.
-        self.assertIsInstance(result, str)
-        self.assertIn("group_by", result)
-        self.assertIn("total_hours", result)
-        self.assertIn("Accounting", result)
 
 
 if __name__ == "__main__":

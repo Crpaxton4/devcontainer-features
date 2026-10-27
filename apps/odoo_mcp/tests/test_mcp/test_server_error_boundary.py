@@ -13,13 +13,13 @@ server-integration cases below (a failing fake tool wired through a real
 
 import asyncio
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 from odoo_mcp import server
 from odoo_dev_core.telemetry import error_payload as _error_payload
-from odoo_mcp.server import OdooMCPServer, _error_boundary
+from odoo_mcp.server import _error_boundary
 from odoo_client.transport.errors import OdooError, OdooValidationError
-from ..support import make_service
+from ..support import make_service, wire_tools
 
 # Each caught type paired with the exact payload the boundary must produce.
 _CAUGHT_CASES = [
@@ -48,13 +48,7 @@ def _async_raiser(exc):
 
 def _build_added(name, tool_fn):
     """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    registry = make_service(client=Mock())
-    mock_mcp = MagicMock()
-    added = []
-    mock_mcp.add_tool.side_effect = added.append
-    with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-        OdooMCPServer(registry, explicit_tools={name: tool_fn})
-    return added[0]
+    return wire_tools(make_service(client=Mock()), {name: tool_fn})[name]
 
 
 class TestErrorPayload(unittest.TestCase):
